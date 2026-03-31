@@ -1,0 +1,346 @@
+//! Anthropic agent implementation
+//!
+//! This module provides an implementation for the Anthropic Claude API.
+
+use std::collections::HashMap;
+use std::time::Duration;
+
+use anyhow::Result;
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use tokio::sync::mpsc;
+use tokio::time::sleep;
+
+use crate::agent::resolve_secret;
+use crate::agent::{Agent, Message};
+use crate::agents::{
+    option_f64, option_string, option_u64, principles_to_text, stream_sse_events, SseEventAction,
+};
+
+/// Anthropic Claude agent
+pub struct AnthropicAgent {
+    /// Base URL for the Anthropic API
+    base_url: String,
+    /// Environment variable for API key
+    api_key_env: String,
+    /// Model name
+    model: String,
+    /// Anthropic API version
+    anthropic_version: String,
+    /// Maximum tokens for response
+    max_tokens: u32,
+    /// HTTP client
+    client: reqwest::Client,
+}
+
+impl AnthropicAgent {
+    /// Create a new Anthropic agent
+    ///
+    /// # Arguments
+    /// * `base_url` - Base URL for the Anthropic API
+    /// * `api_key_env` - Environment variable for API key
+    /// * `model` - Model name
+    /// * `anthropic_version` - Anthropic API version
+    /// * `max_tokens` - Maximum tokens for response
+    /// * `client` - HTTP client
+    ///
+    /// # Returns
+    /// * `Self` - New Anthropic agent instance
+    pub fn new(
+        base_url: String,
+        api_key_env: String,
+        model: String,
+        anthropic_version: String,
+        max_tokens: u32,
+        client: reqwest::Client,
+    ) -> Self {
+        Self {
+            base_url,
+            api_key_env,
+            model,
+            anthropic_version,
+            max_tokens,
+            client,
+        }
+    }
+
+    /// Convert messages and options to Anthropic API payload
+    ///
+    /// # Arguments
+    /// * `messages` - List of messages
+    /// * `principles` - Optional list of principles
+    /// * `options` - Optional HashMap of options
+    ///
+    /// # Returns
+    /// * `Value` - Anthropic API payload
+    fn to_anthropic_payload(
+        &self,
+        messages: Vec<Message>,
+        principles: Option<Vec<String>>,
+        options: Option<HashMap<String, Value>>,
+    ) -> Value {
+        let mut system_parts: Vec<String> = Vec::new();
+        if let Some(items) = principles {
+            if !items.is_empty() {
+                system_parts.push(principles_to_text(&items));
+            }
+        }
+
+        let mut out_messages: Vec<Value> = Vec::new();
+        for m in messages {
+            if m.role.eq_ignore_ascii_case("system") {
+                system_parts.push(m.content);
+                continue;
+            }
+
+            let role = if m.role.eq_ignore_ascii_case("assistant") {
+                "assistant"
+            } else {
+                "user"
+            };
+
+            out_messages.push(json!({
+                "role": role,
+                "content": m.content
+            }));
+        }
+
+        let model = option_string(&options, "model").unwrap_or_else(|| self.model.clone());
+        let max_tokens = option_u64(&options, "max_tokens")
+            .map(|v| v as u32)
+            .unwrap_or(self.max_tokens);
+
+        let temperature = option_f64(&options, "temperature");
+        let top_p = option_f64(&options, "top_p");
+
+        let mut payload = json!({
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": out_messages,
+            "stream": true
+        });
+
+        if !system_parts.is_empty() {
+            payload["system"] = Value::String(system_parts.join("\n\n"));
+        }
+
+        if let Some(temp) = temperature {
+            payload["temperature"] = Value::from(temp);
+        }
+
+        if let Some(value) = top_p {
+            payload["top_p"] = Value::from(value);
+        }
+
+        payload
+    }
+
+    /// Stream SSE events from Anthropic API response
+    ///
+    /// # Arguments
+    /// * `response` - HTTP response from Anthropic API
+    /// * `sender` - Unbounded sender for streaming responses
+    ///
+    /// # Returns
+    /// * `Result<()>` - Returns Ok(()) if streaming completes successfully, or an error if something goes wrong
+    async fn stream_sse(
+        &self,
+        response: reqwest::Response,
+        sender: mpsc::UnboundedSender<String>,
+    ) -> Result<()> {
+        stream_sse_events(response, move |data| match parse_anthropic_event(data) {
+            Ok((action, maybe_text)) => {
+                if let Some(text) = maybe_text {
+                    if sender.send(text).is_err() {
+                        return Ok(SseEventAction::Stop);
+                    }
+                }
+                Ok(action)
+            }
+            Err(_) => Ok(SseEventAction::Continue),
+        })
+        .await
+    }
+
+    /// Send a single chat request to Anthropic API
+    ///
+    /// # Arguments
+    /// * `messages` - List of messages
+    /// * `principles` - Optional list of principles
+    /// * `options` - Optional HashMap of options
+    /// * `sender` - Unbounded sender for streaming responses
+    ///
+    /// # Returns
+    /// * `Result<()>` - Returns Ok(()) if the request completes successfully, or an error if something goes wrong
+    async fn chat_once(
+        &self,
+        messages: Vec<Message>,
+        principles: Option<Vec<String>>,
+        options: Option<HashMap<String, Value>>,
+        sender: mpsc::UnboundedSender<String>,
+    ) -> Result<()> {
+        let api_key = resolve_secret(&self.api_key_env, "claude.api_key_env")?;
+
+        let payload = self.to_anthropic_payload(messages, principles, options);
+        let endpoint = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
+
+        let response = self
+            .client
+            .post(endpoint)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", &self.anthropic_version)
+            .header("content-type", "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("claude request failed with {status}: {body}");
+        }
+
+        self.stream_sse(response, sender).await
+    }
+}
+
+/// Parse Anthropic SSE event
+///
+/// # Arguments
+/// * `data` - SSE event data
+///
+/// # Returns
+/// * `Result<(SseEventAction, Option<String>)>` - Returns Ok((SseEventAction, Option<String>)) with the action and optional token, or an error if parsing fails
+fn parse_anthropic_event(data: &str) -> Result<(SseEventAction, Option<String>)> {
+    if data.trim() == "[DONE]" {
+        return Ok((SseEventAction::Stop, None));
+    }
+
+    let value = serde_json::from_str::<Value>(data)?;
+    if value.get("type").and_then(|v| v.as_str()) == Some("message_stop") {
+        return Ok((SseEventAction::Stop, None));
+    }
+
+    let token = value
+        .get("delta")
+        .and_then(|v| v.get("text"))
+        .and_then(|v| v.as_str())
+        .map(|text| text.to_string());
+
+    Ok((SseEventAction::Continue, token))
+}
+
+#[async_trait]
+impl Agent for AnthropicAgent {
+    /// Send chat messages to the agent and receive streaming responses
+    ///
+    /// # Arguments
+    /// * `messages` - Vector of chat messages
+    /// * `principles` - Optional vector of guiding principles
+    /// * `options` - Optional hash map of additional options
+    /// * `sender` - Unbounded sender for streaming responses
+    ///
+    /// # Returns
+    /// * `Result<()>` - Returns Ok(()) if the chat completes successfully, or an error if something goes wrong
+    async fn chat(
+        &self,
+        messages: Vec<Message>,
+        principles: Option<Vec<String>>,
+        options: Option<HashMap<String, Value>>,
+        sender: mpsc::UnboundedSender<String>,
+    ) -> Result<()> {
+        let mut last_error: Option<anyhow::Error> = None;
+
+        for attempt in 0..=2 {
+            match self
+                .chat_once(
+                    messages.clone(),
+                    principles.clone(),
+                    options.clone(),
+                    sender.clone(),
+                )
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    last_error = Some(err);
+                    if attempt < 2 {
+                        sleep(Duration::from_secs(1_u64 << attempt)).await;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("claude request failed")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(role: &str, content: &str) -> Message {
+        Message {
+            role: role.to_string(),
+            content: content.to_string(),
+        }
+    }
+
+    fn agent() -> AnthropicAgent {
+        AnthropicAgent::new(
+            "https://api.anthropic.com".to_string(),
+            "ANTHROPIC_API_KEY".to_string(),
+            "claude-3-7-sonnet-latest".to_string(),
+            "2023-06-01".to_string(),
+            4096,
+            reqwest::Client::new(),
+        )
+    }
+
+    #[test]
+    fn to_anthropic_payload_merges_system_content_and_options() {
+        let payload = agent().to_anthropic_payload(
+            vec![
+                message("system", "existing system"),
+                message("user", "hello"),
+            ],
+            Some(vec!["Prefer tests".to_string()]),
+            Some(HashMap::from([
+                ("model".to_string(), json!("claude-custom")),
+                ("max_tokens".to_string(), json!(2048)),
+                ("temperature".to_string(), json!(0.2)),
+            ])),
+        );
+
+        let system = payload["system"].as_str().unwrap();
+        assert!(system.contains("Prefer tests"));
+        assert!(system.contains("existing system"));
+        assert_eq!(payload["messages"][0]["role"], "user");
+        assert_eq!(payload["messages"][0]["content"], "hello");
+        assert_eq!(payload["model"], "claude-custom");
+        assert_eq!(payload["max_tokens"], 2048);
+        assert_eq!(payload["temperature"], 0.2);
+    }
+
+    #[test]
+    fn parse_anthropic_event_extracts_delta_text() {
+        let (action, token) =
+            parse_anthropic_event(r#"{"type":"content_block_delta","delta":{"text":"hello"}}"#)
+                .expect("anthropic event should parse");
+
+        assert!(matches!(action, SseEventAction::Continue));
+        assert_eq!(token.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn parse_anthropic_event_stops_on_done_and_message_stop() {
+        let (done_action, done_token) = parse_anthropic_event("[DONE]").expect("done should parse");
+        assert!(matches!(done_action, SseEventAction::Stop));
+        assert!(done_token.is_none());
+
+        let (stop_action, stop_token) =
+            parse_anthropic_event(r#"{"type":"message_stop"}"#).expect("message_stop should parse");
+        assert!(matches!(stop_action, SseEventAction::Stop));
+        assert!(stop_token.is_none());
+    }
+}

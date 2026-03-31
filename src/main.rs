@@ -1,0 +1,348 @@
+//! Main entry point for the go-on ACP proxy
+//!
+//! This module handles command-line arguments, configuration loading, and server initialization.
+
+mod acp;
+mod agent;
+mod agents;
+mod cache;
+mod config;
+mod error;
+mod flow;
+mod setup;
+mod vector;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use anyhow::Result;
+use clap::Parser;
+use log::{error, info, warn};
+
+use crate::acp::AcpServer;
+use crate::agent::AgentRegistry;
+use crate::cache::ResponseCache;
+use crate::config::{
+    validate_runtime_readiness, AppConfig, AutoTuneState, ConfigWarning, RuntimeConfig,
+};
+use crate::flow::FlowManager;
+use crate::setup::{parse_secret_action, parse_secret_mode, parse_setup_profile, SetupOptions};
+use crate::vector::VectorStore;
+
+/// Command-line interface arguments for the go-on application
+#[derive(Debug, Parser)]
+#[command(name = "go-on")]
+#[command(about = "ACP proxy with flow, phases and multi-agent routing")]
+struct Cli {
+    /// Path to configuration file
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Phase to run
+    #[arg(long)]
+    phase: Option<String>,
+
+    /// Enable verbose logging
+    #[arg(long, default_value_t = false)]
+    verbose: bool,
+
+    /// Validate configuration and exit
+    #[arg(long, default_value_t = false)]
+    validate_config: bool,
+
+    /// Run setup wizard
+    #[arg(long, default_value_t = false)]
+    setup: bool,
+
+    /// Setup profile to use
+    #[arg(long)]
+    setup_profile: Option<String>,
+
+    /// Secret mode for setup
+    #[arg(long)]
+    setup_secrets: Option<String>,
+
+    /// Force setup even if files exist
+    #[arg(long, default_value_t = false)]
+    force: bool,
+
+    /// Secret management action
+    #[arg(long)]
+    secret: Option<String>,
+
+    /// Secret name for management
+    #[arg(long)]
+    secret_name: Option<String>,
+
+    /// Secret value for management
+    #[arg(long)]
+    secret_value: Option<String>,
+}
+
+/// Get the default configuration file path
+///
+/// Returns the path to config.toml in the same directory as the executable
+fn default_config_path() -> Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve executable directory"))?;
+    Ok(dir.join("config.toml"))
+}
+
+/// Emit configuration warnings to the log and optionally to stderr
+///
+/// # Arguments
+/// * `warnings` - Slice of configuration warnings
+/// * `mirror_stderr` - Whether to also print warnings to stderr
+fn emit_config_warnings(warnings: &[ConfigWarning], mirror_stderr: bool) {
+    for warning in warnings {
+        let severity = match warning.severity {
+            crate::config::ConfigWarningSeverity::Critical => "critical",
+            crate::config::ConfigWarningSeverity::Warn => "warn",
+            crate::config::ConfigWarningSeverity::Info => "info",
+        };
+        warn!(
+            "config warning [{}:{}] {}",
+            severity, warning.code, warning.message
+        );
+        if mirror_stderr {
+            eprintln!(
+                "config warning [{}:{}] {}",
+                severity, warning.code, warning.message
+            );
+        }
+    }
+}
+
+/// Main function - entry point for the application
+#[tokio::main]
+async fn main() {
+    // Set up panic hook to log panics
+    std::panic::set_hook(Box::new(|panic_info| {
+        error!("panic captured: {panic_info}");
+    }));
+
+    // Run the application and handle any errors
+    if let Err(err) = run().await {
+        error!("fatal error: {err:#}");
+        eprintln!("fatal error: {err:#}");
+        std::process::exit(1);
+    }
+}
+
+/// Core application logic
+///
+/// Handles command-line arguments, configuration loading, and server initialization
+async fn run() -> Result<()> {
+    // Parse command-line arguments
+    let cli = Cli::parse();
+
+    // Configure logging
+    let mut logger_builder = env_logger::Builder::from_default_env();
+    if cli.verbose {
+        logger_builder.filter_level(log::LevelFilter::Debug);
+    }
+    logger_builder.init();
+
+    // Determine configuration file path
+    let config_path = match cli.config {
+        Some(path) => path,
+        None => default_config_path()?,
+    };
+
+    // Handle secret management commands
+    if let Some(action) = cli.secret.as_deref() {
+        let action = parse_secret_action(action)?;
+        setup::run_secret_command(
+            action,
+            cli.secret_name.as_deref(),
+            cli.secret_value.as_deref(),
+        )?;
+        return Ok(());
+    }
+
+    // Handle setup wizard
+    if cli.setup {
+        let options = SetupOptions {
+            profile: cli
+                .setup_profile
+                .as_deref()
+                .map(parse_setup_profile)
+                .transpose()?,
+            secret_mode: cli
+                .setup_secrets
+                .as_deref()
+                .map(parse_secret_mode)
+                .transpose()?,
+            force: cli.force,
+            prompt_for_secrets: cli.setup_profile.is_none() && cli.setup_secrets.is_none(),
+        };
+        setup::run_setup_with_options(&config_path, options)?;
+        return Ok(());
+    }
+
+    // Load and validate configuration
+    info!("loading config from {}", config_path.display());
+    let config = Arc::new(AppConfig::load(&config_path)?);
+    let health_report = validate_runtime_readiness(&config_path, &config)?;
+    emit_config_warnings(&health_report.warnings, cli.validate_config);
+
+    // If only validating config, exit after validation
+    if cli.validate_config {
+        info!(
+            "configuration is valid, external secrets resolved, health score={}/100, warnings={} (critical={}, warn={}, info={})",
+            health_report.score,
+            health_report.total,
+            health_report.critical_count,
+            health_report.warn_count,
+            health_report.info_count
+        );
+        println!(
+            "config health: score={}/100 warnings={} critical={} warn={} info={}",
+            health_report.score,
+            health_report.total,
+            health_report.critical_count,
+            health_report.warn_count,
+            health_report.info_count
+        );
+        return Ok(());
+    }
+
+    // Create HTTP client with timeout
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()?;
+
+    // Initialize agent registry and flow manager
+    let registry = Arc::new(AgentRegistry::from_config(
+        Arc::clone(&config),
+        http_client.clone(),
+    )?);
+    let flow = Arc::new(FlowManager::new(Arc::clone(&config), cli.phase.clone()));
+
+    // Initialize response cache if enabled
+    let cache = match &config.cache {
+        Some(cache_cfg) if cache_cfg.enabled => {
+            let cache_path = if PathBuf::from(&cache_cfg.path).is_absolute() {
+                PathBuf::from(&cache_cfg.path)
+            } else {
+                config_path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join(&cache_cfg.path)
+            };
+
+            info!(
+                "sqlite cache enabled at {} (ttl={}s, max_entries={})",
+                cache_path.display(),
+                cache_cfg.default_ttl_seconds,
+                cache_cfg.max_entries
+            );
+
+            Some(Arc::new(ResponseCache::new(
+                &cache_path,
+                cache_cfg.default_ttl_seconds,
+                cache_cfg.max_entries,
+            )?))
+        }
+        _ => None,
+    };
+
+    // Initialize vector store if enabled
+    let vector_store = match &config.vector {
+        Some(vector_cfg) if vector_cfg.enabled => {
+            let vector_path = if PathBuf::from(&vector_cfg.path).is_absolute() {
+                PathBuf::from(&vector_cfg.path)
+            } else {
+                config_path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join(&vector_cfg.path)
+            };
+
+            info!(
+                "vector memory enabled at {} (dims={}, top_k={}, similarity={})",
+                vector_path.display(),
+                vector_cfg.dimensions,
+                vector_cfg.top_k,
+                vector_cfg.min_similarity
+            );
+
+            Some(Arc::new(VectorStore::new(
+                &vector_path,
+                vector_cfg.dimensions,
+                vector_cfg.max_entries,
+            )?))
+        }
+        _ => None,
+    };
+
+    // Determine autotune state path
+    let autotune_state_path = config.autotune.as_ref().and_then(|autotune_cfg| {
+        if !autotune_cfg.enabled {
+            return None;
+        }
+
+        Some(
+            if PathBuf::from(&autotune_cfg.state_path).is_absolute() {
+                PathBuf::from(&autotune_cfg.state_path)
+            } else {
+                config_path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join(&autotune_cfg.state_path)
+            }
+            .to_string_lossy()
+            .to_string(),
+        )
+    });
+
+    // Initialize autotune state if enabled
+    let (autotune_state, autotune_config) = match config.autotune.as_ref() {
+        Some(autotune_cfg) if autotune_cfg.enabled => {
+            let state_path = autotune_state_path
+                .clone()
+                .unwrap_or_else(|| "acp_autotune_state.json".to_string());
+
+            info!(
+                "autotune enabled (min_chars: {}-{}, step: {}, evaluate_interval: {})",
+                autotune_cfg.min_query_chars_min,
+                autotune_cfg.min_query_chars_max,
+                autotune_cfg.min_query_chars_step,
+                autotune_cfg.evaluate_interval
+            );
+
+            let state = AutoTuneState::load_or_default(&state_path, autotune_cfg);
+            (
+                Some(Arc::new(tokio::sync::Mutex::new(state))),
+                Some(autotune_cfg.clone()),
+            )
+        }
+        _ => (None, None),
+    };
+
+    // Get runtime configuration
+    let runtime_config = config
+        .runtime
+        .clone()
+        .unwrap_or_else(RuntimeConfig::default);
+
+    // Create and run the ACP server
+    let mut server = AcpServer::new(
+        flow,
+        registry,
+        cache,
+        vector_store,
+        config.vector.clone(),
+        autotune_state,
+        autotune_config,
+        autotune_state_path,
+        runtime_config,
+        Some(config_path.clone()),
+        cli.phase.clone(),
+        Some(http_client),
+        cli.verbose,
+    );
+    server.run().await
+}

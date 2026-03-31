@@ -1,0 +1,252 @@
+# ========================================================================
+# ACP Flow Proxy Configuration - STARTER EXAMPLE
+# ========================================================================
+# 
+# This is a BASELINE configuration file. For production use, choose one of:
+#
+# 1. config.toml.autopilot-simple
+#    - Fast 2-3 step workflows with single AI per step
+#    - Best for: bug fixes, small refactoring, documentation updates
+#    - Chat mode: full_auto with autopilot_complexity="simple"
+#    - No dual-AI consensus required
+#    - Resource-efficient, quick feedback loop
+#
+# 2. config.toml.autopilot-complex
+#    - Explicit multi-phase flow with a fixed 2-AI review gate
+#    - Best for: major refactoring, architecture changes, complex features
+#    - Chat mode: full_auto with autopilot_complexity="complex"
+#    - Other phases can use extra AIs, but review always requires 2 reviewers
+#    - If you do not have 2 review-capable AIs, do not use this mode
+#
+# To use, copy one of the above files to config.toml:
+#   cp config.toml.autopilot-simple config.toml
+#   # or
+#   cp config.toml.autopilot-complex config.toml
+#
+# ========================================================================
+
+# Default phase (used when request does not provide phase)
+default_phase = "coding"
+
+[cache]
+enabled = true
+path = "acp_cache.sqlite3"
+default_ttl_seconds = 3600
+max_entries = 5000
+
+[vector]
+enabled = true
+auto_mode = true
+path = "acp_vector.sqlite3"
+dimensions = 192
+min_query_chars = 80
+top_k = 2
+min_similarity = 0.82
+max_snippet_chars = 800
+max_entries = 10000
+summary_enabled = true
+summary_trigger_messages = 8
+summary_max_chars = 1200
+
+[autotune]
+# Runtime autotune persists state locally and adjusts vector thresholds over time.
+enabled = true
+evaluate_interval = 20
+min_query_chars_step = 20
+min_query_chars_min = 40
+min_query_chars_max = 300
+max_top_k = 4
+low_precision_threshold = 0.35
+high_precision_threshold = 0.75
+state_path = "acp_autotune_state.json"
+cooldown_windows = 2
+min_vector_searches = 5
+summary_trigger_min = 3
+summary_trigger_max = 20
+
+[runtime]
+# Background maintenance and shutdown-drain controls.
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 30
+
+# Define all agents (models)
+[agents.copilot]
+type = "copilot"
+url = "http://127.0.0.1:8080"
+
+[agents.deepseek]
+type = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+# Optional secure alternative (Windows Credential Manager/system keyring):
+# api_key_env = "keyring://go-on/deepseek_api_key"
+model = "deepseek-chat"
+
+[agents.wenxin]
+type = "wenxin"
+api_key_env = "WENXIN_API_KEY"
+secret_key_env = "WENXIN_SECRET_KEY"
+# Optional secure alternative:
+# api_key_env = "keyring://go-on/wenxin_api_key"
+# secret_key_env = "keyring://go-on/wenxin_secret_key"
+
+# Generic OpenAI-compatible provider example (optional)
+#[agents.other_provider]
+#type = "openai_compatible"
+#url = "https://api.openai.com"
+#api_key_env = "OTHER_PROVIDER_API_KEY"
+#model = "gpt-4o-mini"
+#supports_system = true
+
+# Doubao example (explicit provider type)
+#[agents.doubao_main]
+#type = "doubao"
+#url = "https://ark.cn-beijing.volces.com/api/v3"
+#chat_path = "/chat/completions"
+#api_key_env = "DOUBAO_API_KEY"
+#model = "doubao-1-5-pro-32k-250115"
+#supports_system = true
+
+# Claude example (explicit provider type)
+#[agents.claude_main]
+#type = "claude"
+#url = "https://api.anthropic.com"
+#api_key_env = "ANTHROPIC_API_KEY"
+#model = "claude-3-7-sonnet-latest"
+#anthropic_version = "2023-06-01"
+#max_tokens = 4096
+
+# Define flow
+# This example follows an explicit step flow using only the built-in agents defined above:
+# planning -> coding -> review -> delivery
+# REVIEW is always the fixed 2-AI approval gate.
+[flow]
+name = "Explicit Software Development Flow"
+phases = ["planning", "coding", "review", "delivery"]
+
+[phases.planning]
+description = "Planning phase"
+agents = ["deepseek", "copilot"]
+fallback = true
+# `principles` can stay inline, or be moved to RULES/*.md for automatic loading.
+principles = [
+    "Break the task into explicit milestones before editing code",
+    "Identify risky files, compatibility constraints, and rollback points early",
+    "Prefer plans that minimize unrelated churn and preserve public behavior",
+    "Call out assumptions and missing context before implementation starts"
+]
+
+[phases.planning.options]
+max_history_messages = 18
+max_history_chars = 12000
+request_timeout_seconds = 90
+cache_enabled = true
+cache_ttl_seconds = 1800
+vector_enabled = true
+vector_auto = true
+vector_min_query_chars = 60
+vector_top_k = 3
+vector_min_similarity = 0.80
+vector_max_snippet_chars = 1000
+summary_enabled = true
+summary_trigger_messages = 8
+summary_max_chars = 1200
+
+[phases.coding]
+description = "Coding phase"
+agents = ["copilot", "deepseek"]
+fallback = true
+# `principles` can stay inline, or be moved to RULES/*.md for automatic loading.
+principles = [
+    "Use meaningful variable names; avoid abbreviations",
+    "Each function should be no more than 50 lines and follow single responsibility",
+    "Prefer the standard library; avoid reinventing the wheel",
+    "All public functions must include doc comments"
+]
+
+# Token-optimization knobs (optional):
+# - Keep only the latest N merged messages before sending to model.
+# - Limit total input characters; oldest context is dropped first.
+[phases.coding.options]
+max_history_messages = 24
+# Chat mode configuration:
+# - simple: 2-3 step execution with one primary AI per step
+# - complex: explicit multi-phase flow with a fixed 2-AI review gate
+autopilot_complexity = "complex"
+max_history_chars = 14000
+request_timeout_seconds = 180
+review_timeout_seconds = 60
+max_request_chars = 40000
+rate_limit_rpm = 120
+rate_limit_burst = 240
+phase_max_inflight = 24
+global_max_inflight = 128
+circuit_breaker_failures = 3
+circuit_breaker_open_seconds = 30
+cache_enabled = true
+cache_ttl_seconds = 1800
+vector_enabled = true
+vector_auto = true
+vector_min_query_chars = 80
+vector_top_k = 3
+vector_min_similarity = 0.80
+vector_max_snippet_chars = 900
+summary_enabled = true
+summary_trigger_messages = 8
+summary_max_chars = 1200
+full_auto_review_agents = ["deepseek", "wenxin"]
+
+[phases.review]
+description = "Review phase"
+agents = ["deepseek", "wenxin"]
+fallback = true
+# `principles` can stay inline, or be moved to RULES/*.md for automatic loading.
+principles = [
+    "Only return APPROVE when the implementation is safe and ready to execute",
+    "Check error handling, edge cases, regression risk, and API compatibility",
+    "Reject changes with incomplete logic, missing tests, or obvious security concerns",
+    "If uncertain, reject and request revision rather than approving optimistically"
+]
+
+[phases.review.options]
+stage = "strict"
+review_gate_timeout_seconds = 90
+review_timeout_policy = "reject" # "reject" | "degrade_single"
+review_min_response_chars = 12  # mark reviewer output as invalid when too short
+max_history_messages = 20
+max_history_chars = 10000
+request_timeout_seconds = 60
+cache_enabled = true
+cache_ttl_seconds = 900
+vector_enabled = true
+vector_auto = true
+vector_min_query_chars = 60
+vector_top_k = 2
+vector_min_similarity = 0.80
+vector_max_snippet_chars = 700
+summary_enabled = true
+summary_trigger_messages = 6
+summary_max_chars = 1000
+approval_mode = "dual"
+min_reviewers = 2
+required_approvals = 2
+
+[phases.delivery]
+description = "Delivery phase"
+agents = ["copilot", "deepseek"]
+fallback = true
+principles = [
+    "Summarize the final change set precisely and avoid overstating what was done",
+    "Keep user-facing instructions short, direct, and operational",
+    "Mention blockers, residual risk, and missing prerequisites explicitly",
+    "Prefer a concise handoff over another implementation pass"
+]
+
+[phases.delivery.options]
+max_history_messages = 16
+max_history_chars = 10000
+cache_enabled = true
+cache_ttl_seconds = 900
+vector_enabled = false
+summary_enabled = false
+

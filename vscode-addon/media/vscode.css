@@ -1,0 +1,54 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* Reset */
+html, body {
+	margin: 0;
+	padding: 0;
+	height: 100%;
+	overflow: hidden;
+}
+
+body {
+	font-family: var(--vscode-font-family);
+	font-size: var(--vscode-font-size);
+	background-color: var(--vscode-editor-background);
+	color: var(--vscode-editor-foreground);
+}
+
+input, button, select, textarea {
+	font-family: var(--vscode-font-family);
+}
+
+button {
+	border: none;
+	padding: 5px 10px;
+	width: 100%;
+	text-align: center;
+	outline: 1px solid transparent;
+	outline-offset: 2px !important;
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+}
+
+button:hover {
+	cursor: pointer;
+	background: var(--vscode-button-hoverBackground);
+}
+
+button:focus {
+	outline-color: var(--vscode-focusBorder);
+}
+
+input, select, textarea {
+	border: 1px solid var(--vscode-input-border);
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	padding: 4px;
+}
+
+input:focus, select:focus, textarea:focus {
+	outline: 1px solid var(--vscode-focusBorder);
+}

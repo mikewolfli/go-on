@@ -1,0 +1,374 @@
+{
+  "name": "go-on-vscode",
+  "displayName": "Go-On VS Code Extension",
+  "description": "VS Code extension for the Go-On Rust ACP proxy",
+  "version": "0.1.2",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:go-on.start",
+    "onCommand:go-on.stop",
+    "onCommand:go-on.sendRequest",
+    "onCommand:go-on.healthCheck",
+    "onCommand:go-on.breakerStatus",
+    "onCommand:go-on.cacheClear",
+    "onCommand:go-on.vectorClear",
+    "onCommand:go-on.configReload",
+    "onCommand:go-on.shutdown",
+    "onView:go-on-status",
+    "onView:go-on-chat",
+    "onView:go-on-settings",
+    "onCommand:go-on.openChat",
+    "onCommand:go-on.openSettings",
+    "onCommand:go-on.clearChat",
+    "onCommand:go-on.exportChat",
+    "onCommand:go-on.newSession",
+    "onCommand:go-on.switchSession",
+    "onCommand:go-on.createWorkflow",
+    "onCommand:go-on.runWorkflow",
+    "onCommand:go-on.editCode",
+    "onCommand:go-on.refactorCode",
+    "onCommand:go-on.showProcessFlow",
+    "onView:go-on-workflow",
+    "onView:go-on-process-flow"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "go-on.chat",
+        "name": "Go-On",
+        "description": "Chat with Go-On AI Assistant",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "ask",
+            "description": "Ask a question"
+          },
+          {
+            "name": "edit",
+            "description": "Request code edits"
+          },
+          {
+            "name": "explain",
+            "description": "Explain code"
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "go-on.start",
+        "title": "Start Go-On Proxy"
+      },
+      {
+        "command": "go-on.stop",
+        "title": "Stop Go-On Proxy"
+      },
+      {
+        "command": "go-on.sendRequest",
+        "title": "Send Chat Request to Go-On"
+      },
+      {
+        "command": "go-on.healthCheck",
+        "title": "Check Go-On Health"
+      },
+      {
+        "command": "go-on.breakerStatus",
+        "title": "Check Breaker Status"
+      },
+      {
+        "command": "go-on.cacheClear",
+        "title": "Clear Cache"
+      },
+      {
+        "command": "go-on.vectorClear",
+        "title": "Clear Vector Memory"
+      },
+      {
+        "command": "go-on.configReload",
+        "title": "Reload Configuration"
+      },
+      {
+        "command": "go-on.shutdown",
+        "title": "Shutdown Go-On"
+      },
+      {
+        "command": "go-on.openChat",
+        "title": "Open Go-On Chat",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "go-on.openSettings",
+        "title": "Open Go-On Settings",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "go-on.clearChat",
+        "title": "Clear Chat History",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "go-on.exportChat",
+        "title": "Export Chat History",
+        "icon": "$(export)"
+      },
+      {
+        "command": "go-on.newSession",
+        "title": "New Chat Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "go-on.switchSession",
+        "title": "Switch Chat Session",
+        "icon": "$(list-selection)"
+      },
+      {
+        "command": "go-on.createWorkflow",
+        "title": "Create Workflow",
+        "icon": "$(workflow)"
+      },
+      {
+        "command": "go-on.runWorkflow",
+        "title": "Run Workflow",
+        "icon": "$(play)"
+      },
+      {
+        "command": "go-on.editCode",
+        "title": "Advanced Code Edit",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "go-on.refactorCode",
+        "title": "Refactor Code",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "go-on.showProcessFlow",
+        "title": "Show Process Flow",
+        "icon": "$(graph)"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "go-on-status",
+          "name": "Go-On Status",
+          "icon": "$(robot)",
+          "contextualTitle": "Go-On Proxy Status"
+        }
+      ],
+      "go-on": [
+        {
+          "id": "go-on-chat",
+          "name": "Chat",
+          "icon": "$(comment-discussion)",
+          "contextualTitle": "Go-On Chat"
+        },
+        {
+          "id": "go-on-settings",
+          "name": "Settings",
+          "icon": "$(settings-gear)",
+          "contextualTitle": "Go-On Settings"
+        },
+        {
+          "id": "go-on-workflow",
+          "name": "Workflow",
+          "icon": "$(workflow)",
+          "contextualTitle": "Go-On Workflow"
+        },
+        {
+          "id": "go-on-process-flow",
+          "name": "Process Flow",
+          "icon": "$(graph)",
+          "contextualTitle": "Go-On Process Flow"
+        }
+      ]
+    },
+    "viewContainers": {
+      "activitybar": [
+        {
+          "id": "go-on",
+          "title": "Go-On",
+          "icon": "$(robot)"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "go-on.openChat",
+          "when": "view == go-on-chat",
+          "group": "navigation"
+        },
+        {
+          "command": "go-on.openSettings",
+          "when": "view == go-on-settings",
+          "group": "navigation"
+        },
+        {
+          "command": "go-on.clearChat",
+          "when": "view == go-on-chat",
+          "group": "navigation"
+        },
+        {
+          "command": "go-on.exportChat",
+          "when": "view == go-on-chat",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Go-On",
+      "properties": {
+        "go-on.configPath": {
+          "type": "string",
+          "default": "./config.toml",
+          "description": "Path to the Go-On config file"
+        },
+        "go-on.executablePath": {
+          "type": "string",
+          "default": "./target/release/go-on",
+          "description": "Path to the Go-On executable"
+        },
+        "go-on.autoDownloadBinary": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically download Go-On runtime from GitHub releases when executablePath does not exist"
+        },
+        "go-on.releaseRepository": {
+          "type": "string",
+          "default": "mikewolfli/go-on",
+          "description": "GitHub repository used for downloading runtime assets (owner/repo)"
+        },
+        "go-on.releaseTag": {
+          "type": "string",
+          "default": "latest",
+          "description": "Release tag to download from (for example v0.1.1). Use latest for newest release"
+        },
+        "go-on.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically start Go-On when workspace opens"
+        },
+        "go-on.chat.maxHistory": {
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Maximum number of chat messages to keep in history"
+        },
+        "go-on.chat.model": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "copilot", "deepseek", "wenxin", "openai_compatible", "doubao", "claude"],
+          "enumDescriptions": [
+            "Automatically select based on configuration",
+            "GitHub Copilot",
+            "DeepSeek",
+            "Wenxin",
+            "OpenAI Compatible",
+            "Doubao",
+            "Claude"
+          ],
+          "description": "Default AI model to use for chat"
+        },
+        "go-on.chat.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0.0,
+          "maximum": 2.0,
+          "description": "Temperature for chat responses (0.0 = deterministic, 2.0 = very random)"
+        },
+        "go-on.chat.maxTokens": {
+          "type": "number",
+          "default": 2048,
+          "minimum": 1,
+          "maximum": 32768,
+          "description": "Maximum tokens for chat responses"
+        },
+        "go-on.chat.streaming": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable streaming responses for real-time chat"
+        },
+        "go-on.cache.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable response caching"
+        },
+        "go-on.vector.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable vector memory for context"
+        },
+        "go-on.health.interval": {
+          "type": "number",
+          "default": 300,
+          "minimum": 30,
+          "maximum": 3600,
+          "description": "Health check interval in seconds"
+        },
+        "go-on.ui.theme": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "light", "dark"],
+          "enumDescriptions": [
+            "Follow VS Code theme",
+            "Light theme",
+            "Dark theme"
+          ],
+          "description": "UI theme for the extension"
+        },
+        "go-on.ui.fontSize": {
+          "type": "number",
+          "default": 13,
+          "minimum": 8,
+          "maximum": 24,
+          "description": "Font size for chat interface"
+        },
+        "go-on.advancedAI.context": {
+          "type": "string",
+          "default": "You are a senior engineer assistant with expertise across languages, security, testing, and performance.",
+          "description": "Base system prompt used by advanced AI editing commands"
+        },
+        "go-on.advancedAI.showDiffByDefault": {
+          "type": "boolean",
+          "default": true,
+          "description": "Default behavior to show diff view after advanced edits or refactoring"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node ./node_modules/typescript/bin/tsc -p ./",
+    "watch": "node ./node_modules/typescript/bin/tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "echo \"No tests specified\""
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/node": "16.x",
+    "@types/adm-zip": "^0.5.7",
+    "@types/tar": "^6.1.13",
+    "eslint": "^8.28.0",
+    "@typescript-eslint/eslint-plugin": "^5.42.0",
+    "@typescript-eslint/parser": "^5.42.0",
+    "typescript": "^4.9.4"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "child_process": "^1.0.2",
+    "tar": "^6.2.1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

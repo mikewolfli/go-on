@@ -1,0 +1,143 @@
+//! Replicate agent implementation
+//!
+//! This module provides an implementation for the Replicate API.
+
+use std::collections::HashMap;
+use std::time::Duration;
+
+use anyhow::Result;
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use tokio::sync::mpsc;
+use tokio::time::sleep;
+
+use crate::agent::resolve_secret;
+use crate::agent::{Agent, Message};
+use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
+
+pub struct ReplicateAgent {
+    api_key_env: String,
+    base_url: String,
+    model: String,
+    client: reqwest::Client,
+}
+
+impl ReplicateAgent {
+    pub fn new(
+        api_key_env: String,
+        base_url: String,
+        model: String,
+        client: reqwest::Client,
+    ) -> Self {
+        Self {
+            api_key_env,
+            base_url,
+            model,
+            client,
+        }
+    }
+
+    fn build_payload(
+        &self,
+        messages: Vec<Message>,
+        principles: Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
+    ) -> Value {
+        let mut final_messages: Vec<Message> = Vec::new();
+        let mut system_text = String::new();
+
+        if let Some(items) = principles {
+            if !items.is_empty() {
+                system_text.push_str(&principles_to_text(&items));
+                system_text.push('\n');
+            }
+        }
+
+        if !system_text.is_empty() {
+            final_messages.push(Message {
+                role: "system".to_string(),
+                content: system_text,
+            });
+        }
+        final_messages.extend(messages);
+
+        let mut payload = json!({
+            "model": self.model,
+            "messages": final_messages,
+            "stream": true
+        });
+
+        if let Some(value) = option_f64(options, "temperature") {
+            payload["temperature"] = Value::from(value);
+        }
+        if let Some(value) = option_f64(options, "top_p") {
+            payload["top_p"] = Value::from(value);
+        }
+
+        payload
+    }
+
+    async fn chat_once(
+        &self,
+        messages: Vec<Message>,
+        principles: Option<Vec<String>>,
+        options: Option<HashMap<String, Value>>,
+        sender: mpsc::UnboundedSender<String>,
+    ) -> Result<()> {
+        let api_key = resolve_secret(&self.api_key_env, "replicate.api_key_env")?;
+        let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let payload = self.build_payload(messages, principles, &options);
+
+        let response = self
+            .client
+            .post(endpoint)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("replicate chat request failed with {status}: {body}");
+        }
+
+        stream_sse_to_sender(response, sender).await
+    }
+}
+
+#[async_trait]
+impl Agent for ReplicateAgent {
+    async fn chat(
+        &self,
+        messages: Vec<Message>,
+        principles: Option<Vec<String>>,
+        options: Option<HashMap<String, Value>>,
+        sender: mpsc::UnboundedSender<String>,
+    ) -> Result<()> {
+        let mut last_error: Option<anyhow::Error> = None;
+
+        for attempt in 0..=2 {
+            match self
+                .chat_once(
+                    messages.clone(),
+                    principles.clone(),
+                    options.clone(),
+                    sender.clone(),
+                )
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    last_error = Some(err);
+                    if attempt < 2 {
+                        sleep(Duration::from_secs(1_u64 << attempt)).await;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("replicate request failed")))
+    }
+}

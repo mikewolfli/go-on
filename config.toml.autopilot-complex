@@ -1,0 +1,222 @@
+# ========================================================================
+# ACP Flow Proxy Configuration - AUTOPILOT COMPLEX MODE
+# ========================================================================
+# This configuration is optimized for COMPLEX AUTOPILOT mode:
+# - Explicit multi-phase flow: planning -> coding -> review -> delivery
+# - REVIEW is always a fixed 2-AI gate
+# - Other phases may use additional AIs as needed
+# - Suitable for: major refactoring, architecture changes, complex features
+# - Chat mode: full_auto with autopilot_complexity = "complex"
+# - Requirement: at least 2 independent review-capable AIs must be configured
+# - If you do not have 2 review AIs available, do not use this mode
+# ========================================================================
+
+# Default phase (used when request does not provide phase)
+default_phase = "coding"
+
+[cache]
+enabled = true
+path = "acp_cache_complex.sqlite3"
+default_ttl_seconds = 7200        # Longer TTL for complex workflows
+max_entries = 10000               # More cache entries
+
+[vector]
+enabled = true
+auto_mode = true
+path = "acp_vector_complex.sqlite3"
+dimensions = 192
+min_query_chars = 60              # Lower threshold for more context
+top_k = 3                         # More candidates for consensus
+min_similarity = 0.78             # Slightly lower to capture more relevant context
+max_snippet_chars = 1200          # More context per snippet
+max_entries = 20000               # More entries for comprehensive analysis
+summary_enabled = true
+summary_trigger_messages = 12     # More frequent summaries
+summary_max_chars = 2000          # Longer summaries for complex workflows
+
+[autotune]
+# Runtime autotune persists state locally and adjusts vector thresholds over time.
+enabled = true
+evaluate_interval = 30            # More frequent tuning
+min_query_chars_step = 15
+min_query_chars_min = 30
+min_query_chars_max = 500         # Larger range for complex queries
+max_top_k = 6                     # More candidates
+low_precision_threshold = 0.30
+high_precision_threshold = 0.80
+state_path = "acp_autotune_state_complex.json"
+cooldown_windows = 3
+min_vector_searches = 10          # More searches for better tuning
+summary_trigger_min = 5
+summary_trigger_max = 30
+
+# Define all agents (models)
+[agents.copilot]
+type = "copilot"
+url = "http://127.0.0.1:8080"
+
+[agents.deepseek]
+type = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+model = "deepseek-chat"
+
+[agents.wenxin]
+type = "wenxin"
+api_key_env = "WENXIN_API_KEY"
+secret_key_env = "WENXIN_SECRET_KEY"
+
+[agents.claude]
+type = "claude"
+url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+model = "claude-3-7-sonnet-latest"
+anthropic_version = "2023-06-01"
+max_tokens = 4096
+
+# Generic OpenAI-compatible provider example (optional)
+#[agents.gpt4]
+#type = "openai_compatible"
+#url = "https://api.openai.com"
+#api_key_env = "OPENAI_API_KEY"
+#model = "gpt-4-turbo"
+#supports_system = true
+
+# Define an explicit full-auto flow.
+# REVIEW is the fixed approval gate with exactly 2 AI reviewers.
+# Other phases can use different agent combinations.
+[flow]
+name = "Complex Autopilot Flow"
+phases = ["planning", "coding", "review", "delivery"]
+
+# ========================================================================
+# PLANNING PHASE
+# Architecture / decomposition / change plan generation
+# ========================================================================
+[phases.planning]
+description = "Planning phase for complex autopilot tasks"
+agents = ["claude", "deepseek"]
+fallback = true
+principles = [
+    "Break large tasks into explicit milestones before editing code",
+    "Identify risky files, compatibility constraints, and rollback points early",
+    "Prefer plans that minimize unrelated churn and preserve public behavior",
+    "Call out assumptions and missing context before implementation starts"
+]
+
+[phases.planning.options]
+max_history_messages = 18
+max_history_chars = 12000
+request_timeout_seconds = 90
+cache_enabled = true
+cache_ttl_seconds = 1800
+vector_enabled = true
+vector_auto = true
+vector_min_query_chars = 60
+vector_top_k = 3
+vector_min_similarity = 0.80
+vector_max_snippet_chars = 1000
+summary_enabled = true
+summary_trigger_messages = 8
+summary_max_chars = 1200
+
+# ========================================================================
+# CODING PHASE
+# Main implementation phase. Extra AIs can be added here without changing REVIEW.
+# ========================================================================
+[phases.coding]
+description = "Coding phase for complex autopilot tasks"
+agents = ["copilot", "claude", "deepseek"]
+fallback = true
+principles = [
+    "Comprehensive error handling: null checks, boundary conditions, edge cases",
+    "All public APIs must be fully documented with examples",
+    "Functions should be self-contained (max 100 lines) with clear contracts",
+    "Use type system to prevent bugs; minimize casting and unsafe code",
+    "Performance-critical paths must be justified with benchmarks",
+    "All user-facing strings must be internationalization-ready",
+    "Thread safety must be explicit; use appropriate synchronization",
+    "Code must pass all unit and integration tests before proceeding"
+]
+
+[phases.coding.options]
+max_history_messages = 30
+# COMPLEX MODE: coding work plus a fixed 2-AI review gate.
+autopilot_complexity = "complex"
+max_history_chars = 20000
+request_timeout_seconds = 180
+review_timeout_seconds = 60
+cache_enabled = true
+cache_ttl_seconds = 3600
+vector_enabled = true
+vector_auto = true
+vector_min_query_chars = 60
+vector_top_k = 3
+vector_min_similarity = 0.78
+vector_max_snippet_chars = 1200
+summary_enabled = true
+summary_trigger_messages = 10
+summary_max_chars = 1800
+
+# REVIEW gate for full_auto complex mode.
+# Exactly 2 reviewers should be listed here. The current implementation uses the first 2.
+# If you cannot provide 2 independent reviewers, switch to config.toml.autopilot-simple.
+full_auto_review_agents = ["claude", "wenxin"]
+
+# ========================================================================
+# REVIEW PHASE
+# Fixed 2-AI approval gate. Do not add more agents here unless runtime semantics change.
+# ========================================================================
+[phases.review]
+description = "Review phase with a fixed 2-AI approval gate"
+agents = ["claude", "wenxin"]
+fallback = true
+principles = [
+    "Only return APPROVE when the proposed implementation is ready to execute safely",
+    "Reject changes with missing error handling, incomplete edge-case coverage, or obvious regressions",
+    "Check API compatibility, test impact, and security-sensitive edits before approval",
+    "If uncertain, fail closed and request revision instead of optimistic approval"
+]
+
+[phases.review.options]
+stage = "strict"
+max_history_messages = 20
+max_history_chars = 12000
+request_timeout_seconds = 60
+cache_enabled = true
+cache_ttl_seconds = 900
+vector_enabled = true
+vector_auto = true
+vector_min_query_chars = 60
+vector_top_k = 2
+vector_min_similarity = 0.80
+vector_max_snippet_chars = 1000
+summary_enabled = true
+summary_trigger_messages = 6
+summary_max_chars = 1000
+
+# REVIEW semantics: exactly 2 reviewers should approve.
+approval_mode = "dual"
+required_approvals = 2
+
+# ========================================================================
+# DELIVERY PHASE
+# Final polish, response shaping, and handoff formatting
+# ========================================================================
+[phases.delivery]
+description = "Delivery phase for final response shaping and handoff"
+agents = ["copilot", "claude"]
+fallback = true
+principles = [
+    "Summarize the final change set precisely and avoid overstating what was done",
+    "Keep user-facing instructions short, direct, and operational",
+    "Mention blockers, residual risk, and missing prerequisites explicitly",
+    "Prefer a concise handoff over another implementation pass"
+]
+
+[phases.delivery.options]
+max_history_messages = 16
+max_history_chars = 10000
+cache_enabled = true
+cache_ttl_seconds = 900
+vector_enabled = false
+summary_enabled = false

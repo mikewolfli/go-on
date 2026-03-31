@@ -1,0 +1,45 @@
+# RULES Templates
+
+These files are auto-loaded by `go-on` when `config.toml` is loaded (startup and `config.reload`).
+
+## Discovery Paths
+
+The loader reads optional files relative to the config directory:
+
+1. `RULES.md`
+2. `RULES/global.md`
+3. `RULES/common.md`
+4. `RULES/local.md`
+5. `<phase>.rules.md` (for example `coding.rules.md`)
+6. `RULES/<phase>.md`
+7. `RULES/<phase>.rules.md`
+8. `RULES/<phase>.local.md`
+
+## Merge Behavior
+
+- Existing `phases.<name>.principles` from TOML are kept.
+- Auto-loaded rules are appended after existing principles.
+- Duplicate lines are deduplicated while preserving first appearance order.
+- Markdown headings and fenced code blocks are ignored.
+- List item prefixes (`-`, `*`, `+`, `1.`, `1)`) are stripped.
+
+## Recommended Workflow
+
+1. Keep stable, cross-project constraints in `RULES/global.md`.
+2. Keep team conventions in `RULES/common.md`.
+3. Keep machine-local or developer-local overrides in `RULES/local.md`.
+4. Keep phase-specific rules in `RULES/coding.md`, `RULES/review.md`, etc.
+5. Keep project-local phase overrides in `RULES/<phase>.local.md` or `<phase>.rules.md` sidecar files when needed.
+
+## Example
+
+If your config defines phases `coding` and `review`, start with:
+
+- `RULES/global.md`
+- `RULES/coding.md`
+- `RULES/review.md`
+
+Then call `config.reload` to apply changes without restarting.
+
+If a rule file exists but contributes no usable lines, `--validate-config` and `config.reload` will report it as a warning.
+

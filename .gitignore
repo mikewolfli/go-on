@@ -1,0 +1,5 @@
+target/
+vscode-addon/node_modules/
+*.sqlite3
+acp_autotune_state*.json
+*.log
