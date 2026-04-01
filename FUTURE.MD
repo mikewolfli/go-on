@@ -187,6 +187,218 @@ Metrics and Prometheus are in place, but there is not yet a first-class trace mo
 
 There is no built-in benchmark harness for measuring task completion quality, review precision, tool loop reliability, or regression against known scenarios.
 
+### 3.3 Operational Agent Discipline Additions
+
+Beyond the architectural gaps listed above, modern coding-agent systems must enforce hard behavioral contracts at runtime. Here are the key patterns from Claude Code's 8-skill and 6-engineering-optimization synthesis that should be adopted:
+
+#### Skill 1: Coordinator Anti-Lazy-Delegation Contract
+
+Every delegation from a coordinator (or manager) agent to a worker agent must include:
+
+- explicit task objective with acceptance criteria
+- constraints on tool use, budget, and timeframe
+- evidence pointers or artifact references from prior steps
+- explicit failure modes and recovery signals
+- confidence expectation from the worker
+
+Lazy delegation (passing raw unstructured context and hoping the worker figures it out) guarantees failure in concurrent or unsupervised settings.
+
+#### Skill 2: Worker Task Schema Discipline
+
+Each agent role must have a strictly typed input schema and output schema:
+
+- input schema defines context envelope, objective, constraints, and evidence references
+- output schema defines deliverables, artifacts, confidence score, and failure signals
+- schema enforcement is non-negotiable; invalid output is treated as fatal
+- schemas are versioned to allow runtime negotiation
+
+This prevents context pollution and ensures traceability.
+
+#### Skill 3: Adversarial Verification Policy
+
+After primary generation, run an independent verification check that:
+
+- assumes the primary output may be wrong or incomplete
+- uses deterministic checks (syntax, tests, compile) where available
+- uses adversarial questioning if deterministic checks pass
+- returns a structured verdict: approve, revise, reject, or insufficient-evidence
+
+Do not use a single reviewer; use multiple independent signals.
+
+#### Skill 4: Self-Rationalization Guard
+
+Agents must not accept their own reasoning uncritically. Require:
+
+- explicit assumption statements (what does the agent believe to be true?)
+- evidence pointers for each claim made in the task
+- auto-flag when assumptions contradict evidence
+- forced re-examination if confidence < threshold or evidence is weak
+
+This prevents agents from spinning narratives that ignore contradictory signals.
+
+#### Skill 5: Typed Memory Classes
+
+Do not treat all memory as one bin. Implement separate memory classes:
+
+- transient: current turn conversation only
+- episodic: this task's artifacts and decisions
+- semantic: reusable facts and code patterns
+- project-state: distilled project facts, architecture, style
+- observation: raw tool results and terminal output
+
+Each class has different write policy, retention, retrieval ranking, and promotion rules.
+
+#### Skill 6: Memory Drift and Correctness Guards
+
+Memory is a liability if not maintained. Require:
+
+- usefulness scoring on retrieved memory (is it relevant?)
+- staleness detection (is it outdated?)
+- size bounds per memory class
+- periodic revalidation of semantic memory against project state
+- garbage collection and compaction
+
+#### Skill 7: Startup Repository Context Loading
+
+When an agent task begins, asynchronously load and cache:
+
+- project README and architecture overview
+- build and test commands
+- recent commits and refactor patterns
+- lint and style rules
+- team conventions and decision history
+
+This should happen in parallel with user interaction, not block the user.
+
+#### Skill 8: Static and Dynamic Prompt Segmentation
+
+Organize prompts into layers:
+
+- layer 0: static role-based system prompt (planner, coder, reviewer, etc.)
+- layer 1: static project conventions and constraints
+- layer 2: static phase and mode instructions
+- layer 3: dynamic task objective and context envelope
+- layer 4: dynamic evidence pointers and prior decisions
+- layer 5: dynamic conversation turn and new information
+
+This structure allows reuse of static layers, reduces token waste, and makes prompts debuggable.
+
+#### Engineering Optimization 1: Circuit-Breaker Based Fallback
+
+Already partially present in go-on; strengthen with:
+
+- per-provider circuit breaker state in traces
+- fallback triggering logged with reason and destination
+- circuit state reset policy and observability
+
+#### Engineering Optimization 2: Tool-Execution Budgets
+
+Bounded tool loops need enforced budgets:
+
+- max tool calls per agent per task
+- max wall-clock time per tool call
+- max tokens per tool invocation
+- max tokens per multi-step loop
+- graceful degradation when budget exhausted
+
+#### Engineering Optimization 3: Task-Level Audit Logging
+
+Every agent decision must be logged:
+
+- what decision was made (tool call, approval, rejection, etc.)
+- who made it (which agent or policy)
+- why (which inputs or signals drove the decision)
+- outcome (what happened after)
+- confidence/risk score from decision maker
+
+#### Engineering Optimization 4: Forked Sub-Agent Isolation
+
+When spawning child agents (for parallelism or specialization):
+
+- each child runs in an isolated execution context
+- kill signal from parent or policy timeout kills child
+- child failure must not corrupt parent state
+- child output is validated before merge
+- resource limits (tokens, time, API calls) are per-child
+
+#### Engineering Optimization 5: Prompt Architecture Optimization
+
+Prompts must be structured for token efficiency and clarity:
+
+- separate system prompt (static, reused) from task prompt (dynamic, per-turn)
+- use compact formats for structured data (JSON/YAML vs. prose)
+- compress task history using summaries and semantic compression
+- truncate irrelevant context before model invocation
+- use token budgets per layer
+
+#### Engineering Optimization 6: Memory Promotion Pipeline
+
+Explicit pipeline from raw output to durable knowledge:
+
+- layer 0: model output (raw, noisy, tool results)
+- layer 1: parsed and validated (schema enforced)
+- layer 2: summarized (key decision + rationale)
+- layer 3: indexed (semantic vectors, metadata tags)
+- layer 4: promoted to project state (only high-confidence facts)
+
+Each promotion requires gating; not everything graduates.
+
+### 3.4 Gap Against Current go-on Implementation
+
+Comparing the 8 skills and 6 optimizations against current go-on:
+
+**Already covered or easy to add to existing infrastructure:**
+
+- Tool-execution budgets (can layer on top of Phase 1)
+- Task-level audit logging (can extend metrics and trace system)
+- Circuit-breaker fallback (partially exists; easy to expose in traces)
+- Prompt architecture optimization (tool, not runtime change; can guide prompt templates)
+
+**Partially covered:**
+
+- Review gate exists, but not structured with typed schemas or adversarial checks
+- Memory exists (cache, vector, summary) but lacks unified policy and guards
+- Multi-agent is phase-routed, but not role-specialized with typed contracts
+
+**Missing entirely:**
+
+- Coordinator anti-lazy-delegation contract (requires explicit task envelope types)
+- Worker task schema discipline (requires typed handoff layer)
+- Self-rationalization guard (requires assumption tracking and revalidation logic)
+- Typed memory classes (requires memory policy and promotion pipeline)
+- Startup repository context loading (requires async bootstrap phase)
+- Forked sub-agent isolation (requires process/execution isolation for parallelism)
+
+### 3.5 Recommended Additions to the Roadmap
+
+To incorporate the 8+6 synthesis, add these targeted enhancements:
+
+**Immediate (Phases 0-1):**
+
+- Add typed task envelope and handoff schema to enable Skills 1-2
+- Document agent roles and their input/output schema contracts
+- Add deterministic verification signals to strengthen existing review gate
+
+**Near-term (Phases 2-3):**
+
+- Implement memory policy layer with typed classes and promotion pipeline (Skill 5-6)
+- Add self-rationalization logic: assumption tracking, evidence validation, re-examine triggers (Skill 4)
+- Add startup context loading for repository baseline (Skill 7)
+- Extend audit logging to cover all agent decisions (Optimization 3)
+
+**Mid-term (Phases 4-5):**
+
+- Enforce prompt architecture segmentation (Skill 8, Optimization 5)
+- Implement coordinator anti-lazy-delegation contract in delegation logic (Skill 1)
+- Add forked sub-agent isolation primitives for parallel branches (Optimization 6)
+- Strengthen review gate with structured verification and adversarial checks (Skill 3)
+
+**Long-term (Phases 6-9):**
+
+- Promote memory pipeline through all phases (Optimization 4)
+- Integrate all agent-discipline rules into graph execution model (Phase 6)
+- Build evaluation suite that validates agent-discipline compliance at task level
+
 ## 4. Future Operating Model
 
 The recommended target is:
@@ -214,12 +426,16 @@ Deliverables:
 - document invariants for cache, vector memory, summary memory, and breaker state
 - standardize RPC schemas for diagnostics and future extensibility
 - add a compatibility matrix for modes, phases, and provider capabilities
+- **[Agent Discipline]** document the contract for agent task envelopes (objective, constraints, evidence, failure modes)
+- **[Agent Discipline]** define input/output schemas for each planned agent role (planner, coder, tester, reviewer, researcher)
+- **[Agent Discipline]** add audit logging schema for agent decisions and outcomes
 
 Exit criteria:
 
 - architecture boundaries are documented
 - all current control RPCs have contract tests
 - mode semantics are stated precisely in docs and config validation
+- agent task envelope contract is defined and validated at phase boundaries
 
 ## Phase 1: Add A First-Class Tool Runtime
 
@@ -236,18 +452,23 @@ Deliverables:
   - inspect git diff
 - add per-tool permission levels and audit records
 - expose tool call metrics and tool failure taxonomy
+- **[Agent Discipline]** enforce tool call budgets (max calls, max tokens per call, max wall-clock per loop)
+- **[Agent Discipline]** implement deterministic verification signals for tool outputs (syntax, schema, compile checks)
+- **[Agent Discipline]** add structured task envelope validation at tool invocation (confirm constraints and objective are still valid)
 
 Recommended implementation notes:
 
 - keep provider adapters separate from tool orchestration
 - treat tools as runtime capabilities, not provider-specific features
 - require bounded tool loops with max steps and max wall-clock budget
+- treat tool output validation as a first-class verification signal alongside LLM review
 
 Exit criteria:
 
 - `agent` mode can complete at least one multi-step tool loop
 - tool calls are visible in traces and metrics
 - permission gating works per tool class
+- tool budgets are enforced and visible in telemetry
 
 ## Phase 2: Separate Modes By Orchestration Semantics
 
@@ -309,16 +530,21 @@ Deliverables:
 - verification stages such as syntax, tests, policy, and task-completion checks
 - disagreement handling and arbitration policy
 - support for model reviewer plus deterministic verifier combination
+- **[Agent Discipline: Adversarial Verification Policy]** implement independent verifier that questions primary output assumptions
+- **[Agent Discipline: Self-Rationalization Guard]** require reviewers to validate assumptions against evidence; auto-flag weak evidence
+- **[Agent Discipline: Structured Verification]** introduce verification confidence score and require high confidence + deterministic pass for `full_auto` approval
 
 Recommended implementation notes:
 
 - treat tests, lint, and compile checks as independent verification signals
 - do not rely only on LLM reviewers for execution approval
+- do not allow a single reviewer to approve high-risk operations; require consensus or multiple signal types
 
 Exit criteria:
 
 - `full_auto` approval can depend on both LLM review and deterministic verification
 - invalid reviewer output is isolated and measurable
+- structured verification verdicts include confidence and reasoning trace
 
 ## Phase 5: Add Role-Specialized Multi-Agent Collaboration
 
@@ -338,17 +564,24 @@ Deliverables:
 - role-specific prompt templates and policy budgets
 - manager or coordinator role for delegation
 - merge policy for multiple agent outputs
+- **[Agent Discipline: Coordinator Anti-Lazy-Delegation]** enforce that each delegation includes explicit task objective, constraints, evidence pointers, and failure modes
+- **[Agent Discipline: Worker Task Schema]** define and enforce input/output schemas for each role; reject invalid output as fatal
+- **[Agent Discipline: Typed Memory Classes]** implement role-aware memory retrieval: each role gets project-state + episodic context sized appropriately to role
+- **[Agent Discipline: Startup Context Loading]** async load and cache project README, architecture, build commands, and style rules before spawning worker agents
 
 Recommended implementation notes:
 
 - do not start with fully dynamic agent swarms
 - begin with a fixed small set of roles and explicit handoff schema
 - reuse current phase model to constrain which roles can run in which phases
+- treat handoff contract violation as task failure, not graceful degradation
 
 Exit criteria:
 
 - one task can involve at least planner -> coder -> tester -> reviewer handoff
 - each handoff is traceable and replayable
+- each agent receives compact context envelope matching its schema
+- schema violations in handoff are caught and logged
 
 ## Phase 6: Move From Phase Chain To Execution Graph
 
@@ -390,11 +623,16 @@ Deliverables:
 - decay and pruning policy
 - phase-aware and task-aware retrieval ranking
 - provenance tags on retrieved memory
+- **[Agent Discipline: Typed Memory Classes]** enforce separate memory classes with different policies: transient, episodic, semantic, project-state, observation
+- **[Agent Discipline: Memory Promotion Pipeline]** implement gated pipeline: raw output -> validated -> summarized -> indexed -> promoted to project state
+- **[Agent Discipline: Memory Guards]** implement correctness guards: usefulness scoring, staleness detection, size bounds per class, periodic revalidation, garbage collection
 
 Exit criteria:
 
 - memory retrieval is explainable
 - noisy or low-value memory does not accumulate without control
+- memory promotion requires gating; not all artifacts graduate to durable state
+- retrieved memory includes confidence and staleness metadata
 
 ## Phase 8: Add Trace And Evaluation Infrastructure
 
@@ -625,6 +863,40 @@ The layered strategy is working when:
 
 In short: cheap paths handle common work, expensive paths handle only hard or risky work.
 
+### 5B.8 Prompt Architecture Optimization
+
+Prompts are often the largest hidden cost in agent systems. Structure prompts in layers to maximize reuse and minimize token waste:
+
+**Static Layers (reused across many requests):**
+
+- system.role: role-specific instructions (planner vs. coder vs. reviewer tone and constraints)
+- system.mode: mode-specific rules (ask vs. edit vs. agent vs. full_auto semantics)
+- system.phase: phase-specific guidance (discovery, implementation, testing, review phases)
+- system.conventions: project-specific constraints, style rules, approved tool usage
+
+**Dynamic Layers (per-task):**
+
+- task.objective: what result is needed, acceptance criteria
+- task.constraints: budget, deadline, tool restrictions, scope limits
+- task.evidence: prior artifacts, decisions, evidence pointers from prior steps
+
+**Per-Turn Layers:**
+
+- turn.context: current state, recent decisions
+- turn.new_info: new input, tool results, feedback
+
+**Implementation:**
+
+- cache static layer hashes; send only delta if unchanged
+- tokenize each layer independently to measure per-layer cost
+- use compact formats (JSON keys vs. prose) for structured data
+- compress history using summaries before sending; never send raw transcript to expensive models
+- use vector retrieval to insert only relevant prior evidence, not all past context
+
+**Cost Impact:**
+
+Aligned prompt architecture can reduce per-request cost by 20-40% without quality loss, because dynamic and per-turn layers are much smaller than full raw transcript.
+
 ## 5C. Multi-Agent And Multi-Task Concurrency Blueprint
 
 This section defines a practical high-throughput design for running many agent tasks in parallel without losing safety, fairness, or quality.
@@ -812,6 +1084,52 @@ The design is successful when:
 - traces can fully reconstruct branch decisions and joins
 
 In short: more parallel work, but with predictable control and recoverable outcomes.
+
+### 5C.12 Forked Sub-Agent Isolation
+
+When spawning parallel branches (for example planner + concurrency research while coder works), isolate each branch strictly:
+
+**Execution Isolation:**
+
+- each forked agent runs in a separate execution context
+- child agent cannot modify parent state
+- child failure (crash, timeout, invalid output) must not corrupt parent
+- resource limits (token count, wall-clock time, RPC quota) are per-child, not shared
+
+**Lifespan Control:**
+
+- parent can terminate child with kill signal
+- policy timeout kills child automatically
+- child cannot escape its designated time/token budget
+- parent waits for all children, with explicit join semantics
+
+**Output Validation:**
+
+- child output is validated against schema before merge
+- invalid output is treated as task failure, not silent drop
+- output from multiple children is aggregated by merge policy, not concatenated
+- confidence and provenance metadata from each child is retained
+
+**Failure Recovery:**
+
+- child timeouts trigger automatic fallback (smaller branch plan, skip optional child)
+- child crash does not propagate exception to parent
+- failed child's partial output is tagged failed + incomplete
+- parent continues with remaining children or degraded outcome
+
+**Observability:**
+
+- each forked agent has unique `child_id` in traces
+- fork decision, fork point, join point all logged
+- child resource usage (tokens, time, calls) measured independently
+- child-to-child causality is visible in trace graph
+
+**Implementation Notes:**
+
+- use process-level or container-level isolation if possible (for true process isolation)
+- at minimum, use execution scope isolation + resource limits
+- validate kill-signal handling; do not leave zombie children
+- test fork/join under provider failures and token exhaustion scenarios
 
 ## 6. Recommended Build Order
 
