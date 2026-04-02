@@ -38,6 +38,10 @@
     "onView:go-on-process-flow"
   ],
   "main": "./out/extension.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/go-on"
+  },
   "contributes": {
     "chatParticipants": [
       {
