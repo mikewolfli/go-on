@@ -839,12 +839,16 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Open chat command
     let openChatCommand = vscode.commands.registerCommand('go-on.openChat', () => {
+        // Reveal the Go-On activity bar and Chat view
         vscode.commands.executeCommand('workbench.view.extension.go-on');
+        vscode.commands.executeCommand('workbench.view.extension.go-on-chat');
     });
 
     // Open settings command
     let openSettingsCommand = vscode.commands.registerCommand('go-on.openSettings', () => {
+        // Reveal the Go-On activity bar and Settings view
         vscode.commands.executeCommand('workbench.view.extension.go-on');
+        vscode.commands.executeCommand('workbench.view.extension.go-on-settings');
     });
 
     // Clear chat command
@@ -1015,7 +1019,7 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
-    goOnManager.stop();
+    if (goOnManager) goOnManager.stop();
 }
 
 /**
