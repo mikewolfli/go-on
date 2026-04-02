@@ -7,7 +7,8 @@
 
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
 use crate::agent::AgentRegistry;
@@ -122,30 +123,161 @@ impl McpHttpServer {
 
     /// Run the HTTP server
     pub async fn run(&self) -> Result<()> {
-        // HTTP server implementation (can be enhanced with actix-web or hyper in the future)
         log::info!("MCP HTTP server listening on {}", self.bind_addr);
-
-        // For now, we provide a placeholder implementation that logs the server startup
-        // Future enhancement: implement full HTTP/1.1 server using:
-        // - actix-web for production-grade async HTTP
-        // - hyper for lower-level control
-        // - warp for lightweight REST API
-
-        // The server is ready to accept connections
-        // In a full implementation, this would:
-        // 1. Bind to the specified address
-        // 2. Accept incoming HTTP POST requests
-        // 3. Route JSON-RPC calls to mcp_server.handle_request()
-        // 4. Stream responses back to clients
+        let listener = TcpListener::bind(&self.bind_addr).await?;
 
         log::info!("MCP HTTP server is operational. Ready to accept requests.");
         log::debug!("MCP Protocol Version: {}", crate::mcp::MCP_VERSION);
 
-        // Keep the server running (infinite loop with proper cancellation)
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            let (mut socket, peer_addr) = listener.accept().await?;
+            let mcp_server = Arc::clone(&self.mcp_server);
+
+            tokio::spawn(async move {
+                if let Err(err) = handle_http_connection(&mut socket, mcp_server).await {
+                    log::warn!("HTTP connection error from {}: {}", peer_addr, err);
+                }
+            });
         }
     }
+}
+
+async fn handle_http_connection(
+    socket: &mut tokio::net::TcpStream,
+    mcp_server: Arc<McpServer>,
+) -> Result<()> {
+    let mut buffer = vec![0u8; 64 * 1024];
+    let bytes_read = socket.read(&mut buffer).await?;
+    if bytes_read == 0 {
+        return Ok(());
+    }
+
+    let request_text = String::from_utf8_lossy(&buffer[..bytes_read]);
+    let header_end = request_text
+        .find("\r\n\r\n")
+        .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing header terminator"))?;
+
+    let (header_part, body_initial_part) = request_text.split_at(header_end + 4);
+    let mut lines = header_part.lines();
+    let request_line = lines
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing request line"))?;
+
+    let mut request_line_parts = request_line.split_whitespace();
+    let method = request_line_parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing method"))?;
+    let path = request_line_parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing path"))?;
+
+    if method == "GET" && path == "/health" {
+        write_http_json_response(
+            socket,
+            200,
+            serde_json::json!({
+                "status": "ok",
+                "protocolVersion": crate::mcp::MCP_VERSION,
+            }),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if method != "POST" {
+        write_http_json_response(
+            socket,
+            405,
+            serde_json::json!({"error": "method not allowed"}),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let content_length = extract_content_length(header_part).unwrap_or(0);
+    let mut body_bytes = body_initial_part.as_bytes().to_vec();
+    if body_bytes.len() < content_length {
+        let mut remaining = vec![0u8; content_length - body_bytes.len()];
+        socket.read_exact(&mut remaining).await?;
+        body_bytes.extend_from_slice(&remaining);
+    }
+    body_bytes.truncate(content_length);
+
+    let body_str = String::from_utf8_lossy(&body_bytes);
+    let request = match serde_json::from_str::<JsonRpcRequest>(&body_str) {
+        Ok(req) => req,
+        Err(parse_error) => {
+            let error_response = JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                result: None,
+                error: Some(crate::mcp::JsonRpcError {
+                    code: crate::mcp::error_codes::PARSE_ERROR,
+                    message: format!("Parse error: {}", parse_error),
+                    data: None,
+                }),
+                id: None,
+            };
+            write_http_json_response(socket, 200, serde_json::to_value(error_response)?).await?;
+            return Ok(());
+        }
+    };
+
+    let response = mcp_server.handle_request(request).await?;
+    write_http_json_response(socket, 200, serde_json::to_value(response)?).await?;
+
+    Ok(())
+}
+
+fn extract_content_length(headers: &str) -> Option<usize> {
+    headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.trim().eq_ignore_ascii_case("content-length") {
+            value.trim().parse::<usize>().ok()
+        } else {
+            None
+        }
+    })
+}
+
+async fn write_http_json_response(
+    socket: &mut tokio::net::TcpStream,
+    status: u16,
+    body: serde_json::Value,
+) -> Result<()> {
+    let body_text = serde_json::to_string(&body)?;
+    let status_text = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        405 => "Method Not Allowed",
+        500 => "Internal Server Error",
+        _ => "OK",
+    };
+
+    let response = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        status,
+        status_text,
+        body_text.len(),
+        body_text
+    );
+
+    socket.write_all(response.as_bytes()).await?;
+    socket.flush().await?;
+    Ok(())
+}
+
+#[cfg(test)]
+fn parse_request_target_for_test(raw_request: &str) -> Option<(String, String)> {
+    let first_line = raw_request.lines().next()?;
+    let mut parts = first_line.split_whitespace();
+    let method = parts.next()?.to_string();
+    let path = parts.next()?.to_string();
+    Some((method, path))
+}
+
+#[cfg(test)]
+fn content_length_for_test(headers: &str) -> Option<usize> {
+    extract_content_length(headers)
 }
 
 #[cfg(test)]
@@ -183,5 +315,19 @@ mod tests {
             server.bind_addr, "127.0.0.1:8080",
             "Bind address should be set correctly"
         );
+    }
+
+    #[test]
+    fn test_extract_content_length() {
+        let headers = "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 42\r\n\r\n";
+        assert_eq!(content_length_for_test(headers), Some(42));
+    }
+
+    #[test]
+    fn test_parse_request_target() {
+        let request = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let parsed = parse_request_target_for_test(request).expect("request line should parse");
+        assert_eq!(parsed.0, "GET");
+        assert_eq!(parsed.1, "/health");
     }
 }

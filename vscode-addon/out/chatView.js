@@ -4,10 +4,11 @@ exports.GoOnChatViewProvider = void 0;
 const vscode = require("vscode");
 const child_process_1 = require("child_process");
 class GoOnChatViewProvider {
-    constructor(_extensionUri, manager, context) {
+    constructor(_extensionUri, manager, context, onViewResolved) {
         this._extensionUri = _extensionUri;
         this.manager = manager;
         this.context = context;
+        this.onViewResolved = onViewResolved;
         this._currentSession = 'default';
         this._sessions = new Map();
         this._loadSessions();
@@ -47,6 +48,11 @@ class GoOnChatViewProvider {
             ]
         };
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+        if (this.onViewResolved) {
+            Promise.resolve(this.onViewResolved()).catch((error) => {
+                console.warn('Failed to initialize Go-On runtime after chat view opened:', error);
+            });
+        }
         webviewView.webview.onDidReceiveMessage(async (message) => {
             switch (message.type) {
                 case 'sendMessage':
@@ -145,8 +151,8 @@ class GoOnChatViewProvider {
             switch (language) {
                 case 'javascript':
                     try {
-                        // Basic JS evaluation (in a real implementation, this should be sandboxed)
-                        result = String(eval(code));
+                        // Use Function constructor instead of eval for better security
+                        result = String(new Function('return (' + code + ')()')());
                     }
                     catch (e) {
                         result = `Error: ${e.message}`;

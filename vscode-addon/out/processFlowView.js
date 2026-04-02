@@ -158,13 +158,33 @@ class GoOnProcessFlowViewProvider {
     }
     async _updateProcess(processId, updates) {
         const processes = this.context.globalState.get('go-on-processes', {});
-        if (processes[processId]) {
+        // Validate input
+        if (!processId) {
+            console.error('Process ID is required');
+            vscode.window.showErrorMessage('Invalid process: ID is required');
+            return;
+        }
+        if (!processes[processId]) {
+            console.error('Process not found:', processId);
+            vscode.window.showErrorMessage('Process not found');
+            return;
+        }
+        if (updates && typeof updates === 'object' && updates.stages && !Array.isArray(updates.stages)) {
+            console.error('Invalid stages format: must be array');
+            vscode.window.showErrorMessage('Invalid stages format: must be array');
+            return;
+        }
+        try {
             Object.assign(processes[processId], updates);
             await this.context.globalState.update('go-on-processes', processes);
             this._view?.webview.postMessage({
                 type: 'processUpdated',
                 process: processes[processId]
             });
+        }
+        catch (error) {
+            console.error('Failed to update process:', error);
+            vscode.window.showErrorMessage(`Failed to update process: ${error.message}`);
         }
     }
     _getHtmlForWebview(webview) {

@@ -14,6 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -120,9 +121,39 @@ pub trait Agent: Send + Sync {
     }
 
     /// (Phase 0/1 discipline) Structured agent task entrypoint
-    fn run_task(&self, _envelope: AgentTaskEnvelope) -> Result<AgentTaskResult> {
-        // 默认实现：可由具体 agent 实现覆盖
-        Err(anyhow::anyhow!("run_task not implemented for this agent"))
+    fn run_task(&self, envelope: AgentTaskEnvelope) -> Result<AgentTaskResult> {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_else(|_| "0".to_string());
+
+        let audit = AgentAuditLog {
+            agent: "generic".to_string(),
+            phase: envelope.phase.clone(),
+            task_id: envelope.task_id.clone(),
+            decision: "rejected".to_string(),
+            rationale: Some(
+                "This provider does not implement synchronous task execution; use chat() or provide a concrete run_task override."
+                    .to_string(),
+            ),
+            timestamp,
+        };
+
+        Ok(AgentTaskResult {
+            success: false,
+            output: Some(json!({
+                "task_id": envelope.task_id,
+                "phase": envelope.phase,
+                "role": envelope.role,
+                "objective": envelope.objective,
+                "status": "unsupported_operation"
+            })),
+            error: Some(
+                "run_task is unsupported for this provider without a concrete override"
+                    .to_string(),
+            ),
+            audit_log: Some(serde_json::to_string(&audit)?),
+        })
     }
 }
 

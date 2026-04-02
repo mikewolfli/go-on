@@ -2,7 +2,7 @@
   "name": "go-on-vscode",
   "displayName": "Go-On VS Code Extension",
   "description": "VS Code extension for the Go-On Rust ACP proxy",
-  "version": "0.2.2",
+  "version": "0.2.11",
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -24,6 +24,7 @@
     "onView:go-on-chat",
     "onView:go-on-settings",
     "onCommand:go-on.openChat",
+    "onCommand:go-on.closeChat",
     "onCommand:go-on.openSettings",
     "onCommand:go-on.clearChat",
     "onCommand:go-on.exportChat",
@@ -43,28 +44,6 @@
     "url": "https://github.com/your-org/go-on"
   },
   "contributes": {
-    "chatParticipants": [
-      {
-        "id": "go-on.chat",
-        "name": "Go-On",
-        "description": "Chat with Go-On AI Assistant",
-        "isSticky": true,
-        "commands": [
-          {
-            "name": "ask",
-            "description": "Ask a question"
-          },
-          {
-            "name": "edit",
-            "description": "Request code edits"
-          },
-          {
-            "name": "explain",
-            "description": "Explain code"
-          }
-        ]
-      }
-    ],
     "commands": [
       {
         "command": "go-on.start",
@@ -106,6 +85,11 @@
         "command": "go-on.openChat",
         "title": "Open Go-On Chat",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "go-on.closeChat",
+        "title": "Close Go-On Chat",
+        "icon": "$(close)"
       },
       {
         "command": "go-on.openSettings",
@@ -199,14 +183,31 @@
         {
           "id": "go-on",
           "title": "Go-On",
-          "icon": "$(robot)"
+          "icon": "media/robot.svg"
         }
       ]
     },
     "menus": {
+      "viewContainer/title": [
+        {
+          "command": "go-on.openChat",
+          "when": "viewContainer == go-on",
+          "group": "navigation@1"
+        },
+        {
+          "command": "go-on.openSettings",
+          "when": "viewContainer == go-on",
+          "group": "navigation@2"
+        }
+      ],
       "view/title": [
         {
           "command": "go-on.openChat",
+          "when": "view == go-on-chat",
+          "group": "navigation"
+        },
+        {
+          "command": "go-on.closeChat",
           "when": "view == go-on-chat",
           "group": "navigation"
         },

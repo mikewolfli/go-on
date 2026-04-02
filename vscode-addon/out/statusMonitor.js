@@ -14,30 +14,42 @@ class StatusMonitor {
     }
     async updateStatus() {
         const isRunning = this.manager.isRunning();
-        this.statusBarItem.text = `$(robot) Go-On: ${isRunning ? 'Running' : 'Stopped'}`;
-        this.statusBarItem.tooltip = `Go-On Status: ${isRunning ? 'Connected' : 'Disconnected'}\nClick to open chat`;
-        if (isRunning) {
-            this.statusBarItem.backgroundColor = undefined;
-        }
-        else {
-            this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
-        }
+        this.statusBarItem.text = '$(comment-discussion) Go-On Chat';
+        this.statusBarItem.tooltip = isRunning
+            ? 'Go-On backend is running. Click to open chat.'
+            : 'Click to open chat. Backend can be configured from Chat/Settings.';
+        this.statusBarItem.backgroundColor = undefined;
     }
     startHealthMonitoring() {
         const config = vscode.workspace.getConfiguration('go-on');
         const interval = config.get('health.interval', 300) * 1000; // Convert to milliseconds
+        let consecutiveFailures = 0;
+        const maxFailures = 3;
         this.healthCheckTimer = setInterval(async () => {
             if (this.manager.isRunning()) {
                 try {
                     const health = await this.manager.sendRequest('runtime.health');
                     this.updateHealthStatus(health);
+                    consecutiveFailures = 0; // Reset counter on success
                 }
                 catch (error) {
-                    console.warn('Health check failed:', error);
-                    this.statusBarItem.tooltip = 'Go-On Status: Health check failed\nClick to open chat';
+                    consecutiveFailures++;
+                    console.warn(`Health check failed (${consecutiveFailures}/${maxFailures}):`, error);
+                    this.statusBarItem.tooltip = `Go-On Status: Health check failed (${consecutiveFailures}/${maxFailures})\nClick to open chat`;
+                    if (consecutiveFailures >= maxFailures) {
+                        console.error('Max health check failures reached, stopping monitoring');
+                        this.stopHealthMonitoring();
+                        vscode.window.showWarningMessage('Go-On: Health checks failed. Please restart the extension.');
+                    }
                 }
             }
         }, interval);
+    }
+    stopHealthMonitoring() {
+        if (this.healthCheckTimer) {
+            clearInterval(this.healthCheckTimer);
+            this.healthCheckTimer = undefined;
+        }
     }
     updateHealthStatus(health) {
         // Update tooltip with health information
@@ -48,9 +60,7 @@ class StatusMonitor {
         this.updateStatus();
     }
     dispose() {
-        if (this.healthCheckTimer) {
-            clearInterval(this.healthCheckTimer);
-        }
+        this.stopHealthMonitoring();
         this.statusBarItem.dispose();
     }
 }

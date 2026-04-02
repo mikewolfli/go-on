@@ -18,14 +18,11 @@ export class StatusMonitor {
 
     private async updateStatus() {
         const isRunning = this.manager.isRunning();
-        this.statusBarItem.text = `$(robot) Go-On: ${isRunning ? 'Running' : 'Stopped'}`;
-        this.statusBarItem.tooltip = `Go-On Status: ${isRunning ? 'Connected' : 'Disconnected'}\nClick to open chat`;
-
-        if (isRunning) {
-            this.statusBarItem.backgroundColor = undefined;
-        } else {
-            this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
-        }
+        this.statusBarItem.text = '$(comment-discussion) Go-On Chat';
+        this.statusBarItem.tooltip = isRunning
+            ? 'Go-On backend is running. Click to open chat.'
+            : 'Click to open chat. Backend can be configured from Chat/Settings.';
+        this.statusBarItem.backgroundColor = undefined;
     }
 
     private startHealthMonitoring() {
@@ -57,6 +54,13 @@ export class StatusMonitor {
         }, interval);
     }
 
+    private stopHealthMonitoring() {
+        if (this.healthCheckTimer) {
+            clearInterval(this.healthCheckTimer);
+            this.healthCheckTimer = undefined;
+        }
+    }
+
     private updateHealthStatus(health: any) {
         // Update tooltip with health information
         const healthInfo = typeof health === 'object' ? JSON.stringify(health, null, 2) : String(health);
@@ -68,9 +72,7 @@ export class StatusMonitor {
     }
 
     public dispose() {
-        if (this.healthCheckTimer) {
-            clearInterval(this.healthCheckTimer);
-        }
+        this.stopHealthMonitoring();
         this.statusBarItem.dispose();
     }
 }

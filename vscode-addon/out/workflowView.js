@@ -115,14 +115,20 @@ class GoOnWorkflowViewProvider {
         }
     }
     async _deleteWorkflow(workflowId) {
-        const workflows = this.context.globalState.get('go-on-workflows', {});
-        delete workflows[workflowId];
-        await this.context.globalState.update('go-on-workflows', workflows);
-        this._view?.webview.postMessage({
-            type: 'workflowDeleted',
-            workflowId
-        });
-        vscode.window.showInformationMessage('Workflow deleted successfully!');
+        try {
+            const workflows = this.context.globalState.get('go-on-workflows', {});
+            delete workflows[workflowId];
+            await this.context.globalState.update('go-on-workflows', workflows);
+            this._view?.webview.postMessage({
+                type: 'workflowDeleted',
+                workflowId
+            });
+            vscode.window.showInformationMessage('Workflow deleted successfully!');
+        }
+        catch (error) {
+            console.error('Failed to delete workflow:', error);
+            vscode.window.showErrorMessage(`Failed to delete workflow: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
     _getHtmlForWebview(webview) {
         const styleResetUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'reset.css'));

@@ -365,9 +365,95 @@ impl TaskRouter {
         let role_count = roles.len();
         base_rate += (role_count as f32 - 1.0) * 0.08; // +8% per additional role (up to 5)
 
-        // Experience matters (for now, assume neutral)
-        // TODO: integrate with historical success rates
+        // Historical proxy: use current role-task fit and risk profile as a stable estimator.
+        let role_fit = Self::estimate_role_task_fit(characteristics, roles);
+        base_rate += role_fit;
+
+        if characteristics.has_safety_concerns && !roles.contains(&AgentRole::Reviewer) {
+            base_rate -= 0.12;
+        }
+        if characteristics.needs_verification && !roles.contains(&AgentRole::Tester) {
+            base_rate -= 0.08;
+        }
+
         base_rate.clamp(0.2, 0.99)
+    }
+
+    fn estimate_role_task_fit(characteristics: &TaskCharacteristics, roles: &[AgentRole]) -> f32 {
+        let mut score: f32 = 0.0;
+
+        let has_coder = roles.contains(&AgentRole::Coder);
+        let has_tester = roles.contains(&AgentRole::Tester);
+        let has_reviewer = roles.contains(&AgentRole::Reviewer);
+        let has_researcher = roles.contains(&AgentRole::Researcher);
+        let has_planner = roles.contains(&AgentRole::Planner);
+
+        match characteristics.task_type {
+            TaskType::BugFix => {
+                if has_coder {
+                    score += 0.06;
+                }
+                if has_tester {
+                    score += 0.05;
+                }
+            }
+            TaskType::FeatureImplementation => {
+                if has_coder {
+                    score += 0.06;
+                }
+                if has_planner {
+                    score += 0.04;
+                }
+            }
+            TaskType::Refactoring => {
+                if has_researcher {
+                    score += 0.05;
+                }
+                if has_reviewer {
+                    score += 0.04;
+                }
+            }
+            TaskType::TestImplementation => {
+                if has_tester {
+                    score += 0.08;
+                }
+                if has_coder {
+                    score += 0.03;
+                }
+            }
+            TaskType::ArchitectureDesign => {
+                if has_planner {
+                    score += 0.08;
+                }
+                if has_researcher {
+                    score += 0.04;
+                }
+            }
+            TaskType::PerformanceOptimization => {
+                if has_researcher {
+                    score += 0.05;
+                }
+                if has_tester {
+                    score += 0.04;
+                }
+            }
+            TaskType::CodeReview => {
+                if has_reviewer {
+                    score += 0.08;
+                }
+            }
+            TaskType::Documentation | TaskType::Unknown => {
+                if has_planner {
+                    score += 0.03;
+                }
+            }
+        }
+
+        if characteristics.involves_multiple_modules && has_planner {
+            score += 0.03;
+        }
+
+        score.clamp(-0.15, 0.2)
     }
 
     fn estimate_execution_duration(

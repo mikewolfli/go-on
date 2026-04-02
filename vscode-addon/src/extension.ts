@@ -39,6 +39,7 @@ class GoOnManager {
     private requestId = 0;
     private pendingRequests = new Map<number, { resolve: Function; reject: Function }>();
     private statusItems: vscode.TreeItem[] = [];
+    private runtimeEnvOverrides: Record<string, string> = {};
 
     constructor() {
         this.updateStatus();
@@ -50,12 +51,20 @@ class GoOnManager {
         }
 
         return new Promise((resolve, reject) => {
+            let resolved = false;
+            let stderrBuffer = '';
+
             this.process = spawn(executablePath, ['--config', configPath, '--verbose'], {
                 cwd,
+                env: {
+                    ...process.env,
+                    ...this.runtimeEnvOverrides
+                },
                 stdio: ['pipe', 'pipe', 'pipe']
             });
 
             let startupTimeout: NodeJS.Timeout | undefined = setTimeout(() => {
+                this.process?.kill();
                 reject(new Error('Go-On startup timeout'));
             }, 10000);
 
@@ -88,18 +97,35 @@ class GoOnManager {
                 if (startupTimeout) {
                     clearTimeout(startupTimeout);
                     startupTimeout = undefined;
+                    resolved = true;
                     resolve();
                 }
             });
 
             this.process.stderr?.on('data', (data: Buffer) => {
-                console.error(`Go-On stderr: ${data}`);
+                const text = data.toString();
+                stderrBuffer += text;
+                if (stderrBuffer.length > 4000) {
+                    stderrBuffer = stderrBuffer.slice(-4000);
+                }
+                console.error(`Go-On stderr: ${text}`);
             });
 
             this.process.on('close', (code: number) => {
                 console.log(`Go-On process exited with code ${code}`);
+                const failedBeforeStartup = !resolved;
                 this.process = null;
                 this.updateStatus();
+
+                if (startupTimeout) {
+                    clearTimeout(startupTimeout);
+                    startupTimeout = undefined;
+                }
+
+                if (failedBeforeStartup) {
+                    const details = stderrBuffer.trim();
+                    reject(new Error(`Go-On exited before startup (code ${code}). ${details || 'No stderr output.'}`));
+                }
             });
 
             this.process.on('error', (error) => {
@@ -120,6 +146,13 @@ class GoOnManager {
 
     isRunning(): boolean {
         return this.process !== null;
+    }
+
+    setRuntimeEnvOverrides(overrides: Record<string, string>): void {
+        this.runtimeEnvOverrides = {
+            ...this.runtimeEnvOverrides,
+            ...overrides
+        };
     }
 
     async sendRequest(method: string, params?: any): Promise<any> {
@@ -192,6 +225,69 @@ class GoOnStatusProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
 interface RuntimeResolution {
     executablePath: string;
     runtimeDir: string;
+}
+
+async function promptForManualBinaryPath(
+    config: vscode.WorkspaceConfiguration,
+    workspaceRoot: string | undefined,
+    reason: string
+): Promise<RuntimeResolution> {
+    const selectOption = 'Select Local Binary';
+    const openSettingsOption = 'Open Go-On Settings';
+    const cancelOption = 'Cancel';
+    const choice = await vscode.window.showErrorMessage(
+        `Failed to download Go-On runtime: ${reason}`,
+        selectOption,
+        openSettingsOption,
+        cancelOption
+    );
+
+    if (choice === openSettingsOption) {
+        await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:go-on-vscode go-on.executablePath');
+        throw new Error('Runtime download failed. Set go-on.executablePath and try again.');
+    }
+
+    if (choice !== selectOption) {
+        throw new Error('Runtime download was canceled. You can set go-on.executablePath in settings.');
+    }
+
+    const fileSelection = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        title: 'Select Go-On executable',
+        openLabel: 'Use This Binary'
+    });
+
+    if (!fileSelection || fileSelection.length === 0) {
+        await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:go-on-vscode go-on.executablePath');
+        throw new Error('No local binary selected. Set go-on.executablePath in settings and try again.');
+    }
+
+    const selectedPath = fileSelection[0].fsPath;
+    if (!(await pathExists(selectedPath))) {
+        throw new Error(`Selected executable does not exist: ${selectedPath}`);
+    }
+
+    if (os.platform() !== 'win32') {
+        try {
+            await fsPromises.chmod(selectedPath, 0o755);
+        } catch {
+            // Ignore chmod failures for user-managed binaries.
+        }
+    }
+
+    await config.update(
+        'executablePath',
+        selectedPath,
+        workspaceRoot ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global
+    );
+
+    vscode.window.showInformationMessage(`Using local Go-On binary: ${selectedPath}`);
+    return {
+        executablePath: selectedPath,
+        runtimeDir: path.dirname(selectedPath)
+    };
 }
 
 function platformAssetInfo(): { assetName: string; executableName: string } {
@@ -293,6 +389,22 @@ async function resolveConfigPath(
         return bundledConfigPath;
     }
 
+    const workspaceConfigExamplePath = path.join(workspaceRoot, 'config.toml.example');
+    if (await pathExists(workspaceConfigExamplePath)) {
+        await fsPromises.mkdir(path.dirname(workspaceConfigPath), { recursive: true });
+        await fsPromises.copyFile(workspaceConfigExamplePath, workspaceConfigPath);
+        vscode.window.showInformationMessage(`Go-On config created from workspace template: ${workspaceConfigPath}`);
+        return workspaceConfigPath;
+    }
+
+    const bundledConfigExamplePath = path.join(runtimeDir, 'config.toml.example');
+    if (await pathExists(bundledConfigExamplePath)) {
+        await fsPromises.mkdir(path.dirname(workspaceConfigPath), { recursive: true });
+        await fsPromises.copyFile(bundledConfigExamplePath, workspaceConfigPath);
+        vscode.window.showInformationMessage(`Go-On config created from runtime template: ${workspaceConfigPath}`);
+        return workspaceConfigPath;
+    }
+
     throw new Error(
         `Config not found. Checked workspace path '${workspaceConfigPath}' and bundled path '${bundledConfigPath}'.`
     );
@@ -343,8 +455,18 @@ async function ensureGoOnBinary(
 
     const archivePath = path.join(context.globalStorageUri.fsPath, assetName);
     const downloadUrl = buildReleaseAssetUrl(releaseRepository, releaseTag, assetName);
-    await downloadFile(downloadUrl, archivePath);
-    await extractArchive(archivePath, runtimeDir);
+
+    vscode.window.showInformationMessage(`Go-On runtime not found. Downloading ${assetName} from ${releaseRepository} (${releaseTag})...`);
+    try {
+        await downloadFile(downloadUrl, archivePath);
+        await extractArchive(archivePath, runtimeDir);
+    } catch (error: any) {
+        return await promptForManualBinaryPath(
+            config,
+            workspaceRoot,
+            error?.message || String(error)
+        );
+    }
 
     if (os.platform() !== 'win32') {
         await fsPromises.chmod(executablePath, 0o755);
@@ -353,6 +475,8 @@ async function ensureGoOnBinary(
     if (!(await pathExists(executablePath))) {
         throw new Error(`Downloaded archive did not contain executable: ${executableName}`);
     }
+
+    vscode.window.showInformationMessage('Go-On runtime download complete. Chat is ready to use.');
 
     return { executablePath, runtimeDir };
 }
@@ -669,6 +793,132 @@ async function updateRulesMarkdownFiles(
 
 let goOnManager: GoOnManager;
 let statusProvider: GoOnStatusProvider;
+let runtimeReadyPromise: Promise<void> | null = null;
+
+async function executeFirstAvailableCommand(commandIds: string[]): Promise<boolean> {
+    const availableCommands = await vscode.commands.getCommands(true);
+    for (const commandId of commandIds) {
+        if (!availableCommands.includes(commandId)) {
+            continue;
+        }
+
+        await vscode.commands.executeCommand(commandId);
+        return true;
+    }
+
+    return false;
+}
+
+async function revealGoOnView(target: 'chat' | 'settings' | 'workflow' | 'process-flow'): Promise<boolean> {
+    const openedContainer = await executeFirstAvailableCommand([
+        'workbench.view.extension.go-on',
+        'workbench.view.extension.go_on',
+        'workbench.view.extension.goon'
+    ]);
+
+    const focusCommands: Record<typeof target, string[]> = {
+        chat: ['go-on-chat.focus', 'go_on_chat.focus'],
+        settings: ['go-on-settings.focus', 'go_on_settings.focus'],
+        workflow: ['go-on-workflow.focus', 'go_on_workflow.focus'],
+        'process-flow': ['go-on-process-flow.focus', 'go_on_process_flow.focus']
+    };
+
+    const focused = await executeFirstAvailableCommand(focusCommands[target]);
+
+    if (openedContainer || focused) {
+        return true;
+    }
+
+    const viewIds: Record<typeof target, string> = {
+        chat: 'go-on-chat',
+        settings: 'go-on-settings',
+        workflow: 'go-on-workflow',
+        'process-flow': 'go-on-process-flow'
+    };
+
+    try {
+        await vscode.commands.executeCommand('workbench.action.openView', viewIds[target]);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function ensureRuntimeReadyAfterChatOpen(context: vscode.ExtensionContext): Promise<void> {
+    if (runtimeReadyPromise) {
+        await runtimeReadyPromise;
+        return;
+    }
+
+    runtimeReadyPromise = (async () => {
+        const config = vscode.workspace.getConfiguration('go-on');
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+        await vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: 'Preparing Go-On runtime',
+                cancellable: false
+            },
+            async () => {
+                await ensureGoOnBinary(workspaceRoot, config, context);
+            }
+        );
+
+        if (config.get<boolean>('autoStart', false) && !goOnManager.isRunning()) {
+            await vscode.commands.executeCommand('go-on.start');
+        }
+    })();
+
+    try {
+        await runtimeReadyPromise;
+    } catch (error) {
+        runtimeReadyPromise = null;
+        throw error;
+    }
+}
+
+async function ensureGoOnStarted(): Promise<void> {
+    if (goOnManager.isRunning()) {
+        return;
+    }
+
+    await vscode.commands.executeCommand('go-on.start');
+    if (!goOnManager.isRunning()) {
+        throw new Error('Go-On backend is still stopped after startup attempt. Check executablePath/configPath settings.');
+    }
+}
+
+async function prepareRuntimeAndStartFromChat(context: vscode.ExtensionContext): Promise<void> {
+    try {
+        await ensureRuntimeReadyAfterChatOpen(context);
+        await ensureGoOnStarted();
+    } catch (error: any) {
+        vscode.window.showWarningMessage(
+            `Chat is open. Backend is not ready yet: ${error?.message || error}. Configure Go-On settings in the Chat/Settings view and retry.`
+        );
+    }
+}
+
+function parseMissingEnvVariableNames(errorMessage: string): string[] {
+    const matches = errorMessage.match(/missing required environment variables[^:]*:\s*([^\n]+)/i);
+    if (!matches || matches.length < 2) {
+        return [];
+    }
+
+    return matches[1]
+        .split(',')
+        .map((name) => name.trim())
+        .filter((name) => /^[A-Z0-9_]+$/.test(name));
+}
+
+function buildPlaceholderEnvValues(envNames: string[]): Record<string, string> {
+    const values: Record<string, string> = {};
+    for (const envName of envNames) {
+        values[envName] = '__GO_ON_PLACEHOLDER__';
+    }
+    return values;
+}
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Go-On extension is now active!');
@@ -697,22 +947,15 @@ export function activate(context: vscode.ExtensionContext) {
     // Initialize advanced edit provider
     const advancedEditProvider = new GoOnAdvancedEditProvider(goOnManager, context);
 
-    // Register chat participant
-    const chatParticipant = vscode.chat.createChatParticipant('go-on.chat', async (request, context, response, token) => {
-        try {
-            const result = await goOnManager.sendRequest('chat', {
-                messages: [{ role: 'user', content: request.prompt }]
-            });
-
-            response.markdown(result.response || JSON.stringify(result, null, 2));
-        } catch (error: any) {
-            response.markdown(`Error: ${error.message}`);
-        }
-    });
-    chatParticipant.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'robot.svg');
-
     // Register webview providers
-    const chatProvider = new GoOnChatViewProvider(context.extensionUri, goOnManager, context);
+    const chatProvider = new GoOnChatViewProvider(
+        context.extensionUri,
+        goOnManager,
+        context,
+        async () => {
+            await prepareRuntimeAndStartFromChat(context);
+        }
+    );
     const settingsProvider = new GoOnSettingsViewProvider(context.extensionUri, goOnManager, context);
     const workflowProvider = new GoOnWorkflowViewProvider(context.extensionUri, goOnManager, context);
     const processFlowProvider = new GoOnProcessFlowViewProvider(context.extensionUri, goOnManager, context);
@@ -736,7 +979,7 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        try {
+        const tryStart = async () => {
             const runtime = await ensureGoOnBinary(workspaceFolder.uri.fsPath, config, context);
             const fullConfigPath = await resolveConfigPath(
                 workspaceFolder.uri.fsPath,
@@ -745,9 +988,30 @@ export function activate(context: vscode.ExtensionContext) {
             );
 
             await goOnManager.start(fullConfigPath, runtime.executablePath, workspaceFolder.uri.fsPath);
+        };
+
+        try {
+            await tryStart();
             vscode.window.showInformationMessage('Go-On proxy started.');
         } catch (error: any) {
-            vscode.window.showErrorMessage(`Failed to start Go-On: ${error.message}`);
+            const errorMessage = String(error?.message || error);
+            const missingEnvVars = parseMissingEnvVariableNames(errorMessage);
+            if (missingEnvVars.length > 0) {
+                try {
+                    const envValues = buildPlaceholderEnvValues(missingEnvVars);
+                    goOnManager.setRuntimeEnvOverrides(envValues);
+                    await tryStart();
+                    vscode.window.showWarningMessage('Go-On proxy started without API keys. Configure provider keys in Settings before using cloud agents.');
+                    return;
+                } catch (retryError: any) {
+                    const retryMessage = String(retryError?.message || retryError);
+                    vscode.window.showErrorMessage(`Failed to start Go-On: ${retryMessage}`);
+                    throw retryError;
+                }
+            }
+
+            vscode.window.showErrorMessage(`Failed to start Go-On: ${errorMessage}`);
+            throw error;
         }
     });
 
@@ -842,17 +1106,34 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     // Open chat command
-    let openChatCommand = vscode.commands.registerCommand('go-on.openChat', () => {
-        // Reveal the Go-On activity bar and Chat view
-        vscode.commands.executeCommand('workbench.view.extension.go-on');
-        vscode.commands.executeCommand('workbench.view.extension.go-on-chat');
+    let openChatCommand = vscode.commands.registerCommand('go-on.openChat', async () => {
+        // Always show chat first; backend preparation runs in background.
+        const opened = await revealGoOnView('chat');
+        if (!opened) {
+            vscode.window.showWarningMessage('Go-On Chat view is not available yet. Reload Window after installing/updating the extension.');
+        }
+        void prepareRuntimeAndStartFromChat(context);
+    });
+
+    // Close chat command and stop backend if currently running
+    let closeChatCommand = vscode.commands.registerCommand('go-on.closeChat', async () => {
+        // Switch away from Go-On chat view to effectively close/hide it.
+        await vscode.commands.executeCommand('workbench.view.explorer');
+
+        if (goOnManager.isRunning()) {
+            goOnManager.stop();
+            vscode.window.showInformationMessage('Go-On chat closed. Running backend was stopped.');
+        } else {
+            vscode.window.showInformationMessage('Go-On chat closed. Backend was already stopped.');
+        }
     });
 
     // Open settings command
-    let openSettingsCommand = vscode.commands.registerCommand('go-on.openSettings', () => {
-        // Reveal the Go-On activity bar and Settings view
-        vscode.commands.executeCommand('workbench.view.extension.go-on');
-        vscode.commands.executeCommand('workbench.view.extension.go-on-settings');
+    let openSettingsCommand = vscode.commands.registerCommand('go-on.openSettings', async () => {
+        const opened = await revealGoOnView('settings');
+        if (!opened) {
+            vscode.window.showWarningMessage('Go-On Settings view is not available yet. Reload Window after installing/updating the extension.');
+        }
     });
 
     // Clear chat command
@@ -868,9 +1149,11 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     // Create workflow command
-    let createWorkflowCommand = vscode.commands.registerCommand('go-on.createWorkflow', () => {
-        vscode.commands.executeCommand('workbench.view.extension.go-on');
-        // The workflow creation will be handled by the workflow view
+    let createWorkflowCommand = vscode.commands.registerCommand('go-on.createWorkflow', async () => {
+        const opened = await revealGoOnView('workflow');
+        if (!opened) {
+            vscode.window.showWarningMessage('Go-On Workflow view is not available yet. Reload Window after installing/updating the extension.');
+        }
     });
 
     // Run workflow command
@@ -879,8 +1162,11 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     // Show process flow command
-    let showProcessFlowCommand = vscode.commands.registerCommand('go-on.showProcessFlow', () => {
-        vscode.commands.executeCommand('workbench.view.extension.go-on');
+    let showProcessFlowCommand = vscode.commands.registerCommand('go-on.showProcessFlow', async () => {
+        const opened = await revealGoOnView('process-flow');
+        if (!opened) {
+            vscode.window.showWarningMessage('Go-On Process Flow view is not available yet. Reload Window after installing/updating the extension.');
+        }
     });
 
     // New session command
@@ -979,18 +1265,7 @@ export function activate(context: vscode.ExtensionContext) {
         return await updateRulesMarkdownFiles(context, payload);
     });
 
-    // Auto-start if configured
-    ensureGoOnBinary(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, config, context)
-        .then(() => {
-            console.log('Go-On runtime is ready.');
-        })
-        .catch((error: any) => {
-            console.warn(`Go-On runtime check failed: ${error.message}`);
-        });
-
-    if (config.get<boolean>('autoStart', false)) {
-        vscode.commands.executeCommand('go-on.start');
-    }
+    // Runtime download/start is intentionally deferred until the Chat view is opened.
 
     context.subscriptions.push(
         startCommand,
@@ -1003,6 +1278,7 @@ export function activate(context: vscode.ExtensionContext) {
         configReloadCommand,
         shutdownCommand,
         openChatCommand,
+        closeChatCommand,
         openSettingsCommand,
         clearChatCommand,
         exportChatCommand,
@@ -1020,6 +1296,11 @@ export function activate(context: vscode.ExtensionContext) {
         updateWorkflowMappingCommand,
         updateRulesCommand
     );
+
+    // Guarantee chat visibility even when the activity bar icon is hidden by layout settings.
+    setTimeout(() => {
+        void vscode.commands.executeCommand('go-on.openChat');
+    }, 300);
 }
 
 export function deactivate() {

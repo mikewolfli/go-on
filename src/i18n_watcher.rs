@@ -153,9 +153,27 @@ impl LanguageWatcher {
 
 #[cfg(test)]
 mod tests {
+    use super::LanguageWatcher;
+    use crate::i18n::I18nManager;
+    use std::sync::Arc;
+
     #[test]
     fn test_watcher_creation() {
-        // Test will only run if we have proper i18n setup
-        // This is a placeholder for CI/CD
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+
+        let en_path = temp_dir.path().join("en_US.json");
+        std::fs::write(
+            &en_path,
+            r#"{"language":"en_US","messages":{"watcher_test":"ok"}}"#,
+        )
+        .expect("failed to write language file");
+
+        let manager = Arc::new(
+            I18nManager::new(temp_dir.path()).expect("failed to initialize i18n manager"),
+        );
+
+        let watcher = LanguageWatcher::new(manager, temp_dir.path())
+            .expect("watcher should be created from valid directory");
+        watcher.stop();
     }
 }

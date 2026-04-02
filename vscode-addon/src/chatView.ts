@@ -11,7 +11,8 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     constructor(
         private readonly _extensionUri: vscode.Uri,
         private readonly manager: any,
-        private readonly context: vscode.ExtensionContext
+        private readonly context: vscode.ExtensionContext,
+        private readonly onViewResolved?: () => void | Promise<void>
     ) {
         this._loadSessions();
     }
@@ -61,6 +62,12 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         };
 
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+
+        if (this.onViewResolved) {
+            Promise.resolve(this.onViewResolved()).catch((error) => {
+                console.warn('Failed to initialize Go-On runtime after chat view opened:', error);
+            });
+        }
 
         webviewView.webview.onDidReceiveMessage(
             async (message) => {
