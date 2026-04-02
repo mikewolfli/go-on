@@ -100,16 +100,51 @@ impl Idempotency {
 
 pub struct SandboxPolicy;
 impl SandboxPolicy {
-    pub fn can_execute_read_file(_level: &str) -> bool {
-        true
+    /// Check if read_file operations are allowed at this security level
+    ///
+    /// Security levels: "none" (unrestricted) -> "basic" (limited) -> "strict" (minimal)
+    pub fn can_execute_read_file(level: &str) -> bool {
+        match level {
+            "none" => true,   // Unrestricted: allow all read operations
+            "basic" => true,  // Basic: allow read (safe, read-only operation)
+            "strict" => true, // Strict: still allow reads (non-destructive)
+            _ => false,       // Unknown level: deny by default (fail-safe)
+        }
     }
-    pub fn can_execute_search(_level: &str) -> bool {
-        true
+
+    /// Check if file search/pattern matching operations are allowed at this security level
+    ///
+    /// Search is a read-only operation, safe across all levels
+    pub fn can_execute_search(level: &str) -> bool {
+        match level {
+            "none" => true,   // Unrestricted: allow all searches
+            "basic" => true,  // Basic: allow search (read-only, safe operation)
+            "strict" => true, // Strict: allow search (read-only, non-destructive)
+            _ => false,       // Unknown level: deny by default
+        }
     }
+
+    /// Check if write/modification/file-creation operations are allowed
+    ///
+    /// Write operations are potentially dangerous and scope-limited by level
     pub fn can_execute_write(level: &str) -> bool {
-        level != "strict"
+        match level {
+            "none" => true,    // Unrestricted: allow all writes
+            "basic" => true,   // Basic: allow writes (but with audit/approval gates)
+            "strict" => false, // Strict: deny writes (read-only enforcement)
+            _ => false,        // Unknown level: deny by default (fail-safe)
+        }
     }
+
+    /// Check if shell/command/code execution is allowed at this security level
+    ///
+    /// Shell execution is most dangerous and only allowed in unrestricted mode
     pub fn can_execute_shell(level: &str) -> bool {
-        level == "none"
+        match level {
+            "none" => true,    // Unrestricted: allow shell/code execution
+            "basic" => false,  // Basic: deny shell (too dangerous, use restricted APIs)
+            "strict" => false, // Strict: deny shell execution (locked down)
+            _ => false,        // Unknown level: deny by default (fail-safe)
+        }
     }
 }

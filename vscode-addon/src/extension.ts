@@ -223,7 +223,11 @@ function buildReleaseAssetUrl(repository: string, tag: string, assetName: string
     return `https://github.com/${repository}/releases/download/${tag}/${assetName}`;
 }
 
-async function downloadFile(url: string, destinationPath: string): Promise<void> {
+async function downloadFile(url: string, destinationPath: string, maxRedirects: number = 5): Promise<void> {
+    if (maxRedirects <= 0) {
+        throw new Error('Too many redirects while downloading file');
+    }
+    
     await fsPromises.mkdir(path.dirname(destinationPath), { recursive: true });
 
     await new Promise<void>((resolve, reject) => {
@@ -232,7 +236,7 @@ async function downloadFile(url: string, destinationPath: string): Promise<void>
 
             if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
                 response.resume();
-                downloadFile(response.headers.location, destinationPath).then(resolve).catch(reject);
+                downloadFile(response.headers.location, destinationPath, maxRedirects - 1).then(resolve).catch(reject);
                 return;
             }
 

@@ -147,17 +147,21 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async _deleteWorkflow(workflowId: string) {
-        const workflows = this.context.globalState.get<Record<string, any>>('go-on-workflows', {});
-        delete workflows[workflowId];
-        await this.context.globalState.update('go-on-workflows', workflows);
+        try {
+            const workflows = this.context.globalState.get<Record<string, any>>('go-on-workflows', {});
+            delete workflows[workflowId];
+            await this.context.globalState.update('go-on-workflows', workflows);
 
+            this._view?.webview.postMessage({
+                type: 'workflowDeleted',
+                workflowId
+            });
 
-        this._view?.webview.postMessage({
-            type: 'workflowDeleted',
-            workflowId
-        });
-
-        vscode.window.showInformationMessage('Workflow deleted successfully!');
+            vscode.window.showInformationMessage('Workflow deleted successfully!');
+        } catch (error) {
+            console.error('Failed to delete workflow:', error);
+            vscode.window.showErrorMessage(`Failed to delete workflow: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
     }
 
     private _getHtmlForWebview(webview: vscode.Webview) {

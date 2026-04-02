@@ -196,10 +196,7 @@ impl ReliabilityOptimizer {
 
     /// Add knowledge entry for pattern-solution mapping
     pub fn add_knowledge(&mut self, pattern: String, entry: KnowledgeEntry) {
-        self.knowledge_base
-            .entry(pattern)
-            .or_insert_with(Vec::new)
-            .push(entry);
+        self.knowledge_base.entry(pattern).or_default().push(entry);
     }
 
     /// Query knowledge base for matching solutions

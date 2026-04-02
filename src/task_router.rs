@@ -508,7 +508,7 @@ mod tests {
         };
 
         let decision = TaskRouter::route_task(&characteristics);
-        assert!(decision.roles.len() >= 1);
+        assert!(!decision.roles.is_empty());
         assert!(decision.roles.contains(&AgentRole::Coder));
     }
 

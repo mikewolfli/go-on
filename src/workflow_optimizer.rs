@@ -152,10 +152,31 @@ impl WorkflowOptimizer {
         successful[0].phases_executed.clone()
     }
 
-    fn identify_skippable_phases(_phases: &[String]) -> Vec<String> {
-        // In real implementation, this would be based on execution data
-        // For now, return phases that don't have critical dependencies
-        vec![]
+    fn identify_skippable_phases(phases: &[String]) -> Vec<String> {
+        let mut skippable = Vec::new();
+        let potentially_skippable = [
+            "code_review",
+            "documentation",
+            "performance_test",
+            "security_scan",
+            "integration_test",
+        ];
+        let critical_phases = [
+            "initialization",
+            "core_implementation",
+            "implementation",
+            "unit_test",
+            "verification",
+            "cleanup",
+        ];
+        for phase in phases {
+            if potentially_skippable.contains(&phase.as_str())
+                && !critical_phases.contains(&phase.as_str())
+            {
+                skippable.push(phase.clone());
+            }
+        }
+        skippable
     }
 }
 

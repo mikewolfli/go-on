@@ -9,11 +9,12 @@ The loader reads optional files relative to the config directory:
 1. `RULES.md`
 2. `RULES/global.md`
 3. `RULES/common.md`
-4. `RULES/local.md`
-5. `<phase>.rules.md` (for example `coding.rules.md`)
-6. `RULES/<phase>.md`
-7. `RULES/<phase>.rules.md`
-8. `RULES/<phase>.local.md`
+4. `RULES/pua.md` ⭐ (NEW: PUA enforcement rules for agent proxy)
+5. `RULES/local.md`
+6. `<phase>.rules.md` (for example `coding.rules.md`)
+7. `RULES/<phase>.md`
+8. `RULES/<phase>.rules.md`
+9. `RULES/<phase>.local.md`
 
 ## Merge Behavior
 

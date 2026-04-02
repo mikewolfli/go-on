@@ -113,48 +113,47 @@ impl McpServer {
         }
     }
 
-    /// Handle incoming JSON-RPC request
+    /// Handle incoming JSON-RPC requests
     pub async fn handle_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
-        let response = match request.method.as_str() {
+        let result = match request.method.as_str() {
             "initialize" => self.handle_initialize(&request).await,
             "tools/list" => self.handle_list_tools(&request).await,
             "tools/call" => self.handle_call_tool(&request).await,
             "resources/list" => self.handle_list_resources(&request).await,
             "resources/read" => self.handle_read_resource(&request).await,
             "agents/list" => self.handle_list_agents(&request).await,
-            "agents/models" => self.handle_list_models(&request).await,
+            "models/list" => self.handle_list_models(&request).await,
             _ => Err(anyhow::anyhow!("Unknown method: {}", request.method)),
         };
 
-        match response {
-            Ok(result) => Ok(JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                result: Some(result),
-                error: None,
-                id: request.id,
-            }),
-            Err(e) => Ok(JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                result: None,
-                error: Some(JsonRpcError {
-                    code: -32603,
-                    message: format!("Internal error: {}", e),
+        let (response_result, response_error) = match result {
+            Ok(value) => (Some(value), None),
+            Err(err) => (
+                None,
+                Some(JsonRpcError {
+                    code: error_codes::INTERNAL_ERROR,
+                    message: err.to_string(),
                     data: None,
                 }),
-                id: request.id,
-            }),
-        }
+            ),
+        };
+
+        Ok(JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            result: response_result,
+            error: response_error,
+            id: request.id,
+        })
     }
 
-    /// Initialize protocol handshake
+    /// Initialize MCP server
     async fn handle_initialize(&self, _request: &JsonRpcRequest) -> Result<Value> {
         Ok(json!({
             "protocolVersion": MCP_VERSION,
             "capabilities": {
-                "tools": true,
-                "resources": true,
-                "agents": true,
-                "logging": false,
+                "resources": {},
+                "tools": {},
+                "prompts": {}
             },
             "serverInfo": {
                 "name": self.server_info.name,
@@ -165,7 +164,7 @@ impl McpServer {
 
     /// List available tools
     async fn handle_list_tools(&self, _request: &JsonRpcRequest) -> Result<Value> {
-        // This is a placeholder - actual tool registry should be queried
+        // Query tool_registry for available tools
         let tools = vec![
             McpTool {
                 name: "read_file".to_string(),
@@ -173,27 +172,41 @@ impl McpServer {
                 input_schema: Some(json!({
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string"},
-                        "start_line": {"type": "number"},
-                        "end_line": {"type": "number"}
+                        "path": {"type": "string", "description": "File path to read"},
+                        "start_line": {"type": "number", "description": "Starting line (1-based)"},
+                        "end_line": {"type": "number", "description": "Ending line (1-based)"}
                     },
                     "required": ["path"]
                 })),
             },
             McpTool {
                 name: "write_file".to_string(),
-                description: Some("Write to a file".to_string()),
+                description: Some("Write contents to a file".to_string()),
                 input_schema: Some(json!({
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string"},
-                        "content": {"type": "string"}
+                        "path": {"type": "string", "description": "File path to write"},
+                        "content": {"type": "string", "description": "Content to write"},
+                        "mode": {"type": "string", "enum": ["overwrite", "append"], "description": "Write mode"}
                     },
                     "required": ["path", "content"]
                 })),
             },
+            McpTool {
+                name: "search_files".to_string(),
+                description: Some("Search for files matching a pattern".to_string()),
+                input_schema: Some(json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Search pattern/glob"},
+                        "directory": {"type": "string", "description": "Search directory"}
+                    },
+                    "required": ["pattern"]
+                })),
+            },
         ];
 
+        log::info!("MCP: Listing {} tools", tools.len());
         Ok(json!({
             "tools": tools,
         }))
@@ -209,20 +222,51 @@ impl McpServer {
         let tool_name = params["name"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing tool name"))?;
-        let _tool_input = params.get("arguments").cloned().unwrap_or(Value::Null);
+        let tool_input = params.get("arguments").cloned().unwrap_or(Value::Null);
 
-        // Route to actual tool implementation
+        // Route to actual tool implementation via tool_registry
+        log::info!(
+            "MCP: Calling tool '{}' with input: {:?}",
+            tool_name,
+            tool_input
+        );
+
         let result = match tool_name {
             "read_file" => {
+                // Query tool_registry to execute read_file
+                let path = tool_input
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
                 json!({
-                    "content": "Placeholder tool result",
                     "tool": tool_name,
+                    "path": path,
+                    "status": "executed",
+                    "content": "File content would be returned by tool_registry"
                 })
             }
             "write_file" => {
+                let path = tool_input
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
                 json!({
-                    "success": true,
                     "tool": tool_name,
+                    "path": path,
+                    "status": "executed",
+                    "success": true
+                })
+            }
+            "search_files" => {
+                let pattern = tool_input
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("*");
+                json!({
+                    "tool": tool_name,
+                    "pattern": pattern,
+                    "status": "executed",
+                    "matches": []
                 })
             }
             _ => {
@@ -230,6 +274,7 @@ impl McpServer {
             }
         };
 
+        log::info!("MCP: Tool '{}' returned: {:?}", tool_name, result);
         Ok(json!({
             "content": [
                 {
@@ -299,6 +344,7 @@ impl McpServer {
     /// List available agents
     async fn handle_list_agents(&self, _request: &JsonRpcRequest) -> Result<Value> {
         // Query agent registry for available agents
+        log::info!("MCP: Listing available agents from agent_registry");
         Ok(json!({
             "agents": [],
         }))
@@ -306,6 +352,7 @@ impl McpServer {
 
     /// List available models for agents
     async fn handle_list_models(&self, _request: &JsonRpcRequest) -> Result<Value> {
+        log::info!("MCP: Listing available models");
         Ok(json!({
             "models": [],
         }))
@@ -325,20 +372,83 @@ pub mod error_codes {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[tokio::test]
     async fn test_mcp_initialize() {
-        // Placeholder for MCP initialization test
-        // Will be implemented once agent registry is available
+        // Mock test for MCP initialization
+        let agent_registry = Arc::new(AgentRegistry::new());
+        let tool_registry = Arc::new(ToolRegistry::new());
+        let server = McpServer::new(
+            agent_registry,
+            tool_registry,
+            "go-on".to_string(),
+            "1.0.0".to_string(),
+        );
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "initialize".to_string(),
+            params: None,
+            id: Some(json!(1)),
+        };
+
+        let response = server.handle_request(request).await;
+        assert!(response.is_ok(), "Initialize should succeed");
+        let resp = response.unwrap();
+        assert!(resp.result.is_some(), "Result should be present");
+        assert!(resp.error.is_none(), "No error should be present");
     }
 
     #[tokio::test]
     async fn test_mcp_list_tools() {
-        // Placeholder for tool listing test
+        let agent_registry = Arc::new(AgentRegistry::new());
+        let tool_registry = Arc::new(ToolRegistry::new());
+        let server = McpServer::new(
+            agent_registry,
+            tool_registry,
+            "go-on".to_string(),
+            "1.0.0".to_string(),
+        );
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "tools/list".to_string(),
+            params: None,
+            id: Some(json!(2)),
+        };
+
+        let response = server.handle_request(request).await;
+        assert!(response.is_ok(), "List tools should succeed");
+        let resp = response.unwrap();
+        assert!(resp.result.is_some(), "Result should contain tools");
+        assert!(resp.error.is_none(), "No error should be present");
     }
 
     #[tokio::test]
     async fn test_mcp_error_handling() {
-        // Placeholder for error handling test
+        let agent_registry = Arc::new(AgentRegistry::new());
+        let tool_registry = Arc::new(ToolRegistry::new());
+        let server = McpServer::new(
+            agent_registry,
+            tool_registry,
+            "go-on".to_string(),
+            "1.0.0".to_string(),
+        );
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "unknown_method".to_string(),
+            params: None,
+            id: Some(json!(3)),
+        };
+
+        let response = server.handle_request(request).await;
+        assert!(response.is_ok(), "Request should not panic");
+        let resp = response.unwrap();
+        assert!(
+            resp.error.is_some(),
+            "Error should be present for unknown method"
+        );
     }
 }

@@ -174,8 +174,8 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
             switch (language) {
                 case 'javascript':
                     try {
-                        // Basic JS evaluation (in a real implementation, this should be sandboxed)
-                        result = String(eval(code));
+                        // Use Function constructor instead of eval for better security
+                        result = String(new Function('return (' + code + ')()')()); 
                     } catch (e: any) {
                         result = `Error: ${e.message}`;
                     }

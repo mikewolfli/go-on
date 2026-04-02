@@ -134,7 +134,7 @@ impl SpeedOptimizer {
         }
 
         // Simple pattern matching based on history
-        let patterns = vec![
+        let patterns = [
             ("analyze", "plan"),
             ("plan", "implement"),
             ("implement", "test"),

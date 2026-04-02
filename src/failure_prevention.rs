@@ -27,10 +27,10 @@ pub enum CircuitBreakerState {
 /// Anomaly type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AnomalyType {
-    InputAnomaly,
-    ModelBehaviorAnomaly,
-    SystemStateAnomaly,
-    PerformanceAnomaly,
+    Input,
+    ModelBehavior,
+    SystemState,
+    Performance,
 }
 
 /// Degradation level
@@ -108,7 +108,7 @@ impl FailurePrevention {
         if input.is_empty() || input.len() > 1_000_000 {
             return AnomalyDetectionResult {
                 detected: true,
-                anomaly_type: Some(AnomalyType::InputAnomaly),
+                anomaly_type: Some(AnomalyType::Input),
                 confidence: 0.95,
                 recommended_action: "Validate input before retry".to_string(),
             };
@@ -120,7 +120,7 @@ impl FailurePrevention {
             if input.to_uppercase().contains(pattern) {
                 return AnomalyDetectionResult {
                     detected: true,
-                    anomaly_type: Some(AnomalyType::InputAnomaly),
+                    anomaly_type: Some(AnomalyType::Input),
                     confidence: 0.9,
                     recommended_action: "Potentially malicious input detected".to_string(),
                 };

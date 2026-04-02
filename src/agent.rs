@@ -133,6 +133,16 @@ pub struct AgentRegistry {
 }
 
 impl AgentRegistry {
+    /// Create an empty agent registry
+    ///
+    /// # Returns
+    /// * `Self` - Returns an empty registry
+    pub fn new() -> Self {
+        Self {
+            agents: HashMap::new(),
+        }
+    }
+
     /// Create an agent registry from configuration
     ///
     /// # Arguments

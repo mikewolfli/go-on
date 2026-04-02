@@ -181,8 +181,8 @@ impl CostOptimizer {
         let ratio = compressed_tokens as f64 / original_tokens as f64;
 
         CompressionResult {
-            original_tokens: original_tokens as u32,
-            compressed_tokens: compressed_tokens as u32,
+            original_tokens,
+            compressed_tokens,
             compression_ratio: ratio,
             compressed_content: compressed,
         }

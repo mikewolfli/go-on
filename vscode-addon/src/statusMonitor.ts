@@ -31,15 +31,27 @@ export class StatusMonitor {
     private startHealthMonitoring() {
         const config = vscode.workspace.getConfiguration('go-on');
         const interval = config.get<number>('health.interval', 300) * 1000; // Convert to milliseconds
+        
+        let consecutiveFailures = 0;
+        const maxFailures = 3;
 
         this.healthCheckTimer = setInterval(async () => {
             if (this.manager.isRunning()) {
                 try {
                     const health = await this.manager.sendRequest('runtime.health');
                     this.updateHealthStatus(health);
+                    consecutiveFailures = 0; // Reset counter on success
                 } catch (error) {
-                    console.warn('Health check failed:', error);
-                    this.statusBarItem.tooltip = 'Go-On Status: Health check failed\nClick to open chat';
+                    consecutiveFailures++;
+                    console.warn(`Health check failed (${consecutiveFailures}/${maxFailures}):`, error);
+                    
+                    this.statusBarItem.tooltip = `Go-On Status: Health check failed (${consecutiveFailures}/${maxFailures})\nClick to open chat`;
+                    
+                    if (consecutiveFailures >= maxFailures) {
+                        console.error('Max health check failures reached, stopping monitoring');
+                        this.stopHealthMonitoring();
+                        vscode.window.showWarningMessage('Go-On: Health checks failed. Please restart the extension.');
+                    }
                 }
             }
         }, interval);

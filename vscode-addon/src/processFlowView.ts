@@ -203,7 +203,27 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
 
     private async _updateProcess(processId: string, updates: any) {
         const processes = this.context.globalState.get<Record<string, any>>('go-on-processes', {});
-        if (processes[processId]) {
+        
+        // Validate input
+        if (!processId) {
+            console.error('Process ID is required');
+            vscode.window.showErrorMessage('Invalid process: ID is required');
+            return;
+        }
+        
+        if (!processes[processId]) {
+            console.error('Process not found:', processId);
+            vscode.window.showErrorMessage('Process not found');
+            return;
+        }
+        
+        if (updates && typeof updates === 'object' && updates.stages && !Array.isArray(updates.stages)) {
+            console.error('Invalid stages format: must be array');
+            vscode.window.showErrorMessage('Invalid stages format: must be array');
+            return;
+        }
+        
+        try {
             Object.assign(processes[processId], updates);
             await this.context.globalState.update('go-on-processes', processes);
 
@@ -211,6 +231,9 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
                 type: 'processUpdated',
                 process: processes[processId]
             });
+        } catch (error: any) {
+            console.error('Failed to update process:', error);
+            vscode.window.showErrorMessage(`Failed to update process: ${error.message}`);
         }
     }
 

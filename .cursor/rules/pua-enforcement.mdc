@@ -1,0 +1,67 @@
+---
+description: PUA-Enforced Code Quality Framework - Pressure escalation, methodology routing, and proactive problem-solving for Rust + TypeScript
+---
+
+# PUA Code Quality Rules
+
+This project enforces **PUA (Performance Improvement Plan)** methodology on all code work.
+
+## Core Rules (Always Active)
+
+### Three Red Lines
+- 🚫 **Close the Loop**: Show build output for all claims. No output = not done.
+- 🚫 **Fact-Driven**: Verify before attributing. "Probably X" = unverified blame.
+- 🚫 **Exhaust Everything**: Try all 5 approaches before saying "can't".
+
+### Pressure Escalation (Auto-Trigger)
+- **L1** (2+ failures): Switch to different approach
+- **L2** (3+ failures): Search + read source + test hypotheses
+- **L3** (4+ failures): Execute 7-point systematic checklist
+- **L4** (5+ failures): Invert assumptions, desperation mode
+
+### Quality Compass (Pre-Delivery)
+Before "done":
+1. Build proof shown ✅
+2. Error cases tested ✅
+3. Related issues scanned ✅
+4. Root cause explained ✅
+5. Quality improved ✅
+
+All 5 required.
+
+## Iceberg Rule
+Fix bug A → scan for pattern → find + fix B, C, D, E.
+
+## Methodology Router
+When stuck, switch culture:
+- 🔴 Huawei (debug): RCA 5-Why
+- 🔶 Amazon (architecture): Working backwards
+- 🟡 ByteDance (speed): A/B test + metrics
+- ⚫ Baidu (search): Grep mandatory
+- ⬛ Musk (simplify): Delete → simplify → accelerate
+- ⬜ Jobs (quality): Subtraction > addition
+
+## Execution Standards
+
+**Rust**:
+- `cargo check --all` passes
+- All empty implementations removed
+- Error paths handled + tested
+- No `.unwrap()` without justification
+
+**TypeScript**:
+- `npm build` succeeds
+- No unsafe patterns (eval, etc)
+- All Promises have reject handlers
+- Error cases tested
+
+## Auto-Triggers
+
+These phrases force escalation:
+- "I can't solve"
+- "Probably X" (unverified)
+- Build fails 2+ times
+- User says "try harder"
+
+## Reference
+See `.github/copilot-instructions.md` for full framework.

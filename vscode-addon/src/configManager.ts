@@ -140,7 +140,11 @@ class ConfigManager {
 
         try {
             await fs.mkdir(configDir, { recursive: true });
-        } catch { }
+        } catch (error) {
+            console.error('Failed to create config directory:', error);
+            // Return fallback path if directory creation fails
+            return path.join(homeDir, 'config.toml');
+        }
 
         return path.join(configDir, 'config.toml');
     }
