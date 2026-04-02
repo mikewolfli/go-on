@@ -1,0 +1,96 @@
+{
+  "language": "zh_TW",
+  "messages": {
+    "app.name": "go-on",
+    "app.version": "第10階段",
+    "app.description": "智慧代理協調協議(ACP)代理",
+    
+    "mode.ask": "提問",
+    "mode.edit": "編輯",
+    "mode.agent": "代理",
+    "mode.safeguard": "安全衛士",
+    "mode.full_auto": "完全自動",
+    
+    "role.planner": "規劃者",
+    "role.researcher": "研究員",
+    "role.coder": "編碼者",
+    "role.tester": "測試員",
+    "role.reviewer": "審閱者",
+    
+    "task_type.bug_fix": "錯誤修復",
+    "task_type.feature": "功能實現",
+    "task_type.refactoring": "代碼重構",
+    "task_type.test": "測試實現",
+    "task_type.documentation": "文件編寫",
+    "task_type.architecture": "架構設計",
+    "task_type.optimization": "效能最佳化",
+    "task_type.review": "代碼審查",
+    "task_type.unknown": "未知類型",
+    
+    "error.no_suitable_model": "未找到適合該任務的模型",
+    "error.task_failed": "任務執行失敗",
+    "error.timeout": "執行逾時",
+    "error.resource_exhausted": "資源不足",
+    "error.invalid_language": "無效的語言設定",
+    "error.file_not_found": "檔案未找到",
+    "error.config_error": "設定錯誤",
+    
+    "success.task_completed": "任務成功完成",
+    "success.model_selected": "模型已選擇",
+    "success.language_loaded": "語言已載入",
+    
+    "info.analyzing_task": "正在分析任務...",
+    "info.selecting_model": "正在選擇模型...",
+    "info.decomposing_task": "正在分解任務...",
+    "info.optimizing_workflow": "正在最佳化工作流程...",
+    "info.executing_task": "正在執行任務...",
+    "info.generating_report": "正在產生報告...",
+    
+    "warning.degraded_mode": "由於資源限制，以降級模式運行",
+    "warning.model_unreliable": "所選模型的成功率較低",
+    "warning.high_risk_task": "任務涉及高風險操作",
+    
+    "router.task_complexity": "任務複雜度",
+    "router.required_roles": "所需角色",
+    "router.estimated_success_rate": "預計成功率",
+    "router.estimated_duration": "預計耗時",
+    "router.risk_factors": "風險因素",
+    "router.recommended_safeguards": "建議的保障措施",
+    
+    "selector.model": "模型",
+    "selector.cost": "成本",
+    "selector.latency": "延遲",
+    "selector.success_rate": "成功率",
+    "selector.strategy": "選擇策略",
+    
+    "decomposer.subtasks": "子任務",
+    "decomposer.dependencies": "依賴關係",
+    "decomposer.execution_phases": "執行階段",
+    "decomposer.parallelizable": "可並行化",
+    
+    "optimizer.critical_path": "關鍵路徑",
+    "optimizer.bottleneck": "瓶頸",
+    "optimizer.optimization_potential": "最佳化潛力",
+    "optimizer.parallelism_factor": "並行度",
+    
+    "resource.token_budget": "令牌預算",
+    "resource.time_budget": "時間預算",
+    "resource.cost_budget": "成本預算",
+    "resource.utilization": "資源利用率",
+    
+    "diagnostic.execution_timeline": "執行時間線",
+    "diagnostic.performance_summary": "效能摘要",
+    "diagnostic.optimization_suggestions": "最佳化建議",
+    "diagnostic.decision_chain": "決策鏈",
+    
+    "learner.experience_updated": "經驗已更新",
+    "learner.pattern_recognized": "識別到模式",
+    "learner.strategy_improved": "策略已改進",
+    
+    "settings.language": "語言",
+    "settings.auto_update": "自動更新",
+    "settings.log_level": "紀錄等級",
+    "settings.timeout": "逾時(秒)",
+    "settings.max_retries": "最大重試次數"
+  }
+}

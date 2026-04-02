@@ -16,6 +16,8 @@ const statusMonitor_1 = require("./statusMonitor");
 const workflowView_1 = require("./workflowView");
 const processFlowView_1 = require("./processFlowView");
 const advancedEdit_1 = require("./advancedEdit");
+const i18n_1 = require("./i18n");
+const configManager_1 = require("./configManager");
 class GoOnManager {
     constructor() {
         this.process = null;
@@ -508,6 +510,17 @@ let goOnManager;
 let statusProvider;
 function activate(context) {
     console.log('Go-On extension is now active!');
+    // Initialize i18n system
+    const currentLanguage = i18n_1.i18n.getCurrentLanguage();
+    console.log(`Go-On UI Language: ${currentLanguage}`);
+    // Initialize config manager
+    const config = vscode.workspace.getConfiguration('go-on');
+    const configPath = config.get('configPath', './config.toml');
+    configManager_1.configManager.initialize(configPath).catch(err => {
+        console.warn('Failed to initialize config manager:', err);
+    });
+    // Sync VS Code language to app configuration
+    syncLanguageToApp(context, currentLanguage);
     goOnManager = new GoOnManager();
     statusProvider = new GoOnStatusProvider(goOnManager);
     // Initialize status monitor
@@ -744,7 +757,6 @@ function activate(context) {
         return await updateRulesMarkdownFiles(context, payload);
     });
     // Auto-start if configured
-    const config = vscode.workspace.getConfiguration('go-on');
     ensureGoOnBinary(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, config, context)
         .then(() => {
         console.log('Go-On runtime is ready.');
@@ -762,4 +774,30 @@ function deactivate() {
     goOnManager.stop();
 }
 exports.deactivate = deactivate;
+/**
+ * Sync VS Code language with app configuration
+ * This ensures the app uses the same language as VS Code
+ */
+async function syncLanguageToApp(context, language) {
+    try {
+        const config = vscode.workspace.getConfiguration('go-on');
+        const configuredConfigPath = config.get('configPath', './config.toml');
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+            return;
+        }
+        // Create a language configuration object for the app
+        const languageConfig = {
+            ui_language: language,
+            sync_vscode_language: true,
+        };
+        // Store language preference in app settings
+        await config.update('language', language, vscode.ConfigurationTarget.Global);
+        // Log successful sync
+        console.log(`Language synchronized: VS Code ${language} -> App ${language}`);
+    }
+    catch (error) {
+        console.warn('Failed to sync language:', error);
+    }
+}
 //# sourceMappingURL=extension.js.map

@@ -1,3 +1,30 @@
+# go-on Phase 0/1 Architecture and Implementation Notes
+
+## Runtime Architecture (Phase 0/1)
+- All request, phase, and review gate lifecycles must be documented
+- cache/vector/summary/breaker invariants must be specified
+- All agent/phase/tool entrypoints support envelope/schema/audit log
+- Agent task envelope (AgentTaskEnvelope), output (AgentTaskResult), and decision log (AgentAuditLog) structures: see src/agent.rs
+- Tool runtime trait and registry: see src/tool.rs
+- Mode/phase/provider capability compatibility matrix: see below
+
+## Capability Compatibility Matrix (Example)
+| Mode      | Tool Use | Multi-Agent | Review Gate | Memory | Resume | Trace | Evaluation |
+|-----------|----------|-------------|-------------|--------|--------|-------|------------|
+| ask       | ×        | ×           | ×           | ✓      | ×      | ×     | ×          |
+| edit      | △        | ×           | ×           | ✓      | ×      | ×     | ×          |
+| agent     | ✓        | ×           | △           | ✓      | △      | △     | ×          |
+| full_auto | ✓        | ✓           | ✓           | ✓      | ✓      | ✓     | ✓          |
+
+- ✓: Fully supported, △: Partially supported, ×: Not supported
+
+## Phase 0/1 Key Interfaces/Structures
+- AgentTaskEnvelope/AgentTaskResult/AgentAuditLog (src/agent.rs)
+- Tool trait/ToolRegistry/ToolInput/ToolOutput (src/tool.rs)
+- All agent/tool/phase routing should generate decision audit logs
+
+---
+
 # Task: Generate a Rust ACP Agent Program Supporting Flow Definitions, Multi-Phase, Multi-Agent, and Phase Principles
 
 Please generate a complete Rust project based on the following requirements. The project should implement the ACP (Agent Client Protocol) for the Zed editor, and define the development flow, phases, agents, and phase-specific coding principles via a TOML configuration file. At runtime, the proxy should determine the current phase from the request, locate the corresponding phase config from the flow, route the request to one of the agents bound to that phase, and automatically inject that phase's principles into the system prompt.
@@ -188,10 +215,10 @@ pub trait Agent: Send + Sync {
     ├── error.rs              # Custom error types
     ├── agent.rs              # Agent trait and registry
     ├── agents
-    �?  ├── mod.rs
-    �?  ├── copilot.rs
-    �?  ├── deepseek.rs
-    �?  └── wenxin.rs
+    �?  ├── mod.rs
+    �?  ├── copilot.rs
+    �?  ├── deepseek.rs
+    �?  └── wenxin.rs
     └── flow.rs               # Flow management: phase lookup and agent routing
 ```
 

@@ -2,6 +2,11 @@
 //!
 //! This module defines the Agent trait, AgentRegistry, and related functionality
 //! for managing and interacting with different AI agents.
+//! These structures are intentional framework definitions for Phase 0-9 architecture.
+//! They define task contracts, audit schemas, and agent interfaces that will be wired
+//! into the execution flow once orchestration logic is implemented.
+
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,10 +24,60 @@ use crate::agents::{
     OpenAiAgent, OpenAiCompatibleAgent, PerplexityAgent, QianfanAgent, QwenAgent, ReplicateAgent,
     SkyworkAgent, StepFunAgent, TitanAgent, TogetherAgent, WenxinAgent, XihuAgent, YiAgent,
 };
+
 use crate::config::{AgentConfig, AppConfig};
+
+/// Agent task envelope (Phase 0/1 discipline)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskEnvelope {
+    pub task_id: String,
+    pub phase: String,
+    pub role: String,
+    pub objective: String,
+    pub constraints: Option<String>,
+    pub evidence: Option<String>,
+    pub input: serde_json::Value,
+}
+
+/// Agent output schema
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskResult {
+    pub success: bool,
+    pub output: Option<serde_json::Value>,
+    pub error: Option<String>,
+    pub audit_log: Option<String>,
+}
+
+/// Agent decision audit log schema
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentAuditLog {
+    pub agent: String,
+    pub phase: String,
+    pub task_id: String,
+    pub decision: String,
+    pub rationale: Option<String>,
+    pub timestamp: String,
+}
 
 /// Keyring prefix for secret references
 const KEYRING_PREFIX: &str = "keyring://";
+
+/// Model information for provider selection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelInfo {
+    /// Model identifier (e.g., "deepseek-chat")
+    pub id: String,
+    /// Human-readable model name
+    pub name: String,
+    /// Model description
+    pub description: String,
+    /// Whether this is the default model for the provider
+    pub is_default: bool,
+    /// Model capabilities (e.g., ["chat", "vision", "function_calling"])
+    pub capabilities: Vec<String>,
+    /// Context window size
+    pub context_window: Option<usize>,
+}
 
 /// Chat message structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,18 +89,12 @@ pub struct Message {
 }
 
 /// Agent trait defining the interface for all AI agents
+///
+/// Phase 0/1: 推荐所有 agent 入口方法都支持 AgentTaskEnvelope 作为输入，AgentTaskResult 作为输出，
+/// 并在决策点生成 AgentAuditLog 结构，便于后续 trace/replay/audit。
 #[async_trait]
 pub trait Agent: Send + Sync {
     /// Send chat messages to the agent and receive streaming responses
-    ///
-    /// # Arguments
-    /// * `messages` - Vector of chat messages
-    /// * `principles` - Optional vector of guiding principles
-    /// * `options` - Optional hash map of additional options
-    /// * `sender` - Unbounded sender for streaming responses
-    ///
-    /// # Returns
-    /// * `Result<()>` - Returns Ok(()) if the chat completes successfully, or an error if something goes wrong
     async fn chat(
         &self,
         messages: Vec<Message>,
@@ -53,6 +102,28 @@ pub trait Agent: Send + Sync {
         options: Option<HashMap<String, Value>>,
         sender: mpsc::UnboundedSender<String>,
     ) -> Result<()>;
+
+    /// Get available models for this provider
+    ///
+    /// Returns a list of models that can be used with this provider.
+    /// Default implementation returns an empty list (providers should override if applicable).
+    fn available_models(&self) -> Vec<ModelInfo> {
+        Vec::new()
+    }
+
+    /// Get the default model for this provider
+    ///
+    /// Returns the currently configured default model.
+    /// Default implementation returns None.
+    fn default_model(&self) -> Option<ModelInfo> {
+        None
+    }
+
+    /// (Phase 0/1 discipline) Structured agent task entrypoint
+    fn run_task(&self, _envelope: AgentTaskEnvelope) -> Result<AgentTaskResult> {
+        // 默认实现：可由具体 agent 实现覆盖
+        Err(anyhow::anyhow!("run_task not implemented for this agent"))
+    }
 }
 
 /// Agent registry for managing and accessing agents
@@ -529,6 +600,7 @@ mod tests {
             cache: None,
             vector: None,
             autotune: None,
+            model_selection_mode: "adaptive".to_string(),
         };
 
         let registry = AgentRegistry::from_config(Arc::new(app_config), reqwest::Client::new());

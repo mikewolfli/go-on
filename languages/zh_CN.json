@@ -1,0 +1,96 @@
+{
+  "language": "zh_CN",
+  "messages": {
+    "app.name": "go-on",
+    "app.version": "第10阶段",
+    "app.description": "智能代理协调协议(ACP)代理",
+    
+    "mode.ask": "提问",
+    "mode.edit": "编辑",
+    "mode.agent": "代理",
+    "mode.safeguard": "安全卫士",
+    "mode.full_auto": "完全自动",
+    
+    "role.planner": "规划者",
+    "role.researcher": "研究员",
+    "role.coder": "编码者",
+    "role.tester": "测试员",
+    "role.reviewer": "审阅者",
+    
+    "task_type.bug_fix": "错误修复",
+    "task_type.feature": "功能实现",
+    "task_type.refactoring": "代码重构",
+    "task_type.test": "测试实现",
+    "task_type.documentation": "文档编写",
+    "task_type.architecture": "架构设计",
+    "task_type.optimization": "性能优化",
+    "task_type.review": "代码审查",
+    "task_type.unknown": "未知类型",
+    
+    "error.no_suitable_model": "未找到适合该任务的模型",
+    "error.task_failed": "任务执行失败",
+    "error.timeout": "执行超时",
+    "error.resource_exhausted": "资源不足",
+    "error.invalid_language": "无效的语言设置",
+    "error.file_not_found": "文件未找到",
+    "error.config_error": "配置错误",
+    
+    "success.task_completed": "任务成功完成",
+    "success.model_selected": "模型已选择",
+    "success.language_loaded": "语言已加载",
+    
+    "info.analyzing_task": "正在分析任务...",
+    "info.selecting_model": "正在选择模型...",
+    "info.decomposing_task": "正在分解任务...",
+    "info.optimizing_workflow": "正在优化工作流...",
+    "info.executing_task": "正在执行任务...",
+    "info.generating_report": "正在生成报告...",
+    
+    "warning.degraded_mode": "由于资源限制，运行在降级模式",
+    "warning.model_unreliable": "所选模型的成功率较低",
+    "warning.high_risk_task": "任务涉及高风险操作",
+    
+    "router.task_complexity": "任务复杂度",
+    "router.required_roles": "所需角色",
+    "router.estimated_success_rate": "预计成功率",
+    "router.estimated_duration": "预计耗时",
+    "router.risk_factors": "风险因素",
+    "router.recommended_safeguards": "推荐的保障措施",
+    
+    "selector.model": "模型",
+    "selector.cost": "成本",
+    "selector.latency": "延迟",
+    "selector.success_rate": "成功率",
+    "selector.strategy": "选择策略",
+    
+    "decomposer.subtasks": "子任务",
+    "decomposer.dependencies": "依赖关系",
+    "decomposer.execution_phases": "执行阶段",
+    "decomposer.parallelizable": "可并行化",
+    
+    "optimizer.critical_path": "关键路径",
+    "optimizer.bottleneck": "瓶颈",
+    "optimizer.optimization_potential": "优化潜力",
+    "optimizer.parallelism_factor": "并行度",
+    
+    "resource.token_budget": "令牌预算",
+    "resource.time_budget": "时间预算",
+    "resource.cost_budget": "成本预算",
+    "resource.utilization": "资源利用率",
+    
+    "diagnostic.execution_timeline": "执行时间线",
+    "diagnostic.performance_summary": "性能摘要",
+    "diagnostic.optimization_suggestions": "优化建议",
+    "diagnostic.decision_chain": "决策链",
+    
+    "learner.experience_updated": "经验已更新",
+    "learner.pattern_recognized": "识别到模式",
+    "learner.strategy_improved": "策略已改进",
+    
+    "settings.language": "语言",
+    "settings.auto_update": "自动更新",
+    "settings.log_level": "日志级别",
+    "settings.timeout": "超时(秒)",
+    "settings.max_retries": "最大重试次数"
+  }
+}

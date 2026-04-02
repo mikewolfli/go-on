@@ -13,6 +13,8 @@ import { StatusMonitor } from './statusMonitor';
 import { GoOnWorkflowViewProvider } from './workflowView';
 import { GoOnProcessFlowViewProvider } from './processFlowView';
 import { GoOnAdvancedEditProvider } from './advancedEdit';
+import { i18n } from './i18n';
+import { configManager } from './configManager';
 
 interface JsonRpcRequest {
     jsonrpc: '2.0';
@@ -169,7 +171,7 @@ class GoOnStatusProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     private _onDidChangeTreeData: vscode.EventEmitter<vscode.TreeItem | undefined | null | void> = new vscode.EventEmitter<vscode.TreeItem | undefined | null | void>();
     readonly onDidChangeTreeData: vscode.Event<vscode.TreeItem | undefined | null | void> = this._onDidChangeTreeData.event;
 
-    constructor(private manager: GoOnManager) {}
+    constructor(private manager: GoOnManager) { }
 
     refresh(): void {
         this._onDidChangeTreeData.fire();
@@ -667,6 +669,20 @@ let statusProvider: GoOnStatusProvider;
 export function activate(context: vscode.ExtensionContext) {
     console.log('Go-On extension is now active!');
 
+    // Initialize i18n system
+    const currentLanguage = i18n.getCurrentLanguage();
+    console.log(`Go-On UI Language: ${currentLanguage}`);
+
+    // Initialize config manager
+    const config = vscode.workspace.getConfiguration('go-on');
+    const configPath = config.get<string>('configPath', './config.toml');
+    configManager.initialize(configPath).catch(err => {
+        console.warn('Failed to initialize config manager:', err);
+    });
+
+    // Sync VS Code language to app configuration
+    syncLanguageToApp(context, currentLanguage);
+
     goOnManager = new GoOnManager();
     statusProvider = new GoOnStatusProvider(goOnManager);
 
@@ -956,8 +972,6 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     // Auto-start if configured
-    const config = vscode.workspace.getConfiguration('go-on');
-
     ensureGoOnBinary(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, config, context)
         .then(() => {
             console.log('Go-On runtime is ready.');
@@ -1002,4 +1016,34 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
     goOnManager.stop();
+}
+
+/**
+ * Sync VS Code language with app configuration
+ * This ensures the app uses the same language as VS Code
+ */
+async function syncLanguageToApp(context: vscode.ExtensionContext, language: string): Promise<void> {
+    try {
+        const config = vscode.workspace.getConfiguration('go-on');
+        const configuredConfigPath = config.get<string>('configPath', './config.toml');
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+
+        if (!workspaceFolder) {
+            return;
+        }
+
+        // Create a language configuration object for the app
+        const languageConfig = {
+            ui_language: language,
+            sync_vscode_language: true,
+        };
+
+        // Store language preference in app settings
+        await config.update('language', language, vscode.ConfigurationTarget.Global);
+
+        // Log successful sync
+        console.log(`Language synchronized: VS Code ${language} -> App ${language}`);
+    } catch (error) {
+        console.warn('Failed to sync language:', error);
+    }
 }

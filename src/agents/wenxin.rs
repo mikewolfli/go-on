@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
 
 const EARLY_STAGE_NOTE: &str = "The project is still in an early stage and architecture is not finalized. Only check core logic validity; empty functions and implementation TODOs are acceptable.";
@@ -201,6 +201,31 @@ impl Agent for WenxinAgent {
         }
 
         Err(last_error.unwrap_or_else(|| anyhow::anyhow!("wenxin request failed")))
+    }
+
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "ernie-4.0-turbo-8k".to_string(),
+                name: "Ernie 4.0 Turbo 8K".to_string(),
+                description: "Latest Ernie model with 8K context window".to_string(),
+                is_default: false,
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(8192),
+            },
+            ModelInfo {
+                id: "ernie-3.5-turbo".to_string(),
+                name: "Ernie 3.5 Turbo".to_string(),
+                description: "Fast and balanced model for general use".to_string(),
+                is_default: true,
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(4096),
+            },
+        ]
+    }
+
+    fn default_model(&self) -> Option<ModelInfo> {
+        self.available_models().into_iter().find(|m| m.is_default)
     }
 }
 

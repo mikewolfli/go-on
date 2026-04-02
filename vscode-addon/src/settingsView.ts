@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { i18n, MessageKeys } from './i18n';
+import { configManager } from './configManager';
 
 export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'go-on-settings';
@@ -9,7 +11,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         private readonly _extensionUri: vscode.Uri,
         private readonly manager: any,
         private readonly context: vscode.ExtensionContext
-    ) {}
+    ) { }
 
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
@@ -20,9 +22,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
 
         webviewView.webview.options = {
             enableScripts: true,
-            localResourceRoots: [
-                this._extensionUri
-            ]
+            localResourceRoots: [this._extensionUri]
         };
 
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
@@ -33,8 +33,41 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                     case 'requestSettings':
                         this._sendCurrentSettings();
                         break;
-                    case 'updateSetting':
-                        await this._updateSetting(message.key, message.value);
+                    case 'updateRuntimeSetting':
+                        await this._updateRuntimeSetting(message.key, message.value);
+                        break;
+                    case 'updateCacheSetting':
+                        await this._updateCacheSetting(message.key, message.value);
+                        break;
+                    case 'updateVectorSetting':
+                        await this._updateVectorSetting(message.key, message.value);
+                        break;
+                    case 'updateAutotuneSetting':
+                        await this._updateAutotuneSetting(message.key, message.value);
+                        break;
+                    case 'addAgent':
+                        await this._addAgent(message.name, message.config);
+                        break;
+                    case 'deleteAgent':
+                        await this._deleteAgent(message.name);
+                        break;
+                    case 'updatePhase':
+                        await this._updatePhase(message.name, message.config);
+                        break;
+                    case 'startGoOn':
+                        vscode.commands.executeCommand('go-on.start');
+                        break;
+                    case 'stopGoOn':
+                        vscode.commands.executeCommand('go-on.stop');
+                        break;
+                    case 'healthCheck':
+                        vscode.commands.executeCommand('go-on.healthCheck');
+                        break;
+                    case 'clearCache':
+                        vscode.commands.executeCommand('go-on.cacheClear');
+                        break;
+                    case 'setLanguage':
+                        await this._setLanguage(message.language);
                         break;
                     case 'setKeyringSecret':
                         await this._handleKeyringSet(message.name, message.value);
@@ -57,61 +90,193 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                     case 'applyWorkflowMapping':
                         await this._handleApplyWorkflowMapping(message.payload);
                         break;
-                    case 'startGoOn':
-                        vscode.commands.executeCommand('go-on.start');
-                        break;
-                    case 'stopGoOn':
-                        vscode.commands.executeCommand('go-on.stop');
-                        break;
-                    case 'healthCheck':
-                        vscode.commands.executeCommand('go-on.healthCheck');
-                        break;
-                    case 'clearCache':
-                        vscode.commands.executeCommand('go-on.cacheClear');
-                        break;
                 }
             },
             undefined,
             this.context.subscriptions
         );
 
-        // Send current settings to webview
         this._sendCurrentSettings();
     }
 
-    private async _updateSetting(key: string, value: any) {
-        const config = vscode.workspace.getConfiguration('go-on');
-        await config.update(key.replace('go-on.', ''), value, vscode.ConfigurationTarget.Global);
-        vscode.window.showInformationMessage(`Setting ${key} updated`);
+    // Settings update methods
+    private async _updateRuntimeSetting(key: string, value: any) {
+        try {
+            configManager.setConfigValue(`runtime.${key}`, value);
+            await configManager.saveToFile();
+            vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
+            this._sendCurrentSettings();
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        }
+    }
+
+    private async _updateCacheSetting(key: string, value: any) {
+        try {
+            configManager.setConfigValue(`cache.${key}`, value);
+            await configManager.saveToFile();
+            vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
+            this._sendCurrentSettings();
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        }
+    }
+
+    private async _updateVectorSetting(key: string, value: any) {
+        try {
+            configManager.setConfigValue(`vector.${key}`, value);
+            await configManager.saveToFile();
+            vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
+            this._sendCurrentSettings();
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        }
+    }
+
+    private async _updateAutotuneSetting(key: string, value: any) {
+        try {
+            configManager.setConfigValue(`autotune.${key}`, value);
+            await configManager.saveToFile();
+            vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
+            this._sendCurrentSettings();
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        }
+    }
+
+    private async _addAgent(name: string, config: any) {
+        try {
+            configManager.setConfigValue(`agents.${name}`, config);
+            await configManager.saveToFile();
+            vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
+            this._sendCurrentSettings();
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        }
+    }
+
+    private async _deleteAgent(name: string) {
+        try {
+            const config = configManager.getConfig();
+            delete config.agents[name];
+            await configManager.saveToFile();
+            vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
+            this._sendCurrentSettings();
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        }
+    }
+
+    private async _updatePhase(name: string, config: any) {
+        try {
+            configManager.setConfigValue(`phases.${name}`, config);
+            await configManager.saveToFile();
+            vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
+            this._sendCurrentSettings();
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        }
+    }
+
+    private async _setLanguage(language: string) {
+        try {
+            const config = vscode.workspace.getConfiguration('go-on');
+            await config.update('language', language, vscode.ConfigurationTarget.Global);
+            configManager.setConfigValue('language', language);
+            await configManager.saveToFile();
+            vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
+            this._sendCurrentSettings();
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        }
     }
 
     private _sendCurrentSettings() {
         if (!this._view) return;
 
-        const config = vscode.workspace.getConfiguration('go-on');
+        const config = configManager.getConfig();
+        const vsCodeConfig = vscode.workspace.getConfiguration('go-on');
+
         const settings = {
-            'go-on.configPath': config.get('configPath'),
-            'go-on.executablePath': config.get('executablePath'),
-            'go-on.autoDownloadBinary': config.get('autoDownloadBinary'),
-            'go-on.releaseRepository': config.get('releaseRepository'),
-            'go-on.releaseTag': config.get('releaseTag'),
-            'go-on.autoStart': config.get('autoStart'),
-            'go-on.chat.maxHistory': config.get('chat.maxHistory'),
-            'go-on.chat.model': config.get('chat.model'),
-            'go-on.chat.temperature': config.get('chat.temperature'),
-            'go-on.chat.maxTokens': config.get('chat.maxTokens'),
-            'go-on.chat.streaming': config.get('chat.streaming'),
-            'go-on.cache.enabled': config.get('cache.enabled'),
-            'go-on.vector.enabled': config.get('vector.enabled'),
-            'go-on.health.interval': config.get('health.interval'),
-            'go-on.ui.theme': config.get('ui.theme'),
-            'go-on.ui.fontSize': config.get('ui.fontSize')
+            language: i18n.getCurrentLanguage(),
+            runtime: config.runtime,
+            cache: config.cache,
+            vector: config.vector,
+            autotune: config.autotune,
+            agents: config.agents,
+            phases: config.phases,
+            flow: config.flow,
+            executablePath: vsCodeConfig.get('executablePath'),
+            autoStart: vsCodeConfig.get('autoStart'),
+            isRunning: this.manager.isRunning?.() || false,
         };
 
         this._view.webview.postMessage({
-            type: 'loadSettings',
-            settings
+            type: 'settingsData',
+            data: settings,
+            translations: this._getTranslations(),
+            language: i18n.getCurrentLanguage()
         });
+    }
+
+    private _getTranslations() {
+        return {
+            general: {
+                goOn: i18n.getMessage(MessageKeys.goOn),
+                settings: i18n.getMessage(MessageKeys.settings),
+                start: i18n.getMessage(MessageKeys.start),
+                stop: i18n.getMessage(MessageKeys.stop),
+                status: i18n.getMessage(MessageKeys.status),
+                running: i18n.getMessage(MessageKeys.running),
+                stopped: i18n.getMessage(MessageKeys.stopped),
+            },
+            runtime: {
+                runtime: i18n.getMessage(MessageKeys.runtime),
+                runtimeSettings: i18n.getMessage(MessageKeys.runtimeSettings),
+                maintenanceInterval: i18n.getMessage(MessageKeys.maintenanceInterval),
+                healthInterval: i18n.getMessage(MessageKeys.healthInterval),
+                shutdownDrain: i18n.getMessage(MessageKeys.shutdownDrain),
+            },
+            execution: {
+                executionSettings: i18n.getMessage(MessageKeys.executionSettings),
+                startGoOn: i18n.getMessage(MessageKeys.startGoOn),
+                stopGoOn: i18n.getMessage(MessageKeys.stopGoOn),
+                healthCheck: i18n.getMessage(MessageKeys.healthCheck),
+                clearCache: i18n.getMessage(MessageKeys.clearCache),
+            },
+            workflow: {
+                workflow: i18n.getMessage(MessageKeys.workflow),
+                phases: i18n.getMessage(MessageKeys.phases),
+                agents: i18n.getMessage(MessageKeys.agents),
+                addPhase: i18n.getMessage(MessageKeys.addPhase),
+                editPhase: i18n.getMessage(MessageKeys.editPhase),
+                deletePhase: i18n.getMessage(MessageKeys.deletePhase),
+            },
+            buttons: {
+                save: i18n.getMessage(MessageKeys.save),
+                cancel: i18n.getMessage(MessageKeys.cancel),
+                reset: i18n.getMessage(MessageKeys.reset),
+                apply: i18n.getMessage(MessageKeys.apply),
+                delete: i18n.getMessage(MessageKeys.delete),
+                edit: i18n.getMessage(MessageKeys.edit),
+                add: i18n.getMessage(MessageKeys.add),
+            },
+            messages: {
+                successfullySaved: i18n.getMessage(MessageKeys.successfullySaved),
+                errorSaving: i18n.getMessage(MessageKeys.errorSaving),
+            },
+            language: {
+                language: i18n.getMessage(MessageKeys.language),
+                simplifiedChinese: i18n.getMessage(MessageKeys.simplifiedChinese),
+                traditionalChinese: i18n.getMessage(MessageKeys.traditionalChinese),
+                english: i18n.getMessage(MessageKeys.english),
+            },
+            credentials: {
+                credentials: i18n.getMessage(MessageKeys.credentials),
+                apiKey: i18n.getMessage(MessageKeys.apiKey),
+                secretKey: i18n.getMessage(MessageKeys.secretKey),
+            },
+        };
     }
 
     private async _handleKeyringSet(name: string, value: string) {

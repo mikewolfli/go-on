@@ -1,0 +1,96 @@
+{
+  "language": "en_US",
+  "messages": {
+    "app.name": "go-on",
+    "app.version": "Phase 10.0",
+    "app.description": "Intelligent Agent Coordination Protocol (ACP) Proxy",
+    
+    "mode.ask": "Ask",
+    "mode.edit": "Edit",
+    "mode.agent": "Agent",
+    "mode.safeguard": "SafeGuard",
+    "mode.full_auto": "Full Auto",
+    
+    "role.planner": "Planner",
+    "role.researcher": "Researcher",
+    "role.coder": "Coder",
+    "role.tester": "Tester",
+    "role.reviewer": "Reviewer",
+    
+    "task_type.bug_fix": "Bug Fix",
+    "task_type.feature": "Feature Implementation",
+    "task_type.refactoring": "Refactoring",
+    "task_type.test": "Test Implementation",
+    "task_type.documentation": "Documentation",
+    "task_type.architecture": "Architecture Design",
+    "task_type.optimization": "Performance Optimization",
+    "task_type.review": "Code Review",
+    "task_type.unknown": "Unknown",
+    
+    "error.no_suitable_model": "No suitable model found for task",
+    "error.task_failed": "Task execution failed",
+    "error.timeout": "Execution timeout",
+    "error.resource_exhausted": "Insufficient resources",
+    "error.invalid_language": "Invalid language specification",
+    "error.file_not_found": "File not found",
+    "error.config_error": "Configuration error",
+    
+    "success.task_completed": "Task completed successfully",
+    "success.model_selected": "Model selected",
+    "success.language_loaded": "Language loaded",
+    
+    "info.analyzing_task": "Analyzing task...",
+    "info.selecting_model": "Selecting model...",
+    "info.decomposing_task": "Decomposing task...",
+    "info.optimizing_workflow": "Optimizing workflow...",
+    "info.executing_task": "Executing task...",
+    "info.generating_report": "Generating report...",
+    
+    "warning.degraded_mode": "Running in degraded mode due to resource constraints",
+    "warning.model_unreliable": "Selected model has low success rate",
+    "warning.high_risk_task": "Task involves high-risk operations",
+    
+    "router.task_complexity": "Task complexity",
+    "router.required_roles": "Required roles",
+    "router.estimated_success_rate": "Estimated success rate",
+    "router.estimated_duration": "Estimated duration",
+    "router.risk_factors": "Risk factors",
+    "router.recommended_safeguards": "Recommended safeguards",
+    
+    "selector.model": "Model",
+    "selector.cost": "Cost",
+    "selector.latency": "Latency",
+    "selector.success_rate": "Success rate",
+    "selector.strategy": "Selection strategy",
+    
+    "decomposer.subtasks": "Subtasks",
+    "decomposer.dependencies": "Dependencies",
+    "decomposer.execution_phases": "Execution phases",
+    "decomposer.parallelizable": "Parallelizable",
+    
+    "optimizer.critical_path": "Critical path",
+    "optimizer.bottleneck": "Bottleneck",
+    "optimizer.optimization_potential": "Optimization potential",
+    "optimizer.parallelism_factor": "Parallelism factor",
+    
+    "resource.token_budget": "Token budget",
+    "resource.time_budget": "Time budget",
+    "resource.cost_budget": "Cost budget",
+    "resource.utilization": "Resource utilization",
+    
+    "diagnostic.execution_timeline": "Execution timeline",
+    "diagnostic.performance_summary": "Performance summary",
+    "diagnostic.optimization_suggestions": "Optimization suggestions",
+    "diagnostic.decision_chain": "Decision chain",
+    
+    "learner.experience_updated": "Experience updated",
+    "learner.pattern_recognized": "Pattern recognized",
+    "learner.strategy_improved": "Strategy improved",
+    
+    "settings.language": "Language",
+    "settings.auto_update": "Auto update",
+    "settings.log_level": "Log level",
+    "settings.timeout": "Timeout (seconds)",
+    "settings.max_retries": "Maximum retries"
+  }
+}

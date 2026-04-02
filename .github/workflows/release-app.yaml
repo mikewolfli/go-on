@@ -53,11 +53,9 @@ jobs:
           STAGE_DIR="dist/stage"
           mkdir -p "$STAGE_DIR"
           cp "target/${{ matrix.target }}/release/${{ matrix.executable }}" "$STAGE_DIR/${{ matrix.executable }}"
-          cp config.toml.autopilot-simple "$STAGE_DIR/config.toml"
-          cp config.toml.autopilot-simple "$STAGE_DIR/config.toml.autopilot-simple"
-          cp config.toml.autopilot-complex "$STAGE_DIR/config.toml.autopilot-complex"
           cp config.toml.example "$STAGE_DIR/config.toml.example"
           cp -R RULES "$STAGE_DIR/RULES"
+          cp -R languages "$STAGE_DIR/languages"
           tar -czf "dist/${{ matrix.archive }}" -C "$STAGE_DIR" .
 
       - name: Package Windows bundle
@@ -66,11 +64,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist/stage | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.executable }}" "dist/stage/${{ matrix.executable }}"
-          Copy-Item "config.toml.autopilot-simple" "dist/stage/config.toml"
-          Copy-Item "config.toml.autopilot-simple" "dist/stage/config.toml.autopilot-simple"
-          Copy-Item "config.toml.autopilot-complex" "dist/stage/config.toml.autopilot-complex"
           Copy-Item "config.toml.example" "dist/stage/config.toml.example"
           Copy-Item "RULES" "dist/stage/RULES" -Recurse
+          Copy-Item "languages" "dist/stage/languages" -Recurse
           Compress-Archive -Path "dist/stage/*" -DestinationPath "dist/${{ matrix.archive }}" -Force
 
       - name: Upload to GitHub Release

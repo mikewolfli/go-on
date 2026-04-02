@@ -1,6 +1,11 @@
 //! Flow management
 //!
 //! This module handles the flow management logic, including phase resolution and agent routing.
+//!
+//! Phase 0/1 discipline:
+//! - 所有 phase/agent 路由都应支持 AgentTaskEnvelope/AgentTaskResult/AgentAuditLog 结构
+//! - 推荐在 phase/agent 入口和决策点生成审计日志，便于 trace/replay/audit
+//! - 可扩展 mode/phase/provider 能力兼容矩阵（见 design.md）
 
 use std::sync::Arc;
 
@@ -269,6 +274,7 @@ mod tests {
             cache: None,
             vector: None,
             autotune: None,
+            model_selection_mode: "adaptive".to_string(),
         }
     }
 

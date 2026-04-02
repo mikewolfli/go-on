@@ -13,6 +13,7 @@ use serde_json::Value;
 
 /// Application configuration structure
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct AppConfig {
     /// Default phase to use when none is specified
     pub default_phase: String,
@@ -30,6 +31,9 @@ pub struct AppConfig {
     pub vector: Option<VectorConfig>,
     /// Autotune configuration
     pub autotune: Option<AutoTuneConfig>,
+    /// Model selection mode for automatic selection (Phase 10+)
+    #[serde(default)]
+    pub model_selection_mode: String,
 }
 
 /// Configuration warning severity levels
@@ -1402,6 +1406,7 @@ mod tests {
             cache: None,
             vector: None,
             autotune: None,
+            model_selection_mode: "adaptive".to_string(),
         }
     }
 

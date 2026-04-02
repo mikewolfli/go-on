@@ -3,14 +3,38 @@
 //! This module handles command-line arguments, configuration loading, and server initialization.
 
 mod acp;
+mod adaptive_selector;
+mod advanced_modules;
 mod agent;
 mod agents;
+mod audit;
 mod cache;
 mod config;
+mod context;
 mod error;
+mod evaluation;
 mod flow;
+mod flow_with_models;
+mod graph;
+mod hardening;
+mod i18n;
+mod i18n_watcher;
+mod mcp;
+mod mcp_server;
+mod memory;
+mod mode;
+mod model_selector;
+mod orchestrator;
+mod promotion;
+mod roles;
 mod setup;
+mod task_decomposer;
+mod task_graph;
+mod task_router;
+mod tool;
 mod vector;
+mod verification;
+mod workflow_optimizer;
 
 use std::path::PathBuf;
 use std::sync::Arc;

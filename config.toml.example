@@ -1,27 +1,22 @@
 # ========================================================================
-# ACP Flow Proxy Configuration - STARTER EXAMPLE
+# ACP Flow Proxy Configuration - Template Example
 # ========================================================================
 # 
-# This is a BASELINE configuration file. For production use, choose one of:
+# This is a template configuration file for go-on.
+# 
+# The recommended way to generate your configuration is to use the
+# interactive setup wizard:
 #
-# 1. config.toml.autopilot-simple
-#    - Fast 2-3 step workflows with single AI per step
-#    - Best for: bug fixes, small refactoring, documentation updates
-#    - Chat mode: full_auto with autopilot_complexity="simple"
-#    - No dual-AI consensus required
-#    - Resource-efficient, quick feedback loop
+#   ./target/release/go-on --setup
 #
-# 2. config.toml.autopilot-complex
-#    - Explicit multi-phase flow with a fixed 2-AI review gate
-#    - Best for: major refactoring, architecture changes, complex features
-#    - Chat mode: full_auto with autopilot_complexity="complex"
-#    - Other phases can use extra AIs, but review always requires 2 reviewers
-#    - If you do not have 2 review-capable AIs, do not use this mode
+# The wizard will guide you through:
+# - Selecting AI providers and configuring credentials
+# - Defining workflow phases and agent assignments  
+# - Setting approval strategies and phase-specific principles
+# - Choosing between environment variables or system keyring for secrets
 #
-# To use, copy one of the above files to config.toml:
-#   cp config.toml.autopilot-simple config.toml
-#   # or
-#   cp config.toml.autopilot-complex config.toml
+# You can also manually edit this file to customize your workflow.
+# Refer to README.md for complete configuration documentation.
 #
 # ========================================================================
 

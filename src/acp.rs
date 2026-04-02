@@ -3873,6 +3873,7 @@ mod tests {
             cache: None,
             vector: None,
             autotune: None,
+            model_selection_mode: "adaptive".to_string(),
         });
 
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
@@ -3941,6 +3942,7 @@ mod tests {
                 cache: None,
                 vector: None,
                 autotune: None,
+                model_selection_mode: "adaptive".to_string(),
             }),
             None,
         )
@@ -4445,6 +4447,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn prometheus_export_includes_headers_and_runtime_labels() {
         let mut snapshot = MetricsSnapshot::default();
         snapshot.chat_requests_total = 3;
@@ -4619,6 +4622,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn rpc_prometheus_metrics_serializes_to_valid_format() {
         let mut snapshot = MetricsSnapshot::default();
         snapshot.chat_requests_total = 42;

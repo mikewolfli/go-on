@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::{
     option_f64, option_string, option_u64, principles_to_text, stream_sse_to_sender,
 };
@@ -133,6 +133,43 @@ impl Agent for DeepSeekAgent {
         }
 
         Err(last_error.unwrap_or_else(|| anyhow::anyhow!("deepseek request failed")))
+    }
+
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "deepseek-v3".to_string(),
+                name: "DeepSeek v3".to_string(),
+                description: "Most capable model, supports vision and function calling".to_string(),
+                is_default: false,
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "function_calling".to_string(),
+                ],
+                context_window: Some(64000),
+            },
+            ModelInfo {
+                id: "deepseek-chat".to_string(),
+                name: "DeepSeek Chat".to_string(),
+                description: "Fast chat model, optimized for speed".to_string(),
+                is_default: self.model == "deepseek-chat",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(4096),
+            },
+            ModelInfo {
+                id: "deepseek-coder".to_string(),
+                name: "DeepSeek Coder".to_string(),
+                description: "Specialized for code generation and analysis".to_string(),
+                is_default: false,
+                capabilities: vec!["chat".to_string(), "code".to_string()],
+                context_window: Some(4096),
+            },
+        ]
+    }
+
+    fn default_model(&self) -> Option<ModelInfo> {
+        self.available_models().into_iter().find(|m| m.is_default)
     }
 }
 
