@@ -52,7 +52,7 @@ impl MemoryPromotionPipeline {
             created_at: "now".to_string(),
         })
     }
-    
+
     pub fn stage_parsed_to_summarized(artifact: &MemoryArtifact) -> Option<MemoryArtifact> {
         if artifact.confidence < 0.7 {
             return None;
@@ -67,7 +67,7 @@ impl MemoryPromotionPipeline {
             created_at: "now".to_string(),
         })
     }
-    
+
     pub fn stage_summarized_to_indexed(artifact: &MemoryArtifact) -> Option<MemoryArtifact> {
         if artifact.confidence < 0.8 {
             return None;
@@ -82,7 +82,7 @@ impl MemoryPromotionPipeline {
             created_at: "now".to_string(),
         })
     }
-    
+
     pub fn stage_indexed_to_project(artifact: &MemoryArtifact) -> Option<MemoryArtifact> {
         if artifact.confidence < 0.9 {
             return None;

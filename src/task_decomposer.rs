@@ -317,7 +317,7 @@ impl TaskDecomposer {
     }
 
     fn decompose_generic(characteristics: &TaskCharacteristics) -> Vec<Subtask> {
-        let num_subtasks = (characteristics.complexity as usize).max(2).min(5);
+        let num_subtasks = (characteristics.complexity as usize).clamp(2, 5);
 
         (0..num_subtasks)
             .map(|i| {

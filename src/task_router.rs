@@ -250,11 +250,10 @@ impl TaskRouter {
         }
 
         // Calculate success rate based on role combination and task type
-        let predicted_success_rate = Self::predict_success_rate(&characteristics, &roles);
+        let predicted_success_rate = Self::predict_success_rate(characteristics, &roles);
 
         // Estimate execution time
-        let estimated_duration_seconds =
-            Self::estimate_execution_duration(&characteristics, &roles);
+        let estimated_duration_seconds = Self::estimate_execution_duration(characteristics, &roles);
 
         // Identify parallelizable pairs
         let can_parallelize = Self::identify_parallel_opportunities(&roles);
@@ -368,8 +367,7 @@ impl TaskRouter {
 
         // Experience matters (for now, assume neutral)
         // TODO: integrate with historical success rates
-
-        base_rate.max(0.2).min(0.99)
+        base_rate.clamp(0.2, 0.99)
     }
 
     fn estimate_execution_duration(
@@ -402,7 +400,7 @@ impl TaskRouter {
             multiplier += (roles.len() as f32 - 1.0) * 0.15;
         }
 
-        ((base_minutes as f32 * multiplier * 60.0) as u32).min(0xFFFF_FFFF)
+        (base_minutes as f32 * multiplier * 60.0) as u32
     }
 
     fn identify_parallel_opportunities(roles: &[AgentRole]) -> Vec<(AgentRole, AgentRole)> {

@@ -172,7 +172,7 @@ impl ResourceAllocator {
             token_budget: (base_tokens as f32 * complexity_multiplier) as usize,
             time_budget_seconds: (base_time as f32 * complexity_multiplier) as u64,
             api_cost_limit_cents: (base_cost as f32 * complexity_multiplier) as u32,
-            max_parallel_tasks: (num_subtasks / 2).max(1).min(8),
+            max_parallel_tasks: (num_subtasks / 2).clamp(1, 8),
         }
     }
 
@@ -354,7 +354,7 @@ impl ContinuousLearner {
         let avg_improvement =
             self.improvement_history.iter().sum::<f32>() / self.improvement_history.len() as f32;
 
-        ((total_lessons / 100.0) * 0.5 + avg_improvement.max(0.0).min(1.0) * 0.5).min(1.0)
+        ((total_lessons / 100.0) * 0.5 + avg_improvement.clamp(0.0, 1.0) * 0.5).clamp(0.0, 1.0)
     }
 }
 

@@ -305,11 +305,10 @@ impl ExecutionOptimizer {
             let mut max_duration = 0;
 
             for (id, duration, deps) in subtasks {
-                if deps.contains(current) && !critical_path.contains(id) {
-                    if *duration > max_duration {
-                        max_duration = *duration;
-                        next_task = Some(id.clone());
-                    }
+                if deps.contains(current) && !critical_path.contains(id) && *duration > max_duration
+                {
+                    max_duration = *duration;
+                    next_task = Some(id.clone());
                 }
             }
 

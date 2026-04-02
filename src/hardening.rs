@@ -48,7 +48,7 @@ pub struct AutonomousEditAuditEntry {
 pub struct PolicyBundle {
     pub name: String,
     pub deployment_target: String, // "local-dev", "ci", "managed-service"
-    pub max_autonomy: String, // "ask", "edit", "agent", "full_auto"
+    pub max_autonomy: String,      // "ask", "edit", "agent", "full_auto"
     pub require_approval_for_write: bool,
     pub enable_code_execution: bool,
     pub sandbox_level: String, // "none", "basic", "strict"
@@ -65,7 +65,7 @@ impl PolicyBundle {
             sandbox_level: "none".to_string(),
         }
     }
-    
+
     pub fn ci_pipeline() -> Self {
         Self {
             name: "ci-pipeline".to_string(),
@@ -76,7 +76,7 @@ impl PolicyBundle {
             sandbox_level: "basic".to_string(),
         }
     }
-    
+
     pub fn managed_service() -> Self {
         Self {
             name: "managed-service".to_string(),
@@ -100,8 +100,16 @@ impl Idempotency {
 
 pub struct SandboxPolicy;
 impl SandboxPolicy {
-    pub fn can_execute_read_file(_level: &str) -> bool { true }
-    pub fn can_execute_search(_level: &str) -> bool { true }
-    pub fn can_execute_write(level: &str) -> bool { level != "strict" }
-    pub fn can_execute_shell(level: &str) -> bool { level == "none" }
+    pub fn can_execute_read_file(_level: &str) -> bool {
+        true
+    }
+    pub fn can_execute_search(_level: &str) -> bool {
+        true
+    }
+    pub fn can_execute_write(level: &str) -> bool {
+        level != "strict"
+    }
+    pub fn can_execute_shell(level: &str) -> bool {
+        level == "none"
+    }
 }

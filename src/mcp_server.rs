@@ -131,7 +131,6 @@ impl McpHttpServer {
 
 #[cfg(test)]
 mod tests {
-    
 
     #[tokio::test]
     async fn test_mcp_stdio_server_creation() {

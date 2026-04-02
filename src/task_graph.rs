@@ -69,6 +69,8 @@ impl TaskGraph {
         }
     }
     pub fn is_complete(&self) -> bool {
-        self.nodes.values().all(|n| n.state == "done" || n.state == "failed")
+        self.nodes
+            .values()
+            .all(|n| n.state == "done" || n.state == "failed")
     }
 }
