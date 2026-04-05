@@ -101,6 +101,27 @@ pub struct RuntimeConfig {
     /// Shutdown drain time in seconds
     #[serde(default = "default_runtime_shutdown_drain_seconds")]
     pub shutdown_drain_seconds: u64,
+    /// How often background maintenance performs SQLite VACUUM cycles
+    #[serde(default = "default_runtime_sqlite_vacuum_interval_cycles")]
+    pub sqlite_vacuum_interval_cycles: u64,
+    /// Enable OpenTelemetry exporter for distributed traces
+    #[serde(default)]
+    pub otel_enabled: bool,
+    /// Exporter type: otlp or jaeger (jaeger uses OTLP endpoint)
+    #[serde(default = "default_runtime_otel_exporter")]
+    pub otel_exporter: String,
+    /// Optional OTLP endpoint (for Jaeger, point to collector OTLP endpoint)
+    #[serde(default)]
+    pub otel_endpoint: Option<String>,
+    /// OpenTelemetry service name
+    #[serde(default = "default_runtime_otel_service_name")]
+    pub otel_service_name: String,
+    /// Sampling ratio in [0.0, 1.0]
+    #[serde(default = "default_runtime_otel_sample_ratio")]
+    pub otel_sample_ratio: f64,
+    /// Number of slow requests to keep in top-N trace metrics
+    #[serde(default = "default_runtime_trace_slow_top_n")]
+    pub trace_slow_top_n: usize,
 }
 
 impl Default for RuntimeConfig {
@@ -109,6 +130,13 @@ impl Default for RuntimeConfig {
             maintenance_interval_seconds: default_runtime_maintenance_interval_seconds(),
             health_interval_seconds: default_runtime_health_interval_seconds(),
             shutdown_drain_seconds: default_runtime_shutdown_drain_seconds(),
+            sqlite_vacuum_interval_cycles: default_runtime_sqlite_vacuum_interval_cycles(),
+            otel_enabled: false,
+            otel_exporter: default_runtime_otel_exporter(),
+            otel_endpoint: None,
+            otel_service_name: default_runtime_otel_service_name(),
+            otel_sample_ratio: default_runtime_otel_sample_ratio(),
+            trace_slow_top_n: default_runtime_trace_slow_top_n(),
         }
     }
 }
@@ -123,6 +151,26 @@ fn default_runtime_health_interval_seconds() -> u64 {
 
 fn default_runtime_shutdown_drain_seconds() -> u64 {
     30
+}
+
+fn default_runtime_sqlite_vacuum_interval_cycles() -> u64 {
+    60
+}
+
+fn default_runtime_otel_exporter() -> String {
+    "otlp".to_string()
+}
+
+fn default_runtime_otel_service_name() -> String {
+    "go-on".to_string()
+}
+
+fn default_runtime_otel_sample_ratio() -> f64 {
+    1.0
+}
+
+fn default_runtime_trace_slow_top_n() -> usize {
+    20
 }
 
 #[allow(dead_code)]
@@ -706,6 +754,19 @@ impl AppConfig {
             if runtime.shutdown_drain_seconds == 0 {
                 anyhow::bail!("runtime.shutdown_drain_seconds must be > 0");
             }
+            if runtime.sqlite_vacuum_interval_cycles == 0 {
+                anyhow::bail!("runtime.sqlite_vacuum_interval_cycles must be > 0");
+            }
+            if !(0.0..=1.0).contains(&runtime.otel_sample_ratio) {
+                anyhow::bail!("runtime.otel_sample_ratio must be in [0.0, 1.0]");
+            }
+            if runtime.trace_slow_top_n == 0 {
+                anyhow::bail!("runtime.trace_slow_top_n must be > 0");
+            }
+            let exporter = runtime.otel_exporter.to_ascii_lowercase();
+            if runtime.otel_enabled && exporter != "otlp" && exporter != "jaeger" {
+                anyhow::bail!("runtime.otel_exporter must be 'otlp' or 'jaeger'");
+            }
         }
 
         if let Some(vector) = &self.vector {
@@ -1188,6 +1249,61 @@ pub fn build_config_health_report(config_path: &Path, config: &AppConfig) -> Con
 fn collect_config_warnings_detailed(config_path: &Path, config: &AppConfig) -> Vec<ConfigWarning> {
     let mut warnings = Vec::new();
 
+    if let Some(vector) = &config.vector {
+        if vector.enabled && !vector.summary_enabled {
+            warnings.push(ConfigWarning {
+                code: "VECTOR_SUMMARY_DISABLED".to_string(),
+                severity: ConfigWarningSeverity::Info,
+                message: "vector memory is enabled while summary_enabled=false; retrieval quality and long-session compression may degrade".to_string(),
+            });
+        }
+
+        if vector.enabled && vector.max_entries >= 50_000 {
+            warnings.push(ConfigWarning {
+                code: "VECTOR_MAX_ENTRIES_HIGH".to_string(),
+                severity: ConfigWarningSeverity::Warn,
+                message: format!(
+                    "vector.max_entries={} is unusually high; startup I/O, SQLite growth, and maintenance time may increase",
+                    vector.max_entries
+                ),
+            });
+        }
+    }
+
+    if let Some(cache) = &config.cache {
+        if cache.enabled && cache.max_entries >= 50_000 {
+            warnings.push(ConfigWarning {
+                code: "CACHE_MAX_ENTRIES_HIGH".to_string(),
+                severity: ConfigWarningSeverity::Warn,
+                message: format!(
+                    "cache.max_entries={} is unusually high; consider lowering it if startup or VACUUM pauses increase",
+                    cache.max_entries
+                ),
+            });
+        }
+    }
+
+    if let Some(autotune) = &config.autotune {
+        let vector_enabled = config.vector.as_ref().map(|v| v.enabled).unwrap_or(false);
+        if autotune.enabled && !vector_enabled {
+            warnings.push(ConfigWarning {
+                code: "AUTOTUNE_WITHOUT_VECTOR".to_string(),
+                severity: ConfigWarningSeverity::Warn,
+                message: "autotune is enabled but vector memory is disabled; autotune will have little practical effect".to_string(),
+            });
+        }
+    }
+
+    if let Some(runtime) = &config.runtime {
+        if runtime.otel_enabled && runtime.otel_endpoint.is_none() {
+            warnings.push(ConfigWarning {
+                code: "OTEL_ENDPOINT_DEFAULTED".to_string(),
+                severity: ConfigWarningSeverity::Info,
+                message: "runtime.otel_enabled=true without otel_endpoint; default collector endpoint http://127.0.0.1:4317 will be used".to_string(),
+            });
+        }
+    }
+
     for path in shared_rule_paths(config_path.parent().unwrap_or_else(|| Path::new("."))) {
         push_rule_warning(&mut warnings, &path, "RULE_FILE_EMPTY");
     }
@@ -1485,6 +1601,13 @@ mod tests {
             maintenance_interval_seconds: 0,
             health_interval_seconds: 30,
             shutdown_drain_seconds: 10,
+            sqlite_vacuum_interval_cycles: 60,
+            otel_enabled: false,
+            otel_exporter: "otlp".to_string(),
+            otel_endpoint: None,
+            otel_service_name: "go-on".to_string(),
+            otel_sample_ratio: 1.0,
+            trace_slow_top_n: 20,
         });
 
         let err = cfg

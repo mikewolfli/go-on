@@ -27,6 +27,7 @@ use crate::agents::{
 };
 
 use crate::config::{AgentConfig, AppConfig};
+use crate::pua::PuaExecutionReport;
 
 /// Agent task envelope (Phase 0/1 discipline)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +48,7 @@ pub struct AgentTaskResult {
     pub output: Option<serde_json::Value>,
     pub error: Option<String>,
     pub audit_log: Option<String>,
+    pub pua_report: Option<PuaExecutionReport>,
 }
 
 /// Agent decision audit log schema
@@ -153,6 +155,7 @@ pub trait Agent: Send + Sync {
                     .to_string(),
             ),
             audit_log: Some(serde_json::to_string(&audit)?),
+            pua_report: None,
         })
     }
 }

@@ -64,6 +64,15 @@ summary_trigger_max = 20
 maintenance_interval_seconds = 60
 health_interval_seconds = 120
 shutdown_drain_seconds = 30
+sqlite_vacuum_interval_cycles = 60
+
+# Phase 2 tracing (OTLP/Jaeger through OTLP collector endpoint)
+otel_enabled = false
+otel_exporter = "otlp" # or "jaeger"
+# otel_endpoint = "http://127.0.0.1:4317"
+otel_service_name = "go-on"
+otel_sample_ratio = 1.0
+trace_slow_top_n = 20
 
 # Define all agents (models)
 [agents.copilot]

@@ -1,0 +1,24 @@
+default_phase = "coding"
+model_selection_mode = "adaptive"
+
+[agents.copilot]
+type = "copilot"
+url = "http://127.0.0.1:8080"
+
+[flow]
+name = "Minimal Flow"
+phases = ["coding"]
+
+[phases.coding]
+description = "Single-phase coding flow"
+agents = ["copilot"]
+fallback = false
+principles = [
+    "Keep changes focused and verifiable",
+    "Run proof-producing verification before claiming completion"
+]
+
+[phases.coding.options]
+request_timeout_seconds = 120
+cache_enabled = false
+vector_enabled = false

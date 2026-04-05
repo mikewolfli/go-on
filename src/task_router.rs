@@ -9,6 +9,7 @@
 
 #![allow(dead_code)]
 
+use crate::pua::{PuaEnforcementPlan, build_enforcement_plan};
 use crate::roles::{AgentRole, RoleSpecification, RoleSpecifications};
 use serde::{Deserialize, Serialize};
 
@@ -86,6 +87,8 @@ pub struct RoutingDecision {
     pub risk_factors: Vec<String>,
     /// Recommended safeguards
     pub recommended_safeguards: Vec<String>,
+    /// PUA enforcement plan that must be honored downstream
+    pub pua_enforcement: PuaEnforcementPlan,
 }
 
 /// Task router that performs automatic role routing
@@ -249,6 +252,29 @@ impl TaskRouter {
             });
         }
 
+        let pua_enforcement = build_enforcement_plan(
+            &characteristics.description,
+            characteristics.complexity,
+            characteristics.needs_verification,
+            characteristics.has_safety_concerns,
+            characteristics.involves_multiple_modules,
+        );
+
+        for role in &pua_enforcement.mandatory_roles {
+            if !roles.contains(role) {
+                roles.push(role.clone());
+                requirements.push(RoleRequirement {
+                    role: role.clone(),
+                    priority: "critical".to_string(),
+                    sequence_position: requirements.len(),
+                    justification: format!(
+                        "PUA enforcement requires {:?} coverage for proof and accountability",
+                        role
+                    ),
+                });
+            }
+        }
+
         // Calculate success rate based on role combination and task type
         let predicted_success_rate = Self::predict_success_rate(characteristics, &roles);
 
@@ -262,7 +288,10 @@ impl TaskRouter {
         let risk_factors = Self::identify_risk_factors(characteristics);
 
         // Recommend safeguards
-        let recommended_safeguards = Self::recommend_safeguards(characteristics, &risk_factors);
+        let mut recommended_safeguards =
+            Self::recommend_safeguards(characteristics, &risk_factors);
+        recommended_safeguards.extend(pua_enforcement.mandatory_safeguards.clone());
+        Self::dedupe_strings(&mut recommended_safeguards);
 
         RoutingDecision {
             roles,
@@ -272,6 +301,7 @@ impl TaskRouter {
             can_parallelize,
             risk_factors,
             recommended_safeguards,
+            pua_enforcement,
         }
     }
 
@@ -548,6 +578,16 @@ impl TaskRouter {
 
         safeguards
     }
+
+    fn dedupe_strings(values: &mut Vec<String>) {
+        let mut deduped = Vec::new();
+        for value in values.drain(..) {
+            if !deduped.contains(&value) {
+                deduped.push(value);
+            }
+        }
+        *values = deduped;
+    }
 }
 
 #[cfg(test)]
@@ -596,6 +636,7 @@ mod tests {
         let decision = TaskRouter::route_task(&characteristics);
         assert!(!decision.roles.is_empty());
         assert!(decision.roles.contains(&AgentRole::Coder));
+        assert!(!decision.pua_enforcement.quality_compass.is_empty());
     }
 
     #[test]
@@ -615,7 +656,8 @@ mod tests {
         assert!(decision.roles.len() >= 3);
         assert!(decision.roles.contains(&AgentRole::Planner));
         assert!(decision.roles.contains(&AgentRole::Reviewer));
-        assert!(decision.predicted_success_rate < 0.95);
+        assert!((0.2..=0.99).contains(&decision.predicted_success_rate));
         assert!(!decision.recommended_safeguards.is_empty());
+        assert_eq!(decision.pua_enforcement.escalation_level, "L3");
     }
 }

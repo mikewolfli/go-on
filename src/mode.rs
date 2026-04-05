@@ -7,6 +7,7 @@
 #![allow(dead_code)]
 
 use crate::agent::{AgentTaskEnvelope, AgentTaskResult};
+use crate::pua::mode_execution_report;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +70,7 @@ impl ModeRuntime for AskModeRuntime {
                 "Ask mode: task_id={}, phase={}, role={}",
                 task.task_id, task.phase, task.role
             )),
+                pua_report: Some(mode_execution_report("ask", false)),
         })
     }
 }
@@ -117,6 +119,7 @@ impl ModeRuntime for EditModeRuntime {
                 "Edit mode: task_id={}, phase={}, role={}, max_tools=5",
                 task.task_id, task.phase, task.role
             )),
+                pua_report: Some(mode_execution_report("edit", false)),
         })
     }
 }
@@ -185,6 +188,7 @@ impl ModeRuntime for AgentModeRuntime {
                 "Agent mode: task_id={}, phase={}, role={}, high_risk={}",
                 task.task_id, task.phase, task.role, is_high_risk
             )),
+                pua_report: Some(mode_execution_report("agent", is_high_risk)),
         })
     }
 }
@@ -237,6 +241,7 @@ impl ModeRuntime for FullAutoModeRuntime {
                 "FullAuto mode: task_id={}, phase={}, role={}, autonomy_level=full",
                 task.task_id, task.phase, task.role
             )),
+                pua_report: Some(mode_execution_report("full_auto", false)),
         })
     }
 }
@@ -339,6 +344,7 @@ impl ModeRuntime for SafeGuardModeRuntime {
                 "SafeGuard mode: task_id={}, phase={}, role={}, high_risk={}, safety=enhanced",
                 task.task_id, task.phase, task.role, is_high_risk
             )),
+                pua_report: Some(mode_execution_report("safeguard", is_high_risk)),
         })
     }
 }

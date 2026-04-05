@@ -3,13 +3,15 @@
 //! This module implements the core server functionality for the go-on ACP proxy,
 //! including request handling, caching, vector storage, and circuit breaking.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use log::{debug, error, info, warn};
+use opentelemetry::{Context as OtelContext, KeyValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -24,31 +26,30 @@ use crate::config::{
     validate_runtime_readiness, AppConfig, AutoTuneConfig, AutoTuneState, PhaseOptions,
     RuntimeConfig, VectorConfig,
 };
+use crate::evaluation::TraceEvent;
 use crate::error::ProxyError;
 use crate::flow::{FlowManager, ResolvedPhase};
+use crate::pua::review_gate_prompt;
+use crate::roles::AgentRole;
+use crate::task_router::{RoutingDecision, TaskCharacteristics, TaskRouter};
+use crate::telemetry::TelemetryRuntime;
 use crate::vector::{VectorHit, VectorStore};
 
-/// Default minimum characters for vector search queries
+const TRACE_BUFFER_MAX: usize = 2048;
+static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 const DEFAULT_VECTOR_MIN_QUERY_CHARS: usize = 80;
-/// Default number of top results for vector search
 const DEFAULT_VECTOR_TOP_K: usize = 2;
-/// Default minimum similarity threshold for vector search
 const DEFAULT_VECTOR_MIN_SIMILARITY: f32 = 0.82;
-/// Default maximum characters for vector search snippets
 const DEFAULT_VECTOR_MAX_SNIPPET_CHARS: usize = 800;
-/// Default number of messages to trigger summary
 const DEFAULT_SUMMARY_TRIGGER_MESSAGES: usize = 8;
-/// Default maximum characters for summaries
 const DEFAULT_SUMMARY_MAX_CHARS: usize = 1200;
-/// Default failure threshold for circuit breakers
 const DEFAULT_BREAKER_FAILURE_THRESHOLD: u32 = 3;
-/// Default time circuit breakers remain open (in seconds)
-const DEFAULT_BREAKER_OPEN_SECONDS: i64 = 30;
-/// Histogram buckets for latency measurements (in seconds)
-const HISTOGRAM_BUCKETS_SECONDS: [f64; 10] =
-    [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0];
+const DEFAULT_BREAKER_OPEN_SECONDS: i64 = 60;
+const HISTOGRAM_BUCKETS_SECONDS: [f64; 10] = [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0];
+const ONLINE_CONTROLLER_WINDOW: usize = 64;
+const ONLINE_CONTROLLER_FAILURE_ESCALATION: f64 = 0.25;
+const ONLINE_CONTROLLER_P95_LATENCY_MS_ESCALATION: u64 = 15_000;
 
-/// JSON-RPC request structure
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
     /// JSON-RPC version
@@ -59,6 +60,56 @@ struct JsonRpcRequest {
     method: String,
     /// Request parameters
     params: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+struct RequestTraceContext {
+    trace_id: String,
+    span_id: String,
+    method: String,
+    request_id: String,
+}
+
+#[derive(Debug, Default, Clone)]
+struct OnlineControllerState {
+    recent_failures: VecDeque<bool>,
+    recent_latency_ms: VecDeque<u64>,
+}
+
+impl OnlineControllerState {
+    fn record(&mut self, success: bool, duration_ms: u64) {
+        if self.recent_failures.len() >= ONLINE_CONTROLLER_WINDOW {
+            self.recent_failures.pop_front();
+        }
+        self.recent_failures.push_back(!success);
+
+        if self.recent_latency_ms.len() >= ONLINE_CONTROLLER_WINDOW {
+            self.recent_latency_ms.pop_front();
+        }
+        self.recent_latency_ms.push_back(duration_ms);
+    }
+
+    fn failure_rate(&self) -> f64 {
+        if self.recent_failures.is_empty() {
+            return 0.0;
+        }
+        let failures = self.recent_failures.iter().filter(|failed| **failed).count();
+        failures as f64 / self.recent_failures.len() as f64
+    }
+
+    fn latency_p95_ms(&self) -> u64 {
+        if self.recent_latency_ms.is_empty() {
+            return 0;
+        }
+        let mut samples = self.recent_latency_ms.iter().copied().collect::<Vec<_>>();
+        samples.sort_unstable();
+        percentile(&samples, 95.0)
+    }
+
+    fn should_escalate(&self) -> bool {
+        self.failure_rate() >= ONLINE_CONTROLLER_FAILURE_ESCALATION
+            || self.latency_p95_ms() >= ONLINE_CONTROLLER_P95_LATENCY_MS_ESCALATION
+    }
 }
 
 /// JSON-RPC response structure
@@ -260,6 +311,8 @@ struct MaintenanceSnapshot {
     last_completed_at: Option<i64>,
     last_memory_expired_removed: u64,
     last_sqlite_expired_removed: u64,
+    last_cache_vacuumed: bool,
+    last_vector_vacuumed: bool,
     last_error: Option<String>,
 }
 
@@ -285,12 +338,20 @@ impl MaintenanceTracker {
         }
     }
 
-    fn note_completed(&self, memory_removed: usize, sqlite_removed: usize) {
+    fn note_completed(
+        &self,
+        memory_removed: usize,
+        sqlite_removed: usize,
+        cache_vacuumed: bool,
+        vector_vacuumed: bool,
+    ) {
         if let Ok(mut guard) = self.inner.lock() {
             guard.running = false;
             guard.last_completed_at = Some(now_ts());
             guard.last_memory_expired_removed = memory_removed as u64;
             guard.last_sqlite_expired_removed = sqlite_removed as u64;
+            guard.last_cache_vacuumed = cache_vacuumed;
+            guard.last_vector_vacuumed = vector_vacuumed;
             guard.last_error = None;
         }
     }
@@ -1005,6 +1066,12 @@ pub struct AcpServer {
     runtime_config: Arc<StdMutex<RuntimeConfig>>,
     /// Runtime metrics collection
     metrics: Arc<RuntimeMetrics>,
+    /// Online controller for adaptive strategy from live outcomes
+    online_controller: Arc<StdMutex<OnlineControllerState>>,
+    /// OpenTelemetry runtime bridge
+    telemetry: Arc<TelemetryRuntime>,
+    /// In-memory request trace events (phase-1 OTel-compatible)
+    trace_events: Arc<StdMutex<Vec<TraceEvent>>>,
     /// In-memory response cache for fast access
     memory_cache: Arc<MemoryResponseCache>,
     /// Maintenance tracker for system health
@@ -1064,6 +1131,7 @@ impl AcpServer {
         http_client: Option<reqwest::Client>,
         verbose: bool,
     ) -> Self {
+        let telemetry = Arc::new(TelemetryRuntime::new(&runtime_config));
         Self {
             flow: Arc::new(StdMutex::new(flow)),
             registry: Arc::new(StdMutex::new(registry)),
@@ -1075,6 +1143,9 @@ impl AcpServer {
             autotune_state_path: Arc::new(StdMutex::new(autotune_state_path)),
             runtime_config: Arc::new(StdMutex::new(runtime_config)),
             metrics: Arc::new(RuntimeMetrics::default()),
+            online_controller: Arc::new(StdMutex::new(OnlineControllerState::default())),
+            telemetry,
+            trace_events: Arc::new(StdMutex::new(Vec::new())),
             memory_cache: Arc::new(MemoryResponseCache::default()),
             maintenance: Arc::new(MaintenanceTracker::default()),
             lifecycle: Arc::new(LifecycleState::default()),
@@ -1272,6 +1343,8 @@ impl AcpServer {
         match perform_maintenance_cycle(
             Arc::clone(&self.memory_cache),
             Arc::clone(&self.cache),
+            Arc::clone(&self.vector_store),
+            Arc::clone(&self.runtime_config),
             Arc::clone(&self.maintenance),
             source,
         )
@@ -1315,18 +1388,45 @@ impl AcpServer {
     }
 
     async fn handle_request(&self, request: JsonRpcRequest) -> Result<()> {
-        if self.lifecycle.is_shutting_down() && request.method != "shutdown" {
-            return self
-                .send_error(
-                    request.id,
-                    -32031,
-                    "server is shutting down".to_string(),
-                    Some(serde_json::to_value(self.lifecycle.snapshot())?),
-                )
-                .await;
-        }
+        let trace = self.new_request_trace(&request);
+        let request_span = self.telemetry.start_root_span(
+            "acp.request",
+            &format!("{}:{}", trace.method, trace.request_id),
+            vec![
+                KeyValue::new("rpc.method", trace.method.clone()),
+                KeyValue::new("rpc.request_id", trace.request_id.clone()),
+                KeyValue::new("trace.id", trace.trace_id.clone()),
+            ],
+        );
+        self.record_trace_event(
+            &trace,
+            "request.start",
+            "ok",
+            "rpc",
+            json!({
+                "method": trace.method,
+                "request_id": trace.request_id,
+            }),
+            None,
+            0,
+        );
 
-        match request.method.as_str() {
+        let method = request.method.clone();
+        let request_id = request.id.clone();
+        let started = Instant::now();
+        let result = async {
+            if self.lifecycle.is_shutting_down() && method != "shutdown" {
+                return self
+                    .send_error(
+                        request_id,
+                        -32031,
+                        "server is shutting down".to_string(),
+                        Some(serde_json::to_value(self.lifecycle.snapshot())?),
+                    )
+                    .await;
+            }
+
+            match method.as_str() {
             "initialize" => {
                 let result = json!({
                     "name": "go-on",
@@ -1339,12 +1439,15 @@ impl AcpServer {
                         "autotune": self.autotune_config_snapshot().map(|cfg| cfg.enabled).unwrap_or(false),
                     }
                 });
-                self.send_result(request.id, result).await
+                self.send_result(request_id, result).await
             }
-            "chat" => self.handle_chat(request.id, request.params).await,
+            "chat" => {
+                self.handle_chat(request_id, request.params, request_span.clone())
+                    .await
+            }
             "metrics.get" => {
                 let result = serde_json::to_value(self.metrics.snapshot())?;
-                self.send_result(request.id, result).await
+                self.send_result(request_id, result).await
             }
             "metrics.prometheus" => {
                 let sqlite_cache_entries = if let Some(cache) = self.cache_handle() {
@@ -1387,11 +1490,33 @@ impl AcpServer {
                         &maintenance,
                     )
                 });
-                self.send_result(request.id, result).await
+                self.send_result(request_id, result).await
             }
             "metrics.reset" => {
                 self.metrics.reset();
-                self.send_result(request.id, json!({"ok": true})).await
+                self.send_result(request_id, json!({"ok": true})).await
+            }
+            "trace.metrics" => {
+                let result = self.trace_metrics_snapshot();
+                self.send_result(request_id, result).await
+            }
+            "trace.get" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let limit = params
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(100)
+                    .min(1000) as usize;
+                let events = self.trace_snapshot(limit);
+                self.send_result(
+                    request_id,
+                    json!({
+                        "ok": true,
+                        "count": events.len(),
+                        "events": events,
+                    }),
+                )
+                .await
             }
             "runtime.health" => {
                 let (global_inflight, phase_inflight) = self.inflight_limiter.snapshot();
@@ -1449,8 +1574,12 @@ impl AcpServer {
                         "degraded": self.metrics.snapshot().review_gate_degraded_total,
                         "invalid_response": self.metrics.snapshot().review_gate_invalid_response_total,
                     },
+                    "telemetry": {
+                        "enabled": self.telemetry.is_enabled(),
+                        "sampling_rate": self.telemetry.sampling_rate(),
+                    },
                 });
-                self.send_result(request.id, result).await
+                self.send_result(request_id, result).await
             }
             "phase.status" => {
                 let limiter = self
@@ -1469,7 +1598,7 @@ impl AcpServer {
                     .collect::<serde_json::Map<String, Value>>();
                 let inflight = self.inflight_limiter.snapshot().1;
                 self.send_result(
-                    request.id,
+                    request_id,
                     json!({
                         "rate_limiter": limiter,
                         "inflight": inflight,
@@ -1496,7 +1625,7 @@ impl AcpServer {
                         )
                     })
                     .collect::<serde_json::Map<String, Value>>();
-                self.send_result(request.id, Value::Object(status)).await
+                self.send_result(request_id, Value::Object(status)).await
             }
             "breaker.reset" => {
                 let params = request.params.unwrap_or_else(|| json!({}));
@@ -1519,12 +1648,12 @@ impl AcpServer {
                         })
                         .unwrap_or(0)
                 };
-                self.send_result(request.id, json!({"ok": true, "removed": removed}))
+                self.send_result(request_id, json!({"ok": true, "removed": removed}))
                     .await
             }
             "config.reload" => {
                 let reloaded = self.reload_runtime_config().await?;
-                self.send_result(request.id, reloaded).await
+                self.send_result(request_id, reloaded).await
             }
             "cache.clear" => {
                 let memory_removed = self.memory_cache.clear_all();
@@ -1539,7 +1668,7 @@ impl AcpServer {
                     "memory_removed": memory_removed,
                     "sqlite_removed": sqlite_removed,
                 });
-                self.send_result(request.id, result).await
+                self.send_result(request_id, result).await
             }
             "vector.clear" => {
                 let (memory_removed, summary_removed) =
@@ -1554,7 +1683,7 @@ impl AcpServer {
                     "vector_removed": memory_removed,
                     "summary_removed": summary_removed,
                 });
-                self.send_result(request.id, result).await
+                self.send_result(request_id, result).await
             }
             "maintenance.gc" => {
                 let cycle = self.run_maintenance_cycle("rpc").await;
@@ -1562,18 +1691,20 @@ impl AcpServer {
                     "ok": true,
                     "memory_expired_removed": cycle.memory_expired_removed,
                     "sqlite_expired_removed": cycle.sqlite_expired_removed,
+                    "cache_vacuumed": cycle.cache_vacuumed,
+                    "vector_vacuumed": cycle.vector_vacuumed,
                     "maintenance": self.maintenance.snapshot(),
                 });
-                self.send_result(request.id, result).await
+                self.send_result(request_id, result).await
             }
             "autotune.get" => {
                 if let Some(autotune) = self.autotune_handle() {
                     let state = autotune.lock().await;
                     let result = state.snapshot();
-                    self.send_result(request.id, result).await
+                    self.send_result(request_id, result).await
                 } else {
                     self.send_error(
-                        request.id,
+                        request_id,
                         -32603,
                         "autotune is not enabled".to_string(),
                         None,
@@ -1597,10 +1728,10 @@ impl AcpServer {
                         } else {
                             warn!("autotune reset skipped persistence because no resolved state path is available");
                         }
-                        self.send_result(request.id, json!({"ok": true})).await
+                        self.send_result(request_id, json!({"ok": true})).await
                     } else {
                         self.send_error(
-                            request.id,
+                            request_id,
                             -32603,
                             "autotune config not available".to_string(),
                             None,
@@ -1609,7 +1740,7 @@ impl AcpServer {
                     }
                 } else {
                     self.send_error(
-                        request.id,
+                        request_id,
                         -32603,
                         "autotune is not enabled".to_string(),
                         None,
@@ -1620,7 +1751,7 @@ impl AcpServer {
             "shutdown" => {
                 self.begin_shutdown("rpc shutdown");
                 self.send_result(
-                    request.id,
+                    request_id,
                     json!({
                         "ok": true,
                         "lifecycle": self.lifecycle.snapshot(),
@@ -1630,18 +1761,220 @@ impl AcpServer {
             }
             other => {
                 self.send_error(
-                    request.id,
+                    request_id,
                     -32601,
                     ProxyError::UnknownMethod(other.to_string()).to_string(),
                     None,
                 )
                 .await
             }
+            }
+        }
+        .await;
+
+        let duration_ms = started.elapsed().as_millis() as u64;
+        match &result {
+            Ok(_) => self.record_trace_event(
+                &trace,
+                "request.end",
+                "ok",
+                "rpc",
+                json!({
+                    "method": method,
+                    "request_id": trace.request_id,
+                }),
+                None,
+                duration_ms,
+            ),
+            Err(err) => self.record_trace_event(
+                &trace,
+                "request.end",
+                "error",
+                "rpc",
+                json!({
+                    "method": method,
+                    "request_id": trace.request_id,
+                }),
+                Some(err.to_string()),
+                duration_ms,
+            ),
+        }
+
+        if let Some(span) = request_span {
+            self.telemetry.end_span(
+                span,
+                vec![
+                    KeyValue::new("request.duration_ms", duration_ms as i64),
+                    KeyValue::new("request.status", if result.is_ok() { "ok" } else { "error" }),
+                ],
+            );
+        }
+
+        result
+    }
+
+    fn new_request_trace(&self, request: &JsonRpcRequest) -> RequestTraceContext {
+        let counter = TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let base = format!(
+            "{}:{}:{}:{}",
+            request.method,
+            request.id.as_ref().map(value_to_id).unwrap_or_else(|| "none".to_string()),
+            now_ms(),
+            counter
+        );
+        RequestTraceContext {
+            trace_id: hash_hex(&base, 32),
+            span_id: hash_hex(&format!("{}:span", base), 16),
+            method: request.method.clone(),
+            request_id: request
+                .id
+                .as_ref()
+                .map(value_to_id)
+                .unwrap_or_else(|| "none".to_string()),
         }
     }
 
-    async fn handle_chat(&self, id: Option<Value>, params: Option<Value>) -> Result<()> {
+    fn record_trace_event(
+        &self,
+        trace: &RequestTraceContext,
+        event_type: &str,
+        status: &str,
+        phase: &str,
+        inputs: Value,
+        error: Option<String>,
+        duration_ms: u64,
+    ) {
+        let event = TraceEvent {
+            timestamp: now_ms().to_string(),
+            event_type: event_type.to_string(),
+            task_id: trace.request_id.clone(),
+            phase: phase.to_string(),
+            agent: None,
+            tool: None,
+            status: status.to_string(),
+            inputs: json!({
+                "trace_id": trace.trace_id,
+                "span_id": trace.span_id,
+                "method": trace.method,
+                "attributes": inputs,
+            }),
+            outputs: None,
+            duration_ms,
+            error,
+            pua_stage: None,
+        };
+
+        if let Ok(mut guard) = self.trace_events.lock() {
+            guard.push(event);
+            if guard.len() > TRACE_BUFFER_MAX {
+                let extra = guard.len() - TRACE_BUFFER_MAX;
+                guard.drain(0..extra);
+            }
+        }
+    }
+
+    fn trace_snapshot(&self, limit: usize) -> Vec<TraceEvent> {
+        self.trace_events
+            .lock()
+            .map(|guard| {
+                guard
+                    .iter()
+                    .rev()
+                    .take(limit.max(1))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    fn trace_metrics_snapshot(&self) -> Value {
+        let slow_top_n = self.runtime_config_snapshot().trace_slow_top_n.max(1);
+        let events = self
+            .trace_events
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+
+        let mut requests = events
+            .iter()
+            .filter(|e| e.event_type == "request.end")
+            .map(|e| {
+                let method = e
+                    .inputs
+                    .get("attributes")
+                    .and_then(|v| v.get("method"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                json!({
+                    "request_id": e.task_id,
+                    "method": method,
+                    "duration_ms": e.duration_ms,
+                    "status": e.status,
+                    "timestamp": e.timestamp,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        requests.sort_by(|a, b| {
+            b.get("duration_ms")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                .cmp(&a.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0))
+        });
+        requests.truncate(slow_top_n);
+
+        let mut phase_buckets: HashMap<String, Vec<u64>> = HashMap::new();
+        for event in &events {
+            if event.duration_ms == 0 {
+                continue;
+            }
+            if event.event_type.starts_with("phase.") || event.event_type == "request.end" {
+                phase_buckets
+                    .entry(event.phase.clone())
+                    .or_default()
+                    .push(event.duration_ms);
+            }
+        }
+
+        let mut by_phase = serde_json::Map::new();
+        for (phase, mut samples) in phase_buckets {
+            samples.sort_unstable();
+            let p95 = percentile(&samples, 95.0);
+            let p99 = percentile(&samples, 99.0);
+            by_phase.insert(
+                phase,
+                json!({
+                    "count": samples.len(),
+                    "p95_ms": p95,
+                    "p99_ms": p99,
+                }),
+            );
+        }
+
+        json!({
+            "sampling_rate": self.telemetry.sampling_rate(),
+            "buffered_events": events.len(),
+            "slow_requests_top_n": requests,
+            "phase_latency": by_phase,
+        })
+    }
+
+    async fn handle_chat(
+        &self,
+        id: Option<Value>,
+        params: Option<Value>,
+        request_span: Option<OtelContext>,
+    ) -> Result<()> {
         let started = Instant::now();
+        let pipeline_trace = chat_trace_context(&id, "chat.pipeline");
+        let chat_span = request_span.as_ref().and_then(|parent| {
+            self.telemetry.start_child_span(
+                parent,
+                "acp.chat",
+                vec![KeyValue::new("phase.entry", "chat")],
+            )
+        });
         let result = async {
             if self.lifecycle.is_shutting_down() {
                 self.send_error(
@@ -1681,15 +2014,72 @@ impl AcpServer {
                 mode,
             );
 
+            // Mandatory pipeline stage 1: Analyze task intent from conversation input.
+            let analyzed_task = TaskRouter::analyze_task(&extract_task_description(&chat_params.messages));
+            self.record_trace_event(
+                &pipeline_trace,
+                "phase.analyze",
+                "ok",
+                "analyze",
+                json!({
+                    "task_type": format!("{:?}", analyzed_task.task_type),
+                    "complexity": analyzed_task.complexity,
+                    "needs_verification": analyzed_task.needs_verification,
+                    "has_safety_concerns": analyzed_task.has_safety_concerns,
+                    "involves_multiple_modules": analyzed_task.involves_multiple_modules,
+                }),
+                None,
+                0,
+            );
+
+            // Mandatory pipeline stage 2: Route into role-based hard gates.
+            let pipeline_routing = TaskRouter::route_task(&analyzed_task);
+            self.record_trace_event(
+                &pipeline_trace,
+                "phase.route_hard_gate",
+                "ok",
+                "route",
+                json!({
+                    "roles": pipeline_routing
+                        .roles
+                        .iter()
+                        .map(|role| format!("{:?}", role))
+                        .collect::<Vec<_>>(),
+                    "success_rate": pipeline_routing.predicted_success_rate,
+                    "risk_factors": pipeline_routing.risk_factors.clone(),
+                    "mandatory_safeguards": pipeline_routing.pua_enforcement.mandatory_safeguards.clone(),
+                }),
+                None,
+                0,
+            );
+
             let total_chars: usize = chat_params
                 .messages
                 .iter()
                 .map(|m| m.content.chars().count())
                 .sum();
 
+            let routing_started = Instant::now();
             let routing = flow
                 .resolve(Some(effective_phase.clone()), registry.as_ref())
                 .map_err(|err| ProxyError::Internal(err.to_string()))?;
+            self.record_trace_event(
+                &RequestTraceContext {
+                    request_id: id
+                        .as_ref()
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "notification".to_string()),
+                    trace_id: String::new(),
+                    span_id: "chat.route".to_string(),
+                    method: "chat".to_string(),
+                },
+                "phase.route",
+                "ok",
+                "route",
+                json!({ "phase": routing.phase.phase_name }),
+                None,
+                routing_started.elapsed().as_millis() as u64,
+            );
 
         if let Some(limit) = extra_u64(routing.phase.options.as_ref(), "max_request_chars") {
             if total_chars > limit as usize {
@@ -1757,7 +2147,49 @@ impl AcpServer {
             .and_then(|opts| opts.autopilot_complexity.as_deref())
             .and_then(AutopilotComplexity::from_str);
 
-        let approval_strategy = mode_to_approval_strategy(mode, autopilot_complexity);
+        let mut approval_strategy = mode_to_approval_strategy(mode, autopilot_complexity);
+        if matches!(approval_strategy, ApprovalStrategy::AutoPilotSimple)
+            && analyzed_task.complexity >= 3
+            && self.should_escalate_approval_strategy()
+        {
+            approval_strategy = ApprovalStrategy::AutoPilotComplex;
+            self.record_trace_event(
+                &pipeline_trace,
+                "phase.route_adapt",
+                "ok",
+                "route",
+                json!({
+                    "reason": "online_controller_escalation",
+                    "new_strategy": approval_strategy.as_str(),
+                }),
+                None,
+                0,
+            );
+            self.send_notification(
+                "chat.pipeline",
+                json!({
+                    "id": id.clone(),
+                    "event": "strategy_escalated",
+                    "strategy": approval_strategy.as_str(),
+                }),
+            )
+            .await?;
+        }
+
+        if let Some(reason) = pipeline_gate_violation(&analyzed_task, &pipeline_routing, approval_strategy) {
+            self.record_trace_event(
+                &pipeline_trace,
+                "phase.route_hard_gate",
+                "error",
+                "route",
+                json!({ "reason": reason }),
+                Some(reason.clone()),
+                0,
+            );
+            self.send_error(id, -32603, format!("pipeline gate blocked execution: {reason}"), None)
+                .await?;
+            return Ok(());
+        }
 
         info!(
             "phase '{}' ({}) selected from flow '{}' with {} candidate agent(s); mode={}, strategy={}",
@@ -1769,12 +2201,14 @@ impl AcpServer {
             approval_strategy.as_str(),
         );
 
+        let review_started = Instant::now();
         let review_decisions = if approval_strategy.needs_dual_review() {
             match self
                 .run_dual_review_gate(
                     id.clone(),
                     &chat_params.messages,
                     routing.phase.options.as_ref(),
+                    chat_span.as_ref().or(request_span.as_ref()),
                 )
                 .await
             {
@@ -1810,6 +2244,38 @@ impl AcpServer {
         } else {
             None
         };
+
+        self.record_trace_event(
+            &pipeline_trace,
+            "phase.verify",
+            "ok",
+            "verify",
+            json!({
+                "needs_dual_review": approval_strategy.needs_dual_review(),
+                "review_decisions": review_decisions.as_ref().map(|v| v.len()).unwrap_or(0),
+            }),
+            None,
+            0,
+        );
+        if approval_strategy.needs_dual_review() {
+            self.record_trace_event(
+                &RequestTraceContext {
+                    request_id: id
+                        .as_ref()
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "notification".to_string()),
+                    trace_id: String::new(),
+                    span_id: "chat.review".to_string(),
+                    method: "chat".to_string(),
+                },
+                "phase.review_gate",
+                "ok",
+                "review",
+                json!({}),
+                None,
+                review_started.elapsed().as_millis() as u64,
+            );
+        }
 
         let prepared_input = self
             .build_effective_messages(&routing.phase, &chat_params.messages)
@@ -1863,9 +2329,26 @@ impl AcpServer {
                         "cache_level": "memory",
                         "done": true,
                         "reviews": review_decisions,
+                        "pipeline": {
+                            "analyze": format!("{:?}", analyzed_task.task_type),
+                            "route_roles": pipeline_routing
+                                .roles
+                                .iter()
+                                .map(|role| format!("{:?}", role))
+                                .collect::<Vec<_>>(),
+                        },
                     }),
                 )
                 .await?;
+                self.record_trace_event(
+                    &pipeline_trace,
+                    "phase.learn",
+                    "ok",
+                    "learn",
+                    json!({"source": "memory_cache"}),
+                    None,
+                    0,
+                );
                 return Ok(());
             }
 
@@ -1903,9 +2386,26 @@ impl AcpServer {
                             "cached": true,
                             "done": true,
                             "reviews": review_decisions,
+                            "pipeline": {
+                                "analyze": format!("{:?}", analyzed_task.task_type),
+                                "route_roles": pipeline_routing
+                                    .roles
+                                    .iter()
+                                    .map(|role| format!("{:?}", role))
+                                    .collect::<Vec<_>>(),
+                            },
                         }),
                     )
                     .await?;
+                    self.record_trace_event(
+                        &pipeline_trace,
+                        "phase.learn",
+                        "ok",
+                        "learn",
+                        json!({"source": "sqlite_cache"}),
+                        None,
+                        0,
+                    );
                     return Ok(());
                 }
             }
@@ -1936,6 +2436,17 @@ impl AcpServer {
                 as i64;
 
             for (agent_name, agent) in routing.agents {
+            let agent_started = Instant::now();
+            let agent_span = chat_span.as_ref().or(request_span.as_ref()).and_then(|parent| {
+                self.telemetry.start_child_span(
+                    parent,
+                    "acp.chat.agent",
+                    vec![
+                        KeyValue::new("agent.name", agent_name.clone()),
+                        KeyValue::new("phase", phase_name.clone()),
+                    ],
+                )
+            });
             match self.circuit_breakers.allow_request(&agent_name) {
                 CircuitBreakerAdmission::Closed => {}
                 CircuitBreakerAdmission::HalfOpenProbe => {
@@ -1959,6 +2470,15 @@ impl AcpServer {
                             agent_name, state
                         ),
                     });
+                    if let Some(span) = agent_span {
+                        self.telemetry.end_span(
+                            span,
+                            vec![
+                                KeyValue::new("agent.status", "skipped"),
+                                KeyValue::new("breaker.state", state.to_string()),
+                            ],
+                        );
+                    }
                     continue;
                 }
             }
@@ -2031,7 +2551,7 @@ impl AcpServer {
                     .await?;
 
                     self.send_result(
-                        id,
+                        id.clone(),
                         json!({
                             "agent": agent_name,
                             "phase": phase_name,
@@ -2040,9 +2560,68 @@ impl AcpServer {
                             "cached": false,
                             "done": true,
                             "reviews": review_decisions,
+                            "pipeline": {
+                                "analyze": format!("{:?}", analyzed_task.task_type),
+                                "route_roles": pipeline_routing
+                                    .roles
+                                    .iter()
+                                    .map(|role| format!("{:?}", role))
+                                    .collect::<Vec<_>>(),
+                                "success_rate": pipeline_routing.predicted_success_rate,
+                            },
                         }),
                     )
                     .await?;
+                    self.record_trace_event(
+                        &pipeline_trace,
+                        "phase.evaluate",
+                        "ok",
+                        "evaluate",
+                        json!({
+                            "predicted_success_rate": pipeline_routing.predicted_success_rate,
+                            "risk_factors": pipeline_routing.risk_factors,
+                        }),
+                        None,
+                        0,
+                    );
+                    self.record_trace_event(
+                        &RequestTraceContext {
+                            request_id: id
+                                .as_ref()
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "notification".to_string()),
+                            trace_id: String::new(),
+                            span_id: format!("chat.agent.{}", agent_name),
+                            method: "chat".to_string(),
+                        },
+                        "phase.agent",
+                        "ok",
+                        &phase_name,
+                        json!({ "agent": agent_name.clone() }),
+                        None,
+                        agent_started.elapsed().as_millis() as u64,
+                    );
+                    if let Some(span) = agent_span {
+                        self.telemetry.end_span(
+                            span,
+                            vec![
+                                KeyValue::new("agent.status", "ok"),
+                                KeyValue::new(
+                                    "agent.duration_ms",
+                                    agent_started.elapsed().as_millis() as i64,
+                                ),
+                            ],
+                        );
+                    }
+                    self.record_trace_event(
+                        &pipeline_trace,
+                        "phase.learn",
+                        "ok",
+                        "learn",
+                        json!({"source": "agent_output"}),
+                        None,
+                        0,
+                    );
                     return Ok(());
                 }
                 Err(err) => {
@@ -2057,6 +2636,19 @@ impl AcpServer {
                         breaker_failure_threshold,
                         breaker_open_seconds,
                     );
+                    if let Some(span) = agent_span {
+                        self.telemetry.end_span(
+                            span,
+                            vec![
+                                KeyValue::new("agent.status", "error"),
+                                KeyValue::new("error", err.to_string()),
+                                KeyValue::new(
+                                    "agent.duration_ms",
+                                    agent_started.elapsed().as_millis() as i64,
+                                ),
+                            ],
+                        );
+                    }
                     warn!("agent '{}' failed: {err:#}", agent_name);
                     errors.push(format!("{}: {}", agent_name, err));
                 }
@@ -2073,8 +2665,29 @@ impl AcpServer {
         }
         .await;
 
+        if let Some(span) = chat_span {
+            self.telemetry.end_span(
+                span,
+                vec![
+                    KeyValue::new("chat.status", if result.is_ok() { "ok" } else { "error" }),
+                    KeyValue::new("chat.duration_ms", started.elapsed().as_millis() as i64),
+                ],
+            );
+        }
+
+        if let Ok(mut state) = self.online_controller.lock() {
+            state.record(result.is_ok(), started.elapsed().as_millis() as u64);
+        }
+
         self.metrics.observe_chat_latency(started.elapsed());
         result
+    }
+
+    fn should_escalate_approval_strategy(&self) -> bool {
+        self.online_controller
+            .lock()
+            .map(|state| state.should_escalate())
+            .unwrap_or(false)
     }
 
     fn infer_phase_name_with_flow(
@@ -2391,9 +3004,17 @@ impl AcpServer {
         id: Option<Value>,
         messages: &[Message],
         phase_options: Option<&PhaseOptions>,
+        parent_span: Option<&OtelContext>,
     ) -> Result<ReviewGateOutcome> {
         let started = Instant::now();
         self.metrics.inc_review_gate();
+        let review_span = parent_span.and_then(|parent| {
+            self.telemetry.start_child_span(
+                parent,
+                "acp.chat.review_gate",
+                vec![KeyValue::new("gate.mode", "dual")],
+            )
+        });
 
         let timeout_policy = ReviewTimeoutPolicy::from_options(phase_options);
         let gate_timeout = extra_u64(phase_options, "review_gate_timeout_seconds")
@@ -2431,9 +3052,9 @@ impl AcpServer {
                 .build_effective_messages(&review_routing.phase, messages)
                 .await?;
             prepared_review.messages.push(Message {
-            role: "user".to_string(),
-            content: "Act as a strict execution approval gate. Reply with APPROVE or REJECT on the first line only. After the first line, provide a brief rationale grounded in the review principles.".to_string(),
-        });
+                role: "user".to_string(),
+                content: review_gate_prompt(),
+            });
 
             let mut decisions = Vec::new();
             let mut approved_count = 0usize;
@@ -2441,6 +3062,14 @@ impl AcpServer {
                 extra_u64(phase_options, "review_min_response_chars").unwrap_or(8) as usize;
             let total_reviewers = reviewer_names.len();
             for (idx, reviewer) in reviewer_names.into_iter().enumerate() {
+                let reviewer_started = Instant::now();
+                let reviewer_span = review_span.as_ref().and_then(|parent| {
+                    self.telemetry.start_child_span(
+                        parent,
+                        "acp.chat.reviewer",
+                        vec![KeyValue::new("reviewer", reviewer.clone())],
+                    )
+                });
                 if let Some(deadline) = gate_deadline {
                     let now = Instant::now();
                     if now >= deadline {
@@ -2503,6 +3132,15 @@ impl AcpServer {
                 {
                     Ok(response) => response,
                     Err(err) => {
+                        if let Some(span) = reviewer_span {
+                            self.telemetry.end_span(
+                                span,
+                                vec![
+                                    KeyValue::new("review.status", "error"),
+                                    KeyValue::new("error", err.to_string()),
+                                ],
+                            );
+                        }
                         record_agent_failure_metrics(self.metrics.as_ref(), &err);
                         return Err(err);
                     }
@@ -2529,6 +3167,18 @@ impl AcpServer {
                 .await?;
 
                 decisions.push(decision);
+                if let Some(span) = reviewer_span {
+                    self.telemetry.end_span(
+                        span,
+                        vec![
+                            KeyValue::new("review.status", verdict.as_str().to_string()),
+                            KeyValue::new(
+                                "review.duration_ms",
+                                reviewer_started.elapsed().as_millis() as i64,
+                            ),
+                        ],
+                    );
+                }
 
                 if verdict.is_approved() {
                     approved_count += 1;
@@ -2555,6 +3205,15 @@ impl AcpServer {
         };
 
         let output = result.await;
+        if let Some(span) = review_span {
+            self.telemetry.end_span(
+                span,
+                vec![
+                    KeyValue::new("gate.status", if output.is_ok() { "ok" } else { "error" }),
+                    KeyValue::new("gate.duration_ms", started.elapsed().as_millis() as i64),
+                ],
+            );
+        }
         self.metrics.observe_review_latency(started.elapsed());
         output
     }
@@ -2916,6 +3575,8 @@ impl AcpServer {
 struct MaintenanceCycleResult {
     memory_expired_removed: usize,
     sqlite_expired_removed: usize,
+    cache_vacuumed: bool,
+    vector_vacuumed: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2954,6 +3615,8 @@ async fn run_background_maintenance_loop(
                 if let Err(err) = perform_maintenance_cycle(
                     Arc::clone(&memory_cache),
                     Arc::clone(&cache),
+                    Arc::clone(&vector_store),
+                    Arc::clone(&runtime_config),
                     Arc::clone(&maintenance),
                     "background",
                 ).await {
@@ -2983,14 +3646,22 @@ async fn run_background_maintenance_loop(
 async fn perform_maintenance_cycle(
     memory_cache: Arc<MemoryResponseCache>,
     cache: Arc<StdMutex<Option<Arc<ResponseCache>>>>,
+    vector_store: Arc<StdMutex<Option<Arc<VectorStore>>>>,
+    runtime_config: Arc<StdMutex<RuntimeConfig>>,
     maintenance: Arc<MaintenanceTracker>,
     source: &str,
 ) -> Result<MaintenanceCycleResult> {
     maintenance.note_started();
+    let vacuum_interval_cycles = runtime_config
+        .lock()
+        .map(|guard| guard.sqlite_vacuum_interval_cycles.max(1))
+        .unwrap_or(60);
+    let current_cycle = maintenance.snapshot().cycles_total;
+    let should_vacuum = current_cycle % vacuum_interval_cycles == 0;
 
     let memory_expired_removed = memory_cache.purge_expired();
     let cache_handle = cache.lock().ok().and_then(|guard| guard.clone());
-    let sqlite_expired_removed_result = if let Some(cache) = cache_handle {
+    let sqlite_expired_removed_result = if let Some(cache) = cache_handle.clone() {
         spawn_blocking(move || cache.purge_expired())
             .await
             .map_err(|e| anyhow::anyhow!("cache purge task join error: {}", e))?
@@ -3005,15 +3676,52 @@ async fn perform_maintenance_cycle(
         }
     };
 
+    let cache_vacuumed = if should_vacuum {
+        if let Some(cache) = cache_handle.clone() {
+            spawn_blocking(move || cache.vacuum())
+                .await
+                .map_err(|e| anyhow::anyhow!("cache vacuum task join error: {}", e))??;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    let vector_vacuumed = if should_vacuum {
+        if let Some(store) = vector_store.lock().ok().and_then(|guard| guard.clone()) {
+            spawn_blocking(move || store.vacuum())
+                .await
+                .map_err(|e| anyhow::anyhow!("vector vacuum task join error: {}", e))??;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
     let result = MaintenanceCycleResult {
         memory_expired_removed,
         sqlite_expired_removed,
+        cache_vacuumed,
+        vector_vacuumed,
     };
 
-    maintenance.note_completed(memory_expired_removed, sqlite_expired_removed);
+    maintenance.note_completed(
+        memory_expired_removed,
+        sqlite_expired_removed,
+        cache_vacuumed,
+        vector_vacuumed,
+    );
     info!(
-        "maintenance cycle '{}' completed (memory_removed={}, sqlite_removed={})",
-        source, result.memory_expired_removed, result.sqlite_expired_removed
+        "maintenance cycle '{}' completed (memory_removed={}, sqlite_removed={}, cache_vacuumed={}, vector_vacuumed={})",
+        source,
+        result.memory_expired_removed,
+        result.sqlite_expired_removed,
+        result.cache_vacuumed,
+        result.vector_vacuumed
     );
     Ok(result)
 }
@@ -3382,6 +4090,15 @@ fn extra_f64(options: Option<&PhaseOptions>, key: &str) -> Option<f64> {
         .and_then(|v| v.as_f64())
 }
 
+
+fn percentile(samples: &[u64], percentile: f64) -> u64 {
+    if samples.is_empty() {
+        return 0;
+    }
+    let clamped = percentile.clamp(0.0, 100.0);
+    let rank = ((clamped / 100.0) * ((samples.len() - 1) as f64)).round() as usize;
+    samples[rank]
+}
 fn observe_latency_histogram(
     duration: Duration,
     count: &mut u64,
@@ -3391,7 +4108,6 @@ fn observe_latency_histogram(
     let value = duration.as_secs_f64();
     *count += 1;
     *sum_seconds += value;
-
     let mut idx = HISTOGRAM_BUCKETS_SECONDS.len();
     for (i, bound) in HISTOGRAM_BUCKETS_SECONDS.iter().enumerate() {
         if value <= *bound {
@@ -3400,6 +4116,61 @@ fn observe_latency_histogram(
         }
     }
     buckets[idx] = buckets[idx].saturating_add(1);
+}
+
+fn extract_task_description(messages: &[Message]) -> String {
+    messages
+        .iter()
+        .rev()
+        .find(|message| message.role.eq_ignore_ascii_case("user") && !message.content.trim().is_empty())
+        .map(|message| message.content.clone())
+        .or_else(|| messages.last().map(|message| message.content.clone()))
+        .unwrap_or_else(|| "general task".to_string())
+}
+
+fn chat_trace_context(id: &Option<Value>, span_id: &str) -> RequestTraceContext {
+    RequestTraceContext {
+        trace_id: String::new(),
+        span_id: span_id.to_string(),
+        method: "chat".to_string(),
+        request_id: id
+            .as_ref()
+            .map(value_to_id)
+            .unwrap_or_else(|| "notification".to_string()),
+    }
+}
+
+fn pipeline_gate_violation(
+    analyzed_task: &TaskCharacteristics,
+    routing: &RoutingDecision,
+    approval_strategy: ApprovalStrategy,
+) -> Option<String> {
+    let non_trivial = analyzed_task.complexity >= 3
+        || analyzed_task.needs_verification
+        || analyzed_task.involves_multiple_modules
+        || analyzed_task.has_safety_concerns;
+
+    if non_trivial && routing.roles.is_empty() {
+        return Some("routing produced no roles for a non-trivial task".to_string());
+    }
+
+    let reviewer_required = routing.roles.contains(&AgentRole::Reviewer)
+        || routing
+            .pua_enforcement
+            .mandatory_roles
+            .contains(&AgentRole::Reviewer);
+    if reviewer_required && !approval_strategy.needs_dual_review() {
+        return Some(
+            "reviewer role required by pipeline routing, but current mode does not enable dual review gate"
+                .to_string(),
+        );
+    }
+
+    if non_trivial && routing.pua_enforcement.mandatory_safeguards.is_empty() {
+        return Some("PUA safeguards missing for non-trivial task".to_string());
+    }
+
+    None
 }
 
 fn histogram_prometheus_lines(
@@ -3459,6 +4230,25 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn hash_hex(input: &str, hex_len: usize) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    let digest = hasher.finalize();
+    let full = digest
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<String>();
+    full.chars().take(hex_len).collect()
+}
+
+fn value_to_id(value: &Value) -> String {
+    match value {
+        Value::String(v) => v.clone(),
+        Value::Number(v) => v.to_string(),
+        _ => value.to_string(),
+    }
 }
 
 fn push_metric_header(lines: &mut Vec<String>, name: &str, metric_type: &str, help: &str) {
@@ -4493,6 +5283,8 @@ mod tests {
             last_completed_at: Some(now_ts()),
             last_memory_expired_removed: 3,
             last_sqlite_expired_removed: 5,
+            last_cache_vacuumed: false,
+            last_vector_vacuumed: false,
             last_error: None,
         };
 
@@ -4799,11 +5591,13 @@ mod tests {
         assert!(snapshot1.running);
         assert_eq!(snapshot1.cycles_total, 1);
 
-        maintenance.note_completed(5, 3);
+        maintenance.note_completed(5, 3, true, false);
         let snapshot2 = maintenance.snapshot();
         assert!(!snapshot2.running);
         assert_eq!(snapshot2.last_memory_expired_removed, 5);
         assert_eq!(snapshot2.last_sqlite_expired_removed, 3);
+        assert!(snapshot2.last_cache_vacuumed);
+        assert!(!snapshot2.last_vector_vacuumed);
         assert_eq!(snapshot2.cycles_total, 1);
     }
 

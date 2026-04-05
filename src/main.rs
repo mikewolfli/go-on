@@ -28,6 +28,7 @@ mod mode;
 mod model_selector;
 mod orchestrator;
 mod promotion;
+mod pua;
 mod reliability_optimizer;
 mod roles;
 mod setup;
@@ -35,6 +36,7 @@ mod speed_optimizer;
 mod task_decomposer;
 mod task_graph;
 mod task_router;
+mod telemetry;
 mod tool;
 mod vector;
 mod verification;
@@ -140,6 +142,114 @@ fn emit_config_warnings(warnings: &[ConfigWarning], mirror_stderr: bool) {
                 severity, warning.code, warning.message
             );
         }
+    }
+}
+
+fn resolve_config_relative_path(config_path: &std::path::Path, raw_path: &str) -> PathBuf {
+    let candidate = PathBuf::from(raw_path);
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        config_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(candidate)
+    }
+}
+
+async fn initialize_cache(
+    config_path: PathBuf,
+    cache_cfg: Option<crate::config::CacheConfig>,
+) -> Result<Option<Arc<ResponseCache>>> {
+    match cache_cfg {
+        Some(cache_cfg) if cache_cfg.enabled => {
+            let cache_path = resolve_config_relative_path(&config_path, &cache_cfg.path);
+            info!(
+                "sqlite cache enabled at {} (ttl={}s, max_entries={})",
+                cache_path.display(),
+                cache_cfg.default_ttl_seconds,
+                cache_cfg.max_entries
+            );
+
+            tokio::task::spawn_blocking(move || {
+                ResponseCache::new(
+                    &cache_path,
+                    cache_cfg.default_ttl_seconds,
+                    cache_cfg.max_entries,
+                )
+                .map(Arc::new)
+                .map(Some)
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!("cache init task join error: {}", err))?
+        }
+        _ => Ok(None),
+    }
+}
+
+async fn initialize_vector_store(
+    config_path: PathBuf,
+    vector_cfg: Option<crate::config::VectorConfig>,
+) -> Result<Option<Arc<VectorStore>>> {
+    match vector_cfg {
+        Some(vector_cfg) if vector_cfg.enabled => {
+            let vector_path = resolve_config_relative_path(&config_path, &vector_cfg.path);
+            info!(
+                "vector memory enabled at {} (dims={}, top_k={}, similarity={})",
+                vector_path.display(),
+                vector_cfg.dimensions,
+                vector_cfg.top_k,
+                vector_cfg.min_similarity
+            );
+
+            tokio::task::spawn_blocking(move || {
+                VectorStore::new(&vector_path, vector_cfg.dimensions, vector_cfg.max_entries)
+                    .map(Arc::new)
+                    .map(Some)
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!("vector init task join error: {}", err))?
+        }
+        _ => Ok(None),
+    }
+}
+
+async fn initialize_autotune(
+    config_path: PathBuf,
+    autotune_cfg: Option<crate::config::AutoTuneConfig>,
+) -> Result<(
+    Option<Arc<tokio::sync::Mutex<AutoTuneState>>>,
+    Option<crate::config::AutoTuneConfig>,
+    Option<String>,
+)> {
+    match autotune_cfg {
+        Some(autotune_cfg) if autotune_cfg.enabled => {
+            let state_path = resolve_config_relative_path(&config_path, &autotune_cfg.state_path)
+                .to_string_lossy()
+                .to_string();
+            info!(
+                "autotune enabled (min_chars: {}-{}, step: {}, evaluate_interval: {})",
+                autotune_cfg.min_query_chars_min,
+                autotune_cfg.min_query_chars_max,
+                autotune_cfg.min_query_chars_step,
+                autotune_cfg.evaluate_interval
+            );
+
+            let autotune_cfg_for_load = autotune_cfg.clone();
+            let state_path_for_load = state_path.clone();
+            let state = tokio::task::spawn_blocking(move || {
+                AutoTuneState::load_or_default(&state_path_for_load, &autotune_cfg_for_load)
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!("autotune init task join error: {}", err))?;
+
+            Ok((
+                Some(Arc::new(tokio::sync::Mutex::new(state))),
+                Some(autotune_cfg),
+                Some(state_path),
+            ))
+        }
+        _ => Ok((None, None, None)),
     }
 }
 
@@ -249,106 +359,12 @@ async fn run() -> Result<()> {
     )?);
     let flow = Arc::new(FlowManager::new(Arc::clone(&config), cli.phase.clone()));
 
-    // Initialize response cache if enabled
-    let cache = match &config.cache {
-        Some(cache_cfg) if cache_cfg.enabled => {
-            let cache_path = if PathBuf::from(&cache_cfg.path).is_absolute() {
-                PathBuf::from(&cache_cfg.path)
-            } else {
-                config_path
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new("."))
-                    .join(&cache_cfg.path)
-            };
-
-            info!(
-                "sqlite cache enabled at {} (ttl={}s, max_entries={})",
-                cache_path.display(),
-                cache_cfg.default_ttl_seconds,
-                cache_cfg.max_entries
-            );
-
-            Some(Arc::new(ResponseCache::new(
-                &cache_path,
-                cache_cfg.default_ttl_seconds,
-                cache_cfg.max_entries,
-            )?))
-        }
-        _ => None,
-    };
-
-    // Initialize vector store if enabled
-    let vector_store = match &config.vector {
-        Some(vector_cfg) if vector_cfg.enabled => {
-            let vector_path = if PathBuf::from(&vector_cfg.path).is_absolute() {
-                PathBuf::from(&vector_cfg.path)
-            } else {
-                config_path
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new("."))
-                    .join(&vector_cfg.path)
-            };
-
-            info!(
-                "vector memory enabled at {} (dims={}, top_k={}, similarity={})",
-                vector_path.display(),
-                vector_cfg.dimensions,
-                vector_cfg.top_k,
-                vector_cfg.min_similarity
-            );
-
-            Some(Arc::new(VectorStore::new(
-                &vector_path,
-                vector_cfg.dimensions,
-                vector_cfg.max_entries,
-            )?))
-        }
-        _ => None,
-    };
-
-    // Determine autotune state path
-    let autotune_state_path = config.autotune.as_ref().and_then(|autotune_cfg| {
-        if !autotune_cfg.enabled {
-            return None;
-        }
-
-        Some(
-            if PathBuf::from(&autotune_cfg.state_path).is_absolute() {
-                PathBuf::from(&autotune_cfg.state_path)
-            } else {
-                config_path
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new("."))
-                    .join(&autotune_cfg.state_path)
-            }
-            .to_string_lossy()
-            .to_string(),
-        )
-    });
-
-    // Initialize autotune state if enabled
-    let (autotune_state, autotune_config) = match config.autotune.as_ref() {
-        Some(autotune_cfg) if autotune_cfg.enabled => {
-            let state_path = autotune_state_path
-                .clone()
-                .unwrap_or_else(|| "acp_autotune_state.json".to_string());
-
-            info!(
-                "autotune enabled (min_chars: {}-{}, step: {}, evaluate_interval: {})",
-                autotune_cfg.min_query_chars_min,
-                autotune_cfg.min_query_chars_max,
-                autotune_cfg.min_query_chars_step,
-                autotune_cfg.evaluate_interval
-            );
-
-            let state = AutoTuneState::load_or_default(&state_path, autotune_cfg);
-            (
-                Some(Arc::new(tokio::sync::Mutex::new(state))),
-                Some(autotune_cfg.clone()),
-            )
-        }
-        _ => (None, None),
-    };
+    let (cache, vector_store, (autotune_state, autotune_config, autotune_state_path)) =
+        tokio::try_join!(
+            initialize_cache(config_path.clone(), config.cache.clone()),
+            initialize_vector_store(config_path.clone(), config.vector.clone()),
+            initialize_autotune(config_path.clone(), config.autotune.clone()),
+        )?;
 
     // Get runtime configuration
     let runtime_config = config

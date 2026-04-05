@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+use crate::pua::PuaExecutionReport;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +21,7 @@ pub struct TraceEvent {
     pub outputs: Option<serde_json::Value>,
     pub duration_ms: u64,
     pub error: Option<String>,
+    pub pua_stage: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +54,9 @@ pub struct EvaluationResult {
     pub token_count: usize,
     pub verification_signals: Vec<String>,
     pub notes: String,
+    pub pua_compliance_score: f32,
+    pub pua_findings: Vec<String>,
+    pub pua_report: Option<PuaExecutionReport>,
 }
 
 pub struct TraceExporter;
@@ -104,5 +109,13 @@ impl EvaluationSuite {
         }
         let total: usize = self.results.iter().map(|r| r.tool_calls).sum();
         total as f32 / self.results.len() as f32
+    }
+
+    pub fn average_pua_compliance(&self) -> f32 {
+        if self.results.is_empty() {
+            return 0.0;
+        }
+        let total: f32 = self.results.iter().map(|r| r.pua_compliance_score).sum();
+        total / self.results.len() as f32
     }
 }

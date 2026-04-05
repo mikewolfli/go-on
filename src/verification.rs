@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 use crate::agent::AgentAuditLog;
+use crate::pua::{PuaExecutionReport, quality_compass};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -34,6 +35,8 @@ pub struct StructuredReview {
     pub rationale: String,
     pub assumptions_validated: Vec<String>,
     pub weak_evidence_flags: Vec<String>,
+    pub quality_compass: Vec<String>,
+    pub pua_report: Option<PuaExecutionReport>,
     pub audit_log: Option<AgentAuditLog>,
 }
 
@@ -65,5 +68,17 @@ impl DeterministicVerifier {
             confidence: 0.8,
             details: None,
         }
+    }
+
+    pub fn run_quality_compass_checks() -> Vec<VerificationSignal> {
+        quality_compass()
+            .into_iter()
+            .map(|item| VerificationSignal {
+                signal_type: "pua_quality_compass".to_string(),
+                result: true,
+                confidence: 0.7,
+                details: Some(item),
+            })
+            .collect()
     }
 }

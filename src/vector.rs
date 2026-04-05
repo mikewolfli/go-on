@@ -372,6 +372,17 @@ impl VectorStore {
         let summaries_deleted = conn.execute("DELETE FROM phase_summary", [])?;
         Ok((memory_deleted, summaries_deleted))
     }
+
+    /// Reclaim SQLite free pages after retention cleanup.
+    pub fn vacuum(&self) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned"))?;
+        conn.execute_batch("VACUUM;")?;
+        Ok(())
+    }
+
 }
 
 fn tokenize(text: &str) -> Vec<String> {

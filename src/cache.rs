@@ -226,6 +226,16 @@ impl ResponseCache {
         Ok(affected)
     }
 
+    /// Reclaim SQLite free pages after cleanup-heavy maintenance cycles.
+    pub fn vacuum(&self) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned"))?;
+        conn.execute_batch("VACUUM;")?;
+        Ok(())
+    }
+
     /// Get the number of entries in the cache
     ///
     /// # Returns

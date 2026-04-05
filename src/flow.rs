@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use crate::agent::{Agent, AgentRegistry};
 use crate::config::{AppConfig, PhaseConfig, PhaseOptions};
 use crate::error::ProxyError;
+use crate::pua::merge_phase_principles;
 
 /// Resolved phase information
 #[derive(Clone)]
@@ -178,7 +179,7 @@ fn build_phase(flow_name: &str, name: &str, cfg: &PhaseConfig) -> ResolvedPhase 
         flow_name: flow_name.to_string(),
         phase_name: name.to_string(),
         phase_description: cfg.description.clone(),
-        principles: cfg.principles.clone(),
+        principles: merge_phase_principles(cfg.principles.clone(), name),
         options: cfg.options.clone(),
         fallback: cfg.fallback.unwrap_or(true),
         agent_names: cfg.agents.clone(),
@@ -347,10 +348,13 @@ mod tests {
         assert_eq!(resolved.phase.flow_name, "flow");
         assert_eq!(resolved.phase.phase_name, "review");
         assert_eq!(resolved.phase.phase_description, "review");
-        assert_eq!(
-            resolved.phase.principles.as_deref(),
-            Some(&["be strict".to_string()][..])
-        );
+        let principles = resolved
+            .phase
+            .principles
+            .clone()
+            .expect("review phase principles should exist");
+        assert!(principles.contains(&"be strict".to_string()));
+        assert!(principles.iter().any(|item| item.contains("PUA red line")));
         assert!(resolved.phase.fallback);
         assert_eq!(resolved.phase.agent_names, vec!["copilot".to_string()]);
         assert_eq!(resolved.agents.len(), 1);

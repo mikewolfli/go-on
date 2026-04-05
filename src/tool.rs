@@ -9,6 +9,8 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::pua::{PuaExecutionReport, tool_execution_report};
+
 /// Tool input envelope
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInput {
@@ -29,6 +31,7 @@ pub struct ToolOutput {
     pub error: Option<String>,
     pub verification: Option<String>,
     pub audit_log: Option<String>,
+    pub pua_report: Option<PuaExecutionReport>,
 }
 
 /// Tool trait
@@ -73,6 +76,7 @@ impl Tool for ReadFileTool {
             error: None,
             verification: Some("file_read".to_string()),
             audit_log: Some(format!("Read file: {}", path)),
+            pua_report: Some(tool_execution_report("read_file", Some("file_read"))),
         })
     }
 }
@@ -89,6 +93,7 @@ impl Tool for SearchFilesTool {
             error: None,
             verification: Some("search_done".to_string()),
             audit_log: Some("Search files completed".to_string()),
+            pua_report: Some(tool_execution_report("search_files", Some("search_done"))),
         })
     }
 }
@@ -105,6 +110,7 @@ impl Tool for ApplyPatchTool {
             error: None,
             verification: Some("patch_applied".to_string()),
             audit_log: Some("Patch applied".to_string()),
+            pua_report: Some(tool_execution_report("apply_patch", Some("patch_applied"))),
         })
     }
 }
@@ -121,6 +127,7 @@ impl Tool for RunTestsTool {
             error: None,
             verification: Some("tests_passed".to_string()),
             audit_log: Some("Tests executed".to_string()),
+            pua_report: Some(tool_execution_report("run_tests", Some("tests_passed"))),
         })
     }
 }
@@ -137,6 +144,7 @@ impl Tool for InspectGitDiffTool {
             error: None,
             verification: Some("diff_inspected".to_string()),
             audit_log: Some("Git diff inspected".to_string()),
+            pua_report: Some(tool_execution_report("inspect_git_diff", Some("diff_inspected"))),
         })
     }
 }
