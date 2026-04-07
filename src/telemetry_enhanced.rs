@@ -2,6 +2,71 @@
 //!
 //! This module provides structured logging, metrics collection, and distributed tracing
 //! for comprehensive observability.
+//!
+//! # Features
+//!
+//! - **Structured Logging**: JSON-formatted logs with context and metadata
+//! - **Metrics Collection**: Prometheus-compatible metrics with histograms
+//! - **Distributed Tracing**: OpenTelemetry support for request tracing
+//! - **Health Monitoring**: System health checks and status reporting
+//! - **Performance Profiling**: Performance metrics and profiling tools
+//!
+//! # Architecture
+//!
+//! The telemetry system is built on three pillars:
+//!
+//! 1. **Logging**: Uses `tracing` crate for structured, hierarchical logging
+//! 2. **Metrics**: Uses `opentelemetry` for metrics collection and export
+//! 3. **Tracing**: Uses `opentelemetry` for distributed tracing
+//!
+//! # Usage
+//!
+//! ```rust
+//! use telemetry_enhanced::{TelemetryConfig, init_telemetry};
+//!
+//! // Configure telemetry
+//! let config = TelemetryConfig {
+//!     enable_logging: true,
+//!     enable_metrics: true,
+//!     enable_tracing: false,
+//!     log_level: "info".to_string(),
+//!     metrics_interval_secs: 30,
+//!     service_name: "my-service".to_string(),
+//!     service_version: "1.0.0".to_string(),
+//! };
+//!
+//! // Initialize telemetry
+//! init_telemetry(&config).expect("failed to initialize telemetry");
+//!
+//! // Use structured logging
+//! info!("application started", service_name = "my-service");
+//!
+//! // Record metrics
+//! let metrics_recorder = MetricsRecorder::new();
+//! metrics_recorder.record_request("api_call", 150.0);
+//! ```
+//!
+//! # Configuration
+//!
+//! The telemetry system can be configured via `TelemetryConfig`:
+//!
+//! - `enable_logging`: Enable/disable structured logging
+//! - `enable_metrics`: Enable/disable metrics collection
+//! - `enable_tracing`: Enable/disable distributed tracing (requires OTLP endpoint)
+//! - `log_level`: Log level filter (trace, debug, info, warn, error)
+//! - `metrics_interval_secs`: Metrics export interval in seconds
+//! - `service_name`: Service name for telemetry metadata
+//! - `service_version`: Service version for telemetry metadata
+//!
+//! # Integration
+//!
+//! This module integrates with:
+//!
+//! - **Prometheus**: Metrics are exposed in Prometheus format
+//! - **Grafana**: Metrics can be visualized in Grafana dashboards
+//! - **Jaeger**: Distributed traces can be sent to Jaeger
+//! - **Datadog**: Metrics and traces can be sent to Datadog
+//! - **New Relic**: Metrics and traces can be sent to New Relic
 
 #![allow(dead_code)]
 

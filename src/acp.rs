@@ -1,7 +1,7 @@
 //! ACP (Agent Coordination Protocol) server implementation
 //!
 //! This module implements the core server functionality for the go-on ACP proxy,
-//! including request handling, caching, vector storage, and circuit breaking.
+//! including request handling, caching, vector storage, circuit breaking, and performance monitoring.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -923,6 +923,8 @@ pub struct AcpServer {
 }
 
 impl AcpServer {
+    /// Handle a chat request (main entry point). Instrumentation should be added in the implementation.
+    // pub async fn handle_chat_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> { ... }
     /// Create a new ACP server instance
     ///
     /// # Arguments
@@ -1475,50 +1477,65 @@ impl AcpServer {
                 result.await
             }
             "metrics.get" => {
-                let result = serde_json::to_value(self.metrics.snapshot())?;
-                self.send_result(request_id, result).await
+                // Measure metrics retrieval performance
+                let (result, duration) = performance::utils::measure_time(|| {
+                    serde_json::to_value(self.metrics.snapshot())
+                });
+
+                // Log performance metrics
+                debug!("metrics.get request handled in {:?}", duration);
+
+                self.send_result(request_id, result?).await
             }
             "metrics.prometheus" => {
-                let sqlite_cache_entries = if let Some(cache) = self.cache_handle() {
-                    self.cache_entry_count(cache.clone()).await.unwrap_or(0)
-                } else {
-                    0
-                };
-                let (vector_memory_entries, vector_summary_entries) =
-                    if let Some(store) = self.vector_store_handle() {
-                        self.vector_entry_counts(store.clone())
-                            .await
-                            .unwrap_or((0, 0))
+                // Measure Prometheus metrics generation performance
+                let (result, duration) = performance::utils::measure_time_async(|| async {
+                    let sqlite_cache_entries = if let Some(cache) = self.cache_handle() {
+                        self.cache_entry_count(cache.clone()).await.unwrap_or(0)
                     } else {
-                        (0, 0)
+                        0
                     };
+                    let (vector_memory_entries, vector_summary_entries) =
+                        if let Some(store) = self.vector_store_handle() {
+                            self.vector_entry_counts(store.clone())
+                                .await
+                                .unwrap_or((0, 0))
+                        } else {
+                            (0, 0)
+                        };
 
-                let gauges = RuntimeGaugeSnapshot {
-                    memory_cache_entries: self.memory_cache.active_entries() as u64,
-                    sqlite_cache_entries,
-                    vector_memory_entries,
-                    vector_summary_entries,
-                    circuit_open_agents: self.circuit_breakers.open_count() as u64,
-                    circuit_half_open_agents: self.circuit_breakers.half_open_count() as u64,
-                    circuit_tracked_agents: self.circuit_breakers.tracked_agents() as u64,
-                    rate_limiter_tracked_phases: self.phase_rate_limiter.tracked_phases() as u64,
-                };
-                let breaker_snapshot = self.circuit_breakers.snapshot();
-                let phase_limiter_snapshot = self.phase_rate_limiter.snapshot();
-                let inflight_snapshot = self.inflight_limiter.snapshot();
-                let lifecycle = self.lifecycle.snapshot();
-                let maintenance = self.maintenance.snapshot();
-                let result = json!({
-                    "text": build_prometheus_metrics(
-                        &self.metrics.snapshot(),
-                        &gauges,
-                        &breaker_snapshot,
-                        &phase_limiter_snapshot,
-                        &inflight_snapshot,
-                        &lifecycle,
-                        &maintenance,
-                    )
-                });
+                    let gauges = RuntimeGaugeSnapshot {
+                        memory_cache_entries: self.memory_cache.active_entries() as u64,
+                        sqlite_cache_entries,
+                        vector_memory_entries,
+                        vector_summary_entries,
+                        circuit_open_agents: self.circuit_breakers.open_count() as u64,
+                        circuit_half_open_agents: self.circuit_breakers.half_open_count() as u64,
+                        circuit_tracked_agents: self.circuit_breakers.tracked_agents() as u64,
+                        rate_limiter_tracked_phases: self.phase_rate_limiter.tracked_phases() as u64,
+                    };
+                    let breaker_snapshot = self.circuit_breakers.snapshot();
+                    let phase_limiter_snapshot = self.phase_rate_limiter.snapshot();
+                    let inflight_snapshot = self.inflight_limiter.snapshot();
+                    let lifecycle = self.lifecycle.snapshot();
+                    let maintenance = self.maintenance.snapshot();
+
+                    json!({
+                        "text": build_prometheus_metrics(
+                            &self.metrics.snapshot(),
+                            &gauges,
+                            &breaker_snapshot,
+                            &phase_limiter_snapshot,
+                            &inflight_snapshot,
+                            &lifecycle,
+                            &maintenance,
+                        )
+                    })
+                }).await;
+
+                // Log performance metrics
+                debug!("metrics.prometheus request handled in {:?}", duration);
+
                 self.send_result(request_id, result).await
             }
             "metrics.reset" => {

@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
+use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use tracing::warn;
@@ -45,11 +46,34 @@ pub struct AgentTaskEnvelope {
 }
 
 /// Agent output schema
+
+/// Unified agent error type
+#[derive(Debug, Error, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "info")]
+pub enum AgentError {
+    #[error("Agent runtime error: {0}")]
+    Runtime(String),
+    #[error("Configuration error: {0}")]
+    Config(String),
+    #[error("Network error: {0}")]
+    Network(String),
+    #[error("Timeout error: {0}")]
+    Timeout(String),
+    #[error("Unknown error: {0}")]
+    Unknown(String),
+}
+
+impl From<anyhow::Error> for AgentError {
+    fn from(e: anyhow::Error) -> Self {
+        AgentError::Runtime(format!("{}", e))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTaskResult {
     pub success: bool,
     pub output: Option<serde_json::Value>,
-    pub error: Option<String>,
+    pub error: Option<AgentError>,
     pub audit_log: Option<String>,
     pub pua_report: Option<PuaExecutionReport>,
 }
@@ -144,6 +168,13 @@ pub trait Agent: Send + Sync {
             timestamp,
         };
 
+        tracing::error!(
+            target = "agent",
+            "run_task called on unsupported provider: phase={} task_id={}",
+            envelope.phase,
+            envelope.task_id
+        );
+
         Ok(AgentTaskResult {
             success: false,
             output: Some(json!({
@@ -153,9 +184,9 @@ pub trait Agent: Send + Sync {
                 "objective": envelope.objective,
                 "status": "unsupported_operation"
             })),
-            error: Some(
+            error: Some(AgentError::Runtime(
                 "run_task is unsupported for this provider without a concrete override".to_string(),
-            ),
+            )),
             audit_log: Some(serde_json::to_string(&audit)?),
             pua_report: None,
         })

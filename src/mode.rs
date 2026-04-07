@@ -23,12 +23,20 @@ pub enum ModeKind {
 }
 
 /// Mode runtime trait: each mode has its own orchestration, budget, and policy
+///
+/// All implementations should instrument `run` for tracing and performance monitoring in the implementation, not on the trait itself.
 pub trait ModeRuntime: Send + Sync {
+    /// Returns the mode kind.
     fn kind(&self) -> ModeKind;
+    /// Returns the allowed tools for this mode.
     fn allowed_tools(&self) -> Vec<String>;
+    /// Returns the maximum number of tool calls allowed.
     fn max_tool_calls(&self) -> usize;
+    /// Whether user approval is required for this mode.
     fn user_approval_required(&self) -> bool;
+    /// Whether the given objective is high risk.
     fn is_high_risk_operation(&self, objective: &str) -> bool;
+    /// Run the mode orchestration for a given agent task.
     fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult>;
 }
 
@@ -174,7 +182,9 @@ impl ModeRuntime for AgentModeRuntime {
                 "message": format!("Agent task '{}' ready for execution", task.objective)
             })),
             error: if is_high_risk {
-                Some("Operator approval required for high-risk operation".to_string())
+                Some(crate::agent::AgentError::Runtime(
+                    "Operator approval required for high-risk operation".to_string(),
+                ))
             } else {
                 None
             },
@@ -322,10 +332,10 @@ impl ModeRuntime for SafeGuardModeRuntime {
                 "message": format!("SafeGuard task '{}' awaiting safety approval", task.objective)
             })),
             error: if is_high_risk {
-                Some(
+                Some(crate::agent::AgentError::Runtime(
                     "SafeGuard: Operator approval required for this high-risk operation"
                         .to_string(),
-                )
+                ))
             } else {
                 None
             },

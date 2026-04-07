@@ -42,8 +42,12 @@ pub struct ToolOutput {
 }
 
 /// Tool trait
+///
+/// All tools must implement this trait. The `run` method should be instrumented for tracing and performance monitoring in the implementation, not on the trait itself.
 pub trait Tool: Send + Sync {
+    /// Returns the tool's unique name.
     fn name(&self) -> &'static str;
+    /// Executes the tool with the given input. Should emit tracing spans for performance analysis (implementations only).
     fn run(&self, input: &ToolInput) -> Result<ToolOutput>;
 }
 
@@ -53,6 +57,8 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    /// Create a new tool registry and register all built-in tools.
+    #[tracing::instrument(level = "info")]
     pub fn new() -> Self {
         let mut registry = Self { tools: Vec::new() };
         registry.register(ReadFileTool);
@@ -66,6 +72,8 @@ impl ToolRegistry {
     pub fn register<T: Tool + 'static>(&mut self, tool: T) {
         self.tools.push(Box::new(tool));
     }
+    /// Get a tool by name.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
         self.tools
             .iter()

@@ -108,10 +108,52 @@ impl DynamicParameterTuner {
 
         // Fall back to complexity-based selection
         match complexity {
-            1 => self.profiles.get("simple").unwrap().clone(),
-            2 | 3 => self.profiles.get("medium").unwrap().clone(),
-            4 | 5 => self.profiles.get("complex").unwrap().clone(),
-            _ => self.profiles.get("medium").unwrap().clone(),
+            1 => self.profiles.get("simple").cloned().unwrap_or_else(|| {
+                tracing::warn!("DynamicParameterTuner: missing 'simple' profile, using default");
+                DynamicParameters {
+                    max_tool_calls: 5,
+                    timeout_seconds: 30,
+                    temperature: 0.3,
+                    approval_required: false,
+                    max_retries: 1,
+                    context_window_size: 2048,
+                }
+            }),
+            2 | 3 => self.profiles.get("medium").cloned().unwrap_or_else(|| {
+                tracing::warn!("DynamicParameterTuner: missing 'medium' profile, using default");
+                DynamicParameters {
+                    max_tool_calls: 20,
+                    timeout_seconds: 120,
+                    temperature: 0.5,
+                    approval_required: false,
+                    max_retries: 2,
+                    context_window_size: 4096,
+                }
+            }),
+            4 | 5 => self.profiles.get("complex").cloned().unwrap_or_else(|| {
+                tracing::warn!("DynamicParameterTuner: missing 'complex' profile, using default");
+                DynamicParameters {
+                    max_tool_calls: 50,
+                    timeout_seconds: 300,
+                    temperature: 0.7,
+                    approval_required: true,
+                    max_retries: 3,
+                    context_window_size: 8192,
+                }
+            }),
+            _ => self.profiles.get("medium").cloned().unwrap_or_else(|| {
+                tracing::warn!(
+                    "DynamicParameterTuner: missing fallback 'medium' profile, using default"
+                );
+                DynamicParameters {
+                    max_tool_calls: 20,
+                    timeout_seconds: 120,
+                    temperature: 0.5,
+                    approval_required: false,
+                    max_retries: 2,
+                    context_window_size: 4096,
+                }
+            }),
         }
     }
 
@@ -157,6 +199,13 @@ pub struct ResourceAllocator;
 
 impl ResourceAllocator {
     /// Allocate resources based on task complexity and requirements
+    /// Usage:
+    /// let budget = ResourceAllocator::allocate_resources("feature", 3, 4);
+    /// assert!(budget.token_budget > 0);
+    ///
+    /// # Panics
+    /// Never panics; clamps and logs on invalid input.
+    #[tracing::instrument(level = "debug", skip(_task_type))]
     pub fn allocate_resources(
         _task_type: &str,
         complexity: u8,
@@ -167,12 +216,18 @@ impl ResourceAllocator {
         let base_cost = 100u32; // cents
 
         let complexity_multiplier = (complexity as f32) / 2.5;
+        if complexity == 0 {
+            tracing::warn!("ResourceAllocator: complexity=0, using minimum allocation");
+        }
+        if num_subtasks == 0 {
+            tracing::warn!("ResourceAllocator: num_subtasks=0, using minimum parallelism");
+        }
 
         ResourceBudget {
-            token_budget: (base_tokens as f32 * complexity_multiplier) as usize,
-            time_budget_seconds: (base_time as f32 * complexity_multiplier) as u64,
-            api_cost_limit_cents: (base_cost as f32 * complexity_multiplier) as u32,
-            max_parallel_tasks: (num_subtasks / 2).clamp(1, 8),
+            token_budget: (base_tokens as f32 * complexity_multiplier.max(0.4)) as usize,
+            time_budget_seconds: (base_time as f32 * complexity_multiplier.max(0.4)) as u64,
+            api_cost_limit_cents: (base_cost as f32 * complexity_multiplier.max(0.4)) as u32,
+            max_parallel_tasks: (num_subtasks / 2).max(1).min(8),
         }
     }
 
@@ -222,6 +277,13 @@ pub struct WorkflowDiagnostics;
 
 impl WorkflowDiagnostics {
     /// Generate diagnostics report
+    /// Usage:
+    /// let diag = WorkflowDiagnostics::generate_report("task1", &[("phase1".to_string(), 100)], &budget, (100, 10, 1));
+    /// assert!(diag.total_duration_ms > 0);
+    ///
+    /// # Panics
+    /// Never panics; logs and uses default on time errors.
+    #[tracing::instrument(level = "debug", skip(phases, resource_budget))]
     pub fn generate_report(
         task_id: &str,
         phases: &[(String, u64)], // (phase_name, duration_ms)
@@ -231,8 +293,12 @@ impl WorkflowDiagnostics {
         let total_duration_ms: u64 = phases.iter().map(|(_, d)| d).sum();
 
         let (tokens_used, _time_used, _cost_used) = resources_used;
-        let resource_utilization =
-            (tokens_used as f32 / resource_budget.token_budget as f32).min(1.0);
+        let resource_utilization = if resource_budget.token_budget > 0 {
+            (tokens_used as f32 / resource_budget.token_budget as f32).min(1.0)
+        } else {
+            tracing::warn!("WorkflowDiagnostics: token_budget=0, utilization forced to 1.0");
+            1.0
+        };
 
         // Find bottleneck
         let bottleneck_phase = phases
@@ -240,28 +306,34 @@ impl WorkflowDiagnostics {
             .max_by_key(|(_, d)| d)
             .map(|(name, _)| name.clone());
 
-        let efficiency_score = if total_duration_ms > 0 {
+        let efficiency_score = if total_duration_ms > 0 && resource_budget.time_budget_seconds > 0 {
             (1.0 - (total_duration_ms as f32 / (resource_budget.time_budget_seconds * 1000) as f32))
                 .max(0.0)
         } else {
+            tracing::warn!(
+                "WorkflowDiagnostics: time_budget_seconds=0 or total_duration_ms=0, efficiency=0"
+            );
             0.0
         };
 
         let mut phase_durations = HashMap::new();
         for (phase, duration) in phases {
-            phase_durations.insert(phase.clone(), duration.to_owned());
+            phase_durations.insert(phase.clone(), *duration);
         }
+
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+        let now_secs = match now {
+            Ok(d) => d.as_secs(),
+            Err(e) => {
+                tracing::error!("SystemTime error: {:?}", e);
+                0
+            }
+        };
 
         ExecutionDiagnostics {
             task_id: task_id.to_string(),
-            start_time: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            end_time: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            start_time: now_secs,
+            end_time: now_secs,
             total_duration_ms,
             phase_durations,
             bottleneck_phase,
@@ -269,6 +341,7 @@ impl WorkflowDiagnostics {
             efficiency_score,
         }
     }
+    // dead_code 检查：本模块所有结构体/方法均有测试覆盖或主流程调用，若后续移除请同步清理。
 
     /// Generate optimization recommendations
     pub fn recommend_optimizations(diagnostics: &ExecutionDiagnostics) -> Vec<String> {

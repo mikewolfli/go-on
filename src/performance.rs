@@ -426,6 +426,7 @@ fn get_memory_usage() -> u64 {
 /// Performance optimization utilities
 pub mod utils {
     use super::*;
+    use std::future::Future;
 
     /// Measure execution time of a function
     pub fn measure_time<F, R>(f: F) -> (R, Duration)
@@ -434,6 +435,18 @@ pub mod utils {
     {
         let start = Instant::now();
         let result = f();
+        let duration = start.elapsed();
+        (result, duration)
+    }
+
+    /// Measure execution time of an async function
+    pub async fn measure_time_async<F, Fut, R>(f: F) -> (R, Duration)
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = R>,
+    {
+        let start = Instant::now();
+        let result = f().await;
         let duration = start.elapsed();
         (result, duration)
     }
