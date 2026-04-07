@@ -33,6 +33,12 @@ use crate::memory_response_cache::MemoryResponseCache;
 use crate::observability::{push_metric_header, push_scalar_metric};
 use crate::performance;
 use crate::pua::review_gate_prompt;
+use crate::reinforcement::{
+    aggregate_status, assistant_excerpt, build_runtime_healthcheck_report, build_task_plan,
+    persist_runtime_healthcheck, persist_task_plan, run_action_check, total_message_chars,
+    ActionCheckKind, ArtifactLedger, CheckStatus, CheckpointSummaryArtifact, ComponentReport,
+};
+use crate::reinforcement::{persist_task_execution_summary, TaskExecutionSummary};
 use crate::review_controls::{
     review_timeout, review_verdict, ReviewDecision, ReviewGateOutcome, ReviewTimeoutPolicy,
     ReviewVerdict,
@@ -1059,7 +1065,7 @@ impl AcpServer {
             // Process the request
             let response = self.handle_request(request).await;
             if let Err(err) = response {
-                error!("request failed: {err:#}");
+                error!(method = %method, "request failed: {err:#}");
             }
 
             // Check if shutdown is requested
@@ -1100,6 +1106,10 @@ impl AcpServer {
         self.cache.lock().ok().and_then(|guard| guard.clone())
     }
 
+    fn artifact_ledger(&self) -> ArtifactLedger {
+        ArtifactLedger::new(self.config_path.as_deref())
+    }
+
     fn vector_store_handle(&self) -> Option<Arc<VectorStore>> {
         self.vector_store
             .lock()
@@ -1137,6 +1147,86 @@ impl AcpServer {
             .lock()
             .map(|guard| guard.clone())
             .unwrap_or_default()
+    }
+
+    fn runtime_healthcheck_report(&self) -> Result<crate::reinforcement::RuntimeHealthcheckReport> {
+        let cache = self.cache_handle();
+        let vector_store = self.vector_store_handle();
+        let mut report = build_runtime_healthcheck_report(
+            self.config_path.as_deref(),
+            cache.as_deref(),
+            vector_store.as_deref(),
+        )?;
+
+        let (global_inflight, phase_inflight) = self.inflight_limiter.snapshot();
+        let runtime_status = if self.lifecycle.is_shutting_down()
+            || self.circuit_breakers.open_count() > 0
+        {
+            CheckStatus::Warn
+        } else {
+            CheckStatus::Healthy
+        };
+
+        report.components.push(ComponentReport {
+            name: "runtime".to_string(),
+            status: runtime_status,
+            message: "runtime controller snapshot captured".to_string(),
+            details: json!({
+                "memory_cache_entries": self.memory_cache.active_entries(),
+                "circuit_breaker": {
+                    "open_agents": self.circuit_breakers.open_count(),
+                    "half_open_agents": self.circuit_breakers.half_open_count(),
+                    "tracked_agents": self.circuit_breakers.tracked_agents(),
+                    "agents": self.circuit_breakers.snapshot(),
+                },
+                "rate_limiter": {
+                    "tracked_phases": self.phase_rate_limiter.tracked_phases(),
+                },
+                "inflight": {
+                    "global": global_inflight,
+                    "per_phase": phase_inflight,
+                },
+                "lifecycle": self.lifecycle.snapshot(),
+                "maintenance": self.maintenance.snapshot(),
+                "review_gate": {
+                    "total": self.metrics.snapshot().review_gate_total,
+                    "approved": self.metrics.snapshot().review_gate_approved_total,
+                    "rejected": self.metrics.snapshot().review_gate_rejected_total,
+                    "timeout": self.metrics.snapshot().review_gate_timeout_total,
+                    "degraded": self.metrics.snapshot().review_gate_degraded_total,
+                    "invalid_response": self.metrics.snapshot().review_gate_invalid_response_total,
+                },
+                "telemetry": {
+                    "enabled": self.telemetry.is_enabled(),
+                    "sampling_rate": self.telemetry.sampling_rate(),
+                },
+            }),
+        });
+
+        report.overall_status =
+            aggregate_status(report.components.iter().map(|component| component.status));
+        Ok(report)
+    }
+
+    fn persist_checkpoint_summary(&self, checkpoint: &ConversationCheckpoint) {
+        let summary = CheckpointSummaryArtifact {
+            checkpoint_id: checkpoint.checkpoint_id.clone(),
+            conversation_id: checkpoint.conversation_id.clone(),
+            branch_id: checkpoint.branch_id.clone(),
+            parent_checkpoint_id: checkpoint.parent_checkpoint_id.clone(),
+            created_at: checkpoint.created_at,
+            note: checkpoint.note.clone(),
+            message_count: checkpoint.messages.len(),
+            message_chars: total_message_chars(&checkpoint.messages),
+            assistant_excerpt: assistant_excerpt(&checkpoint.messages),
+        };
+
+        if let Err(err) = self
+            .artifact_ledger()
+            .write_json("checkpoints", "latest.json", &summary)
+        {
+            warn!("failed to persist checkpoint summary: {}", err);
+        }
     }
 
     fn begin_shutdown(&self, reason: &str) {
@@ -1331,6 +1421,27 @@ impl AcpServer {
                                 }
                             },
                             {
+                                "name": "acp_task_plan",
+                                "description": "Build and persist a controlled task plan",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "task": {"type": "string"}
+                                    },
+                                    "required": ["task"]
+                                }
+                            },
+                            {
+                                "name": "acp_action_check",
+                                "description": "Run BLUE2 action checks against .goon artifacts",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "kind": {"type": "string"}
+                                    }
+                                }
+                            },
+                            {
                                 "name": "acp_conversation_checkpoint_list",
                                 "description": "List conversation checkpoints",
                                 "inputSchema": {
@@ -1396,20 +1507,76 @@ impl AcpServer {
                         })
                     }
                     "acp_runtime_health" => {
-                        let (global_inflight, phase_inflight) = self.inflight_limiter.snapshot();
+                        let report = self.runtime_healthcheck_report()?;
+                        let artifact_path =
+                            persist_runtime_healthcheck(&self.artifact_ledger(), &report)?;
+                        let runtime_details = report
+                            .components
+                            .iter()
+                            .find(|component| component.name == "runtime")
+                            .map(|component| component.details.clone())
+                            .unwrap_or(Value::Null);
+                        let sqlite_cache_entries = report
+                            .components
+                            .iter()
+                            .find(|component| component.name == "cache")
+                            .and_then(|component| component.details.get("entries"))
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        let vector = report
+                            .components
+                            .iter()
+                            .find(|component| component.name == "vector")
+                            .map(|component| component.details.clone())
+                            .unwrap_or(Value::Null);
                         json!({
+                            "ok": report.overall_status != CheckStatus::Error,
+                            "report": report,
+                            "artifact_path": artifact_path.display().to_string(),
                             "memory_cache_entries": self.memory_cache.active_entries(),
-                            "circuit_breaker": {
-                                "open_agents": self.circuit_breakers.open_count(),
-                                "half_open_agents": self.circuit_breakers.half_open_count(),
-                                "tracked_agents": self.circuit_breakers.tracked_agents(),
-                            },
-                            "inflight": {
-                                "global": global_inflight,
-                                "per_phase": phase_inflight,
-                            },
-                            "lifecycle": self.lifecycle.snapshot(),
-                            "maintenance": self.maintenance.snapshot(),
+                            "sqlite_cache_entries": sqlite_cache_entries,
+                            "circuit_breaker": runtime_details.get("circuit_breaker").cloned().unwrap_or(Value::Null),
+                            "rate_limiter": runtime_details.get("rate_limiter").cloned().unwrap_or(Value::Null),
+                            "inflight": runtime_details.get("inflight").cloned().unwrap_or(Value::Null),
+                            "vector": vector,
+                            "lifecycle": runtime_details.get("lifecycle").cloned().unwrap_or(Value::Null),
+                            "maintenance": runtime_details.get("maintenance").cloned().unwrap_or(Value::Null),
+                            "review_gate": runtime_details.get("review_gate").cloned().unwrap_or(Value::Null),
+                            "telemetry": runtime_details.get("telemetry").cloned().unwrap_or(Value::Null),
+                        })
+                    }
+                    "acp_task_plan" => {
+                        let task = match args.get("task").and_then(|v| v.as_str()) {
+                            Some(value) if !value.trim().is_empty() => value,
+                            _ => {
+                                return self
+                                    .send_error(
+                                        request_id,
+                                        -32602,
+                                        "task is required for acp_task_plan".to_string(),
+                                        None,
+                                    )
+                                    .await;
+                            }
+                        };
+                        let plan = build_task_plan(task);
+                        let artifact_path = persist_task_plan(&self.artifact_ledger(), &plan)?;
+                        json!({
+                            "ok": true,
+                            "plan": plan,
+                            "artifact_path": artifact_path.display().to_string(),
+                        })
+                    }
+                    "acp_action_check" => {
+                        let kind = args
+                            .get("kind")
+                            .and_then(|v| v.as_str())
+                            .and_then(ActionCheckKind::parse)
+                            .unwrap_or(ActionCheckKind::All);
+                        let report = run_action_check(&self.artifact_ledger(), kind)?;
+                        json!({
+                            "ok": report.ok,
+                            "report": report,
                         })
                     }
                     "acp_conversation_checkpoint_list" => {
@@ -1640,6 +1807,15 @@ impl AcpServer {
                     })
                     .unwrap_or((0, 0, 0));
 
+                let ledger = self.artifact_ledger();
+                let artifacts = json!({
+                    "root": ledger.root().display().to_string(),
+                    "spec_plan": ledger.latest_path("spec", "latest-plan.json").exists(),
+                    "healthcheck": ledger.latest_path("qa", "latest-healthcheck.json").exists(),
+                    "retest": ledger.latest_path("retest", "latest-action-check.json").exists(),
+                    "final_summary": ledger.latest_path("final", "latest-summary.json").exists(),
+                });
+
                 self.send_result(
                     request_id,
                     json!({
@@ -1665,6 +1841,7 @@ impl AcpServer {
                                 "checkpoints": checkpoint_count,
                                 "branch_heads": branch_head_count,
                             },
+                            "artifacts": artifacts,
                             "review_gate": {
                                 "total": self.metrics.snapshot().review_gate_total,
                                 "approved": self.metrics.snapshot().review_gate_approved_total,
@@ -1678,68 +1855,254 @@ impl AcpServer {
                 )
                 .await
             }
+            "task.plan" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let task = match params.get("task").and_then(|v| v.as_str()) {
+                    Some(value) if !value.trim().is_empty() => value,
+                    _ => {
+                        return self
+                            .send_error(
+                                request_id,
+                                -32602,
+                                "task is required for task.plan".to_string(),
+                                None,
+                            )
+                            .await;
+                    }
+                };
+
+                let plan = build_task_plan(task);
+                let artifact_path = persist_task_plan(&self.artifact_ledger(), &plan)?;
+                self.record_trace_event(
+                    &trace,
+                    "phase.plan",
+                    "ok",
+                    "plan",
+                    json!({
+                        "task": task,
+                        "sub_agent_recommended": plan.sub_agent_recommended,
+                        "planned_subtasks": plan.planned_subtasks.len(),
+                    }),
+                    None,
+                    started.elapsed().as_millis() as u64,
+                );
+                self.send_result(
+                    request_id,
+                    json!({
+                        "ok": true,
+                        "plan": plan,
+                        "artifact_path": artifact_path.display().to_string(),
+                    }),
+                )
+                .await
+            }
+            // Section 6 (sub-agent orchestration) + Section 5 (lifecycle tracking)
+            "task.execute" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let task_str = match params.get("task").and_then(|v| v.as_str()) {
+                    Some(t) if !t.trim().is_empty() => t.to_string(),
+                    _ => {
+                        return self
+                            .send_error(
+                                request_id,
+                                -32602,
+                                "task is required for task.execute".to_string(),
+                                None,
+                            )
+                            .await;
+                    }
+                };
+
+                let phase_hint = params
+                    .get("phase")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let mut plan = build_task_plan(&task_str);
+
+                let (flow, registry) = self.routing_handles()?;
+                let routing = flow
+                    .resolve(phase_hint, registry.as_ref())
+                    .unwrap_or_else(|_| {
+                        flow.resolve(None, registry.as_ref())
+                            .expect("default phase must always resolve")
+                    });
+                let primary_agent_name = routing.phase.agent_names.first().cloned();
+                let executor_label = primary_agent_name
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                let ledger = self.artifact_ledger();
+                let exec_started_ts = now_ts();
+
+                let mut completed = 0usize;
+                let mut failed = 0usize;
+                let mut skipped = 0usize;
+
+                for record in plan.planned_subtasks.iter_mut() {
+                    let subtask_wall = Instant::now();
+                    let subtask_start_ts = now_ts();
+
+                    let agent_name = match primary_agent_name.clone() {
+                        Some(name) => name,
+                        None => {
+                            record.mark_executed(subtask_start_ts, subtask_start_ts, 0, "skipped", "none");
+                            skipped += 1;
+                            continue;
+                        }
+                    };
+
+                    let agent = match registry.get(&agent_name) {
+                        Some(a) => a,
+                        None => {
+                            record.mark_executed(subtask_start_ts, subtask_start_ts, 0, "skipped", &agent_name);
+                            skipped += 1;
+                            continue;
+                        }
+                    };
+
+                    let messages = vec![Message {
+                        role: "user".to_string(),
+                        content: record.description.clone(),
+                    }];
+
+                    let sub_result = self
+                        .run_agent_collecting(
+                            agent_name.clone(),
+                            agent,
+                            messages,
+                            None,
+                            None,
+                            Some(Duration::from_secs(120)),
+                        )
+                        .await;
+
+                    let duration_ms = subtask_wall.elapsed().as_millis() as u64;
+                    let subtask_stop_ts = now_ts();
+
+                    match sub_result {
+                        Ok(_response) => {
+                            record.mark_executed(subtask_start_ts, subtask_stop_ts, duration_ms, "completed", &agent_name);
+                            completed += 1;
+                            info!(
+                                subtask_id = %record.id,
+                                executor = %agent_name,
+                                duration_ms,
+                                "subtask completed"
+                            );
+                        }
+                        Err(err) => {
+                            record.mark_executed(subtask_start_ts, subtask_stop_ts, duration_ms, "failed", &agent_name);
+                            failed += 1;
+                            warn!(
+                                subtask_id = %record.id,
+                                executor = %agent_name,
+                                error = %err,
+                                "subtask failed"
+                            );
+                        }
+                    }
+                }
+
+                let exec_stop_ts = now_ts();
+                let summary = TaskExecutionSummary {
+                    generated_at: exec_stop_ts,
+                    task: task_str.clone(),
+                    subtasks_total: plan.planned_subtasks.len(),
+                    subtasks_completed: completed,
+                    subtasks_failed: failed,
+                    subtasks_skipped: skipped,
+                    executor: executor_label.clone(),
+                    records: plan.planned_subtasks.clone(),
+                    artifact_path: None,
+                };
+                let artifact_path = persist_task_execution_summary(&ledger, &summary)?;
+
+                self.record_trace_event(
+                    &trace,
+                    "phase.execute",
+                    if failed == 0 { "ok" } else { "warn" },
+                    "execute",
+                    json!({
+                        "task": task_str,
+                        "subtasks_total": summary.subtasks_total,
+                        "subtasks_completed": completed,
+                        "subtasks_failed": failed,
+                        "subtasks_skipped": skipped,
+                        "executor": executor_label,
+                    }),
+                    None,
+                    (exec_stop_ts.saturating_sub(exec_started_ts)) as u64 * 1000,
+                );
+
+                self.send_result(
+                    request_id,
+                    json!({
+                        "ok": failed == 0,
+                        "summary": summary,
+                        "artifact_path": artifact_path.display().to_string(),
+                    }),
+                )
+                .await
+            }
             "runtime.health" => {
-                let (global_inflight, phase_inflight) = self.inflight_limiter.snapshot();
-                let sqlite_cache_entries = if let Some(cache) = self.cache_handle() {
-                    match self.cache_entry_count(cache.clone()).await {
-                        Ok(value) => Some(value),
-                        Err(err) => {
-                            warn!("failed to read sqlite cache entry count: {}", err);
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
-
-                let vector_entries = if let Some(store) = self.vector_store_handle() {
-                    match self.vector_entry_counts(store.clone()).await {
-                        Ok((memory, summaries)) => Some(json!({
-                            "memory_entries": memory,
-                            "summary_entries": summaries,
-                        })),
-                        Err(err) => {
-                            warn!("failed to read vector entry counts: {}", err);
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
-
-                let result = json!({
-                    "memory_cache_entries": self.memory_cache.active_entries(),
-                    "sqlite_cache_entries": sqlite_cache_entries,
-                    "circuit_breaker": {
-                        "open_agents": self.circuit_breakers.open_count(),
-                        "half_open_agents": self.circuit_breakers.half_open_count(),
-                        "tracked_agents": self.circuit_breakers.tracked_agents(),
-                        "agents": self.circuit_breakers.snapshot(),
-                    },
-                    "rate_limiter": {
-                        "tracked_phases": self.phase_rate_limiter.tracked_phases(),
-                    },
-                    "inflight": {
-                        "global": global_inflight,
-                        "per_phase": phase_inflight,
-                    },
-                    "vector": vector_entries,
-                    "lifecycle": self.lifecycle.snapshot(),
-                    "maintenance": self.maintenance.snapshot(),
-                    "review_gate": {
-                        "total": self.metrics.snapshot().review_gate_total,
-                        "approved": self.metrics.snapshot().review_gate_approved_total,
-                        "rejected": self.metrics.snapshot().review_gate_rejected_total,
-                        "timeout": self.metrics.snapshot().review_gate_timeout_total,
-                        "degraded": self.metrics.snapshot().review_gate_degraded_total,
-                        "invalid_response": self.metrics.snapshot().review_gate_invalid_response_total,
-                    },
-                    "telemetry": {
-                        "enabled": self.telemetry.is_enabled(),
-                        "sampling_rate": self.telemetry.sampling_rate(),
-                    },
-                });
-                self.send_result(request_id, result).await
+                let report = self.runtime_healthcheck_report()?;
+                let artifact_path = persist_runtime_healthcheck(&self.artifact_ledger(), &report)?;
+                let runtime_details = report
+                    .components
+                    .iter()
+                    .find(|component| component.name == "runtime")
+                    .map(|component| component.details.clone())
+                    .unwrap_or_else(|| json!({}));
+                let sqlite_cache_entries = report
+                    .components
+                    .iter()
+                    .find(|component| component.name == "cache")
+                    .and_then(|component| component.details.get("entries"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let vector = report
+                    .components
+                    .iter()
+                    .find(|component| component.name == "vector")
+                    .map(|component| component.details.clone())
+                    .unwrap_or(Value::Null);
+                self.send_result(
+                    request_id,
+                    json!({
+                        "ok": report.overall_status != CheckStatus::Error,
+                        "report": report,
+                        "artifact_path": artifact_path.display().to_string(),
+                        "memory_cache_entries": self.memory_cache.active_entries(),
+                        "sqlite_cache_entries": sqlite_cache_entries,
+                        "circuit_breaker": runtime_details.get("circuit_breaker").cloned().unwrap_or(Value::Null),
+                        "rate_limiter": runtime_details.get("rate_limiter").cloned().unwrap_or(Value::Null),
+                        "inflight": runtime_details.get("inflight").cloned().unwrap_or(Value::Null),
+                        "vector": vector,
+                        "lifecycle": runtime_details.get("lifecycle").cloned().unwrap_or(Value::Null),
+                        "maintenance": runtime_details.get("maintenance").cloned().unwrap_or(Value::Null),
+                        "review_gate": runtime_details.get("review_gate").cloned().unwrap_or(Value::Null),
+                        "telemetry": runtime_details.get("telemetry").cloned().unwrap_or(Value::Null),
+                    }),
+                )
+                .await
+            }
+            "action.check" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let kind = params
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .and_then(ActionCheckKind::parse)
+                    .unwrap_or(ActionCheckKind::All);
+                let report = run_action_check(&self.artifact_ledger(), kind)?;
+                self.send_result(
+                    request_id,
+                    json!({
+                        "ok": report.ok,
+                        "report": report,
+                    }),
+                )
+                .await
             }
             "phase.status" => {
                 let limiter = self
@@ -2440,6 +2803,10 @@ impl AcpServer {
         let pipeline_trace = parent_trace
             .map(|trace| child_trace_context(&trace, "chat.pipeline"))
             .unwrap_or_else(|| chat_trace_context(&id, "chat.pipeline"));
+        info!(
+            trace_id = %pipeline_trace.trace_id,
+            "pipeline entry: chat request received"
+        );
         let chat_span = request_span.as_ref().and_then(|parent| {
             self.telemetry.start_child_span(
                 parent,
@@ -2751,6 +3118,10 @@ impl AcpServer {
                             }),
                         )
                         .await?;
+                        warn!(
+                            trace_id = %pipeline_trace.trace_id,
+                            "review gate degraded: timeout reached, proceeding with degraded single-reviewer approval"
+                        );
                         Some(decisions)
                     }
                 Err(err) => {
@@ -2980,6 +3351,11 @@ impl AcpServer {
                     );
                     return Ok(());
                 }
+                debug!(
+                    trace_id = %pipeline_trace.trace_id,
+                    phase = %routing.phase.phase_name,
+                    "sqlite cache miss — forwarding to live agent"
+                );
             }
         }
 
@@ -3269,6 +3645,41 @@ impl AcpServer {
                             warn!("auto-checkpoint skipped: {}", err);
                         }
                     }
+                    // Section 7: QA gate — only for FullAuto + high-complexity requests
+                    if matches!(mode, Some(ChatMode::FullAuto))
+                        && analyzed_task.complexity >= 3
+                    {
+                        match run_action_check(&self.artifact_ledger(), ActionCheckKind::Qa) {
+                            Ok(qa_report) => {
+                                if !qa_report.ok {
+                                    warn!(
+                                        trace_id = %pipeline_trace.trace_id,
+                                        phase = %phase_name,
+                                        overall_status = ?qa_report.overall_status,
+                                        "qa gate: artifacts incomplete — checkpoint and retest before promotion"
+                                    );
+                                }
+                                let _ = self
+                                    .send_notification(
+                                        "chat.qa_gate",
+                                        json!({
+                                            "trace_id": pipeline_trace.trace_id,
+                                            "ok": qa_report.ok,
+                                            "overall_status": format!("{:?}", qa_report.overall_status),
+                                            "evidence_refs": qa_report.evidence_refs,
+                                        }),
+                                    )
+                                    .await;
+                            }
+                            Err(err) => {
+                                warn!(
+                                    trace_id = %pipeline_trace.trace_id,
+                                    error = %err,
+                                    "qa gate check skipped: ledger unavailable"
+                                );
+                            }
+                        }
+                    }
                     return Ok(());
                 }
                 Err(err) => {
@@ -3337,6 +3748,13 @@ impl AcpServer {
                 Some("all candidate agents failed".to_string()),
                 0,
             );
+            error!(
+                trace_id = %pipeline_trace.trace_id,
+                phase = %phase_name,
+                error_count = errors.len(),
+                "all candidate agents failed: {:?}",
+                errors
+            );
             self.send_error(
                 id,
                 -32603,
@@ -3386,46 +3804,51 @@ impl AcpServer {
             ));
         }
 
-        let mut store = self
-            .conversation_store
-            .lock()
-            .map_err(|_| "conversation store lock poisoned".to_string())?;
+        let checkpoint = {
+            let mut store = self
+                .conversation_store
+                .lock()
+                .map_err(|_| "conversation store lock poisoned".to_string())?;
 
-        if !store.contains_key(conversation_id) && store.len() >= MAX_CONVERSATIONS_TRACKED {
-            if let Some(evicted) =
-                evict_oldest_conversation(&mut store, &self.conversation_touch_order)
-            {
-                warn!(
-                    "conversation store reached limit ({}), evicted oldest conversation '{}'",
-                    MAX_CONVERSATIONS_TRACKED, evicted
-                );
+            if !store.contains_key(conversation_id) && store.len() >= MAX_CONVERSATIONS_TRACKED {
+                if let Some(evicted) =
+                    evict_oldest_conversation(&mut store, &self.conversation_touch_order)
+                {
+                    warn!(
+                        "conversation store reached limit ({}), evicted oldest conversation '{}'",
+                        MAX_CONVERSATIONS_TRACKED, evicted
+                    );
+                }
             }
-        }
 
-        let touched_at = now_ts();
-        let state = store
-            .entry(conversation_id.to_string())
-            .or_insert_with(ConversationState::default);
-        state.last_touched_at = touched_at;
+            let touched_at = now_ts();
+            let state = store
+                .entry(conversation_id.to_string())
+                .or_insert_with(ConversationState::default);
+            state.last_touched_at = touched_at;
 
-        enforce_checkpoint_capacity(state, 1, None);
+            enforce_checkpoint_capacity(state, 1, None);
 
-        let parent_checkpoint_id = state.branch_heads.get(branch_id).cloned();
-        let checkpoint = ConversationCheckpoint {
-            checkpoint_id: format!("cp-{}", CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed)),
-            conversation_id: conversation_id.to_string(),
-            branch_id: branch_id.to_string(),
-            parent_checkpoint_id,
-            created_at: now_ts(),
-            note,
-            messages,
+            let parent_checkpoint_id = state.branch_heads.get(branch_id).cloned();
+            let checkpoint = ConversationCheckpoint {
+                checkpoint_id: format!("cp-{}", CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed)),
+                conversation_id: conversation_id.to_string(),
+                branch_id: branch_id.to_string(),
+                parent_checkpoint_id,
+                created_at: now_ts(),
+                note,
+                messages,
+            };
+
+            state
+                .branch_heads
+                .insert(branch_id.to_string(), checkpoint.checkpoint_id.clone());
+            state.checkpoints.push(checkpoint.clone());
+            touch_conversation_order(&self.conversation_touch_order, conversation_id);
+            checkpoint
         };
 
-        state
-            .branch_heads
-            .insert(branch_id.to_string(), checkpoint.checkpoint_id.clone());
-        state.checkpoints.push(checkpoint.clone());
-        touch_conversation_order(&self.conversation_touch_order, conversation_id);
+        self.persist_checkpoint_summary(&checkpoint);
         Ok(checkpoint)
     }
 
@@ -3463,40 +3886,45 @@ impl AcpServer {
         checkpoint_id: &str,
         target_branch: Option<&str>,
     ) -> Option<ConversationCheckpoint> {
-        let mut store = match self.conversation_store.lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                warn!("conversation rollback failed because conversation store lock is poisoned");
-                return None;
-            }
-        };
-        let state = store.get_mut(conversation_id)?;
-        state.last_touched_at = now_ts();
-        let checkpoint = state
-            .checkpoints
-            .iter()
-            .find(|candidate| candidate.checkpoint_id == checkpoint_id)
-            .cloned()?;
+        let restored = {
+            let mut store = match self.conversation_store.lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    warn!("conversation rollback failed because conversation store lock is poisoned");
+                    return None;
+                }
+            };
+            let state = store.get_mut(conversation_id)?;
+            state.last_touched_at = now_ts();
+            let checkpoint = state
+                .checkpoints
+                .iter()
+                .find(|candidate| candidate.checkpoint_id == checkpoint_id)
+                .cloned()?;
 
-        let branch = target_branch
-            .unwrap_or(checkpoint.branch_id.as_str())
-            .to_string();
-        let restored = ConversationCheckpoint {
-            checkpoint_id: format!("cp-{}", CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed)),
-            conversation_id: conversation_id.to_string(),
-            branch_id: branch.clone(),
-            parent_checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
-            created_at: now_ts(),
-            note: Some(format!("rollback:{}", checkpoint.checkpoint_id)),
-            messages: checkpoint.messages.clone(),
+            let branch = target_branch
+                .unwrap_or(checkpoint.branch_id.as_str())
+                .to_string();
+            let restored = ConversationCheckpoint {
+                checkpoint_id: format!("cp-{}", CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed)),
+                conversation_id: conversation_id.to_string(),
+                branch_id: branch.clone(),
+                parent_checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
+                created_at: now_ts(),
+                note: Some(format!("rollback:{}", checkpoint.checkpoint_id)),
+                messages: checkpoint.messages.clone(),
+            };
+
+            enforce_checkpoint_capacity(state, 1, Some(checkpoint_id));
+            state.checkpoints.push(restored.clone());
+            state
+                .branch_heads
+                .insert(branch, restored.checkpoint_id.clone());
+            touch_conversation_order(&self.conversation_touch_order, conversation_id);
+            restored
         };
 
-        enforce_checkpoint_capacity(state, 1, Some(checkpoint_id));
-        state.checkpoints.push(restored.clone());
-        state
-            .branch_heads
-            .insert(branch, restored.checkpoint_id.clone());
-        touch_conversation_order(&self.conversation_touch_order, conversation_id);
+        self.persist_checkpoint_summary(&restored);
         Some(restored)
     }
 

@@ -85,7 +85,7 @@ impl ResponseCache {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'get'"))?;
 
         conn.execute(
             "DELETE FROM response_cache WHERE expires_at <= ?1",
@@ -156,7 +156,7 @@ impl ResponseCache {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'put'"))?;
 
         conn.execute(
             "
@@ -205,7 +205,7 @@ impl ResponseCache {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'purge_expired'"))?;
         let affected = conn.execute(
             "DELETE FROM response_cache WHERE expires_at <= ?1",
             params![now],
@@ -221,7 +221,7 @@ impl ResponseCache {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'clear'"))?;
         let affected = conn.execute("DELETE FROM response_cache", [])?;
         Ok(affected)
     }
@@ -231,7 +231,7 @@ impl ResponseCache {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'vacuum'"))?;
         conn.execute_batch("VACUUM;")?;
         Ok(())
     }
@@ -244,7 +244,7 @@ impl ResponseCache {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'entry_count'"))?;
         let count = conn.query_row("SELECT COUNT(*) FROM response_cache", [], |row| {
             row.get::<_, i64>(0)
         })?;

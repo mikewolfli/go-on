@@ -156,21 +156,33 @@ async fn handle_http_connection(
     let request_text = String::from_utf8_lossy(&buffer[..bytes_read]);
     let header_end = request_text
         .find("\r\n\r\n")
-        .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing header terminator"))?;
+        .ok_or_else(|| {
+            warn!("MCP HTTP: invalid request — missing header terminator");
+            anyhow::anyhow!("invalid HTTP request: missing header terminator")
+        })?;
 
     let (header_part, body_initial_part) = request_text.split_at(header_end + 4);
     let mut lines = header_part.lines();
     let request_line = lines
         .next()
-        .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing request line"))?;
+        .ok_or_else(|| {
+            warn!("MCP HTTP: invalid request — missing request line");
+            anyhow::anyhow!("invalid HTTP request: missing request line")
+        })?;
 
     let mut request_line_parts = request_line.split_whitespace();
     let method = request_line_parts
         .next()
-        .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing method"))?;
+        .ok_or_else(|| {
+            warn!("MCP HTTP: invalid request — missing method in request line: {}", request_line);
+            anyhow::anyhow!("invalid HTTP request: missing method")
+        })?;
     let path = request_line_parts
         .next()
-        .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing path"))?;
+        .ok_or_else(|| {
+            warn!("MCP HTTP: invalid request — missing path in request line: {}", request_line);
+            anyhow::anyhow!("invalid HTTP request: missing path")
+        })?;
 
     if method == "GET" && path == "/health" {
         write_http_json_response(
@@ -208,6 +220,7 @@ async fn handle_http_connection(
     let request = match serde_json::from_str::<JsonRpcRequest>(&body_str) {
         Ok(req) => req,
         Err(parse_error) => {
+            warn!("MCP HTTP: JSON-RPC parse error from {} {}: {}", method, path, parse_error);
             let error_response = JsonRpcResponse {
                 jsonrpc: "2.0".to_string(),
                 result: None,
@@ -224,6 +237,7 @@ async fn handle_http_connection(
     };
 
     let response = mcp_server.handle_request(request).await?;
+    debug!("MCP HTTP: dispatched {} {} -> ok", method, path);
     write_http_json_response(socket, 200, serde_json::to_value(response)?).await?;
 
     Ok(())

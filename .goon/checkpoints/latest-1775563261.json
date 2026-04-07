@@ -1,0 +1,11 @@
+{
+  "checkpoint_id": "cp-261",
+  "conversation_id": "conv-cap",
+  "branch_id": "hotfix",
+  "parent_checkpoint_id": "cp-2",
+  "created_at": 1775563261,
+  "note": "rollback:cp-2",
+  "message_count": 1,
+  "message_chars": 9,
+  "assistant_excerpt": null
+}

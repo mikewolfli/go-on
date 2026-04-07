@@ -15,6 +15,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::{debug, warn};
 
 use crate::pua::{tool_execution_report, PuaExecutionReport};
 
@@ -208,9 +209,18 @@ impl Tool for ApplyPatchTool {
         if check_only {
             command.arg("--check");
         }
+        debug!(directory = %current_dir, check_only = %check_only, "tool: running git apply");
         let output = command.arg(&patch_file).current_dir(current_dir).output()?;
         let _ = fs::remove_file(&patch_file);
         let success = output.status.success();
+        if !success {
+            warn!(
+                directory = %current_dir,
+                check_only = %check_only,
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "tool: git apply failed"
+            );
+        }
 
         Ok(ToolOutput {
             success,
@@ -260,11 +270,20 @@ impl Tool for RunTestsTool {
             })
             .unwrap_or_else(|| vec!["test".to_string()]);
         let current_dir = input.payload["directory"].as_str().unwrap_or(".");
+        debug!(command = %command_name, args = ?args, directory = %current_dir, "tool: running shell command");
         let output = Command::new(command_name)
             .args(&args)
             .current_dir(current_dir)
             .output()?;
         let success = output.status.success();
+        if !success {
+            warn!(
+                command = %command_name,
+                exit_code = ?output.status.code(),
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "tool: shell command failed"
+            );
+        }
 
         Ok(ToolOutput {
             success,

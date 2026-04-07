@@ -76,6 +76,7 @@ mod promotion;
 mod pua;
 mod quality_models;
 mod reliability_optimizer;
+mod reinforcement;
 mod review_controls;
 mod roles;
 mod rpc_protocol;
@@ -106,6 +107,10 @@ use crate::config::{
     validate_runtime_readiness, AppConfig, AutoTuneState, ConfigWarning, RuntimeConfig,
 };
 use crate::flow::FlowManager;
+use crate::reinforcement::{
+    build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
+    persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger,
+};
 use crate::setup::{parse_secret_action, parse_secret_mode, parse_setup_profile, SetupOptions};
 use crate::vector::VectorStore;
 
@@ -157,6 +162,18 @@ struct Cli {
     /// Secret value for management
     #[arg(long)]
     secret_value: Option<String>,
+
+    /// Generate a runtime healthcheck report and persist it into .goon/
+    #[arg(long, default_value_t = false)]
+    healthcheck: bool,
+
+    /// Run action checks (all/spec/qa/retest/final) against .goon/ artifacts
+    #[arg(long)]
+    action_check: Option<String>,
+
+    /// Build and persist a controlled task plan artifact for a complex task
+    #[arg(long)]
+    plan_task: Option<String>,
 }
 
 /// Get the default configuration file path
@@ -525,6 +542,51 @@ async fn run() -> Result<()> {
         initialize_vector_store(config_path.clone(), config.vector.clone()),
         initialize_autotune(config_path.clone(), config.autotune.clone()),
     )?;
+
+    let ledger = ArtifactLedger::new(Some(&config_path));
+
+    if let Some(task) = cli.plan_task.as_deref() {
+        let plan = build_task_plan(task);
+        let path = persist_task_plan(&ledger, &plan)?;
+        println!(
+            "persisted task plan to {} (sub_agent_recommended={})",
+            path.display(),
+            plan.sub_agent_recommended
+        );
+        return Ok(());
+    }
+
+    if cli.healthcheck {
+        let report = build_runtime_healthcheck_report(
+            Some(&config_path),
+            cache.as_deref(),
+            vector_store.as_deref(),
+        )?;
+        let path = persist_runtime_healthcheck(&ledger, &report)?;
+        println!(
+            "healthcheck: {:?} -> {}",
+            report.overall_status,
+            path.display()
+        );
+        return Ok(());
+    }
+
+    if let Some(raw_kind) = cli.action_check.as_deref() {
+        let kind = ActionCheckKind::parse(raw_kind).ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid --action-check value '{}'; expected one of: all, spec, qa, retest, final",
+                raw_kind
+            )
+        })?;
+        let report = run_action_check(&ledger, kind)?;
+        println!(
+            "action check {}: {:?} (ok={})",
+            raw_kind,
+            report.overall_status,
+            report.ok
+        );
+        return Ok(());
+    }
 
     // Get runtime configuration
     let runtime_config = config

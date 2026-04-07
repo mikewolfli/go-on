@@ -135,7 +135,7 @@ impl VectorStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'upsert'"))?;
 
         conn.execute(
             "
@@ -207,7 +207,7 @@ impl VectorStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'search'"))?;
 
         let mut stmt = conn.prepare(
             "
@@ -282,7 +282,7 @@ impl VectorStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'get_phase_summary'"))?;
 
         let summary = conn
             .query_row(
@@ -313,7 +313,7 @@ impl VectorStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'upsert_phase_summary'"))?;
 
         conn.execute(
             "
@@ -337,7 +337,7 @@ impl VectorStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'memory_entry_count'"))?;
         let count = conn.query_row("SELECT COUNT(*) FROM vector_memory", [], |row| {
             row.get::<_, i64>(0)
         })?;
@@ -352,7 +352,7 @@ impl VectorStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'summary_entry_count'"))?;
         let count = conn.query_row("SELECT COUNT(*) FROM phase_summary", [], |row| {
             row.get::<_, i64>(0)
         })?;
@@ -367,7 +367,7 @@ impl VectorStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'clear'"))?;
         let memory_deleted = conn.execute("DELETE FROM vector_memory", [])?;
         let summaries_deleted = conn.execute("DELETE FROM phase_summary", [])?;
         Ok((memory_deleted, summaries_deleted))
@@ -378,7 +378,7 @@ impl VectorStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'vacuum'"))?;
         conn.execute_batch("VACUUM;")?;
         Ok(())
     }

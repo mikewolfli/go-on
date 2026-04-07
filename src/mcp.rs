@@ -10,7 +10,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::agent::AgentRegistry;
 use crate::tool::{ToolInput, ToolRegistry};
@@ -124,7 +124,10 @@ impl McpServer {
             "resources/read" => self.handle_read_resource(&request).await,
             "agents/list" => self.handle_list_agents(&request).await,
             "models/list" => self.handle_list_models(&request).await,
-            _ => Err(anyhow::anyhow!("Unknown method: {}", request.method)),
+            _ => {
+                warn!("MCP: unknown method '{}'", request.method);
+                Err(anyhow::anyhow!("Unknown method: {}", request.method))
+            }
         };
 
         let (response_result, response_error) = match result {
@@ -286,7 +289,10 @@ impl McpServer {
                     }
                 ]
             })),
-            _ => Err(anyhow::anyhow!("Unknown resource: {}", uri)),
+            _ => {
+                warn!("MCP: unknown resource '{}'", uri);
+                Err(anyhow::anyhow!("Unknown resource: {}", uri))
+            }
         }
     }
 
