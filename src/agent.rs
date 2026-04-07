@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tokio::time::{sleep, Duration};
 
 use crate::agents::{
     Ai21Agent, AlephAgent, AnthropicAgent, CohereAgent, CopilotAgent, DeepQuestAgent,
@@ -151,8 +152,7 @@ pub trait Agent: Send + Sync {
                 "status": "unsupported_operation"
             })),
             error: Some(
-                "run_task is unsupported for this provider without a concrete override"
-                    .to_string(),
+                "run_task is unsupported for this provider without a concrete override".to_string(),
             ),
             audit_log: Some(serde_json::to_string(&audit)?),
             pua_report: None,
@@ -224,7 +224,39 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             .ok_or_else(|| anyhow::anyhow!("{} agent requires '{}'", agent_name, field))
     }
 
+    fn local_test_agents_enabled() -> bool {
+        std::env::var("GO_ON_ENABLE_LOCAL_TEST_AGENTS")
+            .map(|value| {
+                value == "1"
+                    || value.eq_ignore_ascii_case("true")
+                    || value.eq_ignore_ascii_case("yes")
+            })
+            .unwrap_or(false)
+    }
+
+    fn ensure_local_test_agent_allowed(agent_type: &str) -> Result<()> {
+        if local_test_agents_enabled() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "agent type '{}' is test-only; set GO_ON_ENABLE_LOCAL_TEST_AGENTS=1 to enable it",
+            agent_type
+        );
+    }
+
     match config.agent_type.as_str() {
+        "local_echo" => {
+            ensure_local_test_agent_allowed("local_echo")?;
+            Ok(Arc::new(LocalEchoAgent))
+        }
+        "local_approve" => {
+            ensure_local_test_agent_allowed("local_approve")?;
+            Ok(Arc::new(LocalApproveAgent))
+        }
+        "local_slow_approve" => {
+            ensure_local_test_agent_allowed("local_slow_approve")?;
+            Ok(Arc::new(LocalSlowApproveAgent))
+        }
         "copilot" => {
             let url = required_field("copilot", &config.url, "url")?;
             Ok(Arc::new(CopilotAgent::new(url, client)))
@@ -534,6 +566,61 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             "unsupported agent type '{}'; add implementation in agents/*",
             other
         ),
+    }
+}
+
+struct LocalEchoAgent;
+
+#[async_trait]
+impl Agent for LocalEchoAgent {
+    async fn chat(
+        &self,
+        messages: Vec<Message>,
+        _principles: Option<Vec<String>>,
+        _options: Option<HashMap<String, Value>>,
+        sender: mpsc::UnboundedSender<String>,
+    ) -> Result<()> {
+        let content = messages
+            .iter()
+            .rev()
+            .find(|message| message.role.eq_ignore_ascii_case("user"))
+            .map(|message| message.content.clone())
+            .unwrap_or_else(|| "local echo".to_string());
+        let _ = sender.send(content);
+        Ok(())
+    }
+}
+
+struct LocalApproveAgent;
+
+#[async_trait]
+impl Agent for LocalApproveAgent {
+    async fn chat(
+        &self,
+        _messages: Vec<Message>,
+        _principles: Option<Vec<String>>,
+        _options: Option<HashMap<String, Value>>,
+        sender: mpsc::UnboundedSender<String>,
+    ) -> Result<()> {
+        let _ = sender.send("APPROVE\nlocal reviewer approved".to_string());
+        Ok(())
+    }
+}
+
+struct LocalSlowApproveAgent;
+
+#[async_trait]
+impl Agent for LocalSlowApproveAgent {
+    async fn chat(
+        &self,
+        _messages: Vec<Message>,
+        _principles: Option<Vec<String>>,
+        _options: Option<HashMap<String, Value>>,
+        sender: mpsc::UnboundedSender<String>,
+    ) -> Result<()> {
+        sleep(Duration::from_millis(1_500)).await;
+        let _ = sender.send("APPROVE\nlocal slow reviewer approved".to_string());
+        Ok(())
     }
 }
 

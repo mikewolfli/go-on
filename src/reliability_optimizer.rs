@@ -6,6 +6,7 @@
 
 #![allow(dead_code)]
 
+use crate::quality_models::QualityVerdict;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -17,15 +18,6 @@ pub enum ComplexityLevel {
     Moderate = 2,
     Complex = 3,
     VeryComplex = 4,
-}
-
-/// Verification result
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum VerificationResult {
-    Valid,
-    Invalid,
-    RequiresRepair,
-    Inconclusive,
 }
 
 /// Strategy for solving a task
@@ -167,23 +159,23 @@ impl ReliabilityOptimizer {
     }
 
     /// Verify result and suggest repair if needed
-    pub fn verify_result(&self, result: &str) -> VerificationResult {
+    pub fn verify_result(&self, result: &str) -> QualityVerdict {
         if !self.verification_enabled {
-            return VerificationResult::Valid;
+            return QualityVerdict::Valid;
         }
 
         // Simple verification: check for error indicators
         let lowercase = result.to_lowercase();
         if lowercase.contains("error") || lowercase.contains("failed") {
             if lowercase.contains("retry") || lowercase.contains("fallback available") {
-                VerificationResult::RequiresRepair
+                QualityVerdict::RequiresRepair
             } else {
-                VerificationResult::Invalid
+                QualityVerdict::Invalid
             }
         } else if lowercase.contains("warning") {
-            VerificationResult::Inconclusive
+            QualityVerdict::Inconclusive
         } else {
-            VerificationResult::Valid
+            QualityVerdict::Valid
         }
     }
 
@@ -264,7 +256,7 @@ mod tests {
     fn test_verification() {
         let optimizer = ReliabilityOptimizer::new();
         let result = optimizer.verify_result("Error occurred");
-        assert_eq!(result, VerificationResult::Invalid);
+        assert_eq!(result, QualityVerdict::Invalid);
     }
 
     #[test]

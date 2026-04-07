@@ -3,10 +3,10 @@
 //! This module implements the core server functionality for the go-on ACP proxy,
 //! including request handling, caching, vector storage, and circuit breaking.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex as StdMutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -26,17 +26,29 @@ use crate::config::{
     validate_runtime_readiness, AppConfig, AutoTuneConfig, AutoTuneState, PhaseOptions,
     RuntimeConfig, VectorConfig,
 };
-use crate::evaluation::TraceEvent;
 use crate::error::ProxyError;
+use crate::evaluation::TraceEvent;
 use crate::flow::{FlowManager, ResolvedPhase};
+use crate::memory_response_cache::MemoryResponseCache;
+use crate::observability::{push_metric_header, push_scalar_metric};
 use crate::pua::review_gate_prompt;
+use crate::review_controls::{
+    review_timeout, review_verdict, ReviewDecision, ReviewGateOutcome, ReviewTimeoutPolicy,
+    ReviewVerdict,
+};
 use crate::roles::AgentRole;
+use crate::rpc_protocol::{
+    chat_trace_context, child_trace_context, value_to_id, JsonRpcError, JsonRpcRequest,
+    JsonRpcResponse, RequestTraceContext,
+};
+use crate::runtime_controls::OnlineControllerState;
 use crate::task_router::{RoutingDecision, TaskCharacteristics, TaskRouter};
 use crate::telemetry::TelemetryRuntime;
 use crate::vector::{VectorHit, VectorStore};
 
 const TRACE_BUFFER_MAX: usize = 2048;
 static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
+static CHECKPOINT_COUNTER: AtomicU64 = AtomicU64::new(1);
 const DEFAULT_VECTOR_MIN_QUERY_CHARS: usize = 80;
 const DEFAULT_VECTOR_TOP_K: usize = 2;
 const DEFAULT_VECTOR_MIN_SIMILARITY: f32 = 0.82;
@@ -45,100 +57,8 @@ const DEFAULT_SUMMARY_TRIGGER_MESSAGES: usize = 8;
 const DEFAULT_SUMMARY_MAX_CHARS: usize = 1200;
 const DEFAULT_BREAKER_FAILURE_THRESHOLD: u32 = 3;
 const DEFAULT_BREAKER_OPEN_SECONDS: i64 = 60;
-const HISTOGRAM_BUCKETS_SECONDS: [f64; 10] = [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0];
-const ONLINE_CONTROLLER_WINDOW: usize = 64;
-const ONLINE_CONTROLLER_FAILURE_ESCALATION: f64 = 0.25;
-const ONLINE_CONTROLLER_P95_LATENCY_MS_ESCALATION: u64 = 15_000;
-
-#[derive(Debug, Deserialize)]
-struct JsonRpcRequest {
-    /// JSON-RPC version
-    jsonrpc: String,
-    /// Request ID
-    id: Option<Value>,
-    /// Method name
-    method: String,
-    /// Request parameters
-    params: Option<Value>,
-}
-
-#[derive(Debug, Clone)]
-struct RequestTraceContext {
-    trace_id: String,
-    span_id: String,
-    method: String,
-    request_id: String,
-}
-
-#[derive(Debug, Default, Clone)]
-struct OnlineControllerState {
-    recent_failures: VecDeque<bool>,
-    recent_latency_ms: VecDeque<u64>,
-}
-
-impl OnlineControllerState {
-    fn record(&mut self, success: bool, duration_ms: u64) {
-        if self.recent_failures.len() >= ONLINE_CONTROLLER_WINDOW {
-            self.recent_failures.pop_front();
-        }
-        self.recent_failures.push_back(!success);
-
-        if self.recent_latency_ms.len() >= ONLINE_CONTROLLER_WINDOW {
-            self.recent_latency_ms.pop_front();
-        }
-        self.recent_latency_ms.push_back(duration_ms);
-    }
-
-    fn failure_rate(&self) -> f64 {
-        if self.recent_failures.is_empty() {
-            return 0.0;
-        }
-        let failures = self.recent_failures.iter().filter(|failed| **failed).count();
-        failures as f64 / self.recent_failures.len() as f64
-    }
-
-    fn latency_p95_ms(&self) -> u64 {
-        if self.recent_latency_ms.is_empty() {
-            return 0;
-        }
-        let mut samples = self.recent_latency_ms.iter().copied().collect::<Vec<_>>();
-        samples.sort_unstable();
-        percentile(&samples, 95.0)
-    }
-
-    fn should_escalate(&self) -> bool {
-        self.failure_rate() >= ONLINE_CONTROLLER_FAILURE_ESCALATION
-            || self.latency_p95_ms() >= ONLINE_CONTROLLER_P95_LATENCY_MS_ESCALATION
-    }
-}
-
-/// JSON-RPC response structure
-#[derive(Debug, Serialize)]
-struct JsonRpcResponse {
-    /// JSON-RPC version
-    jsonrpc: &'static str,
-    /// Response ID (matches request ID)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<Value>,
-    /// Response result
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    /// Error information
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonRpcError>,
-}
-
-/// JSON-RPC error structure
-#[derive(Debug, Serialize)]
-struct JsonRpcError {
-    /// Error code
-    code: i64,
-    /// Error message
-    message: String,
-    /// Additional error data
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<Value>,
-}
+const HISTOGRAM_BUCKETS_SECONDS: [f64; 10] =
+    [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0];
 
 /// Chat mode enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,9 +173,28 @@ struct ChatParams {
     phase: Option<String>,
     /// Chat mode
     mode: Option<String>,
+    /// Conversation identifier for checkpoint grouping across turns
+    conversation_id: Option<String>,
     /// Additional context
     #[allow(dead_code)]
     context: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConversationCheckpoint {
+    checkpoint_id: String,
+    conversation_id: String,
+    branch_id: String,
+    parent_checkpoint_id: Option<String>,
+    created_at: i64,
+    note: Option<String>,
+    messages: Vec<Message>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ConversationState {
+    checkpoints: Vec<ConversationCheckpoint>,
+    branch_heads: HashMap<String, String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -545,146 +484,9 @@ impl RuntimeMetrics {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct ReviewDecision {
-    reviewer: String,
-    verdict: String,
-    response: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReviewVerdict {
-    Approve,
-    Reject,
-    Invalid,
-}
-
-impl ReviewVerdict {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Approve => "APPROVE",
-            Self::Reject => "REJECT",
-            Self::Invalid => "INVALID",
-        }
-    }
-
-    fn is_approved(self) -> bool {
-        matches!(self, Self::Approve)
-    }
-}
-
-enum ReviewGateOutcome {
-    Approved(Vec<ReviewDecision>),
-    Rejected(Vec<ReviewDecision>),
-    Degraded(Vec<ReviewDecision>),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReviewTimeoutPolicy {
-    Reject,
-    DegradeSingle,
-}
-
-impl ReviewTimeoutPolicy {
-    fn from_options(options: Option<&PhaseOptions>) -> Self {
-        let value = options
-            .and_then(|opts| opts.extra.get("review_timeout_policy"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("reject");
-
-        if value.eq_ignore_ascii_case("degrade_single") {
-            Self::DegradeSingle
-        } else {
-            Self::Reject
-        }
-    }
-}
-
 struct PreparedChatInput {
     messages: Vec<Message>,
     latest_user_query: Option<String>,
-}
-
-#[derive(Clone)]
-struct MemoryCachedResponse {
-    response_text: String,
-    agent_name: Option<String>,
-    expires_at: i64,
-}
-
-#[derive(Default)]
-struct MemoryResponseCache {
-    inner: StdMutex<HashMap<String, MemoryCachedResponse>>,
-}
-
-impl MemoryResponseCache {
-    fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
-        let now = now_ts();
-        let mut guard = self.inner.lock().ok()?;
-        guard.retain(|_, entry| entry.expires_at > now);
-        guard.get(key).cloned()
-    }
-
-    fn purge_expired(&self) -> usize {
-        let now = now_ts();
-        if let Ok(mut guard) = self.inner.lock() {
-            let before = guard.len();
-            guard.retain(|_, entry| entry.expires_at > now);
-            return before.saturating_sub(guard.len());
-        }
-        0
-    }
-
-    fn clear_all(&self) -> usize {
-        if let Ok(mut guard) = self.inner.lock() {
-            let removed = guard.len();
-            guard.clear();
-            return removed;
-        }
-        0
-    }
-
-    fn active_entries(&self) -> usize {
-        self.purge_expired();
-        self.inner.lock().map(|guard| guard.len()).unwrap_or(0)
-    }
-
-    fn put(
-        &self,
-        key: String,
-        response_text: String,
-        agent_name: Option<String>,
-        ttl_seconds: u64,
-    ) {
-        if ttl_seconds == 0 {
-            return;
-        }
-
-        let expires_at = now_ts() + ttl_seconds as i64;
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.insert(
-                key,
-                MemoryCachedResponse {
-                    response_text,
-                    agent_name,
-                    expires_at,
-                },
-            );
-
-            // Keep L1 cache bounded to avoid unbounded memory growth.
-            if guard.len() > 2048 {
-                let mut entries: Vec<(String, i64)> = guard
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.expires_at))
-                    .collect();
-                entries.sort_by_key(|(_, expires_at)| *expires_at);
-                let remove_count = guard.len() - 2048;
-                for (k, _) in entries.into_iter().take(remove_count) {
-                    guard.remove(&k);
-                }
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1074,6 +876,8 @@ pub struct AcpServer {
     trace_events: Arc<StdMutex<Vec<TraceEvent>>>,
     /// In-memory response cache for fast access
     memory_cache: Arc<MemoryResponseCache>,
+    /// Conversation checkpoint store for branch/rollback control
+    conversation_store: Arc<StdMutex<HashMap<String, ConversationState>>>,
     /// Maintenance tracker for system health
     maintenance: Arc<MaintenanceTracker>,
     /// Lifecycle state management
@@ -1147,6 +951,7 @@ impl AcpServer {
             telemetry,
             trace_events: Arc::new(StdMutex::new(Vec::new())),
             memory_cache: Arc::new(MemoryResponseCache::default()),
+            conversation_store: Arc::new(StdMutex::new(HashMap::new())),
             maintenance: Arc::new(MaintenanceTracker::default()),
             lifecycle: Arc::new(LifecycleState::default()),
             circuit_breakers: Arc::new(CircuitBreakerRegistry::default()),
@@ -1436,13 +1241,196 @@ impl AcpServer {
                         "streaming": true,
                         "phase": true,
                         "metrics": true,
+                        "debug_panel": true,
+                        "mcp_adapter": true,
+                        "conversation_control": true,
                         "autotune": self.autotune_config_snapshot().map(|cfg| cfg.enabled).unwrap_or(false),
                     }
                 });
                 self.send_result(request_id, result).await
             }
+            "mcp.initialize" => {
+                self.send_result(
+                    request_id,
+                    json!({
+                        "protocolVersion": crate::mcp::MCP_VERSION,
+                        "capabilities": {
+                            "tools": {},
+                        },
+                        "serverInfo": {
+                            "name": "go-on",
+                            "version": env!("CARGO_PKG_VERSION"),
+                        }
+                    }),
+                )
+                .await
+            }
+            "mcp.tools.list" => {
+                self.send_result(
+                    request_id,
+                    json!({
+                        "tools": [
+                            {
+                                "name": "acp_debug_panel_get",
+                                "description": "Get runtime debug panel snapshot",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "limit": {"type": "number"}
+                                    }
+                                }
+                            },
+                            {
+                                "name": "acp_trace_get",
+                                "description": "Get recent trace events",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "limit": {"type": "number"}
+                                    }
+                                }
+                            },
+                            {
+                                "name": "acp_runtime_health",
+                                "description": "Get runtime health summary",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {}
+                                }
+                            },
+                            {
+                                "name": "acp_conversation_checkpoint_list",
+                                "description": "List conversation checkpoints",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "conversation_id": {"type": "string"},
+                                        "branch_id": {"type": "string"},
+                                        "limit": {"type": "number"}
+                                    }
+                                }
+                            }
+                        ]
+                    }),
+                )
+                .await
+            }
+            "mcp.tools.call" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let tool_name = match params.get("name").and_then(|v| v.as_str()) {
+                    Some(value) => value,
+                    None => {
+                        return self
+                            .send_error(
+                                request_id,
+                                -32602,
+                                "name is required for mcp.tools.call".to_string(),
+                                None,
+                            )
+                            .await;
+                    }
+                };
+                let args = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+
+                let tool_result = match tool_name {
+                    "acp_debug_panel_get" => {
+                        let limit = args
+                            .get("limit")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(100)
+                            .min(500) as usize;
+                        let events = self.trace_snapshot(limit);
+                        json!({
+                            "ok": true,
+                            "count": events.len(),
+                            "events": events,
+                            "trace_metrics": self.trace_metrics_snapshot(),
+                        })
+                    }
+                    "acp_trace_get" => {
+                        let limit = args
+                            .get("limit")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(100)
+                            .min(1000) as usize;
+                        let events = self.trace_snapshot(limit);
+                        json!({
+                            "ok": true,
+                            "count": events.len(),
+                            "events": events,
+                        })
+                    }
+                    "acp_runtime_health" => {
+                        let (global_inflight, phase_inflight) = self.inflight_limiter.snapshot();
+                        json!({
+                            "memory_cache_entries": self.memory_cache.active_entries(),
+                            "circuit_breaker": {
+                                "open_agents": self.circuit_breakers.open_count(),
+                                "half_open_agents": self.circuit_breakers.half_open_count(),
+                                "tracked_agents": self.circuit_breakers.tracked_agents(),
+                            },
+                            "inflight": {
+                                "global": global_inflight,
+                                "per_phase": phase_inflight,
+                            },
+                            "lifecycle": self.lifecycle.snapshot(),
+                            "maintenance": self.maintenance.snapshot(),
+                        })
+                    }
+                    "acp_conversation_checkpoint_list" => {
+                        let conversation_id = args
+                            .get("conversation_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("default");
+                        let branch_id = args.get("branch_id").and_then(|v| v.as_str());
+                        let limit = args
+                            .get("limit")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(50)
+                            .min(500) as usize;
+                        let checkpoints =
+                            self.list_conversation_checkpoints(conversation_id, branch_id, limit);
+                        json!({
+                            "ok": true,
+                            "count": checkpoints.len(),
+                            "checkpoints": checkpoints,
+                        })
+                    }
+                    _ => {
+                        return self
+                            .send_error(
+                                request_id,
+                                -32602,
+                                format!("unknown MCP adapter tool: {tool_name}"),
+                                None,
+                            )
+                            .await;
+                    }
+                };
+
+                self.send_result(
+                    request_id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": tool_result.to_string(),
+                        }],
+                        "structuredContent": tool_result,
+                    }),
+                )
+                .await
+            }
             "chat" => {
-                self.handle_chat(request_id, request.params, request_span.clone())
+                self
+                    .handle_chat(
+                        request_id,
+                        request.params,
+                        request_span.clone(),
+                        Some(trace.clone()),
+                    )
                     .await
             }
             "metrics.get" => {
@@ -1514,6 +1502,120 @@ impl AcpServer {
                         "ok": true,
                         "count": events.len(),
                         "events": events,
+                    }),
+                )
+                .await
+            }
+            "debug.panel.get" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let limit = params
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(100)
+                    .min(500) as usize;
+                let recent_events = self.trace_snapshot(limit);
+
+                let stage_transitions = recent_events
+                    .iter()
+                    .filter(|event| event.event_type.starts_with("phase."))
+                    .map(|event| {
+                        json!({
+                            "timestamp": event.timestamp,
+                            "event_type": event.event_type,
+                            "phase": event.phase,
+                            "status": event.status,
+                            "duration_ms": event.duration_ms,
+                            "task_id": event.task_id,
+                            "pua_stage": event.pua_stage,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                let review_outcomes = recent_events
+                    .iter()
+                    .filter(|event| event.event_type == "phase.review_gate")
+                    .map(|event| {
+                        let attrs = event.inputs.get("attributes").cloned().unwrap_or_else(|| json!({}));
+                        json!({
+                            "timestamp": event.timestamp,
+                            "status": event.status,
+                            "phase": event.phase,
+                            "attributes": attrs,
+                            "error": event.error,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                let mut selected_agents: Vec<String> = Vec::new();
+                let mut seen_agents: HashSet<String> = HashSet::new();
+                for event in &recent_events {
+                    if event.event_type != "phase.agent" {
+                        continue;
+                    }
+                    let maybe_agent = event
+                        .inputs
+                        .get("attributes")
+                        .and_then(|attrs| attrs.get("agent"))
+                        .and_then(|v| v.as_str())
+                        .map(|v| v.to_string());
+                    if let Some(agent) = maybe_agent {
+                        if seen_agents.insert(agent.clone()) {
+                            selected_agents.push(agent);
+                        }
+                    }
+                }
+
+                let (conversation_count, checkpoint_count, branch_head_count) = self
+                    .conversation_store
+                    .lock()
+                    .map(|store| {
+                        let conversation_count = store.len();
+                        let checkpoint_count = store
+                            .values()
+                            .map(|state| state.checkpoints.len())
+                            .sum::<usize>();
+                        let branch_head_count = store
+                            .values()
+                            .map(|state| state.branch_heads.len())
+                            .sum::<usize>();
+                        (conversation_count, checkpoint_count, branch_head_count)
+                    })
+                    .unwrap_or((0, 0, 0));
+
+                self.send_result(
+                    request_id,
+                    json!({
+                        "ok": true,
+                        "panel": {
+                            "trace": {
+                                "count": recent_events.len(),
+                                "stage_transitions": stage_transitions,
+                            },
+                            "selected_agents": selected_agents,
+                            "review_outcomes": review_outcomes,
+                            "runtime_health": {
+                                "memory_cache_entries": self.memory_cache.active_entries(),
+                                "circuit_breaker": {
+                                    "open_agents": self.circuit_breakers.open_count(),
+                                    "half_open_agents": self.circuit_breakers.half_open_count(),
+                                    "tracked_agents": self.circuit_breakers.tracked_agents(),
+                                },
+                                "lifecycle": self.lifecycle.snapshot(),
+                            },
+                            "conversations": {
+                                "count": conversation_count,
+                                "checkpoints": checkpoint_count,
+                                "branch_heads": branch_head_count,
+                            },
+                            "review_gate": {
+                                "total": self.metrics.snapshot().review_gate_total,
+                                "approved": self.metrics.snapshot().review_gate_approved_total,
+                                "rejected": self.metrics.snapshot().review_gate_rejected_total,
+                                "timeout": self.metrics.snapshot().review_gate_timeout_total,
+                                "degraded": self.metrics.snapshot().review_gate_degraded_total,
+                                "invalid_response": self.metrics.snapshot().review_gate_invalid_response_total,
+                            },
+                        }
                     }),
                 )
                 .await
@@ -1748,6 +1850,169 @@ impl AcpServer {
                     .await
                 }
             }
+            "conversation.checkpoint.create" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let conversation_id = params
+                    .get("conversation_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default");
+                let branch_id = params
+                    .get("branch_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("main");
+                let note = params
+                    .get("note")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
+                let messages_value = match params.get("messages") {
+                    Some(value) => value.clone(),
+                    None => {
+                        return self
+                            .send_error(
+                                request_id,
+                                -32602,
+                                "messages is required for conversation.checkpoint.create"
+                                    .to_string(),
+                                None,
+                            )
+                            .await;
+                    }
+                };
+                let messages: Vec<Message> = match serde_json::from_value(messages_value) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        return self
+                            .send_error(
+                                request_id,
+                                -32602,
+                                format!("invalid messages payload: {err}"),
+                                None,
+                            )
+                            .await;
+                    }
+                };
+
+                if let Some(checkpoint) =
+                    self.create_conversation_checkpoint(conversation_id, branch_id, messages, note)
+                {
+                    self.send_result(
+                        request_id,
+                        json!({
+                            "ok": true,
+                            "checkpoint": checkpoint,
+                        }),
+                    )
+                    .await
+                } else {
+                    self.send_error(
+                        request_id,
+                        -32603,
+                        "failed to create conversation checkpoint".to_string(),
+                        None,
+                    )
+                    .await
+                }
+            }
+            "conversation.checkpoint.list" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let conversation_id = params
+                    .get("conversation_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default");
+                let branch_id = params.get("branch_id").and_then(|v| v.as_str());
+                let limit = params
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(50)
+                    .min(500) as usize;
+
+                let checkpoints =
+                    self.list_conversation_checkpoints(conversation_id, branch_id, limit);
+                self.send_result(
+                    request_id,
+                    json!({
+                        "ok": true,
+                        "count": checkpoints.len(),
+                        "checkpoints": checkpoints,
+                    }),
+                )
+                .await
+            }
+            "conversation.rollback" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let conversation_id = params
+                    .get("conversation_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default");
+                let checkpoint_id = match params.get("checkpoint_id").and_then(|v| v.as_str()) {
+                    Some(value) => value,
+                    None => {
+                        return self
+                            .send_error(
+                                request_id,
+                                -32602,
+                                "checkpoint_id is required for conversation.rollback"
+                                    .to_string(),
+                                None,
+                            )
+                            .await;
+                    }
+                };
+                let target_branch = params.get("branch_id").and_then(|v| v.as_str());
+
+                if let Some(checkpoint) = self.rollback_conversation_checkpoint(
+                    conversation_id,
+                    checkpoint_id,
+                    target_branch,
+                ) {
+                    self.send_result(
+                        request_id,
+                        json!({
+                            "ok": true,
+                            "conversation_id": conversation_id,
+                            "branch_id": checkpoint.branch_id,
+                            "checkpoint": checkpoint,
+                            "messages": checkpoint.messages,
+                        }),
+                    )
+                    .await
+                } else {
+                    self.send_error(
+                        request_id,
+                        -32602,
+                        format!(
+                            "checkpoint '{}' not found in conversation '{}'",
+                            checkpoint_id, conversation_id
+                        ),
+                        None,
+                    )
+                    .await
+                }
+            }
+            "conversation.checkpoint.prune" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let conversation_id = params
+                    .get("conversation_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default");
+                let branch_id = params.get("branch_id").and_then(|v| v.as_str());
+                let keep = params
+                    .get("keep")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(20)
+                    .max(1) as usize;
+
+                let removed = self.prune_conversation_checkpoints(conversation_id, branch_id, keep);
+                self.send_result(
+                    request_id,
+                    json!({
+                        "ok": true,
+                        "conversation_id": conversation_id,
+                        "removed": removed,
+                    }),
+                )
+                .await
+            }
             "shutdown" => {
                 self.begin_shutdown("rpc shutdown");
                 self.send_result(
@@ -1805,7 +2070,10 @@ impl AcpServer {
                 span,
                 vec![
                     KeyValue::new("request.duration_ms", duration_ms as i64),
-                    KeyValue::new("request.status", if result.is_ok() { "ok" } else { "error" }),
+                    KeyValue::new(
+                        "request.status",
+                        if result.is_ok() { "ok" } else { "error" },
+                    ),
                 ],
             );
         }
@@ -1818,7 +2086,11 @@ impl AcpServer {
         let base = format!(
             "{}:{}:{}:{}",
             request.method,
-            request.id.as_ref().map(value_to_id).unwrap_or_else(|| "none".to_string()),
+            request
+                .id
+                .as_ref()
+                .map(value_to_id)
+                .unwrap_or_else(|| "none".to_string()),
             now_ms(),
             counter
         );
@@ -1844,6 +2116,8 @@ impl AcpServer {
         error: Option<String>,
         duration_ms: u64,
     ) {
+        let pua_stage = infer_pua_stage(event_type, phase);
+        let attributes = normalize_trace_attributes(event_type, phase, status, inputs);
         let event = TraceEvent {
             timestamp: now_ms().to_string(),
             event_type: event_type.to_string(),
@@ -1856,12 +2130,12 @@ impl AcpServer {
                 "trace_id": trace.trace_id,
                 "span_id": trace.span_id,
                 "method": trace.method,
-                "attributes": inputs,
+                "attributes": attributes,
             }),
             outputs: None,
             duration_ms,
             error,
-            pua_stage: None,
+            pua_stage,
         };
 
         if let Ok(mut guard) = self.trace_events.lock() {
@@ -1952,11 +2226,19 @@ impl AcpServer {
             );
         }
 
+        let mut by_pua_stage: HashMap<String, u64> = HashMap::new();
+        for event in &events {
+            if let Some(stage) = event.pua_stage.as_ref() {
+                *by_pua_stage.entry(stage.clone()).or_insert(0) += 1;
+            }
+        }
+
         json!({
             "sampling_rate": self.telemetry.sampling_rate(),
             "buffered_events": events.len(),
             "slow_requests_top_n": requests,
             "phase_latency": by_phase,
+            "pua_stage_counts": by_pua_stage,
         })
     }
 
@@ -1965,9 +2247,12 @@ impl AcpServer {
         id: Option<Value>,
         params: Option<Value>,
         request_span: Option<OtelContext>,
+        parent_trace: Option<RequestTraceContext>,
     ) -> Result<()> {
         let started = Instant::now();
-        let pipeline_trace = chat_trace_context(&id, "chat.pipeline");
+        let pipeline_trace = parent_trace
+            .map(|trace| child_trace_context(&trace, "chat.pipeline"))
+            .unwrap_or_else(|| chat_trace_context(&id, "chat.pipeline"));
         let chat_span = request_span.as_ref().and_then(|parent| {
             self.telemetry.start_child_span(
                 parent,
@@ -2007,6 +2292,11 @@ impl AcpServer {
 
             let mode = ChatMode::parse(chat_params.mode.as_deref());
             let mode_name = mode.map(|m| m.as_str()).unwrap_or("default");
+            let auto_conv_id = chat_params
+                .conversation_id
+                .clone()
+                .unwrap_or_else(|| pipeline_trace.trace_id.clone());
+            let original_messages = chat_params.messages.clone();
             let (flow, registry) = self.routing_handles()?;
             let effective_phase = self.infer_phase_name_with_flow(
                 flow.as_ref(),
@@ -2040,6 +2330,7 @@ impl AcpServer {
                 "ok",
                 "route",
                 json!({
+                    "policy_status": "pass",
                     "roles": pipeline_routing
                         .roles
                         .iter()
@@ -2064,15 +2355,7 @@ impl AcpServer {
                 .resolve(Some(effective_phase.clone()), registry.as_ref())
                 .map_err(|err| ProxyError::Internal(err.to_string()))?;
             self.record_trace_event(
-                &RequestTraceContext {
-                    request_id: id
-                        .as_ref()
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "notification".to_string()),
-                    trace_id: String::new(),
-                    span_id: "chat.route".to_string(),
-                    method: "chat".to_string(),
-                },
+                &child_trace_context(&pipeline_trace, "chat.route"),
                 "phase.route",
                 "ok",
                 "route",
@@ -2182,7 +2465,10 @@ impl AcpServer {
                 "phase.route_hard_gate",
                 "error",
                 "route",
-                json!({ "reason": reason }),
+                json!({
+                    "reason": reason,
+                    "policy_status": "blocked",
+                }),
                 Some(reason.clone()),
                 0,
             );
@@ -2209,11 +2495,40 @@ impl AcpServer {
                     &chat_params.messages,
                     routing.phase.options.as_ref(),
                     chat_span.as_ref().or(request_span.as_ref()),
+                    &pipeline_trace,
                 )
                 .await
             {
-                Ok(ReviewGateOutcome::Approved(decisions)) => Some(decisions),
+                Ok(ReviewGateOutcome::Approved(decisions)) => {
+                    self.record_trace_event(
+                        &child_trace_context(&pipeline_trace, "chat.review"),
+                        "phase.review_gate",
+                        "ok",
+                        "review",
+                        json!({
+                            "policy_status": "pass",
+                            "result": "approved",
+                            "review_decisions": decisions.len(),
+                        }),
+                        None,
+                        review_started.elapsed().as_millis() as u64,
+                    );
+                    Some(decisions)
+                }
                 Ok(ReviewGateOutcome::Rejected(decisions)) => {
+                    self.record_trace_event(
+                        &child_trace_context(&pipeline_trace, "chat.review"),
+                        "phase.review_gate",
+                        "error",
+                        "review",
+                        json!({
+                            "policy_status": "blocked",
+                            "result": "rejected",
+                            "review_decisions": decisions.len(),
+                        }),
+                        Some("review gate rejected execution".to_string()),
+                        review_started.elapsed().as_millis() as u64,
+                    );
                     self.send_error(
                         id,
                         -32603,
@@ -2224,6 +2539,19 @@ impl AcpServer {
                     return Ok(());
                 }
                     Ok(ReviewGateOutcome::Degraded(decisions)) => {
+                        self.record_trace_event(
+                            &child_trace_context(&pipeline_trace, "chat.review"),
+                            "phase.review_gate",
+                            "ok",
+                            "review",
+                            json!({
+                                "policy_status": "degraded",
+                                "result": "degraded",
+                                "review_decisions": decisions.len(),
+                            }),
+                            None,
+                            review_started.elapsed().as_millis() as u64,
+                        );
                         self.send_notification(
                             "chat.review",
                             json!({
@@ -2236,6 +2564,18 @@ impl AcpServer {
                         Some(decisions)
                     }
                 Err(err) => {
+                    self.record_trace_event(
+                        &child_trace_context(&pipeline_trace, "chat.review"),
+                        "phase.review_gate",
+                        "error",
+                        "review",
+                        json!({
+                            "policy_status": "error",
+                            "result": "failed",
+                        }),
+                        Some(err.to_string()),
+                        review_started.elapsed().as_millis() as u64,
+                    );
                     self.send_error(id, -32603, format!("review gate failed: {err}"), None)
                         .await?;
                     return Ok(());
@@ -2257,26 +2597,6 @@ impl AcpServer {
             None,
             0,
         );
-        if approval_strategy.needs_dual_review() {
-            self.record_trace_event(
-                &RequestTraceContext {
-                    request_id: id
-                        .as_ref()
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "notification".to_string()),
-                    trace_id: String::new(),
-                    span_id: "chat.review".to_string(),
-                    method: "chat".to_string(),
-                },
-                "phase.review_gate",
-                "ok",
-                "review",
-                json!({}),
-                None,
-                review_started.elapsed().as_millis() as u64,
-            );
-        }
-
         let prepared_input = self
             .build_effective_messages(&routing.phase, &chat_params.messages)
             .await?;
@@ -2306,17 +2626,36 @@ impl AcpServer {
 
             if let Some(memory_hit) = self.memory_cache.get(&cache_key) {
                 self.metrics.inc_cache_hit();
+                let cached_agent = memory_hit
+                    .agent_name
+                    .clone()
+                    .unwrap_or_else(|| "memory-cache".to_string());
+                let stream_payload = stream_chunk_notification(
+                    &id,
+                    &cached_agent,
+                    &memory_hit.response_text,
+                    1,
+                    memory_hit.response_text.chars().count(),
+                    Some("memory"),
+                    Some(routing.phase.phase_name.as_str()),
+                    Some(pipeline_trace.trace_id.as_str()),
+                );
                 self.send_notification(
                     "chat.stream",
-                    json!({
-                        "id": id.clone(),
-                        "agent": memory_hit.agent_name.clone().unwrap_or_else(|| "memory-cache".to_string()),
-                        "token": memory_hit.response_text,
-                        "cached": true,
-                        "cache_level": "memory",
-                    }),
+                    stream_payload,
                 )
                 .await?;
+                let done_payload = stream_done_notification(
+                    &id,
+                    &cached_agent,
+                    1,
+                    memory_hit.response_text.chars().count(),
+                    Some("memory"),
+                    Some(routing.phase.phase_name.as_str()),
+                    Some(pipeline_trace.trace_id.as_str()),
+                    0,
+                );
+                self.send_notification("chat.stream.done", done_payload).await?;
 
                 self.send_result(
                     id,
@@ -2356,6 +2695,8 @@ impl AcpServer {
                 self.metrics.inc_cache_lookup();
                 if let Some(hit) = self.cache_get(cache.clone(), cache_key.clone()).await? {
                     self.metrics.inc_cache_hit();
+                        let cached_agent =
+                            hit.agent_name.clone().unwrap_or_else(|| "cache".to_string());
 
                     self.memory_cache.put(
                         cache_key,
@@ -2364,17 +2705,32 @@ impl AcpServer {
                         cache_ttl,
                     );
 
+                        let stream_payload = stream_chunk_notification(
+                            &id,
+                            &cached_agent,
+                            &hit.response_text,
+                            1,
+                            hit.response_text.chars().count(),
+                            Some("sqlite"),
+                            Some(routing.phase.phase_name.as_str()),
+                            Some(pipeline_trace.trace_id.as_str()),
+                        );
                     self.send_notification(
                         "chat.stream",
-                        json!({
-                            "id": id.clone(),
-                            "agent": hit.agent_name.clone().unwrap_or_else(|| "cache".to_string()),
-                            "token": hit.response_text,
-                            "cached": true,
-                            "cache_level": "sqlite",
-                        }),
+                            stream_payload,
                     )
                     .await?;
+                        let done_payload = stream_done_notification(
+                            &id,
+                            &cached_agent,
+                            1,
+                            hit.response_text.chars().count(),
+                            Some("sqlite"),
+                            Some(routing.phase.phase_name.as_str()),
+                            Some(pipeline_trace.trace_id.as_str()),
+                            0,
+                        );
+                        self.send_notification("chat.stream.done", done_payload).await?;
 
                     self.send_result(
                         id,
@@ -2420,6 +2776,50 @@ impl AcpServer {
             .and_then(|opts| opts.agent_options());
         let phase_principles = routing.phase.principles.clone();
         let phase_agent_names = routing.phase.agent_names.clone();
+        let mut candidate_agents = routing.agents;
+        let original_agent_order = candidate_agents
+            .iter()
+            .map(|(agent_name, _)| agent_name.clone())
+            .collect::<Vec<_>>();
+        let mut ranked_scores: Vec<(String, f64)> = Vec::new();
+
+        if let Ok(state) = self.online_controller.lock() {
+            let ranked = state.rank_agent_names_for_phase(&phase_name, &original_agent_order);
+            let rank_index = ranked
+                .iter()
+                .enumerate()
+                .map(|(idx, (name, _))| (name.clone(), idx))
+                .collect::<HashMap<_, _>>();
+            candidate_agents.sort_by_key(|(agent_name, _)| {
+                rank_index
+                    .get(agent_name)
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
+            ranked_scores = ranked;
+        }
+
+        let ranked_agent_order = candidate_agents
+            .iter()
+            .map(|(agent_name, _)| agent_name.clone())
+            .collect::<Vec<_>>();
+        if original_agent_order != ranked_agent_order {
+            self.record_trace_event(
+                &pipeline_trace,
+                "phase.route_adapt",
+                "ok",
+                "route",
+                json!({
+                    "reason": "online_controller_agent_ranking",
+                    "original_order": original_agent_order,
+                    "ranked_order": ranked_agent_order,
+                    "scores": ranked_scores,
+                }),
+                None,
+                0,
+            );
+        }
+
         let mut errors: Vec<String> = Vec::new();
 
             let breaker_failure_threshold = extra_u64(
@@ -2435,7 +2835,7 @@ impl AcpServer {
             .unwrap_or(DEFAULT_BREAKER_OPEN_SECONDS as u64)
                 as i64;
 
-            for (agent_name, agent) in routing.agents {
+            for (agent_name, agent) in candidate_agents {
             let agent_started = Instant::now();
             let agent_span = chat_span.as_ref().or(request_span.as_ref()).and_then(|parent| {
                 self.telemetry.start_child_span(
@@ -2492,10 +2892,19 @@ impl AcpServer {
                     phase_principles.clone(),
                     phase_agent_options.clone(),
                     request_timeout(phase_options.as_ref()),
+                    Some(phase_name.as_str()),
+                    Some(pipeline_trace.trace_id.as_str()),
                 )
                 .await
             {
                 Ok(response_text) => {
+                    let agent_duration = agent_started.elapsed();
+                    self.record_online_controller_agent_outcome(
+                        &phase_name,
+                        &agent_name,
+                        true,
+                        agent_duration,
+                    );
                     self.circuit_breakers.record_success(&agent_name);
                     if !bypass_cache && cache_enabled {
                         if let Some(cache) = self.cache_handle() {
@@ -2585,15 +2994,7 @@ impl AcpServer {
                         0,
                     );
                     self.record_trace_event(
-                        &RequestTraceContext {
-                            request_id: id
-                                .as_ref()
-                                .map(|v| v.to_string())
-                                .unwrap_or_else(|| "notification".to_string()),
-                            trace_id: String::new(),
-                            span_id: format!("chat.agent.{}", agent_name),
-                            method: "chat".to_string(),
-                        },
+                        &child_trace_context(&pipeline_trace, &format!("chat.agent.{}", agent_name)),
                         "phase.agent",
                         "ok",
                         &phase_name,
@@ -2608,7 +3009,7 @@ impl AcpServer {
                                 KeyValue::new("agent.status", "ok"),
                                 KeyValue::new(
                                     "agent.duration_ms",
-                                    agent_started.elapsed().as_millis() as i64,
+                                    agent_duration.as_millis() as i64,
                                 ),
                             ],
                         );
@@ -2622,11 +3023,44 @@ impl AcpServer {
                         None,
                         0,
                     );
+                    // Auto-checkpoint: capture input messages + agent response for recovery
+                    let mut cp_messages = original_messages.clone();
+                    cp_messages.push(Message {
+                        role: "assistant".to_string(),
+                        content: response_text.clone(),
+                    });
+                    let cp_note = format!("{}/{}", phase_name, agent_name);
+                    if let Some(cp) = self.create_conversation_checkpoint(
+                        &auto_conv_id,
+                        "main",
+                        cp_messages,
+                        Some(cp_note),
+                    ) {
+                        let _ = self
+                            .send_notification(
+                                "conversation.checkpoint",
+                                json!({
+                                    "checkpoint_id": cp.checkpoint_id,
+                                    "conversation_id": cp.conversation_id,
+                                    "branch_id": cp.branch_id,
+                                    "auto": true,
+                                }),
+                            )
+                            .await;
+                    }
                     return Ok(());
                 }
                 Err(err) => {
+                    let agent_duration = agent_started.elapsed();
+                    self.record_online_controller_agent_outcome(
+                        &phase_name,
+                        &agent_name,
+                        false,
+                        agent_duration,
+                    );
                     self.metrics.inc_agent_failures();
-                    match classify_agent_failure(&err) {
+                    let failure_kind = classify_agent_failure(&err);
+                    match failure_kind {
                         "timeout" => self.metrics.inc_agent_timeout_failures(),
                         "panic" => self.metrics.inc_agent_panic_failures(),
                         _ => self.metrics.inc_agent_other_failures(),
@@ -2644,17 +3078,44 @@ impl AcpServer {
                                 KeyValue::new("error", err.to_string()),
                                 KeyValue::new(
                                     "agent.duration_ms",
-                                    agent_started.elapsed().as_millis() as i64,
+                                    agent_duration.as_millis() as i64,
                                 ),
                             ],
                         );
                     }
+                    self.record_trace_event(
+                        &child_trace_context(
+                            &pipeline_trace,
+                            &format!("chat.agent.{}", agent_name),
+                        ),
+                        "phase.agent",
+                        "error",
+                        &phase_name,
+                        json!({
+                            "agent": agent_name,
+                            "failure_kind": failure_kind,
+                        }),
+                        Some(err.to_string()),
+                        agent_duration.as_millis() as u64,
+                    );
                     warn!("agent '{}' failed: {err:#}", agent_name);
                     errors.push(format!("{}: {}", agent_name, err));
                 }
             }
             }
 
+            self.record_trace_event(
+                &pipeline_trace,
+                "phase.evaluate",
+                "error",
+                "evaluate",
+                json!({
+                    "policy_status": "error",
+                    "error_count": errors.len(),
+                }),
+                Some("all candidate agents failed".to_string()),
+                0,
+            );
             self.send_error(
                 id,
                 -32603,
@@ -2688,6 +3149,149 @@ impl AcpServer {
             .lock()
             .map(|state| state.should_escalate())
             .unwrap_or(false)
+    }
+
+    fn create_conversation_checkpoint(
+        &self,
+        conversation_id: &str,
+        branch_id: &str,
+        messages: Vec<Message>,
+        note: Option<String>,
+    ) -> Option<ConversationCheckpoint> {
+        let mut store = self.conversation_store.lock().ok()?;
+        let state = store
+            .entry(conversation_id.to_string())
+            .or_insert_with(ConversationState::default);
+
+        let parent_checkpoint_id = state.branch_heads.get(branch_id).cloned();
+        let checkpoint = ConversationCheckpoint {
+            checkpoint_id: format!("cp-{}", CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed)),
+            conversation_id: conversation_id.to_string(),
+            branch_id: branch_id.to_string(),
+            parent_checkpoint_id,
+            created_at: now_ts(),
+            note,
+            messages,
+        };
+
+        state
+            .branch_heads
+            .insert(branch_id.to_string(), checkpoint.checkpoint_id.clone());
+        state.checkpoints.push(checkpoint.clone());
+        Some(checkpoint)
+    }
+
+    fn list_conversation_checkpoints(
+        &self,
+        conversation_id: &str,
+        branch_id: Option<&str>,
+        limit: usize,
+    ) -> Vec<ConversationCheckpoint> {
+        let Ok(store) = self.conversation_store.lock() else {
+            return Vec::new();
+        };
+        let Some(state) = store.get(conversation_id) else {
+            return Vec::new();
+        };
+
+        state
+            .checkpoints
+            .iter()
+            .rev()
+            .filter(|checkpoint| {
+                branch_id
+                    .map(|target| checkpoint.branch_id == target)
+                    .unwrap_or(true)
+            })
+            .take(limit.max(1))
+            .cloned()
+            .collect::<Vec<_>>()
+    }
+
+    fn rollback_conversation_checkpoint(
+        &self,
+        conversation_id: &str,
+        checkpoint_id: &str,
+        target_branch: Option<&str>,
+    ) -> Option<ConversationCheckpoint> {
+        let mut store = self.conversation_store.lock().ok()?;
+        let state = store.get_mut(conversation_id)?;
+        let checkpoint = state
+            .checkpoints
+            .iter()
+            .find(|candidate| candidate.checkpoint_id == checkpoint_id)
+            .cloned()?;
+
+        let branch = target_branch
+            .unwrap_or(checkpoint.branch_id.as_str())
+            .to_string();
+        state
+            .branch_heads
+            .insert(branch.clone(), checkpoint.checkpoint_id.clone());
+
+        let mut restored = checkpoint;
+        restored.branch_id = branch;
+        Some(restored)
+    }
+
+    fn prune_conversation_checkpoints(
+        &self,
+        conversation_id: &str,
+        branch_id: Option<&str>,
+        keep: usize,
+    ) -> usize {
+        let Ok(mut store) = self.conversation_store.lock() else {
+            return 0;
+        };
+        let Some(state) = store.get_mut(conversation_id) else {
+            return 0;
+        };
+
+        let original_len = state.checkpoints.len();
+        if let Some(target_branch) = branch_id {
+            let mut branch_checkpoints: Vec<String> = state
+                .checkpoints
+                .iter()
+                .filter(|cp| cp.branch_id == target_branch)
+                .map(|cp| cp.checkpoint_id.clone())
+                .collect();
+
+            if branch_checkpoints.len() <= keep {
+                return 0;
+            }
+
+            let to_remove_count = branch_checkpoints.len() - keep;
+            let to_remove: HashSet<String> = branch_checkpoints.drain(0..to_remove_count).collect();
+            state
+                .checkpoints
+                .retain(|cp| !to_remove.contains(&cp.checkpoint_id));
+        } else {
+            // Prune globally: keep most recent `keep` checkpoints across all branches
+            if state.checkpoints.len() <= keep {
+                return 0;
+            }
+            let drain_to = state.checkpoints.len() - keep;
+            state.checkpoints.drain(0..drain_to);
+        }
+
+        original_len - state.checkpoints.len()
+    }
+
+    fn record_online_controller_agent_outcome(
+        &self,
+        phase_name: &str,
+        agent_name: &str,
+        success: bool,
+        duration: Duration,
+    ) {
+        if let Ok(mut state) = self.online_controller.lock() {
+            state.record_agent_outcome(
+                phase_name,
+                agent_name,
+                success,
+                duration.as_millis() as u64,
+            );
+        }
     }
 
     fn infer_phase_name_with_flow(
@@ -3005,6 +3609,7 @@ impl AcpServer {
         messages: &[Message],
         phase_options: Option<&PhaseOptions>,
         parent_span: Option<&OtelContext>,
+        pipeline_trace: &RequestTraceContext,
     ) -> Result<ReviewGateOutcome> {
         let started = Instant::now();
         self.metrics.inc_review_gate();
@@ -3032,9 +3637,41 @@ impl AcpServer {
                     anyhow::anyhow!("review phase is required for complex full_auto mode: {err}")
                 })?;
 
-            let reviewer_names = phase_options
+            let mut reviewer_names = phase_options
                 .and_then(|options| options.full_auto_review_agents.clone())
                 .unwrap_or_else(|| review_routing.phase.agent_names.clone());
+
+            let review_phase_name = review_routing.phase.phase_name.clone();
+            let original_reviewer_order = reviewer_names.clone();
+            let mut reviewer_scores: Vec<(String, f64)> = Vec::new();
+            if let Ok(state) = self.online_controller.lock() {
+                let ranked = state.rank_agent_names_for_phase(&review_phase_name, &reviewer_names);
+                let rank_index = ranked
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, (name, _))| (name.clone(), idx))
+                    .collect::<HashMap<_, _>>();
+                reviewer_names
+                    .sort_by_key(|name| rank_index.get(name).copied().unwrap_or(usize::MAX));
+                reviewer_scores = ranked;
+            }
+
+            if reviewer_names != original_reviewer_order {
+                self.record_trace_event(
+                    &child_trace_context(pipeline_trace, "chat.review.route_adapt"),
+                    "phase.review_route_adapt",
+                    "ok",
+                    "review",
+                    json!({
+                        "reason": "online_controller_reviewer_ranking",
+                        "original_order": original_reviewer_order,
+                        "ranked_order": reviewer_names,
+                        "scores": reviewer_scores,
+                    }),
+                    None,
+                    0,
+                );
+            }
 
             let min_reviewers = extra_u64(phase_options, "min_reviewers").unwrap_or(2) as usize;
             let required_approvals = extra_u64(phase_options, "required_approvals")
@@ -3132,6 +3769,12 @@ impl AcpServer {
                 {
                     Ok(response) => response,
                     Err(err) => {
+                        self.record_online_controller_agent_outcome(
+                            &review_phase_name,
+                            &reviewer,
+                            false,
+                            reviewer_started.elapsed(),
+                        );
                         if let Some(span) = reviewer_span {
                             self.telemetry.end_span(
                                 span,
@@ -3142,11 +3785,37 @@ impl AcpServer {
                             );
                         }
                         record_agent_failure_metrics(self.metrics.as_ref(), &err);
-                        return Err(err);
+                        let err_message = err.to_string();
+                        if classify_agent_failure(&err) == "timeout" {
+                            self.metrics.inc_review_gate_timeout();
+                            return match timeout_policy {
+                                ReviewTimeoutPolicy::Reject => {
+                                    self.metrics.inc_review_gate_rejected();
+                                    Ok(ReviewGateOutcome::Rejected(decisions))
+                                }
+                                ReviewTimeoutPolicy::DegradeSingle => {
+                                    if approved_count >= 1 {
+                                        self.metrics.inc_review_gate_degraded();
+                                        self.metrics.inc_review_gate_approved();
+                                        Ok(ReviewGateOutcome::Degraded(decisions))
+                                    } else {
+                                        self.metrics.inc_review_gate_rejected();
+                                        Ok(ReviewGateOutcome::Rejected(decisions))
+                                    }
+                                }
+                            };
+                        }
+                        return Err(anyhow::anyhow!(err_message));
                     }
                 };
 
                 let verdict = review_verdict(&response, min_review_chars);
+                self.record_online_controller_agent_outcome(
+                    &review_phase_name,
+                    &reviewer,
+                    verdict != ReviewVerdict::Invalid,
+                    reviewer_started.elapsed(),
+                );
                 if verdict == ReviewVerdict::Invalid {
                     self.metrics.inc_review_gate_invalid_response();
                 }
@@ -3228,6 +3897,8 @@ impl AcpServer {
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         timeout_limit: Option<Duration>,
+        phase_name: Option<&str>,
+        trace_id: Option<&str>,
     ) -> Result<String> {
         let started = Instant::now();
         let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
@@ -3235,18 +3906,24 @@ impl AcpServer {
             tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
 
         let mut response_text = String::new();
+        let mut stream_chunks: usize = 0;
+        let mut streamed_chars: usize = 0;
         let collect_stream = async {
             while let Some(token) = receiver.recv().await {
                 response_text.push_str(&token);
-                self.send_notification(
-                    "chat.stream",
-                    json!({
-                        "id": id.clone(),
-                        "agent": agent_name,
-                        "token": token,
-                    }),
-                )
-                .await?;
+                stream_chunks = stream_chunks.saturating_add(1);
+                streamed_chars = streamed_chars.saturating_add(token.chars().count());
+                let payload = stream_chunk_notification(
+                    &id,
+                    &agent_name,
+                    &token,
+                    stream_chunks,
+                    streamed_chars,
+                    None,
+                    phase_name,
+                    trace_id,
+                );
+                self.send_notification("chat.stream", payload).await?;
             }
 
             Ok::<(), anyhow::Error>(())
@@ -3266,7 +3943,21 @@ impl AcpServer {
         }
 
         let result = match agent_task.await {
-            Ok(Ok(())) => Ok(response_text),
+            Ok(Ok(())) => {
+                let done_payload = stream_done_notification(
+                    &id,
+                    &agent_name,
+                    stream_chunks,
+                    streamed_chars,
+                    None,
+                    phase_name,
+                    trace_id,
+                    started.elapsed().as_millis() as u64,
+                );
+                self.send_notification("chat.stream.done", done_payload)
+                    .await?;
+                Ok(response_text)
+            }
             Ok(Err(err)) => Err(err),
             Err(join_err) => Err(anyhow::anyhow!(
                 "agent '{}' panic: {}",
@@ -3513,6 +4204,8 @@ impl AcpServer {
             "path": config_path,
             "warning_count": health_report.total,
             "warnings": health_report.warning_messages(),
+            "profile_recommendation": health_report.profile_recommendation,
+            "recommendations": health_report.recommendations,
             "health": health_report,
         }))
     }
@@ -3811,19 +4504,6 @@ async fn autotune_state_snapshot(autotune: &Arc<Mutex<AutoTuneState>>) -> AutoTu
     autotune.lock().await.clone()
 }
 
-fn review_timeout(
-    review_options: Option<&PhaseOptions>,
-    primary_phase_options: Option<&PhaseOptions>,
-) -> Option<Duration> {
-    review_options
-        .and_then(|opts| opts.review_timeout_seconds.or(opts.request_timeout_seconds))
-        .or_else(|| {
-            primary_phase_options
-                .and_then(|opts| opts.review_timeout_seconds.or(opts.request_timeout_seconds))
-        })
-        .map(Duration::from_secs)
-}
-
 fn effective_vector_enabled(
     options: Option<&PhaseOptions>,
     vector_config: Option<&VectorConfig>,
@@ -4048,19 +4728,6 @@ fn build_cache_key_from_parts(
         .collect())
 }
 
-fn review_verdict(response: &str, min_response_chars: usize) -> ReviewVerdict {
-    if response.trim().chars().count() < min_response_chars {
-        return ReviewVerdict::Invalid;
-    }
-
-    let first_line = response.lines().find(|line| !line.trim().is_empty());
-    match first_line.map(|line| line.trim().to_ascii_uppercase()) {
-        Some(value) if value.starts_with("APPROVE") => ReviewVerdict::Approve,
-        Some(value) if value.starts_with("REJECT") => ReviewVerdict::Reject,
-        _ => ReviewVerdict::Invalid,
-    }
-}
-
 fn dedupe_vector_hits(hits: &[VectorHit]) -> Vec<VectorHit> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -4089,7 +4756,6 @@ fn extra_f64(options: Option<&PhaseOptions>, key: &str) -> Option<f64> {
         .and_then(|opts| opts.extra.get(key))
         .and_then(|v| v.as_f64())
 }
-
 
 fn percentile(samples: &[u64], percentile: f64) -> u64 {
     if samples.is_empty() {
@@ -4122,22 +4788,12 @@ fn extract_task_description(messages: &[Message]) -> String {
     messages
         .iter()
         .rev()
-        .find(|message| message.role.eq_ignore_ascii_case("user") && !message.content.trim().is_empty())
+        .find(|message| {
+            message.role.eq_ignore_ascii_case("user") && !message.content.trim().is_empty()
+        })
         .map(|message| message.content.clone())
         .or_else(|| messages.last().map(|message| message.content.clone()))
         .unwrap_or_else(|| "general task".to_string())
-}
-
-fn chat_trace_context(id: &Option<Value>, span_id: &str) -> RequestTraceContext {
-    RequestTraceContext {
-        trace_id: String::new(),
-        span_id: span_id.to_string(),
-        method: "chat".to_string(),
-        request_id: id
-            .as_ref()
-            .map(value_to_id)
-            .unwrap_or_else(|| "notification".to_string()),
-    }
 }
 
 fn pipeline_gate_violation(
@@ -4171,6 +4827,109 @@ fn pipeline_gate_violation(
     }
 
     None
+}
+
+fn infer_pua_stage(event_type: &str, phase: &str) -> Option<String> {
+    if event_type.starts_with("phase.") {
+        return Some(phase.to_string());
+    }
+    None
+}
+
+fn normalize_trace_attributes(event_type: &str, phase: &str, status: &str, inputs: Value) -> Value {
+    let mut attrs = match inputs {
+        Value::Object(map) => map,
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("payload".to_string(), other);
+            map
+        }
+    };
+
+    attrs
+        .entry("event_type".to_string())
+        .or_insert_with(|| Value::String(event_type.to_string()));
+    attrs
+        .entry("phase".to_string())
+        .or_insert_with(|| Value::String(phase.to_string()));
+    attrs
+        .entry("stage".to_string())
+        .or_insert_with(|| Value::String(phase.to_string()));
+    attrs.entry("policy_status".to_string()).or_insert_with(|| {
+        Value::String(
+            match status {
+                "ok" => "pass",
+                "error" => "error",
+                _ => "unknown",
+            }
+            .to_string(),
+        )
+    });
+
+    Value::Object(attrs)
+}
+
+fn stream_chunk_notification(
+    id: &Option<Value>,
+    agent: &str,
+    token: &str,
+    chunk_index: usize,
+    total_chars: usize,
+    cache_level: Option<&str>,
+    phase: Option<&str>,
+    trace_id: Option<&str>,
+) -> Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("id".to_string(), id.clone().unwrap_or(Value::Null));
+    payload.insert("agent".to_string(), Value::String(agent.to_string()));
+    payload.insert("token".to_string(), Value::String(token.to_string()));
+    payload.insert("chunk_index".to_string(), json!(chunk_index));
+    payload.insert("total_chars".to_string(), json!(total_chars));
+
+    if let Some(level) = cache_level {
+        payload.insert("cached".to_string(), Value::Bool(true));
+        payload.insert("cache_level".to_string(), Value::String(level.to_string()));
+    }
+    if let Some(phase_name) = phase {
+        payload.insert("phase".to_string(), Value::String(phase_name.to_string()));
+    }
+    if let Some(trace) = trace_id {
+        payload.insert("trace_id".to_string(), Value::String(trace.to_string()));
+    }
+
+    Value::Object(payload)
+}
+
+fn stream_done_notification(
+    id: &Option<Value>,
+    agent: &str,
+    chunks: usize,
+    total_chars: usize,
+    cache_level: Option<&str>,
+    phase: Option<&str>,
+    trace_id: Option<&str>,
+    duration_ms: u64,
+) -> Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("id".to_string(), id.clone().unwrap_or(Value::Null));
+    payload.insert("agent".to_string(), Value::String(agent.to_string()));
+    payload.insert("done".to_string(), Value::Bool(true));
+    payload.insert("chunks".to_string(), json!(chunks));
+    payload.insert("total_chars".to_string(), json!(total_chars));
+    payload.insert("duration_ms".to_string(), json!(duration_ms));
+
+    if let Some(level) = cache_level {
+        payload.insert("cached".to_string(), Value::Bool(true));
+        payload.insert("cache_level".to_string(), Value::String(level.to_string()));
+    }
+    if let Some(phase_name) = phase {
+        payload.insert("phase".to_string(), Value::String(phase_name.to_string()));
+    }
+    if let Some(trace) = trace_id {
+        payload.insert("trace_id".to_string(), Value::String(trace.to_string()));
+    }
+
+    Value::Object(payload)
 }
 
 fn histogram_prometheus_lines(
@@ -4241,30 +5000,6 @@ fn hash_hex(input: &str, hex_len: usize) -> String {
         .map(|byte| format!("{:02x}", byte))
         .collect::<String>();
     full.chars().take(hex_len).collect()
-}
-
-fn value_to_id(value: &Value) -> String {
-    match value {
-        Value::String(v) => v.clone(),
-        Value::Number(v) => v.to_string(),
-        _ => value.to_string(),
-    }
-}
-
-fn push_metric_header(lines: &mut Vec<String>, name: &str, metric_type: &str, help: &str) {
-    lines.push(format!("# HELP {} {}", name, help));
-    lines.push(format!("# TYPE {} {}", name, metric_type));
-}
-
-fn push_scalar_metric(
-    lines: &mut Vec<String>,
-    name: &str,
-    metric_type: &str,
-    help: &str,
-    value: impl std::fmt::Display,
-) {
-    push_metric_header(lines, name, metric_type, help);
-    lines.push(format!("{} {}", name, value));
 }
 
 fn escape_prometheus_label(value: &str) -> String {
@@ -4799,6 +5534,47 @@ mod tests {
     }
 
     #[test]
+    fn conversation_checkpoint_roundtrip_and_rollback() {
+        let server = phase_inference_server("coding", &["coding", "review"]);
+        let first_messages = vec![Message {
+            role: "user".to_string(),
+            content: "draft plan".to_string(),
+        }];
+
+        let first = server
+            .create_conversation_checkpoint(
+                "conv-a",
+                "main",
+                first_messages.clone(),
+                Some("initial".to_string()),
+            )
+            .expect("first checkpoint should be created");
+        let second = server
+            .create_conversation_checkpoint(
+                "conv-a",
+                "main",
+                vec![Message {
+                    role: "assistant".to_string(),
+                    content: "second response".to_string(),
+                }],
+                Some("second".to_string()),
+            )
+            .expect("second checkpoint should be created");
+
+        let listed = server.list_conversation_checkpoints("conv-a", Some("main"), 10);
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].checkpoint_id, second.checkpoint_id);
+        assert_eq!(listed[1].checkpoint_id, first.checkpoint_id);
+
+        let restored = server
+            .rollback_conversation_checkpoint("conv-a", &first.checkpoint_id, Some("hotfix"))
+            .expect("rollback should locate target checkpoint");
+        assert_eq!(restored.branch_id, "hotfix");
+        assert_eq!(restored.messages.len(), first_messages.len());
+        assert_eq!(restored.messages[0].content, first_messages[0].content);
+    }
+
+    #[test]
     fn infer_phase_prefers_explicit_phase_over_mode_default() {
         let server = phase_inference_server("planning", &["planning", "review", "coding"]);
         let flow = phase_inference_flow("planning", &["planning", "review", "coding"]);
@@ -5164,6 +5940,36 @@ mod tests {
         for (strategy, expected) in strategies {
             assert_eq!(strategy.as_str(), expected);
         }
+    }
+
+    #[test]
+    fn online_controller_ranks_agents_by_live_phase_outcomes() {
+        let mut state = OnlineControllerState::default();
+
+        for _ in 0..6 {
+            state.record_agent_outcome("coding", "copilot", false, 10_000);
+            state.record_agent_outcome("coding", "deepseek", true, 1_200);
+        }
+
+        let ranked = state
+            .rank_agent_names_for_phase("coding", &["copilot".to_string(), "deepseek".to_string()]);
+
+        assert_eq!(ranked[0].0, "deepseek");
+        assert_eq!(ranked[1].0, "copilot");
+        assert!(ranked[0].1 > ranked[1].1);
+    }
+
+    #[test]
+    fn online_controller_keeps_original_order_without_enough_samples() {
+        let mut state = OnlineControllerState::default();
+        state.record_agent_outcome("coding", "copilot", true, 1_100);
+        state.record_agent_outcome("coding", "deepseek", false, 1_100);
+
+        let ranked = state
+            .rank_agent_names_for_phase("coding", &["copilot".to_string(), "deepseek".to_string()]);
+
+        assert_eq!(ranked[0].0, "copilot");
+        assert_eq!(ranked[1].0, "deepseek");
     }
 
     #[test]
@@ -5716,5 +6522,53 @@ mod tests {
 
         let serialized = serde_json::to_string(&response).unwrap();
         assert!(!serialized.contains("\"id\""));
+    }
+
+    #[test]
+    fn stream_chunk_notification_includes_progress_and_context() {
+        let payload = stream_chunk_notification(
+            &Some(json!(123)),
+            "copilot",
+            "hello",
+            2,
+            11,
+            Some("memory"),
+            Some("coding"),
+            Some("trace-abc"),
+        );
+
+        assert_eq!(payload["id"], 123);
+        assert_eq!(payload["agent"], "copilot");
+        assert_eq!(payload["token"], "hello");
+        assert_eq!(payload["chunk_index"], 2);
+        assert_eq!(payload["total_chars"], 11);
+        assert_eq!(payload["cached"], true);
+        assert_eq!(payload["cache_level"], "memory");
+        assert_eq!(payload["phase"], "coding");
+        assert_eq!(payload["trace_id"], "trace-abc");
+    }
+
+    #[test]
+    fn stream_done_notification_marks_done_with_totals() {
+        let payload = stream_done_notification(
+            &Some(json!("req-7")),
+            "deepseek",
+            4,
+            128,
+            None,
+            Some("review"),
+            Some("trace-xyz"),
+            530,
+        );
+
+        assert_eq!(payload["id"], "req-7");
+        assert_eq!(payload["agent"], "deepseek");
+        assert_eq!(payload["done"], true);
+        assert_eq!(payload["chunks"], 4);
+        assert_eq!(payload["total_chars"], 128);
+        assert_eq!(payload["duration_ms"], 530);
+        assert_eq!(payload["phase"], "review");
+        assert_eq!(payload["trace_id"], "trace-xyz");
+        assert!(payload.get("cache_level").is_none());
     }
 }

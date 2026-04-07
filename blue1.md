@@ -1,17 +1,53 @@
 # Refinement and Expansion Plan (Priority: High to Low)
 
-## Execution Status (2026-04-05)
+## Execution Status (2026-04-07)
+- Completion marking rule:
+  - After each completed delivery step, explicitly update BLUE1 completion percentage and item-level completion status.
+- Overall completion:
+  - BLUE1 plan overall progress: 100% (9 / 9 weighted milestones).
 - Implemented now:
   - Mandatory runtime pipeline entry for non-trivial chat tasks: Analyze -> Route(Hard Gate) -> Execute -> Verify -> Evaluate -> Learn.
   - Hard-gate routing enforcement wired into ACP runtime path (not advisory-only).
   - Reviewer-required tasks are now blocked when mode/strategy does not enable dual review gate.
   - Pipeline stage events are emitted into runtime trace stream for observability.
-  - Phase 11 foundation: online controller now ingests live failure/latency outcomes and can auto-escalate full_auto strategy from simple to complex when risk signals rise.
+  - Phase 11 online controller consumes live failure/latency outcomes and escalates full_auto strategy from simple to complex when risk rises.
+  - Phase 11 deepening completed for runtime control: online signals now drive main-phase candidate ordering/fallback chain and review-phase reviewer ordering.
+  - Online controller feedback loop now ingests main execution outcomes and review outcomes per agent/phase.
+  - Item 4 progress: extracted runtime_controls and review_controls from ACP super-module into dedicated modules.
+  - Item 4 progress: extracted memory_response_cache from ACP super-module into dedicated module.
+  - Item 4 completion: extracted rpc_protocol and observability helpers from ACP super-module into dedicated modules.
+  - Item 5 completion: unified quality verdict/signal/result model across verification/evaluation/reliability and replaced loose verification signal strings with typed structures.
+  - Item 6 completion: request-level trace causality strengthened by propagating request trace_id through chat pipeline, route/review/agent stages, and review route adaptation events.
+  - Item 6 completion: standardized stage trace attributes (event_type/phase/stage/policy_status), added explicit review gate outcome traces (approved/rejected/degraded/failed), and added all-agent-failed evaluate trace.
+  - Item 7 progress: delivered conversation control RPC surfaces with in-memory branch/checkpoint state, including conversation.checkpoint.create, conversation.checkpoint.list, and conversation.rollback.
+  - Item 7 progress (continued): added auto-checkpoint on every successful agent response (keyed to conversation_id or trace_id), emits conversation.checkpoint notification to client, and added conversation.checkpoint.prune RPC method with TTL-based and count-based pruning.
+  - Item 9 progress: added 3 new process-level integration tests — conversation checkpoint/rollback/prune flow, circuit-breaker status and reset, and cache.clear + parameter-validation error paths.
+  - Item 7 progress (continued): added debug.panel.get RPC endpoint for WebUI runtime panel aggregation (trace stage transitions, selected agents, review outcomes, runtime health, conversation counters, review-gate counters).
+  - Item 7 progress (continued): added MCP-compatible adapter path on ACP runtime with mcp.initialize, mcp.tools.list, and mcp.tools.call.
+  - Item 7 progress (continued): refined UI-facing streaming telemetry by adding chunk progress metadata (chunk_index/total_chars/phase/trace_id) and explicit chat.stream.done heartbeat events for live streaming and cache-hit streaming paths.
+  - Item 8 progress: enhanced layered configuration UX with suspicious-combination warning rules (cache/vector explicitly disabled, cache churn risk, observability overhead risk) and profile recommendation generation (minimal/balanced/full).
+  - Item 8 progress (continued): surfaced profile_recommendation and recommendations in config.reload RPC response for direct UI/CLI consumption.
+  - Item 9 progress (continued): added integration test for debug.panel.get snapshot shape and conversation-stat correctness.
+  - Item 9 progress (continued): added integration test for MCP adapter compatibility path (initialize/list/call + error path).
+  - Item 9 progress (continued): added unit-level verification for streaming notification payload schema and completion heartbeat payload.
+  - Item 9 progress (continued): added config-health unit tests for layered profile recommendation and suspicious-combination warning coverage.
+  - Item 9 completion: added fault-injection integration tests for upstream provider failure fallback degradation and review-timeout collision behavior, with deterministic local test agents and validated runtime outcomes.
+  - Item 9 completion (stability): hardened provider-failure scenario with explicit per-phase request timeout and validated trace/runtime-health evidence for degraded execution paths.
+- Completion by item:
+  - Item 1 (Single mandatory pipeline): Completed (100%).
+  - Item 2 (Phase 10 hard gates): Completed (100%).
+  - Item 3 (Phase 11 online controllers): Completed (100%).
+  - Item 4 (ACP module split): Completed (100%).
+  - Item 5 (Quality model unification): Completed (100%).
+  - Item 6 (Deep observability): Completed (100%).
+  - Item 7 (Developer control + UX surfaces): Completed (100%).
+  - Item 8 (Layered config UX): Completed (100%).
+  - Item 9 (Failure-driven integration tests): Completed (100%).
 - Validation proof:
   - cargo check --all: passed
-  - cargo test: passed (163 unit + 5 integration)
+  - cargo test: passed (170 unit + 12 integration)
 - Next execution focus:
-  - Item 3 deepening: feed online controller signals into routing order/agent fallback selection (not just approval strategy).
+  - BLUE1 roadmap closed at 100%; next work should be post-roadmap hardening/performance initiatives.
 
 ## 1) Enforce a Single Execution Pipeline (Highest Priority)
 The system should use one mandatory runtime pipeline for all non-trivial tasks:

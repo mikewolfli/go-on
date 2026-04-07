@@ -1,0 +1,36 @@
+﻿default_phase = "coding"
+
+[flow]
+name = "Cache Vector Unavailable"
+phases = ["coding"]
+
+[runtime]
+maintenance_interval_seconds = 30
+health_interval_seconds = 45
+shutdown_drain_seconds = 7
+
+[agents.copilot]
+type = "copilot"
+url = "http://127.0.0.1:8080"
+
+[cache]
+enabled = true
+path = "D:\\Workspace\\RustWorkspace\\go-on\\tmp_reload_case\\cache_dir_as_file"
+default_ttl_seconds = 60
+max_entries = 100
+
+[vector]
+enabled = true
+path = "D:\\Workspace\\RustWorkspace\\go-on\\tmp_reload_case\\vector_dir_as_file"
+dimensions = 192
+top_k = 2
+min_similarity = 0.82
+max_entries = 100
+summary_enabled = true
+summary_trigger_messages = 8
+summary_max_chars = 1200
+
+[phases.coding]
+description = "Coding"
+agents = ["copilot"]
+fallback = true

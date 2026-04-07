@@ -72,6 +72,10 @@ pub struct ConfigHealthReport {
     pub warn_count: usize,
     /// Number of critical warnings
     pub critical_count: usize,
+    /// Recommended profile based on current warning/risk posture
+    pub profile_recommendation: String,
+    /// Actionable recommendations for improving configuration quality
+    pub recommendations: Vec<String>,
     /// List of warnings
     pub warnings: Vec<ConfigWarning>,
 }
@@ -619,6 +623,7 @@ impl AppConfig {
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
         let mut cfg: AppConfig = toml::from_str(&content)
             .with_context(|| format!("failed to parse toml: {}", path.display()))?;
+        normalize_nested_phase_option_extra(&mut cfg);
         apply_auto_rules(path, &mut cfg);
         Ok(cfg)
     }
@@ -841,6 +846,23 @@ impl AppConfig {
         }
 
         Ok(())
+    }
+}
+
+fn normalize_nested_phase_option_extra(config: &mut AppConfig) {
+    for phase in config.phases.values_mut() {
+        let Some(options) = phase.options.as_mut() else {
+            continue;
+        };
+
+        let nested_extra = options.extra.remove("extra");
+        let Some(Value::Object(map)) = nested_extra else {
+            continue;
+        };
+
+        for (key, value) in map {
+            options.extra.entry(key).or_insert(value);
+        }
     }
 }
 
@@ -1233,6 +1255,8 @@ pub fn build_config_health_report(config_path: &Path, config: &AppConfig) -> Con
         .iter()
         .filter(|item| item.severity == ConfigWarningSeverity::Critical)
         .count();
+    let (profile_recommendation, recommendations) =
+        profile_recommendations_for(&warnings, warn_count, critical_count);
     let penalty = (info_count * 5) + (warn_count * 15) + (critical_count * 40);
     let score = 100_u32.saturating_sub(penalty.min(100) as u32);
 
@@ -1242,6 +1266,8 @@ pub fn build_config_health_report(config_path: &Path, config: &AppConfig) -> Con
         info_count,
         warn_count,
         critical_count,
+        profile_recommendation,
+        recommendations,
         warnings,
     }
 }
@@ -1281,6 +1307,17 @@ fn collect_config_warnings_detailed(config_path: &Path, config: &AppConfig) -> V
                 ),
             });
         }
+
+        if cache.enabled && cache.default_ttl_seconds <= 60 && cache.max_entries >= 10_000 {
+            warnings.push(ConfigWarning {
+                code: "CACHE_CHURN_RISK".to_string(),
+                severity: ConfigWarningSeverity::Warn,
+                message: format!(
+                    "cache.default_ttl_seconds={} with cache.max_entries={} may cause high churn and frequent refreshes",
+                    cache.default_ttl_seconds, cache.max_entries
+                ),
+            });
+        }
     }
 
     if let Some(autotune) = &config.autotune {
@@ -1302,6 +1339,39 @@ fn collect_config_warnings_detailed(config_path: &Path, config: &AppConfig) -> V
                 message: "runtime.otel_enabled=true without otel_endpoint; default collector endpoint http://127.0.0.1:4317 will be used".to_string(),
             });
         }
+
+        if runtime.otel_enabled
+            && runtime.otel_sample_ratio >= 0.95
+            && runtime.maintenance_interval_seconds <= 30
+        {
+            warnings.push(ConfigWarning {
+                code: "RUNTIME_OBSERVABILITY_OVERHEAD_RISK".to_string(),
+                severity: ConfigWarningSeverity::Warn,
+                message: format!(
+                    "runtime.otel_sample_ratio={} with maintenance_interval_seconds={} may add noticeable runtime overhead",
+                    runtime.otel_sample_ratio, runtime.maintenance_interval_seconds
+                ),
+            });
+        }
+    }
+
+    let cache_explicitly_disabled = config
+        .cache
+        .as_ref()
+        .map(|item| !item.enabled)
+        .unwrap_or(false);
+    let vector_explicitly_disabled = config
+        .vector
+        .as_ref()
+        .map(|item| !item.enabled)
+        .unwrap_or(false);
+    if cache_explicitly_disabled && vector_explicitly_disabled {
+        warnings.push(ConfigWarning {
+            code: "MEMORY_LAYERS_DISABLED".to_string(),
+            severity: ConfigWarningSeverity::Warn,
+            message: "cache and vector memory are both disabled; repeated prompts may be slower and less context-aware"
+                .to_string(),
+        });
     }
 
     for path in shared_rule_paths(config_path.parent().unwrap_or_else(|| Path::new("."))) {
@@ -1392,6 +1462,79 @@ fn severity_rank(value: ConfigWarningSeverity) -> usize {
     }
 }
 
+fn profile_recommendations_for(
+    warnings: &[ConfigWarning],
+    warn_count: usize,
+    critical_count: usize,
+) -> (String, Vec<String>) {
+    let profile = if critical_count > 0 || warn_count >= 3 {
+        "full"
+    } else if warn_count == 0 {
+        "minimal"
+    } else {
+        "balanced"
+    }
+    .to_string();
+
+    let mut recommendations = Vec::new();
+    recommendations.push(match profile.as_str() {
+        "full" => {
+            "use config.full.toml profile and keep all safeguards/review settings enabled"
+                .to_string()
+        }
+        "minimal" => {
+            "config quality is stable for quick-start profile; keep minimal defaults unless workload changes"
+                .to_string()
+        }
+        _ => {
+            "use a balanced profile: keep key safeguards while avoiding high-cost optional toggles"
+                .to_string()
+        }
+    });
+
+    let mut has_memory_layers_disabled = false;
+    let mut has_review_timeout_missing = false;
+    let mut has_cache_churn_risk = false;
+    let mut has_overhead_risk = false;
+
+    for warning in warnings {
+        match warning.code.as_str() {
+            "MEMORY_LAYERS_DISABLED" => has_memory_layers_disabled = true,
+            "REVIEW_GATE_TIMEOUT_MISSING" => has_review_timeout_missing = true,
+            "CACHE_CHURN_RISK" => has_cache_churn_risk = true,
+            "RUNTIME_OBSERVABILITY_OVERHEAD_RISK" => has_overhead_risk = true,
+            _ => {}
+        }
+    }
+
+    if has_memory_layers_disabled {
+        recommendations.push(
+            "enable either cache or vector memory for better recall and lower repeated provider cost"
+                .to_string(),
+        );
+    }
+    if has_review_timeout_missing {
+        recommendations.push(
+            "set review_gate_timeout_seconds and review/request timeout to prevent stuck review gates"
+                .to_string(),
+        );
+    }
+    if has_cache_churn_risk {
+        recommendations.push(
+            "increase cache.default_ttl_seconds or reduce cache.max_entries to reduce cache churn"
+                .to_string(),
+        );
+    }
+    if has_overhead_risk {
+        recommendations.push(
+            "reduce otel_sample_ratio or increase maintenance_interval_seconds to lower runtime overhead"
+                .to_string(),
+        );
+    }
+
+    (profile, recommendations)
+}
+
 fn push_rule_warning(warnings: &mut Vec<ConfigWarning>, path: &Path, code: &str) {
     if path.exists() && load_optional_rule_items(path).is_empty() {
         warnings.push(ConfigWarning {
@@ -1440,7 +1583,10 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{AgentConfig, AppConfig, FlowConfig, PhaseConfig, PhaseOptions, RuntimeConfig};
+    use super::{
+        AgentConfig, AppConfig, CacheConfig, FlowConfig, PhaseConfig, PhaseOptions, RuntimeConfig,
+        VectorConfig,
+    };
 
     fn base_agent() -> AgentConfig {
         AgentConfig {
@@ -1859,6 +2005,78 @@ mod tests {
 
         cfg.validate()
             .expect("config.toml.example should be internally consistent");
+    }
+
+    #[test]
+    fn build_config_health_report_recommends_minimal_on_clean_config() {
+        let dir = tempdir().expect("tempdir should be created");
+        let config_path = dir.path().join("config.toml");
+        fs::write(&config_path, "# test").expect("config marker should be written");
+
+        let cfg = valid_config();
+        let report = super::build_config_health_report(&config_path, &cfg);
+
+        assert_eq!(report.total, 0);
+        assert_eq!(report.profile_recommendation, "minimal");
+        assert!(!report.recommendations.is_empty());
+    }
+
+    #[test]
+    fn build_config_health_report_flags_suspicious_combo_and_recommendations() {
+        let dir = tempdir().expect("tempdir should be created");
+        let config_path = dir.path().join("config.toml");
+        fs::write(&config_path, "# test").expect("config marker should be written");
+
+        let mut cfg = valid_config();
+        cfg.cache = Some(CacheConfig {
+            enabled: false,
+            path: "cache.sqlite3".to_string(),
+            default_ttl_seconds: 30,
+            max_entries: 20_000,
+        });
+        cfg.vector = Some(VectorConfig {
+            enabled: false,
+            auto_mode: true,
+            path: "vector.sqlite3".to_string(),
+            dimensions: 192,
+            min_query_chars: 80,
+            top_k: 2,
+            min_similarity: 0.82,
+            max_snippet_chars: 800,
+            max_entries: 10_000,
+            summary_enabled: true,
+            summary_trigger_messages: 8,
+            summary_max_chars: 1200,
+        });
+        cfg.runtime = Some(RuntimeConfig {
+            maintenance_interval_seconds: 20,
+            health_interval_seconds: 120,
+            shutdown_drain_seconds: 30,
+            sqlite_vacuum_interval_cycles: 60,
+            otel_enabled: true,
+            otel_exporter: "otlp".to_string(),
+            otel_endpoint: None,
+            otel_service_name: "go-on".to_string(),
+            otel_sample_ratio: 1.0,
+            trace_slow_top_n: 20,
+        });
+
+        let report = super::build_config_health_report(&config_path, &cfg);
+        let codes = report
+            .warnings
+            .iter()
+            .map(|w| w.code.clone())
+            .collect::<Vec<_>>();
+
+        assert!(codes.iter().any(|code| code == "MEMORY_LAYERS_DISABLED"));
+        assert!(codes
+            .iter()
+            .any(|code| code == "RUNTIME_OBSERVABILITY_OVERHEAD_RISK"));
+        assert_eq!(report.profile_recommendation, "balanced");
+        assert!(report
+            .recommendations
+            .iter()
+            .any(|text| text.contains("enable either cache or vector memory")));
     }
 
     #[test]

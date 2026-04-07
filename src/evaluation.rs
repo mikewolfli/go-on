@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 use crate::pua::PuaExecutionReport;
+use crate::quality_models::QualitySignal;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,7 +53,7 @@ pub struct EvaluationResult {
     pub completion_time_ms: u64,
     pub tool_calls: usize,
     pub token_count: usize,
-    pub verification_signals: Vec<String>,
+    pub verification_signals: Vec<QualitySignal>,
     pub notes: String,
     pub pua_compliance_score: f32,
     pub pua_findings: Vec<String>,

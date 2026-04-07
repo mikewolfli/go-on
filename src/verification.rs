@@ -6,25 +6,12 @@
 #![allow(dead_code)]
 
 use crate::agent::AgentAuditLog;
-use crate::pua::{PuaExecutionReport, quality_compass};
+use crate::pua::{quality_compass, PuaExecutionReport};
+use crate::quality_models::{QualitySignal, QualitySignalType, QualityVerdict};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum VerificationVerdict {
-    Approve,
-    ApproveWithCaveats,
-    Reject,
-    Revise,
-    InsufficientEvidence,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VerificationSignal {
-    pub signal_type: String, // "syntax", "tests", "lint", "policy", "logic"
-    pub result: bool,
-    pub confidence: f32,
-    pub details: Option<String>,
-}
+pub type VerificationVerdict = QualityVerdict;
+pub type VerificationSignal = QualitySignal;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StructuredReview {
@@ -45,8 +32,8 @@ pub struct DeterministicVerifier;
 impl DeterministicVerifier {
     pub fn run_syntax_check(_content: &str) -> VerificationSignal {
         VerificationSignal {
-            signal_type: "syntax".to_string(),
-            result: true,
+            signal_type: QualitySignalType::Syntax,
+            passed: true,
             confidence: 1.0,
             details: None,
         }
@@ -54,8 +41,8 @@ impl DeterministicVerifier {
 
     pub fn run_test_check(_test_results: &str) -> VerificationSignal {
         VerificationSignal {
-            signal_type: "tests".to_string(),
-            result: true,
+            signal_type: QualitySignalType::Tests,
+            passed: true,
             confidence: 1.0,
             details: None,
         }
@@ -63,8 +50,8 @@ impl DeterministicVerifier {
 
     pub fn run_lint_check(_code: &str) -> VerificationSignal {
         VerificationSignal {
-            signal_type: "lint".to_string(),
-            result: true,
+            signal_type: QualitySignalType::Lint,
+            passed: true,
             confidence: 0.8,
             details: None,
         }
@@ -74,8 +61,8 @@ impl DeterministicVerifier {
         quality_compass()
             .into_iter()
             .map(|item| VerificationSignal {
-                signal_type: "pua_quality_compass".to_string(),
-                result: true,
+                signal_type: QualitySignalType::PuaQualityCompass,
+                passed: true,
                 confidence: 0.7,
                 details: Some(item),
             })

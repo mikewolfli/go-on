@@ -24,13 +24,19 @@ mod i18n_watcher;
 mod mcp;
 mod mcp_server;
 mod memory;
+mod memory_response_cache;
 mod mode;
 mod model_selector;
+mod observability;
 mod orchestrator;
 mod promotion;
 mod pua;
+mod quality_models;
 mod reliability_optimizer;
+mod review_controls;
 mod roles;
+mod rpc_protocol;
+mod runtime_controls;
 mod setup;
 mod speed_optimizer;
 mod task_decomposer;
@@ -359,12 +365,11 @@ async fn run() -> Result<()> {
     )?);
     let flow = Arc::new(FlowManager::new(Arc::clone(&config), cli.phase.clone()));
 
-    let (cache, vector_store, (autotune_state, autotune_config, autotune_state_path)) =
-        tokio::try_join!(
-            initialize_cache(config_path.clone(), config.cache.clone()),
-            initialize_vector_store(config_path.clone(), config.vector.clone()),
-            initialize_autotune(config_path.clone(), config.autotune.clone()),
-        )?;
+    let (cache, vector_store, (autotune_state, autotune_config, autotune_state_path)) = tokio::try_join!(
+        initialize_cache(config_path.clone(), config.cache.clone()),
+        initialize_vector_store(config_path.clone(), config.vector.clone()),
+        initialize_autotune(config_path.clone(), config.autotune.clone()),
+    )?;
 
     // Get runtime configuration
     let runtime_config = config
