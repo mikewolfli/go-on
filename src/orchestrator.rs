@@ -122,13 +122,13 @@ pub fn estimate_model_latency(model_id: &str) -> u32 {
 pub fn estimate_capability_tier(capabilities: &[String]) -> u8 {
     let mut score = 2u8; // base score
 
-    if capabilities.contains(&"vision".to_string()) {
+    if capabilities.iter().any(|c| c == "vision") {
         score += 1;
     }
-    if capabilities.contains(&"function_calling".to_string()) {
+    if capabilities.iter().any(|c| c == "function_calling") {
         score += 1;
     }
-    if capabilities.contains(&"code".to_string()) {
+    if capabilities.iter().any(|c| c == "code") {
         score += 1;
     }
 

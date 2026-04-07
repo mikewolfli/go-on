@@ -9,7 +9,7 @@
 
 #![allow(dead_code)]
 
-use crate::pua::{PuaEnforcementPlan, build_enforcement_plan};
+use crate::pua::{build_enforcement_plan, PuaEnforcementPlan};
 use crate::roles::{AgentRole, RoleSpecification, RoleSpecifications};
 use serde::{Deserialize, Serialize};
 
@@ -288,8 +288,7 @@ impl TaskRouter {
         let risk_factors = Self::identify_risk_factors(characteristics);
 
         // Recommend safeguards
-        let mut recommended_safeguards =
-            Self::recommend_safeguards(characteristics, &risk_factors);
+        let mut recommended_safeguards = Self::recommend_safeguards(characteristics, &risk_factors);
         recommended_safeguards.extend(pua_enforcement.mandatory_safeguards.clone());
         Self::dedupe_strings(&mut recommended_safeguards);
 

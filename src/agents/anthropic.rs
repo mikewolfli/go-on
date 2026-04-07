@@ -210,7 +210,7 @@ impl AnthropicAgent {
 /// * `data` - SSE event data
 ///
 /// # Returns
-/// * `Result<(SseEventAction, Option<String>)>` - Returns Ok((SseEventAction, Option<String>)) with the action and optional token, or an error if parsing fails
+/// * `Result<(SseEventAction, Option<String>)>` - Returns `Ok((SseEventAction, Option<String>))` with the action and optional token, or an error if parsing fails
 fn parse_anthropic_event(data: &str) -> Result<(SseEventAction, Option<String>)> {
     if data.trim() == "[DONE]" {
         return Ok((SseEventAction::Stop, None));

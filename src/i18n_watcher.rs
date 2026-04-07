@@ -6,11 +6,11 @@
 
 use crate::i18n::I18nManager;
 use anyhow::Result;
-use log::{info, warn};
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use tracing::{info, warn};
 
 /// Language file watcher for hot-reloading
 pub struct LanguageWatcher {
@@ -168,9 +168,8 @@ mod tests {
         )
         .expect("failed to write language file");
 
-        let manager = Arc::new(
-            I18nManager::new(temp_dir.path()).expect("failed to initialize i18n manager"),
-        );
+        let manager =
+            Arc::new(I18nManager::new(temp_dir.path()).expect("failed to initialize i18n manager"));
 
         let watcher = LanguageWatcher::new(manager, temp_dir.path())
             .expect("watcher should be created from valid directory");

@@ -1,6 +1,47 @@
 //! Main entry point for the go-on ACP proxy
 //!
 //! This module handles command-line arguments, configuration loading, and server initialization.
+//!
+//! # Features
+//!
+//! - **Structured Logging**: Uses `tracing` for comprehensive observability
+//! - **Performance Monitoring**: Integrated performance metrics and profiling
+//! - **Configuration Validation**: Advanced validation with dependency analysis
+//! - **Agent Management**: Support for multiple AI agent vendors
+//! - **Error Handling**: Comprehensive error handling with panic recovery
+//! - **Internationalization**: Multi-language support with hot-reloading
+//!
+//! # Usage Examples
+//!
+//! ```bash
+//! # Start server with default configuration
+//! go-on
+//!
+//! # Start server with custom configuration
+//! go-on --config /path/to/config.toml
+//!
+//! # Validate configuration without starting server
+//! go-on --validate-config
+//!
+//! # Enable verbose logging
+//! go-on --verbose
+//!
+//! # Specify phase to run
+//! go-on --phase review
+//! ```
+//!
+//! # Architecture Overview
+//!
+//! The application follows a modular architecture:
+//!
+//! 1. **Configuration Layer**: `config.rs`, `config_validation.rs`
+//! 2. **Telemetry Layer**: `telemetry.rs`, `telemetry_enhanced.rs`
+//! 3. **Performance Layer**: `performance.rs`, `observability.rs`
+//! 4. **Agent Layer**: `agent.rs`, `agents/` directory
+//! 5. **Protocol Layer**: `acp.rs`, `rpc_protocol.rs`
+//! 6. **Business Logic**: `flow.rs`, `task_router.rs`, `orchestrator.rs`
+//!
+//! Each layer has clear responsibilities and well-defined interfaces.
 
 mod acp;
 mod adaptive_selector;
@@ -10,6 +51,7 @@ mod agents;
 mod audit;
 mod cache;
 mod config;
+mod config_validation;
 mod context;
 mod cost_optimizer;
 mod error;
@@ -29,6 +71,7 @@ mod mode;
 mod model_selector;
 mod observability;
 mod orchestrator;
+mod performance;
 mod promotion;
 mod pua;
 mod quality_models;
@@ -43,6 +86,7 @@ mod task_decomposer;
 mod task_graph;
 mod task_router;
 mod telemetry;
+mod telemetry_enhanced;
 mod tool;
 mod vector;
 mod verification;
@@ -53,7 +97,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use clap::Parser;
-use log::{error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::acp::AcpServer;
 use crate::agent::AgentRegistry;
@@ -262,9 +306,32 @@ async fn initialize_autotune(
 /// Main function - entry point for the application
 #[tokio::main]
 async fn main() {
-    // Set up panic hook to log panics
+    // Set up enhanced panic hook for production
     std::panic::set_hook(Box::new(|panic_info| {
-        error!("panic captured: {panic_info}");
+        let location = panic_info
+            .location()
+            .map(|loc| loc.to_string())
+            .unwrap_or_else(|| "unknown location".to_string());
+        let payload = panic_info.payload();
+        let message = if let Some(s) = payload.downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "unknown panic"
+        };
+
+        error!("panic captured at {}: {}", location, message);
+
+        // Log backtrace if available
+        #[cfg(debug_assertions)]
+        {
+            let backtrace = std::backtrace::Backtrace::capture();
+            error!("backtrace:\n{:?}", backtrace);
+        }
+
+        // Exit with error code
+        std::process::exit(1);
     }));
 
     // Run the application and handle any errors
@@ -282,12 +349,27 @@ async fn run() -> Result<()> {
     // Parse command-line arguments
     let cli = Cli::parse();
 
-    // Configure logging
-    let mut logger_builder = env_logger::Builder::from_default_env();
-    if cli.verbose {
-        logger_builder.filter_level(log::LevelFilter::Debug);
-    }
-    logger_builder.init();
+    // Configure telemetry (structured logging, metrics, tracing)
+    let telemetry_config = telemetry_enhanced::TelemetryConfig {
+        log_level: if cli.verbose {
+            "debug".to_string()
+        } else {
+            "info".to_string()
+        },
+        ..Default::default()
+    };
+
+    telemetry_enhanced::init_telemetry(&telemetry_config)
+        .map_err(|err| anyhow::anyhow!("failed to initialize telemetry: {}", err))?;
+
+    // Initialize enhanced telemetry components
+    let _metrics_recorder = telemetry_enhanced::MetricsRecorder::new();
+    let _health_metrics = telemetry_enhanced::HealthMetrics::new();
+    info!("enhanced telemetry components initialized");
+
+    // Initialize performance monitoring
+    let _performance_monitor = performance::init_performance_monitoring();
+    info!("performance monitoring initialized");
 
     // Determine configuration file path
     let config_path = match cli.config {
@@ -329,28 +411,91 @@ async fn run() -> Result<()> {
     // Load and validate configuration
     info!("loading config from {}", config_path.display());
     let config = Arc::new(AppConfig::load(&config_path)?);
+
+    // Perform enhanced configuration validation
+    let validation_result = config_validation::validate_config_file(&config_path)?;
+
+    // Also run legacy validation for compatibility
     let health_report = validate_runtime_readiness(&config_path, &config)?;
     emit_config_warnings(&health_report.warnings, cli.validate_config);
 
     // If only validating config, exit after validation
     if cli.validate_config {
+        // Enhanced validation report
+        let validation_report =
+            config_validation::ConfigValidator::new(&config_path, config.as_ref().clone())
+                .generate_report(&validation_result);
+
+        info!("configuration validation completed\n{}", validation_report);
+
+        // Legacy report for compatibility
         info!(
-            "configuration is valid, external secrets resolved, health score={}/100, warnings={} (critical={}, warn={}, info={})",
+            "legacy health report: score={}/100 warnings={} (critical={}, warn={}, info={})",
             health_report.score,
             health_report.total,
             health_report.critical_count,
             health_report.warn_count,
             health_report.info_count
         );
+
+        println!("{}", validation_report);
         println!(
-            "config health: score={}/100 warnings={} critical={} warn={} info={}",
+            "legacy health score: {}/100 (warnings: {} critical, {} warn, {} info)",
             health_report.score,
-            health_report.total,
             health_report.critical_count,
             health_report.warn_count,
             health_report.info_count
         );
+
+        if !validation_result.is_valid {
+            error!("Configuration validation failed");
+            return Ok(());
+        }
+
         return Ok(());
+    }
+
+    // Check if configuration is valid before proceeding
+    if !validation_result.is_valid {
+        error!("Configuration validation failed. Cannot start server.");
+        let report = config_validation::ConfigValidator::new(&config_path, config.as_ref().clone())
+            .generate_report(&validation_result);
+        error!("Validation report:\n{}", report);
+
+        // Provide more detailed error information
+        if validation_result.has_critical_errors() {
+            error!("Critical errors detected:");
+            for err in validation_result.critical_errors() {
+                error!("  [CRITICAL] {}: {}", err.section, err.message);
+            }
+            anyhow::bail!("Configuration has critical errors that must be fixed");
+        } else if validation_result.has_errors() {
+            error!("Configuration errors detected (non-critical):");
+            for err in validation_result.regular_errors() {
+                error!("  [ERROR] {}: {}", err.section, err.message);
+            }
+            warn!("Configuration has errors but may still work. Consider fixing them.");
+        } else {
+            anyhow::bail!("Configuration validation failed for unknown reasons");
+        }
+    } else {
+        // Configuration is valid, log warnings and recommendations if any
+        if !validation_result.warnings.is_empty() {
+            warn!("Configuration warnings detected:");
+            for warning in &validation_result.warnings {
+                warn!("  [WARNING] {}: {}", warning.section, warning.message);
+            }
+        }
+
+        if !validation_result.recommendations.is_empty() {
+            info!("Configuration recommendations:");
+            for recommendation in &validation_result.recommendations {
+                info!(
+                    "  [RECOMMENDATION] {:?}: {}",
+                    recommendation.category, recommendation.message
+                );
+            }
+        }
     }
 
     // Create HTTP client with timeout
@@ -364,6 +509,16 @@ async fn run() -> Result<()> {
         http_client.clone(),
     )?);
     let flow = Arc::new(FlowManager::new(Arc::clone(&config), cli.phase.clone()));
+
+    // Display agent vendor information
+    let agents_by_vendor = registry.agents_by_vendor();
+    info!("Agents organized by vendor category:");
+    for (category, agents) in &agents_by_vendor {
+        info!("  {:?}: {} agents", category, agents.len());
+        for agent in agents {
+            info!("    - {}", agent);
+        }
+    }
 
     let (cache, vector_store, (autotune_state, autotune_config, autotune_state_path)) = tokio::try_join!(
         initialize_cache(config_path.clone(), config.cache.clone()),

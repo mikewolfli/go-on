@@ -33,6 +33,13 @@
   - Item 9 progress (continued): added config-health unit tests for layered profile recommendation and suspicious-combination warning coverage.
   - Item 9 completion: added fault-injection integration tests for upstream provider failure fallback degradation and review-timeout collision behavior, with deterministic local test agents and validated runtime outcomes.
   - Item 9 completion (stability): hardened provider-failure scenario with explicit per-phase request timeout and validated trace/runtime-health evidence for degraded execution paths.
+  - Item 7 completion (stability): fixed conversation checkpoint prune branch-head consistency to avoid dangling references after branch/global prune, with unit and process-level regression coverage.
+  - Item 7 completion (consistency): upgraded rollback to persisted copy-on-rollback checkpoints so branch list/head semantics stay consistent after rollback and prune.
+  - Item 7 completion (hardening): added conversation/branch/checkpoint identifier validation for checkpoint RPCs and sanitized chat conversation_id input before auto-checkpointing.
+  - Item 7 completion (capacity): added checkpoint memory guardrails (per-conversation checkpoint cap and per-checkpoint message-char cap) with automatic branch-head repair after enforced trimming.
+  - Item 7 completion (observability): extended conversation.checkpoint.prune RPC response with repaired_heads and dropped_heads for client-side state sync.
+  - Item 9 completion (follow-up): aligned review-timeout collision test naming with actual gate outcomes (reject or degrade) to avoid semantic drift.
+  - Item 9 completion (follow-up): expanded integration coverage for checkpoint identifier validation, prune observability fields, and rollback branch visibility after prune.
 - Completion by item:
   - Item 1 (Single mandatory pipeline): Completed (100%).
   - Item 2 (Phase 10 hard gates): Completed (100%).
@@ -45,7 +52,7 @@
   - Item 9 (Failure-driven integration tests): Completed (100%).
 - Validation proof:
   - cargo check --all: passed
-  - cargo test: passed (170 unit + 12 integration)
+  - cargo test: passed (170 unit + 14 integration)
 - Next execution focus:
   - BLUE1 roadmap closed at 100%; next work should be post-roadmap hardening/performance initiatives.
 

@@ -6,12 +6,12 @@
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
-use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use tracing::{info, warn};
 
 /// Language enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

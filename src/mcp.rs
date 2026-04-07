@@ -10,9 +10,10 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
+use tracing::info;
 
 use crate::agent::AgentRegistry;
-use crate::tool::ToolRegistry;
+use crate::tool::{ToolInput, ToolRegistry};
 
 /// MCP Protocol Version
 pub const MCP_VERSION: &str = "2024-11-05";
@@ -164,49 +165,14 @@ impl McpServer {
 
     /// List available tools
     async fn handle_list_tools(&self, _request: &JsonRpcRequest) -> Result<Value> {
-        // Query tool_registry for available tools
-        let tools = vec![
-            McpTool {
-                name: "read_file".to_string(),
-                description: Some("Read contents of a file".to_string()),
-                input_schema: Some(json!({
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "File path to read"},
-                        "start_line": {"type": "number", "description": "Starting line (1-based)"},
-                        "end_line": {"type": "number", "description": "Ending line (1-based)"}
-                    },
-                    "required": ["path"]
-                })),
-            },
-            McpTool {
-                name: "write_file".to_string(),
-                description: Some("Write contents to a file".to_string()),
-                input_schema: Some(json!({
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "File path to write"},
-                        "content": {"type": "string", "description": "Content to write"},
-                        "mode": {"type": "string", "enum": ["overwrite", "append"], "description": "Write mode"}
-                    },
-                    "required": ["path", "content"]
-                })),
-            },
-            McpTool {
-                name: "search_files".to_string(),
-                description: Some("Search for files matching a pattern".to_string()),
-                input_schema: Some(json!({
-                    "type": "object",
-                    "properties": {
-                        "pattern": {"type": "string", "description": "Search pattern/glob"},
-                        "directory": {"type": "string", "description": "Search directory"}
-                    },
-                    "required": ["pattern"]
-                })),
-            },
-        ];
+        let tools = self
+            .tool_registry
+            .names()
+            .into_iter()
+            .map(tool_descriptor)
+            .collect::<Vec<_>>();
 
-        log::info!("MCP: Listing {} tools", tools.len());
+        info!("MCP: Listing {} tools", tools.len());
         Ok(json!({
             "tools": tools,
         }))
@@ -222,66 +188,45 @@ impl McpServer {
         let tool_name = params["name"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing tool name"))?;
-        let tool_input = params.get("arguments").cloned().unwrap_or(Value::Null);
+        let tool_input = params
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
 
         // Route to actual tool implementation via tool_registry
-        log::info!(
+        info!(
             "MCP: Calling tool '{}' with input: {:?}",
-            tool_name,
-            tool_input
+            tool_name, tool_input
         );
 
-        let result = match tool_name {
-            "read_file" => {
-                // Query tool_registry to execute read_file
-                let path = tool_input
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                json!({
-                    "tool": tool_name,
-                    "path": path,
-                    "status": "executed",
-                    "content": "File content would be returned by tool_registry"
-                })
-            }
-            "write_file" => {
-                let path = tool_input
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                json!({
-                    "tool": tool_name,
-                    "path": path,
-                    "status": "executed",
-                    "success": true
-                })
-            }
-            "search_files" => {
-                let pattern = tool_input
-                    .get("pattern")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("*");
-                json!({
-                    "tool": tool_name,
-                    "pattern": pattern,
-                    "status": "executed",
-                    "matches": []
-                })
-            }
-            _ => {
-                return Err(anyhow::anyhow!("Unknown tool: {}", tool_name));
-            }
-        };
+        let tool = self
+            .tool_registry
+            .get(tool_name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", tool_name))?;
+        validate_required_arguments(tool_name, &tool_input)?;
+        let result = tool.run(&ToolInput {
+            task_id: request
+                .id
+                .as_ref()
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "mcp-tool-call".to_string()),
+            phase: "mcp".to_string(),
+            agent_role: "tool".to_string(),
+            objective: format!("Execute MCP tool '{}'", tool_name),
+            constraints: None,
+            evidence: None,
+            payload: tool_input.clone(),
+        })?;
 
-        log::info!("MCP: Tool '{}' returned: {:?}", tool_name, result);
+        info!("MCP: Tool '{}' returned: {:?}", tool_name, result);
         Ok(json!({
             "content": [
                 {
                     "type": "text",
                     "text": serde_json::to_string(&result)?
                 }
-            ]
+            ],
+            "structuredContent": result,
         }))
     }
 
@@ -324,7 +269,9 @@ impl McpServer {
                     {
                         "uri": "go-on://agents",
                         "mimeType": "application/json",
-                        "text": "[]"
+                        "text": serde_json::to_string(&json!({
+                            "agents": self.agent_registry.names()
+                        }))?
                     }
                 ]
             })),
@@ -333,7 +280,9 @@ impl McpServer {
                     {
                         "uri": "go-on://tools",
                         "mimeType": "application/json",
-                        "text": "[]"
+                        "text": serde_json::to_string(&json!({
+                            "tools": self.tool_registry.names()
+                        }))?
                     }
                 ]
             })),
@@ -343,20 +292,121 @@ impl McpServer {
 
     /// List available agents
     async fn handle_list_agents(&self, _request: &JsonRpcRequest) -> Result<Value> {
-        // Query agent registry for available agents
-        log::info!("MCP: Listing available agents from agent_registry");
+        info!("MCP: Listing available agents from agent_registry");
         Ok(json!({
-            "agents": [],
+            "agents": self.agent_registry.names(),
         }))
     }
 
     /// List available models for agents
     async fn handle_list_models(&self, _request: &JsonRpcRequest) -> Result<Value> {
-        log::info!("MCP: Listing available models");
+        info!("MCP: Listing available models");
+        let models = self
+            .agent_registry
+            .models()
+            .into_iter()
+            .map(|(agent, default_model, models)| {
+                json!({
+                    "agent": agent,
+                    "default_model": default_model,
+                    "models": models,
+                })
+            })
+            .collect::<Vec<_>>();
         Ok(json!({
-            "models": [],
+            "models": models,
         }))
     }
+}
+
+fn tool_descriptor(name: &'static str) -> McpTool {
+    match name {
+        "read_file" => McpTool {
+            name: name.to_string(),
+            description: Some("Read contents of a file".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to read"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "write_file" => McpTool {
+            name: name.to_string(),
+            description: Some("Write contents to a file".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to write"},
+                    "content": {"type": "string", "description": "Content to write"},
+                    "mode": {"type": "string", "enum": ["overwrite", "append"], "description": "Write mode"}
+                },
+                "required": ["path", "content"]
+            })),
+        },
+        "search_files" => McpTool {
+            name: name.to_string(),
+            description: Some("Search for files matching a glob pattern".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Search pattern/glob"},
+                    "directory": {"type": "string", "description": "Search directory"}
+                },
+                "required": ["pattern"]
+            })),
+        },
+        "apply_patch" => McpTool {
+            name: name.to_string(),
+            description: Some("Apply a patch artifact".to_string()),
+            input_schema: Some(json!({"type": "object"})),
+        },
+        "run_tests" => McpTool {
+            name: name.to_string(),
+            description: Some("Run test suite".to_string()),
+            input_schema: Some(json!({"type": "object"})),
+        },
+        "inspect_git_diff" => McpTool {
+            name: name.to_string(),
+            description: Some("Inspect git diff".to_string()),
+            input_schema: Some(json!({"type": "object"})),
+        },
+        other => McpTool {
+            name: other.to_string(),
+            description: Some("Registered MCP tool".to_string()),
+            input_schema: Some(json!({"type": "object"})),
+        },
+    }
+}
+
+fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Result<()> {
+    match tool_name {
+        "read_file" => {
+            tool_input
+                .get("path")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow::anyhow!("read_file requires arguments.path"))?;
+        }
+        "write_file" => {
+            tool_input
+                .get("path")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow::anyhow!("write_file requires arguments.path"))?;
+            tool_input
+                .get("content")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow::anyhow!("write_file requires arguments.content"))?;
+        }
+        "search_files" => {
+            tool_input
+                .get("pattern")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow::anyhow!("search_files requires arguments.pattern"))?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Standard JSON-RPC error codes
@@ -373,18 +423,22 @@ pub mod error_codes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
-    #[tokio::test]
-    async fn test_mcp_initialize() {
-        // Mock test for MCP initialization
+    fn build_server() -> McpServer {
         let agent_registry = Arc::new(AgentRegistry::new());
         let tool_registry = Arc::new(ToolRegistry::new());
-        let server = McpServer::new(
+        McpServer::new(
             agent_registry,
             tool_registry,
             "go-on".to_string(),
             "1.0.0".to_string(),
-        );
+        )
+    }
+
+    #[tokio::test]
+    async fn test_mcp_initialize() {
+        let server = build_server();
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -402,14 +456,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mcp_list_tools() {
-        let agent_registry = Arc::new(AgentRegistry::new());
-        let tool_registry = Arc::new(ToolRegistry::new());
-        let server = McpServer::new(
-            agent_registry,
-            tool_registry,
-            "go-on".to_string(),
-            "1.0.0".to_string(),
-        );
+        let server = build_server();
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -423,18 +470,14 @@ mod tests {
         let resp = response.unwrap();
         assert!(resp.result.is_some(), "Result should contain tools");
         assert!(resp.error.is_none(), "No error should be present");
+        let result = resp.result.expect("tools result should exist");
+        let tools = result["tools"].as_array().expect("tools should be array");
+        assert!(tools.iter().any(|tool| tool["name"] == "read_file"));
     }
 
     #[tokio::test]
     async fn test_mcp_error_handling() {
-        let agent_registry = Arc::new(AgentRegistry::new());
-        let tool_registry = Arc::new(ToolRegistry::new());
-        let server = McpServer::new(
-            agent_registry,
-            tool_registry,
-            "go-on".to_string(),
-            "1.0.0".to_string(),
-        );
+        let server = build_server();
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -450,5 +493,82 @@ mod tests {
             resp.error.is_some(),
             "Error should be present for unknown method"
         );
+    }
+
+    #[tokio::test]
+    async fn test_mcp_tool_call_rejects_missing_required_arguments() {
+        let server = build_server();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "tools/call".to_string(),
+            params: Some(json!({
+                "name": "read_file",
+                "arguments": {}
+            })),
+            id: Some(json!(4)),
+        };
+
+        let response = server
+            .handle_request(request)
+            .await
+            .expect("request should return response envelope");
+        assert!(response.error.is_some());
+        let message = response
+            .error
+            .expect("error object should be present")
+            .message;
+        assert!(message.contains("requires arguments.path"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_resource_reads_return_registry_contents() {
+        let server = build_server();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "resources/read".to_string(),
+            params: Some(json!({"uri": "go-on://tools"})),
+            id: Some(json!(5)),
+        };
+
+        let response = server
+            .handle_request(request)
+            .await
+            .expect("read should succeed");
+        let result = response.result.expect("resource result should be present");
+        let text = result["contents"][0]["text"]
+            .as_str()
+            .expect("resource text should be string");
+        assert!(text.contains("read_file"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_tool_call_executes_registered_tool() {
+        let temp = tempdir().expect("tempdir should be created");
+        let file_path = temp.path().join("sample.txt");
+        std::fs::write(&file_path, "hello from mcp").expect("test file should be written");
+        let server = build_server();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "tools/call".to_string(),
+            params: Some(json!({
+                "name": "read_file",
+                "arguments": {"path": file_path.to_string_lossy().to_string()}
+            })),
+            id: Some(json!(6)),
+        };
+
+        let response = server
+            .handle_request(request)
+            .await
+            .expect("tool call should succeed");
+        let result = response.result.expect("tool call result should be present");
+        assert_eq!(result["structuredContent"]["success"], true);
+        let content = result["structuredContent"]["result"]["content"]
+            .as_str()
+            .expect("read_file content should be string");
+        assert_eq!(content, "hello from mcp");
     }
 }

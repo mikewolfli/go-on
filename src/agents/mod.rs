@@ -33,6 +33,7 @@ pub mod skywork;
 pub mod stepfun;
 pub mod titan;
 pub mod together;
+pub mod vendors;
 pub mod wenxin;
 pub mod xihu;
 pub mod yi;

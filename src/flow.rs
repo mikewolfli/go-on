@@ -203,7 +203,7 @@ mod tests {
     fn test_agent(agent_type: &str, url: Option<&str>) -> AgentConfig {
         AgentConfig {
             agent_type: agent_type.to_string(),
-            url: url.map(|v| v.to_string()),
+            url: url.map(std::string::ToString::to_string),
             chat_path: None,
             api_key_env: None,
             secret_key_env: None,

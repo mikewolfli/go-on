@@ -10,6 +10,7 @@ use crate::agent::{AgentTaskEnvelope, AgentTaskResult};
 use crate::pua::mode_execution_report;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
 
 /// Supported chat/agent modes
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -51,11 +52,9 @@ impl ModeRuntime for AskModeRuntime {
     }
     fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         // AskMode: Single-turn question-answering without tools
-        log::info!(
+        info!(
             "[Ask Mode] Executing task: {} (phase: {}, role: {})",
-            task.objective,
-            task.phase,
-            task.role
+            task.objective, task.phase, task.role
         );
         Ok(AgentTaskResult {
             success: true,
@@ -70,7 +69,7 @@ impl ModeRuntime for AskModeRuntime {
                 "Ask mode: task_id={}, phase={}, role={}",
                 task.task_id, task.phase, task.role
             )),
-                pua_report: Some(mode_execution_report("ask", false)),
+            pua_report: Some(mode_execution_report("ask", false)),
         })
     }
 }
@@ -99,11 +98,9 @@ impl ModeRuntime for EditModeRuntime {
     }
     fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         // EditMode: Constrained changes with plan/patch/verify workflow
-        log::info!(
+        info!(
             "[Edit Mode] Planning edits for: {} (phase: {}, role: {})",
-            task.objective,
-            task.phase,
-            task.role
+            task.objective, task.phase, task.role
         );
         Ok(AgentTaskResult {
             success: true,
@@ -119,7 +116,7 @@ impl ModeRuntime for EditModeRuntime {
                 "Edit mode: task_id={}, phase={}, role={}, max_tools=5",
                 task.task_id, task.phase, task.role
             )),
-                pua_report: Some(mode_execution_report("edit", false)),
+            pua_report: Some(mode_execution_report("edit", false)),
         })
     }
 }
@@ -155,15 +152,12 @@ impl ModeRuntime for AgentModeRuntime {
     fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         // AgentMode: Iterative multi-tool execution with user approval for high-risk ops
         let is_high_risk = self.is_high_risk_operation(&task.objective);
-        log::info!(
+        info!(
             "[Agent Mode] Executing iterative task: {} (phase: {}, role: {}, high_risk: {})",
-            task.objective,
-            task.phase,
-            task.role,
-            is_high_risk
+            task.objective, task.phase, task.role, is_high_risk
         );
         if is_high_risk {
-            log::warn!(
+            warn!(
                 "[Agent Mode] High-risk operation detected: {}",
                 task.objective
             );
@@ -188,7 +182,7 @@ impl ModeRuntime for AgentModeRuntime {
                 "Agent mode: task_id={}, phase={}, role={}, high_risk={}",
                 task.task_id, task.phase, task.role, is_high_risk
             )),
-                pua_report: Some(mode_execution_report("agent", is_high_risk)),
+            pua_report: Some(mode_execution_report("agent", is_high_risk)),
         })
     }
 }
@@ -219,11 +213,9 @@ impl ModeRuntime for FullAutoModeRuntime {
     }
     fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         // FullAutoMode: Unrestricted autonomous execution with full trust
-        log::info!(
+        info!(
             "[FullAuto Mode] Executing autonomous task: {} (phase: {}, role: {})",
-            task.objective,
-            task.phase,
-            task.role
+            task.objective, task.phase, task.role
         );
         Ok(AgentTaskResult {
             success: true,
@@ -241,7 +233,7 @@ impl ModeRuntime for FullAutoModeRuntime {
                 "FullAuto mode: task_id={}, phase={}, role={}, autonomy_level=full",
                 task.task_id, task.phase, task.role
             )),
-                pua_report: Some(mode_execution_report("full_auto", false)),
+            pua_report: Some(mode_execution_report("full_auto", false)),
         })
     }
 }
@@ -307,15 +299,12 @@ impl ModeRuntime for SafeGuardModeRuntime {
     fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         // SafeGuardMode: Automatic execution with approval gates for high-risk operations
         let is_high_risk = self.is_high_risk_operation(&task.objective);
-        log::info!(
+        info!(
             "[SafeGuard Mode] Executing protected task: {} (phase: {}, role: {}, high_risk: {})",
-            task.objective,
-            task.phase,
-            task.role,
-            is_high_risk
+            task.objective, task.phase, task.role, is_high_risk
         );
         if is_high_risk {
-            log::warn!(
+            warn!(
                 "[SafeGuard Mode] High-risk operation detected: {}",
                 task.objective
             );
@@ -344,7 +333,7 @@ impl ModeRuntime for SafeGuardModeRuntime {
                 "SafeGuard mode: task_id={}, phase={}, role={}, high_risk={}, safety=enhanced",
                 task.task_id, task.phase, task.role, is_high_risk
             )),
-                pua_report: Some(mode_execution_report("safeguard", is_high_risk)),
+            pua_report: Some(mode_execution_report("safeguard", is_high_risk)),
         })
     }
 }

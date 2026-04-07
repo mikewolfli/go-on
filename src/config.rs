@@ -7,6 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use tracing::{info, warn};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -296,10 +297,9 @@ impl AutoTuneState {
             Ok(content) => match serde_json::from_str::<AutoTuneState>(&content) {
                 Ok(state) => state,
                 Err(e) => {
-                    log::warn!(
+                    warn!(
                         "failed to parse autotune state from {}: {}, using defaults",
-                        path,
-                        e
+                        path, e
                     );
                     Self::new(config)
                 }
@@ -398,10 +398,9 @@ impl AutoTuneState {
         let new_value = (self.current_min_query_chars + config.min_query_chars_step)
             .min(config.min_query_chars_max);
         if new_value != self.current_min_query_chars {
-            log::info!(
+            info!(
                 "autotune: increasing min_query_chars from {} to {}",
-                self.current_min_query_chars,
-                new_value
+                self.current_min_query_chars, new_value
             );
             self.current_min_query_chars = new_value;
             true
@@ -417,10 +416,9 @@ impl AutoTuneState {
             .saturating_sub(config.min_query_chars_step)
             .max(config.min_query_chars_min);
         if new_value != self.current_min_query_chars {
-            log::info!(
+            info!(
                 "autotune: decreasing min_query_chars from {} to {}",
-                self.current_min_query_chars,
-                new_value
+                self.current_min_query_chars, new_value
             );
             self.current_min_query_chars = new_value;
             true
@@ -920,7 +918,7 @@ fn load_optional_rule_items(path: &Path) -> Vec<String> {
     match fs::read_to_string(path) {
         Ok(content) => parse_rule_items(&content),
         Err(err) => {
-            log::warn!(
+            warn!(
                 "failed to read optional rule file {}: {}",
                 path.display(),
                 err
@@ -1572,6 +1570,64 @@ fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
     if secret.trim().is_empty() {
         anyhow::bail!("keyring entry for {} resolved to empty value", field_name);
     }
+
+    // 验证密钥安全性
+    validate_secret_security(&secret, field_name)?;
+
+    Ok(())
+}
+
+/// 验证密钥的安全性
+///
+/// # 参数
+/// * `secret` - 要验证的密钥
+/// * `field_name` - 字段名称，用于错误消息
+///
+/// # 返回
+/// * `Result<()>` - 如果密钥安全则返回Ok，否则返回错误
+fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
+    use tracing::warn;
+
+    if secret.trim().is_empty() {
+        anyhow::bail!("{} is empty", field_name);
+    }
+
+    // 检查是否有换行符（可能是多行密钥或注入尝试）
+    if secret.contains('\n') || secret.contains('\r') {
+        warn!(
+            "{} contains newline characters, which may be a security issue",
+            field_name
+        );
+    }
+
+    // 检查密钥长度
+    if secret.len() < 8 {
+        warn!(
+            "{} is very short ({} characters), which may be insecure",
+            field_name,
+            secret.len()
+        );
+    }
+
+    // 检查是否包含常见的不安全模式
+    let insecure_patterns = [
+        ("password", "contains the word 'password'"),
+        ("123456", "contains simple numeric sequence"),
+        ("admin", "contains the word 'admin'"),
+        ("test", "contains the word 'test'"),
+        ("secret", "contains the word 'secret'"),
+    ];
+
+    let secret_lower = secret.to_lowercase();
+    for (pattern, description) in insecure_patterns {
+        if secret_lower.contains(pattern) {
+            warn!(
+                "{} {} - consider using a stronger secret",
+                field_name, description
+            );
+        }
+    }
+
     Ok(())
 }
 

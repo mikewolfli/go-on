@@ -95,8 +95,7 @@ pub fn build_enforcement_plan(
         mandatory_roles,
         red_lines: vec![
             "Close the loop with executable proof before claiming completion".to_string(),
-            "Verify facts before attributing failures to environment or dependencies"
-                .to_string(),
+            "Verify facts before attributing failures to environment or dependencies".to_string(),
             "Exhaust alternative approaches before declaring a blocker".to_string(),
         ],
         quality_compass: quality_compass(),
@@ -166,7 +165,10 @@ pub fn build_enforcement_plan(
     }
 }
 
-pub fn merge_phase_principles(existing: Option<Vec<String>>, phase_name: &str) -> Option<Vec<String>> {
+pub fn merge_phase_principles(
+    existing: Option<Vec<String>>,
+    phase_name: &str,
+) -> Option<Vec<String>> {
     let mut principles = existing.unwrap_or_default();
     principles.extend(vec![
         "PUA red line: close the loop with build/test/runtime proof".to_string(),
@@ -284,7 +286,9 @@ mod tests {
     #[test]
     fn merges_phase_principles_without_duplicates() {
         let merged = merge_phase_principles(
-            Some(vec!["PUA red line: close the loop with build/test/runtime proof".to_string()]),
+            Some(vec![
+                "PUA red line: close the loop with build/test/runtime proof".to_string(),
+            ]),
             "review",
         )
         .unwrap();

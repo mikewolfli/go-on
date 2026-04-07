@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
+use tracing::{debug, info, warn};
 
 use crate::agent::AgentRegistry;
 use crate::mcp::{JsonRpcRequest, JsonRpcResponse, McpServer};
@@ -123,11 +124,11 @@ impl McpHttpServer {
 
     /// Run the HTTP server
     pub async fn run(&self) -> Result<()> {
-        log::info!("MCP HTTP server listening on {}", self.bind_addr);
+        info!("MCP HTTP server listening on {}", self.bind_addr);
         let listener = TcpListener::bind(&self.bind_addr).await?;
 
-        log::info!("MCP HTTP server is operational. Ready to accept requests.");
-        log::debug!("MCP Protocol Version: {}", crate::mcp::MCP_VERSION);
+        info!("MCP HTTP server is operational. Ready to accept requests.");
+        debug!("MCP Protocol Version: {}", crate::mcp::MCP_VERSION);
 
         loop {
             let (mut socket, peer_addr) = listener.accept().await?;
@@ -135,7 +136,7 @@ impl McpHttpServer {
 
             tokio::spawn(async move {
                 if let Err(err) = handle_http_connection(&mut socket, mcp_server).await {
-                    log::warn!("HTTP connection error from {}: {}", peer_addr, err);
+                    warn!("HTTP connection error from {}: {}", peer_addr, err);
                 }
             });
         }

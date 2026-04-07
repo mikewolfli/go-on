@@ -185,7 +185,7 @@ impl VectorStore {
     /// * `max_snippet_chars` - Maximum number of characters in response snippets
     ///
     /// # Returns
-    /// * `Result<(Vec<VectorHit>, VectorPrecisionFeedback)>` - Returns Ok((Vec<VectorHit>, VectorPrecisionFeedback)) with the search results and precision feedback, or an error if something goes wrong
+    /// * `Result<(Vec<VectorHit>, VectorPrecisionFeedback)>` - Returns `Ok((Vec<VectorHit>, VectorPrecisionFeedback))` with the search results and precision feedback, or an error if something goes wrong
     pub fn search(
         &self,
         phase: &str,
@@ -382,7 +382,6 @@ impl VectorStore {
         conn.execute_batch("VACUUM;")?;
         Ok(())
     }
-
 }
 
 fn tokenize(text: &str) -> Vec<String> {
@@ -520,6 +519,6 @@ mod tests {
         let hits = vec![];
         let feedback = VectorPrecisionFeedback::new(&hits);
         assert_eq!(feedback.hit_count, 0);
-        assert_eq!(feedback.avg_similarity, 0.0);
+        assert!((feedback.avg_similarity - 0.0).abs() < f32::EPSILON);
     }
 }

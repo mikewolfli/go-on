@@ -567,7 +567,15 @@ fn rpc_conversation_checkpoint_and_rollback() {
     );
     assert_eq!(rolled["result"]["ok"], true);
     assert_eq!(rolled["result"]["branch_id"], "hotfix");
-    assert_eq!(rolled["result"]["checkpoint"]["checkpoint_id"], first_cp_id);
+    assert_ne!(rolled["result"]["checkpoint"]["checkpoint_id"], first_cp_id);
+    assert_eq!(
+        rolled["result"]["checkpoint"]["parent_checkpoint_id"],
+        first_cp_id
+    );
+    let hotfix_rollback_cp_id = rolled["result"]["checkpoint"]["checkpoint_id"]
+        .as_str()
+        .expect("hotfix rollback checkpoint id should be string")
+        .to_string();
 
     // Prune: remove old checkpoints from main, keeping only 1
     let pruned = harness.request(
@@ -581,6 +589,8 @@ fn rpc_conversation_checkpoint_and_rollback() {
     );
     assert_eq!(pruned["result"]["ok"], true);
     assert_eq!(pruned["result"]["removed"], 1);
+    assert!(pruned["result"]["repaired_heads"].is_number());
+    assert!(pruned["result"]["dropped_heads"].is_number());
 
     // List again: main should now have 1 checkpoint
     let listed2 = harness.request(
@@ -590,15 +600,44 @@ fn rpc_conversation_checkpoint_and_rollback() {
     );
     assert_eq!(listed2["result"]["count"], 1);
 
+    // After prune, creating a hotfix checkpoint should not reference a removed parent.
+    let hotfix_after_prune = harness.request(
+        46,
+        "conversation.checkpoint.create",
+        Some(json!({
+            "conversation_id": "conv-test",
+            "branch_id": "hotfix",
+            "messages": [{"role": "assistant", "content": "hotfix after prune"}],
+            "note": "hotfix checkpoint"
+        })),
+    );
+    assert_eq!(hotfix_after_prune["result"]["ok"], true);
+    assert_eq!(
+        hotfix_after_prune["result"]["checkpoint"]["parent_checkpoint_id"],
+        hotfix_rollback_cp_id
+    );
+
+    let hotfix_list = harness.request(
+        461,
+        "conversation.checkpoint.list",
+        Some(json!({"conversation_id": "conv-test", "branch_id": "hotfix"})),
+    );
+    assert_eq!(hotfix_list["result"]["ok"], true);
+    assert!(hotfix_list["result"]["checkpoints"]
+        .as_array()
+        .expect("hotfix checkpoints should be array")
+        .iter()
+        .any(|item| item["checkpoint_id"] == hotfix_rollback_cp_id));
+
     // Missing checkpoint_id should return an error
     let bad_rollback = harness.request(
-        46,
+        47,
         "conversation.rollback",
         Some(json!({"conversation_id": "conv-test"})),
     );
     assert_eq!(bad_rollback["error"]["code"], -32602);
 
-    let shutdown = harness.request(47, "shutdown", None);
+    let shutdown = harness.request(48, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
     harness.wait_for_exit(Duration::from_secs(8));
 }
@@ -660,6 +699,28 @@ fn rpc_cache_clear_and_checkpoint_missing_messages() {
         Some(json!({"conversation_id": "conv-unknown"})),
     );
     assert_eq!(empty_list["result"]["count"], 0);
+
+    // invalid conversation_id/branch_id should fail validation
+    let bad_identifiers = harness.request(
+        621,
+        "conversation.checkpoint.create",
+        Some(json!({
+            "conversation_id": "  ",
+            "branch_id": "bad branch",
+            "messages": [{"role": "user", "content": "x"}]
+        })),
+    );
+    assert_eq!(bad_identifiers["error"]["code"], -32602);
+
+    let bad_keep = harness.request(
+        622,
+        "conversation.checkpoint.prune",
+        Some(json!({
+            "conversation_id": "conv-x",
+            "keep": 0
+        })),
+    );
+    assert_eq!(bad_keep["error"]["code"], -32602);
 
     // metrics.reset should succeed
     let reset = harness.request(63, "metrics.reset", None);
@@ -865,7 +926,7 @@ fn rpc_chat_provider_failure_degrades_to_fallback_agent() {
 }
 
 #[test]
-fn rpc_chat_review_timeout_collision_reports_timeout_and_rejection() {
+fn rpc_chat_review_timeout_collision_reports_timeout_and_gate_outcome() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");
     write_review_timeout_collision_config(&config_path);

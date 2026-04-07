@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use log::{debug, error, info, warn};
 use opentelemetry::{Context as OtelContext, KeyValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -19,6 +18,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, Mutex, Notify};
 use tokio::task::{spawn_blocking, JoinHandle};
 use tokio::time::{sleep, timeout, MissedTickBehavior};
+use tracing::{debug, error, info, warn};
 
 use crate::agent::{Agent, AgentRegistry, Message};
 use crate::cache::ResponseCache;
@@ -31,6 +31,7 @@ use crate::evaluation::TraceEvent;
 use crate::flow::{FlowManager, ResolvedPhase};
 use crate::memory_response_cache::MemoryResponseCache;
 use crate::observability::{push_metric_header, push_scalar_metric};
+use crate::performance;
 use crate::pua::review_gate_prompt;
 use crate::review_controls::{
     review_timeout, review_verdict, ReviewDecision, ReviewGateOutcome, ReviewTimeoutPolicy,
@@ -44,6 +45,7 @@ use crate::rpc_protocol::{
 use crate::runtime_controls::OnlineControllerState;
 use crate::task_router::{RoutingDecision, TaskCharacteristics, TaskRouter};
 use crate::telemetry::TelemetryRuntime;
+use crate::telemetry_enhanced;
 use crate::vector::{VectorHit, VectorStore};
 
 const TRACE_BUFFER_MAX: usize = 2048;
@@ -57,6 +59,14 @@ const DEFAULT_SUMMARY_TRIGGER_MESSAGES: usize = 8;
 const DEFAULT_SUMMARY_MAX_CHARS: usize = 1200;
 const DEFAULT_BREAKER_FAILURE_THRESHOLD: u32 = 3;
 const DEFAULT_BREAKER_OPEN_SECONDS: i64 = 60;
+const MAX_CONVERSATION_ID_LEN: usize = 128;
+const MAX_BRANCH_ID_LEN: usize = 64;
+const MAX_CHECKPOINT_ID_LEN: usize = 128;
+const MAX_CHECKPOINTS_PER_CONVERSATION: usize = 256;
+const MAX_CHECKPOINT_MESSAGE_CHARS: usize = 64_000;
+const MAX_CONVERSATIONS_TRACKED: usize = 512;
+const MAX_STREAM_CHUNKS: usize = 4_096;
+const MAX_STREAM_CHARS: usize = 256_000;
 const HISTOGRAM_BUCKETS_SECONDS: [f64; 10] =
     [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0];
 
@@ -195,6 +205,14 @@ struct ConversationCheckpoint {
 struct ConversationState {
     checkpoints: Vec<ConversationCheckpoint>,
     branch_heads: HashMap<String, String>,
+    last_touched_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct ConversationPruneResult {
+    removed: usize,
+    repaired_heads: usize,
+    dropped_heads: usize,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -878,6 +896,8 @@ pub struct AcpServer {
     memory_cache: Arc<MemoryResponseCache>,
     /// Conversation checkpoint store for branch/rollback control
     conversation_store: Arc<StdMutex<HashMap<String, ConversationState>>>,
+    /// Most-recently touched conversations; used for bounded conversation-store eviction
+    conversation_touch_order: Arc<StdMutex<Vec<String>>>,
     /// Maintenance tracker for system health
     maintenance: Arc<MaintenanceTracker>,
     /// Lifecycle state management
@@ -952,6 +972,7 @@ impl AcpServer {
             trace_events: Arc::new(StdMutex::new(Vec::new())),
             memory_cache: Arc::new(MemoryResponseCache::default()),
             conversation_store: Arc::new(StdMutex::new(HashMap::new())),
+            conversation_touch_order: Arc::new(StdMutex::new(Vec::new())),
             maintenance: Arc::new(MaintenanceTracker::default()),
             lifecycle: Arc::new(LifecycleState::default()),
             circuit_breakers: Arc::new(CircuitBreakerRegistry::default()),
@@ -1216,6 +1237,9 @@ impl AcpServer {
             0,
         );
 
+        // Enhanced telemetry logging
+        telemetry_enhanced::log::request_start("rpc", &trace.method, &trace.request_id);
+
         let method = request.method.clone();
         let request_id = request.id.clone();
         let started = Instant::now();
@@ -1233,20 +1257,26 @@ impl AcpServer {
 
             match method.as_str() {
             "initialize" => {
-                let result = json!({
-                    "name": "go-on",
-                    "protocol": "acp",
-                    "capabilities": {
-                        "chat": true,
-                        "streaming": true,
-                        "phase": true,
-                        "metrics": true,
-                        "debug_panel": true,
-                        "mcp_adapter": true,
-                        "conversation_control": true,
-                        "autotune": self.autotune_config_snapshot().map(|cfg| cfg.enabled).unwrap_or(false),
-                    }
+                // Measure initialization performance
+                let (result, duration) = performance::utils::measure_time(|| {
+                    json!({
+                        "name": "go-on",
+                        "protocol": "acp",
+                        "capabilities": {
+                            "chat": true,
+                            "streaming": true,
+                            "phase": true,
+                            "metrics": true,
+                            "debug_panel": true,
+                            "mcp_adapter": true,
+                            "conversation_control": true,
+                            "autotune": self.autotune_config_snapshot().map(|cfg| cfg.enabled).unwrap_or(false),
+                        }
+                    })
                 });
+
+                // Log performance metrics
+                debug!("initialize request handled in {:?}", duration);
                 self.send_result(request_id, result).await
             }
             "mcp.initialize" => {
@@ -1391,13 +1421,19 @@ impl AcpServer {
                             .and_then(|v| v.as_u64())
                             .unwrap_or(50)
                             .min(500) as usize;
-                        let checkpoints =
-                            self.list_conversation_checkpoints(conversation_id, branch_id, limit);
-                        json!({
-                            "ok": true,
-                            "count": checkpoints.len(),
-                            "checkpoints": checkpoints,
-                        })
+                        match self
+                            .list_conversation_checkpoints(conversation_id, branch_id, limit)
+                        {
+                            Ok(checkpoints) => json!({
+                                "ok": true,
+                                "count": checkpoints.len(),
+                                "checkpoints": checkpoints,
+                            }),
+                            Err(message) => json!({
+                                "ok": false,
+                                "error": message,
+                            }),
+                        }
                     }
                     _ => {
                         return self
@@ -1424,14 +1460,19 @@ impl AcpServer {
                 .await
             }
             "chat" => {
-                self
-                    .handle_chat(
+                // Measure chat handling performance
+                let (result, duration) = performance::utils::measure_time(|| {
+                    self.handle_chat(
                         request_id,
                         request.params,
                         request_span.clone(),
                         Some(trace.clone()),
                     )
-                    .await
+                });
+
+                // Log performance metrics
+                debug!("chat request handled in {:?}", duration);
+                result.await
             }
             "metrics.get" => {
                 let result = serde_json::to_value(self.metrics.snapshot())?;
@@ -1852,14 +1893,31 @@ impl AcpServer {
             }
             "conversation.checkpoint.create" => {
                 let params = request.params.unwrap_or_else(|| json!({}));
-                let conversation_id = params
+                let conversation_id_raw = params
                     .get("conversation_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("default");
-                let branch_id = params
+                let conversation_id = match validate_storage_key(
+                    conversation_id_raw,
+                    "conversation_id",
+                    MAX_CONVERSATION_ID_LEN,
+                ) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        return self.send_error(request_id, -32602, message, None).await;
+                    }
+                };
+                let branch_id_raw = params
                     .get("branch_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("main");
+                let branch_id =
+                    match validate_storage_key(branch_id_raw, "branch_id", MAX_BRANCH_ID_LEN) {
+                        Ok(value) => value,
+                        Err(message) => {
+                            return self.send_error(request_id, -32602, message, None).await;
+                        }
+                    };
                 let note = params
                     .get("note")
                     .and_then(|v| v.as_str())
@@ -1892,60 +1950,95 @@ impl AcpServer {
                     }
                 };
 
-                if let Some(checkpoint) =
-                    self.create_conversation_checkpoint(conversation_id, branch_id, messages, note)
+                match self.create_conversation_checkpoint(&conversation_id, &branch_id, messages, note)
                 {
-                    self.send_result(
-                        request_id,
-                        json!({
-                            "ok": true,
-                            "checkpoint": checkpoint,
-                        }),
-                    )
-                    .await
-                } else {
-                    self.send_error(
-                        request_id,
-                        -32603,
-                        "failed to create conversation checkpoint".to_string(),
-                        None,
-                    )
-                    .await
+                    Ok(checkpoint) => {
+                        self.send_result(
+                            request_id,
+                            json!({
+                                "ok": true,
+                                "checkpoint": checkpoint,
+                            }),
+                        )
+                        .await
+                    }
+                    Err(message) => self.send_error(request_id, -32603, message, None).await,
                 }
             }
             "conversation.checkpoint.list" => {
                 let params = request.params.unwrap_or_else(|| json!({}));
-                let conversation_id = params
+                let conversation_id_raw = params
                     .get("conversation_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("default");
-                let branch_id = params.get("branch_id").and_then(|v| v.as_str());
+                let conversation_id = match validate_storage_key(
+                    conversation_id_raw,
+                    "conversation_id",
+                    MAX_CONVERSATION_ID_LEN,
+                ) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        return self.send_error(request_id, -32602, message, None).await;
+                    }
+                };
+                let branch_id = match params.get("branch_id").and_then(|v| v.as_str()) {
+                    Some(value) => {
+                        match validate_storage_key(value, "branch_id", MAX_BRANCH_ID_LEN) {
+                            Ok(valid) => Some(valid),
+                            Err(message) => {
+                                return self.send_error(request_id, -32602, message, None).await;
+                            }
+                        }
+                    }
+                    None => None,
+                };
                 let limit = params
                     .get("limit")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(50)
                     .min(500) as usize;
 
-                let checkpoints =
-                    self.list_conversation_checkpoints(conversation_id, branch_id, limit);
-                self.send_result(
-                    request_id,
-                    json!({
-                        "ok": true,
-                        "count": checkpoints.len(),
-                        "checkpoints": checkpoints,
-                    }),
-                )
-                .await
+                match self.list_conversation_checkpoints(&conversation_id, branch_id.as_deref(), limit)
+                {
+                    Ok(checkpoints) => {
+                        self.send_result(
+                            request_id,
+                            json!({
+                                "ok": true,
+                                "count": checkpoints.len(),
+                                "checkpoints": checkpoints,
+                            }),
+                        )
+                        .await
+                    }
+                    Err(message) => self.send_error(request_id, -32603, message, None).await,
+                }
             }
             "conversation.rollback" => {
                 let params = request.params.unwrap_or_else(|| json!({}));
-                let conversation_id = params
+                let conversation_id_raw = params
                     .get("conversation_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("default");
+                let conversation_id = match validate_storage_key(
+                    conversation_id_raw,
+                    "conversation_id",
+                    MAX_CONVERSATION_ID_LEN,
+                ) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        return self.send_error(request_id, -32602, message, None).await;
+                    }
+                };
                 let checkpoint_id = match params.get("checkpoint_id").and_then(|v| v.as_str()) {
-                    Some(value) => value,
+                    Some(value) => {
+                        match validate_storage_key(value, "checkpoint_id", MAX_CHECKPOINT_ID_LEN) {
+                            Ok(valid) => valid,
+                            Err(message) => {
+                                return self.send_error(request_id, -32602, message, None).await;
+                            }
+                        }
+                    }
                     None => {
                         return self
                             .send_error(
@@ -1958,18 +2051,28 @@ impl AcpServer {
                             .await;
                     }
                 };
-                let target_branch = params.get("branch_id").and_then(|v| v.as_str());
+                let target_branch = match params.get("branch_id").and_then(|v| v.as_str()) {
+                    Some(value) => {
+                        match validate_storage_key(value, "branch_id", MAX_BRANCH_ID_LEN) {
+                            Ok(valid) => Some(valid),
+                            Err(message) => {
+                                return self.send_error(request_id, -32602, message, None).await;
+                            }
+                        }
+                    }
+                    None => None,
+                };
 
                 if let Some(checkpoint) = self.rollback_conversation_checkpoint(
-                    conversation_id,
-                    checkpoint_id,
-                    target_branch,
+                    &conversation_id,
+                    &checkpoint_id,
+                    target_branch.as_deref(),
                 ) {
                     self.send_result(
                         request_id,
                         json!({
                             "ok": true,
-                            "conversation_id": conversation_id,
+                            "conversation_id": conversation_id.clone(),
                             "branch_id": checkpoint.branch_id,
                             "checkpoint": checkpoint,
                             "messages": checkpoint.messages,
@@ -1991,24 +2094,70 @@ impl AcpServer {
             }
             "conversation.checkpoint.prune" => {
                 let params = request.params.unwrap_or_else(|| json!({}));
-                let conversation_id = params
+                let conversation_id_raw = params
                     .get("conversation_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("default");
-                let branch_id = params.get("branch_id").and_then(|v| v.as_str());
-                let keep = params
-                    .get("keep")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(20)
-                    .max(1) as usize;
+                let conversation_id = match validate_storage_key(
+                    conversation_id_raw,
+                    "conversation_id",
+                    MAX_CONVERSATION_ID_LEN,
+                ) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        return self.send_error(request_id, -32602, message, None).await;
+                    }
+                };
+                let branch_id = match params.get("branch_id").and_then(|v| v.as_str()) {
+                    Some(value) => {
+                        match validate_storage_key(value, "branch_id", MAX_BRANCH_ID_LEN) {
+                            Ok(valid) => Some(valid),
+                            Err(message) => {
+                                return self.send_error(request_id, -32602, message, None).await;
+                            }
+                        }
+                    }
+                    None => None,
+                };
+                let keep = match params.get("keep") {
+                    Some(value) => match value.as_u64() {
+                        Some(0) => {
+                            return self
+                                .send_error(
+                                    request_id,
+                                    -32602,
+                                    "keep must be >= 1 for conversation.checkpoint.prune"
+                                        .to_string(),
+                                    None,
+                                )
+                                .await;
+                        }
+                        Some(valid) => valid.min(500) as usize,
+                        None => {
+                            return self
+                                .send_error(
+                                    request_id,
+                                    -32602,
+                                    "keep must be an integer >= 1 for conversation.checkpoint.prune"
+                                        .to_string(),
+                                    None,
+                                )
+                                .await;
+                        }
+                    },
+                    None => 20,
+                };
 
-                let removed = self.prune_conversation_checkpoints(conversation_id, branch_id, keep);
+                let prune =
+                    self.prune_conversation_checkpoints(&conversation_id, branch_id.as_deref(), keep);
                 self.send_result(
                     request_id,
                     json!({
                         "ok": true,
                         "conversation_id": conversation_id,
-                        "removed": removed,
+                        "removed": prune.removed,
+                        "repaired_heads": prune.repaired_heads,
+                        "dropped_heads": prune.dropped_heads,
                     }),
                 )
                 .await
@@ -2051,18 +2200,26 @@ impl AcpServer {
                 None,
                 duration_ms,
             ),
-            Err(err) => self.record_trace_event(
-                &trace,
-                "request.end",
-                "error",
-                "rpc",
-                json!({
-                    "method": method,
-                    "request_id": trace.request_id,
-                }),
-                Some(err.to_string()),
-                duration_ms,
-            ),
+            Err(err) => {
+                self.record_trace_event(
+                    &trace,
+                    "request.end",
+                    "error",
+                    "rpc",
+                    json!({
+                        "method": method,
+                        "request_id": trace.request_id,
+                    }),
+                    Some(err.to_string()),
+                    duration_ms,
+                );
+                // Enhanced telemetry logging for errors
+                telemetry_enhanced::log::error_with_context(
+                    err,
+                    "request_processing",
+                    Some(&trace.request_id),
+                );
+            }
         }
 
         if let Some(span) = request_span {
@@ -2077,6 +2234,16 @@ impl AcpServer {
                 ],
             );
         }
+
+        // Enhanced telemetry logging for request completion
+        let status_code = if result.is_ok() { 200 } else { 500 };
+        telemetry_enhanced::log::request_complete(
+            "rpc",
+            &trace.method,
+            &trace.request_id,
+            status_code,
+            duration_ms as f64,
+        );
 
         result
     }
@@ -2106,6 +2273,7 @@ impl AcpServer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn record_trace_event(
         &self,
         trace: &RequestTraceContext,
@@ -2144,6 +2312,8 @@ impl AcpServer {
                 let extra = guard.len() - TRACE_BUFFER_MAX;
                 guard.drain(0..extra);
             }
+        } else {
+            warn!("failed to record trace event: trace_events lock poisoned");
         }
     }
 
@@ -2294,7 +2464,10 @@ impl AcpServer {
             let mode_name = mode.map(|m| m.as_str()).unwrap_or("default");
             let auto_conv_id = chat_params
                 .conversation_id
-                .clone()
+                .as_deref()
+                .and_then(|value| {
+                    validate_storage_key(value, "conversation_id", MAX_CONVERSATION_ID_LEN).ok()
+                })
                 .unwrap_or_else(|| pipeline_trace.trace_id.clone());
             let original_messages = chat_params.messages.clone();
             let (flow, registry) = self.routing_handles()?;
@@ -2656,6 +2829,19 @@ impl AcpServer {
                     0,
                 );
                 self.send_notification("chat.stream.done", done_payload).await?;
+                self.record_trace_event(
+                    &pipeline_trace,
+                    "phase.agent",
+                    "ok",
+                    routing.phase.phase_name.as_str(),
+                    json!({
+                        "agent": cached_agent,
+                        "cache_level": "memory",
+                        "source": "memory_cache",
+                    }),
+                    None,
+                    0,
+                );
 
                 self.send_result(
                     id,
@@ -2731,6 +2917,19 @@ impl AcpServer {
                             0,
                         );
                         self.send_notification("chat.stream.done", done_payload).await?;
+                    self.record_trace_event(
+                        &pipeline_trace,
+                        "phase.agent",
+                        "ok",
+                        routing.phase.phase_name.as_str(),
+                        json!({
+                            "agent": cached_agent,
+                            "cache_level": "sqlite",
+                            "source": "sqlite_cache",
+                        }),
+                        None,
+                        0,
+                    );
 
                     self.send_result(
                         id,
@@ -3030,23 +3229,28 @@ impl AcpServer {
                         content: response_text.clone(),
                     });
                     let cp_note = format!("{}/{}", phase_name, agent_name);
-                    if let Some(cp) = self.create_conversation_checkpoint(
+                    match self.create_conversation_checkpoint(
                         &auto_conv_id,
                         "main",
                         cp_messages,
                         Some(cp_note),
                     ) {
-                        let _ = self
-                            .send_notification(
-                                "conversation.checkpoint",
-                                json!({
-                                    "checkpoint_id": cp.checkpoint_id,
-                                    "conversation_id": cp.conversation_id,
-                                    "branch_id": cp.branch_id,
-                                    "auto": true,
-                                }),
-                            )
-                            .await;
+                        Ok(cp) => {
+                            let _ = self
+                                .send_notification(
+                                    "conversation.checkpoint",
+                                    json!({
+                                        "checkpoint_id": cp.checkpoint_id,
+                                        "conversation_id": cp.conversation_id,
+                                        "branch_id": cp.branch_id,
+                                        "auto": true,
+                                    }),
+                                )
+                                .await;
+                        }
+                        Err(err) => {
+                            warn!("auto-checkpoint skipped: {}", err);
+                        }
                     }
                     return Ok(());
                 }
@@ -3157,11 +3361,37 @@ impl AcpServer {
         branch_id: &str,
         messages: Vec<Message>,
         note: Option<String>,
-    ) -> Option<ConversationCheckpoint> {
-        let mut store = self.conversation_store.lock().ok()?;
+    ) -> std::result::Result<ConversationCheckpoint, String> {
+        if checkpoint_message_chars(&messages) > MAX_CHECKPOINT_MESSAGE_CHARS {
+            return Err(format!(
+                "checkpoint messages exceed max chars {}",
+                MAX_CHECKPOINT_MESSAGE_CHARS
+            ));
+        }
+
+        let mut store = self
+            .conversation_store
+            .lock()
+            .map_err(|_| "conversation store lock poisoned".to_string())?;
+
+        if !store.contains_key(conversation_id) && store.len() >= MAX_CONVERSATIONS_TRACKED {
+            if let Some(evicted) =
+                evict_oldest_conversation(&mut store, &self.conversation_touch_order)
+            {
+                warn!(
+                    "conversation store reached limit ({}), evicted oldest conversation '{}'",
+                    MAX_CONVERSATIONS_TRACKED, evicted
+                );
+            }
+        }
+
+        let touched_at = now_ts();
         let state = store
             .entry(conversation_id.to_string())
             .or_insert_with(ConversationState::default);
+        state.last_touched_at = touched_at;
+
+        enforce_checkpoint_capacity(state, 1, None);
 
         let parent_checkpoint_id = state.branch_heads.get(branch_id).cloned();
         let checkpoint = ConversationCheckpoint {
@@ -3178,7 +3408,8 @@ impl AcpServer {
             .branch_heads
             .insert(branch_id.to_string(), checkpoint.checkpoint_id.clone());
         state.checkpoints.push(checkpoint.clone());
-        Some(checkpoint)
+        touch_conversation_order(&self.conversation_touch_order, conversation_id);
+        Ok(checkpoint)
     }
 
     fn list_conversation_checkpoints(
@@ -3186,15 +3417,16 @@ impl AcpServer {
         conversation_id: &str,
         branch_id: Option<&str>,
         limit: usize,
-    ) -> Vec<ConversationCheckpoint> {
-        let Ok(store) = self.conversation_store.lock() else {
-            return Vec::new();
-        };
+    ) -> std::result::Result<Vec<ConversationCheckpoint>, String> {
+        let store = self
+            .conversation_store
+            .lock()
+            .map_err(|_| "conversation store lock poisoned".to_string())?;
         let Some(state) = store.get(conversation_id) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
 
-        state
+        Ok(state
             .checkpoints
             .iter()
             .rev()
@@ -3205,7 +3437,7 @@ impl AcpServer {
             })
             .take(limit.max(1))
             .cloned()
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>())
     }
 
     fn rollback_conversation_checkpoint(
@@ -3214,8 +3446,15 @@ impl AcpServer {
         checkpoint_id: &str,
         target_branch: Option<&str>,
     ) -> Option<ConversationCheckpoint> {
-        let mut store = self.conversation_store.lock().ok()?;
+        let mut store = match self.conversation_store.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                warn!("conversation rollback failed because conversation store lock is poisoned");
+                return None;
+            }
+        };
         let state = store.get_mut(conversation_id)?;
+        state.last_touched_at = now_ts();
         let checkpoint = state
             .checkpoints
             .iter()
@@ -3225,12 +3464,22 @@ impl AcpServer {
         let branch = target_branch
             .unwrap_or(checkpoint.branch_id.as_str())
             .to_string();
+        let restored = ConversationCheckpoint {
+            checkpoint_id: format!("cp-{}", CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed)),
+            conversation_id: conversation_id.to_string(),
+            branch_id: branch.clone(),
+            parent_checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
+            created_at: now_ts(),
+            note: Some(format!("rollback:{}", checkpoint.checkpoint_id)),
+            messages: checkpoint.messages.clone(),
+        };
+
+        enforce_checkpoint_capacity(state, 1, Some(checkpoint_id));
+        state.checkpoints.push(restored.clone());
         state
             .branch_heads
-            .insert(branch.clone(), checkpoint.checkpoint_id.clone());
-
-        let mut restored = checkpoint;
-        restored.branch_id = branch;
+            .insert(branch, restored.checkpoint_id.clone());
+        touch_conversation_order(&self.conversation_touch_order, conversation_id);
         Some(restored)
     }
 
@@ -3239,13 +3488,15 @@ impl AcpServer {
         conversation_id: &str,
         branch_id: Option<&str>,
         keep: usize,
-    ) -> usize {
+    ) -> ConversationPruneResult {
         let Ok(mut store) = self.conversation_store.lock() else {
-            return 0;
+            warn!("conversation prune skipped because conversation store lock is poisoned");
+            return ConversationPruneResult::default();
         };
         let Some(state) = store.get_mut(conversation_id) else {
-            return 0;
+            return ConversationPruneResult::default();
         };
+        state.last_touched_at = now_ts();
 
         let original_len = state.checkpoints.len();
         if let Some(target_branch) = branch_id {
@@ -3257,7 +3508,7 @@ impl AcpServer {
                 .collect();
 
             if branch_checkpoints.len() <= keep {
-                return 0;
+                return ConversationPruneResult::default();
             }
 
             let to_remove_count = branch_checkpoints.len() - keep;
@@ -3268,13 +3519,23 @@ impl AcpServer {
         } else {
             // Prune globally: keep most recent `keep` checkpoints across all branches
             if state.checkpoints.len() <= keep {
-                return 0;
+                return ConversationPruneResult::default();
             }
             let drain_to = state.checkpoints.len() - keep;
             state.checkpoints.drain(0..drain_to);
         }
 
-        original_len - state.checkpoints.len()
+        let before_heads = state.branch_heads.clone();
+        repair_conversation_branch_heads(state);
+        let (repaired_heads, dropped_heads) =
+            branch_head_adjustment_counts(&before_heads, &state.branch_heads);
+        touch_conversation_order(&self.conversation_touch_order, conversation_id);
+
+        ConversationPruneResult {
+            removed: original_len - state.checkpoints.len(),
+            repaired_heads,
+            dropped_heads,
+        }
     }
 
     fn record_online_controller_agent_outcome(
@@ -3910,9 +4171,20 @@ impl AcpServer {
         let mut streamed_chars: usize = 0;
         let collect_stream = async {
             while let Some(token) = receiver.recv().await {
+                let token_chars = token.chars().count();
+                let projected_chunks = stream_chunks.saturating_add(1);
+                let projected_chars = streamed_chars.saturating_add(token_chars);
+                if stream_would_exceed_limits(stream_chunks, streamed_chars, token_chars) {
+                    return Err(anyhow::anyhow!(
+                        "agent '{}' stream exceeded limits (chunks={}, chars={})",
+                        agent_name,
+                        projected_chunks,
+                        projected_chars
+                    ));
+                }
                 response_text.push_str(&token);
-                stream_chunks = stream_chunks.saturating_add(1);
-                streamed_chars = streamed_chars.saturating_add(token.chars().count());
+                stream_chunks = projected_chunks;
+                streamed_chars = projected_chars;
                 let payload = stream_chunk_notification(
                     &id,
                     &agent_name,
@@ -3985,9 +4257,24 @@ impl AcpServer {
             tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
 
         let mut response_text = String::new();
+        let mut stream_chunks: usize = 0;
+        let mut streamed_chars: usize = 0;
         let collect_stream = async {
             while let Some(token) = receiver.recv().await {
+                let token_chars = token.chars().count();
+                let projected_chunks = stream_chunks.saturating_add(1);
+                let projected_chars = streamed_chars.saturating_add(token_chars);
+                if stream_would_exceed_limits(stream_chunks, streamed_chars, token_chars) {
+                    return Err(anyhow::anyhow!(
+                        "agent '{}' stream exceeded limits (chunks={}, chars={})",
+                        agent_name,
+                        projected_chunks,
+                        projected_chars
+                    ));
+                }
                 response_text.push_str(&token);
+                stream_chunks = projected_chunks;
+                streamed_chars = projected_chars;
             }
 
             Ok::<(), anyhow::Error>(())
@@ -4350,7 +4637,7 @@ async fn perform_maintenance_cycle(
         .map(|guard| guard.sqlite_vacuum_interval_cycles.max(1))
         .unwrap_or(60);
     let current_cycle = maintenance.snapshot().cycles_total;
-    let should_vacuum = current_cycle % vacuum_interval_cycles == 0;
+    let should_vacuum = current_cycle.is_multiple_of(vacuum_interval_cycles);
 
     let memory_expired_removed = memory_cache.purge_expired();
     let cache_handle = cache.lock().ok().and_then(|guard| guard.clone());
@@ -4829,6 +5116,151 @@ fn pipeline_gate_violation(
     None
 }
 
+fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
+    if let Ok(mut guard) = order.lock() {
+        if let Some(position) = guard.iter().position(|item| item == conversation_id) {
+            guard.remove(position);
+        }
+        guard.push(conversation_id.to_string());
+    }
+}
+
+fn evict_oldest_conversation(
+    store: &mut HashMap<String, ConversationState>,
+    order: &StdMutex<Vec<String>>,
+) -> Option<String> {
+    if let Ok(mut guard) = order.lock() {
+        while let Some(candidate) = guard.first().cloned() {
+            guard.remove(0);
+            if store.remove(&candidate).is_some() {
+                return Some(candidate);
+            }
+        }
+        return None;
+    }
+
+    let oldest = store
+        .iter()
+        .min_by_key(|(_, state)| state.last_touched_at)
+        .map(|(id, _)| id.clone());
+
+    oldest.and_then(|id| store.remove(&id).map(|_| id))
+}
+
+fn enforce_checkpoint_capacity(
+    state: &mut ConversationState,
+    incoming: usize,
+    protected_checkpoint_id: Option<&str>,
+) {
+    let total_after_insert = state.checkpoints.len().saturating_add(incoming);
+    if total_after_insert <= MAX_CHECKPOINTS_PER_CONVERSATION {
+        return;
+    }
+
+    let mut overflow = total_after_insert - MAX_CHECKPOINTS_PER_CONVERSATION;
+    let mut cursor = 0usize;
+
+    // Prefer removing oldest checkpoints, but keep the rollback target when requested.
+    while overflow > 0 && cursor < state.checkpoints.len() {
+        let can_remove = protected_checkpoint_id
+            .map(|protected| state.checkpoints[cursor].checkpoint_id != protected)
+            .unwrap_or(true);
+        if can_remove {
+            state.checkpoints.remove(cursor);
+            overflow -= 1;
+        } else {
+            cursor += 1;
+        }
+    }
+
+    if overflow > 0 {
+        let drain_to = overflow.min(state.checkpoints.len());
+        state.checkpoints.drain(0..drain_to);
+    }
+
+    repair_conversation_branch_heads(state);
+}
+
+fn stream_would_exceed_limits(
+    current_chunks: usize,
+    current_chars: usize,
+    next_token_chars: usize,
+) -> bool {
+    current_chunks.saturating_add(1) > MAX_STREAM_CHUNKS
+        || current_chars.saturating_add(next_token_chars) > MAX_STREAM_CHARS
+}
+
+fn validate_storage_key(
+    value: &str,
+    field: &str,
+    max_len: usize,
+) -> std::result::Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field} must be a non-empty string"));
+    }
+    if trimmed.len() > max_len {
+        return Err(format!("{field} exceeds max length {}", max_len));
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/'))
+    {
+        return Err(format!(
+            "{field} contains invalid characters; allowed: [A-Za-z0-9_.:/-]"
+        ));
+    }
+
+    Ok(trimmed.to_string())
+}
+
+fn checkpoint_message_chars(messages: &[Message]) -> usize {
+    messages.iter().map(|msg| msg.content.chars().count()).sum()
+}
+
+fn repair_conversation_branch_heads(state: &mut ConversationState) {
+    let existing_ids = state
+        .checkpoints
+        .iter()
+        .map(|checkpoint| checkpoint.checkpoint_id.clone())
+        .collect::<HashSet<_>>();
+    let mut repaired_heads: HashMap<String, String> = HashMap::new();
+    for (branch, head_id) in state.branch_heads.clone() {
+        if existing_ids.contains(&head_id) {
+            repaired_heads.insert(branch, head_id);
+            continue;
+        }
+
+        if let Some(fallback) = state
+            .checkpoints
+            .iter()
+            .rev()
+            .find(|checkpoint| checkpoint.branch_id == branch)
+            .map(|checkpoint| checkpoint.checkpoint_id.clone())
+        {
+            repaired_heads.insert(branch, fallback);
+        }
+    }
+    state.branch_heads = repaired_heads;
+}
+
+fn branch_head_adjustment_counts(
+    before: &HashMap<String, String>,
+    after: &HashMap<String, String>,
+) -> (usize, usize) {
+    let mut repaired = 0usize;
+    let mut dropped = 0usize;
+    for (branch, old_head) in before {
+        match after.get(branch) {
+            Some(new_head) if new_head != old_head => repaired = repaired.saturating_add(1),
+            Some(_) => {}
+            None => dropped = dropped.saturating_add(1),
+        }
+    }
+
+    (repaired, dropped)
+}
+
 fn infer_pua_stage(event_type: &str, phase: &str) -> Option<String> {
     if event_type.starts_with("phase.") {
         return Some(phase.to_string());
@@ -4869,6 +5301,7 @@ fn normalize_trace_attributes(event_type: &str, phase: &str, status: &str, input
     Value::Object(attrs)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stream_chunk_notification(
     id: &Option<Value>,
     agent: &str,
@@ -4900,6 +5333,7 @@ fn stream_chunk_notification(
     Value::Object(payload)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stream_done_notification(
     id: &Option<Value>,
     agent: &str,
@@ -5561,7 +5995,9 @@ mod tests {
             )
             .expect("second checkpoint should be created");
 
-        let listed = server.list_conversation_checkpoints("conv-a", Some("main"), 10);
+        let listed = server
+            .list_conversation_checkpoints("conv-a", Some("main"), 10)
+            .expect("list should succeed");
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].checkpoint_id, second.checkpoint_id);
         assert_eq!(listed[1].checkpoint_id, first.checkpoint_id);
@@ -5570,8 +6006,89 @@ mod tests {
             .rollback_conversation_checkpoint("conv-a", &first.checkpoint_id, Some("hotfix"))
             .expect("rollback should locate target checkpoint");
         assert_eq!(restored.branch_id, "hotfix");
+        assert_ne!(restored.checkpoint_id, first.checkpoint_id);
+        assert_eq!(
+            restored.parent_checkpoint_id.as_deref(),
+            Some(first.checkpoint_id.as_str())
+        );
         assert_eq!(restored.messages.len(), first_messages.len());
         assert_eq!(restored.messages[0].content, first_messages[0].content);
+
+        let prune = server.prune_conversation_checkpoints("conv-a", Some("main"), 1);
+        assert_eq!(prune.removed, 1);
+
+        let hotfix_checkpoint = server
+            .create_conversation_checkpoint(
+                "conv-a",
+                "hotfix",
+                vec![Message {
+                    role: "assistant".to_string(),
+                    content: "hotfix follow-up".to_string(),
+                }],
+                Some("hotfix checkpoint".to_string()),
+            )
+            .expect("hotfix checkpoint should be created");
+        assert_eq!(
+            hotfix_checkpoint.parent_checkpoint_id.as_deref(),
+            Some(restored.checkpoint_id.as_str())
+        );
+    }
+
+    #[test]
+    fn rollback_preserves_target_checkpoint_under_capacity_pressure() {
+        let server = phase_inference_server("coding", &["coding", "review"]);
+        let mut first_checkpoint_id = None;
+
+        for idx in 0..MAX_CHECKPOINTS_PER_CONVERSATION {
+            let cp = server
+                .create_conversation_checkpoint(
+                    "conv-cap",
+                    "main",
+                    vec![Message {
+                        role: "user".to_string(),
+                        content: format!("message-{idx}"),
+                    }],
+                    None,
+                )
+                .expect("checkpoint creation should succeed");
+            if idx == 0 {
+                first_checkpoint_id = Some(cp.checkpoint_id);
+            }
+        }
+
+        let target = first_checkpoint_id.expect("first checkpoint id should be captured");
+        let restored = server
+            .rollback_conversation_checkpoint("conv-cap", &target, Some("hotfix"))
+            .expect("rollback should succeed");
+
+        assert_eq!(
+            restored.parent_checkpoint_id.as_deref(),
+            Some(target.as_str())
+        );
+
+        let store = server
+            .conversation_store
+            .lock()
+            .expect("conversation store lock should succeed");
+        let state = store
+            .get("conv-cap")
+            .expect("conversation state should exist");
+        assert_eq!(state.checkpoints.len(), MAX_CHECKPOINTS_PER_CONVERSATION);
+        assert!(state
+            .checkpoints
+            .iter()
+            .any(|cp| cp.checkpoint_id == target));
+    }
+
+    #[test]
+    fn stream_limits_reject_next_token_before_append() {
+        assert!(stream_would_exceed_limits(0, MAX_STREAM_CHARS, 1));
+        assert!(stream_would_exceed_limits(MAX_STREAM_CHUNKS, 0, 1));
+        assert!(!stream_would_exceed_limits(
+            MAX_STREAM_CHUNKS.saturating_sub(1),
+            MAX_STREAM_CHARS.saturating_sub(1),
+            1
+        ));
     }
 
     #[test]
