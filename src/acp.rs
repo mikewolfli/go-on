@@ -3,13 +3,14 @@
 //! This module implements the core server functionality for the go-on ACP proxy,
 //! including request handling, caching, vector storage, circuit breaking, and performance monitoring.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
+use futures_util::stream::{self, StreamExt};
 use opentelemetry::{Context as OtelContext, KeyValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -35,10 +36,14 @@ use crate::performance;
 use crate::pua::review_gate_prompt;
 use crate::reinforcement::{
     aggregate_status, assistant_excerpt, build_runtime_healthcheck_report, build_task_plan,
-    persist_runtime_healthcheck, persist_task_plan, run_action_check, total_message_chars,
+    build_workflow_generated_artifact,
+    persist_runtime_healthcheck, persist_task_plan, persist_workflow_learning_event,
+    persist_workflow_generated, persist_workflow_research, recommend_failure_strategy_from_learning,
+    recommend_parallelism_from_learning, run_action_check, total_message_chars,
     ActionCheckKind, ArtifactLedger, CheckStatus, CheckpointSummaryArtifact, ComponentReport,
+    WorkflowLearningEvent, WorkflowResearchArtifact,
 };
-use crate::reinforcement::{persist_task_execution_summary, TaskExecutionSummary};
+use crate::reinforcement::{persist_task_execution_summary, TaskExecutionMetrics, TaskExecutionSummary};
 use crate::review_controls::{
     review_timeout, review_verdict, ReviewDecision, ReviewGateOutcome, ReviewTimeoutPolicy,
     ReviewVerdict,
@@ -1896,8 +1901,199 @@ impl AcpServer {
                 )
                 .await
             }
+            "workflow.generate" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let task = match params.get("task").and_then(|v| v.as_str()) {
+                    Some(value) if !value.trim().is_empty() => value,
+                    _ => {
+                        return self
+                            .send_error(
+                                request_id,
+                                -32602,
+                                "task is required for workflow.generate".to_string(),
+                                None,
+                            )
+                            .await;
+                    }
+                };
+
+                let plan = build_task_plan(task);
+                let plan_artifact_path = persist_task_plan(&self.artifact_ledger(), &plan)?;
+                let workflow = build_workflow_generated_artifact(&plan);
+                let workflow_artifact_path =
+                    persist_workflow_generated(&self.artifact_ledger(), &workflow)?;
+
+                self.record_trace_event(
+                    &trace,
+                    "phase.plan",
+                    "ok",
+                    "workflow",
+                    json!({
+                        "task": task,
+                        "nodes": workflow.nodes.len(),
+                        "edges": workflow.edges.len(),
+                        "execution_phases": workflow.execution_order.len(),
+                    }),
+                    None,
+                    started.elapsed().as_millis() as u64,
+                );
+                self.send_result(
+                    request_id,
+                    json!({
+                        "ok": true,
+                        "plan": plan,
+                        "workflow": workflow,
+                        "plan_artifact_path": plan_artifact_path.display().to_string(),
+                        "workflow_artifact_path": workflow_artifact_path.display().to_string(),
+                    }),
+                )
+                .await
+            }
+            "workflow.research" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let task = match params.get("task").and_then(|v| v.as_str()) {
+                    Some(value) if !value.trim().is_empty() => value.to_string(),
+                    _ => {
+                        return self
+                            .send_error(
+                                request_id,
+                                -32602,
+                                "task is required for workflow.research".to_string(),
+                                None,
+                            )
+                            .await;
+                    }
+                };
+
+                let phase_hint = params
+                    .get("phase")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let (flow, registry) = self.routing_handles()?;
+                let routing = flow
+                    .resolve(phase_hint, registry.as_ref())
+                    .unwrap_or_else(|_| {
+                        flow.resolve(None, registry.as_ref())
+                            .expect("default phase must always resolve")
+                    });
+
+                let agent_name = match routing.phase.agent_names.first().cloned() {
+                    Some(name) => name,
+                    None => {
+                        return self
+                            .send_error(
+                                request_id,
+                                -32603,
+                                "workflow.research requires at least one routable agent".to_string(),
+                                None,
+                            )
+                            .await;
+                    }
+                };
+                let agent = match registry.get(&agent_name) {
+                    Some(a) => a,
+                    None => {
+                        return self
+                            .send_error(
+                                request_id,
+                                -32603,
+                                format!("workflow.research agent '{}' not found", agent_name),
+                                None,
+                            )
+                            .await;
+                    }
+                };
+
+                let planner_prompt = format!(
+                    "Task: {}\n\nAs Planner: produce a concise problem tree and acceptance criteria.",
+                    task
+                );
+                let researcher_prompt = format!(
+                    "Task: {}\n\nAs Researcher: propose 3 candidate solutions with risk matrix and tradeoffs.",
+                    task
+                );
+                let reviewer_prompt = format!(
+                    "Task: {}\n\nAs Reviewer: select one recommended plan from candidates with rationale and risks.",
+                    task
+                );
+
+                let planner_output = self
+                    .run_agent_collecting(
+                        agent_name.clone(),
+                        agent.clone(),
+                        vec![Message {
+                            role: "user".to_string(),
+                            content: planner_prompt,
+                        }],
+                        None,
+                        None,
+                        Some(Duration::from_secs(120)),
+                    )
+                    .await?;
+                let researcher_output = self
+                    .run_agent_collecting(
+                        agent_name.clone(),
+                        agent.clone(),
+                        vec![Message {
+                            role: "user".to_string(),
+                            content: researcher_prompt,
+                        }],
+                        None,
+                        None,
+                        Some(Duration::from_secs(120)),
+                    )
+                    .await?;
+                let reviewer_output = self
+                    .run_agent_collecting(
+                        agent_name.clone(),
+                        agent,
+                        vec![Message {
+                            role: "user".to_string(),
+                            content: reviewer_prompt,
+                        }],
+                        None,
+                        None,
+                        Some(Duration::from_secs(120)),
+                    )
+                    .await?;
+
+                let artifact = WorkflowResearchArtifact {
+                    generated_at: now_ts(),
+                    task: task.clone(),
+                    planner_output,
+                    researcher_output,
+                    recommended_plan: reviewer_output.chars().take(500).collect(),
+                    reviewer_output,
+                };
+                let artifact_path = persist_workflow_research(&self.artifact_ledger(), &artifact)?;
+
+                self.record_trace_event(
+                    &trace,
+                    "phase.research",
+                    "ok",
+                    "research",
+                    json!({
+                        "task": task,
+                        "agent": agent_name,
+                    }),
+                    None,
+                    started.elapsed().as_millis() as u64,
+                );
+
+                self.send_result(
+                    request_id,
+                    json!({
+                        "ok": true,
+                        "artifact": artifact,
+                        "artifact_path": artifact_path.display().to_string(),
+                    }),
+                )
+                .await
+            }
             // Section 6 (sub-agent orchestration) + Section 5 (lifecycle tracking)
-            "task.execute" => {
+            method @ ("task.execute" | "workflow.execute") => {
+                let is_workflow_execute = method == "workflow.execute";
                 let params = request.params.unwrap_or_else(|| json!({}));
                 let task_str = match params.get("task").and_then(|v| v.as_str()) {
                     Some(t) if !t.trim().is_empty() => t.to_string(),
@@ -1927,10 +2123,15 @@ impl AcpServer {
                         flow.resolve(None, registry.as_ref())
                             .expect("default phase must always resolve")
                     });
-                let primary_agent_name = routing.phase.agent_names.first().cloned();
-                let executor_label = primary_agent_name
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string());
+                let phase_agent_names = routing.phase.agent_names.clone();
+                let primary_agent_name = phase_agent_names.first().cloned();
+                let executor_label = if phase_agent_names.len() > 1 {
+                    "multi-agent-auto-assigned".to_string()
+                } else {
+                    primary_agent_name
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string())
+                };
 
                 let ledger = self.artifact_ledger();
                 let exec_started_ts = now_ts();
@@ -1939,72 +2140,249 @@ impl AcpServer {
                 let mut failed = 0usize;
                 let mut skipped = 0usize;
 
-                for record in plan.planned_subtasks.iter_mut() {
-                    let subtask_wall = Instant::now();
-                    let subtask_start_ts = now_ts();
+                let phase_parallelism_base = extra_u64(routing.phase.options.as_ref(), "phase_max_inflight")
+                    .or_else(|| extra_u64(routing.phase.options.as_ref(), "subtask_parallelism"))
+                    .map(|value| value.max(1) as usize)
+                    .unwrap_or(4);
+                let adaptive_parallelism = params
+                    .get("adaptive_parallelism")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(is_workflow_execute);
+                let phase_parallelism = if adaptive_parallelism {
+                    recommend_parallelism_from_learning(&ledger, phase_parallelism_base, 1, 16)
+                } else {
+                    phase_parallelism_base
+                };
+                let parallelism_tuned = phase_parallelism != phase_parallelism_base;
 
-                    let agent_name = match primary_agent_name.clone() {
-                        Some(name) => name,
-                        None => {
-                            record.mark_executed(subtask_start_ts, subtask_start_ts, 0, "skipped", "none");
-                            skipped += 1;
-                            continue;
+                let role_aware_assignment = params
+                    .get("role_aware_assignment")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(is_workflow_execute);
+                let role_map: HashMap<String, String> = if role_aware_assignment {
+                    build_workflow_generated_artifact(&plan)
+                        .nodes
+                        .into_iter()
+                        .map(|node| (node.id, node.role))
+                        .collect()
+                } else {
+                    HashMap::new()
+                };
+
+                let fail_fast_base = params
+                    .get("fail_fast")
+                    .and_then(|v| v.as_bool())
+                    .or_else(|| {
+                        extra_string(routing.phase.options.as_ref(), "subtask_failure_strategy")
+                            .map(|v| v.eq_ignore_ascii_case("fail_fast"))
+                    })
+                    .unwrap_or(false);
+                let adaptive_failure_strategy = params
+                    .get("adaptive_failure_strategy")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(is_workflow_execute);
+                let fail_fast = if adaptive_failure_strategy {
+                    recommend_failure_strategy_from_learning(
+                        &ledger,
+                        if fail_fast_base { "fail_fast" } else { "tolerant" },
+                    )
+                    .eq_ignore_ascii_case("fail_fast")
+                } else {
+                    fail_fast_base
+                };
+                let failure_strategy = if fail_fast { "fail_fast" } else { "tolerant" };
+                let failure_strategy_tuned = fail_fast != fail_fast_base;
+
+                let mut serial_work_ms: u64 = 0;
+                let mut critical_path_ms: u64 = 0;
+                let mut phases_executed: usize = 0;
+                let mut halted_early = false;
+
+                let mut phase_records: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+                for (index, record) in plan.planned_subtasks.iter().enumerate() {
+                    phase_records.entry(record.phase_index).or_default().push(index);
+                }
+
+                for (phase_index, indexes) in phase_records {
+                    let mut phase_failed = false;
+                    let mut phase_sum_duration_ms: u64 = 0;
+                    let mut phase_max_duration_ms: u64 = 0;
+
+                    let tasks = indexes.iter().map(|index| {
+                        let idx = *index;
+                        let description = plan.planned_subtasks[idx].description.clone();
+                        let subtask_id = plan.planned_subtasks[idx].id.clone();
+                        let desired_role = role_map.get(&subtask_id).cloned();
+                        let assigned_agent = pick_execution_agent(
+                            &phase_agent_names,
+                            desired_role.as_deref(),
+                            phase_index,
+                            idx,
+                        );
+                        let run_agent = assigned_agent
+                            .as_ref()
+                            .and_then(|name| registry.get(name));
+
+                        async move {
+                            let subtask_wall = Instant::now();
+                            let subtask_start_ts = now_ts();
+
+                            let Some(run_agent_name) = assigned_agent else {
+                                let subtask_stop_ts = now_ts();
+                                return (
+                                    idx,
+                                    subtask_id,
+                                    "none".to_string(),
+                                    subtask_start_ts,
+                                    subtask_stop_ts,
+                                    0,
+                                    Ok(None),
+                                );
+                            };
+                            let Some(run_agent) = run_agent else {
+                                let subtask_stop_ts = now_ts();
+                                return (
+                                    idx,
+                                    subtask_id,
+                                    run_agent_name,
+                                    subtask_start_ts,
+                                    subtask_stop_ts,
+                                    0,
+                                    Ok(None),
+                                );
+                            };
+
+                            let messages = vec![Message {
+                                role: "user".to_string(),
+                                content: description,
+                            }];
+
+                            let sub_result = self
+                                .run_agent_collecting(
+                                    run_agent_name.clone(),
+                                    run_agent,
+                                    messages,
+                                    None,
+                                    None,
+                                    Some(Duration::from_secs(120)),
+                                )
+                                .await
+                                .map(Some);
+
+                            let duration_ms = subtask_wall.elapsed().as_millis() as u64;
+                            let subtask_stop_ts = now_ts();
+                            (
+                                idx,
+                                subtask_id,
+                                run_agent_name,
+                                subtask_start_ts,
+                                subtask_stop_ts,
+                                duration_ms,
+                                sub_result,
+                            )
                         }
-                    };
+                    });
 
-                    let agent = match registry.get(&agent_name) {
-                        Some(a) => a,
-                        None => {
-                            record.mark_executed(subtask_start_ts, subtask_start_ts, 0, "skipped", &agent_name);
-                            skipped += 1;
-                            continue;
-                        }
-                    };
-
-                    let messages = vec![Message {
-                        role: "user".to_string(),
-                        content: record.description.clone(),
-                    }];
-
-                    let sub_result = self
-                        .run_agent_collecting(
-                            agent_name.clone(),
-                            agent,
-                            messages,
-                            None,
-                            None,
-                            Some(Duration::from_secs(120)),
-                        )
+                    let results = stream::iter(tasks)
+                        .buffer_unordered(phase_parallelism)
+                        .collect::<Vec<_>>()
                         .await;
 
-                    let duration_ms = subtask_wall.elapsed().as_millis() as u64;
-                    let subtask_stop_ts = now_ts();
+                    phases_executed += 1;
+                    for (
+                        idx,
+                        subtask_id,
+                        run_agent_name,
+                        subtask_start_ts,
+                        subtask_stop_ts,
+                        duration_ms,
+                        sub_result,
+                    ) in results
+                    {
+                        let Some(record) = plan.planned_subtasks.get_mut(idx) else {
+                            continue;
+                        };
 
-                    match sub_result {
-                        Ok(_response) => {
-                            record.mark_executed(subtask_start_ts, subtask_stop_ts, duration_ms, "completed", &agent_name);
-                            completed += 1;
-                            info!(
-                                subtask_id = %record.id,
-                                executor = %agent_name,
-                                duration_ms,
-                                "subtask completed"
-                            );
+                        phase_sum_duration_ms = phase_sum_duration_ms.saturating_add(duration_ms);
+                        phase_max_duration_ms = phase_max_duration_ms.max(duration_ms);
+
+                        match sub_result {
+                            Ok(Some(_response)) => {
+                                record.mark_executed(
+                                    subtask_start_ts,
+                                    subtask_stop_ts,
+                                    duration_ms,
+                                    "completed",
+                                    &run_agent_name,
+                                );
+                                completed += 1;
+                                info!(
+                                    subtask_id = %subtask_id,
+                                    executor = %run_agent_name,
+                                    duration_ms,
+                                    "subtask completed"
+                                );
+                            }
+                            Ok(None) => {
+                                record.mark_executed(
+                                    subtask_start_ts,
+                                    subtask_stop_ts,
+                                    0,
+                                    "skipped",
+                                    &run_agent_name,
+                                );
+                                skipped += 1;
+                            }
+                            Err(err) => {
+                                record.mark_executed(
+                                    subtask_start_ts,
+                                    subtask_stop_ts,
+                                    duration_ms,
+                                    "failed",
+                                    &run_agent_name,
+                                );
+                                failed += 1;
+                                warn!(
+                                    subtask_id = %subtask_id,
+                                    executor = %run_agent_name,
+                                    error = %err,
+                                    "subtask failed"
+                                );
+                                phase_failed = true;
+                            }
                         }
-                        Err(err) => {
-                            record.mark_executed(subtask_start_ts, subtask_stop_ts, duration_ms, "failed", &agent_name);
-                            failed += 1;
-                            warn!(
-                                subtask_id = %record.id,
-                                executor = %agent_name,
-                                error = %err,
-                                "subtask failed"
-                            );
+                    }
+
+                    serial_work_ms = serial_work_ms.saturating_add(phase_sum_duration_ms);
+                    critical_path_ms = critical_path_ms.saturating_add(phase_max_duration_ms);
+
+                    if fail_fast && phase_failed {
+                        halted_early = true;
+                        break;
+                    }
+                }
+
+                if halted_early {
+                    for record in plan.planned_subtasks.iter_mut() {
+                        if record.status == "planned" {
+                            let ts = now_ts();
+                            record.mark_executed(ts, ts, 0, "skipped", "none");
+                            skipped += 1;
                         }
                     }
                 }
 
                 let exec_stop_ts = now_ts();
+                let parallel_efficiency = if serial_work_ms == 0 {
+                    1.0
+                } else {
+                    (critical_path_ms as f64 / serial_work_ms as f64).clamp(0.0, 1.0)
+                };
+                let parallel_speedup = if critical_path_ms == 0 {
+                    1.0
+                } else {
+                    serial_work_ms as f64 / critical_path_ms as f64
+                };
                 let summary = TaskExecutionSummary {
                     generated_at: exec_stop_ts,
                     task: task_str.clone(),
@@ -2014,9 +2392,55 @@ impl AcpServer {
                     subtasks_skipped: skipped,
                     executor: executor_label.clone(),
                     records: plan.planned_subtasks.clone(),
+                    execution_metrics: Some(TaskExecutionMetrics {
+                        subtask_parallelism: phase_parallelism,
+                        failure_strategy: failure_strategy.to_string(),
+                        phases_executed,
+                        halted_early,
+                        serial_work_ms,
+                        critical_path_ms,
+                        parallel_efficiency,
+                        parallel_speedup,
+                    }),
                     artifact_path: None,
                 };
                 let artifact_path = persist_task_execution_summary(&ledger, &summary)?;
+                let learning_artifact_path = persist_workflow_learning_event(
+                    &ledger,
+                    WorkflowLearningEvent {
+                        generated_at: exec_stop_ts,
+                        task: task_str.clone(),
+                        complexity: plan.characteristics.complexity,
+                        predicted_success_rate: plan.routing.predicted_success_rate,
+                        subtasks_total: summary.subtasks_total,
+                        subtasks_completed: completed,
+                        subtasks_failed: failed,
+                        subtasks_skipped: skipped,
+                        serial_work_ms,
+                        critical_path_ms,
+                        parallel_speedup,
+                        parallel_efficiency,
+                        executor: executor_label.clone(),
+                        source: method.to_string(),
+                    },
+                    200,
+                )?;
+
+                let auto_gates = params
+                    .get("auto_gates")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(is_workflow_execute);
+                let mut gate_reports = Vec::new();
+                let mut gates_ok = true;
+                if auto_gates {
+                    for gate in [ActionCheckKind::Qa, ActionCheckKind::Retest, ActionCheckKind::Final] {
+                        let report = run_action_check(&ledger, gate)?;
+                        if !report.ok {
+                            gates_ok = false;
+                        }
+                        gate_reports.push(report);
+                    }
+                }
 
                 self.record_trace_event(
                     &trace,
@@ -2029,6 +2453,23 @@ impl AcpServer {
                         "subtasks_completed": completed,
                         "subtasks_failed": failed,
                         "subtasks_skipped": skipped,
+                        "subtask_parallelism": phase_parallelism,
+                        "subtask_parallelism_base": phase_parallelism_base,
+                        "adaptive_parallelism": adaptive_parallelism,
+                        "parallelism_tuned": parallelism_tuned,
+                        "role_aware_assignment": role_aware_assignment,
+                        "adaptive_failure_strategy": adaptive_failure_strategy,
+                        "failure_strategy_tuned": failure_strategy_tuned,
+                        "failure_strategy": failure_strategy,
+                        "phases_executed": phases_executed,
+                        "halted_early": halted_early,
+                        "serial_work_ms": serial_work_ms,
+                        "critical_path_ms": critical_path_ms,
+                        "parallel_efficiency": parallel_efficiency,
+                        "parallel_speedup": parallel_speedup,
+                        "auto_gates": auto_gates,
+                        "gates_ok": gates_ok,
+                        "gates_run": gate_reports.len(),
                         "executor": executor_label,
                     }),
                     None,
@@ -2038,9 +2479,29 @@ impl AcpServer {
                 self.send_result(
                     request_id,
                     json!({
-                        "ok": failed == 0,
+                        "ok": failed == 0 && (!auto_gates || gates_ok),
                         "summary": summary,
+                        "execution_metrics": {
+                            "subtask_parallelism": phase_parallelism,
+                            "subtask_parallelism_base": phase_parallelism_base,
+                            "adaptive_parallelism": adaptive_parallelism,
+                            "parallelism_tuned": parallelism_tuned,
+                            "role_aware_assignment": role_aware_assignment,
+                            "adaptive_failure_strategy": adaptive_failure_strategy,
+                            "failure_strategy_tuned": failure_strategy_tuned,
+                            "failure_strategy": failure_strategy,
+                            "phases_executed": phases_executed,
+                            "halted_early": halted_early,
+                            "serial_work_ms": serial_work_ms,
+                            "critical_path_ms": critical_path_ms,
+                            "parallel_efficiency": parallel_efficiency,
+                            "parallel_speedup": parallel_speedup,
+                        },
+                        "auto_gates": auto_gates,
+                        "gates_ok": gates_ok,
+                        "gate_reports": gate_reports,
                         "artifact_path": artifact_path.display().to_string(),
+                        "learning_artifact_path": learning_artifact_path.display().to_string(),
                     }),
                 )
                 .await
@@ -5477,6 +5938,38 @@ fn dedupe_vector_hits(hits: &[VectorHit]) -> Vec<VectorHit> {
     out
 }
 
+fn pick_execution_agent(
+    agent_names: &[String],
+    desired_role: Option<&str>,
+    phase_index: usize,
+    task_index: usize,
+) -> Option<String> {
+    if agent_names.is_empty() {
+        return None;
+    }
+
+    if let Some(role) = desired_role {
+        let role = role.to_ascii_lowercase();
+        let keywords = match role.as_str() {
+            "planner" => vec!["planner", "plan"],
+            "researcher" => vec!["researcher", "research"],
+            "coder" => vec!["coder", "code", "implement", "dev"],
+            "tester" => vec!["tester", "test", "qa"],
+            "reviewer" => vec!["reviewer", "review", "audit"],
+            _ => vec![role.as_str()],
+        };
+
+        if let Some(found) = agent_names.iter().find(|name| {
+            let lower = name.to_ascii_lowercase();
+            keywords.iter().any(|k| lower.contains(k))
+        }) {
+            return Some(found.clone());
+        }
+    }
+
+    Some(agent_names[(phase_index + task_index) % agent_names.len()].clone())
+}
+
 fn extra_u64(options: Option<&PhaseOptions>, key: &str) -> Option<u64> {
     options
         .and_then(|opts| opts.extra.get(key))
@@ -5487,6 +5980,13 @@ fn extra_f64(options: Option<&PhaseOptions>, key: &str) -> Option<f64> {
     options
         .and_then(|opts| opts.extra.get(key))
         .and_then(|v| v.as_f64())
+}
+
+fn extra_string(options: Option<&PhaseOptions>, key: &str) -> Option<String> {
+    options
+        .and_then(|opts| opts.extra.get(key))
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string())
 }
 
 fn percentile(samples: &[u64], percentile: f64) -> u64 {

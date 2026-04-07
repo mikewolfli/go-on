@@ -126,6 +126,18 @@ impl PlannedSubtaskRecord {
 
 /// Aggregate result of executing a `TaskPlanArtifact` via `task.execute`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskExecutionMetrics {
+    pub subtask_parallelism: usize,
+    pub failure_strategy: String,
+    pub phases_executed: usize,
+    pub halted_early: bool,
+    pub serial_work_ms: u64,
+    pub critical_path_ms: u64,
+    pub parallel_efficiency: f64,
+    pub parallel_speedup: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskExecutionSummary {
     pub generated_at: i64,
     pub task: String,
@@ -135,7 +147,44 @@ pub struct TaskExecutionSummary {
     pub subtasks_skipped: usize,
     pub executor: String,
     pub records: Vec<PlannedSubtaskRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_metrics: Option<TaskExecutionMetrics>,
     pub artifact_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowResearchArtifact {
+    pub generated_at: i64,
+    pub task: String,
+    pub planner_output: String,
+    pub researcher_output: String,
+    pub reviewer_output: String,
+    pub recommended_plan: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowLearningEvent {
+    pub generated_at: i64,
+    pub task: String,
+    pub complexity: u8,
+    pub predicted_success_rate: f32,
+    pub subtasks_total: usize,
+    pub subtasks_completed: usize,
+    pub subtasks_failed: usize,
+    pub subtasks_skipped: usize,
+    pub serial_work_ms: u64,
+    pub critical_path_ms: u64,
+    pub parallel_speedup: f64,
+    pub parallel_efficiency: f64,
+    pub executor: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowLearningBusArtifact {
+    pub generated_at: i64,
+    pub total_events: usize,
+    pub events: Vec<WorkflowLearningEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +198,35 @@ pub struct TaskPlanArtifact {
     pub sub_agent_recommended: bool,
     pub activation_reasons: Vec<String>,
     pub action_checks_required: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowNode {
+    pub id: String,
+    pub description: String,
+    pub phase_index: usize,
+    pub dependencies: Vec<String>,
+    pub role: String,
+    pub timeout_seconds: u64,
+    pub retry_limit: u32,
+    pub priority: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowEdge {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowGeneratedArtifact {
+    pub generated_at: i64,
+    pub task: String,
+    pub nodes: Vec<WorkflowNode>,
+    pub edges: Vec<WorkflowEdge>,
+    pub execution_order: Vec<Vec<String>>,
+    pub auto_gates: Vec<String>,
+    pub routing_summary: Value,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -314,12 +392,234 @@ pub fn persist_task_plan(ledger: &ArtifactLedger, plan: &TaskPlanArtifact) -> Re
     ledger.write_json("spec", "latest-plan.json", plan)
 }
 
+pub fn build_workflow_generated_artifact(plan: &TaskPlanArtifact) -> WorkflowGeneratedArtifact {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+
+    for record in &plan.planned_subtasks {
+        let (dependencies, priority, timeout_seconds, retry_limit) = plan
+            .decomposition
+            .as_ref()
+            .and_then(|decomposition| {
+                decomposition
+                    .subtasks
+                    .iter()
+                    .find(|subtask| subtask.id == record.id)
+                    .map(|subtask| {
+                        let mut deps = subtask.dependencies.iter().cloned().collect::<Vec<_>>();
+                        deps.sort();
+                        let timeout = ((subtask.estimated_duration_seconds / 2) as u64)
+                            .clamp(60, 900);
+                        let retry = if subtask.complexity >= 4 { 2 } else { 1 };
+                        (deps, subtask.priority, timeout, retry)
+                    })
+            })
+            .unwrap_or_else(|| (Vec::new(), 3, 120, 1));
+
+        let role = choose_workflow_role(&record.description, &plan.routing.roles);
+        for dep in &dependencies {
+            edges.push(WorkflowEdge {
+                from: dep.clone(),
+                to: record.id.clone(),
+            });
+        }
+
+        nodes.push(WorkflowNode {
+            id: record.id.clone(),
+            description: record.description.clone(),
+            phase_index: record.phase_index,
+            dependencies,
+            role,
+            timeout_seconds,
+            retry_limit,
+            priority,
+        });
+    }
+
+    let execution_order = if let Some(decomposition) = plan.decomposition.as_ref() {
+        decomposition.execution_phases.clone()
+    } else {
+        let mut phases = std::collections::BTreeMap::<usize, Vec<String>>::new();
+        for record in &plan.planned_subtasks {
+            phases
+                .entry(record.phase_index)
+                .or_default()
+                .push(record.id.clone());
+        }
+        phases.into_values().collect::<Vec<_>>()
+    };
+
+    WorkflowGeneratedArtifact {
+        generated_at: now_ts(),
+        task: plan.task.clone(),
+        nodes,
+        edges,
+        execution_order,
+        auto_gates: plan.action_checks_required.clone(),
+        routing_summary: json!({
+            "roles": plan
+                .routing
+                .roles
+                .iter()
+                .map(|r| format!("{:?}", r))
+                .collect::<Vec<_>>(),
+            "predicted_success_rate": plan.routing.predicted_success_rate,
+            "risk_factors": plan.routing.risk_factors,
+        }),
+    }
+}
+
+pub fn persist_workflow_generated(
+    ledger: &ArtifactLedger,
+    workflow: &WorkflowGeneratedArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json("spec", "latest-workflow.json", workflow)
+}
+
 /// Persist the execution summary produced by `task.execute` to the durable ledger.
 pub fn persist_task_execution_summary(
     ledger: &ArtifactLedger,
     summary: &TaskExecutionSummary,
 ) -> Result<PathBuf> {
     ledger.write_json("spec", "latest-execution.json", summary)
+}
+
+pub fn persist_workflow_research(
+    ledger: &ArtifactLedger,
+    artifact: &WorkflowResearchArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json("spec", "latest-research.json", artifact)
+}
+
+pub fn persist_workflow_learning_event(
+    ledger: &ArtifactLedger,
+    event: WorkflowLearningEvent,
+    max_events: usize,
+) -> Result<PathBuf> {
+    ledger.ensure_ready()?;
+
+    let latest_path = ledger.latest_path("spec", "latest-learning.json");
+    let mut existing = if latest_path.exists() {
+        fs::read_to_string(&latest_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<WorkflowLearningBusArtifact>(&raw).ok())
+            .unwrap_or(WorkflowLearningBusArtifact {
+                generated_at: now_ts(),
+                total_events: 0,
+                events: Vec::new(),
+            })
+    } else {
+        WorkflowLearningBusArtifact {
+            generated_at: now_ts(),
+            total_events: 0,
+            events: Vec::new(),
+        }
+    };
+
+    existing.events.push(event);
+    if existing.events.len() > max_events {
+        let overflow = existing.events.len() - max_events;
+        existing.events.drain(0..overflow);
+    }
+    existing.generated_at = now_ts();
+    existing.total_events = existing.events.len();
+
+    ledger.write_json("spec", "latest-learning.json", &existing)
+}
+
+/// Recommend next parallelism level from persisted learning events.
+pub fn recommend_parallelism_from_learning(
+    ledger: &ArtifactLedger,
+    current: usize,
+    min_parallelism: usize,
+    max_parallelism: usize,
+) -> usize {
+    let min_p = min_parallelism.max(1);
+    let max_p = max_parallelism.max(min_p);
+    let current = current.clamp(min_p, max_p);
+
+    let latest_path = ledger.latest_path("spec", "latest-learning.json");
+    let payload = match fs::read_to_string(&latest_path) {
+        Ok(raw) => raw,
+        Err(_) => return current,
+    };
+    let bus = match serde_json::from_str::<WorkflowLearningBusArtifact>(&payload) {
+        Ok(value) => value,
+        Err(_) => return current,
+    };
+
+    if bus.events.len() < 8 {
+        return current;
+    }
+
+    let recent = bus.events.iter().rev().take(20).collect::<Vec<_>>();
+    if recent.is_empty() {
+        return current;
+    }
+
+    let avg_speedup = recent
+        .iter()
+        .map(|event| event.parallel_speedup)
+        .sum::<f64>()
+        / recent.len() as f64;
+
+    let mut total_subtasks = 0usize;
+    let mut total_failed = 0usize;
+    for event in &recent {
+        total_subtasks = total_subtasks.saturating_add(event.subtasks_total.max(1));
+        total_failed = total_failed.saturating_add(event.subtasks_failed);
+    }
+    let fail_rate = total_failed as f64 / total_subtasks as f64;
+
+    if fail_rate > 0.25 {
+        current.saturating_sub(1).clamp(min_p, max_p)
+    } else if avg_speedup > 1.6 && fail_rate < 0.10 {
+        current.saturating_add(1).clamp(min_p, max_p)
+    } else {
+        current
+    }
+}
+
+/// Recommend failure strategy from persisted learning events.
+/// Returns "fail_fast" or "tolerant".
+pub fn recommend_failure_strategy_from_learning(
+    ledger: &ArtifactLedger,
+    current: &str,
+) -> String {
+    let latest_path = ledger.latest_path("spec", "latest-learning.json");
+    let payload = match fs::read_to_string(&latest_path) {
+        Ok(raw) => raw,
+        Err(_) => return current.to_string(),
+    };
+    let bus = match serde_json::from_str::<WorkflowLearningBusArtifact>(&payload) {
+        Ok(value) => value,
+        Err(_) => return current.to_string(),
+    };
+
+    if bus.events.len() < 8 {
+        return current.to_string();
+    }
+
+    let recent = bus.events.iter().rev().take(20).collect::<Vec<_>>();
+    if recent.is_empty() {
+        return current.to_string();
+    }
+
+    let mut total_subtasks = 0usize;
+    let mut total_failed = 0usize;
+    for event in &recent {
+        total_subtasks = total_subtasks.saturating_add(event.subtasks_total.max(1));
+        total_failed = total_failed.saturating_add(event.subtasks_failed);
+    }
+    let fail_rate = total_failed as f64 / total_subtasks as f64;
+
+    if fail_rate >= 0.35 {
+        "fail_fast".to_string()
+    } else if fail_rate <= 0.15 {
+        "tolerant".to_string()
+    } else {
+        current.to_string()
+    }
 }
 
 pub fn build_runtime_healthcheck_report(
@@ -672,6 +972,34 @@ fn planned_subtask_records(decomposition: &TaskDecomposition) -> Vec<PlannedSubt
             })
         })
         .collect()
+}
+
+fn choose_workflow_role(description: &str, roles: &[crate::roles::AgentRole]) -> String {
+    let lower = description.to_ascii_lowercase();
+    if lower.contains("test") || lower.contains("verify") || lower.contains("regression") {
+        return "tester".to_string();
+    }
+    if lower.contains("review") || lower.contains("audit") {
+        return "reviewer".to_string();
+    }
+    if lower.contains("research") || lower.contains("analy") {
+        return "researcher".to_string();
+    }
+    if lower.contains("plan") || lower.contains("design") {
+        return "planner".to_string();
+    }
+
+    let has_coder = roles
+        .iter()
+        .any(|role| matches!(role, crate::roles::AgentRole::Coder));
+    if has_coder {
+        "coder".to_string()
+    } else {
+        roles
+            .first()
+            .map(|role| format!("{:?}", role).to_ascii_lowercase())
+            .unwrap_or_else(|| "coder".to_string())
+    }
 }
 
 pub fn aggregate_status<I>(statuses: I) -> CheckStatus
