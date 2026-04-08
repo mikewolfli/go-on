@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use crate::agent::ModelInfo;
+use crate::agent::{Agent, ModelInfo};
 use crate::config::AppConfig;
 use crate::flow::ResolvedRouting;
 use crate::model_selector::{AutomaticModePolicy, ModelSelectionStrategy, SelectionCriteria};
@@ -21,6 +21,12 @@ pub struct ResolvedRoutingWithModel {
     /// Model selection strategy used
     pub selection_strategy: ModelSelectionStrategy,
     /// Task complexity for diagnostics
+    pub task_complexity: u8,
+}
+
+pub struct AgentModelSelection {
+    pub selected_model: Option<ModelInfo>,
+    pub selection_strategy: ModelSelectionStrategy,
     pub task_complexity: u8,
 }
 
@@ -42,26 +48,40 @@ impl FlowModelSelector {
         config: &AppConfig,
         task_description: Option<&str>,
     ) -> Result<ResolvedRoutingWithModel> {
+        let agent_selection = routing
+            .agents
+            .first()
+            .map(|(_, agent_arc)| {
+                Self::select_model_for_agent(agent_arc.as_ref(), config, task_description)
+            })
+            .unwrap_or_else(|| AgentModelSelection {
+                selected_model: None,
+                selection_strategy: Self::selection_strategy(config),
+                task_complexity: Self::analyze_task_complexity(task_description),
+            });
+
+        Ok(ResolvedRoutingWithModel {
+            routing,
+            selected_model: agent_selection.selected_model,
+            selection_strategy: agent_selection.selection_strategy,
+            task_complexity: agent_selection.task_complexity,
+        })
+    }
+
+    pub fn select_model_for_agent(
+        agent: &dyn Agent,
+        config: &AppConfig,
+        task_description: Option<&str>,
+    ) -> AgentModelSelection {
         let task_complexity = Self::analyze_task_complexity(task_description);
-
-        // Select appropriate strategy based on config
-        let strategy = match config.model_selection_mode.as_str() {
-            "explicit" => ModelSelectionStrategy::Explicit,
-            "capable" => ModelSelectionStrategy::MostCapable,
-            "cost" => ModelSelectionStrategy::Cheapest,
-            "speed" => ModelSelectionStrategy::Fastest,
-            _ => ModelSelectionStrategy::Balanced,
-        };
-
-        // Try to select model from first agent in routing
-        let selected_model = if let Some((_, agent_arc)) = routing.agents.first() {
-            let available = agent_arc.available_models();
+        let strategy = Self::selection_strategy(config);
+        let selected_model = if agent.supports_model_override() {
+            let available = agent.available_models();
             if !available.is_empty() && strategy != ModelSelectionStrategy::Explicit {
                 let criteria = Self::build_selection_criteria(task_complexity, task_description);
                 select_model_for_task(available, &criteria, strategy.clone())
             } else if !available.is_empty() {
-                // Explicit strategy: return default model
-                agent_arc.default_model()
+                agent.default_model()
             } else {
                 None
             }
@@ -69,12 +89,21 @@ impl FlowModelSelector {
             None
         };
 
-        Ok(ResolvedRoutingWithModel {
-            routing,
+        AgentModelSelection {
             selected_model,
             selection_strategy: strategy,
             task_complexity,
-        })
+        }
+    }
+
+    fn selection_strategy(config: &AppConfig) -> ModelSelectionStrategy {
+        match config.model_selection_mode.as_str() {
+            "explicit" => ModelSelectionStrategy::Explicit,
+            "capable" => ModelSelectionStrategy::MostCapable,
+            "cost" => ModelSelectionStrategy::Cheapest,
+            "speed" => ModelSelectionStrategy::Fastest,
+            _ => ModelSelectionStrategy::Balanced,
+        }
     }
 
     /// Analyze task complexity from description
@@ -151,7 +180,61 @@ impl FlowModelSelector {
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+    use serde_json::Value;
+    use std::collections::HashMap;
+    use tokio::sync::mpsc;
+
+    use crate::agent::{Agent, Message};
+
     use super::*;
+
+    struct MockSelectableAgent {
+        supports_override: bool,
+        models: Vec<ModelInfo>,
+    }
+
+    #[async_trait]
+    impl Agent for MockSelectableAgent {
+        async fn chat(
+            &self,
+            _messages: Vec<Message>,
+            _principles: Option<Vec<String>>,
+            _options: Option<HashMap<String, Value>>,
+            _sender: mpsc::UnboundedSender<String>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn available_models(&self) -> Vec<ModelInfo> {
+            self.models.clone()
+        }
+
+        fn default_model(&self) -> Option<ModelInfo> {
+            self.models.iter().find(|m| m.is_default).cloned()
+        }
+
+        fn supports_model_override(&self) -> bool {
+            self.supports_override
+        }
+    }
+
+    fn test_config(mode: &str) -> AppConfig {
+        AppConfig {
+            default_phase: "coding".to_string(),
+            agents: HashMap::new(),
+            flow: crate::config::FlowConfig {
+                name: "flow".to_string(),
+                phases: vec!["coding".to_string()],
+            },
+            phases: HashMap::new(),
+            runtime: None,
+            cache: None,
+            vector: None,
+            autotune: None,
+            model_selection_mode: mode.to_string(),
+        }
+    }
 
     #[test]
     fn test_analyze_task_complexity() {
@@ -195,5 +278,64 @@ mod tests {
     fn test_build_selection_criteria_speed() {
         let criteria = FlowModelSelector::build_selection_criteria(1, Some("quick fix"));
         assert!(criteria.prefer_speed);
+    }
+
+    #[test]
+    fn select_model_for_agent_uses_override_capability() {
+        let agent = MockSelectableAgent {
+            supports_override: true,
+            models: vec![
+                ModelInfo {
+                    id: "fast-model".to_string(),
+                    name: "Fast".to_string(),
+                    description: "fast".to_string(),
+                    is_default: true,
+                    capabilities: vec!["chat".to_string()],
+                    context_window: Some(4096),
+                },
+                ModelInfo {
+                    id: "code-model".to_string(),
+                    name: "Code".to_string(),
+                    description: "code".to_string(),
+                    is_default: false,
+                    capabilities: vec!["chat".to_string(), "code".to_string()],
+                    context_window: Some(8192),
+                },
+            ],
+        };
+
+        let selection = FlowModelSelector::select_model_for_agent(
+            &agent,
+            &test_config("capable"),
+            Some("implement code generation changes"),
+        );
+
+        assert_eq!(
+            selection.selected_model.as_ref().map(|m| m.id.as_str()),
+            Some("code-model")
+        );
+    }
+
+    #[test]
+    fn select_model_for_agent_skips_providers_without_override() {
+        let agent = MockSelectableAgent {
+            supports_override: false,
+            models: vec![ModelInfo {
+                id: "chat-model".to_string(),
+                name: "Chat".to_string(),
+                description: "chat".to_string(),
+                is_default: true,
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(4096),
+            }],
+        };
+
+        let selection = FlowModelSelector::select_model_for_agent(
+            &agent,
+            &test_config("capable"),
+            Some("simple chat"),
+        );
+
+        assert!(selection.selected_model.is_none());
     }
 }

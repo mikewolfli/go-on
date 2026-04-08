@@ -7,3 +7,4 @@ tmp_basic_test_config.toml
 tmp_provider_fail_config.toml
 tmp_provider_fail_config2.toml
 tmp_review_collision.toml
+.goon/

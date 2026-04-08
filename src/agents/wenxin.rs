@@ -15,7 +15,7 @@ use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
-use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
+use crate::agents::{option_f64, option_string, principles_to_text, stream_sse_to_sender};
 
 const STRICT_STAGE_NOTE: &str = "Enforce strict completeness checks: no empty functions, no unhandled errors, no missing boundary checks, and no placeholder implementations.";
 
@@ -91,6 +91,17 @@ impl WenxinAgent {
         Ok(token_response.access_token)
     }
 
+    fn resolve_target_model(options: &Option<HashMap<String, Value>>) -> String {
+        option_string(options, "model").unwrap_or_else(|| "ernie-3.5-turbo".to_string())
+    }
+
+    fn endpoint_for_model(model: &str) -> &'static str {
+        match model {
+            "ernie-4.0-turbo-8k" => "chat/completions_pro",
+            _ => "chat/completions",
+        }
+    }
+
     fn stage_instruction(_options: &Option<HashMap<String, Value>>) -> &'static str {
         STRICT_STAGE_NOTE
     }
@@ -119,8 +130,10 @@ impl WenxinAgent {
         });
         final_messages.extend(messages);
 
+        let model = Self::resolve_target_model(options);
         let mut payload = json!({
             "messages": final_messages,
+            "model": model,
             "stream": true
         });
 
@@ -142,8 +155,10 @@ impl WenxinAgent {
         sender: mpsc::UnboundedSender<String>,
     ) -> Result<()> {
         let token = self.get_access_token().await?;
+        let target_model = Self::resolve_target_model(&options);
+        let endpoint_path = Self::endpoint_for_model(&target_model);
         let endpoint = format!(
-            "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions_pro?access_token={token}"
+            "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/{endpoint_path}?access_token={token}"
         );
         let payload = self.build_payload(messages, principles, &options);
 
@@ -216,6 +231,10 @@ impl Agent for WenxinAgent {
     fn default_model(&self) -> Option<ModelInfo> {
         self.available_models().into_iter().find(|m| m.is_default)
     }
+
+    fn supports_model_override(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -268,5 +287,18 @@ mod tests {
         assert_eq!(payload["messages"][1]["content"], "review this");
         assert_eq!(payload["temperature"], 0.3);
         assert_eq!(payload["top_p"], 0.8);
+        assert_eq!(payload["model"], "ernie-3.5-turbo");
+    }
+
+    #[test]
+    fn endpoint_for_model_routes_expected_path() {
+        assert_eq!(
+            WenxinAgent::endpoint_for_model("ernie-4.0-turbo-8k"),
+            "chat/completions_pro"
+        );
+        assert_eq!(
+            WenxinAgent::endpoint_for_model("ernie-3.5-turbo"),
+            "chat/completions"
+        );
     }
 }

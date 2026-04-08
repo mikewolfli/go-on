@@ -90,6 +90,11 @@ impl FlowManager {
         &self.config.default_phase
     }
 
+    /// Get the underlying application configuration.
+    pub fn config(&self) -> Arc<AppConfig> {
+        Arc::clone(&self.config)
+    }
+
     /// Resolve a phase and its agents
     ///
     /// This method resolves the requested phase (or uses the default if not specified),

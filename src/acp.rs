@@ -22,6 +22,7 @@ use tokio::task::{spawn_blocking, JoinHandle};
 use tokio::time::{sleep, timeout, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
 
+use crate::adaptive_selector::AdaptiveModelSelector;
 use crate::advanced_modules::{DynamicParameterTuner, ResourceAllocator};
 use crate::agent::{Agent, AgentRegistry, Message};
 use crate::cache::ResponseCache;
@@ -34,6 +35,7 @@ use crate::error::ProxyError;
 use crate::evaluation::TraceEvent;
 use crate::failure_prevention::FailurePrevention;
 use crate::flow::{FlowManager, ResolvedPhase};
+use crate::flow_with_models::FlowModelSelector;
 use crate::memory_response_cache::MemoryResponseCache;
 use crate::observability::{push_metric_header, push_scalar_metric};
 use crate::performance;
@@ -1517,6 +1519,8 @@ pub struct AcpServer {
     lifecycle: Arc<LifecycleState>,
     /// Circuit breakers for agent failure handling
     circuit_breakers: Arc<CircuitBreakerRegistry>,
+    /// Adaptive model selector: tracks per-model success rates for auto-switching
+    adaptive_model_selector: Arc<StdMutex<AdaptiveModelSelector>>,
     /// Rate limiter for phase-level throttling
     phase_rate_limiter: Arc<PhaseRateLimiter>,
     /// In-flight request limiter
@@ -1591,6 +1595,7 @@ impl AcpServer {
             maintenance: Arc::new(MaintenanceTracker::default()),
             lifecycle: Arc::new(LifecycleState::default()),
             circuit_breakers: Arc::new(CircuitBreakerRegistry::default()),
+            adaptive_model_selector: Arc::new(StdMutex::new(AdaptiveModelSelector::new())),
             phase_rate_limiter: Arc::new(PhaseRateLimiter::default()),
             inflight_limiter: Arc::new(InflightLimiter::default()),
             config_path,
@@ -6474,6 +6479,48 @@ impl AcpServer {
                 }
             }
 
+            // Auto model selection: consult FlowModelSelector and AdaptiveModelSelector
+            // to pick the best model for this agent/task, then inject into options.
+            let selected_model_id: Option<String>;
+            let agent_effective_options: Option<HashMap<String, Value>>;
+            {
+                let config = flow.config();
+                if config.model_selection_mode != "explicit" && agent.supports_model_override() {
+                    // Ask AdaptiveModelSelector if there is a preferred candidate
+                    let candidates: Vec<String> = agent
+                        .available_models()
+                        .into_iter()
+                        .map(|m| m.id)
+                        .collect();
+                    let adaptive_winner = self
+                        .adaptive_model_selector
+                        .lock()
+                        .ok()
+                        .and_then(|sel| sel.get_best_model(&candidates));
+
+                    let selection = FlowModelSelector::select_model_for_agent(
+                        agent.as_ref(),
+                        &config,
+                        prepared_input.latest_user_query.as_deref(),
+                    );
+                    // Prefer AdaptiveModelSelector winner (learned from history) when available
+                    let chosen_id = adaptive_winner.or_else(|| {
+                        selection.selected_model.map(|m| m.id)
+                    });
+                    if let Some(ref model_id) = chosen_id {
+                        let mut opts = phase_agent_options.clone().unwrap_or_default();
+                        opts.insert("model".to_string(), serde_json::Value::String(model_id.clone()));
+                        agent_effective_options = Some(opts);
+                    } else {
+                        agent_effective_options = phase_agent_options.clone();
+                    }
+                    selected_model_id = chosen_id;
+                } else {
+                    agent_effective_options = phase_agent_options.clone();
+                    selected_model_id = None;
+                }
+            }
+
             match self
                 .run_agent_streaming(
                     id.clone(),
@@ -6481,7 +6528,7 @@ impl AcpServer {
                     agent,
                     prepared_input.messages.clone(),
                     phase_principles.clone(),
-                    phase_agent_options.clone(),
+                    agent_effective_options,
                     request_timeout(phase_options.as_ref()),
                     Some(phase_name.as_str()),
                     Some(pipeline_trace.trace_id.as_str()),
@@ -6497,6 +6544,11 @@ impl AcpServer {
                         agent_duration,
                     );
                     self.circuit_breakers.record_success(&agent_name);
+                    if let Some(ref model_id) = selected_model_id {
+                        if let Ok(mut sel) = self.adaptive_model_selector.lock() {
+                            sel.record_result(model_id, true);
+                        }
+                    }
                     if !bypass_cache && cache_enabled {
                         if let Some(cache) = self.cache_handle() {
                             let cache_key = build_cache_key_from_parts(
@@ -6702,6 +6754,11 @@ impl AcpServer {
                         breaker_failure_threshold,
                         breaker_open_seconds,
                     );
+                    if let Some(ref model_id) = selected_model_id {
+                        if let Ok(mut sel) = self.adaptive_model_selector.lock() {
+                            sel.record_result(model_id, false);
+                        }
+                    }
                     if let Some(span) = agent_span {
                         self.telemetry.end_span(
                             span,

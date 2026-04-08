@@ -148,6 +148,11 @@ pub trait Agent: Send + Sync {
         None
     }
 
+    /// Whether the provider supports overriding the target model through chat options.
+    fn supports_model_override(&self) -> bool {
+        false
+    }
+
     /// (Phase 0/1 discipline) Structured agent task entrypoint
     fn run_task(&self, envelope: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         let timestamp = std::time::SystemTime::now()
