@@ -2,6 +2,7 @@
 //!
 //! This module provides implementations for various AI agents, including AI21 Labs, Aleph Alpha, Anthropic, Cohere, Copilot, DeepQuest, DeepSeek, Doubao (ByteDance), FaceWall (面壁智能), Fireworks AI, Gemini (Google), GLM (Zhipu AI), Groq, Hunyuan (Tencent), Langboat (澜舟科技), Llama (Meta), Loop AI, MiniMax, Mistral AI, Moonshot (月之暗面), Nim, OpenAI, OpenAI-compatible, Perplexity AI, Qianfan (Baidu), Qwen (Alibaba), Replicate, Skywork (昆仑万维), StepFun (阶跃星辰), Together AI, Titan (Amazon), Wenxin (Baidu), Xihu (西湖), and Yi (01.AI).
 
+pub mod agent;
 pub mod ai21;
 pub mod aleph;
 pub mod anthropic;
