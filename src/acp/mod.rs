@@ -1,4 +1,10 @@
 include!("prelude.rs");
 include!("server.rs");
-include!("maintenance.rs");
+include!("background.rs");
+include!("helpers/context.rs");
+include!("helpers/policy.rs");
+include!("helpers/misc.rs");
+include!("helpers/requirement.rs");
+include!("helpers/conversation.rs");
+include!("helpers/metrics.rs");
 include!("tests.rs");

@@ -1,0 +1,255 @@
+fn observe_latency_histogram(
+    duration: Duration,
+    count: &mut u64,
+    sum_seconds: &mut f64,
+    buckets: &mut [u64; HISTOGRAM_BUCKETS_SECONDS.len() + 1],
+) {
+    let value = duration.as_secs_f64();
+    *count += 1;
+    *sum_seconds += value;
+    let mut idx = HISTOGRAM_BUCKETS_SECONDS.len();
+    for (i, bound) in HISTOGRAM_BUCKETS_SECONDS.iter().enumerate() {
+        if value <= *bound {
+            idx = i;
+            break;
+        }
+    }
+    buckets[idx] = buckets[idx].saturating_add(1);
+}
+
+fn extract_task_description(messages: &[Message]) -> String {
+    messages
+        .iter()
+        .rev()
+        .find(|message| {
+            message.role.eq_ignore_ascii_case("user") && !message.content.trim().is_empty()
+        })
+        .map(|message| message.content.clone())
+        .or_else(|| messages.last().map(|message| message.content.clone()))
+        .unwrap_or_else(|| "general task".to_string())
+}
+
+fn pipeline_gate_violation(
+    analyzed_task: &TaskCharacteristics,
+    routing: &RoutingDecision,
+    approval_strategy: ApprovalStrategy,
+) -> Option<String> {
+    let non_trivial = analyzed_task.complexity >= 3
+        || analyzed_task.needs_verification
+        || analyzed_task.involves_multiple_modules
+        || analyzed_task.has_safety_concerns;
+
+    if non_trivial && routing.roles.is_empty() {
+        return Some("routing produced no roles for a non-trivial task".to_string());
+    }
+
+    let reviewer_required = routing.roles.contains(&AgentRole::Reviewer)
+        || routing
+            .pua_enforcement
+            .mandatory_roles
+            .contains(&AgentRole::Reviewer);
+    if reviewer_required && !approval_strategy.needs_dual_review() {
+        return Some(
+            "reviewer role required by pipeline routing, but current mode does not enable dual review gate"
+                .to_string(),
+        );
+    }
+
+    if non_trivial && routing.pua_enforcement.mandatory_safeguards.is_empty() {
+        return Some("PUA safeguards missing for non-trivial task".to_string());
+    }
+
+    None
+}
+
+fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
+    if let Ok(mut guard) = order.lock() {
+        if let Some(position) = guard.iter().position(|item| item == conversation_id) {
+            guard.remove(position);
+        }
+        guard.push(conversation_id.to_string());
+    }
+}
+
+fn evict_oldest_conversation(
+    store: &mut HashMap<String, ConversationState>,
+    order: &StdMutex<Vec<String>>,
+) -> Option<String> {
+    if let Ok(mut guard) = order.lock() {
+        while let Some(candidate) = guard.first().cloned() {
+            guard.remove(0);
+            if store.remove(&candidate).is_some() {
+                return Some(candidate);
+            }
+        }
+        return None;
+    }
+
+    let oldest = store
+        .iter()
+        .min_by_key(|(_, state)| state.last_touched_at)
+        .map(|(id, _)| id.clone());
+
+    oldest.and_then(|id| store.remove(&id).map(|_| id))
+}
+
+fn enforce_checkpoint_capacity(
+    state: &mut ConversationState,
+    incoming: usize,
+    protected_checkpoint_id: Option<&str>,
+) {
+    let total_after_insert = state.checkpoints.len().saturating_add(incoming);
+    if total_after_insert <= MAX_CHECKPOINTS_PER_CONVERSATION {
+        return;
+    }
+
+    let mut overflow = total_after_insert - MAX_CHECKPOINTS_PER_CONVERSATION;
+    let mut cursor = 0usize;
+
+    // Prefer removing oldest checkpoints, but keep the rollback target when requested.
+    while overflow > 0 && cursor < state.checkpoints.len() {
+        let can_remove = protected_checkpoint_id
+            .map(|protected| state.checkpoints[cursor].checkpoint_id != protected)
+            .unwrap_or(true);
+        if can_remove {
+            state.checkpoints.remove(cursor);
+            overflow -= 1;
+        } else {
+            cursor += 1;
+        }
+    }
+
+    if overflow > 0 {
+        let drain_to = overflow.min(state.checkpoints.len());
+        state.checkpoints.drain(0..drain_to);
+    }
+
+    repair_conversation_branch_heads(state);
+}
+
+fn stream_would_exceed_limits(
+    current_chunks: usize,
+    current_chars: usize,
+    next_token_chars: usize,
+) -> bool {
+    current_chunks.saturating_add(1) > MAX_STREAM_CHUNKS
+        || current_chars.saturating_add(next_token_chars) > MAX_STREAM_CHARS
+}
+
+fn validate_storage_key(
+    value: &str,
+    field: &str,
+    max_len: usize,
+) -> std::result::Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(crate::i18n::tf(
+            "error.storage_key_empty",
+            &[("field", field)],
+        ));
+    }
+    if trimmed.len() > max_len {
+        return Err(crate::i18n::tf(
+            "error.storage_key_too_long",
+            &[("field", field), ("max_len", &max_len.to_string())],
+        ));
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/'))
+    {
+        return Err(format!(
+            "{field} contains invalid characters; allowed: [A-Za-z0-9_.:/-]"
+        ));
+    }
+
+    Ok(trimmed.to_string())
+}
+
+fn checkpoint_message_chars(messages: &[Message]) -> usize {
+    messages.iter().map(|msg| msg.content.chars().count()).sum()
+}
+
+fn repair_conversation_branch_heads(state: &mut ConversationState) {
+    let existing_ids = state
+        .checkpoints
+        .iter()
+        .map(|checkpoint| checkpoint.checkpoint_id.clone())
+        .collect::<HashSet<_>>();
+    let mut repaired_heads: HashMap<String, String> = HashMap::new();
+    for (branch, head_id) in state.branch_heads.clone() {
+        if existing_ids.contains(&head_id) {
+            repaired_heads.insert(branch, head_id);
+            continue;
+        }
+
+        if let Some(fallback) = state
+            .checkpoints
+            .iter()
+            .rev()
+            .find(|checkpoint| checkpoint.branch_id == branch)
+            .map(|checkpoint| checkpoint.checkpoint_id.clone())
+        {
+            repaired_heads.insert(branch, fallback);
+        }
+    }
+    state.branch_heads = repaired_heads;
+}
+
+fn branch_head_adjustment_counts(
+    before: &HashMap<String, String>,
+    after: &HashMap<String, String>,
+) -> (usize, usize) {
+    let mut repaired = 0usize;
+    let mut dropped = 0usize;
+    for (branch, old_head) in before {
+        match after.get(branch) {
+            Some(new_head) if new_head != old_head => repaired = repaired.saturating_add(1),
+            Some(_) => {}
+            None => dropped = dropped.saturating_add(1),
+        }
+    }
+
+    (repaired, dropped)
+}
+
+fn infer_pua_stage(event_type: &str, phase: &str) -> Option<String> {
+    if event_type.starts_with("phase.") {
+        return Some(phase.to_string());
+    }
+    None
+}
+
+fn normalize_trace_attributes(event_type: &str, phase: &str, status: &str, inputs: Value) -> Value {
+    let mut attrs = match inputs {
+        Value::Object(map) => map,
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("payload".to_string(), other);
+            map
+        }
+    };
+
+    attrs
+        .entry("event_type".to_string())
+        .or_insert_with(|| Value::String(event_type.to_string()));
+    attrs
+        .entry("phase".to_string())
+        .or_insert_with(|| Value::String(phase.to_string()));
+    attrs
+        .entry("stage".to_string())
+        .or_insert_with(|| Value::String(phase.to_string()));
+    attrs.entry("policy_status".to_string()).or_insert_with(|| {
+        Value::String(
+            match status {
+                "ok" => "pass",
+                "error" => "error",
+                _ => "unknown",
+            }
+            .to_string(),
+        )
+    });
+
+    Value::Object(attrs)
+}
+

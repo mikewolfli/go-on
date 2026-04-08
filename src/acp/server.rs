@@ -61,6 +61,10 @@ pub struct AcpServer {
     shutdown_notify: Arc<Notify>,
 }
 
-include!("impl_core.rs");
-include!("impl_request.rs");
-include!("impl_chat.rs");
+include!("impl/runtime.rs");
+include!("impl/request.rs");
+include!("impl/chat.rs");
+include!("impl/conversation.rs");
+include!("impl/storage.rs");
+include!("impl/agent.rs");
+include!("impl/io.rs");

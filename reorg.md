@@ -445,3 +445,39 @@ Validation evidence:
 Notes:
 - This ACP split is structural and compile-safe; it reduces the single giant ACP module into smaller maintainable files without introducing compatibility duplicates.
 - Wave 2 is still open for any further semantic ACP subdivision, but the current ACP module is already folder-based, multi-file, and validated.
+
+### 2026-04-09 - ACP Semantic Split Completed (on `migrate`)
+Status: Done
+
+Motivation: ACP had structural include-based split but files were still too large
+(impl_chat.rs=2426, impl_request.rs=3841, maintenance.rs=2223 lines). Reorganized
+into semantic domain groupings aligned with user-requested domains:
+runtime / request / chat / conversation / storage / agent / io / policy / requirement / metrics.
+
+ACP `impl/` domain files (methods on AcpServer, all wrapped in `impl AcpServer {}`):
+- `src/acp/impl/runtime.rs` (376 lines) — new() + run() + lifecycle + snapshots
+- `src/acp/impl/request.rs` (3841 lines) — handle_request + trace helpers
+- `src/acp/impl/chat.rs` (1077 lines) — handle_chat + should_escalate_approval_strategy
+- `src/acp/impl/conversation.rs` (429 lines) — checkpoint CRUD + phase inference + memory helpers
+- `src/acp/impl/storage.rs` (191 lines) — cache_get/put/clear + vector_search/upsert/clear
+- `src/acp/impl/agent.rs` (683 lines) — run_dual_review_gate + run_agent_* + reload_config
+- `src/acp/impl/io.rs` (54 lines) — send_result/error/notification + write_response
+
+ACP helpers/ domain files (module-level utility functions):
+- `src/acp/background.rs` (229 lines) — MaintenanceCycleResult + background maintenance loop
+- `src/acp/helpers/context.rs` (295 lines) — effective_vector/summary, optimize_messages, build_cache_key
+- `src/acp/helpers/policy.rs` (586 lines) — WorkGrade, review policy, optimization policy
+- `src/acp/helpers/misc.rs` (75 lines) — extra_u64/f64/string/bool, percentile, parse_string_list
+- `src/acp/helpers/requirement.rs` (258 lines) — requirement contract parse/evaluate/clarification
+- `src/acp/helpers/conversation.rs` (255 lines) — conversation ordering, checkpoint capacity, branch repair
+- `src/acp/helpers/metrics.rs` (524 lines) — prometheus, latency histogram, stream notifications, time utils
+
+Updated entrypoints:
+- `src/acp/server.rs`: changed 3 `include!` lines → 7 `include!("impl/...")` lines
+- `src/acp/mod.rs`: changed 1 `include!("maintenance.rs")` → 7 `include!` lines for background + helpers
+
+Deleted obsolete files: maintenance.rs, impl_core.rs, impl_request.rs, impl_chat.rs
+
+Validation evidence:
+- `cargo check`: PASS (9.38s)
+- `cargo test acp`: PASS (`59` passed, `0` failed)
