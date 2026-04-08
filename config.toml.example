@@ -120,6 +120,20 @@ secret_key_env = "WENXIN_SECRET_KEY"
 #anthropic_version = "2023-06-01"
 #max_tokens = 4096
 
+# Qwen [experimental] - Alibaba Cloud DashScope API.
+# Implemented but not in default flow; add to a phase's agents list to activate.
+#[agents.qwen_main]
+#type = "qwen"
+#api_key_env = "QWEN_API_KEY"
+#secret_key_env = "QWEN_SECRET_KEY"
+
+# Qianfan [experimental] - Baidu Qianfan platform.
+# Implemented but not in default flow; add to a phase's agents list to activate.
+#[agents.qianfan_main]
+#type = "qianfan"
+#api_key_env = "QIANFAN_API_KEY"
+#secret_key_env = "QIANFAN_SECRET_KEY"
+
 # Define flow
 # This example follows an explicit step flow using only the built-in agents defined above:
 # planning -> coding -> review -> delivery

@@ -2,8 +2,6 @@
 //!
 //! Monitors language files for changes and automatically reloads translations
 
-#![allow(dead_code)]
-
 use crate::i18n::I18nManager;
 use anyhow::Result;
 use std::path::Path;
@@ -13,8 +11,10 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 /// Language file watcher for hot-reloading
+#[allow(dead_code)]
 pub struct LanguageWatcher {
     /// Reference to i18n manager
+    #[allow(dead_code)]
     i18n_manager: Arc<I18nManager>,
     /// Languages directory to watch
     watch_dir: std::path::PathBuf,
@@ -26,6 +26,7 @@ pub struct LanguageWatcher {
 
 impl LanguageWatcher {
     /// Create new language watcher
+    #[allow(dead_code)]
     pub fn new(i18n_manager: Arc<I18nManager>, watch_dir: &Path) -> Result<Self> {
         let mut watcher = LanguageWatcher {
             i18n_manager,
@@ -41,6 +42,7 @@ impl LanguageWatcher {
     }
 
     /// Update tracked file modification times
+    #[allow(dead_code)]
     fn update_file_times(&mut self) -> Result<()> {
         self.file_times.clear();
 
@@ -61,6 +63,7 @@ impl LanguageWatcher {
     }
 
     /// Check if any language file has been modified
+    #[allow(dead_code)]
     fn check_for_changes(&self) -> bool {
         if let Ok(entries) = std::fs::read_dir(&self.watch_dir) {
             for entry in entries.flatten() {
@@ -100,6 +103,7 @@ impl LanguageWatcher {
     }
 
     /// Start watching for file changes (runs in background thread)
+    #[allow(dead_code)]
     pub fn start_watching(&mut self, check_interval: Duration) -> Result<()> {
         let i18n = self.i18n_manager.clone();
         let watch_dir = self.watch_dir.clone();
@@ -144,6 +148,7 @@ impl LanguageWatcher {
     }
 
     /// Stop watching
+    #[allow(dead_code)]
     pub fn stop(&self) {
         self.should_stop
             .store(true, std::sync::atomic::Ordering::Relaxed);

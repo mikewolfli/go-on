@@ -4,12 +4,280 @@
 //! and performance impact assessment.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 use crate::config::{AgentConfig, AppConfig, PhaseConfig};
+use crate::i18n::{I18nManager, Language};
+
+fn report_language() -> Language {
+    if let Ok(explicit) = std::env::var("GO_ON_LANG") {
+        return Language::from_str(&explicit);
+    }
+    Language::detect_system()
+}
+
+fn resolve_languages_dir(config_path: &Path) -> PathBuf {
+    config_path
+        .parent()
+        .map(|parent| parent.join("languages"))
+        .unwrap_or_else(|| PathBuf::from("languages"))
+}
+
+fn tr(manager: Option<&I18nManager>, lang: Language, key: &str, fallback: &str) -> String {
+    if let Some(mgr) = manager {
+        let value = mgr.get_lang(key, lang);
+        if value != key {
+            return value;
+        }
+    }
+    fallback.to_string()
+}
+
+fn trf(
+    manager: Option<&I18nManager>,
+    lang: Language,
+    key: &str,
+    fallback: &str,
+    args: &[(&str, &str)],
+) -> String {
+    let template = tr(manager, lang, key, fallback);
+    let mut rendered = template;
+    for (placeholder, value) in args {
+        rendered = rendered.replace(&format!("{{{}}}", placeholder), value);
+    }
+    rendered
+}
+
+fn localize_validation_message(
+    manager: Option<&I18nManager>,
+    lang: Language,
+    message: &str,
+) -> String {
+    if message == "No agents configured" {
+        return tr(
+            manager,
+            lang,
+            "validation.msg.no_agents_configured",
+            "No agents configured",
+        );
+    }
+    if message == "No phases configured" {
+        return tr(
+            manager,
+            lang,
+            "validation.msg.no_phases_configured",
+            "No phases configured",
+        );
+    }
+    if message == "Enable cache for better performance" {
+        return tr(
+            manager,
+            lang,
+            "validation.msg.enable_cache",
+            "Enable cache for better performance",
+        );
+    }
+    if message == "Consider increasing cache TTL for better hit rates" {
+        return tr(
+            manager,
+            lang,
+            "validation.msg.increase_cache_ttl",
+            "Consider increasing cache TTL for better hit rates",
+        );
+    }
+    if message == "Enable vector store for semantic search capabilities" {
+        return tr(
+            manager,
+            lang,
+            "validation.msg.enable_vector",
+            "Enable vector store for semantic search capabilities",
+        );
+    }
+    if message == "Consider adding a fast model (e.g., turbo variant) for low-latency requests" {
+        return tr(
+            manager,
+            lang,
+            "validation.msg.add_fast_model",
+            "Consider adding a fast model (e.g., turbo variant) for low-latency requests",
+        );
+    }
+    if message == "Consider using keyring for secure secret storage" {
+        return tr(
+            manager,
+            lang,
+            "validation.msg.use_keyring",
+            "Consider using keyring for secure secret storage",
+        );
+    }
+
+    if let Some(raw) = message
+        .strip_prefix("Cache max_entries (")
+        .and_then(|v| v.strip_suffix(") is very low"))
+    {
+        return trf(
+            manager,
+            lang,
+            "validation.msg.cache_entries_low",
+            "Cache max_entries ({value}) is very low",
+            &[("value", raw)],
+        );
+    }
+    if let Some(raw) = message
+        .strip_prefix("Vector dimensions (")
+        .and_then(|v| v.strip_suffix(") may not be optimal"))
+    {
+        return trf(
+            manager,
+            lang,
+            "validation.msg.vector_dimensions_suboptimal",
+            "Vector dimensions ({value}) may not be optimal",
+            &[("value", raw)],
+        );
+    }
+    if let Some(name) = message
+        .strip_prefix("Agent '")
+        .and_then(|v| v.strip_suffix("' has empty agent_type"))
+    {
+        return trf(
+            manager,
+            lang,
+            "validation.msg.agent_empty_type",
+            "Agent '{name}' has empty agent_type",
+            &[("name", name)],
+        );
+    }
+    if let Some(name) = message
+        .strip_prefix("Agent '")
+        .and_then(|v| v.strip_suffix("' URL does not start with http:// or https://"))
+    {
+        return trf(
+            manager,
+            lang,
+            "validation.msg.agent_url_invalid",
+            "Agent '{name}' URL does not start with http:// or https://",
+            &[("name", name)],
+        );
+    }
+    if let Some(name) = message
+        .strip_prefix("Agent '")
+        .and_then(|v| v.strip_suffix("' has no model specified"))
+    {
+        return trf(
+            manager,
+            lang,
+            "validation.msg.agent_model_missing",
+            "Agent '{name}' has no model specified",
+            &[("name", name)],
+        );
+    }
+    if let Some(name) = message
+        .strip_prefix("Phase '")
+        .and_then(|v| v.strip_suffix("' has no agents"))
+    {
+        return trf(
+            manager,
+            lang,
+            "validation.msg.phase_no_agents",
+            "Phase '{name}' has no agents",
+            &[("name", name)],
+        );
+    }
+    if let Some(name) = message
+        .strip_prefix("Phase '")
+        .and_then(|v| v.strip_suffix("' has empty principles"))
+    {
+        return trf(
+            manager,
+            lang,
+            "validation.msg.phase_empty_principles",
+            "Phase '{name}' has empty principles",
+            &[("name", name)],
+        );
+    }
+    if let Some(rest) = message.strip_prefix("Phase '") {
+        if let Some((phase, agent_part)) = rest.split_once("' references non-existent agent '") {
+            if let Some(agent) = agent_part.strip_suffix("'") {
+                return trf(
+                    manager,
+                    lang,
+                    "validation.msg.phase_missing_agent_ref",
+                    "Phase '{phase}' references non-existent agent '{agent}'",
+                    &[("phase", phase), ("agent", agent)],
+                );
+            }
+        }
+    }
+    if let Some(name) = message
+        .strip_prefix("Agent '")
+        .and_then(|v| v.strip_suffix("' uses HTTP instead of HTTPS"))
+    {
+        return trf(
+            manager,
+            lang,
+            "validation.msg.agent_http_insecure",
+            "Agent '{name}' uses HTTP instead of HTTPS",
+            &[("name", name)],
+        );
+    }
+
+    message.to_string()
+}
+
+fn localize_validation_suggestion(
+    manager: Option<&I18nManager>,
+    lang: Language,
+    suggestion: &str,
+) -> String {
+    if suggestion == "Add at least one agent configuration" {
+        return tr(
+            manager,
+            lang,
+            "validation.suggestion.add_agent_config",
+            "Add at least one agent configuration",
+        );
+    }
+    if suggestion == "Add at least one phase configuration" {
+        return tr(
+            manager,
+            lang,
+            "validation.suggestion.add_phase_config",
+            "Add at least one phase configuration",
+        );
+    }
+    if suggestion == "Set agent_type to a valid agent type" {
+        return tr(
+            manager,
+            lang,
+            "validation.suggestion.set_valid_agent_type",
+            "Set agent_type to a valid agent type",
+        );
+    }
+    if suggestion == "Add at least one agent to the phase" {
+        return tr(
+            manager,
+            lang,
+            "validation.suggestion.add_agent_to_phase",
+            "Add at least one agent to the phase",
+        );
+    }
+    if let Some(agent) = suggestion
+        .strip_prefix("Add agent '")
+        .and_then(|v| v.strip_suffix("' or remove reference"))
+    {
+        return trf(
+            manager,
+            lang,
+            "validation.suggestion.add_or_remove_agent",
+            "Add agent '{agent}' or remove reference",
+            &[("agent", agent)],
+        );
+    }
+
+    suggestion.to_string()
+}
 
 /// Configuration validation result
 #[derive(Debug, Clone)]
@@ -490,29 +758,55 @@ impl ConfigValidator {
 
     /// Generate validation report
     pub fn generate_report(&self, result: &ValidationResult) -> String {
+        let lang = report_language();
+        let i18n = I18nManager::new(resolve_languages_dir(&self.config_path)).ok();
         let mut report = String::new();
 
         // Header
-        report.push_str("Configuration Validation Report\n");
-        report.push_str(&format!("Config: {}\n", self.config_path.display()));
-        report.push_str(&format!("Valid: {}\n\n", result.is_valid));
+        report.push_str(&tr(
+            i18n.as_ref(),
+            lang,
+            "report.title",
+            "Configuration Validation Report",
+        ));
+        report.push('\n');
+        report.push_str(&format!(
+            "{}: {}\n",
+            tr(i18n.as_ref(), lang, "report.config", "Config"),
+            self.config_path.display()
+        ));
+        report.push_str(&format!(
+            "{}: {}\n\n",
+            tr(i18n.as_ref(), lang, "report.valid", "Valid"),
+            result.is_valid
+        ));
 
         // Errors
         if !result.errors.is_empty() {
-            report.push_str("Errors:\n");
+            report.push_str(&tr(i18n.as_ref(), lang, "report.errors", "Errors"));
+            report.push_str(":\n");
             for error in &result.errors {
+                let severity = match error.severity {
+                    ErrorSeverity::Critical => {
+                        tr(i18n.as_ref(), lang, "severity.critical", "CRITICAL")
+                    }
+                    ErrorSeverity::Error => tr(i18n.as_ref(), lang, "severity.error", "ERROR"),
+                    ErrorSeverity::Warning => {
+                        tr(i18n.as_ref(), lang, "severity.warning", "WARNING")
+                    }
+                };
                 report.push_str(&format!(
                     "  [{}] {}: {}\n",
-                    match error.severity {
-                        ErrorSeverity::Critical => "CRITICAL",
-                        ErrorSeverity::Error => "ERROR",
-                        ErrorSeverity::Warning => "WARNING",
-                    },
+                    severity,
                     error.section,
-                    error.message
+                    localize_validation_message(i18n.as_ref(), lang, &error.message)
                 ));
                 if let Some(suggestion) = &error.suggestion {
-                    report.push_str(&format!("    Suggestion: {}\n", suggestion));
+                    report.push_str(&format!(
+                        "    {}: {}\n",
+                        tr(i18n.as_ref(), lang, "report.suggestion", "Suggestion"),
+                        localize_validation_suggestion(i18n.as_ref(), lang, suggestion)
+                    ));
                 }
             }
             report.push('\n');
@@ -520,52 +814,98 @@ impl ConfigValidator {
 
         // Warnings
         if !result.warnings.is_empty() {
-            report.push_str("Warnings:\n");
+            report.push_str(&tr(i18n.as_ref(), lang, "report.warnings", "Warnings"));
+            report.push_str(":\n");
             for warning in &result.warnings {
-                report.push_str(&format!("  {}: {}\n", warning.section, warning.message));
+                report.push_str(&format!(
+                    "  {}: {}\n",
+                    warning.section,
+                    localize_validation_message(i18n.as_ref(), lang, &warning.message)
+                ));
             }
             report.push('\n');
         }
 
         // Recommendations
         if !result.recommendations.is_empty() {
-            report.push_str("Recommendations:\n");
+            report.push_str(&tr(
+                i18n.as_ref(),
+                lang,
+                "report.recommendations",
+                "Recommendations",
+            ));
+            report.push_str(":\n");
             for rec in &result.recommendations {
+                let priority = match rec.priority {
+                    PriorityLevel::High => tr(i18n.as_ref(), lang, "priority.high", "HIGH"),
+                    PriorityLevel::Medium => tr(i18n.as_ref(), lang, "priority.medium", "MEDIUM"),
+                    PriorityLevel::Low => tr(i18n.as_ref(), lang, "priority.low", "LOW"),
+                };
+                let category = match rec.category {
+                    RecommendationCategory::Performance => {
+                        tr(i18n.as_ref(), lang, "category.perf", "PERF")
+                    }
+                    RecommendationCategory::Security => {
+                        tr(i18n.as_ref(), lang, "category.sec", "SEC")
+                    }
+                    RecommendationCategory::Reliability => {
+                        tr(i18n.as_ref(), lang, "category.rel", "REL")
+                    }
+                    RecommendationCategory::Maintainability => {
+                        tr(i18n.as_ref(), lang, "category.maint", "MAINT")
+                    }
+                    RecommendationCategory::Cost => {
+                        tr(i18n.as_ref(), lang, "category.cost", "COST")
+                    }
+                };
+                let impact = match rec.impact {
+                    ImpactLevel::High => tr(i18n.as_ref(), lang, "impact.high", "High impact"),
+                    ImpactLevel::Medium => {
+                        tr(i18n.as_ref(), lang, "impact.medium", "Medium impact")
+                    }
+                    ImpactLevel::Low => tr(i18n.as_ref(), lang, "impact.low", "Low impact"),
+                };
                 report.push_str(&format!(
                     "  [{}][{}] {}: {}\n",
-                    match rec.priority {
-                        PriorityLevel::High => "HIGH",
-                        PriorityLevel::Medium => "MEDIUM",
-                        PriorityLevel::Low => "LOW",
-                    },
-                    match rec.category {
-                        RecommendationCategory::Performance => "PERF",
-                        RecommendationCategory::Security => "SEC",
-                        RecommendationCategory::Reliability => "REL",
-                        RecommendationCategory::Maintainability => "MAINT",
-                        RecommendationCategory::Cost => "COST",
-                    },
-                    match rec.impact {
-                        ImpactLevel::High => "High impact",
-                        ImpactLevel::Medium => "Medium impact",
-                        ImpactLevel::Low => "Low impact",
-                    },
-                    rec.message
+                    priority,
+                    category,
+                    impact,
+                    localize_validation_message(i18n.as_ref(), lang, &rec.message)
                 ));
             }
             report.push('\n');
         }
 
         // Dependencies
-        report.push_str("Dependencies:\n");
+        report.push_str(&tr(
+            i18n.as_ref(),
+            lang,
+            "report.dependencies",
+            "Dependencies",
+        ));
+        report.push_str(":\n");
         if !result.dependencies.required_env_vars.is_empty() {
-            report.push_str("  Required Environment Variables:\n");
+            report.push_str("  ");
+            report.push_str(&tr(
+                i18n.as_ref(),
+                lang,
+                "report.required_env",
+                "Required Environment Variables",
+            ));
+            report.push_str(":\n");
             for var in &result.dependencies.required_env_vars {
                 report.push_str(&format!("    - {}\n", var));
             }
         }
         if !result.dependencies.required_keyring_entries.is_empty() {
-            report.push_str("  Required Keyring Entries:\n");
+            report.push_str("  ");
+            report.push_str(&tr(
+                i18n.as_ref(),
+                lang,
+                "report.required_keyring",
+                "Required Keyring Entries",
+            ));
+            report.push_str(":\n");
             for entry in &result.dependencies.required_keyring_entries {
                 report.push_str(&format!("    - {}\n", entry));
             }

@@ -168,6 +168,14 @@ max_history_messages = 24
 # - simple: 2-3 step execution with one primary AI per step
 # - complex: explicit multi-phase flow with a fixed 2-AI review gate
 autopilot_complexity = "complex"
+# Capability governance defaults:
+# - adaptive_routing: tune predicted success rate from LearningBus history
+# - adaptive_agent_order: reorder fallback chain by execution success history
+# - enforce_capability_ceiling: when true, over-capability tasks require explicit
+#   capability_decision (multi_ai/degrade) + capability_confirm=true
+adaptive_routing = true
+adaptive_agent_order = true
+enforce_capability_ceiling = true
 max_history_chars = 14000
 request_timeout_seconds = 180
 review_timeout_seconds = 60

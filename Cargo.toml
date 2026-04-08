@@ -17,7 +17,6 @@ toml = "1.1.0"
 env = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-tracing-opentelemetry = "0.23"  # Note: This may need updating if incompatible
 tracing-appender = "0.2"
 opentelemetry-stdout = "0.31"
 lazy_static = "1.4"
@@ -28,6 +27,9 @@ opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.31", features = ["trace", "grpc-tonic"] }
 glob = "0.3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile = "3"

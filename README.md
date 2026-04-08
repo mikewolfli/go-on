@@ -327,6 +327,7 @@ Contributors should follow it for coding, testing, protocol compatibility, and d
 - JSON-RPC 2.0 over stdin/stdout for ACP-style chat handling.
 - Flow and phase definitions loaded from `config.toml`.
 - Supports `copilot`, `deepseek`, `wenxin`, `openai_compatible`, `doubao`, and `claude` agent types.
+- Additional experimental agents: `qwen` (Alibaba Qwen) and `qianfan` (Baidu Qianfan). These are implemented but not in default configuration; see Agent type notes.
 - Phase-aware principle injection:
   - DeepSeek/Wenxin: principles go to `system` message.
   - Copilot: principles are injected into a prefixed user instruction.
@@ -598,6 +599,14 @@ Agent type notes:
   - `url` (optional): default `https://api.anthropic.com`
   - `anthropic_version` (optional): default `2023-06-01`
   - `max_tokens` (optional): default `4096`
+- `qwen` **[experimental]**: Alibaba Cloud Qwen / DashScope API requiring:
+  - `api_key_env`: env var for DashScope API key
+  - `secret_key_env`: env var for DashScope secret key
+  - Not in default configuration; must be added manually if needed.
+- `qianfan` **[experimental]**: Baidu Qianfan platform agent requiring:
+  - `api_key_env`: env var for Qianfan API key
+  - `secret_key_env`: env var for Qianfan secret key
+  - Not in default configuration; must be added manually if needed.
 
 ## Zed settings.json Example
 

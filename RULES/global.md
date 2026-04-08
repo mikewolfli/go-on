@@ -1,5 +1,19 @@
 # Universal Project Runtime Rules
 
+Authoritative policy sources (single source of truth):
+- RULES/global.md
+- RULES/common.md
+- RULES/coding.md
+- RULES/review.md
+- RULES/pua.md
+
+Compatibility bootstrap:
+- .github/copilot-instructions.md points to RULES and is not the long-form authority.
+
+Archive/index policy:
+- Historical or duplicate policy documents must be reduced to short index pages.
+- Index pages should only point to the authoritative sources above.
+
 - Follow all repository-wide rules from DEVELOPMENT_RULES.md and top-level policies.
 - Preserve API and protocol compatibility; never break method contracts.
 - Prefer minimal, reviewable diffs; avoid broad refactoring unless necessary.

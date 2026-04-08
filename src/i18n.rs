@@ -3,8 +3,6 @@
 //! Supports multiple languages (Simplified Chinese, Traditional Chinese, English)
 //! with automatic system language detection and hot-reloading capabilities.
 
-#![allow(dead_code)]
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -71,6 +69,7 @@ impl Language {
 
 /// Translation message
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Message {
     /// Message key
     pub key: String,
@@ -168,6 +167,7 @@ impl I18nManager {
     }
 
     /// Set current language
+    #[allow(dead_code)]
     pub fn set_language(&self, language: Language) {
         let mut current = self.current_language.write().unwrap();
         *current = language;
@@ -227,6 +227,7 @@ impl I18nManager {
     }
 
     /// Hot reload language files (monitors for changes)
+    #[allow(dead_code)]
     pub fn hot_reload(&self) -> Result<()> {
         self.load_all_languages()?;
         info!("Languages reloaded");
@@ -234,6 +235,7 @@ impl I18nManager {
     }
 
     /// Export translatable keys (for translation work)
+    #[allow(dead_code)]
     pub fn export_keys(&self) -> Result<Vec<String>> {
         let translations = self.translations.read().unwrap();
 
@@ -245,6 +247,7 @@ impl I18nManager {
     }
 
     /// Get available languages
+    #[allow(dead_code)]
     pub fn available_languages(&self) -> Vec<(Language, usize)> {
         let translations = self.translations.read().unwrap();
 
@@ -298,6 +301,7 @@ pub fn tf(key: &str, args: &[(&str, &str)]) -> String {
 }
 
 /// Set global language
+#[allow(dead_code)]
 pub fn set_language(language: Language) {
     let i18n = I18N.read().unwrap();
     if let Some(manager) = i18n.as_ref() {
@@ -306,6 +310,7 @@ pub fn set_language(language: Language) {
 }
 
 /// Get current global language
+#[allow(dead_code)]
 pub fn current_language() -> Language {
     let i18n = I18N.read().unwrap();
     if let Some(manager) = i18n.as_ref() {

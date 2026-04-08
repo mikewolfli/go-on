@@ -71,7 +71,13 @@ impl McpStdioServer {
                             stdout.flush().await?;
                         }
                         Err(e) => {
-                            eprintln!("Error handling request: {}", e);
+                            eprintln!(
+                                "{}",
+                                crate::i18n::tf(
+                                    "error.handling_request",
+                                    &[("error", &format!("{}", e))]
+                                )
+                            );
                         }
                     }
                 }
@@ -81,7 +87,10 @@ impl McpStdioServer {
                         result: None,
                         error: Some(crate::mcp::JsonRpcError {
                             code: crate::mcp::error_codes::PARSE_ERROR,
-                            message: format!("Parse error: {}", parse_error),
+                            message: crate::i18n::tf(
+                                "error.parse_error",
+                                &[("error", &format!("{}", parse_error))],
+                            ),
                             data: None,
                         }),
                         id: None,
@@ -124,11 +133,20 @@ impl McpHttpServer {
 
     /// Run the HTTP server
     pub async fn run(&self) -> Result<()> {
-        info!("MCP HTTP server listening on {}", self.bind_addr);
+        info!(
+            "{}",
+            crate::i18n::tf("info.mcp_server_listening", &[("address", &self.bind_addr)])
+        );
         let listener = TcpListener::bind(&self.bind_addr).await?;
 
-        info!("MCP HTTP server is operational. Ready to accept requests.");
-        debug!("MCP Protocol Version: {}", crate::mcp::MCP_VERSION);
+        info!("{}", crate::i18n::t("info.mcp_server_operational"));
+        debug!(
+            "{}",
+            crate::i18n::tf(
+                "info.mcp_protocol_version",
+                &[("version", crate::mcp::MCP_VERSION)]
+            )
+        );
 
         loop {
             let (mut socket, peer_addr) = listener.accept().await?;
@@ -136,7 +154,16 @@ impl McpHttpServer {
 
             tokio::spawn(async move {
                 if let Err(err) = handle_http_connection(&mut socket, mcp_server).await {
-                    warn!("HTTP connection error from {}: {}", peer_addr, err);
+                    warn!(
+                        "{}",
+                        crate::i18n::tf(
+                            "error.http_connection",
+                            &[
+                                ("address", &peer_addr.to_string()),
+                                ("error", &format!("{}", err))
+                            ]
+                        )
+                    );
                 }
             });
         }
@@ -154,35 +181,33 @@ async fn handle_http_connection(
     }
 
     let request_text = String::from_utf8_lossy(&buffer[..bytes_read]);
-    let header_end = request_text
-        .find("\r\n\r\n")
-        .ok_or_else(|| {
-            warn!("MCP HTTP: invalid request — missing header terminator");
-            anyhow::anyhow!("invalid HTTP request: missing header terminator")
-        })?;
+    let header_end = request_text.find("\r\n\r\n").ok_or_else(|| {
+        warn!("MCP HTTP: invalid request — missing header terminator");
+        anyhow::anyhow!("invalid HTTP request: missing header terminator")
+    })?;
 
     let (header_part, body_initial_part) = request_text.split_at(header_end + 4);
     let mut lines = header_part.lines();
-    let request_line = lines
-        .next()
-        .ok_or_else(|| {
-            warn!("MCP HTTP: invalid request — missing request line");
-            anyhow::anyhow!("invalid HTTP request: missing request line")
-        })?;
+    let request_line = lines.next().ok_or_else(|| {
+        warn!("MCP HTTP: invalid request — missing request line");
+        anyhow::anyhow!("invalid HTTP request: missing request line")
+    })?;
 
     let mut request_line_parts = request_line.split_whitespace();
-    let method = request_line_parts
-        .next()
-        .ok_or_else(|| {
-            warn!("MCP HTTP: invalid request — missing method in request line: {}", request_line);
-            anyhow::anyhow!("invalid HTTP request: missing method")
-        })?;
-    let path = request_line_parts
-        .next()
-        .ok_or_else(|| {
-            warn!("MCP HTTP: invalid request — missing path in request line: {}", request_line);
-            anyhow::anyhow!("invalid HTTP request: missing path")
-        })?;
+    let method = request_line_parts.next().ok_or_else(|| {
+        warn!(
+            "MCP HTTP: invalid request — missing method in request line: {}",
+            request_line
+        );
+        anyhow::anyhow!("invalid HTTP request: missing method")
+    })?;
+    let path = request_line_parts.next().ok_or_else(|| {
+        warn!(
+            "MCP HTTP: invalid request — missing path in request line: {}",
+            request_line
+        );
+        anyhow::anyhow!("invalid HTTP request: missing path")
+    })?;
 
     if method == "GET" && path == "/health" {
         write_http_json_response(
@@ -220,7 +245,10 @@ async fn handle_http_connection(
     let request = match serde_json::from_str::<JsonRpcRequest>(&body_str) {
         Ok(req) => req,
         Err(parse_error) => {
-            warn!("MCP HTTP: JSON-RPC parse error from {} {}: {}", method, path, parse_error);
+            warn!(
+                "MCP HTTP: JSON-RPC parse error from {} {}: {}",
+                method, path, parse_error
+            );
             let error_response = JsonRpcResponse {
                 jsonrpc: "2.0".to_string(),
                 result: None,

@@ -4,8 +4,6 @@
 //! Mode runtimes define orchestration policies per mode that will be activated once
 //! the orchestrator integrates them into the execution flow.
 
-#![allow(dead_code)]
-
 use crate::agent::{AgentTaskEnvelope, AgentTaskResult};
 use crate::pua::mode_execution_report;
 use anyhow::Result;
@@ -27,12 +25,16 @@ pub enum ModeKind {
 /// All implementations should instrument `run` for tracing and performance monitoring in the implementation, not on the trait itself.
 pub trait ModeRuntime: Send + Sync {
     /// Returns the mode kind.
+    #[allow(dead_code)]
     fn kind(&self) -> ModeKind;
     /// Returns the allowed tools for this mode.
+    #[allow(dead_code)]
     fn allowed_tools(&self) -> Vec<String>;
     /// Returns the maximum number of tool calls allowed.
+    #[allow(dead_code)]
     fn max_tool_calls(&self) -> usize;
     /// Whether user approval is required for this mode.
+    #[allow(dead_code)]
     fn user_approval_required(&self) -> bool;
     /// Whether the given objective is high risk.
     fn is_high_risk_operation(&self, objective: &str) -> bool;

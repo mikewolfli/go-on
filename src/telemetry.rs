@@ -136,12 +136,36 @@ impl TelemetryRuntime {
 }
 
 fn init_otel_provider(_exporter: &str, endpoint: Option<String>, service_name: &str) -> Result<()> {
-    // Simplified implementation for now
-    // In a production environment, you would set up proper OpenTelemetry tracing
+    use opentelemetry_sdk::trace::SdkTracerProvider;
+    use opentelemetry_sdk::Resource;
+
+    let resource = Resource::builder_empty()
+        .with_attribute(KeyValue::new("service.name", service_name.to_string()))
+        .build();
+
+    let provider = if let Some(ep) = endpoint {
+        use opentelemetry_otlp::{SpanExporter, WithExportConfig};
+        let span_exporter = SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(&ep)
+            .build()
+            .map_err(|e| anyhow::anyhow!("OTLP span exporter init error: {}", e))?;
+        SdkTracerProvider::builder()
+            .with_resource(resource)
+            .with_batch_exporter(span_exporter)
+            .build()
+    } else {
+        let span_exporter = opentelemetry_stdout::SpanExporter::default();
+        SdkTracerProvider::builder()
+            .with_resource(resource)
+            .with_simple_exporter(span_exporter)
+            .build()
+    };
+
+    global::set_tracer_provider(provider);
     tracing::info!(
-        "OpenTelemetry tracing configured for service: {}",
-        service_name
+        service = service_name,
+        "OpenTelemetry tracing provider initialized"
     );
-    tracing::info!("OpenTelemetry endpoint: {:?}", endpoint);
     Ok(())
 }

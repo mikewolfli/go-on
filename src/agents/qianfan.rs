@@ -17,8 +17,7 @@ use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
 use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
 
-const EARLY_STAGE_NOTE: &str = "The project is still in an early stage and architecture is not finalized. Only check core logic validity; empty functions and implementation TODOs are acceptable.";
-const STRICT_STAGE_NOTE: &str = "The project is in a mature stage. Enforce strict completeness checks: no empty functions, no unhandled errors, no missing boundary checks, etc.";
+const STRICT_STAGE_NOTE: &str = "Enforce strict completeness checks: no empty functions, no unhandled errors, no missing boundary checks, and no placeholder implementations.";
 
 #[derive(Debug, Deserialize)]
 struct QianfanTokenResponse {
@@ -99,18 +98,8 @@ impl QianfanAgent {
         Ok(token_response.access_token)
     }
 
-    fn stage_instruction(options: &Option<HashMap<String, Value>>) -> &'static str {
-        let stage = options
-            .as_ref()
-            .and_then(|m| m.get("stage"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("strict");
-
-        if stage.eq_ignore_ascii_case("early") {
-            EARLY_STAGE_NOTE
-        } else {
-            STRICT_STAGE_NOTE
-        }
+    fn stage_instruction(_options: &Option<HashMap<String, Value>>) -> &'static str {
+        STRICT_STAGE_NOTE
     }
 
     fn build_payload(

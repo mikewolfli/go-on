@@ -227,7 +227,7 @@ impl ResourceAllocator {
             token_budget: (base_tokens as f32 * complexity_multiplier.max(0.4)) as usize,
             time_budget_seconds: (base_time as f32 * complexity_multiplier.max(0.4)) as u64,
             api_cost_limit_cents: (base_cost as f32 * complexity_multiplier.max(0.4)) as u32,
-            max_parallel_tasks: (num_subtasks / 2).max(1).min(8),
+            max_parallel_tasks: (num_subtasks / 2).clamp(1, 8),
         }
     }
 

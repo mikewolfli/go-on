@@ -12,6 +12,22 @@
 - Task lists must be detailed, strictly ordered, and each step must be fully completed before proceeding.
 - If a rule below is marked as language-specific (e.g., Rust), and the current project is not that language, skip or adapt the rule accordingly.
 
+## Strict Structural Safety Rules
+
+Forbidden:
+- deleting code without validating symbol pairs: {}, (), [], <>
+- leaving unclosed symbols
+- bulk edits that break syntax structure
+- partial, placeholder, or fake implementations
+- modifying unrelated code during a focused task
+
+Mandatory:
+1. Validate symbol pairs before and after edits.
+2. Keep modified functions structurally complete.
+3. Ensure resulting code is compilable.
+4. Check syntax errors before delivery.
+5. Preserve behavior unless change is explicitly requested.
+
 # Language-Specific Rules
 
 ## Rust

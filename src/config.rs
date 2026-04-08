@@ -710,6 +710,12 @@ impl AppConfig {
                         phase_name
                     );
                 }
+                if reviewers.len() > 2 {
+                    anyhow::bail!(
+                        "phase '{}' uses complex autopilot but full_auto_review_agents supports at most 2 reviewers",
+                        phase_name
+                    );
+                }
 
                 if review_phase.agents.len() < 2 {
                     anyhow::bail!(
@@ -1048,14 +1054,30 @@ fn validate_phase_options(phase_name: &str, options: &PhaseOptions) -> Result<()
         0.1,
         20.0,
     )?;
-    validate_extra_u64_range(phase_name, options, "min_reviewers", 1, 16)?;
-    validate_extra_u64_range(phase_name, options, "required_approvals", 1, 16)?;
+    validate_extra_u64_range(phase_name, options, "min_reviewers", 1, 2)?;
+    validate_extra_u64_range(phase_name, options, "required_approvals", 1, 2)?;
     validate_extra_u64_range(phase_name, options, "phase_max_inflight", 1, 10_000)?;
     validate_extra_u64_range(phase_name, options, "global_max_inflight", 1, 10_000)?;
     validate_extra_u64_range(phase_name, options, "circuit_breaker_failures", 1, 100)?;
     validate_extra_u64_range(phase_name, options, "circuit_breaker_open_seconds", 1, 3600)?;
     validate_extra_u64_range(phase_name, options, "review_gate_timeout_seconds", 1, 3600)?;
     validate_extra_u64_range(phase_name, options, "review_min_response_chars", 1, 4000)?;
+    validate_extra_bool(phase_name, options, "auto_attach")?;
+    validate_extra_bool(phase_name, options, "auto_detach")?;
+    validate_extra_string_array(
+        phase_name,
+        options,
+        "optimization_modules",
+        &[
+            "workflow_optimizer",
+            "adaptive_selector",
+            "advanced_modules",
+            "cost_optimizer",
+            "speed_optimizer",
+            "reliability_optimizer",
+            "failure_prevention",
+        ],
+    )?;
 
     if let Some(policy) = options
         .extra
@@ -1123,6 +1145,58 @@ fn validate_extra_u64_range(
     Ok(())
 }
 
+fn validate_extra_bool(phase_name: &str, options: &PhaseOptions, key: &str) -> Result<()> {
+    let Some(value) = options.extra.get(key) else {
+        return Ok(());
+    };
+
+    if !value.is_boolean() {
+        anyhow::bail!("phase '{}' option '{}' must be a boolean", phase_name, key);
+    }
+
+    Ok(())
+}
+
+fn validate_extra_string_array(
+    phase_name: &str,
+    options: &PhaseOptions,
+    key: &str,
+    allowed: &[&str],
+) -> Result<()> {
+    let Some(value) = options.extra.get(key) else {
+        return Ok(());
+    };
+
+    let Some(items) = value.as_array() else {
+        anyhow::bail!(
+            "phase '{}' option '{}' must be an array of strings",
+            phase_name,
+            key
+        );
+    };
+
+    for item in items {
+        let Some(module_name) = item.as_str() else {
+            anyhow::bail!(
+                "phase '{}' option '{}' must contain only strings",
+                phase_name,
+                key
+            );
+        };
+
+        if !allowed.iter().any(|candidate| candidate == &module_name) {
+            anyhow::bail!(
+                "phase '{}' option '{}' contains unsupported module '{}'",
+                phase_name,
+                key,
+                module_name
+            );
+        }
+    }
+
+    Ok(())
+}
+
 fn validate_extra_f64_range(
     phase_name: &str,
     options: &PhaseOptions,
@@ -1175,6 +1249,40 @@ pub fn missing_env_vars(config: &AppConfig) -> Vec<String> {
     missing
 }
 
+pub fn is_agent_env_ready(config: &AppConfig, agent_name: &str) -> bool {
+    let Some(agent) = config.agents.get(agent_name) else {
+        return false;
+    };
+    required_env_vars(agent).into_iter().all(|env_name| {
+        std::env::var(env_name)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    })
+}
+
+fn missing_env_vars_by_agent(config: &AppConfig) -> HashMap<String, Vec<String>> {
+    let mut missing = HashMap::new();
+
+    for (agent_name, agent) in &config.agents {
+        let mut per_agent_missing = required_env_vars(agent)
+            .into_iter()
+            .filter(|env_name| match std::env::var(env_name) {
+                Ok(value) => value.trim().is_empty(),
+                Err(_) => true,
+            })
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        if !per_agent_missing.is_empty() {
+            per_agent_missing.sort();
+            per_agent_missing.dedup();
+            missing.insert(agent_name.clone(), per_agent_missing);
+        }
+    }
+
+    missing
+}
+
 fn required_env_vars(agent: &AgentConfig) -> Vec<&str> {
     let mut envs = Vec::new();
     if let Some(value) = agent.api_key_env.as_deref() {
@@ -1212,11 +1320,26 @@ pub fn validate_runtime_readiness(
 ) -> Result<ConfigHealthReport> {
     config.validate()?;
 
-    let missing = missing_env_vars(config);
-    if !missing.is_empty() {
-        anyhow::bail!(
-            "missing required environment variables for configured agents: {}",
-            missing.join(", ")
+    let missing_by_agent = missing_env_vars_by_agent(config);
+    if !missing_by_agent.is_empty() {
+        let total_agents = config.agents.len();
+        let ready_agents = total_agents.saturating_sub(missing_by_agent.len());
+        if ready_agents == 0 {
+            let missing = missing_env_vars(config);
+            anyhow::bail!(
+                "missing required environment variables for configured agents: {}",
+                missing.join(", ")
+            );
+        }
+
+        let blocked = missing_by_agent
+            .iter()
+            .map(|(agent, vars)| format!("{}({})", agent, vars.join(",")))
+            .collect::<Vec<_>>()
+            .join("; ");
+        warn!(
+            "runtime readiness degraded: {} of {} agents are env-ready; unavailable agents: {}",
+            ready_agents, total_agents, blocked
         );
     }
 
@@ -1926,10 +2049,10 @@ mod tests {
             .expect("coding phase must exist")
             .options = Some(PhaseOptions {
             extra: HashMap::from([
-                ("min_reviewers".to_string(), serde_json::Value::from(2_u64)),
+                ("min_reviewers".to_string(), serde_json::Value::from(1_u64)),
                 (
                     "required_approvals".to_string(),
-                    serde_json::Value::from(3_u64),
+                    serde_json::Value::from(2_u64),
                 ),
             ]),
             ..PhaseOptions::default()
@@ -1941,6 +2064,60 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("phase 'coding' required_approvals must be <= min_reviewers"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_min_reviewers_above_two() {
+        let mut cfg = valid_config();
+        cfg.phases
+            .get_mut("coding")
+            .expect("coding phase must exist")
+            .options = Some(PhaseOptions {
+            extra: HashMap::from([("min_reviewers".to_string(), serde_json::Value::from(3_u64))]),
+            ..PhaseOptions::default()
+        });
+
+        let err = cfg
+            .validate()
+            .expect_err("min_reviewers above two must fail");
+        assert!(
+            err.to_string()
+                .contains("phase 'coding' option 'min_reviewers' must be in [1, 2]"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_complex_autopilot_with_more_than_two_reviewers() {
+        let mut cfg = valid_config();
+        cfg.phases
+            .get_mut("review")
+            .expect("review phase must exist")
+            .agents = vec![
+            "reviewer_a".to_string(),
+            "reviewer_b".to_string(),
+            "copilot".to_string(),
+        ];
+        cfg.phases
+            .get_mut("coding")
+            .expect("coding phase must exist")
+            .options = Some(PhaseOptions {
+            autopilot_complexity: Some("complex".to_string()),
+            full_auto_review_agents: Some(vec![
+                "reviewer_a".to_string(),
+                "reviewer_b".to_string(),
+                "copilot".to_string(),
+            ]),
+            ..PhaseOptions::default()
+        });
+
+        let err = cfg
+            .validate()
+            .expect_err("complex autopilot with >2 reviewers must fail");
+        assert!(
+            err.to_string().contains("supports at most 2 reviewers"),
             "unexpected error: {err}"
         );
     }
@@ -2045,6 +2222,52 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_non_boolean_auto_attach() {
+        let mut cfg = valid_config();
+        cfg.phases
+            .get_mut("coding")
+            .expect("coding phase must exist")
+            .options = Some(PhaseOptions {
+            extra: HashMap::from([("auto_attach".to_string(), serde_json::Value::from("yes"))]),
+            ..PhaseOptions::default()
+        });
+
+        let err = cfg
+            .validate()
+            .expect_err("non-boolean auto_attach must fail");
+        assert!(
+            err.to_string()
+                .contains("phase 'coding' option 'auto_attach' must be a boolean"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_unsupported_optimization_module() {
+        let mut cfg = valid_config();
+        cfg.phases
+            .get_mut("coding")
+            .expect("coding phase must exist")
+            .options = Some(PhaseOptions {
+            extra: HashMap::from([(
+                "optimization_modules".to_string(),
+                serde_json::Value::from(vec!["unknown_module"]),
+            )]),
+            ..PhaseOptions::default()
+        });
+
+        let err = cfg
+            .validate()
+            .expect_err("unsupported optimization module must fail");
+        assert!(
+            err.to_string().contains(
+                "phase 'coding' option 'optimization_modules' contains unsupported module 'unknown_module'"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn missing_env_vars_detects_agent_requirements() {
         let cfg = valid_config();
         let missing = super::missing_env_vars(&cfg);
@@ -2052,6 +2275,46 @@ mod tests {
         assert!(missing.iter().any(|value| value == "ANTHROPIC_API_KEY"));
         assert!(missing.iter().any(|value| value == "WENXIN_API_KEY"));
         assert!(missing.iter().any(|value| value == "WENXIN_SECRET_KEY"));
+    }
+
+    #[test]
+    fn runtime_readiness_allows_when_at_least_one_agent_ready() {
+        let cfg = valid_config();
+        let dir = tempdir().expect("tempdir should be created");
+        let config_path = dir.path().join("config.toml");
+        fs::write(&config_path, "# test").expect("config marker should be written");
+
+        super::validate_runtime_readiness(&config_path, &cfg)
+            .expect("runtime readiness should pass when at least one agent is env-ready");
+    }
+
+    #[test]
+    fn runtime_readiness_fails_when_all_agents_are_env_blocked() {
+        let mut cfg = valid_config();
+        cfg.agents.remove("copilot");
+        cfg.phases
+            .get_mut("coding")
+            .expect("coding phase should exist")
+            .agents = vec!["reviewer_a".to_string()];
+        if let Some(agent) = cfg.agents.get_mut("reviewer_a") {
+            agent.api_key_env = Some("UNITTEST_MISSING_REVIEWER_A_KEY".to_string());
+        }
+        if let Some(agent) = cfg.agents.get_mut("reviewer_b") {
+            agent.api_key_env = Some("UNITTEST_MISSING_REVIEWER_B_KEY".to_string());
+            agent.secret_key_env = Some("UNITTEST_MISSING_REVIEWER_B_SECRET".to_string());
+        }
+
+        let dir = tempdir().expect("tempdir should be created");
+        let config_path = dir.path().join("config.toml");
+        fs::write(&config_path, "# test").expect("config marker should be written");
+
+        let err = super::validate_runtime_readiness(&config_path, &cfg)
+            .expect_err("runtime readiness should fail when zero agents are env-ready");
+        assert!(
+            err.to_string()
+                .contains("missing required environment variables for configured agents"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

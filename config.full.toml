@@ -86,6 +86,9 @@ principles = [
 
 [phases.coding.options]
 autopilot_complexity = "complex"
+adaptive_routing = true
+adaptive_agent_order = true
+enforce_capability_ceiling = true
 request_timeout_seconds = 180
 review_timeout_seconds = 60
 cache_enabled = true

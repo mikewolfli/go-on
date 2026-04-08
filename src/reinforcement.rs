@@ -10,6 +10,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::{BTreeSet, HashMap},
+    ffi::OsStr,
+};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -123,7 +127,6 @@ impl PlannedSubtaskRecord {
     }
 }
 
-
 /// Aggregate result of executing a `TaskPlanArtifact` via `task.execute`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskExecutionMetrics {
@@ -131,6 +134,9 @@ pub struct TaskExecutionMetrics {
     pub failure_strategy: String,
     pub phases_executed: usize,
     pub halted_early: bool,
+    pub parallel_utilization: f64,
+    pub serial_degradation_count: usize,
+    pub parallel_failure_rollback_count: usize,
     pub serial_work_ms: u64,
     pub critical_path_ms: u64,
     pub parallel_efficiency: f64,
@@ -178,6 +184,34 @@ pub struct WorkflowLearningEvent {
     pub parallel_efficiency: f64,
     pub executor: String,
     pub source: String,
+    #[serde(default)]
+    pub runtime_healthy: bool,
+    #[serde(default = "default_workflow_learning_gates_ok")]
+    pub gates_ok: bool,
+    #[serde(default)]
+    pub work_grade: String,
+    #[serde(default)]
+    pub risk_score: f64,
+    #[serde(default)]
+    pub clarification_rounds: u32,
+    #[serde(default)]
+    pub clarification_quality_score: f64,
+    #[serde(default)]
+    pub requirement_change_count: u32,
+    #[serde(default)]
+    pub review_reject_root_cause: String,
+    #[serde(default)]
+    pub primary_stability_score: f64,
+    #[serde(default)]
+    pub secondary_utilization_rate: f64,
+    #[serde(default)]
+    pub failover_count: u32,
+    #[serde(default)]
+    pub failover_root_cause: String,
+}
+
+fn default_workflow_learning_gates_ok() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +219,209 @@ pub struct WorkflowLearningBusArtifact {
     pub generated_at: i64,
     pub total_events: usize,
     pub events: Vec<WorkflowLearningEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowOptimizationPolicyArtifact {
+    pub generated_at: i64,
+    pub task: String,
+    pub source: String,
+    pub policy_report: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase_parallelism_cap: Option<u64>,
+    pub force_fail_fast: bool,
+    #[serde(default)]
+    pub runtime_healthy: bool,
+    #[serde(default)]
+    pub anomaly_detected: bool,
+    #[serde(default)]
+    pub detached_modules: Vec<String>,
+    #[serde(default)]
+    pub reattached_modules: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowWorkGradeArtifact {
+    pub generated_at: i64,
+    pub task: String,
+    pub source: String,
+    pub requested_grade: String,
+    pub decided_grade: String,
+    pub decision_action: String,
+    pub reasons: Vec<String>,
+    pub risk_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineUnifiedMetricsArtifact {
+    pub generated_at: i64,
+    pub task: String,
+    pub source: String,
+    pub predicted_success_rate: f64,
+    pub risk_score: f64,
+    pub runtime_healthy: bool,
+    pub gates_ok: bool,
+    pub subtasks_total: usize,
+    pub subtasks_completed: usize,
+    pub subtasks_failed: usize,
+    pub subtasks_skipped: usize,
+    pub parallelism: usize,
+    pub parallel_utilization: f64,
+    pub serial_degradation_count: usize,
+    pub parallel_failure_rollback_count: usize,
+    pub failure_strategy: String,
+    pub work_grade: String,
+    pub optimization_policy: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequirementContractArtifact {
+    pub generated_at: i64,
+    pub task: String,
+    pub source: String,
+    pub goal: String,
+    pub scope: String,
+    pub non_goals: Vec<String>,
+    pub acceptance_criteria: Vec<String>,
+    pub constraints: Vec<String>,
+    pub open_questions: Vec<String>,
+    pub ambiguity_score: u8,
+    pub user_confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernancePolicyArtifact {
+    pub generated_at: i64,
+    pub task: String,
+    pub source: String,
+    pub clarification_required: bool,
+    pub confirmed: bool,
+    pub blocked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub next_step: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionDecisionCandidate {
+    pub agent: String,
+    pub score: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionAssignmentRecord {
+    pub subtask_id: String,
+    pub phase_index: usize,
+    pub task_index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desired_role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_agent: Option<String>,
+    pub selection_reason: String,
+    pub candidate_scores: Vec<ExecutionDecisionCandidate>,
+    pub dependency_blocked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_primary_agent: Option<String>,
+    #[serde(default)]
+    pub node_secondary_agents: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_executor: Option<String>,
+    #[serde(default)]
+    pub failover_applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failover_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParallelPhaseDecisionRecord {
+    pub phase_index: usize,
+    pub subtask_count: usize,
+    pub parallelism_limit: usize,
+    pub utilization_target: f64,
+    pub has_dependencies: bool,
+    pub execution_mode: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionDecisionArtifact {
+    pub generated_at: i64,
+    pub task: String,
+    pub source: String,
+    pub selected_agents: Vec<String>,
+    pub assignment_reason: String,
+    pub subtask_assignments: Vec<ExecutionAssignmentRecord>,
+    pub parallel_phase_decisions: Vec<ParallelPhaseDecisionRecord>,
+    pub parallelism: usize,
+    pub failure_strategy: String,
+    pub degrade_policy: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrimarySecondaryPolicyArtifact {
+    pub generated_at: i64,
+    pub task: String,
+    pub source: String,
+    pub primary_agent: String,
+    pub secondary_agents: Vec<String>,
+    pub policy_version: String,
+    pub failover_policy: String,
+    pub secondary_max_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrimaryFailoverReportItem {
+    pub subtask_id: String,
+    pub phase_index: usize,
+    pub selected_primary_agent: Option<String>,
+    pub effective_executor: Option<String>,
+    pub failover_applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failover_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrimarySecondaryFailoverArtifact {
+    pub generated_at: i64,
+    pub task: String,
+    pub source: String,
+    pub primary_agent: String,
+    pub secondary_agents: Vec<String>,
+    pub failover_policy: String,
+    pub total_subtasks: usize,
+    pub failover_count: usize,
+    pub reports: Vec<PrimaryFailoverReportItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsultationArtifact {
+    pub generated_at: i64,
+    pub task: String,
+    pub source: String,
+    pub trigger_reason: String,
+    pub participants: Vec<String>,
+    pub candidate_plans: Vec<String>,
+    pub consensus_plan: String,
+    pub risk_matrix: Value,
+    pub decision_confidence: f64,
+    pub handoff_primary_agent: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClarificationSessionArtifact {
+    pub generated_at: i64,
+    pub task: String,
+    pub source: String,
+    pub session_id: String,
+    pub round_index: u32,
+    pub lead_clarifier: String,
+    pub assistant_clarifiers: Vec<String>,
+    pub user_feedback: String,
+    pub resolved_points: Vec<String>,
+    pub open_points: Vec<String>,
+    pub next_questions: Vec<String>,
+    pub ready_to_confirm: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,7 +537,11 @@ impl ArtifactLedger {
     pub fn new(config_path: Option<&Path>) -> Self {
         let root = config_path
             .and_then(|path| path.parent().map(|parent| parent.join(GOON_DIR)))
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(GOON_DIR));
+            .unwrap_or_else(|| {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join(GOON_DIR)
+            });
         Self { root }
     }
 
@@ -334,10 +575,15 @@ impl ArtifactLedger {
         let archive_path = dir.join(format!("{}-{}.json", stem, now_ts()));
         let encoded = serde_json::to_vec_pretty(value)?;
 
-        fs::write(&archive_path, &encoded)
-            .with_context(|| format!("failed to write ledger artifact {}", archive_path.display()))?;
-        fs::write(&latest_path, &encoded)
-            .with_context(|| format!("failed to write latest ledger artifact {}", latest_path.display()))?;
+        fs::write(&archive_path, &encoded).with_context(|| {
+            format!("failed to write ledger artifact {}", archive_path.display())
+        })?;
+        fs::write(&latest_path, &encoded).with_context(|| {
+            format!(
+                "failed to write latest ledger artifact {}",
+                latest_path.display()
+            )
+        })?;
 
         Ok(latest_path)
     }
@@ -408,8 +654,8 @@ pub fn build_workflow_generated_artifact(plan: &TaskPlanArtifact) -> WorkflowGen
                     .map(|subtask| {
                         let mut deps = subtask.dependencies.iter().cloned().collect::<Vec<_>>();
                         deps.sort();
-                        let timeout = ((subtask.estimated_duration_seconds / 2) as u64)
-                            .clamp(60, 900);
+                        let timeout =
+                            ((subtask.estimated_duration_seconds / 2) as u64).clamp(60, 900);
                         let retry = if subtask.complexity >= 4 { 2 } else { 1 };
                         (deps, subtask.priority, timeout, retry)
                     })
@@ -527,6 +773,156 @@ pub fn persist_workflow_learning_event(
     ledger.write_json("spec", "latest-learning.json", &existing)
 }
 
+pub fn persist_workflow_optimization_policy(
+    ledger: &ArtifactLedger,
+    artifact: &WorkflowOptimizationPolicyArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json("spec", "latest-optimization-policy.json", artifact)
+}
+
+pub fn persist_workflow_work_grade(
+    ledger: &ArtifactLedger,
+    artifact: &WorkflowWorkGradeArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json("spec", "latest-work-grade.json", artifact)
+}
+
+pub fn persist_pipeline_unified_metrics(
+    ledger: &ArtifactLedger,
+    artifact: &PipelineUnifiedMetricsArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json("spec", "latest-pipeline-metrics.json", artifact)
+}
+
+pub fn persist_requirement_contract(
+    ledger: &ArtifactLedger,
+    artifact: &RequirementContractArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json("spec", "latest-clarification.json", artifact)
+}
+
+pub fn persist_governance_policy(
+    ledger: &ArtifactLedger,
+    artifact: &GovernancePolicyArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json("spec", "latest-governance-policy.json", artifact)
+}
+
+pub fn persist_execution_decision(
+    ledger: &ArtifactLedger,
+    artifact: &ExecutionDecisionArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json("spec", "latest-execution-decision.json", artifact)
+}
+
+pub fn persist_primary_secondary_policy_artifact(
+    ledger: &ArtifactLedger,
+    artifact: &PrimarySecondaryPolicyArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json("spec", "latest-primary-secondary-policy.json", artifact)
+}
+
+pub fn persist_primary_secondary_failover_artifact(
+    ledger: &ArtifactLedger,
+    artifact: &PrimarySecondaryFailoverArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json("spec", "latest-primary-secondary-failover.json", artifact)
+}
+
+pub fn persist_consultation_artifact(
+    ledger: &ArtifactLedger,
+    artifact: &ConsultationArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json("spec", "latest-consultation.json", artifact)
+}
+
+pub fn persist_clarification_session_artifact(
+    ledger: &ArtifactLedger,
+    artifact: &ClarificationSessionArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json("spec", "latest-clarification-session.json", artifact)
+}
+
+/// Recommend modules to reattach based on recent optimization-policy history.
+///
+/// Recovery rule:
+/// - Require the last `required_healthy_streak` records to be healthy and anomaly-free.
+/// - If satisfied, recover modules detached by the latest anomalous record before that streak.
+pub fn recommend_reattach_modules_from_policy_history(
+    ledger: &ArtifactLedger,
+    required_healthy_streak: usize,
+    max_records: usize,
+) -> Vec<String> {
+    let required_healthy_streak = required_healthy_streak.max(1);
+    let max_records = max_records.max(required_healthy_streak);
+
+    let spec_dir = ledger.latest_path("spec", "latest-optimization-policy.json");
+    let Some(parent) = spec_dir.parent() else {
+        return Vec::new();
+    };
+
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut events = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension() != Some(OsStr::new("json")) {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|v| v.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("latest-optimization-policy") {
+            continue;
+        }
+
+        let Ok(raw) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(event) = serde_json::from_str::<WorkflowOptimizationPolicyArtifact>(&raw) else {
+            continue;
+        };
+        events.push(event);
+    }
+
+    if events.len() < required_healthy_streak + 1 {
+        return Vec::new();
+    }
+
+    events.sort_by_key(|event| event.generated_at);
+    if events.len() > max_records {
+        let drain_to = events.len() - max_records;
+        events.drain(0..drain_to);
+    }
+
+    let healthy_tail = events
+        .iter()
+        .rev()
+        .take(required_healthy_streak)
+        .all(|event| event.runtime_healthy && !event.anomaly_detected);
+    if !healthy_tail {
+        return Vec::new();
+    }
+
+    let mut recovered = BTreeSet::new();
+    let anomaly_anchor = events
+        .iter()
+        .rev()
+        .skip(required_healthy_streak)
+        .find(|event| event.anomaly_detected && !event.detached_modules.is_empty());
+
+    if let Some(anchor) = anomaly_anchor {
+        for module in &anchor.detached_modules {
+            recovered.insert(module.clone());
+        }
+    }
+
+    recovered.into_iter().collect()
+}
+
 /// Recommend next parallelism level from persisted learning events.
 pub fn recommend_parallelism_from_learning(
     ledger: &ArtifactLedger,
@@ -582,10 +978,7 @@ pub fn recommend_parallelism_from_learning(
 
 /// Recommend failure strategy from persisted learning events.
 /// Returns "fail_fast" or "tolerant".
-pub fn recommend_failure_strategy_from_learning(
-    ledger: &ArtifactLedger,
-    current: &str,
-) -> String {
+pub fn recommend_failure_strategy_from_learning(ledger: &ArtifactLedger, current: &str) -> String {
     let latest_path = ledger.latest_path("spec", "latest-learning.json");
     let payload = match fs::read_to_string(&latest_path) {
         Ok(raw) => raw,
@@ -620,6 +1013,206 @@ pub fn recommend_failure_strategy_from_learning(
     } else {
         current.to_string()
     }
+}
+
+/// Recommend work grade from persisted learning events.
+/// Returns one of: ask/edit/agent/safeguard/full_auto.
+pub fn recommend_work_grade_from_learning(ledger: &ArtifactLedger, current: &str) -> String {
+    let latest_path = ledger.latest_path("spec", "latest-learning.json");
+    let payload = match fs::read_to_string(&latest_path) {
+        Ok(raw) => raw,
+        Err(_) => return current.to_string(),
+    };
+    let bus = match serde_json::from_str::<WorkflowLearningBusArtifact>(&payload) {
+        Ok(value) => value,
+        Err(_) => return current.to_string(),
+    };
+
+    if bus.events.len() < 8 {
+        return current.to_string();
+    }
+
+    let recent = bus.events.iter().rev().take(20).collect::<Vec<_>>();
+    if recent.is_empty() {
+        return current.to_string();
+    }
+
+    let mut total_subtasks = 0usize;
+    let mut total_failed = 0usize;
+    let mut gates_ok_count = 0usize;
+    let mut runtime_healthy_count = 0usize;
+    let mut complexity_sum = 0usize;
+
+    for event in &recent {
+        total_subtasks = total_subtasks.saturating_add(event.subtasks_total.max(1));
+        total_failed = total_failed.saturating_add(event.subtasks_failed);
+        if event.gates_ok {
+            gates_ok_count = gates_ok_count.saturating_add(1);
+        }
+        if event.runtime_healthy {
+            runtime_healthy_count = runtime_healthy_count.saturating_add(1);
+        }
+        complexity_sum = complexity_sum.saturating_add(event.complexity as usize);
+    }
+
+    let fail_rate = total_failed as f64 / total_subtasks as f64;
+    let gate_pass_rate = gates_ok_count as f64 / recent.len() as f64;
+    let runtime_healthy_rate = runtime_healthy_count as f64 / recent.len() as f64;
+    let avg_complexity = complexity_sum as f64 / recent.len() as f64;
+
+    if fail_rate >= 0.30 || gate_pass_rate < 0.70 || runtime_healthy_rate < 0.80 {
+        "safeguard".to_string()
+    } else if avg_complexity >= 3.0 && fail_rate <= 0.12 && gate_pass_rate >= 0.90 {
+        "full_auto".to_string()
+    } else if fail_rate <= 0.08 && avg_complexity <= 2.0 && gate_pass_rate >= 0.92 {
+        "edit".to_string()
+    } else {
+        "agent".to_string()
+    }
+}
+
+/// Recommend a tuned predicted success rate using recent LearningBus outcomes.
+///
+/// This is a lightweight online regression: blend current heuristic score with
+/// weighted historical success rates, where weights decay by complexity distance.
+pub fn recommend_predicted_success_rate_from_learning(
+    ledger: &ArtifactLedger,
+    current: f32,
+    target_complexity: u8,
+) -> f32 {
+    let latest_path = ledger.latest_path("spec", "latest-learning.json");
+    let payload = match fs::read_to_string(&latest_path) {
+        Ok(raw) => raw,
+        Err(_) => return current,
+    };
+    let bus = match serde_json::from_str::<WorkflowLearningBusArtifact>(&payload) {
+        Ok(value) => value,
+        Err(_) => return current,
+    };
+
+    if bus.events.len() < 8 {
+        return current;
+    }
+
+    let recent = bus.events.iter().rev().take(48).collect::<Vec<_>>();
+    if recent.is_empty() {
+        return current;
+    }
+
+    let mut weighted_success = 0.0f64;
+    let mut weighted_total = 0.0f64;
+    for event in &recent {
+        let total = event.subtasks_total.max(1) as f64;
+        let success = event.subtasks_completed as f64 / total;
+        let complexity_distance = (event.complexity as i32 - target_complexity as i32).abs() as f64;
+        let complexity_weight = 1.0 / (1.0 + complexity_distance);
+        let gate_weight = if event.gates_ok { 1.0 } else { 0.8 };
+        let runtime_weight = if event.runtime_healthy { 1.0 } else { 0.85 };
+        let weight = complexity_weight * gate_weight * runtime_weight;
+        weighted_success += success * weight;
+        weighted_total += weight;
+    }
+
+    if weighted_total <= f64::EPSILON {
+        return current;
+    }
+
+    let learned = (weighted_success / weighted_total).clamp(0.05, 0.99) as f32;
+    // 35% heuristic + 65% learned regression signal.
+    (current * 0.35 + learned * 0.65).clamp(0.05, 0.99)
+}
+
+/// Reorder candidate execution agents from recent execution history.
+///
+/// Agents are ranked by Bayesian-smoothed success score derived from
+/// `TaskExecutionSummary.records` executor outcomes.
+pub fn recommend_agent_order_from_execution_history(
+    ledger: &ArtifactLedger,
+    candidates: &[String],
+    max_records: usize,
+) -> Vec<String> {
+    if candidates.len() <= 1 {
+        return candidates.to_vec();
+    }
+
+    let latest = ledger.latest_path("spec", "latest-execution.json");
+    let Some(parent) = latest.parent() else {
+        return candidates.to_vec();
+    };
+
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(_) => return candidates.to_vec(),
+    };
+
+    let mut summaries = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension() != Some(OsStr::new("json")) {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|v| v.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("latest-execution") {
+            continue;
+        }
+
+        let Ok(raw) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(summary) = serde_json::from_str::<TaskExecutionSummary>(&raw) else {
+            continue;
+        };
+        summaries.push(summary);
+    }
+
+    if summaries.is_empty() {
+        return candidates.to_vec();
+    }
+
+    summaries.sort_by_key(|summary| summary.generated_at);
+    if summaries.len() > max_records.max(1) {
+        let drain_to = summaries.len() - max_records.max(1);
+        summaries.drain(0..drain_to);
+    }
+
+    let mut stats: HashMap<String, (u64, u64)> = HashMap::new();
+    for summary in &summaries {
+        for record in &summary.records {
+            let Some(executor) = record.executor.as_ref() else {
+                continue;
+            };
+            if !candidates.iter().any(|candidate| candidate == executor) {
+                continue;
+            }
+            let entry = stats.entry(executor.clone()).or_insert((0, 0));
+            if record.status == "completed" {
+                entry.0 = entry.0.saturating_add(1);
+            } else if record.status == "failed" {
+                entry.1 = entry.1.saturating_add(1);
+            }
+        }
+    }
+
+    let mut ranked = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let (completed, failed) = stats.get(name).copied().unwrap_or((0, 0));
+            let score = (completed as f64 + 1.0) / (completed as f64 + failed as f64 + 2.0);
+            (name.clone(), score, completed + failed, index)
+        })
+        .collect::<Vec<_>>();
+
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| a.3.cmp(&b.3))
+    });
+
+    ranked.into_iter().map(|(name, _, _, _)| name).collect()
 }
 
 pub fn build_runtime_healthcheck_report(
@@ -706,7 +1299,10 @@ pub fn build_runtime_healthcheck_report(
     }
 
     if let Some(vector_store) = vector_store {
-        match (vector_store.memory_entry_count(), vector_store.summary_entry_count()) {
+        match (
+            vector_store.memory_entry_count(),
+            vector_store.summary_entry_count(),
+        ) {
             (Ok(memory_entries), Ok(summary_entries)) => components.push(ComponentReport {
                 name: "vector".to_string(),
                 status: CheckStatus::Healthy,
@@ -858,8 +1454,7 @@ pub fn run_action_check(
                 "final evidence chain is incomplete; fix failing checks before promotion"
                     .to_string()
             } else {
-                "final evidence chain is complete enough for controlled promotion"
-                    .to_string()
+                "final evidence chain is complete enough for controlled promotion".to_string()
             },
         };
         let path = ledger.write_json("final", "latest-summary.json", &summary)?;
@@ -1027,7 +1622,10 @@ pub fn assistant_excerpt(messages: &[crate::agent::Message]) -> Option<String> {
 }
 
 pub fn total_message_chars(messages: &[crate::agent::Message]) -> usize {
-    messages.iter().map(|message| message.content.chars().count()).sum()
+    messages
+        .iter()
+        .map(|message| message.content.chars().count())
+        .sum()
 }
 
 fn trim_chars(text: &str, max_chars: usize) -> String {
@@ -1046,9 +1644,8 @@ mod tests {
 
     #[test]
     fn task_plan_recommends_sub_agents_for_complex_work() {
-        let plan = build_task_plan(
-            "design a complex multi-module feature with verification and review",
-        );
+        let plan =
+            build_task_plan("design a complex multi-module feature with verification and review");
         assert!(plan.sub_agent_recommended);
         assert!(!plan.planned_subtasks.is_empty());
     }
@@ -1082,8 +1679,8 @@ fallback = true
         let ledger = ArtifactLedger::new(Some(&config_path));
         let report = build_runtime_healthcheck_report(Some(&config_path), None, None)
             .expect("healthcheck should build");
-        let path = persist_runtime_healthcheck(&ledger, &report)
-            .expect("healthcheck should persist");
+        let path =
+            persist_runtime_healthcheck(&ledger, &report).expect("healthcheck should persist");
         assert!(path.exists());
     }
 
@@ -1101,8 +1698,7 @@ fallback = true
             overall_status: CheckStatus::Healthy,
             components: vec![],
         };
-        persist_runtime_healthcheck(&ledger, &health)
-            .expect("healthcheck should persist");
+        persist_runtime_healthcheck(&ledger, &health).expect("healthcheck should persist");
 
         let checkpoint = CheckpointSummaryArtifact {
             checkpoint_id: "cp-1".to_string(),
@@ -1119,10 +1715,12 @@ fallback = true
             .write_json("checkpoints", "latest.json", &checkpoint)
             .expect("checkpoint should persist");
 
-        let report = run_action_check(&ledger, ActionCheckKind::All)
-            .expect("action check should succeed");
+        let report =
+            run_action_check(&ledger, ActionCheckKind::All).expect("action check should succeed");
         assert!(report.ok);
-        assert!(ledger.latest_path("retest", "latest-action-check.json").exists());
+        assert!(ledger
+            .latest_path("retest", "latest-action-check.json")
+            .exists());
         assert!(ledger.latest_path("final", "latest-summary.json").exists());
     }
 }

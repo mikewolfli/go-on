@@ -75,8 +75,8 @@ mod performance;
 mod promotion;
 mod pua;
 mod quality_models;
-mod reliability_optimizer;
 mod reinforcement;
+mod reliability_optimizer;
 mod review_controls;
 mod roles;
 mod rpc_protocol;
@@ -107,6 +107,7 @@ use crate::config::{
     validate_runtime_readiness, AppConfig, AutoTuneState, ConfigWarning, RuntimeConfig,
 };
 use crate::flow::FlowManager;
+use crate::i18n::init_i18n;
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
     persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger,
@@ -354,7 +355,10 @@ async fn main() {
     // Run the application and handle any errors
     if let Err(err) = run().await {
         error!("fatal error: {err:#}");
-        eprintln!("fatal error: {err:#}");
+        eprintln!(
+            "{}",
+            crate::i18n::tf("error.fatal", &[("error", &format!("{err:#}"))])
+        );
         std::process::exit(1);
     }
 }
@@ -393,6 +397,24 @@ async fn run() -> Result<()> {
         Some(path) => path,
         None => default_config_path()?,
     };
+
+    // Initialize i18n system
+    let languages_dir = config_path
+        .parent()
+        .map(|p| p.join("languages"))
+        .unwrap_or_else(|| std::path::Path::new("languages").to_path_buf());
+
+    if let Err(e) = init_i18n(&languages_dir) {
+        warn!(
+            "Failed to initialize i18n system: {}. Continuing without translations.",
+            e
+        );
+    } else {
+        info!(
+            "i18n system initialized with language directory: {:?}",
+            languages_dir
+        );
+    }
 
     // Handle secret management commands
     if let Some(action) = cli.secret.as_deref() {
@@ -457,11 +479,16 @@ async fn run() -> Result<()> {
 
         println!("{}", validation_report);
         println!(
-            "legacy health score: {}/100 (warnings: {} critical, {} warn, {} info)",
-            health_report.score,
-            health_report.critical_count,
-            health_report.warn_count,
-            health_report.info_count
+            "{}",
+            crate::i18n::tf(
+                "ui.legacy_health_score",
+                &[
+                    ("score", &health_report.score.to_string()),
+                    ("critical", &health_report.critical_count.to_string()),
+                    ("warn", &health_report.warn_count.to_string()),
+                    ("info", &health_report.info_count.to_string()),
+                ]
+            )
         );
 
         if !validation_result.is_valid {
@@ -581,9 +608,7 @@ async fn run() -> Result<()> {
         let report = run_action_check(&ledger, kind)?;
         println!(
             "action check {}: {:?} (ok={})",
-            raw_kind,
-            report.overall_status,
-            report.ok
+            raw_kind, report.overall_status, report.ok
         );
         return Ok(());
     }

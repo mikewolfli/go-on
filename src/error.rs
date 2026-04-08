@@ -12,12 +12,11 @@
 //!
 //! Each error type provides detailed context and supports error chaining.
 
-#![allow(dead_code)]
-
 use thiserror::Error;
 
 /// Main application error type
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum AppError {
     /// Proxy-related errors
     #[error("proxy error: {0}")]
@@ -53,31 +52,36 @@ pub enum ProxyError {
 
     /// Phase not found error
     #[error("phase not found: {0}")]
-    UnknownPhase(String),
+    PhaseNotFound(String),
 
     /// Agent not found error
     #[error("agent not found: {0}")]
-    UnknownAgent(String),
+    AgentNotFound(String),
 
-    /// Internal error
-    #[error("internal error: {0}")]
+    /// Internal server error
+    #[error("internal server error: {0}")]
     Internal(String),
 
-    /// Rate limit exceeded
+    /// Rate limit exceeded error
     #[error("rate limit exceeded: {0}")]
+    #[allow(dead_code)]
     RateLimitExceeded(String),
 
-    /// Circuit breaker open
-    #[error("circuit breaker open for {0}")]
+    /// Circuit breaker open error
+    #[error("circuit breaker open: {0}")]
+    #[allow(dead_code)]
     CircuitBreakerOpen(String),
 
     /// Timeout error
-    #[error("operation timeout: {0}")]
+    #[error("timeout: {0}")]
+    #[allow(dead_code)]
     Timeout(String),
 }
 
 /// Configuration and input validation errors
+/// Configuration validation errors
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum ValidationError {
     /// Invalid configuration
     #[error("invalid configuration: {0}")]
@@ -98,6 +102,7 @@ pub enum ValidationError {
 
 /// Network and communication errors
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum NetworkError {
     /// Connection failed
     #[error("connection failed: {0}")]
@@ -118,6 +123,7 @@ pub enum NetworkError {
 
 /// Resource and system errors
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum ResourceError {
     /// File system error
     #[error("file system error: {0}")]
@@ -137,9 +143,11 @@ pub enum ResourceError {
 }
 
 /// Convenience type alias for Result<T, AppError>
+#[allow(dead_code)]
 pub type Result<T> = std::result::Result<T, AppError>;
 
 /// Extension trait for error context
+#[allow(dead_code)]
 pub trait ErrorContext {
     /// Add context to an error
     fn context(self, context: &str) -> Self;
@@ -155,11 +163,11 @@ impl ErrorContext for AppError {
                 ProxyError::UnknownMethod(msg) => {
                     ProxyError::UnknownMethod(format!("{}: {}", context, msg))
                 }
-                ProxyError::UnknownPhase(msg) => {
-                    ProxyError::UnknownPhase(format!("{}: {}", context, msg))
+                ProxyError::PhaseNotFound(msg) => {
+                    ProxyError::PhaseNotFound(format!("{}: {}", context, msg))
                 }
-                ProxyError::UnknownAgent(msg) => {
-                    ProxyError::UnknownAgent(format!("{}: {}", context, msg))
+                ProxyError::AgentNotFound(msg) => {
+                    ProxyError::AgentNotFound(format!("{}: {}", context, msg))
                 }
                 ProxyError::Internal(msg) => ProxyError::Internal(format!("{}: {}", context, msg)),
                 ProxyError::RateLimitExceeded(msg) => {
@@ -189,7 +197,7 @@ mod tests {
         assert_eq!(error.to_string(), "rate limit exceeded: api calls");
 
         let error = ProxyError::CircuitBreakerOpen("openai".to_string());
-        assert_eq!(error.to_string(), "circuit breaker open for openai");
+        assert_eq!(error.to_string(), "circuit breaker open: openai");
     }
 
     #[test]

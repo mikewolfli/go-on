@@ -46,7 +46,6 @@ pub struct AgentTaskEnvelope {
 }
 
 /// Agent output schema
-
 /// Unified agent error type
 #[derive(Debug, Error, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "info")]

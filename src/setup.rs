@@ -5,6 +5,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use crate::i18n::{t, tf};
 use anyhow::{Context, Result};
 
 // 简化模式和复杂模式配置文件模板名称
@@ -85,26 +86,26 @@ pub fn run_setup(config_path: &Path) -> Result<()> {
 /// Handles profile selection, secret mode, writing config template, writing RULES files,
 /// and optionally storing secrets into keyring.
 pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Result<()> {
-    println!("=== go-on setup ===");
-    println!("Target config: {}", config_path.display());
+    println!("{}", t("setup.title"));
+    println!(
+        "{}",
+        tf(
+            "setup.target_config",
+            &[("path", &config_path.display().to_string())]
+        )
+    );
 
     if config_path.exists()
         && !options.force
-        && !prompt_yes_no("Config already exists. Overwrite?", false)?
+        && !prompt_yes_no(&t("setup.prompt_overwrite"), false)?
     {
-        println!("Setup canceled: existing config kept.");
+        println!("{}", t("setup.canceled"));
         return Ok(());
     }
 
     let profile = match options.profile {
         Some(value) => value,
-        None => match prompt_choice(
-            "Choose profile: [1] simple autopilot, [2] complex autopilot",
-            &["1", "2"],
-            "1",
-        )?
-        .as_str()
-        {
+        None => match prompt_choice(&t("setup.prompt_profile"), &["1", "2"], "1")?.as_str() {
             "2" => SetupProfile::Complex,
             _ => SetupProfile::Simple,
         },
@@ -121,13 +122,7 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
 
     let secret_mode = match options.secret_mode {
         Some(value) => value,
-        None => match prompt_choice(
-            "Secret mode: [1] environment variables, [2] system keyring",
-            &["1", "2"],
-            "2",
-        )?
-        .as_str()
-        {
+        None => match prompt_choice(&t("setup.prompt_secret_mode"), &["1", "2"], "2")?.as_str() {
             "1" => SecretMode::Env,
             _ => SecretMode::Keyring,
         },
@@ -148,7 +143,7 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
 
     let should_store_secrets = secret_mode == SecretMode::Keyring
         && if options.prompt_for_secrets {
-            prompt_yes_no("Store secrets into system keyring now?", true)?
+            prompt_yes_no(&t("setup.prompt_store_secrets"), true)?
         } else {
             false
         };
@@ -156,10 +151,13 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
         store_keyring_secrets_interactive()?;
     }
 
-    println!("Setup complete.");
+    println!("{}", t("setup.complete"));
     println!(
-        "Next step: run with --config {}",
-        config_path.to_string_lossy()
+        "{}",
+        tf(
+            "setup.next_step",
+            &[("config", &config_path.to_string_lossy())]
+        )
     );
     Ok(())
 }
@@ -175,8 +173,8 @@ pub fn parse_setup_profile(value: &str) -> Result<SetupProfile> {
         return Ok(SetupProfile::Complex);
     }
     anyhow::bail!(
-        "invalid setup profile '{}': expected simple or complex",
-        value
+        "{}",
+        crate::i18n::tf("error.invalid_setup_profile", &[("value", value)])
     )
 }
 
@@ -191,8 +189,8 @@ pub fn parse_secret_mode(value: &str) -> Result<SecretMode> {
         return Ok(SecretMode::Keyring);
     }
     anyhow::bail!(
-        "invalid setup secret mode '{}': expected env or keyring",
-        value
+        "{}",
+        crate::i18n::tf("error.invalid_secret_mode", &[("value", value)])
     )
 }
 
@@ -213,8 +211,8 @@ pub fn parse_secret_action(value: &str) -> Result<SecretAction> {
         return Ok(SecretAction::List);
     }
     anyhow::bail!(
-        "invalid secret action '{}': expected set|get|delete|list",
-        value
+        "{}",
+        crate::i18n::tf("error.invalid_secret_action", &[("value", value)])
     )
 }
 
@@ -233,40 +231,74 @@ pub fn run_secret_command(
                 } else {
                     "missing"
                 };
-                println!("{}: {}", name, status);
+                println!(
+                    "{}",
+                    tf("setup.secret_status", &[("name", name), ("status", status)])
+                );
             }
             Ok(())
         }
         SecretAction::Set => {
             let (service, account) = resolve_secret_target(name)?;
-            let value =
-                value.ok_or_else(|| anyhow::anyhow!("--secret-value is required for set"))?;
-            let entry = keyring::Entry::new(service, account)
-                .map_err(|err| anyhow::anyhow!("failed to open keyring entry: {}", err))?;
-            entry
-                .set_password(value)
-                .map_err(|err| anyhow::anyhow!("failed to write keyring entry: {}", err))?;
-            println!("stored secret '{}'", name.unwrap_or_default());
+            let value = value.ok_or_else(|| {
+                anyhow::anyhow!("{}", crate::i18n::t("error.secret_value_required"))
+            })?;
+            let entry = keyring::Entry::new(service, account).map_err(|err| {
+                anyhow::anyhow!(
+                    "{}",
+                    crate::i18n::tf("error.keyring_open", &[("error", &format!("{}", err))])
+                )
+            })?;
+            entry.set_password(value).map_err(|err| {
+                anyhow::anyhow!(
+                    "{}",
+                    crate::i18n::tf("error.keyring_write", &[("error", &format!("{}", err))])
+                )
+            })?;
+            println!(
+                "{}",
+                tf("setup.secret_stored", &[("name", name.unwrap_or_default())])
+            );
             Ok(())
         }
         SecretAction::Get => {
             let (service, account) = resolve_secret_target(name)?;
-            let entry = keyring::Entry::new(service, account)
-                .map_err(|err| anyhow::anyhow!("failed to open keyring entry: {}", err))?;
-            let secret = entry
-                .get_password()
-                .map_err(|err| anyhow::anyhow!("failed to read keyring entry: {}", err))?;
+            let entry = keyring::Entry::new(service, account).map_err(|err| {
+                anyhow::anyhow!(
+                    "{}",
+                    crate::i18n::tf("error.keyring_open", &[("error", &format!("{}", err))])
+                )
+            })?;
+            let secret = entry.get_password().map_err(|err| {
+                anyhow::anyhow!(
+                    "{}",
+                    crate::i18n::tf("error.keyring_read", &[("error", &format!("{}", err))])
+                )
+            })?;
             println!("{}", secret);
             Ok(())
         }
         SecretAction::Delete => {
             let (service, account) = resolve_secret_target(name)?;
-            let entry = keyring::Entry::new(service, account)
-                .map_err(|err| anyhow::anyhow!("failed to open keyring entry: {}", err))?;
-            entry
-                .delete_credential()
-                .map_err(|err| anyhow::anyhow!("failed to delete keyring entry: {}", err))?;
-            println!("deleted secret '{}'", name.unwrap_or_default());
+            let entry = keyring::Entry::new(service, account).map_err(|err| {
+                anyhow::anyhow!(
+                    "{}",
+                    crate::i18n::tf("error.keyring_open", &[("error", &format!("{}", err))])
+                )
+            })?;
+            entry.delete_credential().map_err(|err| {
+                anyhow::anyhow!(
+                    "{}",
+                    crate::i18n::tf("error.keyring_delete", &[("error", &format!("{}", err))])
+                )
+            })?;
+            println!(
+                "{}",
+                tf(
+                    "setup.secret_deleted",
+                    &[("name", name.unwrap_or_default())]
+                )
+            );
             Ok(())
         }
     }
@@ -342,7 +374,7 @@ fn write_default_rules(config_dir: &Path) -> Result<()> {
     )?;
     write_if_missing(
         &rules_dir.join("review.md"),
-        "# Review Rules\n\n- In early architecture stage, placeholders are acceptable with explicit TODO markers.\n- In mature stage, require full implementations and complete error handling.\n",
+        "# Review Rules\n\n- Enforce strict completeness: no placeholders, no TODO-only branches, and no unhandled errors.\n- Require evidence-backed review outcomes for non-trivial changes.\n",
     )?;
 
     Ok(())
@@ -362,7 +394,7 @@ fn write_if_missing(path: &Path, content: &str) -> Result<()> {
 ///
 /// Prompts user for each secret key and stores non-empty values.
 fn store_keyring_secrets_interactive() -> Result<()> {
-    println!("Enter secrets (leave blank to skip each item):");
+    println!("{}", t("setup.enter_secrets"));
     for (name, service, account) in SECRET_TARGETS {
         let value = prompt_value(name)?;
         if value.trim().is_empty() {
@@ -387,7 +419,12 @@ fn resolve_secret_target(name: Option<&str>) -> Result<(&'static str, &'static s
         .iter()
         .find(|(known_name, _, _)| *known_name == name)
         .map(|(_, service, account)| (*service, *account))
-        .ok_or_else(|| anyhow::anyhow!("unknown secret name '{}': use --secret list", name))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}",
+                crate::i18n::tf("error.unknown_secret_name", &[("name", name)])
+            )
+        })
 }
 
 fn prompt_choice(prompt: &str, allowed: &[&str], default: &str) -> Result<String> {
@@ -412,7 +449,10 @@ fn prompt_choice(prompt: &str, allowed: &[&str], default: &str) -> Result<String
             return Ok(value);
         }
 
-        println!("Invalid value. Allowed: {}", allowed.join(", "));
+        println!(
+            "{}",
+            crate::i18n::tf("warning.invalid_value", &[("allowed", &allowed.join(", "))])
+        );
     }
 }
 

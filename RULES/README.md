@@ -26,6 +26,12 @@ The loader reads optional files relative to the config directory:
 
 ## Recommended Workflow
 
+Authoritative source model:
+- Keep policy authority in `RULES/*.md` for editor-agnostic reuse.
+- Keep `.github/copilot-instructions.md` as bootstrap pointer for Copilot compatibility.
+- Keep legacy or campaign documents as short index pages pointing to authority files.
+- Do not duplicate long-form policy text across multiple root/.github markdown files.
+
 1. Keep stable, cross-project constraints in `RULES/global.md`.
 2. Keep team conventions in `RULES/common.md`.
 3. Keep machine-local or developer-local overrides in `RULES/local.md`.

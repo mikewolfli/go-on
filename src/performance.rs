@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 
 use tracing::info;
 
+#[cfg(target_os = "linux")]
+use std::fs;
+
 /// Performance metrics
 #[derive(Debug, Clone)]
 pub struct PerformanceMetrics {
@@ -415,11 +418,58 @@ pub struct CacheStats {
     pub utilization: f64,
 }
 
-/// Get memory usage (simplified implementation)
+/// Get memory usage in bytes for the current process.
+///
+/// Falls back to `0` when platform-specific APIs are unavailable.
+#[cfg(target_os = "windows")]
 fn get_memory_usage() -> u64 {
-    // This is a simplified implementation
-    // In a real application, you would use system-specific APIs
-    // For now, we return a placeholder value
+    use std::mem::{size_of, zeroed};
+
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    unsafe {
+        let handle = GetCurrentProcess();
+        let mut counters: PROCESS_MEMORY_COUNTERS = zeroed();
+        counters.cb = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+
+        let ok = K32GetProcessMemoryInfo(
+            handle,
+            &mut counters as *mut PROCESS_MEMORY_COUNTERS,
+            size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        );
+        if ok != 0 {
+            counters.WorkingSetSize as u64
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn get_memory_usage() -> u64 {
+    // Read VmRSS from /proc for stable process-resident memory on Linux.
+    let Ok(status) = fs::read_to_string("/proc/self/status") else {
+        return 0;
+    };
+
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            let kb = rest
+                .split_whitespace()
+                .find_map(|token| token.parse::<u64>().ok())
+                .unwrap_or(0);
+            return kb.saturating_mul(1024);
+        }
+    }
+
+    0
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn get_memory_usage() -> u64 {
     0
 }
 

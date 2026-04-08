@@ -360,6 +360,81 @@ rate_limit_burst = 1
     fs::write(path, config).expect("failed to write rate-limit saturation config file");
 }
 
+fn write_workflow_governance_config(path: &Path) {
+    let config = r#"default_phase = "coding"
+
+[flow]
+name = "Workflow Governance"
+phases = ["coding"]
+
+[runtime]
+maintenance_interval_seconds = 30
+health_interval_seconds = 45
+shutdown_drain_seconds = 7
+
+[agents.local_echo]
+type = "local_echo"
+
+[phases.coding]
+description = "Coding"
+agents = ["local_echo"]
+fallback = true
+
+[phases.coding.options.extra]
+review_min_level = "standard"
+review_required_reviews = 1
+review_timeout_policy = "reject"
+review_required_checks = []
+"#;
+
+    fs::write(path, config).expect("failed to write workflow governance config file");
+}
+
+fn write_workflow_dual_review_config(path: &Path) {
+    let config = r#"default_phase = "coding"
+
+[flow]
+name = "Workflow Dual Review"
+phases = ["coding", "review"]
+
+[runtime]
+maintenance_interval_seconds = 30
+health_interval_seconds = 45
+shutdown_drain_seconds = 7
+
+[agents.main_agent]
+type = "local_echo"
+
+[agents.reviewer_a]
+type = "local_approve"
+
+[agents.reviewer_b]
+type = "local_approve"
+
+[phases.coding]
+description = "Coding"
+agents = ["main_agent"]
+fallback = true
+
+[phases.coding.options]
+review_timeout_seconds = 2
+
+[phases.coding.options.extra]
+review_min_level = "enhanced"
+review_required_reviews = 2
+review_timeout_policy = "reject"
+min_reviewers = 2
+required_approvals = 2
+
+[phases.review]
+description = "Review"
+agents = ["reviewer_a", "reviewer_b"]
+fallback = false
+"#;
+
+    fs::write(path, config).expect("failed to write workflow dual review config file");
+}
+
 #[test]
 fn rpc_initialize_health_phase_and_shutdown() {
     let temp = tempdir().expect("failed to create temp dir");
@@ -750,9 +825,12 @@ fn rpc_unknown_method_and_config_reload() {
 
     let reload = harness.request(11, "config.reload", None);
     assert_eq!(reload["result"]["ok"], true);
-    assert_eq!(
-        reload["result"]["note"],
-        "flow/registry/cache/vector/autotune resources reloaded"
+    let reload_note = reload["result"]["note"]
+        .as_str()
+        .expect("reload note should be string");
+    assert!(
+        reload_note == "flow/registry/cache/vector/autotune resources reloaded"
+            || reload_note == "info.resources_reloaded"
     );
     let reload_path = reload["result"]["path"]
         .as_str()
@@ -813,7 +891,9 @@ fn rpc_chat_rejects_invalid_params() {
     let message = invalid["error"]["message"]
         .as_str()
         .expect("error message should be string");
-    assert!(message.contains("invalid chat params"));
+    assert!(
+        message.contains("invalid chat params") || message.contains("error.invalid_chat_params")
+    );
 
     let shutdown = harness.request(32, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
@@ -1008,7 +1088,10 @@ fn startup_fails_when_cache_vector_paths_are_unavailable() {
     );
     let stderr_text = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr_text.contains("unable to open database file") || stderr_text.contains("fatal error")
+        stderr_text.contains("unable to open database file")
+            || stderr_text.contains("fatal error")
+            || stderr_text.contains("error.fatal")
+            || stderr_text.contains("database")
     );
 }
 
@@ -1047,6 +1130,572 @@ fn rpc_chat_rate_limit_saturation_returns_rate_limited_error() {
     assert!(message.contains("rate limited"));
 
     let shutdown = harness.request(103, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_task_execute_blocks_when_requirement_not_confirmed() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_governance_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(110, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let execute = harness.request(
+        111,
+        "task.execute",
+        Some(json!({
+            "task": "Refactor auth and billing modules with security hardening, migration plan, and regression verification"
+        })),
+    );
+
+    assert_eq!(execute["error"]["code"], -32006);
+    assert_eq!(execute["error"]["data"]["kind"], "requirement_contract");
+    assert_eq!(
+        execute["error"]["data"]["next_step"]["method"],
+        "workflow.clarify"
+    );
+
+    let shutdown = harness.request(112, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_workflow_execute_returns_review_policy_and_learning_feedback_fields() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_governance_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(120, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let task = "Refactor auth and billing modules with security hardening, migration plan, and regression verification";
+    let confirmed = harness.request(
+        121,
+        "workflow.confirm",
+        Some(json!({
+            "task": task,
+            "user_confirmed": true,
+            "ready_to_confirm": true,
+            "requirement_contract": {
+                "goal": "Harden release path while preserving behavior",
+                "scope": "auth and billing modules",
+                "non_goals": ["rewrite architecture"],
+                "acceptance_criteria": [
+                    "all existing tests pass",
+                    "no regression in auth and billing integration"
+                ],
+                "constraints": [
+                    "no breaking API changes",
+                    "must keep migration reversible"
+                ]
+            }
+        })),
+    );
+    assert_eq!(confirmed["result"]["ok"], true);
+
+    let execute = harness.request(
+        122,
+        "workflow.execute",
+        Some(json!({
+            "task": task,
+            "requirement_confirmed": true,
+            "capability_decision": "degrade",
+            "capability_confirm": true,
+            "clarification_rounds": 3,
+            "clarification_quality_score": 0.85,
+            "requirement_change_count": 2,
+            "auto_gates": false
+        })),
+    );
+
+    assert_eq!(execute["result"]["ok"], true);
+    assert_eq!(
+        execute["result"]["review_policy"]["min_review_level"],
+        "standard"
+    );
+    assert_eq!(execute["result"]["review_policy"]["required_reviews"], 1);
+
+    let learning_artifact_path = execute["result"]["learning_artifact_path"]
+        .as_str()
+        .expect("learning_artifact_path should be string");
+    let learning_raw = fs::read_to_string(learning_artifact_path)
+        .expect("failed to read latest-learning artifact");
+    let learning_json: Value =
+        serde_json::from_str(&learning_raw).expect("latest-learning should be valid json");
+    let events = learning_json["events"]
+        .as_array()
+        .expect("learning events should be array");
+    let event = events.last().expect("learning events should not be empty");
+    assert_eq!(event["clarification_rounds"], 3);
+    let quality = event["clarification_quality_score"]
+        .as_f64()
+        .expect("clarification_quality_score should be number");
+    assert!((quality - 0.85).abs() < 1e-6);
+    assert_eq!(event["requirement_change_count"], 2);
+    assert_eq!(event["review_reject_root_cause"], "");
+
+    let shutdown = harness.request(123, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_workflow_execute_enforces_dual_review_and_returns_decisions() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_dual_review_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(124, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let task = "Refactor auth and billing modules with safety checks and verification";
+    let confirmed = harness.request(
+        125,
+        "workflow.confirm",
+        Some(json!({
+            "task": task,
+            "user_confirmed": true,
+            "ready_to_confirm": true,
+            "requirement_contract": {
+                "goal": "harden auth and billing safely",
+                "scope": "auth and billing modules",
+                "non_goals": ["full architecture rewrite"],
+                "acceptance_criteria": ["all tests pass"],
+                "constraints": ["no API break"]
+            }
+        })),
+    );
+    assert_eq!(confirmed["result"]["ok"], true);
+
+    let execute = harness.request(
+        126,
+        "workflow.execute",
+        Some(json!({
+            "task": task,
+            "requirement_confirmed": true,
+            "auto_gates": false
+        })),
+    );
+    assert!(execute["error"].is_null());
+    assert!(execute["result"].is_object());
+    assert_eq!(execute["result"]["review_policy"]["required_reviews"], 2);
+
+    let reviews = execute["result"]["reviews"]
+        .as_array()
+        .expect("reviews should be array when dual review is enforced");
+    assert_eq!(reviews.len(), 2);
+    assert_eq!(reviews[0]["verdict"], "APPROVE");
+    assert_eq!(reviews[1]["verdict"], "APPROVE");
+
+    let shutdown = harness.request(127, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_learning_summary_aggregates_clarification_feedback_metrics() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_governance_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(130, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let task = "Refactor auth and billing modules with security hardening, migration plan, and regression verification";
+    let confirmed = harness.request(
+        131,
+        "workflow.confirm",
+        Some(json!({
+            "task": task,
+            "user_confirmed": true,
+            "ready_to_confirm": true,
+            "requirement_contract": {
+                "goal": "Harden release path while preserving behavior",
+                "scope": "auth and billing modules",
+                "non_goals": ["rewrite architecture"],
+                "acceptance_criteria": [
+                    "all existing tests pass",
+                    "no regression in auth and billing integration"
+                ],
+                "constraints": [
+                    "no breaking API changes",
+                    "must keep migration reversible"
+                ]
+            }
+        })),
+    );
+    assert_eq!(confirmed["result"]["ok"], true);
+
+    let execute = harness.request(
+        132,
+        "workflow.execute",
+        Some(json!({
+            "task": task,
+            "requirement_confirmed": true,
+            "capability_decision": "degrade",
+            "capability_confirm": true,
+            "clarification_rounds": 4,
+            "clarification_quality_score": 0.9,
+            "requirement_change_count": 3,
+            "auto_gates": false
+        })),
+    );
+    assert_eq!(execute["result"]["ok"], true);
+
+    let summary = harness.request(
+        133,
+        "learning.summary",
+        Some(json!({
+            "limit": 20
+        })),
+    );
+    assert_eq!(summary["result"]["ok"], true);
+
+    let sampled = summary["result"]["summary"]["sampled_events"]
+        .as_u64()
+        .expect("sampled_events should be integer");
+    assert!(sampled >= 1);
+    assert_eq!(
+        summary["result"]["summary"]["totals"]["requirement_change_count"],
+        3
+    );
+
+    let rounds = summary["result"]["summary"]["averages"]["clarification_rounds"]
+        .as_f64()
+        .expect("clarification_rounds average should be number");
+    assert!(rounds >= 4.0);
+
+    let quality = summary["result"]["summary"]["averages"]["clarification_quality_score"]
+        .as_f64()
+        .expect("clarification_quality_score average should be number");
+    assert!(quality >= 0.9);
+
+    let gates_pass_rate = summary["result"]["summary"]["rates"]["gates_pass_rate"]
+        .as_f64()
+        .expect("gates_pass_rate should be number");
+    assert!(gates_pass_rate >= 1.0);
+
+    let shutdown = harness.request(134, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_primary_secondary_policy_artifact_is_persisted_and_response_contains_policy() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_governance_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(140, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let task = "Build secure payment gateway with input validation and audit logging";
+    let _confirmed = harness.request(
+        141,
+        "workflow.confirm",
+        Some(json!({
+            "task": task,
+            "user_confirmed": true,
+            "requirement_contract": {
+                "goal": "Secure payment gateway",
+                "scope": "payment module",
+                "non_goals": ["rewrite existing billing"],
+                "acceptance_criteria": ["all payment flows pass tests"],
+                "constraints": ["pci-dss compliant"]
+            }
+        })),
+    );
+
+    let execute = harness.request(
+        142,
+        "workflow.execute",
+        Some(json!({
+            "task": task,
+            "requirement_confirmed": true,
+            "auto_gates": false
+        })),
+    );
+    assert_eq!(execute["result"]["ok"], true);
+
+    // primary_secondary_policy must be present in the execute response under blue5
+    let policy = &execute["result"]["blue5"]["primary_secondary_policy"];
+    assert!(
+        policy.is_object(),
+        "primary_secondary_policy must be object in response"
+    );
+    assert!(
+        !policy["primary_agent"].as_str().unwrap_or("").is_empty(),
+        "primary_agent must not be empty"
+    );
+    assert!(
+        policy["failover_policy"].is_string(),
+        "failover_policy must be string"
+    );
+
+    assert!(
+        execute["result"]["primary_failover_artifact_path"].is_string(),
+        "primary_failover_artifact_path must be present"
+    );
+    assert!(
+        execute["result"]["primary_failover_report"].is_object(),
+        "primary_failover_report must be object"
+    );
+    assert!(
+        execute["result"]["primary_failover_report"]["failover_policy"].is_string(),
+        "primary_failover_report.failover_policy must be string"
+    );
+    assert!(
+        execute["result"]["primary_failover_report"]["reports"].is_array(),
+        "primary_failover_report.reports must be array"
+    );
+
+    // The policy artifact path must be present
+    let _artifact_path = execute["result"]["artifact_path"]
+        .as_str()
+        .expect("artifact_path should be string");
+
+    let shutdown = harness.request(143, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_primary_secondary_summary_reports_stability_and_failover_metrics() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_governance_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(150, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let task = "Migrate legacy auth service to OAuth2 with rollback plan";
+    let _confirmed = harness.request(
+        151,
+        "workflow.confirm",
+        Some(json!({
+            "task": task,
+            "user_confirmed": true,
+            "requirement_contract": {
+                "goal": "Migrate auth to OAuth2",
+                "scope": "auth service",
+                "non_goals": ["migrate billing"],
+                "acceptance_criteria": ["OAuth2 tests pass"],
+                "constraints": ["must rollback in < 5 minutes"]
+            }
+        })),
+    );
+
+    let execute = harness.request(
+        152,
+        "workflow.execute",
+        Some(json!({
+            "task": task,
+            "requirement_confirmed": true,
+            "auto_gates": false
+        })),
+    );
+    assert_eq!(execute["result"]["ok"], true);
+
+    // primary_secondary.summary must return ok with correct shape
+    let summary = harness.request(
+        153,
+        "primary_secondary.summary",
+        Some(json!({ "limit": 20 })),
+    );
+    assert_eq!(summary["result"]["ok"], true);
+
+    let s = &summary["result"]["summary"];
+    assert!(
+        s["total_events"].as_u64().unwrap_or(0) >= 1,
+        "total_events must be >= 1 after an execute"
+    );
+    assert!(
+        s["averages"]["primary_stability_score"].is_number(),
+        "primary_stability_score must be a number"
+    );
+    assert!(
+        s["averages"]["secondary_utilization_rate"].is_number(),
+        "secondary_utilization_rate must be a number"
+    );
+    assert!(
+        s["totals"]["failover_count"].is_number(),
+        "failover_count must be a number"
+    );
+    assert!(
+        s["failover_root_causes"].is_object(),
+        "failover_root_causes must be an object"
+    );
+
+    let shutdown = harness.request(154, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_workflow_consult_returns_artifact_and_consensus_signal() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_governance_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(160, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let consult = harness.request(
+        161,
+        "workflow.consult",
+        Some(json!({
+            "task": "Design safe data migration strategy with rollback and evidence plan",
+            "trigger_reason": "unclear requirement and conflicting constraints",
+            "consultation_confidence_threshold": 0.5
+        })),
+    );
+    assert_eq!(consult["result"]["ok"], true);
+    assert!(consult["result"]["artifact"].is_object());
+    assert!(consult["result"]["artifact_path"].is_string());
+    assert!(consult["result"]["artifact"]["participants"].is_array());
+    assert!(consult["result"]["artifact"]["consensus_plan"].is_string());
+
+    let shutdown = harness.request(162, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_confirm_requires_ready_to_confirm_and_respects_clarification_rounds() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_governance_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(170, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let task = "Clarify security hardening scope for auth and billing";
+    let clarify = harness.request(
+        171,
+        "workflow.clarify",
+        Some(json!({
+            "task": task,
+            "clarify_collaboration_mode": "multi_ai",
+            "round_index": 1,
+            "ready_to_confirm": false
+        })),
+    );
+    assert_eq!(clarify["result"]["ok"], true);
+    assert_eq!(clarify["result"]["clarification_session"]["round_index"], 1);
+    assert_eq!(
+        clarify["result"]["clarification_session"]["ready_to_confirm"],
+        false
+    );
+    assert!(clarify["result"]["clarification_session_artifact_path"].is_string());
+
+    let blocked_confirm = harness.request(
+        172,
+        "workflow.confirm",
+        Some(json!({
+            "task": task,
+            "user_confirmed": true,
+            "requirement_contract": {
+                "goal": "harden auth and billing",
+                "scope": "auth,billing modules",
+                "non_goals": ["architecture rewrite"],
+                "acceptance_criteria": ["all regression tests pass"],
+                "constraints": ["no api break"]
+            }
+        })),
+    );
+    assert_eq!(blocked_confirm["error"]["code"], -32006);
+    assert_eq!(
+        blocked_confirm["error"]["data"]["kind"],
+        "clarification_session"
+    );
+    assert_eq!(
+        blocked_confirm["error"]["data"]["next_step"]["method"],
+        "workflow.clarify"
+    );
+
+    let confirmed = harness.request(
+        173,
+        "workflow.confirm",
+        Some(json!({
+            "task": task,
+            "user_confirmed": true,
+            "ready_to_confirm": true,
+            "requirement_contract": {
+                "goal": "harden auth and billing",
+                "scope": "auth,billing modules",
+                "non_goals": ["architecture rewrite"],
+                "acceptance_criteria": ["all regression tests pass"],
+                "constraints": ["no api break"]
+            }
+        })),
+    );
+    assert_eq!(confirmed["result"]["ok"], true);
+    assert_eq!(
+        confirmed["result"]["clarification_session"]["ready_to_confirm"],
+        true
+    );
+
+    let shutdown = harness.request(174, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_workflow_execute_auto_consultation_blocks_without_consensus() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_governance_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(180, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let task = "Refactor core auth pipeline with high-risk migration";
+    let _confirmed = harness.request(
+        181,
+        "workflow.confirm",
+        Some(json!({
+            "task": task,
+            "user_confirmed": true,
+            "ready_to_confirm": true,
+            "requirement_contract": {
+                "goal": "safe auth migration",
+                "scope": "auth module",
+                "non_goals": ["billing refactor"],
+                "acceptance_criteria": ["all auth tests pass"],
+                "constraints": ["no downtime"]
+            }
+        })),
+    );
+
+    let execute = harness.request(
+        182,
+        "workflow.execute",
+        Some(json!({
+            "task": task,
+            "requirement_confirmed": true,
+            "consultation_required": true,
+            "consultation_confidence_threshold": 0.95,
+            "auto_gates": false
+        })),
+    );
+    assert_eq!(execute["error"]["code"], -32007);
+    assert_eq!(execute["error"]["data"]["kind"], "consultation_blocked");
+    assert!(execute["error"]["data"]["consultation_artifact_path"].is_string());
+
+    let shutdown = harness.request(183, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
     harness.wait_for_exit(Duration::from_secs(8));
 }

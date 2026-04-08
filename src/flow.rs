@@ -119,7 +119,7 @@ impl FlowManager {
             .iter()
             .any(|name| name == &phase_name)
         {
-            return Err(ProxyError::UnknownPhase(phase_name).into());
+            return Err(ProxyError::PhaseNotFound(phase_name).into());
         }
 
         let phase_cfg = self
@@ -137,7 +137,7 @@ impl FlowManager {
             if let Some(agent) = registry.get(agent_name) {
                 resolved_agents.push((agent_name.clone(), agent));
             } else if idx == 0 && !resolved_phase.fallback {
-                return Err(ProxyError::UnknownAgent(agent_name.clone()).into());
+                return Err(ProxyError::AgentNotFound(agent_name.clone()).into());
             }
 
             if !resolved_phase.fallback {
@@ -151,7 +151,7 @@ impl FlowManager {
                 .first()
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_string());
-            return Err(ProxyError::UnknownAgent(first).into());
+            return Err(ProxyError::AgentNotFound(first).into());
         }
 
         if !resolved_phase.fallback {

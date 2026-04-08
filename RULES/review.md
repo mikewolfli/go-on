@@ -13,6 +13,19 @@
 - Approve only when behavior, tests, and documentation are coherent and consistent.
 - If a rule below is marked as language-specific (e.g., Rust), and the current project is not that language, skip or adapt the rule accordingly.
 
+## Mandatory Review Standards (merged from copilot-instructions)
+
+1. Empty implementations and placeholders are forbidden in production logic.
+2. Loops and recursion must have reachable and explicit termination conditions.
+3. Review cross-calls for circular dependency risk and suggest decoupling where needed.
+4. Flag unused code and remove it unless there is justified retention.
+5. Validate function completeness:
+- inputs validated
+- edge cases handled
+- error paths explicit
+- behavior aligned with function intent
+- known limitations documented
+
 # Language-Specific (Rust Only)
 - If the current project is not Rust, skip the following:
 	- Placeholders are only allowed in early-stage architecture with clear interface and documented risk.
