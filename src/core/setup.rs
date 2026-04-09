@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::i18n::{t, tf};
+use crate::i18n::runtime::{t, tf};
 use anyhow::{Context, Result};
 
 // 简化模式和复杂模式配置文件模板名称
@@ -172,10 +172,7 @@ pub fn parse_setup_profile(value: &str) -> Result<SetupProfile> {
     if value.eq_ignore_ascii_case("complex") {
         return Ok(SetupProfile::Complex);
     }
-    anyhow::bail!(
-        "{}",
-        crate::i18n::tf("error.invalid_setup_profile", &[("value", value)])
-    )
+    anyhow::bail!("{}", tf("error.invalid_setup_profile", &[("value", value)]))
 }
 
 /// Parse secret mode string to SecretMode enum.
@@ -188,10 +185,7 @@ pub fn parse_secret_mode(value: &str) -> Result<SecretMode> {
     if value.eq_ignore_ascii_case("keyring") {
         return Ok(SecretMode::Keyring);
     }
-    anyhow::bail!(
-        "{}",
-        crate::i18n::tf("error.invalid_secret_mode", &[("value", value)])
-    )
+    anyhow::bail!("{}", tf("error.invalid_secret_mode", &[("value", value)]))
 }
 
 /// Parse secret action string to SecretAction enum.
@@ -210,10 +204,7 @@ pub fn parse_secret_action(value: &str) -> Result<SecretAction> {
     if value.eq_ignore_ascii_case("list") {
         return Ok(SecretAction::List);
     }
-    anyhow::bail!(
-        "{}",
-        crate::i18n::tf("error.invalid_secret_action", &[("value", value)])
-    )
+    anyhow::bail!("{}", tf("error.invalid_secret_action", &[("value", value)]))
 }
 
 pub fn run_secret_command(
@@ -240,19 +231,18 @@ pub fn run_secret_command(
         }
         SecretAction::Set => {
             let (service, account) = resolve_secret_target(name)?;
-            let value = value.ok_or_else(|| {
-                anyhow::anyhow!("{}", crate::i18n::t("error.secret_value_required"))
-            })?;
+            let value =
+                value.ok_or_else(|| anyhow::anyhow!("{}", t("error.secret_value_required")))?;
             let entry = keyring::Entry::new(service, account).map_err(|err| {
                 anyhow::anyhow!(
                     "{}",
-                    crate::i18n::tf("error.keyring_open", &[("error", &format!("{}", err))])
+                    tf("error.keyring_open", &[("error", &format!("{}", err))])
                 )
             })?;
             entry.set_password(value).map_err(|err| {
                 anyhow::anyhow!(
                     "{}",
-                    crate::i18n::tf("error.keyring_write", &[("error", &format!("{}", err))])
+                    tf("error.keyring_write", &[("error", &format!("{}", err))])
                 )
             })?;
             println!(
@@ -266,13 +256,13 @@ pub fn run_secret_command(
             let entry = keyring::Entry::new(service, account).map_err(|err| {
                 anyhow::anyhow!(
                     "{}",
-                    crate::i18n::tf("error.keyring_open", &[("error", &format!("{}", err))])
+                    tf("error.keyring_open", &[("error", &format!("{}", err))])
                 )
             })?;
             let secret = entry.get_password().map_err(|err| {
                 anyhow::anyhow!(
                     "{}",
-                    crate::i18n::tf("error.keyring_read", &[("error", &format!("{}", err))])
+                    tf("error.keyring_read", &[("error", &format!("{}", err))])
                 )
             })?;
             println!("{}", secret);
@@ -283,13 +273,13 @@ pub fn run_secret_command(
             let entry = keyring::Entry::new(service, account).map_err(|err| {
                 anyhow::anyhow!(
                     "{}",
-                    crate::i18n::tf("error.keyring_open", &[("error", &format!("{}", err))])
+                    tf("error.keyring_open", &[("error", &format!("{}", err))])
                 )
             })?;
             entry.delete_credential().map_err(|err| {
                 anyhow::anyhow!(
                     "{}",
-                    crate::i18n::tf("error.keyring_delete", &[("error", &format!("{}", err))])
+                    tf("error.keyring_delete", &[("error", &format!("{}", err))])
                 )
             })?;
             println!(
@@ -419,12 +409,7 @@ fn resolve_secret_target(name: Option<&str>) -> Result<(&'static str, &'static s
         .iter()
         .find(|(known_name, _, _)| *known_name == name)
         .map(|(_, service, account)| (*service, *account))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "{}",
-                crate::i18n::tf("error.unknown_secret_name", &[("name", name)])
-            )
-        })
+        .ok_or_else(|| anyhow::anyhow!("{}", tf("error.unknown_secret_name", &[("name", name)])))
 }
 
 fn prompt_choice(prompt: &str, allowed: &[&str], default: &str) -> Result<String> {
@@ -451,7 +436,7 @@ fn prompt_choice(prompt: &str, allowed: &[&str], default: &str) -> Result<String
 
         println!(
             "{}",
-            crate::i18n::tf("warning.invalid_value", &[("allowed", &allowed.join(", "))])
+            tf("warning.invalid_value", &[("allowed", &allowed.join(", "))])
         );
     }
 }

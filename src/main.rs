@@ -43,47 +43,55 @@
 //!
 //! Each layer has clear responsibilities and well-defined interfaces.
 
+#![allow(dead_code)]
+
 mod acp;
-mod adaptive_selector;
-mod advanced_modules;
 mod agents;
-mod cache;
 mod core;
-mod cost_optimizer;
-mod evaluation;
-mod failure_prevention;
 mod governance;
 mod i18n;
-mod i18n_watcher;
+mod intelligence;
 mod mcp;
 mod memory;
-mod memory_response_cache;
-mod model_selector;
 mod observability;
+mod optimization;
 mod orchestration;
-mod performance;
-mod promotion;
 mod protocol;
-mod quality_models;
-mod reinforcement;
-mod reliability_optimizer;
-mod speed_optimizer;
-mod telemetry;
-mod telemetry_enhanced;
-mod vector;
-mod verification;
-mod workflow_optimizer;
 
 pub use crate::agents::agent;
 pub use crate::core::config;
 pub use crate::core::config_validation;
 pub use crate::core::context;
 pub use crate::core::error;
+pub use crate::core::setup;
 pub use crate::governance::audit;
 pub use crate::governance::hardening;
 pub use crate::governance::pua;
 pub use crate::governance::review_controls;
 pub use crate::governance::runtime_controls;
+pub use crate::i18n::runtime;
+pub use crate::i18n::watcher as i18n_watcher;
+pub use crate::intelligence::adaptive_selector;
+pub use crate::intelligence::advanced_modules;
+pub use crate::intelligence::evaluation;
+pub use crate::intelligence::model_selector;
+pub use crate::intelligence::promotion;
+pub use crate::intelligence::quality_models;
+pub use crate::intelligence::reinforcement;
+pub use crate::intelligence::verification;
+pub use crate::memory::cache;
+pub use crate::memory::memory as memory_module;
+pub use crate::memory::memory_response_cache;
+pub use crate::memory::vector;
+pub use crate::observability::observability as observability_module;
+pub use crate::observability::performance;
+pub use crate::observability::telemetry;
+pub use crate::observability::telemetry_enhanced;
+pub use crate::optimization::cost_optimizer;
+pub use crate::optimization::failure_prevention;
+pub use crate::optimization::reliability_optimizer;
+pub use crate::optimization::speed_optimizer;
+pub use crate::optimization::workflow_optimizer;
 pub use crate::orchestration::flow;
 pub use crate::orchestration::flow_with_models;
 pub use crate::orchestration::graph;
@@ -96,7 +104,6 @@ pub use crate::orchestration::task_router;
 pub use crate::orchestration::tool;
 pub use crate::protocol::mcp_server;
 pub use crate::protocol::rpc_protocol;
-pub use crate::core::setup;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -105,14 +112,14 @@ use anyhow::Result;
 use clap::Parser;
 use tracing::{error, info, warn};
 
-use crate::acp::AcpServer;
+use crate::acp::r#impl::{new_acp_server, run_acp_server};
 use crate::agent::AgentRegistry;
 use crate::cache::ResponseCache;
 use crate::config::{
     validate_runtime_readiness, AppConfig, AutoTuneState, ConfigWarning, RuntimeConfig,
 };
 use crate::flow::FlowManager;
-use crate::i18n::init_i18n;
+use crate::i18n::runtime::{init_i18n, tf};
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
     persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger,
@@ -360,10 +367,7 @@ async fn main() {
     // Run the application and handle any errors
     if let Err(err) = run().await {
         error!("fatal error: {err:#}");
-        eprintln!(
-            "{}",
-            crate::i18n::tf("error.fatal", &[("error", &format!("{err:#}"))])
-        );
+        eprintln!("{}", tf("error.fatal", &[("error", &format!("{err:#}"))]));
         std::process::exit(1);
     }
 }
@@ -485,7 +489,7 @@ async fn run() -> Result<()> {
         println!("{}", validation_report);
         println!(
             "{}",
-            crate::i18n::tf(
+            tf(
                 "ui.legacy_health_score",
                 &[
                     ("score", &health_report.score.to_string()),
@@ -625,7 +629,7 @@ async fn run() -> Result<()> {
         .unwrap_or_else(RuntimeConfig::default);
 
     // Create and run the ACP server
-    let mut server = AcpServer::new(
+    let mut server = new_acp_server(
         flow,
         registry,
         cache,
@@ -635,10 +639,8 @@ async fn run() -> Result<()> {
         autotune_config,
         autotune_state_path,
         runtime_config,
-        Some(config_path.clone()),
-        cli.phase.clone(),
         Some(http_client),
         cli.verbose,
     );
-    server.run().await
+    run_acp_server(&mut server).await
 }

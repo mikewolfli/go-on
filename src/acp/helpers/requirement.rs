@@ -1,4 +1,70 @@
-fn parse_requirement_contract_from_params(
+//! Requirement helper functions for ACP server
+//!
+//! This module provides utility functions for managing requirement contracts,
+//! requirement gates, and clarification metrics.
+
+use std::path::PathBuf;
+
+use serde_json::Value;
+
+use crate::{
+    orchestration::task_router::TaskRouter,
+    reinforcement::{
+        persist_governance_policy, persist_requirement_contract, ArtifactLedger,
+        GovernancePolicyArtifact, RequirementContractArtifact,
+    },
+};
+
+/// Requirement gate decision
+#[derive(Debug, Clone)]
+pub struct RequirementGateDecision {
+    /// Whether the gate is blocked
+    pub blocked: bool,
+    /// Reason for blocking (if any)
+    pub reason: Option<String>,
+    /// Missing requirement fields
+    pub missing_fields: Vec<String>,
+    /// Path to clarification artifact (if any)
+    pub clarification_artifact_path: Option<PathBuf>,
+    /// Path to governance artifact
+    pub governance_artifact_path: PathBuf,
+}
+
+/// Learning clarification metrics
+#[derive(Debug, Clone, Copy)]
+pub struct LearningClarificationMetrics {
+    /// Number of clarification rounds
+    pub rounds: u32,
+    /// Quality score (0.0 to 1.0)
+    pub quality_score: f64,
+    /// Number of requirement changes
+    pub requirement_change_count: u32,
+}
+
+/// Parse string list from JSON value
+fn parse_string_list(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str())
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+/// Get current timestamp
+fn now_ts() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+/// Parse requirement contract from request parameters
+pub fn parse_requirement_contract_from_params(
     params: &Value,
     task: &str,
 ) -> Option<RequirementContractArtifact> {
@@ -36,7 +102,8 @@ fn parse_requirement_contract_from_params(
     })
 }
 
-fn default_requirement_contract(task: &str, source: &str) -> RequirementContractArtifact {
+/// Create default requirement contract
+pub fn default_requirement_contract(task: &str, source: &str) -> RequirementContractArtifact {
     RequirementContractArtifact {
         generated_at: now_ts(),
         task: task.to_string(),
@@ -52,7 +119,8 @@ fn default_requirement_contract(task: &str, source: &str) -> RequirementContract
     }
 }
 
-fn requirement_missing_fields(contract: &RequirementContractArtifact) -> Vec<String> {
+/// Identify missing requirement fields
+pub fn requirement_missing_fields(contract: &RequirementContractArtifact) -> Vec<String> {
     let mut missing = Vec::new();
     if contract.goal.trim().is_empty() {
         missing.push("goal".to_string());
@@ -69,7 +137,8 @@ fn requirement_missing_fields(contract: &RequirementContractArtifact) -> Vec<Str
     missing
 }
 
-fn requirement_questions_from_missing(missing_fields: &[String]) -> Vec<String> {
+/// Generate clarification questions from missing fields
+pub fn requirement_questions_from_missing(missing_fields: &[String]) -> Vec<String> {
     missing_fields
         .iter()
         .map(|field| match field.as_str() {
@@ -82,7 +151,8 @@ fn requirement_questions_from_missing(missing_fields: &[String]) -> Vec<String> 
         .collect::<Vec<_>>()
 }
 
-fn estimate_requirement_ambiguity(task: &str, contract: &RequirementContractArtifact) -> u8 {
+/// Estimate requirement ambiguity score
+pub fn estimate_requirement_ambiguity(task: &str, contract: &RequirementContractArtifact) -> u8 {
     let characteristics = TaskRouter::analyze_task(task);
     let mut score = characteristics.complexity.min(5);
     let missing = requirement_missing_fields(contract).len() as u8;
@@ -90,11 +160,14 @@ fn estimate_requirement_ambiguity(task: &str, contract: &RequirementContractArti
     score.min(5)
 }
 
-fn load_latest_requirement_contract(
+/// Load latest requirement contract for a task
+pub fn load_latest_requirement_contract(
     ledger: &ArtifactLedger,
     task: &str,
 ) -> Option<RequirementContractArtifact> {
-    let artifact = load_latest_requirement_contract_lazy(ledger)?;
+    let latest = ledger.latest_path("spec", "latest-clarification.json");
+    let raw = std::fs::read_to_string(latest).ok()?;
+    let artifact = serde_json::from_str::<RequirementContractArtifact>(&raw).ok()?;
     if artifact.task.trim() == task.trim() {
         Some(artifact)
     } else {
@@ -102,12 +175,13 @@ fn load_latest_requirement_contract(
     }
 }
 
-fn evaluate_requirement_gate(
+/// Evaluate requirement gate
+pub fn evaluate_requirement_gate(
     ledger: &ArtifactLedger,
     task: &str,
     params: &Value,
     source: &str,
-) -> Result<RequirementGateDecision> {
+) -> anyhow::Result<RequirementGateDecision> {
     let characteristics = TaskRouter::analyze_task(task);
     let clarification_required = characteristics.complexity >= 3
         || characteristics.involves_multiple_modules
@@ -155,14 +229,14 @@ fn evaluate_requirement_gate(
         blocked,
         reason: reason.clone(),
         next_step: if blocked {
-            json!({
+            serde_json::json!({
                 "method": "workflow.clarify",
                 "task": task,
                 "missing_fields": missing_fields,
                 "suggested_followup": "call workflow.confirm with completed requirement_contract and user_confirmed=true"
             })
         } else {
-            json!({"status": "confirmed"})
+            serde_json::json!({"status": "confirmed"})
         },
     };
     let governance_artifact_path = persist_governance_policy(ledger, &governance)?;
@@ -176,7 +250,8 @@ fn evaluate_requirement_gate(
     })
 }
 
-fn derive_clarification_quality_score(contract: &RequirementContractArtifact) -> f64 {
+/// Derive clarification quality score from contract
+pub fn derive_clarification_quality_score(contract: &RequirementContractArtifact) -> f64 {
     let missing_count = requirement_missing_fields(contract).len() as f64;
     let completeness_score = ((4.0 - missing_count).max(0.0) / 4.0).clamp(0.0, 1.0);
     let ambiguity_penalty = (contract.ambiguity_score as f64 / 5.0).clamp(0.0, 1.0);
@@ -184,7 +259,8 @@ fn derive_clarification_quality_score(contract: &RequirementContractArtifact) ->
     quality.clamp(0.0, 1.0)
 }
 
-fn resolve_learning_clarification_metrics(
+/// Resolve learning clarification metrics
+pub fn resolve_learning_clarification_metrics(
     ledger: &ArtifactLedger,
     task: &str,
     params: &Value,
@@ -255,4 +331,3 @@ fn resolve_learning_clarification_metrics(
         requirement_change_count,
     }
 }
-

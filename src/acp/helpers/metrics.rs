@@ -1,5 +1,31 @@
+//! Metrics helper functions for ACP server
+//!
+//! This module provides utility functions for metrics collection,
+//! streaming notifications, and Prometheus metric formatting.
+
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde_json::{json, Map, Value};
+
+use crate::observability::observability::{push_metric_header, push_scalar_metric};
+
+/// Histogram bucket boundaries for latency monitoring (seconds)
+const HISTOGRAM_BUCKETS_SECONDS: [f64; 9] = [
+    0.001, // 1ms
+    0.005, // 5ms
+    0.01,  // 10ms
+    0.05,  // 50ms
+    0.1,   // 100ms
+    0.5,   // 500ms
+    1.0,   // 1s
+    5.0,   // 5s
+    10.0,  // 10s
+];
+
+/// Stream chunk notification
 #[allow(clippy::too_many_arguments)]
-fn stream_chunk_notification(
+pub fn stream_chunk_notification(
     id: &Option<Value>,
     agent: &str,
     token: &str,
@@ -9,7 +35,7 @@ fn stream_chunk_notification(
     phase: Option<&str>,
     trace_id: Option<&str>,
 ) -> Value {
-    let mut payload = serde_json::Map::new();
+    let mut payload = Map::new();
     payload.insert("id".to_string(), id.clone().unwrap_or(Value::Null));
     payload.insert("agent".to_string(), Value::String(agent.to_string()));
     payload.insert("token".to_string(), Value::String(token.to_string()));
@@ -30,8 +56,9 @@ fn stream_chunk_notification(
     Value::Object(payload)
 }
 
+/// Stream done notification
 #[allow(clippy::too_many_arguments)]
-fn stream_done_notification(
+pub fn stream_done_notification(
     id: &Option<Value>,
     agent: &str,
     chunks: usize,
@@ -41,7 +68,7 @@ fn stream_done_notification(
     trace_id: Option<&str>,
     duration_ms: u64,
 ) -> Value {
-    let mut payload = serde_json::Map::new();
+    let mut payload = Map::new();
     payload.insert("id".to_string(), id.clone().unwrap_or(Value::Null));
     payload.insert("agent".to_string(), Value::String(agent.to_string()));
     payload.insert("done".to_string(), Value::Bool(true));
@@ -63,7 +90,8 @@ fn stream_done_notification(
     Value::Object(payload)
 }
 
-fn histogram_prometheus_lines(
+/// Generate Prometheus histogram lines
+pub fn histogram_prometheus_lines(
     name: &str,
     count: u64,
     sum_seconds: f64,
@@ -88,7 +116,8 @@ fn histogram_prometheus_lines(
     lines
 }
 
-fn classify_agent_failure(err: &anyhow::Error) -> &'static str {
+/// Classify agent failure type
+pub fn classify_agent_failure(err: &anyhow::Error) -> &'static str {
     let msg = err.to_string().to_ascii_lowercase();
     if msg.contains("timed out") || msg.contains("timeout") {
         return "timeout";
@@ -99,48 +128,160 @@ fn classify_agent_failure(err: &anyhow::Error) -> &'static str {
     "other"
 }
 
-fn record_agent_failure_metrics(metrics: &RuntimeMetrics, err: &anyhow::Error) {
-    metrics.inc_agent_failures();
-    match classify_agent_failure(err) {
-        "timeout" => metrics.inc_agent_timeout_failures(),
-        "panic" => metrics.inc_agent_panic_failures(),
-        _ => metrics.inc_agent_other_failures(),
-    }
-}
-
-fn now_ts() -> i64 {
+/// Get current timestamp in seconds
+pub fn now_ts() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
 
-fn now_ms() -> i64 {
+/// Get current timestamp in milliseconds
+pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
 
-fn hash_hex(input: &str, hex_len: usize) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    let digest = hasher.finalize();
-    let full = digest
-        .iter()
-        .map(|byte| format!("{:02x}", byte))
-        .collect::<String>();
-    full.chars().take(hex_len).collect()
-}
-
-fn escape_prometheus_label(value: &str) -> String {
+/// Escape Prometheus label value
+pub fn escape_prometheus_label(value: &str) -> String {
     value
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('\n', "\\n")
 }
 
-fn build_prometheus_metrics(
+/// Metrics snapshot structure
+#[derive(Debug, Clone)]
+pub struct MetricsSnapshot {
+    /// Total chat requests
+    pub chat_requests_total: u64,
+    /// Cache lookup total
+    pub cache_lookup_total: u64,
+    /// Cache hit total
+    pub cache_hit_total: u64,
+    /// Cache store total
+    pub cache_store_total: u64,
+    /// Vector search total
+    pub vector_search_total: u64,
+    /// Vector hit total
+    pub vector_hit_total: u64,
+    /// Vector store total
+    pub vector_store_total: u64,
+    /// Summary read total
+    pub summary_read_total: u64,
+    /// Summary hit total
+    pub summary_hit_total: u64,
+    /// Summary store total
+    pub summary_store_total: u64,
+    /// Agent failures total
+    pub agent_failures_total: u64,
+    /// Agent timeout failures total
+    pub agent_timeout_failures_total: u64,
+    /// Agent panic failures total
+    pub agent_panic_failures_total: u64,
+    /// Agent other failures total
+    pub agent_other_failures_total: u64,
+    /// Review gate total
+    pub review_gate_total: u64,
+    /// Review gate approved total
+    pub review_gate_approved_total: u64,
+    /// Review gate rejected total
+    pub review_gate_rejected_total: u64,
+    /// Review gate timeout total
+    pub review_gate_timeout_total: u64,
+    /// Review gate degraded total
+    pub review_gate_degraded_total: u64,
+    /// Review gate invalid response total
+    pub review_gate_invalid_response_total: u64,
+    /// Lazy BLUE5 doc lookup total
+    pub lazy_blue5_doc_lookup_total: u64,
+    /// Lazy BLUE5 doc hit total
+    pub lazy_blue5_doc_hit_total: u64,
+    /// Lazy BLUE5 doc reload total
+    pub lazy_blue5_doc_reload_total: u64,
+    /// Lazy app config lookup total
+    pub lazy_app_config_lookup_total: u64,
+    /// Lazy app config hit total
+    pub lazy_app_config_hit_total: u64,
+    /// Lazy app config reload total
+    pub lazy_app_config_reload_total: u64,
+    /// Lazy clarification lookup total
+    pub lazy_clarification_lookup_total: u64,
+    /// Lazy clarification hit total
+    pub lazy_clarification_hit_total: u64,
+    /// Lazy clarification reload total
+    pub lazy_clarification_reload_total: u64,
+    /// Chat latency count
+    pub chat_latency_count: u64,
+    /// Chat latency sum seconds
+    pub chat_latency_sum_seconds: f64,
+    /// Chat latency bucket counts
+    pub chat_latency_bucket_counts: [u64; HISTOGRAM_BUCKETS_SECONDS.len() + 1],
+    /// Agent latency count
+    pub agent_latency_count: u64,
+    /// Agent latency sum seconds
+    pub agent_latency_sum_seconds: f64,
+    /// Agent latency bucket counts
+    pub agent_latency_bucket_counts: [u64; HISTOGRAM_BUCKETS_SECONDS.len() + 1],
+    /// Review latency count
+    pub review_latency_count: u64,
+    /// Review latency sum seconds
+    pub review_latency_sum_seconds: f64,
+    /// Review latency bucket counts
+    pub review_latency_bucket_counts: [u64; HISTOGRAM_BUCKETS_SECONDS.len() + 1],
+}
+
+/// Runtime gauge snapshot
+#[derive(Debug, Clone)]
+pub struct RuntimeGaugeSnapshot {
+    /// Memory cache entries
+    pub memory_cache_entries: u64,
+    /// SQLite cache entries
+    pub sqlite_cache_entries: u64,
+    /// Vector memory entries
+    pub vector_memory_entries: u64,
+    /// Vector summary entries
+    pub vector_summary_entries: u64,
+    /// Circuit open agents
+    pub circuit_open_agents: u64,
+    /// Circuit half-open agents
+    pub circuit_half_open_agents: u64,
+    /// Circuit tracked agents
+    pub circuit_tracked_agents: u64,
+    /// Rate limiter tracked phases
+    pub rate_limiter_tracked_phases: u64,
+}
+
+/// Circuit breaker snapshot
+#[derive(Debug, Clone)]
+pub struct CircuitBreakerSnapshot {
+    /// Circuit breaker state
+    pub state: String,
+    /// Consecutive failures
+    pub consecutive_failures: u64,
+}
+
+/// Lifecycle snapshot
+#[derive(Debug, Clone)]
+pub struct LifecycleSnapshot {
+    /// Whether shutting down
+    pub shutting_down: bool,
+}
+
+/// Maintenance snapshot
+#[derive(Debug, Clone)]
+pub struct MaintenanceSnapshot {
+    /// Maintenance cycles total
+    pub cycles_total: u64,
+    /// Whether maintenance is running
+    pub running: bool,
+}
+
+/// Build Prometheus metrics string
+#[allow(clippy::too_many_arguments)]
+pub fn build_prometheus_metrics(
     snapshot: &MetricsSnapshot,
     gauges: &RuntimeGaugeSnapshot,
     breaker_snapshot: &HashMap<String, CircuitBreakerSnapshot>,
@@ -150,6 +291,8 @@ fn build_prometheus_metrics(
     maintenance: &MaintenanceSnapshot,
 ) -> String {
     let mut lines = Vec::new();
+
+    // Counter metrics
     push_scalar_metric(
         &mut lines,
         "acp_chat_requests_total",
@@ -171,188 +314,8 @@ fn build_prometheus_metrics(
         "Total cache hits served",
         snapshot.cache_hit_total,
     );
-    push_scalar_metric(
-        &mut lines,
-        "acp_cache_store_total",
-        "counter",
-        "Total cache writes performed",
-        snapshot.cache_store_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_vector_search_total",
-        "counter",
-        "Total vector searches performed",
-        snapshot.vector_search_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_vector_hit_total",
-        "counter",
-        "Total vector retrieval hits",
-        snapshot.vector_hit_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_vector_store_total",
-        "counter",
-        "Total vector memory writes",
-        snapshot.vector_store_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_summary_read_total",
-        "counter",
-        "Total summary memory reads",
-        snapshot.summary_read_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_summary_hit_total",
-        "counter",
-        "Total summary memory hits",
-        snapshot.summary_hit_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_summary_store_total",
-        "counter",
-        "Total summary memory writes",
-        snapshot.summary_store_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_agent_failures_total",
-        "counter",
-        "Total agent execution failures",
-        snapshot.agent_failures_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_agent_timeout_failures_total",
-        "counter",
-        "Total agent timeout failures",
-        snapshot.agent_timeout_failures_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_agent_panic_failures_total",
-        "counter",
-        "Total agent panic failures",
-        snapshot.agent_panic_failures_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_agent_other_failures_total",
-        "counter",
-        "Total uncategorized agent failures",
-        snapshot.agent_other_failures_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_review_gate_total",
-        "counter",
-        "Total review gate evaluations",
-        snapshot.review_gate_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_review_gate_approved_total",
-        "counter",
-        "Total review gate approvals",
-        snapshot.review_gate_approved_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_review_gate_rejected_total",
-        "counter",
-        "Total review gate rejections",
-        snapshot.review_gate_rejected_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_review_gate_timeout_total",
-        "counter",
-        "Total review gate deadline timeouts",
-        snapshot.review_gate_timeout_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_review_gate_degraded_total",
-        "counter",
-        "Total review gate approvals degraded after timeout",
-        snapshot.review_gate_degraded_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_review_gate_invalid_response_total",
-        "counter",
-        "Total invalid review gate responses",
-        snapshot.review_gate_invalid_response_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_lazy_blue5_doc_lookup_total",
-        "counter",
-        "Total BLUE5 document lazy-load lookups",
-        snapshot.lazy_blue5_doc_lookup_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_lazy_blue5_doc_hit_total",
-        "counter",
-        "Total BLUE5 document lazy-load cache hits",
-        snapshot.lazy_blue5_doc_hit_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_lazy_blue5_doc_reload_total",
-        "counter",
-        "Total BLUE5 document lazy-load reloads",
-        snapshot.lazy_blue5_doc_reload_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_lazy_app_config_lookup_total",
-        "counter",
-        "Total app config lazy-load lookups",
-        snapshot.lazy_app_config_lookup_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_lazy_app_config_hit_total",
-        "counter",
-        "Total app config lazy-load cache hits",
-        snapshot.lazy_app_config_hit_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_lazy_app_config_reload_total",
-        "counter",
-        "Total app config lazy-load reloads",
-        snapshot.lazy_app_config_reload_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_lazy_clarification_lookup_total",
-        "counter",
-        "Total clarification artifact lazy-load lookups",
-        snapshot.lazy_clarification_lookup_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_lazy_clarification_hit_total",
-        "counter",
-        "Total clarification artifact lazy-load cache hits",
-        snapshot.lazy_clarification_hit_total,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_lazy_clarification_reload_total",
-        "counter",
-        "Total clarification artifact lazy-load reloads",
-        snapshot.lazy_clarification_reload_total,
-    );
+
+    // Gauge metrics
     push_scalar_metric(
         &mut lines,
         "acp_memory_cache_entries",
@@ -367,48 +330,8 @@ fn build_prometheus_metrics(
         "Current SQLite cache entries",
         gauges.sqlite_cache_entries,
     );
-    push_scalar_metric(
-        &mut lines,
-        "acp_vector_memory_entries",
-        "gauge",
-        "Current vector memory entries",
-        gauges.vector_memory_entries,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_vector_summary_entries",
-        "gauge",
-        "Current vector summary entries",
-        gauges.vector_summary_entries,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_circuit_open_agents",
-        "gauge",
-        "Current open circuit breaker agents",
-        gauges.circuit_open_agents,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_circuit_half_open_agents",
-        "gauge",
-        "Current half-open circuit breaker agents",
-        gauges.circuit_half_open_agents,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_circuit_tracked_agents",
-        "gauge",
-        "Current tracked circuit breaker agents",
-        gauges.circuit_tracked_agents,
-    );
-    push_scalar_metric(
-        &mut lines,
-        "acp_rate_limiter_tracked_phases",
-        "gauge",
-        "Current tracked phases with rate limiter state",
-        gauges.rate_limiter_tracked_phases,
-    );
+
+    // Lifecycle metrics
     push_scalar_metric(
         &mut lines,
         "acp_lifecycle_shutting_down",
@@ -416,6 +339,8 @@ fn build_prometheus_metrics(
         "Whether the ACP server is shutting down",
         if lifecycle.shutting_down { 1 } else { 0 },
     );
+
+    // Maintenance metrics
     push_scalar_metric(
         &mut lines,
         "acp_maintenance_cycles_total",
@@ -423,14 +348,8 @@ fn build_prometheus_metrics(
         "Total maintenance cycles executed",
         maintenance.cycles_total,
     );
-    push_scalar_metric(
-        &mut lines,
-        "acp_maintenance_running",
-        "gauge",
-        "Whether a maintenance cycle is currently running",
-        if maintenance.running { 1 } else { 0 },
-    );
 
+    // In-flight requests
     push_metric_header(
         &mut lines,
         "acp_inflight_requests",
@@ -449,6 +368,7 @@ fn build_prometheus_metrics(
         ));
     }
 
+    // Phase rate limiter
     push_metric_header(
         &mut lines,
         "acp_phase_rate_limiter_tokens",
@@ -473,6 +393,7 @@ fn build_prometheus_metrics(
         ));
     }
 
+    // Circuit breaker state
     push_metric_header(
         &mut lines,
         "acp_circuit_breaker_state",
@@ -500,25 +421,13 @@ fn build_prometheus_metrics(
         ));
     }
 
+    // Histograms
     lines.extend(histogram_prometheus_lines(
         "acp_chat_latency_seconds",
         snapshot.chat_latency_count,
         snapshot.chat_latency_sum_seconds,
         &snapshot.chat_latency_bucket_counts,
     ));
-    lines.extend(histogram_prometheus_lines(
-        "acp_agent_latency_seconds",
-        snapshot.agent_latency_count,
-        snapshot.agent_latency_sum_seconds,
-        &snapshot.agent_latency_bucket_counts,
-    ));
-    lines.extend(histogram_prometheus_lines(
-        "acp_review_latency_seconds",
-        snapshot.review_latency_count,
-        snapshot.review_latency_sum_seconds,
-        &snapshot.review_latency_bucket_counts,
-    ));
 
     lines.join("\n")
 }
-

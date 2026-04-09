@@ -1,4 +1,75 @@
-fn observe_latency_histogram(
+//! Conversation helper functions for ACP server
+//!
+//! This module provides utility functions for managing conversation state,
+//! latency monitoring, pipeline gates, and storage validation.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex as StdMutex;
+use std::time::Duration;
+
+use serde_json::{Map, Value};
+
+use crate::agent::Message;
+use crate::orchestration::task_router::{RoutingDecision, TaskCharacteristics};
+use crate::roles::AgentRole;
+
+/// Histogram bucket boundaries for latency monitoring (seconds)
+const HISTOGRAM_BUCKETS_SECONDS: [f64; 9] = [
+    0.001, // 1ms
+    0.005, // 5ms
+    0.01,  // 10ms
+    0.05,  // 50ms
+    0.1,   // 100ms
+    0.5,   // 500ms
+    1.0,   // 1s
+    5.0,   // 5s
+    10.0,  // 10s
+];
+
+/// Maximum checkpoints per conversation
+pub const MAX_CHECKPOINTS_PER_CONVERSATION: usize = 256;
+
+/// Maximum stream chunks
+pub const MAX_STREAM_CHUNKS: usize = 4_096;
+
+/// Maximum stream characters
+pub const MAX_STREAM_CHARS: usize = 256_000;
+
+/// Conversation state structure
+#[derive(Debug, Clone)]
+pub struct ConversationState {
+    /// Conversation ID
+    pub conversation_id: String,
+    /// Checkpoints in this conversation
+    pub checkpoints: Vec<crate::acp::ConversationCheckpoint>,
+    /// Branch heads mapping
+    pub branch_heads: HashMap<String, String>,
+    /// Last touched timestamp
+    pub last_touched_at: u64,
+}
+
+// Use the ConversationCheckpoint from prelude module
+
+/// Approval strategy enum
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalStrategy {
+    /// No approval required
+    None,
+    /// Single approval required
+    Single,
+    /// Dual approval required
+    Dual,
+}
+
+impl ApprovalStrategy {
+    /// Check if dual review is needed
+    pub fn needs_dual_review(&self) -> bool {
+        matches!(self, Self::Dual)
+    }
+}
+
+/// Observe latency in histogram
+pub fn observe_latency_histogram(
     duration: Duration,
     count: &mut u64,
     sum_seconds: &mut f64,
@@ -17,7 +88,8 @@ fn observe_latency_histogram(
     buckets[idx] = buckets[idx].saturating_add(1);
 }
 
-fn extract_task_description(messages: &[Message]) -> String {
+/// Extract task description from messages
+pub fn extract_task_description(messages: &[Message]) -> String {
     messages
         .iter()
         .rev()
@@ -29,7 +101,8 @@ fn extract_task_description(messages: &[Message]) -> String {
         .unwrap_or_else(|| "general task".to_string())
 }
 
-fn pipeline_gate_violation(
+/// Check for pipeline gate violations
+pub fn pipeline_gate_violation(
     analyzed_task: &TaskCharacteristics,
     routing: &RoutingDecision,
     approval_strategy: ApprovalStrategy,
@@ -62,7 +135,8 @@ fn pipeline_gate_violation(
     None
 }
 
-fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
+/// Touch conversation order (move to most recent)
+pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
     if let Ok(mut guard) = order.lock() {
         if let Some(position) = guard.iter().position(|item| item == conversation_id) {
             guard.remove(position);
@@ -71,7 +145,8 @@ fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str
     }
 }
 
-fn evict_oldest_conversation(
+/// Evict oldest conversation
+pub fn evict_oldest_conversation(
     store: &mut HashMap<String, ConversationState>,
     order: &StdMutex<Vec<String>>,
 ) -> Option<String> {
@@ -93,7 +168,8 @@ fn evict_oldest_conversation(
     oldest.and_then(|id| store.remove(&id).map(|_| id))
 }
 
-fn enforce_checkpoint_capacity(
+/// Enforce checkpoint capacity
+pub fn enforce_checkpoint_capacity(
     state: &mut ConversationState,
     incoming: usize,
     protected_checkpoint_id: Option<&str>,
@@ -127,7 +203,8 @@ fn enforce_checkpoint_capacity(
     repair_conversation_branch_heads(state);
 }
 
-fn stream_would_exceed_limits(
+/// Check if streaming would exceed limits
+pub fn stream_would_exceed_limits(
     current_chunks: usize,
     current_chars: usize,
     next_token_chars: usize,
@@ -136,41 +213,39 @@ fn stream_would_exceed_limits(
         || current_chars.saturating_add(next_token_chars) > MAX_STREAM_CHARS
 }
 
-fn validate_storage_key(
+/// Validate storage key
+pub fn validate_storage_key(
     value: &str,
     field: &str,
     max_len: usize,
 ) -> std::result::Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(crate::i18n::tf(
-            "error.storage_key_empty",
-            &[("field", field)],
-        ));
+        return Err(format!("{} cannot be empty", field));
     }
     if trimmed.len() > max_len {
-        return Err(crate::i18n::tf(
-            "error.storage_key_too_long",
-            &[("field", field), ("max_len", &max_len.to_string())],
-        ));
+        return Err(format!("{} exceeds maximum length of {}", field, max_len));
     }
     if !trimmed
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/'))
     {
         return Err(format!(
-            "{field} contains invalid characters; allowed: [A-Za-z0-9_.:/-]"
+            "{} contains invalid characters; allowed: [A-Za-z0-9_.:/-]",
+            field
         ));
     }
 
     Ok(trimmed.to_string())
 }
 
-fn checkpoint_message_chars(messages: &[Message]) -> usize {
+/// Calculate total characters in checkpoint messages
+pub fn checkpoint_message_chars(messages: &[Message]) -> usize {
     messages.iter().map(|msg| msg.content.chars().count()).sum()
 }
 
-fn repair_conversation_branch_heads(state: &mut ConversationState) {
+/// Repair conversation branch heads
+pub fn repair_conversation_branch_heads(state: &mut ConversationState) {
     let existing_ids = state
         .checkpoints
         .iter()
@@ -196,7 +271,8 @@ fn repair_conversation_branch_heads(state: &mut ConversationState) {
     state.branch_heads = repaired_heads;
 }
 
-fn branch_head_adjustment_counts(
+/// Calculate branch head adjustment counts
+pub fn branch_head_adjustment_counts(
     before: &HashMap<String, String>,
     after: &HashMap<String, String>,
 ) -> (usize, usize) {
@@ -213,18 +289,25 @@ fn branch_head_adjustment_counts(
     (repaired, dropped)
 }
 
-fn infer_pua_stage(event_type: &str, phase: &str) -> Option<String> {
+/// Infer PUA stage from event type and phase
+pub fn infer_pua_stage(event_type: &str, phase: &str) -> Option<String> {
     if event_type.starts_with("phase.") {
         return Some(phase.to_string());
     }
     None
 }
 
-fn normalize_trace_attributes(event_type: &str, phase: &str, status: &str, inputs: Value) -> Value {
+/// Normalize trace attributes
+pub fn normalize_trace_attributes(
+    event_type: &str,
+    phase: &str,
+    status: &str,
+    inputs: Value,
+) -> Value {
     let mut attrs = match inputs {
         Value::Object(map) => map,
         other => {
-            let mut map = serde_json::Map::new();
+            let mut map = Map::new();
             map.insert("payload".to_string(), other);
             map
         }
@@ -252,4 +335,3 @@ fn normalize_trace_attributes(event_type: &str, phase: &str, status: &str, input
 
     Value::Object(attrs)
 }
-

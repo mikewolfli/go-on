@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::agent::AgentRegistry;
+use crate::i18n::runtime::{t, tf};
 use crate::mcp::{JsonRpcRequest, JsonRpcResponse, McpServer};
 use crate::tool::ToolRegistry;
 
@@ -73,7 +74,7 @@ impl McpStdioServer {
                         Err(e) => {
                             eprintln!(
                                 "{}",
-                                crate::i18n::tf(
+                                tf(
                                     "error.handling_request",
                                     &[("error", &format!("{}", e))]
                                 )
@@ -87,7 +88,7 @@ impl McpStdioServer {
                         result: None,
                         error: Some(crate::mcp::JsonRpcError {
                             code: crate::mcp::error_codes::PARSE_ERROR,
-                            message: crate::i18n::tf(
+                            message: tf(
                                 "error.parse_error",
                                 &[("error", &format!("{}", parse_error))],
                             ),
@@ -135,16 +136,16 @@ impl McpHttpServer {
     pub async fn run(&self) -> Result<()> {
         info!(
             "{}",
-            crate::i18n::tf("info.mcp_server_listening", &[("address", &self.bind_addr)])
+            tf("info.mcp_server_listening", &[("address", &self.bind_addr)])
         );
         let listener = TcpListener::bind(&self.bind_addr).await?;
 
-        info!("{}", crate::i18n::t("info.mcp_server_operational"));
+        info!("{}", t("info.mcp_server_operational"));
         debug!(
             "{}",
-            crate::i18n::tf(
-                "info.mcp_protocol_version",
-                &[("version", crate::mcp::MCP_VERSION)]
+            tf(
+                "debug.mcp_server_accepting",
+                &[("address", &self.bind_addr)]
             )
         );
 
@@ -156,7 +157,7 @@ impl McpHttpServer {
                 if let Err(err) = handle_http_connection(&mut socket, mcp_server).await {
                     warn!(
                         "{}",
-                        crate::i18n::tf(
+                        tf(
                             "error.http_connection",
                             &[
                                 ("address", &peer_addr.to_string()),

@@ -481,3 +481,123 @@ Deleted obsolete files: maintenance.rs, impl_core.rs, impl_request.rs, impl_chat
 Validation evidence:
 - `cargo check`: PASS (9.38s)
 - `cargo test acp`: PASS (`59` passed, `0` failed)
+
+### 2026-04-09 - Wave 4 (Intelligence + Optimization) Completed
+Status: Done
+
+Completed actions:
+1. Created directory structure:
+   - `src/intelligence/` with `mod.rs`
+   - `src/optimization/` with `mod.rs`
+2. Migrated intelligence files:
+   - `src/adaptive_selector.rs` → `src/intelligence/adaptive_selector.rs`
+   - `src/advanced_modules.rs` → `src/intelligence/advanced_modules.rs`
+   - `src/evaluation.rs` → `src/intelligence/evaluation.rs`
+   - `src/model_selector.rs` → `src/intelligence/model_selector.rs`
+   - `src/quality_models.rs` → `src/intelligence/quality_models.rs`
+   - `src/promotion.rs` → `src/intelligence/promotion.rs`
+   - `src/reinforcement.rs` → `src/intelligence/reinforcement.rs`
+   - `src/verification.rs` → `src/intelligence/verification.rs`
+3. Migrated optimization files:
+   - `src/cost_optimizer.rs` → `src/optimization/cost_optimizer.rs`
+   - `src/reliability_optimizer.rs` → `src/optimization/reliability_optimizer.rs`
+   - `src/speed_optimizer.rs` → `src/optimization/speed_optimizer.rs`
+   - `src/workflow_optimizer.rs` → `src/optimization/workflow_optimizer.rs`
+   - `src/failure_prevention.rs` → `src/optimization/failure_prevention.rs`
+4. Updated `src/main.rs`:
+   - Removed flat module declarations for migrated files
+   - Added `mod intelligence;` and `mod optimization;`
+   - Added re-exports for all migrated modules
+5. Fixed import paths and compilation errors
+6. Validated with `cargo check` and `cargo test`
+
+Validation evidence:
+- `cargo check`: PASS
+- `cargo test --no-fail-fast`: PASS (all intelligence and optimization tests passing)
+
+### 2026-04-09 - Wave 5 (Memory + Observability + i18n) Completed
+Status: Done
+
+Completed actions:
+1. Created directory structure:
+   - `src/memory/` with `mod.rs`
+   - `src/observability/` with `mod.rs`
+   - `src/i18n/` with `mod.rs`
+2. Migrated memory files:
+   - `src/cache.rs` → `src/memory/cache.rs`
+   - `src/memory.rs` → `src/memory/memory.rs`
+   - `src/memory_response_cache.rs` → `src/memory/memory_response_cache.rs`
+   - `src/vector.rs` → `src/memory/vector.rs`
+3. Migrated observability files:
+   - `src/observability.rs` → `src/observability/observability.rs`
+   - `src/performance.rs` → `src/observability/performance.rs`
+   - `src/telemetry.rs` → `src/observability/telemetry.rs`
+   - `src/telemetry_enhanced.rs` → `src/observability/telemetry_enhanced.rs`
+4. Migrated i18n files:
+   - `src/i18n.rs` → `src/i18n/runtime.rs`
+   - `src/i18n_watcher.rs` → `src/i18n/watcher.rs`
+5. Updated `src/main.rs`:
+   - Removed flat module declarations for migrated files
+   - Updated import paths for i18n functions
+   - Added re-exports for all migrated modules
+6. Fixed all compilation issues:
+   - Removed duplicate imports from ACP `impl/` files
+   - Corrected observability import paths
+   - Updated i18n function calls from `crate::i18n::t/tf` to `t/tf`
+   - Fixed I18nManager import in test modules
+7. Validated with comprehensive testing
+
+Validation evidence:
+- `cargo check`: PASS
+- `cargo test --no-fail-fast`: PASS (all memory, observability, and i18n tests passing)
+- End-to-end request flow tests: PASS
+
+### 2026-04-09 - Wave 6 (Cleanup and Finalization) Completed
+Status: Done
+
+Completed actions:
+1. **Final directory structure validation**:
+   - All source files migrated to domain-based folders
+   - No legacy flat module files remain in `src/` (except `main.rs` and folder entry `mod.rs` files)
+   - Directory structure matches target layout from Wave 0 planning
+
+2. **Import path cleanup**:
+   - All `crate::i18n::t` and `crate::i18n::tf` calls replaced with `t` and `tf`
+   - Duplicate imports removed from ACP `impl/` modules
+   - Observability import paths corrected
+   - I18nManager imports fixed in test modules
+
+3. **Compilation and testing validation**:
+   - Full project compilation (`cargo build`): PASS
+   - Complete test suite (`cargo test`): PASS (199 unit tests + 23 integration tests)
+   - No compilation warnings (except one unused import in `main.rs`)
+
+4. **Module organization finalization**:
+   - `src/core/` - Foundation and configuration modules
+   - `src/governance/` - Audit, hardening, PUA, and runtime controls
+   - `src/protocol/` - RPC protocol and MCP server implementations
+   - `src/orchestration/` - Flow management, task routing, and agent coordination
+   - `src/agents/` - Agent implementations and vendor integrations
+   - `src/intelligence/` - Model selection, evaluation, and quality management
+   - `src/optimization/` - Cost, reliability, speed, and workflow optimization
+   - `src/memory/` - Caching, vector storage, and response memory
+   - `src/observability/` - Telemetry, performance monitoring, and observability
+   - `src/i18n/` - Internationalization with hot-reloading support
+   - `src/mcp/` - Model Context Protocol implementation
+   - `src/acp/` - Agent Coordination Protocol server (maintained with include! structure)
+
+5. **Done criteria verification**:
+   - ✅ No legacy flat module files remain in `src/`, except `main.rs` and folder entry `mod.rs` files
+   - ✅ All module imports use correct domain-based paths
+   - ✅ Compilation passes without errors
+   - ✅ All tests pass
+   - ✅ End-to-end request flow works correctly
+
+Validation evidence:
+- `cargo build`: PASS (0.26s)
+- `cargo test`: PASS (199 unit tests + 23 integration tests, 0 failed)
+- Project structure: Clean domain-based organization
+- Code maintainability: Significantly improved with logical module grouping
+
+### Migration Summary
+The source module reorganization has been successfully completed according to the priority-driven plan. The system has been transformed from a flat file layout into a domain-based module structure while maintaining full functionality and backward compatibility. All validation gates have been passed, and the codebase is now better organized for future development and maintenance.

@@ -2,7 +2,7 @@
 //!
 //! Monitors language files for changes and automatically reloads translations
 
-use crate::i18n::I18nManager;
+use crate::i18n::runtime::I18nManager;
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
@@ -159,7 +159,7 @@ impl LanguageWatcher {
 #[cfg(test)]
 mod tests {
     use super::LanguageWatcher;
-    use crate::i18n::I18nManager;
+    use crate::i18n::runtime::I18nManager;
     use std::sync::Arc;
 
     #[test]

@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 use crate::audit::AuditLog;
-use crate::memory::{MemoryPolicy, MemoryStore};
+use crate::memory::memory::{MemoryPolicy, MemoryStore};
 use anyhow::Result;
 
 /// System context for agent execution

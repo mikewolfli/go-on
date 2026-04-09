@@ -1,29 +1,43 @@
-fn extra_u64(options: Option<&PhaseOptions>, key: &str) -> Option<u64> {
+//! Miscellaneous helper functions for ACP server
+//!
+//! This module contains various utility functions that don't fit neatly into
+//! other helper categories but are used throughout the ACP server implementation.
+
+use crate::config::PhaseOptions;
+use serde_json::Value;
+use std::path::PathBuf;
+
+/// Extract u64 value from PhaseOptions extra field
+pub fn extra_u64(options: Option<&PhaseOptions>, key: &str) -> Option<u64> {
     options
         .and_then(|opts| opts.extra.get(key))
         .and_then(|v| v.as_u64())
 }
 
-fn extra_f64(options: Option<&PhaseOptions>, key: &str) -> Option<f64> {
+/// Extract f64 value from PhaseOptions extra field
+pub fn extra_f64(options: Option<&PhaseOptions>, key: &str) -> Option<f64> {
     options
         .and_then(|opts| opts.extra.get(key))
         .and_then(|v| v.as_f64())
 }
 
-fn extra_string(options: Option<&PhaseOptions>, key: &str) -> Option<String> {
+/// Extract string value from PhaseOptions extra field
+pub fn extra_string(options: Option<&PhaseOptions>, key: &str) -> Option<String> {
     options
         .and_then(|opts| opts.extra.get(key))
         .and_then(|v| v.as_str())
         .map(|v| v.to_string())
 }
 
-fn extra_bool(options: Option<&PhaseOptions>, key: &str) -> Option<bool> {
+/// Extract bool value from PhaseOptions extra field
+pub fn extra_bool(options: Option<&PhaseOptions>, key: &str) -> Option<bool> {
     options
         .and_then(|opts| opts.extra.get(key))
         .and_then(|v| v.as_bool())
 }
 
-fn extra_string_list(options: Option<&PhaseOptions>, key: &str) -> Option<Vec<String>> {
+/// Extract string list from PhaseOptions extra field
+pub fn extra_string_list(options: Option<&PhaseOptions>, key: &str) -> Option<Vec<String>> {
     options
         .and_then(|opts| opts.extra.get(key))
         .and_then(|v| v.as_array())
@@ -35,7 +49,8 @@ fn extra_string_list(options: Option<&PhaseOptions>, key: &str) -> Option<Vec<St
         })
 }
 
-fn percentile(samples: &[u64], percentile: f64) -> u64 {
+/// Calculate percentile value from a sorted slice of u64 samples
+pub fn percentile(samples: &[u64], percentile: f64) -> u64 {
     if samples.is_empty() {
         return 0;
     }
@@ -44,23 +59,34 @@ fn percentile(samples: &[u64], percentile: f64) -> u64 {
     samples[rank]
 }
 
+/// Decision structure for requirement gate evaluation
 #[derive(Debug, Clone)]
-struct RequirementGateDecision {
-    blocked: bool,
-    reason: Option<String>,
-    missing_fields: Vec<String>,
-    clarification_artifact_path: Option<PathBuf>,
-    governance_artifact_path: PathBuf,
+pub struct RequirementGateDecision {
+    /// Whether the request is blocked
+    pub blocked: bool,
+    /// Reason for blocking (if blocked)
+    pub reason: Option<String>,
+    /// Missing required fields
+    pub missing_fields: Vec<String>,
+    /// Path to clarification artifact (if needed)
+    pub clarification_artifact_path: Option<PathBuf>,
+    /// Path to governance artifact
+    pub governance_artifact_path: PathBuf,
 }
 
+/// Metrics for learning clarification process
 #[derive(Debug, Clone, Copy)]
-struct LearningClarificationMetrics {
-    rounds: u32,
-    quality_score: f64,
-    requirement_change_count: u32,
+pub struct LearningClarificationMetrics {
+    /// Number of clarification rounds
+    pub rounds: u32,
+    /// Quality score (0.0-1.0)
+    pub quality_score: f64,
+    /// Number of requirement changes
+    pub requirement_change_count: u32,
 }
 
-fn parse_string_list(value: Option<&Value>) -> Vec<String> {
+/// Parse a string list from JSON Value
+pub fn parse_string_list(value: Option<&Value>) -> Vec<String> {
     value
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -72,4 +98,3 @@ fn parse_string_list(value: Option<&Value>) -> Vec<String> {
         })
         .unwrap_or_default()
 }
-
