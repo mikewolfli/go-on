@@ -60,6 +60,8 @@
     "error.request_handling_panic": "请求处理异常: {error}",
     "error.unknown_mcp_adapter_tool": "未知的 MCP 适配器工具: {tool_name}",
     "error.review_gate_failed": "审阅门失败: {error}",
+    "error.review_timeout": "审阅代理 '{reviewer}' 超时",
+    "error.reviewer_not_found": "审阅代理 '{reviewer}' 未在代理注册表中找到",
     "error.invalid_messages_payload": "无效的消息负载: {error}",
     "error.invalid_chat_params": "无效的聊天参数: {error}",
     "error.pipeline_gate_blocked": "流水线门阻止了执行: {reason}",
@@ -72,6 +74,7 @@
 
     "warning.failed_persist_checkpoint": "持久化检查点摘要失败: {error}",
     "warning.failed_save_autotune": "保存自动调优状态失败: {error}",
+    "warning.review_timeout_continue": "审阅代理超时；在降级策略下继续执行",
     "warning.failed_persist_autotune": "持久化自动调优状态失败: {error}",
 
     "info.mcp_server_listening": "MCP HTTP 服务器正在监听 {address}",
@@ -100,6 +103,8 @@
     "warning.model_unreliable": "所选模型的成功率较低",
     "warning.high_risk_task": "任务涉及高风险操作",
     "warning.invalid_value": "无效值。允许的值: {allowed}",
+
+    "review.request_prompt": "请审阅以上内容，如果同意请回复 APPROVE，如果不同意请回复 REJECT 并说明原因。",
 
     "router.task_complexity": "任务复杂度",
     "router.required_roles": "所需角色",

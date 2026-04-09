@@ -5,7 +5,7 @@
 //! modular ACP implementation.
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -113,6 +113,10 @@ pub struct MetricsSnapshot {
     pub failed_requests: u64,
     /// Average request duration in milliseconds
     pub avg_request_duration_ms: f64,
+    /// Cumulative request duration in milliseconds
+    pub request_latency_sum_ms: f64,
+    /// Request latency histogram bucket counts (ms buckets +Inf)
+    pub request_latency_bucket_counts: [u64; 10],
     /// Current active requests
     pub active_requests: u32,
     /// Cache hit rate (0.0 to 1.0)
@@ -125,8 +129,16 @@ pub struct MetricsSnapshot {
     pub cpu_usage_percent: f64,
     /// Total chat requests
     pub chat_requests_total: u64,
+    /// Cumulative chat duration in milliseconds
+    pub chat_latency_sum_ms: f64,
+    /// Chat latency histogram bucket counts (ms buckets +Inf)
+    pub chat_latency_bucket_counts: [u64; 10],
     /// Review gate invocations
     pub review_gate_total: u64,
+    /// Cumulative review-gate duration in milliseconds
+    pub review_latency_sum_ms: f64,
+    /// Review latency histogram bucket counts (ms buckets +Inf)
+    pub review_latency_bucket_counts: [u64; 10],
     /// Review gate approved count
     pub review_gate_approved_total: u64,
     /// Review gate rejected count
@@ -553,6 +565,35 @@ impl CircuitBreakerRegistry {
         }
     }
 
+    /// Reset one circuit breaker or all tracked breakers back to closed state.
+    pub fn reset(&self, name: Option<&str>) -> usize {
+        let Ok(mut guard) = self.inner.lock() else {
+            return 0;
+        };
+
+        let reset_state = |state: &mut CircuitBreakerState| {
+            state.stage = CircuitBreakerStage::Closed;
+            state.failure_count = 0;
+            state.success_count = 0;
+            state.last_state_change = now_ts();
+            state.open_until = None;
+        };
+
+        if let Some(name) = name {
+            if let Some(state) = guard.get_mut(name) {
+                reset_state(state);
+                return 1;
+            }
+            return 0;
+        }
+
+        let count = guard.len();
+        for state in guard.values_mut() {
+            reset_state(state);
+        }
+        count
+    }
+
     /// Check if circuit breakers are healthy
     pub fn is_healthy(&self) -> bool {
         self.open_count() == 0
@@ -955,6 +996,17 @@ pub struct RuntimeMetrics {
     inner: StdMutex<MetricsSnapshot>,
 }
 
+const METRIC_LATENCY_BUCKETS_MS: [f64; 9] = [1.0, 5.0, 10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0];
+
+fn latency_bucket_index_ms(duration_ms: f64) -> usize {
+    for (idx, boundary) in METRIC_LATENCY_BUCKETS_MS.iter().enumerate() {
+        if duration_ms <= *boundary {
+            return idx;
+        }
+    }
+    METRIC_LATENCY_BUCKETS_MS.len()
+}
+
 impl RuntimeMetrics {
     /// Create new runtime metrics
     pub fn new() -> Self {
@@ -1042,8 +1094,11 @@ impl RuntimeMetrics {
     pub fn update_avg_duration(&self, duration_ms: f64) {
         if let Ok(mut guard) = self.inner.lock() {
             let total = guard.total_requests as f64;
-            guard.avg_request_duration_ms =
-                (guard.avg_request_duration_ms * (total - 1.0) + duration_ms) / total;
+            guard.avg_request_duration_ms = if total <= 1.0 {
+                duration_ms
+            } else {
+                (guard.avg_request_duration_ms * (total - 1.0) + duration_ms) / total
+            };
         }
     }
 
@@ -1096,16 +1151,103 @@ impl RuntimeMetrics {
         }
     }
 
+    /// Record one ACP request outcome with duration.
+    pub fn record_request_outcome(&self, success: bool, duration_ms: f64) {
+        if let Ok(mut guard) = self.inner.lock() {
+            if success {
+                guard.successful_requests += 1;
+            } else {
+                guard.failed_requests += 1;
+            }
+            guard.total_requests += 1;
+
+            let duration_ms = duration_ms.max(0.0);
+            guard.request_latency_sum_ms += duration_ms;
+            let bucket_idx = latency_bucket_index_ms(duration_ms);
+            guard.request_latency_bucket_counts[bucket_idx] =
+                guard.request_latency_bucket_counts[bucket_idx].saturating_add(1);
+            guard.avg_request_duration_ms = if guard.total_requests == 0 {
+                0.0
+            } else {
+                guard.request_latency_sum_ms / guard.total_requests as f64
+            };
+        }
+    }
+
+    /// Record chat latency.
+    pub fn record_chat_latency(&self, duration_ms: f64) {
+        if let Ok(mut guard) = self.inner.lock() {
+            let duration_ms = duration_ms.max(0.0);
+            guard.chat_requests_total += 1;
+            guard.chat_latency_sum_ms += duration_ms;
+            let bucket_idx = latency_bucket_index_ms(duration_ms);
+            guard.chat_latency_bucket_counts[bucket_idx] =
+                guard.chat_latency_bucket_counts[bucket_idx].saturating_add(1);
+        }
+    }
+
+    /// Record review gate latency.
+    pub fn record_review_latency(&self, duration_ms: f64) {
+        if let Ok(mut guard) = self.inner.lock() {
+            let duration_ms = duration_ms.max(0.0);
+            guard.review_latency_sum_ms += duration_ms;
+            let bucket_idx = latency_bucket_index_ms(duration_ms);
+            guard.review_latency_bucket_counts[bucket_idx] =
+                guard.review_latency_bucket_counts[bucket_idx].saturating_add(1);
+        }
+    }
+
     pub fn snapshot(&self) -> MetricsSnapshot {
         self.inner
             .lock()
             .map(|guard| guard.clone())
             .unwrap_or_default()
     }
+
+    /// Reset all collected runtime metrics.
+    pub fn reset_all(&self) {
+        if let Ok(mut guard) = self.inner.lock() {
+            *guard = MetricsSnapshot::default();
+        }
+    }
 }
 
 impl Default for RuntimeMetrics {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeMetrics;
+
+    #[test]
+    fn runtime_metrics_records_request_latency_and_outcomes() {
+        let metrics = RuntimeMetrics::new();
+        metrics.record_request_outcome(true, 12.0);
+        metrics.record_request_outcome(false, 24.0);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.total_requests, 2);
+        assert_eq!(snapshot.successful_requests, 1);
+        assert_eq!(snapshot.failed_requests, 1);
+        assert_eq!(snapshot.request_latency_sum_ms, 36.0);
+        assert_eq!(snapshot.avg_request_duration_ms, 18.0);
+        assert_eq!(snapshot.request_latency_bucket_counts[3], 2); // <= 50ms
+    }
+
+    #[test]
+    fn runtime_metrics_records_chat_and_review_latency_buckets() {
+        let metrics = RuntimeMetrics::new();
+        metrics.record_chat_latency(3.0);
+        metrics.record_review_latency(5001.0);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.chat_requests_total, 1);
+        assert_eq!(snapshot.chat_latency_sum_ms, 3.0);
+        assert_eq!(snapshot.chat_latency_bucket_counts[1], 1); // <= 5ms
+        assert_eq!(snapshot.review_latency_sum_ms, 5001.0);
+        assert_eq!(snapshot.review_latency_bucket_counts[8], 1); // <= 10000ms
     }
 }

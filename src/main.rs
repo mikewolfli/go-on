@@ -638,6 +638,7 @@ async fn run() -> Result<()> {
         autotune_state,
         autotune_config,
         autotune_state_path,
+        Some(config_path.to_string_lossy().to_string()),
         runtime_config,
         Some(http_client),
         cli.verbose,

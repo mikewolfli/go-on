@@ -5,6 +5,8 @@
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -103,19 +105,33 @@ pub async fn cache_clear(
 /// Get cache statistics
 ///
 /// This function replaces the `AcpServer::cache_stats` method.
-/// TODO: Implement proper cache stats - ResponseCache doesn't have stats() method
 pub async fn cache_stats(
     _server: &AcpServer,
-    _cache: Arc<ResponseCache>,
+    cache: Arc<ResponseCache>,
 ) -> Result<CacheStats> {
-    // TODO: Implement proper cache statistics
-    // For now, return default stats
+    let snapshot = spawn_blocking(move || cache.stats())
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "{}",
+                tf(
+                    "error.task_join",
+                    &[("task", "cache_stats"), ("error", &format!("{}", e))]
+                )
+            )
+        })??;
+
+    let total_size = snapshot.entry_count as usize;
+    let max_size = snapshot.max_entries.max(1);
+    let utilization = (total_size as f64 / max_size as f64).clamp(0.0, 1.0);
+    let total_hits = snapshot.total_hits.min(u32::MAX as u64) as u32;
+
     Ok(CacheStats {
-        total_size: 0,
-        max_size: 0,
-        total_hits: 0,
-        avg_hits_per_entry: 0.0,
-        utilization: 0.0,
+        total_size,
+        max_size,
+        total_hits,
+        avg_hits_per_entry: snapshot.avg_hits_per_entry,
+        utilization,
     })
 }
 
@@ -126,11 +142,7 @@ pub fn persist_checkpoint_summary(
     server: &AcpServer,
     checkpoint: &crate::acp::prelude::ConversationCheckpoint,
 ) {
-    // This is a simplified implementation for migration
-    // In the original code, this creates a CheckpointSummaryArtifact
-    // and stores it in the artifact ledger
-
-    let _summary = crate::reinforcement::CheckpointSummaryArtifact {
+    let summary = crate::reinforcement::CheckpointSummaryArtifact {
         checkpoint_id: checkpoint.checkpoint_id.clone(),
         conversation_id: checkpoint.conversation_id.clone(),
         branch_id: checkpoint.branch_id.clone(),
@@ -138,16 +150,23 @@ pub fn persist_checkpoint_summary(
         created_at: checkpoint.created_at,
         note: checkpoint.note.clone(),
         message_count: checkpoint.messages.len(),
-        message_chars: 0, // Simplified for migration
+        message_chars: checkpoint
+            .messages
+            .iter()
+            .map(|message| message.content.chars().count())
+            .sum(),
         assistant_excerpt: None,
     };
 
-    // Store in artifact ledger if available
-    // Note: store_artifact method doesn't exist on ArtifactLedger
-    // This is simplified for migration
-    if let Ok(_ledger_guard) = server.artifact_ledger.lock() {
-        // Artifact ledger exists but store_artifact method not available
-        // This is a TODO for full migration
+    if let Ok(ledger) = server.artifact_ledger.lock() {
+        let dir = ledger.root().join("checkpoints");
+        let path = checkpoint_summary_path(&dir, &checkpoint.checkpoint_id);
+        if fs::create_dir_all(&dir).is_ok() {
+            let _ = fs::write(
+                path,
+                serde_json::to_vec_pretty(&summary).unwrap_or_default(),
+            );
+        }
     }
 }
 
@@ -156,18 +175,12 @@ pub fn persist_checkpoint_summary(
 /// This function replaces the `AcpServer::load_checkpoint_summary` method.
 pub fn load_checkpoint_summary(
     server: &AcpServer,
-    _checkpoint_id: &str,
+    checkpoint_id: &str,
 ) -> Option<crate::reinforcement::CheckpointSummaryArtifact> {
-    // This is a simplified implementation for migration
-    // In the original code, this loads from the artifact ledger
-
-    if let Ok(_ledger_guard) = server.artifact_ledger.lock() {
-        // get_artifact method doesn't exist on ArtifactLedger
-        // This is simplified for migration
-        None
-    } else {
-        None
-    }
+    let ledger = server.artifact_ledger.lock().ok()?;
+    let path = checkpoint_summary_path(&ledger.root().join("checkpoints"), checkpoint_id);
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 /// Save conversation state
@@ -175,12 +188,19 @@ pub fn load_checkpoint_summary(
 /// This function replaces the `AcpServer::save_conversation_state` method.
 pub fn save_conversation_state(
     _server: &AcpServer,
-    _conversation_id: &str,
-    _state: &crate::acp::helpers::conversation::ConversationState,
+    conversation_id: &str,
+    state: &crate::acp::helpers::conversation::ConversationState,
 ) -> Result<()> {
-    // This is a simplified implementation for migration
-    // In the original code, this would serialize and save the state
-
+    let root = _server
+        .artifact_ledger
+        .lock()
+        .map(|ledger| ledger.root().join("conversation-state"))
+        .unwrap_or_else(|_| PathBuf::from(".goon/conversation-state"));
+    fs::create_dir_all(&root)?;
+    fs::write(
+        root.join(format!("{}.json", conversation_id)),
+        serde_json::to_vec_pretty(state)?,
+    )?;
     Ok(())
 }
 
@@ -188,11 +208,18 @@ pub fn save_conversation_state(
 ///
 /// This function replaces the `AcpServer::load_conversation_state` method.
 pub fn load_conversation_state(
-    _server: &AcpServer,
-    _conversation_id: &str,
+    server: &AcpServer,
+    conversation_id: &str,
 ) -> Option<crate::acp::helpers::conversation::ConversationState> {
-    // This is a simplified implementation for migration
-    // In the original code, this would load and deserialize the state
+    let root = server
+        .artifact_ledger
+        .lock()
+        .map(|ledger| ledger.root().join("conversation-state"))
+        .ok()?;
+    let raw = fs::read_to_string(root.join(format!("{}.json", conversation_id))).ok()?;
+    serde_json::from_str(&raw).ok()
+}
 
-    None
+fn checkpoint_summary_path(root: &std::path::Path, checkpoint_id: &str) -> PathBuf {
+    root.join(format!("checkpoint-{}.json", checkpoint_id))
 }

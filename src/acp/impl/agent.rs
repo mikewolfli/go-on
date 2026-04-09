@@ -12,6 +12,7 @@ use anyhow::Result;
 use futures_util::future;
 use opentelemetry::Context as OtelContext;
 use serde_json::Value;
+use tokio::sync::mpsc;
 use tracing::info;
 
 use crate::acp::server::AcpServer;
@@ -37,7 +38,11 @@ impl ReviewTimeoutPolicy {
             .and_then(|opts| opts.review_timeout_seconds)
             .or_else(|| options.and_then(|opts| opts.request_timeout_seconds));
 
-        let fail_on_timeout = true; // Default to true since review_fail_on_timeout doesn't exist in PhaseOptions
+        let timeout_policy = options
+            .and_then(|opts| opts.extra.get("review_timeout_policy"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("reject");
+        let fail_on_timeout = !timeout_policy.eq_ignore_ascii_case("degrade_single");
 
         Self {
             timeout_seconds,
@@ -141,6 +146,12 @@ pub async fn run_dual_review_gate(
             ));
         }
 
+        let reviewer_timeout = phase_options
+            .and_then(|opts| opts.review_timeout_seconds)
+            .or_else(|| phase_options.and_then(|opts| opts.request_timeout_seconds))
+            .map(Duration::from_secs);
+        let reviewer_deadline = reviewer_timeout.map(|limit| Instant::now() + limit);
+
         // Run reviews in parallel
         let review_futures: Vec<_> = reviewers
             .iter()
@@ -153,7 +164,7 @@ pub async fn run_dual_review_gate(
                     phase_options,
                     review_span.as_ref(),
                     pipeline_trace,
-                    gate_deadline,
+                    reviewer_deadline,
                 )
             })
             .collect();
@@ -164,6 +175,7 @@ pub async fn run_dual_review_gate(
         let mut passed_count = 0;
         let mut all_comments = Vec::new();
         let mut final_reviewer = String::new();
+        let mut timeout_detected = false;
 
         for (i, result) in results.into_iter().enumerate() {
             match result {
@@ -177,6 +189,9 @@ pub async fn run_dual_review_gate(
                     }
                 }
                 Err(err) => {
+                    if err.to_string().to_ascii_lowercase().contains("timeout") {
+                        timeout_detected = true;
+                    }
                     info!("Reviewer {} failed: {}", reviewers[i], err);
                 }
             }
@@ -185,44 +200,88 @@ pub async fn run_dual_review_gate(
         // Determine final outcome
         let passed = passed_count >= 1; // At least one reviewer must pass
 
-        Ok(ReviewGateOutcome {
-            passed,
-            comments: all_comments,
-            reviewer: final_reviewer,
-            duration_ms: started.elapsed().as_millis() as u64,
-        })
+        Ok((
+            ReviewGateOutcome {
+                passed,
+                comments: all_comments,
+                reviewer: final_reviewer,
+                duration_ms: started.elapsed().as_millis() as u64,
+            },
+            timeout_detected,
+        ))
     }.await;
 
     // Handle timeout
     if let Some(deadline) = gate_deadline {
         if Instant::now() > deadline {
+            let timeout_duration_ms = started.elapsed().as_millis() as u64;
+            server.metrics.inc_review_gate_timeout();
+            server.metrics.record_review_latency(timeout_duration_ms as f64);
             if timeout_policy.fail_on_timeout {
+                server.metrics.inc_review_gate_rejected();
                 return Err(anyhow::anyhow!(
                     "{}",
                     tf("error.review_gate_timeout", &[])
                 ));
             } else {
-                // Return a neutral outcome on timeout when not failing
-                return Ok(ReviewGateOutcome {
-                    passed: true,
-                    comments: vec![tf("warning.review_timeout_continue", &[])],
-                    reviewer: "timeout".to_string(),
-                    duration_ms: started.elapsed().as_millis() as u64,
-                });
+                server.metrics.inc_review_gate_degraded();
+                match result {
+                    Ok((mut outcome, _timeout_detected)) => {
+                        outcome
+                            .comments
+                            .push(tf("warning.review_timeout_continue", &[]));
+                        if outcome.passed {
+                            server.metrics.inc_review_gate_approved();
+                        } else {
+                            server.metrics.inc_review_gate_rejected();
+                        }
+                        return Ok(outcome);
+                    }
+                    Err(_err) => {
+                        server.metrics.inc_review_gate_invalid_response();
+                        return Ok(ReviewGateOutcome {
+                            passed: true,
+                            comments: vec![tf("warning.review_timeout_continue", &[])],
+                            reviewer: "timeout".to_string(),
+                            duration_ms: timeout_duration_ms,
+                        });
+                    }
+                }
             }
         }
     }
 
-    result
+    match result {
+        Ok((outcome, timeout_detected)) => {
+            if timeout_detected {
+                server.metrics.inc_review_gate_timeout();
+                if !timeout_policy.fail_on_timeout {
+                    server.metrics.inc_review_gate_degraded();
+                }
+            }
+            server.metrics.record_review_latency(outcome.duration_ms as f64);
+            if outcome.passed {
+                server.metrics.inc_review_gate_approved();
+            } else {
+                server.metrics.inc_review_gate_rejected();
+            }
+            Ok(outcome)
+        }
+        Err(err) => {
+            server.metrics.inc_review_gate_invalid_response();
+            server.metrics.inc_review_gate_rejected();
+            Err(err)
+        }
+    }
 }
 
-/// Run single review
+/// Run single review by calling the reviewer agent and parsing its APPROVE/REJECT response.
 async fn run_single_review(
     server: &AcpServer,
     _id: Option<Value>,
-    _messages: &[Message],
+    messages: &[Message],
     reviewer: &str,
-    _phase_options: Option<&PhaseOptions>,
+    phase_options: Option<&PhaseOptions>,
     parent_span: Option<&OtelContext>,
     _pipeline_trace: &RequestTraceContext,
     deadline: Option<Instant>,
@@ -240,7 +299,7 @@ async fn run_single_review(
         ))
     });
 
-    // Check deadline
+    // Check deadline before starting to avoid unnecessary work
     if let Some(deadline) = deadline {
         if Instant::now() > deadline {
             return Err(anyhow::anyhow!(
@@ -250,19 +309,67 @@ async fn run_single_review(
         }
     }
 
-    // Simplified implementation for migration
-    // In the original code, this uses run_agent_collecting method
-    // For now, we'll use a simplified approach
+    // Look up reviewer agent from the registry
+    let (_, registry) = routing_handles(server)?;
+    let agent = registry
+        .get(reviewer)
+        .ok_or_else(|| anyhow::anyhow!("{}", tf("error.reviewer_not_found", &[("reviewer", reviewer)])))?;
 
-    // Simulate review outcome based on reviewer name
-    // This is a temporary implementation for migration
-    let passed = !reviewer.to_lowercase().contains("strict");
+    // Build review messages: copy the original conversation and append a review prompt
+    let mut review_messages = messages.to_vec();
+    review_messages.push(Message {
+        role: "user".to_string(),
+        content: tf("review.request_prompt", &[]),
+    });
 
-    let comments = if passed {
-        vec![format!("Reviewer {}: PASSED (simulated for migration)", reviewer)]
+    let agent_options = phase_options.and_then(|opts| opts.agent_options());
+
+    // Spawn and collect agent response, enforcing the reviewer deadline via tokio timeout
+    let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
+    let agent_clone = agent.clone();
+    let task = tokio::spawn(async move {
+        agent_clone.chat(review_messages, None, agent_options, sender).await
+    });
+
+    let response = if let Some(deadline) = deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let collect_fut = async move {
+            let mut resp = String::new();
+            while let Some(token) = receiver.recv().await {
+                resp.push_str(&token);
+            }
+            match task.await {
+                Ok(Ok(())) => Ok::<String, anyhow::Error>(resp),
+                Ok(Err(err)) => Err(err),
+                Err(join_err) => Err(anyhow::anyhow!("reviewer task panicked: {join_err}")),
+            }
+        };
+        match tokio::time::timeout(remaining, collect_fut).await {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(err)) => return Err(err),
+            Err(_elapsed) => {
+                return Err(anyhow::anyhow!(
+                    "{}",
+                    tf("error.review_timeout", &[("reviewer", reviewer)])
+                ));
+            }
+        }
     } else {
-        vec![format!("Reviewer {}: REJECTED - needs improvement (simulated for migration)", reviewer)]
+        let mut resp = String::new();
+        while let Some(token) = receiver.recv().await {
+            resp.push_str(&token);
+        }
+        match task.await {
+            Ok(Ok(())) => resp,
+            Ok(Err(err)) => return Err(err),
+            Err(join_err) => return Err(anyhow::anyhow!("reviewer task panicked: {join_err}")),
+        }
     };
+
+    // Parse reviewer response: APPROVE unless the response contains REJECT or DENIED
+    let upper = response.to_ascii_uppercase();
+    let passed = upper.contains("APPROVE") && !upper.contains("REJECT") && !upper.contains("DENIED");
+    let comments = vec![format!("{}: {}", reviewer, response.trim())];
 
     Ok(ReviewGateOutcome {
         passed,

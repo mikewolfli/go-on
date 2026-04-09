@@ -17,6 +17,19 @@ pub struct CachedResponse {
     pub agent_name: Option<String>,
 }
 
+/// Aggregated cache statistics snapshot.
+#[derive(Debug, Clone, Copy)]
+pub struct ResponseCacheStats {
+    /// Number of active cache entries.
+    pub entry_count: u64,
+    /// Configured maximum number of entries.
+    pub max_entries: usize,
+    /// Sum of all entry hit counters.
+    pub total_hits: u64,
+    /// Average hits per cached entry.
+    pub avg_hits_per_entry: f64,
+}
+
 /// SQLite-based response cache
 pub struct ResponseCache {
     /// SQLite connection (mutex-protected)
@@ -250,6 +263,35 @@ impl ResponseCache {
         })?;
         Ok(count.max(0) as u64)
     }
+
+    /// Get aggregate cache statistics used by ACP cache observability APIs.
+    pub fn stats(&self) -> Result<ResponseCacheStats> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'stats'"))?;
+
+        let (entry_count_raw, total_hits_raw) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+
+        let entry_count = entry_count_raw.max(0) as u64;
+        let total_hits = total_hits_raw.max(0) as u64;
+        let avg_hits_per_entry = if entry_count == 0 {
+            0.0
+        } else {
+            total_hits as f64 / entry_count as f64
+        };
+
+        Ok(ResponseCacheStats {
+            entry_count,
+            max_entries: self.max_entries,
+            total_hits,
+            avg_hits_per_entry,
+        })
+    }
 }
 
 fn now_ts() -> i64 {
@@ -279,5 +321,25 @@ mod tests {
         let entry = hit.expect("cache entry should exist");
         assert_eq!(entry.response_text, "cached response");
         assert_eq!(entry.agent_name.as_deref(), Some("deepseek"));
+    }
+
+    #[test]
+    fn cache_stats_reports_entries_and_hits() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = dir.path().join("cache.sqlite3");
+
+        let cache = ResponseCache::new(&db_path, 60, 10).expect("cache should initialize");
+        cache.put("k1", "r1", "agent", None).expect("cache put should succeed");
+        cache.put("k2", "r2", "agent", None).expect("cache put should succeed");
+
+        let _ = cache.get("k1").expect("cache get should succeed");
+        let _ = cache.get("k1").expect("cache get should succeed");
+        let _ = cache.get("k2").expect("cache get should succeed");
+
+        let stats = cache.stats().expect("cache stats should succeed");
+        assert_eq!(stats.entry_count, 2);
+        assert_eq!(stats.max_entries, 10);
+        assert_eq!(stats.total_hits, 3);
+        assert!((stats.avg_hits_per_entry - 1.5).abs() < f64::EPSILON);
     }
 }

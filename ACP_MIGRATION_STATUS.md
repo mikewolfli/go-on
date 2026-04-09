@@ -1,5 +1,35 @@
 # ACP Module Migration Status Report
 
+## 2026-04-09 Reality Snapshot (Supersedes Older Sections)
+
+This snapshot is the authoritative current status for ACP migration and blue6 implementation.
+
+- Status: ACP migration and runtime contract alignment are complete for current scope.
+- Compile gate: `cargo check --all` passed.
+- Integration gate: `cargo test --test acp_runtime_rpc_integration -- --nocapture` passed (23/23).
+- Full test gate: `cargo test --all -- --nocapture` passed.
+
+### Completed in this round
+
+- Request routing closure in ACP for runtime/control/workflow paths, including:
+   - `metrics.prometheus`, `metrics.reset`
+   - `breaker.status`, `breaker.reset`
+   - `cache.clear`
+   - `conversation.checkpoint.create|list|rollback|prune`
+   - `config.reload`
+   - `task.execute`
+   - `workflow.confirm|clarify|consult|execute`
+   - `learning.summary`, `primary_secondary.summary`
+- Runtime shutdown loop hardened to avoid shutdown-time hangs under integration harness.
+- Artifact ledger path isolation aligned to active config path to prevent cross-test state pollution.
+- Debug panel async lock panic fixed.
+- Prometheus review-gate counters exported for RPC contract assertions.
+
+### Remaining work classification
+
+- No blocking ACP runtime migration items remain for compile/test gates.
+- Any historical notes below that claim incomplete ACP migration should be treated as archived context.
+
 ## Overview
 This document summarizes the completed migration of the ACP module from `include!` macros to proper Rust module structure. The migration followed the plan outlined in `MIGRATE2.MD` and has been successfully completed.
 

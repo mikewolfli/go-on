@@ -6,6 +6,7 @@
 //! compatibility with the original implementation.
 
 use std::sync::{Arc, Mutex as StdMutex};
+use std::path::Path;
 
 use anyhow::Result;
 use reqwest;
@@ -44,6 +45,7 @@ pub fn new_acp_server(
     autotune: Option<Arc<tokio::sync::Mutex<AutoTuneState>>>,
     autotune_config: Option<AutoTuneConfig>,
     autotune_state_path: Option<String>,
+    config_path: Option<String>,
     runtime_config: RuntimeConfig,
     _http_client: Option<reqwest::Client>,
     _verbose: bool,
@@ -64,6 +66,10 @@ pub fn new_acp_server(
     if let Some(ref vector_store) = vector_store {
         builder = builder.with_vector_store(vector_store.clone());
     }
+    if let Some(ref path) = config_path {
+        builder = builder.with_artifact_ledger(ArtifactLedger::new(Some(Path::new(path))));
+    }
+    builder = builder.with_config_path(config_path.clone());
 
     // Note: ServerBuilder doesn't have methods for all parameters yet
     // For now, we'll build with defaults and let the caller set additional fields
@@ -74,6 +80,7 @@ pub fn new_acp_server(
             server.autotune = autotune;
             server.autotune_config = autotune_config;
             server.autotune_state_path = autotune_state_path;
+            server.config_path = config_path;
             server.runtime_config = runtime_config;
             server.verbose = _verbose;
 
@@ -99,6 +106,7 @@ pub fn new_acp_server(
                 autotune: autotune,
                 autotune_config: autotune_config,
                 autotune_state_path: autotune_state_path,
+                config_path: config_path.clone(),
                 runtime_config: runtime_config.clone(),
                 metrics: Arc::new(RuntimeMetrics::new()),
                 online_controller: Arc::new(StdMutex::new(OnlineControllerState::default())),
@@ -129,7 +137,9 @@ pub fn new_acp_server(
                     mandatory_evidence: Vec::new(),
                     stage_requirements: Vec::new(),
                 })),
-                artifact_ledger: Arc::new(StdMutex::new(ArtifactLedger::new(None))),
+                artifact_ledger: Arc::new(StdMutex::new(ArtifactLedger::new(
+                    config_path.as_deref().map(Path::new),
+                ))),
                 verbose: _verbose,
                 output: Arc::new(Mutex::new(tokio::io::stdout())),
                 shutdown_notify: Arc::new(Notify::new()),
@@ -157,7 +167,22 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
     let stdin = tokio::io::stdin();
     let mut lines = BufReader::new(stdin).lines();
 
-    while let Some(line) = lines.next_line().await? {
+    loop {
+        if server.shutdown_requested() {
+            break;
+        }
+
+        let next_line = tokio::select! {
+            _ = shutdown_notify.notified() => {
+                break;
+            }
+            line = lines.next_line() => line?,
+        };
+
+        let Some(line) = next_line else {
+            break;
+        };
+
         if server.shutdown_requested() {
             break;
         }
@@ -223,7 +248,11 @@ pub fn artifact_ledger(_server: &AcpServer) -> crate::reinforcement::ArtifactLed
         .artifact_ledger
         .lock()
         .map(|guard| guard.clone())
-        .unwrap_or_else(|_| crate::reinforcement::ArtifactLedger::new(None))
+        .unwrap_or_else(|_| {
+            crate::reinforcement::ArtifactLedger::new(
+                _server.config_path.as_deref().map(std::path::Path::new),
+            )
+        })
 }
 
 /// Get vector store handle

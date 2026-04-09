@@ -51,6 +51,8 @@ pub struct AcpServer {
     pub autotune_state_path: Option<String>,
     /// Runtime configuration
     pub runtime_config: RuntimeConfig,
+    /// Loaded config file path if available
+    pub config_path: Option<String>,
     /// Runtime metrics collection
     pub metrics: Arc<RuntimeMetrics>,
     /// Online controller for adaptive strategy from live outcomes
@@ -241,6 +243,7 @@ pub struct ServerBuilder {
     vector_store: Option<Arc<VectorStore>>,
     artifact_ledger: Option<ArtifactLedger>,
     memory_response_cache: Option<MemoryResponseCache>,
+    config_path: Option<String>,
     verbose: bool,
 }
 
@@ -254,8 +257,15 @@ impl ServerBuilder {
             vector_store: None,
             artifact_ledger: None,
             memory_response_cache: None,
+            config_path: None,
             verbose: false,
         }
+    }
+
+    /// Set config path
+    pub fn with_config_path(mut self, config_path: Option<String>) -> Self {
+        self.config_path = config_path;
+        self
     }
 
     /// Set the flow manager
@@ -363,6 +373,7 @@ impl ServerBuilder {
             autotune_config: None,
             autotune_state_path: None,
             runtime_config: RuntimeConfig::default(),
+            config_path: self.config_path,
             metrics,
             online_controller,
             circuit_breakers,

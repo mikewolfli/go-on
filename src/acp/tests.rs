@@ -97,16 +97,27 @@ mod tests {
     #[test]
     fn test_create_conversation_checkpoint() {
         let server = phase_inference_server("coding", &["coding", "review"]);
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let checkpoint = runtime
+            .block_on(crate::acp::r#impl::conversation::create_conversation_checkpoint(
+                &server,
+                "conv-test",
+                &crate::agent::Message {
+                    role: "user".to_string(),
+                    content: "Test message".to_string(),
+                },
+                Some("checkpoint note".to_string()),
+                Some("main".to_string()),
+            ))
+            .expect("checkpoint created");
 
-        // Create a test conversation
-        let _messages = vec![crate::agent::Message {
-            role: "user".to_string(),
-            content: "Test message".to_string(),
-        }];
+        assert_eq!(checkpoint.conversation_id, "conv-test");
+        assert_eq!(checkpoint.branch_id, "main");
+        assert_eq!(checkpoint.messages.len(), 1);
 
-        // Note: The actual implementation would use the conversation module
-        // This is a placeholder test
-        assert_eq!(server.total_requests(), 0);
+        let state = server.conversation_state.blocking_lock();
+        assert_eq!(state.checkpoints.len(), 1);
+        assert_eq!(state.checkpoints[0].checkpoint_id, checkpoint.checkpoint_id);
     }
 
     /// Test conversation state management
@@ -208,8 +219,7 @@ mod tests {
         let builder = ServerBuilder::new();
         let server = builder.build().expect("Failed to build server");
 
-        // Note: The config field doesn't exist on the new AcpServer structure
-        // This test is simplified for migration
+        // flow_manager is None when no config is provided to the builder
         assert!(server.flow_manager.is_none());
     }
 
@@ -235,8 +245,6 @@ mod tests {
     /// Test conversation order touching
     #[test]
     fn test_touch_conversation_order() {
-        // Note: conversation_touch_order field doesn't exist in new AcpServer
-        // This test is simplified for migration
         let order = Arc::new(std::sync::Mutex::new(vec![
             "conv1".to_string(),
             "conv2".to_string(),

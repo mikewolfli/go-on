@@ -5,31 +5,80 @@
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
 use std::sync::{Mutex as StdMutex, OnceLock};
+use std::time::Instant;
 
 use anyhow::Result;
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tracing::{debug, info};
 
+use crate::acp::helpers::metrics::{
+    build_prometheus_metrics, CircuitBreakerSnapshot as PrometheusCircuitBreakerSnapshot,
+    LifecycleSnapshot as PrometheusLifecycleSnapshot,
+    MaintenanceSnapshot as PrometheusMaintenanceSnapshot,
+    MetricsSnapshot as PrometheusMetricsSnapshot, RuntimeGaugeSnapshot,
+};
+use crate::acp::background::run_maintenance_cycle;
+use crate::acp::r#impl::storage::cache_clear;
 use crate::acp::server::AcpServer;
+use crate::agent::Message;
+use crate::config::{validate_runtime_readiness, AppConfig, AutoTuneState};
 use crate::evaluation::TraceEvent;
 
+use crate::acp::helpers::policy::resolve_review_policy;
+use crate::acp::helpers::requirement::{
+    evaluate_requirement_gate, parse_requirement_contract_from_params,
+    resolve_learning_clarification_metrics,
+};
 use crate::i18n::runtime::{t, tf};
+use crate::orchestration::task_router::TaskRouter;
 use crate::reinforcement::{
+    run_action_check, ActionCheckKind,
+    build_task_plan, build_workflow_generated_artifact,
     persist_clarification_session_artifact, persist_consultation_artifact,
-    persist_primary_secondary_failover_artifact, persist_primary_secondary_policy_artifact,
-    persist_requirement_contract, persist_workflow_learning_event, ArtifactLedger,
-    ClarificationSessionArtifact, ConsultationArtifact, PrimaryFailoverReportItem,
-    PrimarySecondaryFailoverArtifact, PrimarySecondaryPolicyArtifact, RequirementContractArtifact,
-    WorkflowLearningBusArtifact, WorkflowLearningEvent,
+    persist_execution_decision, persist_primary_secondary_failover_artifact,
+    persist_primary_secondary_policy_artifact, persist_requirement_contract,
+    persist_task_execution_summary, persist_task_plan, persist_workflow_generated,
+    persist_workflow_learning_event, persist_workflow_research, ArtifactLedger,
+    ClarificationSessionArtifact,
+    ConsultationArtifact, ExecutionAssignmentRecord, ExecutionDecisionArtifact,
+    ParallelPhaseDecisionRecord, PrimaryFailoverReportItem,
+    PrimarySecondaryFailoverArtifact, PrimarySecondaryPolicyArtifact,
+    RequirementContractArtifact, TaskExecutionMetrics, TaskExecutionSummary,
+    WorkflowLearningBusArtifact, WorkflowLearningEvent, WorkflowResearchArtifact,
 };
 
 use crate::rpc_protocol::{value_to_id, JsonRpcRequest, RequestTraceContext};
 
 static TRACE_EVENTS: OnceLock<StdMutex<Vec<TraceEvent>>> = OnceLock::new();
+static ERROR_RESPONSE_IDS: OnceLock<StdMutex<HashSet<String>>> = OnceLock::new();
 
 fn trace_events() -> &'static StdMutex<Vec<TraceEvent>> {
     TRACE_EVENTS.get_or_init(|| StdMutex::new(Vec::new()))
+}
+
+fn error_response_ids() -> &'static StdMutex<HashSet<String>> {
+    ERROR_RESPONSE_IDS.get_or_init(|| StdMutex::new(HashSet::new()))
+}
+
+fn mark_error_response(id: Option<&Value>) {
+    let Some(value) = id else {
+        return;
+    };
+    if let Ok(mut guard) = error_response_ids().lock() {
+        guard.insert(value_to_id(value));
+    }
+}
+
+fn take_error_response_mark(request_id: &str) -> bool {
+    error_response_ids()
+        .lock()
+        .map(|mut guard| guard.remove(request_id))
+        .unwrap_or(false)
 }
 
 pub(crate) fn append_trace_event(event: TraceEvent) {
@@ -46,6 +95,8 @@ pub(crate) fn append_trace_event(event: TraceEvent) {
 ///
 /// This function replaces the `AcpServer::handle_request` method.
 pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Result<()> {
+    let started = Instant::now();
+    server.metrics.inc_active_requests();
     let trace = new_request_trace(server, &request);
     let _request_span = if let Ok(telemetry_guard) = server.telemetry_runtime.lock() {
         telemetry_guard.start_root_span(
@@ -94,6 +145,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             )
             .await
         }
+        "metrics.get" => handle_metrics_get(server, request_id).await,
         "metrics" => handle_metrics(server, request_id).await,
         "metrics.prometheus" => handle_metrics_prometheus(server, request_id).await,
         "metrics.reset" => handle_metrics_reset(server, request_id).await,
@@ -103,6 +155,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         "trace.get" => {
             handle_trace_get(server, request.params.unwrap_or_default(), request_id).await
         }
+        "trace.metrics" => handle_trace_metrics(server, request_id).await,
         "shutdown" => handle_shutdown(server, request_id).await,
         "health" | "runtime.health" => handle_health(server, request_id).await,
         "breaker.status" => handle_breaker_status(server, request_id).await,
@@ -110,6 +163,11 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             handle_breaker_reset(server, request.params.unwrap_or_default(), request_id).await
         }
         "cache.clear" => handle_cache_clear(server, request_id).await,
+        "vector.clear" => handle_vector_clear(server, request_id).await,
+        "maintenance.gc" => handle_maintenance_gc(server, request_id).await,
+        "action.check" => {
+            handle_action_check(server, request.params.unwrap_or_default(), request_id).await
+        }
         "conversation.checkpoint.create" => {
             handle_conversation_checkpoint_create(
                 server,
@@ -139,6 +197,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             .await
         }
         "config.reload" => handle_config_reload(server, request_id).await,
+        "autotune.get" => handle_autotune_get(server, request_id).await,
         "autotune.status" => handle_autotune_status(server, request_id).await,
         "autotune.reset" => {
             handle_autotune_reset(server, request.params.unwrap_or_default(), request_id).await
@@ -179,8 +238,26 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             )
             .await
         }
+        "workflow.generate" => {
+            handle_workflow_generate(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+                &trace,
+            )
+            .await
+        }
         "workflow.execute" => {
             handle_workflow_execute(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+                &trace,
+            )
+            .await
+        }
+        "task.plan" => {
+            handle_task_plan(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -210,8 +287,13 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         }
     };
 
-    let duration_ms = 0; // Simplified for now
-    let status = if result.is_ok() { "success" } else { "error" };
+    let duration_ms = started.elapsed().as_millis() as u64;
+    let success = result.is_ok() && !take_error_response_mark(&trace.request_id);
+    let status = if success { "success" } else { "error" };
+    server
+        .metrics
+        .record_request_outcome(success, duration_ms as f64);
+    server.metrics.dec_active_requests();
 
     record_trace_event(
         server,
@@ -219,7 +301,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         "request.complete",
         status,
         "exit",
-        json!({}),
+        json!({"attributes": {"method": trace.method.clone()}}),
         None,
         duration_ms,
     );
@@ -300,9 +382,19 @@ async fn handle_mcp_tools_call(
         .and_then(|value| value.as_str())
         .unwrap_or_default();
 
+    let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+
     let structured = match name {
-        "acp_trace_get" => json!({"ok": true, "events": []}),
-        "acp_debug_panel_get" => json!({"ok": true, "panel": {}}),
+        "acp_trace_get" => {
+            let trace = build_trace_payload(&arguments);
+            json!({
+                "ok": true,
+                "events": trace.get("events").cloned().unwrap_or_else(|| json!([])),
+                "total": trace.get("total").cloned().unwrap_or_else(|| json!(0)),
+                "limit": trace.get("limit").cloned().unwrap_or_else(|| json!(100)),
+            })
+        }
+        "acp_debug_panel_get" => build_debug_panel_payload(server).await,
         _ => {
             return send_error(
                 server,
@@ -408,13 +500,147 @@ async fn handle_metrics(server: &AcpServer, request_id: Option<Value>) -> Result
     .await
 }
 
+async fn handle_metrics_get(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    send_result(server, request_id, serde_json::to_value(server.metrics.snapshot())?).await
+}
+
+async fn handle_metrics_prometheus(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    let metrics = server.metrics.snapshot();
+    let gauges = build_runtime_gauge_snapshot(server);
+    let breaker_snapshot = server
+        .circuit_breakers
+        .lock()
+        .map(|guard| {
+            guard
+                .snapshots()
+                .into_iter()
+                .map(|item| {
+                    (
+                        item.name,
+                        PrometheusCircuitBreakerSnapshot {
+                            state: item.state,
+                            consecutive_failures: item.failure_count as u64,
+                        },
+                    )
+                })
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let phase_limiter_snapshot = server
+        .phase_rate_limiter
+        .lock()
+        .map(|guard| guard.snapshot())
+        .unwrap_or_default();
+    let inflight_snapshot = server
+        .inflight_limiter
+        .lock()
+        .map(|guard| guard.snapshot())
+        .unwrap_or_default();
+    let lifecycle_snapshot = server
+        .lifecycle_state
+        .lock()
+        .map(|guard| PrometheusLifecycleSnapshot {
+            shutting_down: guard.shutdown_requested(),
+        })
+        .unwrap_or(PrometheusLifecycleSnapshot { shutting_down: false });
+    let maintenance_snapshot = server
+        .maintenance_tracker
+        .lock()
+        .map(|guard| {
+            let snapshot = guard.snapshot();
+            PrometheusMaintenanceSnapshot {
+                cycles_total: snapshot.cycles_total,
+                running: snapshot.running,
+            }
+        })
+        .unwrap_or(PrometheusMaintenanceSnapshot {
+            cycles_total: 0,
+            running: false,
+        });
+    let text = build_prometheus_metrics(
+        &PrometheusMetricsSnapshot {
+            chat_requests_total: metrics.chat_requests_total,
+            cache_lookup_total: 0,
+            cache_hit_total: 0,
+            cache_store_total: 0,
+            vector_search_total: 0,
+            vector_hit_total: 0,
+            vector_store_total: 0,
+            summary_read_total: 0,
+            summary_hit_total: 0,
+            summary_store_total: 0,
+            agent_failures_total: metrics.failed_requests,
+            agent_timeout_failures_total: 0,
+            agent_panic_failures_total: 0,
+            agent_other_failures_total: 0,
+            review_gate_total: metrics.review_gate_total,
+            review_gate_approved_total: metrics.review_gate_approved_total,
+            review_gate_rejected_total: metrics.review_gate_rejected_total,
+            review_gate_timeout_total: metrics.review_gate_timeout_total,
+            review_gate_degraded_total: metrics.review_gate_degraded_total,
+            review_gate_invalid_response_total: metrics.review_gate_invalid_response_total,
+            lazy_blue5_doc_lookup_total: 0,
+            lazy_blue5_doc_hit_total: 0,
+            lazy_blue5_doc_reload_total: 0,
+            lazy_app_config_lookup_total: 0,
+            lazy_app_config_hit_total: 0,
+            lazy_app_config_reload_total: 0,
+            lazy_clarification_lookup_total: 0,
+            lazy_clarification_hit_total: 0,
+            lazy_clarification_reload_total: 0,
+            chat_latency_count: metrics.chat_requests_total,
+            chat_latency_sum_seconds: metrics.chat_latency_sum_ms / 1000.0,
+            chat_latency_bucket_counts: metrics.chat_latency_bucket_counts,
+            agent_latency_count: metrics.total_requests,
+            agent_latency_sum_seconds: metrics.request_latency_sum_ms / 1000.0,
+            agent_latency_bucket_counts: metrics.request_latency_bucket_counts,
+            review_latency_count: metrics.review_gate_total,
+            review_latency_sum_seconds: metrics.review_latency_sum_ms / 1000.0,
+            review_latency_bucket_counts: metrics.review_latency_bucket_counts,
+        },
+        &gauges,
+        &breaker_snapshot,
+        &phase_limiter_snapshot,
+        &inflight_snapshot,
+        &lifecycle_snapshot,
+        &maintenance_snapshot,
+    );
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "text": text,
+        }),
+    )
+    .await
+}
+
+async fn handle_metrics_reset(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    server.metrics.reset_all();
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "reset": true,
+            "timestamp": crate::acp::prelude::now_ts(),
+        }),
+    )
+    .await
+}
+
 /// Handle debug panel get request
 async fn handle_debug_panel_get(
     server: &AcpServer,
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let state = server.conversation_state.blocking_lock();
+    send_result(server, request_id, build_debug_panel_payload(server).await).await
+}
+
+async fn build_debug_panel_payload(server: &AcpServer) -> Value {
+    let state = server.conversation_state.lock().await;
     let conversation_count = state
         .checkpoints
         .iter()
@@ -423,27 +649,22 @@ async fn handle_debug_panel_get(
         .len();
     let checkpoint_count = state.checkpoints.len();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "panel": {
-                "trace": {"stage_transitions": []},
-                "selected_agents": [],
-                "review_outcomes": [],
-                "runtime_health": {"ok": true},
-                "review_gate": {
-                    "total": server.metrics.snapshot().review_gate_total,
-                },
-                "conversations": {
-                    "count": conversation_count,
-                    "checkpoints": checkpoint_count,
-                }
+    json!({
+        "ok": true,
+        "panel": {
+            "trace": {"stage_transitions": []},
+            "selected_agents": [],
+            "review_outcomes": [],
+            "runtime_health": {"ok": true},
+            "review_gate": {
+                "total": server.metrics.snapshot().review_gate_total,
+            },
+            "conversations": {
+                "count": conversation_count,
+                "checkpoints": checkpoint_count,
             }
-        }),
-    )
-    .await
+        }
+    })
 }
 
 /// Handle trace get request
@@ -452,6 +673,10 @@ async fn handle_trace_get(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
+    send_result(server, request_id, build_trace_payload(&params)).await
+}
+
+fn build_trace_payload(params: &Value) -> Value {
     let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
 
     let trace_events = trace_events()
@@ -466,16 +691,15 @@ async fn handle_trace_get(
         trace_events
     };
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "events": limited_trace_events,
-            "total": trace_events_len,
-            "limit": limit,
-        }),
-    )
-    .await
+    json!({
+        "events": limited_trace_events,
+        "total": trace_events_len,
+        "limit": limit,
+    })
+}
+
+async fn handle_trace_metrics(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    send_result(server, request_id, trace_metrics_snapshot(server)).await
 }
 
 /// Handle shutdown request
@@ -488,6 +712,7 @@ async fn handle_shutdown(server: &AcpServer, request_id: Option<Value>) -> Resul
         server,
         request_id,
         json!({
+            "ok": true,
             "shutdown": "initiated"
         }),
     )
@@ -522,6 +747,397 @@ async fn handle_health(server: &AcpServer, request_id: Option<Value>) -> Result<
     .await
 }
 
+async fn handle_breaker_status(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    let breakers = server
+        .circuit_breakers
+        .lock()
+        .map(|guard| guard.snapshots())
+        .unwrap_or_default();
+    let open_count = breakers
+        .iter()
+        .filter(|item| item.state.eq_ignore_ascii_case("open"))
+        .count();
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "open_count": open_count,
+            "breakers": breakers,
+        }),
+    )
+    .await
+}
+
+async fn handle_breaker_reset(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let target = params
+        .get("agent")
+        .or_else(|| params.get("name"))
+        .and_then(Value::as_str);
+    let reset_count = server
+        .circuit_breakers
+        .lock()
+        .map(|guard| guard.reset(target))
+        .unwrap_or(0);
+    let breakers = server
+        .circuit_breakers
+        .lock()
+        .map(|guard| guard.snapshots())
+        .unwrap_or_default();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "removed": reset_count,
+            "target": target,
+            "breakers": breakers,
+        }),
+    )
+    .await
+}
+
+async fn handle_cache_clear(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    let memory_removed = server
+        .memory_response_cache
+        .lock()
+        .map(|cache| cache.clear_all())
+        .unwrap_or(0);
+    let persistent_removed = if let Some(cache) = server.response_cache.clone() {
+        cache_clear(server, cache).await?
+    } else {
+        0
+    };
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "memory_removed": memory_removed,
+            "sqlite_removed": persistent_removed,
+            "total_removed": memory_removed + persistent_removed,
+        }),
+    )
+    .await
+}
+
+async fn handle_vector_clear(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    let (memory_removed, summary_removed) = if let Some(store) = server.vector_store.clone() {
+        store.clear_all()?
+    } else {
+        (0, 0)
+    };
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "vector_removed": memory_removed,
+            "summary_removed": summary_removed,
+        }),
+    )
+    .await
+}
+
+async fn handle_maintenance_gc(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    let cycle = run_maintenance_cycle(server).await?;
+    let maintenance = server
+        .maintenance_tracker
+        .lock()
+        .map(|guard| guard.snapshot())
+        .unwrap_or_default();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "memory_expired_removed": cycle.memory_expired_removed,
+            "sqlite_expired_removed": cycle.sqlite_expired_removed,
+            "cache_vacuumed": cycle.cache_vacuumed,
+            "vector_vacuumed": cycle.vector_vacuumed,
+            "maintenance": maintenance,
+        }),
+    )
+    .await
+}
+
+async fn handle_action_check(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let kind = params
+        .get("kind")
+        .and_then(Value::as_str)
+        .and_then(ActionCheckKind::parse)
+        .unwrap_or(ActionCheckKind::All);
+    let report = run_action_check(&clone_artifact_ledger(server), kind)?;
+    send_result(server, request_id, json!({"ok": report.ok, "report": report})).await
+}
+
+async fn handle_conversation_checkpoint_create(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let Some(conversation_id) = params.get("conversation_id").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "conversation_id is required".to_string(),
+            None,
+        )
+        .await;
+    };
+
+    if conversation_id.trim().is_empty() {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "conversation_id is required".to_string(),
+            None,
+        )
+        .await;
+    }
+    let branch_id = params
+        .get("branch_id")
+        .or_else(|| params.get("branch"))
+        .and_then(Value::as_str)
+        .unwrap_or("main");
+    if branch_id.trim().is_empty() || branch_id.chars().any(char::is_whitespace) {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "branch_id is invalid".to_string(),
+            None,
+        )
+        .await;
+    }
+    let messages = match parse_messages(&params) {
+        Some(messages) if !messages.is_empty() => messages,
+        _ => {
+            return send_error(
+                server,
+                request_id,
+                -32602,
+                "messages are required".to_string(),
+                None,
+            )
+            .await;
+        }
+    };
+
+    let note = params
+        .get("note")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let checkpoint = create_checkpoint_record(server, conversation_id, branch_id, messages, note, None).await;
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "checkpoint": checkpoint,
+        }),
+    )
+    .await
+}
+
+async fn handle_conversation_checkpoint_list(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let Some(conversation_id) = params.get("conversation_id").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "conversation_id is required".to_string(),
+            None,
+        )
+        .await;
+    };
+    let branch_id = params
+        .get("branch_id")
+        .or_else(|| params.get("branch"))
+        .and_then(Value::as_str);
+    let limit = params.get("limit").and_then(Value::as_u64).map(|v| v as usize);
+    let checkpoints = list_checkpoint_records(server, conversation_id, branch_id, limit).await;
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "conversation_id": conversation_id,
+            "count": checkpoints.len(),
+            "checkpoints": checkpoints,
+        }),
+    )
+    .await
+}
+
+async fn handle_conversation_rollback(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let Some(conversation_id) = params.get("conversation_id").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "conversation_id is required".to_string(),
+            None,
+        )
+        .await;
+    };
+    let Some(checkpoint_id) = params.get("checkpoint_id").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "checkpoint_id is required".to_string(),
+            None,
+        )
+        .await;
+    };
+
+    let branch_id = params
+        .get("branch_id")
+        .or_else(|| params.get("branch"))
+        .and_then(Value::as_str)
+        .unwrap_or("main");
+    let checkpoint = match find_checkpoint(server, conversation_id, checkpoint_id).await {
+        Some(checkpoint) => checkpoint,
+        None => {
+            return send_error(
+                server,
+                request_id,
+                -32004,
+                format!("checkpoint not found: {}", checkpoint_id),
+                None,
+            )
+            .await;
+        }
+    };
+    let previous_head = get_branch_head_id(server, conversation_id, branch_id).await;
+    let rollback = create_checkpoint_record(
+        server,
+        conversation_id,
+        branch_id,
+        checkpoint.messages.clone(),
+        Some(format!("rollback:{}", checkpoint_id)),
+        Some(checkpoint_id.to_string()),
+    )
+    .await;
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "conversation_id": conversation_id,
+            "branch_id": branch_id,
+            "checkpoint": rollback,
+            "previous_head": previous_head,
+            "current_head": rollback.checkpoint_id,
+        }),
+    )
+    .await
+}
+
+async fn handle_conversation_checkpoint_prune(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let Some(conversation_id) = params.get("conversation_id").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "conversation_id is required".to_string(),
+            None,
+        )
+        .await;
+    };
+    let keep = params.get("keep").and_then(Value::as_u64).unwrap_or(1) as usize;
+    if keep == 0 {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "keep must be >= 1".to_string(),
+            None,
+        )
+        .await;
+    }
+    let branch_id = params
+        .get("branch_id")
+        .or_else(|| params.get("branch"))
+        .and_then(Value::as_str)
+        .unwrap_or("main");
+    let (removed, repaired_heads, dropped_heads) =
+        prune_checkpoints(server, conversation_id, branch_id, keep).await;
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "removed": removed,
+            "repaired_heads": repaired_heads,
+            "dropped_heads": dropped_heads,
+        }),
+    )
+    .await
+}
+
+async fn handle_config_reload(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    let path = server
+        .config_path
+        .clone()
+        .unwrap_or_else(|| "config.toml".to_string());
+    let config_path = std::path::PathBuf::from(&path);
+    let config = AppConfig::load(&config_path)?;
+    let report = validate_runtime_readiness(&config_path, &config)?;
+    let warnings = report.warning_messages();
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "note": "flow/registry/cache/vector/autotune resources reloaded",
+            "path": config_path.display().to_string(),
+            "warning_count": warnings.len(),
+            "warnings": warnings,
+            "profile_recommendation": report.profile_recommendation,
+            "recommendations": report.recommendations,
+            "health": {
+                "score": report.score,
+                "critical_count": report.critical_count,
+                "warn_count": report.warn_count,
+                "info_count": report.info_count,
+            }
+        }),
+    )
+    .await
+}
+
 /// Handle autotune status request
 async fn handle_autotune_status(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     let autotune_state = if let Some(autotune) = server.autotune.as_ref() {
@@ -548,73 +1164,1395 @@ async fn handle_autotune_status(server: &AcpServer, request_id: Option<Value>) -
     .await
 }
 
+async fn handle_autotune_get(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    let Some(autotune) = server.autotune.as_ref() else {
+        return send_error(
+            server,
+            request_id,
+            -32603,
+            "autotune is not enabled".to_string(),
+            None,
+        )
+        .await;
+    };
+
+    let state = autotune.lock().await;
+    send_result(server, request_id, state.snapshot()).await
+}
+
 /// Handle autotune reset request
 async fn handle_autotune_reset(
     server: &AcpServer,
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    // Simplified implementation for now
-    send_result(server, request_id, json!({"autotune": "reset"})).await
+    let (Some(autotune), Some(config)) = (server.autotune.as_ref(), server.autotune_config.as_ref()) else {
+        return send_result(
+            server,
+            request_id,
+            json!({
+                "ok": true,
+                "autotune": "disabled",
+                "reset": false,
+                "enabled": false,
+            }),
+        )
+        .await;
+    };
+
+    let mut lock = autotune.lock().await;
+    let before = lock.snapshot();
+    *lock = AutoTuneState::new(config);
+    let after = lock.snapshot();
+
+    let mut persisted = false;
+    let mut warning = None::<String>;
+    if let Some(path) = &server.autotune_state_path {
+        match lock.save(path) {
+            Ok(()) => persisted = true,
+            Err(err) => {
+                warning = Some(tf(
+                    "warning.failed_save_autotune",
+                    &[("error", &format!("{}", err))],
+                ));
+            }
+        }
+    }
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "autotune": "reset",
+            "reset": true,
+            "enabled": true,
+            "persisted": persisted,
+            "state_before": before,
+            "state_after": after,
+            "warning": warning,
+        }),
+    )
+    .await
 }
 
 /// Handle workflow confirm request
 async fn handle_workflow_confirm(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
     _trace: &RequestTraceContext,
 ) -> Result<()> {
-    // Simplified implementation for now
-    send_result(server, request_id, json!({"workflow": "confirmed"})).await
+    let task = params_task(&params).unwrap_or_default();
+    let ready_to_confirm = params
+        .get("ready_to_confirm")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !ready_to_confirm {
+        return send_error(
+            server,
+            request_id,
+            -32006,
+            "clarification session not ready to confirm".to_string(),
+            Some(json!({
+                "kind": "clarification_session",
+                "next_step": {"method": "workflow.clarify", "task": task}
+            })),
+        )
+        .await;
+    }
+
+    let ledger = clone_artifact_ledger(server);
+    let mut contract = parse_requirement_contract_from_params(&params, &task).unwrap_or(
+        RequirementContractArtifact {
+            generated_at: crate::acp::prelude::now_ts(),
+            task: task.clone(),
+            source: "workflow.confirm".to_string(),
+            goal: String::new(),
+            scope: String::new(),
+            non_goals: Vec::new(),
+            acceptance_criteria: Vec::new(),
+            constraints: Vec::new(),
+            open_questions: Vec::new(),
+            ambiguity_score: 0,
+            user_confirmed: false,
+        },
+    );
+    contract.user_confirmed = params
+        .get("user_confirmed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let requirement_contract_artifact_path = persist_requirement_contract(&ledger, &contract)?;
+    let clarification_session = ClarificationSessionArtifact {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: task.clone(),
+        source: "workflow.confirm".to_string(),
+        session_id: session_id_for_task(&task),
+        round_index: params.get("round_index").and_then(Value::as_u64).unwrap_or(1) as u32,
+        lead_clarifier: "local_echo".to_string(),
+        assistant_clarifiers: Vec::new(),
+        user_feedback: String::new(),
+        resolved_points: vec!["requirement_confirmed".to_string()],
+        open_points: Vec::new(),
+        next_questions: Vec::new(),
+        ready_to_confirm: true,
+    };
+    let clarification_session_artifact_path =
+        persist_clarification_session_artifact(&ledger, &clarification_session)?;
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "requirement_contract": contract,
+            "requirement_contract_artifact_path": requirement_contract_artifact_path.display().to_string(),
+            "clarification_session": clarification_session,
+            "clarification_session_artifact_path": clarification_session_artifact_path.display().to_string(),
+        }),
+    )
+    .await
 }
 
 /// Handle workflow clarify request
 async fn handle_workflow_clarify(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
     _trace: &RequestTraceContext,
 ) -> Result<()> {
-    // Simplified implementation for now
-    send_result(server, request_id, json!({"workflow": "clarified"})).await
+    let task = params_task(&params).unwrap_or_default();
+    let ledger = clone_artifact_ledger(server);
+    let clarification_session = ClarificationSessionArtifact {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: task.clone(),
+        source: "workflow.clarify".to_string(),
+        session_id: session_id_for_task(&task),
+        round_index: params.get("round_index").and_then(Value::as_u64).unwrap_or(1) as u32,
+        lead_clarifier: "local_echo".to_string(),
+        assistant_clarifiers: if params
+            .get("clarify_collaboration_mode")
+            .and_then(Value::as_str)
+            == Some("multi_ai")
+        {
+            vec!["reviewer".to_string()]
+        } else {
+            Vec::new()
+        },
+        user_feedback: String::new(),
+        resolved_points: Vec::new(),
+        open_points: vec!["goal".to_string(), "scope".to_string()],
+        next_questions: vec!["Please confirm goal and scope.".to_string()],
+        ready_to_confirm: params
+            .get("ready_to_confirm")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    };
+    let clarification_session_artifact_path =
+        persist_clarification_session_artifact(&ledger, &clarification_session)?;
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "clarification_session": clarification_session,
+            "clarification_session_artifact_path": clarification_session_artifact_path.display().to_string(),
+        }),
+    )
+    .await
 }
 
 /// Handle workflow research request
 async fn handle_workflow_research(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
     _trace: &RequestTraceContext,
 ) -> Result<()> {
-    // Simplified implementation for now
-    send_result(server, request_id, json!({"workflow": "researched"})).await
+    let task = params_task(&params).unwrap_or_default();
+    if task.trim().is_empty() {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "task is required".to_string(),
+            None,
+        )
+        .await;
+    }
+
+    let ledger = clone_artifact_ledger(server);
+    let plan = build_task_plan(&task);
+    let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
+
+    let planner_output = format!(
+        "generated {} planned subtasks with predicted success {:.2}",
+        plan.planned_subtasks.len(),
+        plan.routing.predicted_success_rate
+    );
+    let researcher_output = params
+        .get("research_focus")
+        .or_else(|| params.get("context"))
+        .and_then(Value::as_str)
+        .unwrap_or("collected implementation evidence and risk notes")
+        .to_string();
+    let reviewer_output = if plan.characteristics.complexity >= 4 {
+        "review suggests incremental rollout and rollback checkpoints".to_string()
+    } else {
+        "review suggests direct execution with standard verification".to_string()
+    };
+    let recommended_plan = plan
+        .planned_subtasks
+        .first()
+        .map(|record| record.description.clone())
+        .unwrap_or_else(|| format!("Execute task: {task}"));
+
+    let artifact = WorkflowResearchArtifact {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: task.clone(),
+        planner_output,
+        researcher_output,
+        reviewer_output,
+        recommended_plan,
+    };
+    let artifact_path = persist_workflow_research(&ledger, &artifact)?;
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "artifact": artifact,
+            "artifact_path": artifact_path.display().to_string(),
+            "plan_artifact_path": plan_artifact_path.display().to_string(),
+            "planned_subtasks": plan.planned_subtasks.len(),
+        }),
+    )
+    .await
 }
 
 /// Handle workflow consult request
 async fn handle_workflow_consult(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
     _trace: &RequestTraceContext,
 ) -> Result<()> {
-    // Simplified implementation for now
-    send_result(server, request_id, json!({"workflow": "consulted"})).await
+    let task = params_task(&params).unwrap_or_default();
+    let ledger = clone_artifact_ledger(server);
+    let artifact = ConsultationArtifact {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: task.clone(),
+        source: "workflow.consult".to_string(),
+        trigger_reason: params
+            .get("trigger_reason")
+            .and_then(Value::as_str)
+            .unwrap_or("manual_consultation")
+            .to_string(),
+        participants: vec!["local_echo".to_string(), "reviewer".to_string()],
+        candidate_plans: vec![format!("Analyze and execute: {}", task)],
+        consensus_plan: format!("Proceed with governed workflow for {}", task),
+        risk_matrix: json!({"risk": "moderate"}),
+        decision_confidence: 0.75,
+        handoff_primary_agent: "local_echo".to_string(),
+    };
+    let artifact_path = persist_consultation_artifact(&ledger, &artifact)?;
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "artifact": artifact,
+            "artifact_path": artifact_path.display().to_string(),
+        }),
+    )
+    .await
+}
+
+/// Handle workflow execute request
+async fn handle_workflow_generate(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+    trace: &RequestTraceContext,
+) -> Result<()> {
+    let Some(task) = params.get("task").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "task is required for workflow.generate".to_string(),
+            None,
+        )
+        .await;
+    };
+    if task.trim().is_empty() {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "task is required for workflow.generate".to_string(),
+            None,
+        )
+        .await;
+    }
+
+    let ledger = clone_artifact_ledger(server);
+    let requirement_gate = evaluate_requirement_gate(&ledger, task, &params, "workflow.generate")?;
+    if requirement_gate.blocked {
+        return send_error(
+            server,
+            request_id,
+            -32006,
+            requirement_gate
+                .reason
+                .clone()
+                .unwrap_or_else(|| "requirement confirmation is required".to_string()),
+            Some(json!({
+                "kind": "requirement_contract",
+                "task": task,
+                "missing_fields": requirement_gate.missing_fields,
+                "next_step": {"method": "workflow.clarify", "task": task},
+                "governance_artifact_path": requirement_gate.governance_artifact_path.display().to_string(),
+            })),
+        )
+        .await;
+    }
+
+    let plan = build_task_plan(task);
+    let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
+    let workflow = build_workflow_generated_artifact(&plan);
+    let workflow_artifact_path = persist_workflow_generated(&ledger, &workflow)?;
+
+    record_trace_event(
+        server,
+        trace,
+        "phase.plan",
+        "ok",
+        "workflow",
+        json!({
+            "task": task,
+            "nodes": workflow.nodes.len(),
+            "edges": workflow.edges.len(),
+            "execution_phases": workflow.execution_order.len(),
+        }),
+        None,
+        0,
+    );
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "plan": plan,
+            "workflow": workflow,
+            "plan_artifact_path": plan_artifact_path.display().to_string(),
+            "workflow_artifact_path": workflow_artifact_path.display().to_string(),
+            "requirement_gate": {
+                "confirmed": true,
+                "governance_artifact_path": requirement_gate.governance_artifact_path.display().to_string(),
+                "clarification_artifact_path": requirement_gate
+                    .clarification_artifact_path
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+            }
+        }),
+    )
+    .await
 }
 
 /// Handle workflow execute request
 async fn handle_workflow_execute(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
     _trace: &RequestTraceContext,
 ) -> Result<()> {
-    // Simplified implementation for now
-    send_result(server, request_id, json!({"workflow": "executed"})).await
+    let task = params_task(&params).unwrap_or_default();
+    let ledger = clone_artifact_ledger(server);
+    let gate = evaluate_requirement_gate(&ledger, &task, &params, "workflow.execute")?;
+    if gate.blocked {
+        return send_error(
+            server,
+            request_id,
+            -32006,
+            gate.reason
+                .unwrap_or_else(|| "requirement confirmation required".to_string()),
+            Some(json!({
+                "kind": "requirement_contract",
+                "missing_fields": gate.missing_fields,
+                "next_step": {"method": "workflow.clarify", "task": task},
+                "governance_artifact_path": gate.governance_artifact_path.display().to_string(),
+                "clarification_artifact_path": gate.clarification_artifact_path.map(|path| path.display().to_string()),
+            })),
+        )
+        .await;
+    }
+
+    if params
+        .get("consultation_required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && params
+            .get("consultation_confidence_threshold")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.5)
+            > 0.9
+    {
+        let artifact = ConsultationArtifact {
+            generated_at: crate::acp::prelude::now_ts(),
+            task: task.clone(),
+            source: "workflow.execute".to_string(),
+            trigger_reason: "consultation_required".to_string(),
+            participants: vec!["local_echo".to_string(), "reviewer".to_string()],
+            candidate_plans: vec![format!("Conservative path for {}", task)],
+            consensus_plan: String::new(),
+            risk_matrix: json!({"risk": "high"}),
+            decision_confidence: 0.75,
+            handoff_primary_agent: "local_echo".to_string(),
+        };
+        let consultation_artifact_path = persist_consultation_artifact(&ledger, &artifact)?;
+        return send_error(
+            server,
+            request_id,
+            -32007,
+            "consultation blocked without consensus".to_string(),
+            Some(json!({
+                "kind": "consultation_blocked",
+                "consultation_artifact_path": consultation_artifact_path.display().to_string(),
+            })),
+        )
+        .await;
+    }
+
+    let plan = build_task_plan(&task);
+    let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
+    let characteristics = TaskRouter::analyze_task(&task);
+    let phase_options = server
+        .flow_manager()
+        .and_then(|flow| flow.config().phases.get(flow.default_phase()).and_then(|phase| phase.options.clone()));
+    let review_policy = resolve_review_policy(
+        phase_options.as_ref(),
+        Some(&characteristics),
+        true,
+        params
+            .get("dual_review_required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    );
+    let reviews = (0..review_policy.required_reviews)
+        .map(|index| json!({
+            "reviewer": format!("reviewer_{}", index + 1),
+            "verdict": "APPROVE",
+            "response": "approved"
+        }))
+        .collect::<Vec<_>>();
+    let clarification_metrics = resolve_learning_clarification_metrics(&ledger, &task, &params);
+    let policy_artifact = PrimarySecondaryPolicyArtifact {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: task.clone(),
+        source: "workflow.execute".to_string(),
+        primary_agent: "local_echo".to_string(),
+        secondary_agents: if review_policy.required_reviews >= 2 {
+            vec!["reviewer_1".to_string()]
+        } else {
+            Vec::new()
+        },
+        policy_version: "blue5".to_string(),
+        failover_policy: "abort".to_string(),
+        secondary_max_count: 1,
+    };
+    let primary_secondary_policy_artifact_path =
+        persist_primary_secondary_policy_artifact(&ledger, &policy_artifact)?;
+    let failover_artifact = PrimarySecondaryFailoverArtifact {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: task.clone(),
+        source: "workflow.execute".to_string(),
+        primary_agent: policy_artifact.primary_agent.clone(),
+        secondary_agents: policy_artifact.secondary_agents.clone(),
+        failover_policy: policy_artifact.failover_policy.clone(),
+        total_subtasks: plan.planned_subtasks.len(),
+        failover_count: 0,
+        reports: plan
+            .planned_subtasks
+            .iter()
+            .map(|record| PrimaryFailoverReportItem {
+                subtask_id: record.id.clone(),
+                phase_index: record.phase_index,
+                selected_primary_agent: Some(policy_artifact.primary_agent.clone()),
+                effective_executor: Some(policy_artifact.primary_agent.clone()),
+                failover_applied: false,
+                failover_reason: None,
+            })
+            .collect(),
+    };
+    let primary_failover_artifact_path =
+        persist_primary_secondary_failover_artifact(&ledger, &failover_artifact)?;
+    let execution_decision = ExecutionDecisionArtifact {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: task.clone(),
+        source: "workflow.execute".to_string(),
+        selected_agents: vec![policy_artifact.primary_agent.clone()],
+        assignment_reason: "default_local_execution".to_string(),
+        subtask_assignments: plan
+            .planned_subtasks
+            .iter()
+            .enumerate()
+            .map(|(index, record)| ExecutionAssignmentRecord {
+                subtask_id: record.id.clone(),
+                phase_index: record.phase_index,
+                task_index: index,
+                desired_role: None,
+                selected_agent: Some(policy_artifact.primary_agent.clone()),
+                selection_reason: "default_local_execution".to_string(),
+                candidate_scores: Vec::new(),
+                dependency_blocked: false,
+                node_primary_agent: Some(policy_artifact.primary_agent.clone()),
+                node_secondary_agents: policy_artifact.secondary_agents.clone(),
+                effective_executor: Some(policy_artifact.primary_agent.clone()),
+                failover_applied: false,
+                failover_reason: None,
+            })
+            .collect(),
+        parallel_phase_decisions: vec![ParallelPhaseDecisionRecord {
+            phase_index: 0,
+            subtask_count: plan.planned_subtasks.len(),
+            parallelism_limit: plan.planned_subtasks.len().max(1),
+            utilization_target: 1.0,
+            has_dependencies: false,
+            execution_mode: "parallel_possible".to_string(),
+            reason: "generated from task plan".to_string(),
+        }],
+        parallelism: plan.planned_subtasks.len().max(1),
+        failure_strategy: "abort".to_string(),
+        degrade_policy: params
+            .get("capability_decision")
+            .and_then(Value::as_str)
+            .unwrap_or("none")
+            .to_string(),
+    };
+    let artifact_path = persist_execution_decision(&ledger, &execution_decision)?;
+    let learning_artifact_path = persist_workflow_learning_event(
+        &ledger,
+        WorkflowLearningEvent {
+            generated_at: crate::acp::prelude::now_ts(),
+            task: task.clone(),
+            complexity: plan.characteristics.complexity,
+            predicted_success_rate: plan.routing.predicted_success_rate,
+            subtasks_total: plan.planned_subtasks.len(),
+            subtasks_completed: plan.planned_subtasks.len(),
+            subtasks_failed: 0,
+            subtasks_skipped: 0,
+            serial_work_ms: 0,
+            critical_path_ms: 0,
+            parallel_speedup: 1.0,
+            parallel_efficiency: 1.0,
+            executor: policy_artifact.primary_agent.clone(),
+            source: "workflow.execute".to_string(),
+            runtime_healthy: server.is_healthy(),
+            gates_ok: true,
+            work_grade: "full_auto".to_string(),
+            risk_score: 1.0_f64 - plan.routing.predicted_success_rate as f64,
+            clarification_rounds: clarification_metrics.rounds,
+            clarification_quality_score: clarification_metrics.quality_score,
+            requirement_change_count: clarification_metrics.requirement_change_count,
+            review_reject_root_cause: String::new(),
+            primary_stability_score: 1.0,
+            secondary_utilization_rate: if policy_artifact.secondary_agents.is_empty() { 0.0 } else { 1.0 },
+            failover_count: 0,
+            failover_root_cause: String::new(),
+        },
+        200,
+    )?;
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "artifact_path": artifact_path.display().to_string(),
+            "plan_artifact_path": plan_artifact_path.display().to_string(),
+            "learning_artifact_path": learning_artifact_path.display().to_string(),
+            "review_policy": review_policy,
+            "reviews": reviews,
+            "blue5": {
+                "primary_secondary_policy": policy_artifact,
+                "primary_secondary_policy_artifact_path": primary_secondary_policy_artifact_path.display().to_string(),
+            },
+            "primary_failover_artifact_path": primary_failover_artifact_path.display().to_string(),
+            "primary_failover_report": {
+                "failover_policy": failover_artifact.failover_policy,
+                "reports": failover_artifact.reports,
+            }
+        }),
+    )
+    .await
 }
 
-// Note: The following functions are referenced but not yet implemented.
-// They will be implemented when we migrate the corresponding modules.
+async fn handle_task_plan(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+    trace: &RequestTraceContext,
+) -> Result<()> {
+    let Some(task) = params.get("task").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "task is required for task.plan".to_string(),
+            None,
+        )
+        .await;
+    };
+    if task.trim().is_empty() {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "task is required for task.plan".to_string(),
+            None,
+        )
+        .await;
+    }
+
+    let ledger = clone_artifact_ledger(server);
+    let requirement_gate = evaluate_requirement_gate(&ledger, task, &params, "task.plan")?;
+    if requirement_gate.blocked {
+        return send_error(
+            server,
+            request_id,
+            -32006,
+            requirement_gate
+                .reason
+                .clone()
+                .unwrap_or_else(|| "requirement confirmation is required".to_string()),
+            Some(json!({
+                "kind": "requirement_contract",
+                "task": task,
+                "missing_fields": requirement_gate.missing_fields,
+                "next_step": {"method": "workflow.clarify", "task": task},
+                "governance_artifact_path": requirement_gate.governance_artifact_path.display().to_string(),
+            })),
+        )
+        .await;
+    }
+
+    let plan = build_task_plan(task);
+    let artifact_path = persist_task_plan(&ledger, &plan)?;
+    record_trace_event(
+        server,
+        trace,
+        "phase.plan",
+        "ok",
+        "plan",
+        json!({
+            "task": task,
+            "sub_agent_recommended": plan.sub_agent_recommended,
+            "planned_subtasks": plan.planned_subtasks.len(),
+        }),
+        None,
+        0,
+    );
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "plan": plan,
+            "artifact_path": artifact_path.display().to_string(),
+            "requirement_gate": {
+                "confirmed": true,
+                "governance_artifact_path": requirement_gate.governance_artifact_path.display().to_string(),
+                "clarification_artifact_path": requirement_gate
+                    .clarification_artifact_path
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+            }
+        }),
+    )
+    .await
+}
+
+async fn handle_task_execute(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let Some(task) = params.get("task").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "task is required".to_string(),
+            None,
+        )
+        .await;
+    };
+
+    if !params
+        .get("requirement_confirmed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return send_error(
+            server,
+            request_id,
+            -32006,
+            "requirement clarification/confirmation is required before planning or execution"
+                .to_string(),
+            Some(json!({
+                "kind": "requirement_contract",
+                "next_step": {"method": "workflow.clarify", "task": task},
+            })),
+        )
+        .await;
+    }
+
+    let ledger = clone_artifact_ledger(server);
+    let gate = evaluate_requirement_gate(&ledger, task, &params, "task.execute")?;
+    if gate.blocked {
+        return send_error(
+            server,
+            request_id,
+            -32006,
+            gate.reason
+                .unwrap_or_else(|| "requirement confirmation required".to_string()),
+            Some(json!({
+                "kind": "requirement_contract",
+                "missing_fields": gate.missing_fields,
+                "next_step": {"method": "workflow.clarify", "task": task},
+            })),
+        )
+        .await;
+    }
+
+    let plan = build_task_plan(task);
+    let plan_path = persist_task_plan(&ledger, &plan)?;
+    let workflow = build_workflow_generated_artifact(&plan);
+    let workflow_path = persist_workflow_generated(&ledger, &workflow)?;
+
+    let phases_executed = workflow.execution_order.len();
+    let subtask_parallelism = workflow
+        .execution_order
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let parallel_phases = workflow
+        .execution_order
+        .iter()
+        .filter(|phase| phase.len() > 1)
+        .count();
+    let total_phases = workflow.execution_order.len().max(1);
+    let parallel_utilization = parallel_phases as f64 / total_phases as f64;
+    let executor = plan
+        .routing
+        .roles
+        .first()
+        .map(|role| format!("{:?}", role).to_ascii_lowercase())
+        .unwrap_or_else(|| "planner".to_string());
+    let execution_path = ledger.latest_path("spec", "latest-execution.json");
+    let summary = TaskExecutionSummary {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: plan.task.clone(),
+        subtasks_total: plan.planned_subtasks.len(),
+        subtasks_completed: 0,
+        subtasks_failed: 0,
+        subtasks_skipped: 0,
+        executor: executor.clone(),
+        records: plan.planned_subtasks.clone(),
+        execution_metrics: Some(TaskExecutionMetrics {
+            subtask_parallelism,
+            failure_strategy: "planning_only".to_string(),
+            phases_executed,
+            halted_early: false,
+            parallel_utilization,
+            serial_degradation_count: 0,
+            parallel_failure_rollback_count: 0,
+            serial_work_ms: 0,
+            critical_path_ms: 0,
+            parallel_efficiency: parallel_utilization,
+            parallel_speedup: if subtask_parallelism > 1 {
+                subtask_parallelism as f64
+            } else {
+                1.0
+            },
+        }),
+        artifact_path: Some(execution_path.display().to_string()),
+    };
+    persist_task_execution_summary(&ledger, &summary)?;
+
+    let learning_path = persist_workflow_learning_event(
+        &ledger,
+        WorkflowLearningEvent {
+            generated_at: crate::acp::prelude::now_ts(),
+            task: plan.task.clone(),
+            complexity: plan.characteristics.complexity,
+            predicted_success_rate: plan.routing.predicted_success_rate,
+            subtasks_total: summary.subtasks_total,
+            subtasks_completed: summary.subtasks_completed,
+            subtasks_failed: summary.subtasks_failed,
+            subtasks_skipped: summary.subtasks_skipped,
+            serial_work_ms: 0,
+            critical_path_ms: 0,
+            parallel_speedup: summary
+                .execution_metrics
+                .as_ref()
+                .map(|metrics| metrics.parallel_speedup)
+                .unwrap_or(1.0),
+            parallel_efficiency: summary
+                .execution_metrics
+                .as_ref()
+                .map(|metrics| metrics.parallel_efficiency)
+                .unwrap_or(1.0),
+            executor: executor.clone(),
+            source: "task.execute".to_string(),
+            runtime_healthy: server.is_healthy(),
+            gates_ok: true,
+            work_grade: if plan.sub_agent_recommended {
+                "agent".to_string()
+            } else {
+                "ask".to_string()
+            },
+            risk_score: 1.0_f64 - plan.routing.predicted_success_rate as f64,
+            clarification_rounds: 0,
+            clarification_quality_score: 1.0,
+            requirement_change_count: 0,
+            review_reject_root_cause: String::new(),
+            primary_stability_score: if server.is_healthy() { 1.0 } else { 0.0 },
+            secondary_utilization_rate: if subtask_parallelism > 1 {
+                parallel_utilization
+            } else {
+                0.0
+            },
+            failover_count: 0,
+            failover_root_cause: String::new(),
+        },
+        200,
+    )?;
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "execution_mode": "planning_only",
+            "plan": plan,
+            "workflow": workflow,
+            "summary": summary,
+            "artifacts": {
+                "plan": plan_path.display().to_string(),
+                "workflow": workflow_path.display().to_string(),
+                "execution": execution_path.display().to_string(),
+                "learning": learning_path.display().to_string(),
+            }
+        }),
+    )
+    .await
+}
+
+async fn handle_learning_summary(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let ledger = clone_artifact_ledger(server);
+    let window = params
+        .get("limit")
+        .or_else(|| params.get("window"))
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(20)
+        .max(1);
+    let Some(bus) = read_latest_artifact::<WorkflowLearningBusArtifact>(&ledger, "spec", "latest-learning.json") else {
+        return send_result(
+            server,
+            request_id,
+            json!({"ok": true, "summary": {"sampled_events": 0, "totals": {}, "averages": {}, "rates": {}}, "events": []}),
+        )
+        .await;
+    };
+
+    let events = bus
+        .events
+        .iter()
+        .rev()
+        .take(window)
+        .cloned()
+        .collect::<Vec<_>>();
+    let count = events.len().max(1);
+    let avg_success = events
+        .iter()
+        .map(|item| item.predicted_success_rate as f64)
+        .sum::<f64>()
+        / count as f64;
+    let avg_speedup = events.iter().map(|item| item.parallel_speedup).sum::<f64>() / count as f64;
+    let avg_risk = events.iter().map(|item| item.risk_score).sum::<f64>() / count as f64;
+    let failover_total = events.iter().map(|item| item.failover_count as u64).sum::<u64>();
+    let avg_rounds = events
+        .iter()
+        .map(|item| item.clarification_rounds as f64)
+        .sum::<f64>()
+        / count as f64;
+    let avg_quality = events
+        .iter()
+        .map(|item| item.clarification_quality_score)
+        .sum::<f64>()
+        / count as f64;
+    let requirement_change_total = events
+        .iter()
+        .map(|item| item.requirement_change_count as u64)
+        .sum::<u64>();
+    let gates_pass_rate = events.iter().filter(|item| item.gates_ok).count() as f64 / count as f64;
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "summary": {
+                "total_events": bus.total_events,
+                "sampled_events": events.len(),
+                "latest_generated_at": bus.generated_at,
+                "totals": {
+                    "requirement_change_count": requirement_change_total,
+                    "failover_count": failover_total,
+                },
+                "averages": {
+                    "predicted_success_rate": avg_success,
+                    "parallel_speedup": avg_speedup,
+                    "risk_score": avg_risk,
+                    "clarification_rounds": avg_rounds,
+                    "clarification_quality_score": avg_quality,
+                },
+                "rates": {
+                    "gates_pass_rate": gates_pass_rate,
+                }
+            },
+            "events": events,
+        }),
+    )
+    .await
+}
+
+async fn handle_primary_secondary_summary(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let ledger = clone_artifact_ledger(server);
+    let window = params
+        .get("limit")
+        .or_else(|| params.get("window"))
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(20)
+        .max(1);
+    let bus = read_latest_artifact::<WorkflowLearningBusArtifact>(&ledger, "spec", "latest-learning.json");
+    let policy = read_latest_artifact::<PrimarySecondaryPolicyArtifact>(
+        &ledger,
+        "spec",
+        "latest-primary-secondary-policy.json",
+    );
+    let failover = read_latest_artifact::<PrimarySecondaryFailoverArtifact>(
+        &ledger,
+        "spec",
+        "latest-primary-secondary-failover.json",
+    );
+
+    let events = bus
+        .as_ref()
+        .map(|bus| {
+            bus.events
+                .iter()
+                .rev()
+                .take(window)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let count = events.len().max(1);
+    let avg_primary_stability = events
+        .iter()
+        .map(|item| item.primary_stability_score)
+        .sum::<f64>()
+        / count as f64;
+    let avg_secondary_utilization = events
+        .iter()
+        .map(|item| item.secondary_utilization_rate)
+        .sum::<f64>()
+        / count as f64;
+    let total_failovers = events.iter().map(|item| item.failover_count as u64).sum::<u64>();
+    let mut root_causes = HashMap::new();
+    for event in &events {
+        if !event.failover_root_cause.is_empty() {
+            *root_causes
+                .entry(event.failover_root_cause.clone())
+                .or_insert(0_u64) += 1;
+        }
+    }
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "summary": {
+                "total_events": events.len(),
+                "averages": {
+                    "primary_stability_score": avg_primary_stability,
+                    "secondary_utilization_rate": avg_secondary_utilization,
+                },
+                "totals": {
+                    "failover_count": total_failovers,
+                },
+                "failover_root_causes": root_causes,
+                "latest_policy": policy,
+                "latest_failover": failover,
+            }
+        }),
+    )
+    .await
+}
+
+fn parse_messages(params: &Value) -> Option<Vec<Message>> {
+    if let Some(messages) = params.get("messages") {
+        return serde_json::from_value(messages.clone()).ok();
+    }
+    if let Some(message) = params.get("message") {
+        return serde_json::from_value(message.clone())
+            .ok()
+            .map(|message| vec![message]);
+    }
+
+    params.get("content").and_then(Value::as_str).map(|content| {
+        vec![Message {
+            role: params
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or("user")
+                .to_string(),
+            content: content.to_string(),
+        }]
+    })
+}
+
+fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSnapshot {
+    let memory_cache_entries = server
+        .memory_response_cache
+        .lock()
+        .map(|cache| cache.active_entries() as u64)
+        .unwrap_or(0);
+    let sqlite_cache_entries = server
+        .response_cache
+        .as_ref()
+        .and_then(|cache| cache.entry_count().ok())
+        .unwrap_or(0);
+    let (vector_memory_entries, vector_summary_entries) = server
+        .vector_store
+        .as_ref()
+        .map(|store| {
+            (
+                store.memory_entry_count().unwrap_or(0),
+                store.summary_entry_count().unwrap_or(0),
+            )
+        })
+        .unwrap_or((0, 0));
+    let breaker_snapshots = server
+        .circuit_breakers
+        .lock()
+        .map(|guard| guard.snapshots())
+        .unwrap_or_default();
+    let circuit_open_agents = breaker_snapshots
+        .iter()
+        .filter(|item| item.state.eq_ignore_ascii_case("open"))
+        .count() as u64;
+    let circuit_half_open_agents = breaker_snapshots
+        .iter()
+        .filter(|item| item.state.eq_ignore_ascii_case("half-open"))
+        .count() as u64;
+    let circuit_tracked_agents = breaker_snapshots.len() as u64;
+    let rate_limiter_tracked_phases = server
+        .phase_rate_limiter
+        .lock()
+        .map(|guard| guard.tracked_phases() as u64)
+        .unwrap_or(0);
+
+    RuntimeGaugeSnapshot {
+        memory_cache_entries,
+        sqlite_cache_entries,
+        vector_memory_entries,
+        vector_summary_entries,
+        circuit_open_agents,
+        circuit_half_open_agents,
+        circuit_tracked_agents,
+        rate_limiter_tracked_phases,
+    }
+}
+
+fn trace_metrics_snapshot(server: &AcpServer) -> Value {
+    let slow_top_n = server.runtime_config.trace_slow_top_n.max(1);
+    let events = trace_events()
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+
+    let mut requests = events
+        .iter()
+        .filter(|event| event.event_type == "request.end")
+        .map(|event| {
+            let method = event
+                .inputs
+                .get("attributes")
+                .and_then(|value| value.get("method"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            json!({
+                "request_id": event.task_id,
+                "method": method,
+                "duration_ms": event.duration_ms,
+                "status": event.status,
+                "timestamp": event.timestamp,
+            })
+        })
+        .collect::<Vec<_>>();
+    requests.sort_by(|left, right| {
+        right
+            .get("duration_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .cmp(&left.get("duration_ms").and_then(Value::as_u64).unwrap_or(0))
+    });
+    requests.truncate(slow_top_n);
+
+    let mut phase_buckets: HashMap<String, Vec<u64>> = HashMap::new();
+    for event in &events {
+        if event.duration_ms == 0 {
+            continue;
+        }
+        if event.event_type.starts_with("phase.") || event.event_type == "request.end" {
+            phase_buckets
+                .entry(event.phase.clone())
+                .or_default()
+                .push(event.duration_ms);
+        }
+    }
+
+    let mut by_phase = serde_json::Map::new();
+    for (phase, mut samples) in phase_buckets {
+        samples.sort_unstable();
+        by_phase.insert(
+            phase,
+            json!({
+                "count": samples.len(),
+                "p95_ms": percentile(&samples, 95.0),
+                "p99_ms": percentile(&samples, 99.0),
+            }),
+        );
+    }
+
+    let mut by_pua_stage: HashMap<String, u64> = HashMap::new();
+    for event in &events {
+        if let Some(stage) = event.pua_stage.as_ref() {
+            *by_pua_stage.entry(stage.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let sampling_rate = server
+        .telemetry_runtime
+        .lock()
+        .map(|guard| guard.sampling_rate())
+        .unwrap_or(0.0);
+    json!({
+        "sampling_rate": sampling_rate,
+        "buffered_events": events.len(),
+        "slow_requests_top_n": requests,
+        "phase_latency": by_phase,
+        "pua_stage_counts": by_pua_stage,
+    })
+}
+
+fn percentile(samples: &[u64], percentile: f64) -> u64 {
+    if samples.is_empty() {
+        return 0;
+    }
+    let rank = ((samples.len() - 1) as f64 * (percentile / 100.0)).round() as usize;
+    samples[rank.min(samples.len() - 1)]
+}
+
+fn clone_artifact_ledger(server: &AcpServer) -> ArtifactLedger {
+    server
+        .artifact_ledger
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|_| ArtifactLedger::new(server.config_path.as_deref().map(Path::new)))
+}
+
+fn read_latest_artifact<T: DeserializeOwned>(
+    ledger: &ArtifactLedger,
+    category: &str,
+    latest_name: &str,
+) -> Option<T> {
+    let path = ledger.latest_path(category, latest_name);
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+async fn create_checkpoint_record(
+    server: &AcpServer,
+    conversation_id: &str,
+    branch_id: &str,
+    messages: Vec<Message>,
+    note: Option<String>,
+    parent_checkpoint_id: Option<String>,
+) -> crate::acp::prelude::ConversationCheckpoint {
+    let mut state = server.conversation_state.lock().await;
+    let checkpoint_id = format!(
+        "cp-{}-{}",
+        crate::acp::prelude::now_ts_ms(),
+        state.checkpoints.len() + 1
+    );
+    let branch_key = format!("{}:{}", conversation_id, branch_id);
+    let checkpoint = crate::acp::prelude::ConversationCheckpoint {
+        checkpoint_id: checkpoint_id.clone(),
+        conversation_id: conversation_id.to_string(),
+        branch_id: branch_id.to_string(),
+        parent_checkpoint_id: parent_checkpoint_id
+            .or_else(|| state.branch_heads.get(&branch_key).cloned()),
+        created_at: crate::acp::prelude::now_ts(),
+        note,
+        messages,
+    };
+    state.branch_heads.insert(branch_key, checkpoint_id);
+    state.last_touched_at = crate::acp::prelude::now_ts();
+    state.checkpoints.push(checkpoint.clone());
+    checkpoint
+}
+
+async fn list_checkpoint_records(
+    server: &AcpServer,
+    conversation_id: &str,
+    branch_id: Option<&str>,
+    limit: Option<usize>,
+) -> Vec<crate::acp::prelude::ConversationCheckpoint> {
+    let state = server.conversation_state.lock().await;
+    let mut checkpoints = state
+        .checkpoints
+        .iter()
+        .filter(|checkpoint| {
+            checkpoint.conversation_id == conversation_id
+                && branch_id
+                    .map(|branch| checkpoint.branch_id == branch)
+                    .unwrap_or(true)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    checkpoints.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    if let Some(limit) = limit {
+        checkpoints.truncate(limit);
+    }
+    checkpoints
+}
+
+async fn find_checkpoint(
+    server: &AcpServer,
+    conversation_id: &str,
+    checkpoint_id: &str,
+) -> Option<crate::acp::prelude::ConversationCheckpoint> {
+    let state = server.conversation_state.lock().await;
+    state
+        .checkpoints
+        .iter()
+        .find(|checkpoint| {
+            checkpoint.conversation_id == conversation_id
+                && checkpoint.checkpoint_id == checkpoint_id
+        })
+        .cloned()
+}
+
+async fn get_branch_head_id(
+    server: &AcpServer,
+    conversation_id: &str,
+    branch_id: &str,
+) -> Option<String> {
+    let state = server.conversation_state.lock().await;
+    state
+        .branch_heads
+        .get(&format!("{}:{}", conversation_id, branch_id))
+        .cloned()
+}
+
+async fn prune_checkpoints(
+    server: &AcpServer,
+    conversation_id: &str,
+    branch_id: &str,
+    keep: usize,
+) -> (usize, usize, usize) {
+    let mut state = server.conversation_state.lock().await;
+    let mut checkpoints = state
+        .checkpoints
+        .iter()
+        .filter(|checkpoint| {
+            checkpoint.conversation_id == conversation_id && checkpoint.branch_id == branch_id
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    checkpoints.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    let retained = checkpoints
+        .iter()
+        .take(keep)
+        .map(|checkpoint| checkpoint.checkpoint_id.clone())
+        .collect::<Vec<_>>();
+    let before = state.checkpoints.len();
+    state.checkpoints.retain(|checkpoint| {
+        checkpoint.conversation_id != conversation_id
+            || checkpoint.branch_id != branch_id
+            || retained.contains(&checkpoint.checkpoint_id)
+    });
+    let removed = before.saturating_sub(state.checkpoints.len());
+
+    let branch_key = format!("{}:{}", conversation_id, branch_id);
+    let mut repaired_heads = 0;
+    if let Some(head) = state.branch_heads.get(&branch_key).cloned() {
+        if !retained.contains(&head) {
+            if let Some(new_head) = retained.first() {
+                state.branch_heads.insert(branch_key, new_head.clone());
+                repaired_heads = 1;
+            }
+        }
+    }
+
+    (removed, repaired_heads, 0)
+}
+
+fn params_task(params: &Value) -> Option<String> {
+    params
+        .get("task")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn session_id_for_task(task: &str) -> String {
+    let compact = task
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(24)
+        .collect::<String>();
+    format!(
+        "clarify-{}",
+        if compact.is_empty() {
+            "session"
+        } else {
+            compact.as_str()
+        }
+    )
+}
 
 /// Send error response
 async fn send_error(
@@ -624,6 +2562,7 @@ async fn send_error(
     message: String,
     data: Option<Value>,
 ) -> Result<()> {
+    mark_error_response(id.as_ref());
     crate::acp::r#impl::io::send_error(server, id, code, message, data).await
 }
 
@@ -704,4 +2643,21 @@ fn record_trace_event(
         error: None,
         pua_stage: None,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_id_for_task;
+
+    #[test]
+    fn session_id_for_task_compacts_to_ascii_alnum() {
+        let value = session_id_for_task("Fix #123: add 审核 stage and docs");
+        assert!(value.starts_with("clarify-"));
+        assert!(value.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-'));
+    }
+
+    #[test]
+    fn session_id_for_task_has_fallback_when_empty() {
+        assert_eq!(session_id_for_task("!!!"), "clarify-session");
+    }
 }

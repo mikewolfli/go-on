@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::agent::Message;
@@ -36,7 +37,7 @@ pub const MAX_STREAM_CHUNKS: usize = 4_096;
 pub const MAX_STREAM_CHARS: usize = 256_000;
 
 /// Conversation state structure
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationState {
     /// Conversation ID
     pub conversation_id: String,

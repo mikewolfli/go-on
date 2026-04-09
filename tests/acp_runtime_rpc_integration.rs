@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,10 +14,23 @@ struct RpcHarness {
     child: Child,
     stdin: ChildStdin,
     stdout_rx: Receiver<Value>,
+    stderr_lines: Arc<Mutex<Vec<String>>>,
+    // Serialize this integration suite to avoid flaky child-process pipe races.
+    _suite_guard: MutexGuard<'static, ()>,
+}
+
+static RPC_SUITE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn suite_guard() -> &'static Mutex<()> {
+    RPC_SUITE_GUARD.get_or_init(|| Mutex::new(()))
 }
 
 impl RpcHarness {
     fn spawn(config_path: &Path) -> Self {
+        let suite_guard = match suite_guard().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         let mut child = Command::new(binary_path())
             .arg("--config")
             .arg(config_path)
@@ -30,6 +44,7 @@ impl RpcHarness {
         let stdin = child.stdin.take().expect("failed to capture child stdin");
         let stdout = child.stdout.take().expect("failed to capture child stdout");
         let stderr = child.stderr.take().expect("failed to capture child stderr");
+        let stderr_lines = Arc::new(Mutex::new(Vec::new()));
 
         let (stdout_tx, stdout_rx) = mpsc::channel();
 
@@ -49,10 +64,20 @@ impl RpcHarness {
         });
 
         // Drain stderr so a verbose process cannot block on a full stderr buffer.
+        let stderr_lines_clone = Arc::clone(&stderr_lines);
         thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            for _line in reader.lines() {
-                // best-effort drain
+            for line in reader.lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                if let Ok(mut guard) = stderr_lines_clone.lock() {
+                    guard.push(line);
+                    if guard.len() > 200 {
+                        let overflow = guard.len() - 200;
+                        guard.drain(0..overflow);
+                    }
+                }
             }
         });
 
@@ -60,6 +85,8 @@ impl RpcHarness {
             child,
             stdin,
             stdout_rx,
+            stderr_lines,
+            _suite_guard: suite_guard,
         }
     }
 
@@ -95,10 +122,18 @@ impl RpcHarness {
                 panic!("timed out waiting for response id {id}");
             }
             let remaining = deadline.saturating_duration_since(now);
-            let msg = self
-                .stdout_rx
-                .recv_timeout(remaining)
-                .expect("stdout closed while waiting for response");
+            let msg = match self.stdout_rx.recv_timeout(remaining) {
+                Ok(msg) => msg,
+                Err(err) => {
+                    let status = self.child.try_wait().ok().flatten();
+                    let stderr_tail = self.stderr_tail(30);
+                    panic!(
+                        "stdout closed while waiting for response id {id}: {err}; child status: {:?}; stderr tail:\n{}",
+                        status,
+                        stderr_tail
+                    );
+                }
+            };
             if msg.get("id") == Some(&json!(id)) {
                 return msg;
             }
@@ -119,8 +154,22 @@ impl RpcHarness {
                     }
                     thread::sleep(Duration::from_millis(20));
                 }
-                Err(err) => panic!("failed to wait for child: {err}"),
+                Err(err) => panic!("failed to wait for child: {err}; stderr tail:\n{}", self.stderr_tail(30)),
             }
+        }
+    }
+
+    fn stderr_tail(&self, limit: usize) -> String {
+        if let Ok(guard) = self.stderr_lines.lock() {
+            let start = guard.len().saturating_sub(limit);
+            let lines = guard[start..].to_vec();
+            if lines.is_empty() {
+                "<empty>".to_string()
+            } else {
+                lines.join("\n")
+            }
+        } else {
+            "<stderr lock poisoned>".to_string()
         }
     }
 }
@@ -435,6 +484,37 @@ fallback = false
     fs::write(path, config).expect("failed to write workflow dual review config file");
 }
 
+fn write_autotune_enabled_config(path: &Path, state_path: &Path) {
+    let config = format!(
+        r#"default_phase = "coding"
+
+[flow]
+name = "Autotune Enabled"
+phases = ["coding"]
+
+[runtime]
+maintenance_interval_seconds = 30
+health_interval_seconds = 45
+shutdown_drain_seconds = 7
+
+[agents.local_echo]
+type = "local_echo"
+
+[phases.coding]
+description = "Coding"
+agents = ["local_echo"]
+fallback = true
+
+[autotune]
+enabled = true
+state_path = "{state_path}"
+"#,
+        state_path = state_path.display(),
+    );
+
+    fs::write(path, config).expect("failed to write autotune-enabled config file");
+}
+
 #[test]
 fn rpc_initialize_health_phase_and_shutdown() {
     let temp = tempdir().expect("failed to create temp dir");
@@ -468,6 +548,9 @@ fn rpc_initialize_health_phase_and_shutdown() {
     assert!(prometheus_text.contains("acp_review_gate_timeout_total 0"));
     assert!(prometheus_text.contains("acp_review_gate_degraded_total 0"));
     assert!(prometheus_text.contains("acp_review_gate_invalid_response_total 0"));
+    assert!(prometheus_text.contains("acp_chat_latency_seconds_count"));
+    assert!(prometheus_text.contains("acp_agent_latency_seconds_count"));
+    assert!(prometheus_text.contains("acp_review_latency_seconds_count"));
 
     let shutdown = harness.request(4, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
@@ -555,6 +638,14 @@ fn rpc_mcp_adapter_initialize_list_and_call() {
     assert!(called["result"]["content"].is_array());
     assert_eq!(called["result"]["structuredContent"]["ok"], true);
     assert!(called["result"]["structuredContent"]["events"].is_array());
+    assert!(called["result"]["structuredContent"]["total"]
+        .as_u64()
+        .expect("mcp trace total should be integer")
+        >= 1);
+    assert_eq!(
+        called["result"]["structuredContent"]["limit"],
+        json!(5)
+    );
 
     let unknown = harness.request(
         5,
@@ -821,6 +912,12 @@ fn rpc_unknown_method_and_config_reload() {
         .expect("error message should be string");
     assert!(message.contains("unknown method"));
 
+    let metrics_after_unknown = harness.request(1010, "metrics", None);
+    assert!(metrics_after_unknown["result"]["metrics"]["failed_requests"]
+        .as_u64()
+        .expect("failed_requests should be integer")
+        >= 1);
+
     write_test_config(&config_path, 30, 45, 7);
 
     let reload = harness.request(11, "config.reload", None);
@@ -848,6 +945,106 @@ fn rpc_unknown_method_and_config_reload() {
     let shutdown = harness.request(12, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
 
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_action_vector_maintenance_and_trace_metrics() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_test_config(&config_path, 60, 120, 5);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    harness.request(200, "initialize", None);
+
+    let action = harness.request(
+        201,
+        "action.check",
+        Some(json!({
+            "kind": "all"
+        })),
+    );
+    assert!(action["result"]["report"].is_object());
+
+    let vector = harness.request(202, "vector.clear", None);
+    assert_eq!(vector["result"]["ok"], true);
+    assert!(vector["result"]["vector_removed"].is_u64());
+    assert!(vector["result"]["summary_removed"].is_u64());
+
+    let maintenance = harness.request(203, "maintenance.gc", None);
+    assert_eq!(maintenance["result"]["ok"], true);
+    assert!(maintenance["result"]["memory_expired_removed"].is_u64());
+    assert!(maintenance["result"]["sqlite_expired_removed"].is_u64());
+    assert!(maintenance["result"]["cache_vacuumed"].is_boolean());
+    assert!(maintenance["result"]["vector_vacuumed"].is_boolean());
+    assert!(maintenance["result"]["maintenance"].is_object());
+
+    let trace_metrics = harness.request(204, "trace.metrics", None);
+    assert!(trace_metrics["result"]["sampling_rate"].is_number());
+    assert!(trace_metrics["result"]["buffered_events"].is_u64());
+    assert!(trace_metrics["result"]["slow_requests_top_n"].is_array());
+    assert!(trace_metrics["result"]["phase_latency"].is_object());
+    assert!(trace_metrics["result"]["pua_stage_counts"].is_object());
+
+    let shutdown = harness.request(205, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_legacy_method_aliases_remain_compatible() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    let state_path = temp.path().join("compat_autotune_state.json");
+    write_autotune_enabled_config(&config_path, &state_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    harness.request(300, "initialize", None);
+
+    let metrics = harness.request(301, "metrics.get", None);
+    assert!(metrics["result"]["total_requests"].is_u64());
+    assert!(metrics["result"]["active_requests"].is_u64());
+
+    let autotune = harness.request(302, "autotune.get", None);
+    assert!(autotune["result"]["current_min_query_chars"].is_u64());
+    assert!(autotune["result"]["current_top_k"].is_u64());
+
+    let plan = harness.request(
+        303,
+        "task.plan",
+        Some(json!({
+            "task": "Plan a governed refactor for ACP routing compatibility",
+            "requirement_confirmed": true,
+            "goal": "restore legacy ACP compatibility routes",
+            "scope": "request alias compatibility only",
+            "acceptance_criteria": ["legacy methods resolve", "tests cover aliases"]
+        })),
+    );
+    assert_eq!(plan["result"]["ok"], true);
+    assert!(plan["result"]["plan"].is_object());
+    assert!(plan["result"]["artifact_path"].is_string());
+    assert_eq!(plan["result"]["requirement_gate"]["confirmed"], true);
+
+    let workflow = harness.request(
+        304,
+        "workflow.generate",
+        Some(json!({
+            "task": "Generate workflow for ACP route compatibility rollout",
+            "requirement_confirmed": true,
+            "goal": "generate execution workflow",
+            "scope": "compatibility alias rollout",
+            "acceptance_criteria": ["workflow emitted", "plan emitted"]
+        })),
+    );
+    assert_eq!(workflow["result"]["ok"], true);
+    assert!(workflow["result"]["plan"].is_object());
+    assert!(workflow["result"]["workflow"].is_object());
+    assert!(workflow["result"]["plan_artifact_path"].is_string());
+    assert!(workflow["result"]["workflow_artifact_path"].is_string());
+    assert_eq!(workflow["result"]["requirement_gate"]["confirmed"], true);
+
+    let shutdown = harness.request(305, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
     harness.wait_for_exit(Duration::from_secs(8));
 }
 
@@ -1572,6 +1769,54 @@ fn rpc_workflow_consult_returns_artifact_and_consensus_signal() {
 }
 
 #[test]
+fn rpc_workflow_research_persists_artifact_and_plan() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_governance_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(165, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let research = harness.request(
+        166,
+        "workflow.research",
+        Some(json!({
+            "task": "Research cross-module impact of introducing stricter audit evidence",
+            "research_focus": "impact analysis, migration risk, and rollback plan"
+        })),
+    );
+    assert_eq!(research["result"]["ok"], true);
+    assert!(research["result"]["artifact"].is_object());
+    assert!(research["result"]["artifact"]["planner_output"].is_string());
+    assert!(research["result"]["artifact"]["researcher_output"].is_string());
+    assert!(research["result"]["artifact"]["reviewer_output"].is_string());
+    assert!(research["result"]["artifact"]["recommended_plan"].is_string());
+    assert!(research["result"]["planned_subtasks"].is_number());
+
+    let artifact_path = research["result"]["artifact_path"]
+        .as_str()
+        .expect("research artifact path should be string");
+    assert!(Path::new(artifact_path).exists());
+
+    let plan_artifact_path = research["result"]["plan_artifact_path"]
+        .as_str()
+        .expect("research plan artifact path should be string");
+    assert!(Path::new(plan_artifact_path).exists());
+
+    let artifact_raw = fs::read_to_string(artifact_path).expect("read research artifact");
+    let artifact_json: Value = serde_json::from_str(&artifact_raw).expect("parse research artifact");
+    assert_eq!(
+        artifact_json["task"],
+        "Research cross-module impact of introducing stricter audit evidence"
+    );
+
+    let shutdown = harness.request(167, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
 fn rpc_confirm_requires_ready_to_confirm_and_respects_clarification_rounds() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");
@@ -1648,6 +1893,58 @@ fn rpc_confirm_requires_ready_to_confirm_and_respects_clarification_rounds() {
     );
 
     let shutdown = harness.request(174, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_autotune_reset_restores_default_state_and_persists() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    let state_path = temp.path().join("acp_autotune_state.json");
+    write_autotune_enabled_config(&config_path, &state_path);
+
+    let custom_state = json!({
+        "current_min_query_chars": 240,
+        "current_top_k": 4,
+        "window_phase": 9,
+        "high_precision_count": 7,
+        "low_precision_count": 3,
+        "vector_search_count": 18,
+        "cooldown_remaining": 2
+    });
+    fs::write(
+        &state_path,
+        serde_json::to_string_pretty(&custom_state).expect("serialize custom state"),
+    )
+    .expect("write custom autotune state");
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(180, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let status_before = harness.request(181, "autotune.status", None);
+    assert_eq!(status_before["result"]["enabled"], true);
+    assert_eq!(status_before["result"]["state"]["current_min_query_chars"], 240);
+
+    let reset = harness.request(182, "autotune.reset", None);
+    assert_eq!(reset["result"]["ok"], true);
+    assert_eq!(reset["result"]["reset"], true);
+    assert_eq!(reset["result"]["enabled"], true);
+    assert_eq!(reset["result"]["state_before"]["current_min_query_chars"], 240);
+    assert_eq!(reset["result"]["state_after"]["current_min_query_chars"], 40);
+
+    let status_after = harness.request(183, "autotune.status", None);
+    assert_eq!(status_after["result"]["state"]["current_min_query_chars"], 40);
+    assert_eq!(status_after["result"]["state"]["window_phase"], 0);
+    assert_eq!(status_after["result"]["state"]["cooldown_remaining"], 0);
+
+    let persisted_raw = fs::read_to_string(&state_path).expect("read persisted autotune state");
+    let persisted: Value = serde_json::from_str(&persisted_raw).expect("parse persisted autotune state");
+    assert_eq!(persisted["current_min_query_chars"], 40);
+    assert_eq!(persisted["window_phase"], 0);
+
+    let shutdown = harness.request(184, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
     harness.wait_for_exit(Duration::from_secs(8));
 }

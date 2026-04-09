@@ -1,5 +1,37 @@
 # go-on Phase 0-9 Complete Implementation Status
 
+## 2026-04-09 Execution Update (Blue6 Closure)
+
+This section captures the latest verified execution state for migration completion work.
+
+- ACP implementation closure completed for the blue6 scope.
+- Validation evidence:
+     - `cargo check --all`: pass
+     - `cargo test --test acp_runtime_rpc_integration -- --nocapture`: pass (23/23)
+     - `cargo test --all -- --nocapture`: pass
+     - latest full gate after metrics semantics fix: `cargo test --all -- --nocapture`: pass (156 unit tests + 25 ACP runtime integration tests)
+
+### Delta completed in this execution wave
+
+- ACP runtime/request contract hardening finished.
+- Conversation/workflow/learning/primary-secondary RPC responses aligned.
+- Shutdown-time harness stability fixed.
+- ACP integration harness hardened with suite-level serialization and stderr-tail diagnostics to prevent intermittent `stdout closed` failures under default parallel runs.
+- ACP storage cache statistics completed: replaced placeholder `cache_stats` with real `ResponseCache` aggregate metrics and added unit-test coverage.
+- ACP `workflow.research` completed: replaced simplified response with real task-plan + research-artifact persistence flow, and added integration test coverage.
+- ACP `autotune.reset` completed: replaced simplified response with real state reset/persistence behavior and added integration test coverage.
+- ACP `metrics.prometheus` semantics corrected: latency `*_sum` now reports cumulative seconds (`avg_request_duration_ms * total_requests / 1000`) instead of a single-average seconds value, with regression unit tests added.
+- ACP runtime metrics instrumentation closed: request/chat/review latency sums and histogram buckets are now recorded at runtime; request active count and request trace duration are now real measurements.
+- ACP Prometheus export expanded: `acp_chat_latency_seconds`, `acp_agent_latency_seconds`, and `acp_review_latency_seconds` histograms are all emitted with `_bucket/_sum/_count` series; integration assertions added.
+- ACP full-auto review gate path now executes real dual-review flow in chat mode (replacing placeholder counter-only behavior), with reviewer-level timeout handling aligned to `review_timeout_policy` (`reject` vs `degrade_single`).
+- Review gate metrics are now event-driven: timeout/degraded/approved/rejected/invalid_response counters and review latency are updated from real review outcomes and timeout collisions.
+- `run_single_review` now executes real agent calls: registry lookup → `review.request_prompt` injection → `tokio::time::timeout` deadline enforcement → APPROVE/REJECT text parsing; name-based simulation removed entirely.
+- i18n词条补齐：`error.review_timeout`/`error.reviewer_not_found`/`warning.review_timeout_continue`/`review.request_prompt` 四项词条已补入全部三份语言文件（en_US / zh_CN / zh_TW）；zh_TW 缺漏词条 `error.review_phase_required`/`error.config_reload_failed`/`error.parse_error_with_detail` 同步补全。
+- `src/acp/tests.rs` 两处 "simplified for migration" 占位注释已清除，测试断言保持正确。
+- Status documents updated with authoritative current-state snapshots.
+
+Older sections below remain as architecture history and phase narrative.
+
 ## Summary
 
 ✅ **ALL PHASES COMPLETE** - go-on now implements full Phase 0-10 architecture as defined in FUTURE.MD + Phase 10 extensions

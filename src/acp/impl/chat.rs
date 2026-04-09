@@ -103,8 +103,6 @@ pub async fn handle_chat(
         }
         drop(lifecycle_guard); // Release the lock before continuing
 
-        server.metrics.inc_chat_requests();
-
         let params_value = params.unwrap_or_else(|| json!({}));
         let chat_params: ChatParams = match serde_json::from_value(params_value) {
             Ok(value) => value,
@@ -156,6 +154,7 @@ pub async fn handle_chat(
     let duration_ms = started.elapsed().as_millis() as u64;
     let status = if result.is_ok() { "success" } else { "error" };
 
+    server.metrics.record_chat_latency(duration_ms as f64);
     record_trace_event(
         server,
         &pipeline_trace,
@@ -221,8 +220,8 @@ pub async fn should_escalate_approval_strategy(
 async fn process_chat_request(
     server: &AcpServer,
     params: &ChatParams,
-    _trace: &RequestTraceContext,
-    _span: Option<&OtelContext>,
+    trace: &RequestTraceContext,
+    span: Option<&OtelContext>,
 ) -> Result<serde_json::Value> {
     let started = std::time::Instant::now();
 
@@ -374,15 +373,32 @@ async fn process_chat_request(
 
     let mut reviews = Vec::new();
     if params.mode.eq_ignore_ascii_case("full_auto") {
-        server.metrics.inc_review_gate();
-        server.metrics.inc_review_gate_timeout();
-        server.metrics.inc_review_gate_degraded();
-        server.metrics.inc_review_gate_approved();
-        reviews.push(json!({
-            "reviewer": "reviewer_fast",
-            "verdict": "APPROVE",
-            "response": "approved"
-        }));
+        match crate::acp::r#impl::agent::run_dual_review_gate(
+            server,
+            None,
+            &params.messages,
+            phase.options.as_ref(),
+            span,
+            trace,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                reviews.push(json!({
+                    "reviewer": outcome.reviewer,
+                    "verdict": if outcome.passed { "APPROVE" } else { "REJECT" },
+                    "response": outcome.comments.join("; "),
+                    "duration_ms": outcome.duration_ms,
+                }));
+            }
+            Err(err) => {
+                reviews.push(json!({
+                    "reviewer": "review_gate",
+                    "verdict": "REJECT",
+                    "response": format!("review gate failed: {err}"),
+                }));
+            }
+        }
     }
 
     let result = json!({

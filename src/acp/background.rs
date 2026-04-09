@@ -214,26 +214,36 @@ pub async fn perform_maintenance_cycle(
 
 /// Perform health check cycle
 pub async fn perform_health_check_cycle(
-    _memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
-    _cache: Arc<std::sync::Mutex<Option<Arc<ResponseCache>>>>,
-    _vector_store: Arc<std::sync::Mutex<Option<Arc<VectorStore>>>>,
+    memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
+    cache: Arc<std::sync::Mutex<Option<Arc<ResponseCache>>>>,
+    vector_store: Arc<std::sync::Mutex<Option<Arc<VectorStore>>>>,
     circuit_breakers: Arc<std::sync::Mutex<CircuitBreakerRegistry>>,
     phase_rate_limiter: Arc<std::sync::Mutex<PhaseRateLimiter>>,
     inflight_limiter: Arc<std::sync::Mutex<InflightLimiter>>,
     lifecycle: Arc<std::sync::Mutex<LifecycleState>>,
     maintenance: Arc<std::sync::Mutex<MaintenanceTracker>>,
 ) -> Result<()> {
-    // Simplified health check for migration
-    // TODO: Implement proper health checks when all modules are migrated
+    let memory_health = memory_cache
+        .lock()
+        .map(|cache| {
+            cache.active_entries();
+            true
+        })
+        .unwrap_or(false);
 
-    // Check memory cache health - simplified
-    let memory_health = true; // Assume healthy for migration
+    let sqlite_health = cache
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .map(|cache| cache.entry_count().is_ok())
+        .unwrap_or(true);
 
-    // Check SQLite cache health if available - simplified
-    let sqlite_health = true; // Assume healthy for migration
-
-    // Check vector store health if available - simplified
-    let vector_health = true; // Assume healthy for migration
+    let vector_health = vector_store
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .map(|store| store.memory_entry_count().is_ok() && store.summary_entry_count().is_ok())
+        .unwrap_or(true);
 
     // Check circuit breakers
     let circuit_breaker_health = if let Ok(guard) = circuit_breakers.lock() {

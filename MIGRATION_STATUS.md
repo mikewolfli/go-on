@@ -1,5 +1,28 @@
 # ACP Module Migration Status Report
 
+## 2026-04-09 Current Status Update (Authoritative)
+
+This section overrides earlier in-progress notes in this file.
+
+- ACP migration and blue6 implementation are functionally complete for current release scope.
+- Verified gates:
+  - `cargo check --all`: pass
+  - `cargo test --test acp_runtime_rpc_integration -- --nocapture`: pass (23/23)
+  - `cargo test --all -- --nocapture`: pass
+
+### Closed items
+
+- ACP compile baseline restored.
+- ACP request handlers closed for runtime/control/workflow/summary contracts.
+- Placeholder/TODO-like ACP mainline gaps removed from active paths.
+- Runtime shutdown behavior fixed for deterministic test harness exit.
+- Config reload response and health metadata aligned with integration assertions.
+- Learning and primary-secondary summary structures aligned to expected response shape.
+
+### Note on historical sections
+
+Older paragraphs below describing partial migration are retained only as historical trace and are no longer the current truth source.
+
 ## Overview
 This document tracks the progress of migrating the ACP module from `include!` macros to proper Rust module structure as outlined in MIGRATE2.MD.
 

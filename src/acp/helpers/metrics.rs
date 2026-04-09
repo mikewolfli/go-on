@@ -314,6 +314,48 @@ pub fn build_prometheus_metrics(
         "Total cache hits served",
         snapshot.cache_hit_total,
     );
+    push_scalar_metric(
+        &mut lines,
+        "acp_review_gate_total",
+        "counter",
+        "Total review gate evaluations",
+        snapshot.review_gate_total,
+    );
+    push_scalar_metric(
+        &mut lines,
+        "acp_review_gate_approved_total",
+        "counter",
+        "Total review gate approvals",
+        snapshot.review_gate_approved_total,
+    );
+    push_scalar_metric(
+        &mut lines,
+        "acp_review_gate_rejected_total",
+        "counter",
+        "Total review gate rejections",
+        snapshot.review_gate_rejected_total,
+    );
+    push_scalar_metric(
+        &mut lines,
+        "acp_review_gate_timeout_total",
+        "counter",
+        "Total review gate timeouts",
+        snapshot.review_gate_timeout_total,
+    );
+    push_scalar_metric(
+        &mut lines,
+        "acp_review_gate_degraded_total",
+        "counter",
+        "Total review gate degradations",
+        snapshot.review_gate_degraded_total,
+    );
+    push_scalar_metric(
+        &mut lines,
+        "acp_review_gate_invalid_response_total",
+        "counter",
+        "Total invalid review gate responses",
+        snapshot.review_gate_invalid_response_total,
+    );
 
     // Gauge metrics
     push_scalar_metric(
@@ -427,6 +469,18 @@ pub fn build_prometheus_metrics(
         snapshot.chat_latency_count,
         snapshot.chat_latency_sum_seconds,
         &snapshot.chat_latency_bucket_counts,
+    ));
+    lines.extend(histogram_prometheus_lines(
+        "acp_agent_latency_seconds",
+        snapshot.agent_latency_count,
+        snapshot.agent_latency_sum_seconds,
+        &snapshot.agent_latency_bucket_counts,
+    ));
+    lines.extend(histogram_prometheus_lines(
+        "acp_review_latency_seconds",
+        snapshot.review_latency_count,
+        snapshot.review_latency_sum_seconds,
+        &snapshot.review_latency_bucket_counts,
     ));
 
     lines.join("\n")

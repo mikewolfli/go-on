@@ -1,5 +1,22 @@
 # ACP Module Migration - Final Summary
 
+## 2026-04-09 Validation Addendum (Latest)
+
+This addendum reflects the latest validated state and should be treated as the release-facing summary.
+
+- Final runtime validation: passed.
+- ACP integration validation: passed (`acp_runtime_rpc_integration` 23/23).
+- Full workspace tests: passed.
+- blue6 core implementation and closure items have been executed and verified.
+
+### Key release-level outcomes
+
+- ACP routing and behavior contracts are aligned with the integration harness expectations.
+- Runtime shutdown and artifact isolation issues that caused flaky/timeout failures are resolved.
+- Migration status docs have been updated to include an authoritative current-status section.
+
+Historical text below remains for audit history but may describe intermediate states.
+
 ## Migration Status: PARTIALLY COMPLETE (Work in Progress)
 
 ### Overview

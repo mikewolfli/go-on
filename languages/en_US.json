@@ -60,6 +60,8 @@
     "error.request_handling_panic": "request handling panic: {error}",
     "error.unknown_mcp_adapter_tool": "unknown MCP adapter tool: {tool_name}",
     "error.review_gate_failed": "review gate failed: {error}",
+    "error.review_timeout": "reviewer '{reviewer}' timed out",
+    "error.reviewer_not_found": "reviewer agent '{reviewer}' not found in registry",
     "error.invalid_messages_payload": "invalid messages payload: {error}",
     "error.invalid_chat_params": "invalid chat params: {error}",
     "error.pipeline_gate_blocked": "pipeline gate blocked execution: {reason}",
@@ -73,6 +75,7 @@
 
     "warning.failed_persist_checkpoint": "failed to persist checkpoint summary: {error}",
     "warning.failed_save_autotune": "failed to save autotune state: {error}",
+    "warning.review_timeout_continue": "review agent timed out; continuing under degraded policy",
     "warning.failed_persist_autotune": "failed to persist autotune state: {error}",
 
     "info.mcp_server_listening": "MCP HTTP server listening on {address}",
@@ -101,6 +104,8 @@
     "warning.model_unreliable": "Selected model has low success rate",
     "warning.high_risk_task": "Task involves high-risk operations",
     "warning.invalid_value": "Invalid value. Allowed: {allowed}",
+
+    "review.request_prompt": "Please review the above and respond with APPROVE if you approve, or REJECT with reasons if you do not approve.",
 
     "router.task_complexity": "Task complexity",
     "router.required_roles": "Required roles",

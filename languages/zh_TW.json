@@ -60,16 +60,22 @@
     "error.request_handling_panic": "請求處理異常: {error}",
     "error.unknown_mcp_adapter_tool": "未知的 MCP 適配器工具: {tool_name}",
     "error.review_gate_failed": "審閱門失敗: {error}",
+    "error.review_timeout": "審閱代理 '{reviewer}' 已超時",
+    "error.reviewer_not_found": "審閱代理 '{reviewer}' 未在代理登錄檔中找到",
     "error.invalid_messages_payload": "無效的消息負載: {error}",
     "error.invalid_chat_params": "無效的聊天參數: {error}",
     "error.pipeline_gate_blocked": "流水線門阻止了執行: {reason}",
     "error.storage_key_empty": "{field} 必須是非空字串",
     "error.storage_key_too_long": "{field} 超過最大長度 {max_len}",
+    "error.review_phase_required": "複雜 full_auto 模式需要審閱階段: {error}",
+    "error.config_reload_failed": "設定重載失敗: {error}",
+    "error.parse_error_with_detail": "解析錯誤: {error}",
     "error.all_agents_failed": "所有候選代理都失敗了",
     "error.http_connection": "來自 {address} 的 HTTP 連接錯誤: {error}",
 
     "warning.failed_persist_checkpoint": "持久化檢查點摘要失敗: {error}",
     "warning.failed_save_autotune": "儲存自動調優狀態失敗: {error}",
+    "warning.review_timeout_continue": "審閱代理已超時；在降級策略下繼續執行",
     "warning.failed_persist_autotune": "持久化自動調優狀態失敗: {error}",
 
     "info.mcp_server_listening": "MCP HTTP 伺服器正在監聽 {address}",
@@ -98,6 +104,8 @@
     "warning.model_unreliable": "所選模型的成功率較低",
     "warning.high_risk_task": "任務涉及高風險操作",
     "warning.invalid_value": "無效值。允許的值: {allowed}",
+
+    "review.request_prompt": "請審閱以上內容，如果同意請回覆 APPROVE，如果不同意請回覆 REJECT 並說明原因。",
 
     "router.task_complexity": "任務複雜度",
     "router.required_roles": "所需角色",
