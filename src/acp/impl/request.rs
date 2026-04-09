@@ -8,12 +8,16 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::{Mutex as StdMutex, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
 use anyhow::Result;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
+use tokio::task::JoinSet;
+use tokio::time::Duration;
 use tracing::{debug, info};
 
 use crate::acp::helpers::metrics::{
@@ -25,17 +29,20 @@ use crate::acp::helpers::metrics::{
 use crate::acp::background::run_maintenance_cycle;
 use crate::acp::r#impl::storage::cache_clear;
 use crate::acp::server::AcpServer;
-use crate::agent::Message;
+use crate::agent::{AgentAuditLog, AgentTaskEnvelope, Message};
 use crate::config::{validate_runtime_readiness, AppConfig, AutoTuneState};
 use crate::evaluation::TraceEvent;
 
-use crate::acp::helpers::policy::resolve_review_policy;
+use crate::acp::helpers::policy::{rank_execution_agents, resolve_review_policy};
 use crate::acp::helpers::requirement::{
     evaluate_requirement_gate, parse_requirement_contract_from_params,
     resolve_learning_clarification_metrics,
 };
 use crate::i18n::runtime::{t, tf};
+use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryPromotionReport, MemoryStore};
 use crate::orchestration::task_router::TaskRouter;
+use crate::flow_with_models::FlowModelSelector;
+use crate::tool::{ToolInput, ToolRegistry};
 use crate::reinforcement::{
     run_action_check, ActionCheckKind,
     build_task_plan, build_workflow_generated_artifact,
@@ -46,10 +53,12 @@ use crate::reinforcement::{
     persist_workflow_learning_event, persist_workflow_research, ArtifactLedger,
     ClarificationSessionArtifact,
     ConsultationArtifact, ExecutionAssignmentRecord, ExecutionDecisionArtifact,
+    ExecutionDecisionCandidate,
     ParallelPhaseDecisionRecord, PrimaryFailoverReportItem,
     PrimarySecondaryFailoverArtifact, PrimarySecondaryPolicyArtifact,
     RequirementContractArtifact, TaskExecutionMetrics, TaskExecutionSummary,
-    WorkflowLearningBusArtifact, WorkflowLearningEvent, WorkflowResearchArtifact,
+    WorkflowGeneratedArtifact, WorkflowLearningBusArtifact, WorkflowLearningEvent,
+    WorkflowResearchArtifact,
 };
 
 use crate::rpc_protocol::{value_to_id, JsonRpcRequest, RequestTraceContext};
@@ -1629,6 +1638,19 @@ async fn handle_workflow_execute(
 
     let plan = build_task_plan(&task);
     let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
+    let workflow = build_workflow_generated_artifact(&plan);
+    let workflow_artifact_path = persist_workflow_generated(&ledger, &workflow)?;
+
+    let execution_context = build_execution_context(server, &params)?;
+    let mut execution_records = plan.planned_subtasks.clone();
+    let execution_report = execute_runtime_subtasks(
+        task.as_str(),
+        &workflow,
+        &mut execution_records,
+        &execution_context,
+    )
+    .await;
+
     let characteristics = TaskRouter::analyze_task(&task);
     let phase_options = server
         .flow_manager()
@@ -1642,6 +1664,15 @@ async fn handle_workflow_execute(
             .and_then(Value::as_bool)
             .unwrap_or(false),
     );
+    let secondary_agents = if execution_context.secondary_agents.is_empty() {
+        if review_policy.required_reviews >= 2 {
+            vec!["reviewer_1".to_string()]
+        } else {
+            Vec::new()
+        }
+    } else {
+        execution_context.secondary_agents.clone()
+    };
     let reviews = (0..review_policy.required_reviews)
         .map(|index| json!({
             "reviewer": format!("reviewer_{}", index + 1),
@@ -1654,15 +1685,11 @@ async fn handle_workflow_execute(
         generated_at: crate::acp::prelude::now_ts(),
         task: task.clone(),
         source: "workflow.execute".to_string(),
-        primary_agent: "local_echo".to_string(),
-        secondary_agents: if review_policy.required_reviews >= 2 {
-            vec!["reviewer_1".to_string()]
-        } else {
-            Vec::new()
-        },
+        primary_agent: execution_context.primary_agent.clone(),
+        secondary_agents: secondary_agents.clone(),
         policy_version: "blue5".to_string(),
-        failover_policy: "abort".to_string(),
-        secondary_max_count: 1,
+        failover_policy: execution_report.failure_strategy.clone(),
+        secondary_max_count: secondary_agents.len().max(1),
     };
     let primary_secondary_policy_artifact_path =
         persist_primary_secondary_policy_artifact(&ledger, &policy_artifact)?;
@@ -1674,17 +1701,17 @@ async fn handle_workflow_execute(
         secondary_agents: policy_artifact.secondary_agents.clone(),
         failover_policy: policy_artifact.failover_policy.clone(),
         total_subtasks: plan.planned_subtasks.len(),
-        failover_count: 0,
-        reports: plan
-            .planned_subtasks
+        failover_count: execution_report.failover_count,
+        reports: execution_report
+            .assignment_records
             .iter()
             .map(|record| PrimaryFailoverReportItem {
-                subtask_id: record.id.clone(),
+                subtask_id: record.subtask_id.clone(),
                 phase_index: record.phase_index,
-                selected_primary_agent: Some(policy_artifact.primary_agent.clone()),
-                effective_executor: Some(policy_artifact.primary_agent.clone()),
-                failover_applied: false,
-                failover_reason: None,
+                selected_primary_agent: record.node_primary_agent.clone(),
+                effective_executor: record.effective_executor.clone(),
+                failover_applied: record.failover_applied,
+                failover_reason: record.failover_reason.clone(),
             })
             .collect(),
     };
@@ -1694,39 +1721,26 @@ async fn handle_workflow_execute(
         generated_at: crate::acp::prelude::now_ts(),
         task: task.clone(),
         source: "workflow.execute".to_string(),
-        selected_agents: vec![policy_artifact.primary_agent.clone()],
-        assignment_reason: "default_local_execution".to_string(),
-        subtask_assignments: plan
-            .planned_subtasks
+        selected_agents: execution_report
+            .assignment_records
             .iter()
-            .enumerate()
-            .map(|(index, record)| ExecutionAssignmentRecord {
-                subtask_id: record.id.clone(),
-                phase_index: record.phase_index,
-                task_index: index,
-                desired_role: None,
-                selected_agent: Some(policy_artifact.primary_agent.clone()),
-                selection_reason: "default_local_execution".to_string(),
-                candidate_scores: Vec::new(),
-                dependency_blocked: false,
-                node_primary_agent: Some(policy_artifact.primary_agent.clone()),
-                node_secondary_agents: policy_artifact.secondary_agents.clone(),
-                effective_executor: Some(policy_artifact.primary_agent.clone()),
-                failover_applied: false,
-                failover_reason: None,
-            })
+            .filter_map(|record| record.effective_executor.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
             .collect(),
+        assignment_reason: "runtime_execution".to_string(),
+        subtask_assignments: execution_report.assignment_records.clone(),
         parallel_phase_decisions: vec![ParallelPhaseDecisionRecord {
             phase_index: 0,
             subtask_count: plan.planned_subtasks.len(),
-            parallelism_limit: plan.planned_subtasks.len().max(1),
-            utilization_target: 1.0,
+            parallelism_limit: execution_report.subtask_parallelism,
+            utilization_target: execution_report.parallel_utilization,
             has_dependencies: false,
-            execution_mode: "parallel_possible".to_string(),
-            reason: "generated from task plan".to_string(),
+            execution_mode: "runtime_execute".to_string(),
+            reason: "runtime execution from workflow DAG".to_string(),
         }],
-        parallelism: plan.planned_subtasks.len().max(1),
-        failure_strategy: "abort".to_string(),
+        parallelism: execution_report.subtask_parallelism,
+        failure_strategy: execution_report.failure_strategy.clone(),
         degrade_policy: params
             .get("capability_decision")
             .and_then(Value::as_str)
@@ -1742,13 +1756,13 @@ async fn handle_workflow_execute(
             complexity: plan.characteristics.complexity,
             predicted_success_rate: plan.routing.predicted_success_rate,
             subtasks_total: plan.planned_subtasks.len(),
-            subtasks_completed: plan.planned_subtasks.len(),
-            subtasks_failed: 0,
-            subtasks_skipped: 0,
+            subtasks_completed: execution_report.subtasks_completed,
+            subtasks_failed: execution_report.subtasks_failed,
+            subtasks_skipped: execution_report.subtasks_skipped,
             serial_work_ms: 0,
-            critical_path_ms: 0,
-            parallel_speedup: 1.0,
-            parallel_efficiency: 1.0,
+            critical_path_ms: execution_report.critical_path_ms,
+            parallel_speedup: execution_report.parallel_speedup,
+            parallel_efficiency: execution_report.parallel_efficiency,
             executor: policy_artifact.primary_agent.clone(),
             source: "workflow.execute".to_string(),
             runtime_healthy: server.is_healthy(),
@@ -1759,10 +1773,14 @@ async fn handle_workflow_execute(
             clarification_quality_score: clarification_metrics.quality_score,
             requirement_change_count: clarification_metrics.requirement_change_count,
             review_reject_root_cause: String::new(),
-            primary_stability_score: 1.0,
-            secondary_utilization_rate: if policy_artifact.secondary_agents.is_empty() { 0.0 } else { 1.0 },
-            failover_count: 0,
-            failover_root_cause: String::new(),
+            primary_stability_score: if execution_report.subtasks_failed == 0 { 1.0 } else { 0.0 },
+            secondary_utilization_rate: if policy_artifact.secondary_agents.is_empty() {
+                0.0
+            } else {
+                execution_report.parallel_utilization
+            },
+            failover_count: execution_report.failover_count as u32,
+            failover_root_cause: execution_report.failover_root_cause.clone(),
         },
         200,
     )?;
@@ -1774,7 +1792,10 @@ async fn handle_workflow_execute(
             "ok": true,
             "artifact_path": artifact_path.display().to_string(),
             "plan_artifact_path": plan_artifact_path.display().to_string(),
+            "workflow_artifact_path": workflow_artifact_path.display().to_string(),
             "learning_artifact_path": learning_artifact_path.display().to_string(),
+            "execution_mode": "runtime_execute",
+            "lazy_load": execution_report.lazy_load,
             "review_policy": review_policy,
             "reviews": reviews,
             "blue5": {
@@ -1935,53 +1956,32 @@ async fn handle_task_execute(
     let workflow = build_workflow_generated_artifact(&plan);
     let workflow_path = persist_workflow_generated(&ledger, &workflow)?;
 
-    let phases_executed = workflow.execution_order.len();
-    let subtask_parallelism = workflow
-        .execution_order
-        .iter()
-        .map(Vec::len)
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    let parallel_phases = workflow
-        .execution_order
-        .iter()
-        .filter(|phase| phase.len() > 1)
-        .count();
-    let total_phases = workflow.execution_order.len().max(1);
-    let parallel_utilization = parallel_phases as f64 / total_phases as f64;
-    let executor = plan
-        .routing
-        .roles
-        .first()
-        .map(|role| format!("{:?}", role).to_ascii_lowercase())
-        .unwrap_or_else(|| "planner".to_string());
+    let execution_context = build_execution_context(server, &params)?;
+    let mut records = plan.planned_subtasks.clone();
+    let execution_report = execute_runtime_subtasks(task, &workflow, &mut records, &execution_context).await;
+
     let execution_path = ledger.latest_path("spec", "latest-execution.json");
     let summary = TaskExecutionSummary {
         generated_at: crate::acp::prelude::now_ts(),
         task: plan.task.clone(),
         subtasks_total: plan.planned_subtasks.len(),
-        subtasks_completed: 0,
-        subtasks_failed: 0,
-        subtasks_skipped: 0,
-        executor: executor.clone(),
-        records: plan.planned_subtasks.clone(),
+        subtasks_completed: execution_report.subtasks_completed,
+        subtasks_failed: execution_report.subtasks_failed,
+        subtasks_skipped: execution_report.subtasks_skipped,
+        executor: execution_context.primary_agent.clone(),
+        records,
         execution_metrics: Some(TaskExecutionMetrics {
-            subtask_parallelism,
-            failure_strategy: "planning_only".to_string(),
-            phases_executed,
-            halted_early: false,
-            parallel_utilization,
+            subtask_parallelism: execution_report.subtask_parallelism,
+            failure_strategy: execution_report.failure_strategy.clone(),
+            phases_executed: execution_report.phases_executed,
+            halted_early: execution_report.halted_early,
+            parallel_utilization: execution_report.parallel_utilization,
             serial_degradation_count: 0,
-            parallel_failure_rollback_count: 0,
-            serial_work_ms: 0,
-            critical_path_ms: 0,
-            parallel_efficiency: parallel_utilization,
-            parallel_speedup: if subtask_parallelism > 1 {
-                subtask_parallelism as f64
-            } else {
-                1.0
-            },
+            parallel_failure_rollback_count: execution_report.parallel_failure_rollback_count,
+            serial_work_ms: execution_report.serial_work_ms,
+            critical_path_ms: execution_report.critical_path_ms,
+            parallel_efficiency: execution_report.parallel_efficiency,
+            parallel_speedup: execution_report.parallel_speedup,
         }),
         artifact_path: Some(execution_path.display().to_string()),
     };
@@ -1998,8 +1998,8 @@ async fn handle_task_execute(
             subtasks_completed: summary.subtasks_completed,
             subtasks_failed: summary.subtasks_failed,
             subtasks_skipped: summary.subtasks_skipped,
-            serial_work_ms: 0,
-            critical_path_ms: 0,
+            serial_work_ms: execution_report.serial_work_ms,
+            critical_path_ms: execution_report.critical_path_ms,
             parallel_speedup: summary
                 .execution_metrics
                 .as_ref()
@@ -2010,7 +2010,7 @@ async fn handle_task_execute(
                 .as_ref()
                 .map(|metrics| metrics.parallel_efficiency)
                 .unwrap_or(1.0),
-            executor: executor.clone(),
+            executor: execution_context.primary_agent.clone(),
             source: "task.execute".to_string(),
             runtime_healthy: server.is_healthy(),
             gates_ok: true,
@@ -2024,14 +2024,14 @@ async fn handle_task_execute(
             clarification_quality_score: 1.0,
             requirement_change_count: 0,
             review_reject_root_cause: String::new(),
-            primary_stability_score: if server.is_healthy() { 1.0 } else { 0.0 },
-            secondary_utilization_rate: if subtask_parallelism > 1 {
-                parallel_utilization
+            primary_stability_score: if summary.subtasks_failed == 0 { 1.0 } else { 0.0 },
+            secondary_utilization_rate: if execution_report.subtask_parallelism > 1 {
+                execution_report.parallel_utilization
             } else {
                 0.0
             },
-            failover_count: 0,
-            failover_root_cause: String::new(),
+            failover_count: execution_report.failover_count as u32,
+            failover_root_cause: execution_report.failover_root_cause.clone(),
         },
         200,
     )?;
@@ -2041,10 +2041,11 @@ async fn handle_task_execute(
         request_id,
         json!({
             "ok": true,
-            "execution_mode": "planning_only",
+            "execution_mode": "runtime_execute",
             "plan": plan,
             "workflow": workflow,
             "summary": summary,
+            "lazy_load": execution_report.lazy_load,
             "artifacts": {
                 "plan": plan_path.display().to_string(),
                 "workflow": workflow_path.display().to_string(),
@@ -2054,6 +2055,776 @@ async fn handle_task_execute(
         }),
     )
     .await
+}
+
+#[derive(Clone)]
+struct RuntimeExecutionContext {
+    task_timeout_seconds: Option<u64>,
+    principles: Option<Vec<String>>,
+    base_options: HashMap<String, Value>,
+    app_config: Arc<AppConfig>,
+    primary_agent: String,
+    secondary_agents: Vec<String>,
+    candidates: Vec<(String, Arc<dyn crate::agent::Agent>)>,
+    failure_strategy: String,
+    adaptive_selector: Arc<StdMutex<crate::adaptive_selector::AdaptiveModelSelector>>,
+    online_controller: Arc<StdMutex<crate::acp::prelude::OnlineControllerState>>,
+    failure_prevention: Arc<StdMutex<crate::failure_prevention::FailurePrevention>>,
+    lazy_policy: LazyLoadPolicy,
+}
+
+struct RuntimeExecutionReport {
+    assignment_records: Vec<ExecutionAssignmentRecord>,
+    subtasks_completed: usize,
+    subtasks_failed: usize,
+    subtasks_skipped: usize,
+    subtask_parallelism: usize,
+    phases_executed: usize,
+    halted_early: bool,
+    parallel_utilization: f64,
+    parallel_failure_rollback_count: usize,
+    serial_work_ms: u64,
+    critical_path_ms: u64,
+    parallel_efficiency: f64,
+    parallel_speedup: f64,
+    failure_strategy: String,
+    failover_count: usize,
+    failover_root_cause: String,
+    lazy_load: LazyLoadExecutionReport,
+}
+
+struct SubtaskRunResult {
+    record_index: usize,
+    duration_ms: u64,
+    executor: String,
+    success: bool,
+    failover_applied: bool,
+    failover_reason: Option<String>,
+    desired_role: Option<String>,
+    candidate_scores: Vec<ExecutionDecisionCandidate>,
+    response_excerpt: String,
+    tool_loop_used: bool,
+    tool_observations: Vec<String>,
+    audit_log_json: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct LazyLoadPolicy {
+    enable_tool_loop: bool,
+    enable_role_collaboration: bool,
+    enable_memory_policy: bool,
+    activation_reasons: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct LazyLoadExecutionReport {
+    policy: LazyLoadPolicy,
+    tool_loop_runs: usize,
+    role_routed_subtasks: usize,
+    memory_entries_written: usize,
+    memory_entries_retained: usize,
+    memory_artifact_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct MemoryPolicyExecutionArtifact {
+    generated_at: i64,
+    task: String,
+    policy: LazyLoadPolicy,
+    total_entries_before_gc: usize,
+    retained_entries_after_gc: usize,
+    sample_observations: Vec<String>,
+}
+
+fn build_execution_context(server: &AcpServer, params: &Value) -> Result<RuntimeExecutionContext> {
+    let flow = server
+        .flow_manager
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("flow manager not initialized"))?
+        .clone();
+    let registry = server
+        .agent_registry
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("agent registry not initialized"))?
+        .clone();
+
+    let requested_phase = params
+        .get("phase")
+        .and_then(Value::as_str)
+        .map(|value| value.to_string());
+    let resolved = flow.resolve(requested_phase, registry.as_ref())?;
+    let base_options = resolved
+        .phase
+        .options
+        .as_ref()
+        .and_then(|options| options.agent_options())
+        .unwrap_or_default();
+
+    let failure_strategy = params
+        .get("failure_strategy")
+        .and_then(Value::as_str)
+        .unwrap_or("tolerant")
+        .to_ascii_lowercase();
+    let complexity = params
+        .get("complexity")
+        .and_then(Value::as_u64)
+        .map(|value| value as u8)
+        .unwrap_or(3);
+    let mode = params
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("agent")
+        .to_ascii_lowercase();
+    let lazy_policy = resolve_lazy_load_policy(params, complexity, mode.as_str());
+
+    let primary_agent = resolved
+        .agents
+        .first()
+        .map(|(name, _)| name.clone())
+        .unwrap_or_else(|| "local_echo".to_string());
+    let secondary_agents = resolved
+        .agents
+        .iter()
+        .skip(1)
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+
+    Ok(RuntimeExecutionContext {
+        task_timeout_seconds: resolved
+            .phase
+            .options
+            .as_ref()
+            .and_then(|options| options.request_timeout_seconds),
+        principles: resolved.phase.principles.clone(),
+        base_options,
+        app_config: flow.config(),
+        primary_agent,
+        secondary_agents,
+        candidates: resolved.agents,
+        failure_strategy,
+        adaptive_selector: server.adaptive_model_selector.clone(),
+        online_controller: server.online_controller.clone(),
+        failure_prevention: server.failure_prevention.clone(),
+        lazy_policy,
+    })
+}
+
+fn resolve_lazy_load_policy(params: &Value, complexity: u8, mode: &str) -> LazyLoadPolicy {
+    let high_complexity = complexity >= 3;
+    let mode_is_heavy = matches!(mode, "agent" | "full_auto" | "safeguard");
+
+    let tool_loop = params
+        .get("lazy_tool_loop")
+        .and_then(Value::as_bool)
+        .unwrap_or(high_complexity && mode_is_heavy);
+    let role_collaboration = params
+        .get("lazy_role_collaboration")
+        .and_then(Value::as_bool)
+        .unwrap_or(high_complexity);
+    let memory_policy = params
+        .get("lazy_memory_policy")
+        .and_then(Value::as_bool)
+        .unwrap_or(high_complexity && mode_is_heavy);
+
+    let mut activation_reasons = Vec::new();
+    if high_complexity {
+        activation_reasons.push("complexity>=3".to_string());
+    }
+    if mode_is_heavy {
+        activation_reasons.push(format!("mode={}", mode));
+    }
+    if tool_loop {
+        activation_reasons.push("tool_loop_enabled".to_string());
+    }
+    if role_collaboration {
+        activation_reasons.push("role_collaboration_enabled".to_string());
+    }
+    if memory_policy {
+        activation_reasons.push("memory_policy_enabled".to_string());
+    }
+
+    LazyLoadPolicy {
+        enable_tool_loop: tool_loop,
+        enable_role_collaboration: role_collaboration,
+        enable_memory_policy: memory_policy,
+        activation_reasons,
+    }
+}
+
+async fn execute_runtime_subtasks(
+    task: &str,
+    workflow: &WorkflowGeneratedArtifact,
+    records: &mut [crate::reinforcement::PlannedSubtaskRecord],
+    context: &RuntimeExecutionContext,
+) -> RuntimeExecutionReport {
+    let mut id_to_index = HashMap::new();
+    for (index, record) in records.iter().enumerate() {
+        id_to_index.insert(record.id.clone(), index);
+    }
+
+    let mut assignment_records = Vec::new();
+    let mut phases_executed = 0_usize;
+    let mut halted_early = false;
+    let mut serial_work_ms = 0_u64;
+    let mut critical_path_ms = 0_u64;
+    let mut failover_count = 0_usize;
+    let mut failover_root_causes = Vec::new();
+    let mut tool_loop_runs = 0_usize;
+    let mut role_routed_subtasks = 0_usize;
+    let mut memory_snapshots = Vec::new();
+    let fail_fast = context.failure_strategy.eq_ignore_ascii_case("fail_fast");
+
+    for (phase_idx, phase) in workflow.execution_order.iter().enumerate() {
+        let phase_started = Instant::now();
+        let mut join_set: JoinSet<SubtaskRunResult> = JoinSet::new();
+        let mut scheduled = 0_usize;
+
+        for node_id in phase {
+            let Some(record_index) = id_to_index.get(node_id).copied() else {
+                continue;
+            };
+            let subtask_description = records[record_index].description.clone();
+            let mut local_context = context.clone();
+            let task_text = task.to_string();
+            let desired_role = workflow
+                .nodes
+                .iter()
+                .find(|node| node.id == *node_id)
+                .map(|node| node.role.clone());
+
+            let mut ranked_candidates = Vec::new();
+            if context.lazy_policy.enable_role_collaboration {
+                let names = context
+                    .candidates
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>();
+                ranked_candidates = rank_execution_agents(
+                    &names,
+                    desired_role.as_deref(),
+                    phase_idx,
+                    record_index,
+                );
+                if !ranked_candidates.is_empty() {
+                    role_routed_subtasks += 1;
+                }
+
+                let by_name = context
+                    .candidates
+                    .iter()
+                    .map(|(name, agent)| (name.clone(), agent.clone()))
+                    .collect::<HashMap<_, _>>();
+                let mut reordered = Vec::new();
+                for candidate in &ranked_candidates {
+                    if let Some(agent) = by_name.get(&candidate.agent) {
+                        reordered.push((candidate.agent.clone(), agent.clone()));
+                    }
+                }
+                for (name, agent) in &context.candidates {
+                    if !reordered.iter().any(|(existing, _)| existing == name) {
+                        reordered.push((name.clone(), agent.clone()));
+                    }
+                }
+                local_context.candidates = reordered;
+            }
+
+            join_set.spawn(async move {
+                execute_single_subtask(
+                    task_text,
+                    subtask_description,
+                    record_index,
+                    phase_idx,
+                    desired_role,
+                    ranked_candidates,
+                    local_context,
+                )
+                .await
+            });
+            scheduled += 1;
+        }
+
+        if scheduled == 0 {
+            continue;
+        }
+
+        phases_executed += 1;
+        let mut phase_failed = false;
+
+        while let Some(result) = join_set.join_next().await {
+            let Ok(result) = result else {
+                phase_failed = true;
+                continue;
+            };
+
+            let now = crate::acp::prelude::now_ts();
+            if let Some(record) = records.get_mut(result.record_index) {
+                record.mark_executed(
+                    now,
+                    now,
+                    result.duration_ms,
+                    if result.success { "completed" } else { "failed" },
+                    result.executor.clone(),
+                );
+
+                if !result.success {
+                    phase_failed = true;
+                }
+            }
+
+            if result.failover_applied {
+                failover_count += 1;
+                if let Some(reason) = result.failover_reason.clone() {
+                    failover_root_causes.push(reason);
+                }
+            }
+            if result.tool_loop_used {
+                tool_loop_runs += 1;
+            }
+            if !result.response_excerpt.is_empty() {
+                memory_snapshots.push(result.response_excerpt.clone());
+            }
+            for observation in &result.tool_observations {
+                memory_snapshots.push(observation.clone());
+            }
+
+            serial_work_ms += result.duration_ms;
+            assignment_records.push(ExecutionAssignmentRecord {
+                subtask_id: records
+                    .get(result.record_index)
+                    .map(|record| record.id.clone())
+                    .unwrap_or_else(|| format!("subtask-{}", result.record_index + 1)),
+                phase_index: records
+                    .get(result.record_index)
+                    .map(|record| record.phase_index)
+                    .unwrap_or(phase_idx),
+                task_index: result.record_index,
+                desired_role: result.desired_role,
+                selected_agent: Some(result.executor.clone()),
+                selection_reason: "runtime_execution".to_string(),
+                candidate_scores: result.candidate_scores,
+                dependency_blocked: false,
+                node_primary_agent: Some(context.primary_agent.clone()),
+                node_secondary_agents: context.secondary_agents.clone(),
+                effective_executor: Some(result.executor),
+                failover_applied: result.failover_applied,
+                failover_reason: result.failover_reason,
+            });
+        }
+
+        critical_path_ms += phase_started.elapsed().as_millis() as u64;
+        if fail_fast && phase_failed {
+            halted_early = true;
+            break;
+        }
+    }
+
+    if halted_early {
+        let now = crate::acp::prelude::now_ts();
+        for record in records.iter_mut() {
+            if record.start_ts.is_none() {
+                record.mark_executed(now, now, 0, "skipped", "scheduler");
+            }
+        }
+    }
+
+    let subtasks_completed = records
+        .iter()
+        .filter(|record| record.outcome.as_deref() == Some("completed"))
+        .count();
+    let subtasks_failed = records
+        .iter()
+        .filter(|record| record.outcome.as_deref() == Some("failed"))
+        .count();
+    let subtasks_skipped = records
+        .iter()
+        .filter(|record| record.outcome.as_deref() == Some("skipped"))
+        .count();
+
+    let total_phases = workflow.execution_order.len().max(1);
+    let parallel_phases = workflow
+        .execution_order
+        .iter()
+        .filter(|phase| phase.len() > 1)
+        .count();
+    let parallel_utilization = parallel_phases as f64 / total_phases as f64;
+    let subtask_parallelism = workflow
+        .execution_order
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let parallel_speedup = if critical_path_ms == 0 {
+        1.0
+    } else {
+        (serial_work_ms as f64 / critical_path_ms as f64).max(1.0)
+    };
+    let parallel_efficiency = if subtask_parallelism > 1 {
+        (parallel_speedup / subtask_parallelism as f64).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+
+    let mut memory_entries_written = 0_usize;
+    let mut memory_entries_retained = 0_usize;
+    let mut memory_artifact_path = None;
+    if context.lazy_policy.enable_memory_policy {
+        let mut store = MemoryStore::new(MemoryPolicy::default());
+        for (index, content) in memory_snapshots.iter().enumerate() {
+            let class = if content.contains("tool:") {
+                MemoryClass::Observation
+            } else {
+                MemoryClass::Episodic
+            };
+            store.store(MemoryEntry {
+                id: format!("mem-{}-{}", crate::acp::prelude::now_ts_ms(), index + 1),
+                class,
+                content: content.clone(),
+                timestamp: crate::acp::prelude::now_ts().to_string(),
+                usefulness: 0.8,
+                staleness: 0,
+            });
+            memory_entries_written += 1;
+        }
+        store.gc();
+        // Promote high-usefulness entries up one memory class level (BLUE8-M2)
+        let promotion: MemoryPromotionReport = store.promote();
+        memory_entries_retained = store.retrieve(MemoryClass::Observation, 128).len()
+            + store.retrieve(MemoryClass::Episodic, 128).len();
+
+        let memory_artifact = MemoryPolicyExecutionArtifact {
+            generated_at: crate::acp::prelude::now_ts(),
+            task: task.to_string(),
+            policy: context.lazy_policy.clone(),
+            total_entries_before_gc: memory_entries_written,
+            retained_entries_after_gc: memory_entries_retained,
+            sample_observations: memory_snapshots.into_iter().take(8).collect(),
+        };
+        let ledger = ArtifactLedger::new(None);
+        if let Ok(path) = ledger.write_json("spec", "latest-memory-policy.json", &memory_artifact)
+        {
+            memory_artifact_path = Some(path.display().to_string());
+        }
+        // Persist promotion report (BLUE8-M3)
+        let promotion_artifact = serde_json::json!({
+            "generated_at": crate::acp::prelude::now_ts(),
+            "task": task,
+            "promoted_count": promotion.promoted_count,
+            "promotion_map": promotion.promotion_map,
+        });
+        let _ = ledger.write_json("spec", "latest-promoted-memory.json", &promotion_artifact);
+    }
+
+    RuntimeExecutionReport {
+        assignment_records,
+        subtasks_completed,
+        subtasks_failed,
+        subtasks_skipped,
+        subtask_parallelism,
+        phases_executed,
+        halted_early,
+        parallel_utilization,
+        parallel_failure_rollback_count: if halted_early && subtasks_failed > 0 {
+            1
+        } else {
+            0
+        },
+        serial_work_ms,
+        critical_path_ms,
+        parallel_efficiency,
+        parallel_speedup,
+        failure_strategy: context.failure_strategy.clone(),
+        failover_count,
+        failover_root_cause: failover_root_causes
+            .into_iter()
+            .next()
+            .unwrap_or_default(),
+        lazy_load: LazyLoadExecutionReport {
+            policy: context.lazy_policy.clone(),
+            tool_loop_runs,
+            role_routed_subtasks,
+            memory_entries_written,
+            memory_entries_retained,
+            memory_artifact_path,
+        },
+    }
+}
+
+async fn execute_single_subtask(
+    task: String,
+    subtask_description: String,
+    record_index: usize,
+    phase_index: usize,
+    desired_role: Option<String>,
+    candidate_scores: Vec<ExecutionDecisionCandidate>,
+    mut context: RuntimeExecutionContext,
+) -> SubtaskRunResult {
+    let started = Instant::now();
+    let mut tool_observations = Vec::new();
+    let tool_context = if context.lazy_policy.enable_tool_loop {
+        run_lazy_tool_loop(task.as_str(), subtask_description.as_str(), record_index)
+    } else {
+        String::new()
+    };
+    if !tool_context.is_empty() {
+        tool_observations.push(tool_context.clone());
+    }
+    let messages = vec![Message {
+        role: "user".to_string(),
+        content: format!(
+            "Parent task: {}\nSubtask: {}\n{}\nReturn concrete implementation outcome and concise verification.",
+            task,
+            subtask_description,
+            if tool_context.is_empty() {
+                "".to_string()
+            } else {
+                format!("Tool observations:\n{}", tool_context)
+            }
+        ),
+    }];
+
+    // Build task envelope for this subtask (BLUE8-M4)
+    let task_id = format!(
+        "subtask-{}-{}-{}",
+        phase_index + 1,
+        record_index + 1,
+        crate::acp::prelude::now_ts_ms()
+    );
+    let envelope = AgentTaskEnvelope {
+        task_id: task_id.clone(),
+        phase: format!("phase-{}", phase_index + 1),
+        role: desired_role.clone().unwrap_or_else(|| "executor".to_string()),
+        objective: subtask_description.clone(),
+        constraints: context.principles.as_ref().map(|p| p.join("; ")),
+        evidence: if tool_context.is_empty() {
+            None
+        } else {
+            Some(tool_context.clone())
+        },
+        input: serde_json::json!({ "task": task.as_str(), "subtask": subtask_description.as_str() }),
+    };
+
+    let mut first_failure_reason: Option<String> = None;
+
+    // Sort candidates by adaptive model selector: best-known model first
+    let phase_name = format!("phase-{}", phase_index + 1);
+    let agent_names: Vec<String> = context.candidates.iter().map(|(n, _)| n.clone()).collect();
+    if let Ok(sel) = context.adaptive_selector.lock() {
+        if let Some(best) = sel.get_best_model(&agent_names) {
+            if let Some(pos) = context.candidates.iter().position(|(n, _)| n == &best) {
+                if pos > 0 {
+                    context.candidates.swap(0, pos);
+                }
+            }
+        }
+    }
+    // Skip agents that FailurePrevention marks as severely degraded (only if alternatives exist)
+    let degraded_set: std::collections::HashSet<String> = context
+        .failure_prevention
+        .lock()
+        .map(|fp| {
+            agent_names
+                .iter()
+                .filter(|n| fp.should_degrade(n))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if !degraded_set.is_empty()
+        && context
+            .candidates
+            .iter()
+            .any(|(n, _)| !degraded_set.contains(n))
+    {
+        context.candidates.retain(|(n, _)| !degraded_set.contains(n));
+    }
+
+    for (idx, (agent_name, agent)) in context.candidates.iter().enumerate() {
+        let selection = FlowModelSelector::select_model_for_agent(
+            agent.as_ref(),
+            context.app_config.as_ref(),
+            Some(&subtask_description),
+        );
+
+        let mut options = context.base_options.clone();
+        let selected_model = selection.selected_model.as_ref().map(|model| model.id.clone());
+        if let Some(model_id) = selected_model.clone() {
+            options.insert("model".to_string(), Value::String(model_id));
+        }
+
+        let run_result = run_agent_chat_collecting(
+            agent.clone(),
+            messages.clone(),
+            context.principles.clone(),
+            if options.is_empty() { None } else { Some(options) },
+            context.task_timeout_seconds,
+        )
+        .await;
+
+        if let (Ok(mut selector), Some(model_id)) =
+            (context.adaptive_selector.lock(), selected_model.clone())
+        {
+            selector.record_result(&model_id, run_result.is_ok());
+        }
+        // Record per-agent outcome to online controller for adaptive ranking
+        if let Ok(mut ctrl) = context.online_controller.lock() {
+            ctrl.record_agent_outcome(
+                &phase_name,
+                agent_name,
+                run_result.is_ok(),
+                started.elapsed().as_millis() as u64,
+            );
+        }
+
+        match run_result {
+            Ok(response) if !response.trim().is_empty() => {
+                // Build audit log for this successful execution (BLUE8-M5)
+                let audit = AgentAuditLog {
+                    agent: agent_name.clone(),
+                    phase: envelope.phase.clone(),
+                    task_id: task_id.clone(),
+                    decision: "executed".to_string(),
+                    rationale: Some(format!(
+                        "subtask completed; failover={}; tool_loop={}",
+                        idx > 0,
+                        context.lazy_policy.enable_tool_loop,
+                    )),
+                    timestamp: crate::acp::prelude::now_ts().to_string(),
+                };
+                let audit_log_json = serde_json::to_string(&audit).ok();
+                // Persist audit log to artifact ledger
+                let ledger = ArtifactLedger::new(None);
+                let _ = ledger.write_json("spec", "latest-audit-log.json", &audit);
+
+                return SubtaskRunResult {
+                    record_index,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    executor: agent_name.clone(),
+                    success: true,
+                    failover_applied: idx > 0,
+                    failover_reason: if idx > 0 {
+                        first_failure_reason.clone()
+                    } else {
+                        None
+                    },
+                    desired_role,
+                    candidate_scores,
+                    response_excerpt: response.chars().take(220).collect(),
+                    tool_loop_used: context.lazy_policy.enable_tool_loop,
+                    tool_observations,
+                    audit_log_json,
+                };
+            }
+            Ok(_) => {
+                if first_failure_reason.is_none() {
+                    first_failure_reason = Some("empty_response".to_string());
+                }
+            }
+            Err(err) => {
+                if first_failure_reason.is_none() {
+                    first_failure_reason = Some(err.to_string());
+                }
+            }
+        }
+    }
+
+    // Envelope is captured but execution failed — suppress unused-variable warning
+    let _ = envelope;
+
+    SubtaskRunResult {
+        record_index,
+        duration_ms: started.elapsed().as_millis() as u64,
+        executor: context
+            .candidates
+            .first()
+            .map(|(name, _)| name.clone())
+            .unwrap_or_else(|| "scheduler".to_string()),
+        success: false,
+        failover_applied: false,
+        failover_reason: first_failure_reason,
+        desired_role,
+        candidate_scores,
+        response_excerpt: String::new(),
+        tool_loop_used: context.lazy_policy.enable_tool_loop,
+        tool_observations,
+        audit_log_json: None,
+    }
+}
+
+fn run_lazy_tool_loop(task: &str, subtask: &str, record_index: usize) -> String {
+    let registry = ToolRegistry::new();
+    let Some(search_tool) = registry.get("search_files") else {
+        return String::new();
+    };
+
+    let pattern = if subtask.to_ascii_lowercase().contains("test") {
+        "**/*test*.rs"
+    } else {
+        "**/*.rs"
+    };
+
+    let input = ToolInput {
+        task_id: format!("subtask-{}", record_index + 1),
+        phase: "execution".to_string(),
+        agent_role: "coder".to_string(),
+        objective: task.to_string(),
+        constraints: Some("lazy-tool-loop".to_string()),
+        evidence: Some(subtask.to_string()),
+        payload: json!({
+            "pattern": pattern,
+            "directory": "src"
+        }),
+    };
+
+    match search_tool.run(&input) {
+        Ok(output) => {
+            let count = output
+                .result
+                .and_then(|result| {
+                    result
+                        .get("files")
+                        .and_then(Value::as_array)
+                        .map(|items| items.len())
+                })
+                .unwrap_or(0);
+            format!("tool:search_files pattern={} hits={}", pattern, count)
+        }
+        Err(_) => String::new(),
+    }
+}
+
+async fn run_agent_chat_collecting(
+    agent: Arc<dyn crate::agent::Agent>,
+    messages: Vec<Message>,
+    principles: Option<Vec<String>>,
+    options: Option<HashMap<String, Value>>,
+    timeout_seconds: Option<u64>,
+) -> Result<String> {
+    let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
+    let task = tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
+
+    let collect = async move {
+        let mut response = String::new();
+        while let Some(token) = receiver.recv().await {
+            response.push_str(&token);
+        }
+
+        match task.await {
+            Ok(Ok(())) => Ok::<String, anyhow::Error>(response),
+            Ok(Err(err)) => Err(err),
+            Err(join_err) => Err(anyhow::anyhow!("agent task panicked: {join_err}")),
+        }
+    };
+
+    if let Some(seconds) = timeout_seconds {
+        let timeout = Duration::from_secs(seconds.max(1));
+        match tokio::time::timeout(timeout, collect).await {
+            Ok(result) => result,
+            Err(_) => Err(anyhow::anyhow!("agent request timed out after {}s", seconds)),
+        }
+    } else {
+        collect.await
+    }
 }
 
 async fn handle_learning_summary(

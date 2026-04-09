@@ -58,6 +58,14 @@ impl MemoryPolicy {
     }
 }
 
+/// Promotion report returned by MemoryStore::promote
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemoryPromotionReport {
+    pub promoted_count: usize,
+    /// Each entry: (id, from_class_name, to_class_name)
+    pub promotion_map: Vec<(String, String, String)>,
+}
+
 /// Memory store with policy management
 pub struct MemoryStore {
     entries: HashMap<String, MemoryEntry>,
@@ -90,5 +98,48 @@ impl MemoryStore {
 
     pub fn gc(&mut self) {
         self.entries.retain(|_, e| self.policy.should_retain(e));
+    }
+
+    /// Promote high-usefulness entries up one memory class level.
+    ///
+    /// Promotion thresholds:
+    /// - Observation  (usefulness ≥ 0.75, staleness = 0) → Episodic
+    /// - Episodic     (usefulness ≥ 0.80)                → Semantic
+    /// - Semantic     (usefulness ≥ 0.90)                → ProjectState
+    pub fn promote(&mut self) -> MemoryPromotionReport {
+        let mut to_promote: Vec<(String, MemoryClass, MemoryClass)> = Vec::new();
+
+        for (id, entry) in &self.entries {
+            let new_class = match entry.class {
+                MemoryClass::Observation if entry.usefulness >= 0.75 && entry.staleness == 0 => {
+                    Some(MemoryClass::Episodic)
+                }
+                MemoryClass::Episodic if entry.usefulness >= 0.80 => Some(MemoryClass::Semantic),
+                MemoryClass::Semantic if entry.usefulness >= 0.90 => {
+                    Some(MemoryClass::ProjectState)
+                }
+                _ => None,
+            };
+            if let Some(new_class) = new_class {
+                to_promote.push((id.clone(), entry.class.clone(), new_class));
+            }
+        }
+
+        let promoted_count = to_promote.len();
+        let mut promotion_map = Vec::with_capacity(promoted_count);
+
+        for (id, from_class, to_class) in to_promote {
+            let from_name = format!("{:?}", from_class);
+            let to_name = format!("{:?}", to_class);
+            if let Some(entry) = self.entries.get_mut(&id) {
+                entry.class = to_class;
+            }
+            promotion_map.push((id, from_name, to_name));
+        }
+
+        MemoryPromotionReport {
+            promoted_count,
+            promotion_map,
+        }
     }
 }

@@ -1,7 +1,5 @@
 //! Adaptive Model Selection - Learning-based model selection (Phase 10+)
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

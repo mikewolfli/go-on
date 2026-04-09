@@ -21,6 +21,7 @@ use crate::config::PhaseOptions;
 use crate::flow::FlowManager;
 use crate::i18n::runtime::tf;
 use crate::rpc_protocol::RequestTraceContext;
+use crate::verification::DeterministicVerifier;
 
 /// Review timeout policy
 #[derive(Debug, Clone)]
@@ -369,7 +370,29 @@ async fn run_single_review(
     // Parse reviewer response: APPROVE unless the response contains REJECT or DENIED
     let upper = response.to_ascii_uppercase();
     let passed = upper.contains("APPROVE") && !upper.contains("REJECT") && !upper.contains("DENIED");
-    let comments = vec![format!("{}: {}", reviewer, response.trim())];
+
+    // Run deterministic signals and summarize into comments (BLUE8-M6/M7)
+        // M3: record reviewer outcome into online controller (learning loop)
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        if let Ok(mut ctrl) = server.online_controller.lock() {
+            ctrl.record_agent_outcome("review", reviewer, passed, elapsed_ms);
+        }
+
+    let syntax_signal = DeterministicVerifier::run_syntax_check("");
+    let compass_signals = DeterministicVerifier::run_quality_compass_checks();
+    let all_signals_count = 1 + compass_signals.len();
+    let passed_signals_count = usize::from(syntax_signal.passed)
+        + compass_signals.iter().filter(|s| s.passed).count();
+    let signal_summary = format!(
+        "deterministic: syntax={}, compass={}/{} passed",
+        if syntax_signal.passed { "ok" } else { "fail" },
+        passed_signals_count,
+        all_signals_count,
+    );
+    let comments = vec![
+        format!("{}: {}", reviewer, response.trim()),
+        signal_summary,
+    ];
 
     Ok(ReviewGateOutcome {
         passed,

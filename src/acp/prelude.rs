@@ -787,25 +787,8 @@ impl MaintenanceTracker {
     }
 }
 
-/// Online controller state for adaptive strategy
-#[derive(Debug, Default)]
-pub struct OnlineControllerState {
-    // Simplified implementation for migration
-}
-
-impl OnlineControllerState {
-    /// Rank agent names for a specific phase based on reliability scores
-    pub fn rank_agent_names_for_phase(
-        &self,
-        _phase_name: &str,
-        agent_names: &[String],
-    ) -> Vec<(String, f64)> {
-        // Simplified implementation for migration
-        // In the real implementation, this would use historical success rates
-        // For now, return all agents with a default score of 1.0
-        agent_names.iter().map(|name| (name.clone(), 1.0)).collect()
-    }
-}
+/// Online controller state - real implementation from governance module
+pub(crate) use crate::governance::runtime_controls::OnlineControllerState;
 
 /// Phase rate limiter for phase-level throttling
 #[derive(Debug, Default)]
