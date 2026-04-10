@@ -99,16 +99,18 @@ mod tests {
         let server = phase_inference_server("coding", &["coding", "review"]);
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         let checkpoint = runtime
-            .block_on(crate::acp::r#impl::conversation::create_conversation_checkpoint(
-                &server,
-                "conv-test",
-                &crate::agent::Message {
-                    role: "user".to_string(),
-                    content: "Test message".to_string(),
-                },
-                Some("checkpoint note".to_string()),
-                Some("main".to_string()),
-            ))
+            .block_on(
+                crate::acp::r#impl::conversation::create_conversation_checkpoint(
+                    &server,
+                    "conv-test",
+                    &crate::agent::Message {
+                        role: "user".to_string(),
+                        content: "Test message".to_string(),
+                    },
+                    Some("checkpoint note".to_string()),
+                    Some("main".to_string()),
+                ),
+            )
             .expect("checkpoint created");
 
         assert_eq!(checkpoint.conversation_id, "conv-test");

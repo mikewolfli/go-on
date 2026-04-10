@@ -2,7 +2,7 @@
   "name": "go-on-vscode",
   "displayName": "Go-On VS Code Extension",
   "description": "VS Code extension for the Go-On Rust ACP proxy",
-  "version": "0.2.11",
+  "version": "0.4.1",
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -35,6 +35,11 @@
     "onCommand:go-on.editCode",
     "onCommand:go-on.refactorCode",
     "onCommand:go-on.showProcessFlow",
+    "onCommand:go-on.workflowExecute",
+    "onCommand:go-on.taskPlan",
+    "onCommand:go-on.taskExecute",
+    "onCommand:go-on.learningSummary",
+    "onCommand:go-on.autotuneStatus",
     "onView:go-on-workflow",
     "onView:go-on-process-flow"
   ],
@@ -140,6 +145,31 @@
         "command": "go-on.showProcessFlow",
         "title": "Show Process Flow",
         "icon": "$(graph)"
+      },
+      {
+        "command": "go-on.workflowExecute",
+        "title": "Execute Workflow (RPC)",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "go-on.taskPlan",
+        "title": "Plan Task (RPC)",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "go-on.taskExecute",
+        "title": "Execute Task (RPC)",
+        "icon": "$(play-circle)"
+      },
+      {
+        "command": "go-on.learningSummary",
+        "title": "Get Learning Summary (RPC)",
+        "icon": "$(graph-line)"
+      },
+      {
+        "command": "go-on.autotuneStatus",
+        "title": "Get Autotune Status (RPC)",
+        "icon": "$(pulse)"
       }
     ],
     "views": {
@@ -254,7 +284,7 @@
         "go-on.releaseTag": {
           "type": "string",
           "default": "latest",
-          "description": "Release tag to download from (for example v0.1.1). Use latest for newest release"
+          "description": "Release tag to download from (for example v0.4.1). Use latest for newest release"
         },
         "go-on.autoStart": {
           "type": "boolean",

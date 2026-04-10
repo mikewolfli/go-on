@@ -918,6 +918,94 @@ function activate(context) {
             vscode.window.showWarningMessage('Go-On Process Flow view is not available yet. Reload Window after installing/updating the extension.');
         }
     });
+    let workflowExecuteRpcCommand = vscode.commands.registerCommand('go-on.workflowExecute', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        const objective = await vscode.window.showInputBox({
+            prompt: 'Workflow objective',
+            placeHolder: 'Describe the task objective for workflow.execute'
+        });
+        if (!objective) {
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('workflow.execute', {
+                task: objective,
+            });
+            vscode.window.showInformationMessage(`workflow.execute completed: ${JSON.stringify(result)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`workflow.execute failed: ${error.message}`);
+        }
+    });
+    let taskPlanRpcCommand = vscode.commands.registerCommand('go-on.taskPlan', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        const task = await vscode.window.showInputBox({
+            prompt: 'Task to plan',
+            placeHolder: 'Describe the task for task.plan'
+        });
+        if (!task) {
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('task.plan', { task });
+            vscode.window.showInformationMessage(`task.plan completed: ${JSON.stringify(result)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`task.plan failed: ${error.message}`);
+        }
+    });
+    let taskExecuteRpcCommand = vscode.commands.registerCommand('go-on.taskExecute', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        const task = await vscode.window.showInputBox({
+            prompt: 'Task to execute',
+            placeHolder: 'Describe the task for task.execute'
+        });
+        if (!task) {
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('task.execute', { task });
+            vscode.window.showInformationMessage(`task.execute completed: ${JSON.stringify(result)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`task.execute failed: ${error.message}`);
+        }
+    });
+    let learningSummaryRpcCommand = vscode.commands.registerCommand('go-on.learningSummary', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('learning.summary');
+            vscode.window.showInformationMessage(`learning.summary: ${JSON.stringify(result)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`learning.summary failed: ${error.message}`);
+        }
+    });
+    let autotuneStatusRpcCommand = vscode.commands.registerCommand('go-on.autotuneStatus', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('autotune.status');
+            vscode.window.showInformationMessage(`autotune.status: ${JSON.stringify(result)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`autotune.status failed: ${error.message}`);
+        }
+    });
     // New session command
     let newSessionCommand = vscode.commands.registerCommand('go-on.newSession', () => {
         vscode.window.showInputBox({
@@ -990,7 +1078,7 @@ function activate(context) {
         return await updateRulesMarkdownFiles(context, payload);
     });
     // Runtime download/start is intentionally deferred until the Chat view is opened.
-    context.subscriptions.push(startCommand, stopCommand, sendRequestCommand, healthCheckCommand, breakerStatusCommand, cacheClearCommand, vectorClearCommand, configReloadCommand, shutdownCommand, openChatCommand, closeChatCommand, openSettingsCommand, clearChatCommand, exportChatCommand, newSessionCommand, switchSessionCommand, createWorkflowCommand, runWorkflowCommand, showProcessFlowCommand, refreshStatusMonitorCommand, keyringSetCommand, keyringGetCommand, keyringDeleteCommand, keyringListCommand, applyDefaultConfigCommand, updateWorkflowMappingCommand, updateRulesCommand);
+    context.subscriptions.push(startCommand, stopCommand, sendRequestCommand, healthCheckCommand, breakerStatusCommand, cacheClearCommand, vectorClearCommand, configReloadCommand, shutdownCommand, openChatCommand, closeChatCommand, openSettingsCommand, clearChatCommand, exportChatCommand, newSessionCommand, switchSessionCommand, createWorkflowCommand, runWorkflowCommand, showProcessFlowCommand, workflowExecuteRpcCommand, taskPlanRpcCommand, taskExecuteRpcCommand, learningSummaryRpcCommand, autotuneStatusRpcCommand, refreshStatusMonitorCommand, keyringSetCommand, keyringGetCommand, keyringDeleteCommand, keyringListCommand, applyDefaultConfigCommand, updateWorkflowMappingCommand, updateRulesCommand);
     // Guarantee chat visibility even when the activity bar icon is hidden by layout settings.
     setTimeout(() => {
         void vscode.commands.executeCommand('go-on.openChat');

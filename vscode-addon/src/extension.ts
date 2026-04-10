@@ -323,7 +323,7 @@ async function downloadFile(url: string, destinationPath: string, maxRedirects: 
     if (maxRedirects <= 0) {
         throw new Error('Too many redirects while downloading file');
     }
-    
+
     await fsPromises.mkdir(path.dirname(destinationPath), { recursive: true });
 
     await new Promise<void>((resolve, reject) => {
@@ -1169,6 +1169,102 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    let workflowExecuteRpcCommand = vscode.commands.registerCommand('go-on.workflowExecute', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+
+        const objective = await vscode.window.showInputBox({
+            prompt: 'Workflow objective',
+            placeHolder: 'Describe the task objective for workflow.execute'
+        });
+        if (!objective) {
+            return;
+        }
+
+        try {
+            const result = await goOnManager.sendRequest('workflow.execute', {
+                task: objective,
+            });
+            vscode.window.showInformationMessage(`workflow.execute completed: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`workflow.execute failed: ${error.message}`);
+        }
+    });
+
+    let taskPlanRpcCommand = vscode.commands.registerCommand('go-on.taskPlan', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+
+        const task = await vscode.window.showInputBox({
+            prompt: 'Task to plan',
+            placeHolder: 'Describe the task for task.plan'
+        });
+        if (!task) {
+            return;
+        }
+
+        try {
+            const result = await goOnManager.sendRequest('task.plan', { task });
+            vscode.window.showInformationMessage(`task.plan completed: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`task.plan failed: ${error.message}`);
+        }
+    });
+
+    let taskExecuteRpcCommand = vscode.commands.registerCommand('go-on.taskExecute', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+
+        const task = await vscode.window.showInputBox({
+            prompt: 'Task to execute',
+            placeHolder: 'Describe the task for task.execute'
+        });
+        if (!task) {
+            return;
+        }
+
+        try {
+            const result = await goOnManager.sendRequest('task.execute', { task });
+            vscode.window.showInformationMessage(`task.execute completed: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`task.execute failed: ${error.message}`);
+        }
+    });
+
+    let learningSummaryRpcCommand = vscode.commands.registerCommand('go-on.learningSummary', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+
+        try {
+            const result = await goOnManager.sendRequest('learning.summary');
+            vscode.window.showInformationMessage(`learning.summary: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`learning.summary failed: ${error.message}`);
+        }
+    });
+
+    let autotuneStatusRpcCommand = vscode.commands.registerCommand('go-on.autotuneStatus', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+
+        try {
+            const result = await goOnManager.sendRequest('autotune.status');
+            vscode.window.showInformationMessage(`autotune.status: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`autotune.status failed: ${error.message}`);
+        }
+    });
+
     // New session command
     let newSessionCommand = vscode.commands.registerCommand('go-on.newSession', () => {
         vscode.window.showInputBox({
@@ -1287,6 +1383,11 @@ export function activate(context: vscode.ExtensionContext) {
         createWorkflowCommand,
         runWorkflowCommand,
         showProcessFlowCommand,
+        workflowExecuteRpcCommand,
+        taskPlanRpcCommand,
+        taskExecuteRpcCommand,
+        learningSummaryRpcCommand,
+        autotuneStatusRpcCommand,
         refreshStatusMonitorCommand,
         keyringSetCommand,
         keyringGetCommand,

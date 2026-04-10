@@ -74,10 +74,7 @@ impl McpStdioServer {
                         Err(e) => {
                             eprintln!(
                                 "{}",
-                                tf(
-                                    "error.handling_request",
-                                    &[("error", &format!("{}", e))]
-                                )
+                                tf("error.handling_request", &[("error", &format!("{}", e))])
                             );
                         }
                     }

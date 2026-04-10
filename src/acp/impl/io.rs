@@ -5,7 +5,6 @@
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
-
 use anyhow::Result;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
@@ -45,7 +44,11 @@ pub async fn send_error(
             jsonrpc: "2.0",
             id,
             result: None,
-            error: Some(JsonRpcError { code, message, data }),
+            error: Some(JsonRpcError {
+                code,
+                message,
+                data,
+            }),
         },
     )
     .await

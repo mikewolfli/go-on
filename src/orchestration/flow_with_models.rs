@@ -180,10 +180,10 @@ impl FlowModelSelector {
 
 #[cfg(test)]
 mod tests {
+    use crate::agent::{Agent, Message};
     use async_trait::async_trait;
     use serde_json::Value;
     use std::collections::HashMap;
-    use crate::agent::{Agent, Message};
 
     use super::*;
 

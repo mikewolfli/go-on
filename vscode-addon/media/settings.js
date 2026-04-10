@@ -1,5 +1,5 @@
 // Settings functionality
-(function() {
+(function () {
     const vscode = acquireVsCodeApi();
 
     // Load settings when received
@@ -221,8 +221,40 @@
         vscode.postMessage({ type: 'healthCheck' });
     });
 
+    document.getElementById('breakerStatus').addEventListener('click', () => {
+        vscode.postMessage({ type: 'breakerStatus' });
+    });
+
     document.getElementById('clearCache').addEventListener('click', () => {
         vscode.postMessage({ type: 'clearCache' });
+    });
+
+    document.getElementById('clearVector').addEventListener('click', () => {
+        vscode.postMessage({ type: 'clearVector' });
+    });
+
+    document.getElementById('reloadConfig').addEventListener('click', () => {
+        vscode.postMessage({ type: 'reloadConfig' });
+    });
+
+    document.getElementById('workflowExecute').addEventListener('click', () => {
+        vscode.postMessage({ type: 'workflowExecute' });
+    });
+
+    document.getElementById('taskPlan').addEventListener('click', () => {
+        vscode.postMessage({ type: 'taskPlan' });
+    });
+
+    document.getElementById('taskExecute').addEventListener('click', () => {
+        vscode.postMessage({ type: 'taskExecute' });
+    });
+
+    document.getElementById('learningSummary').addEventListener('click', () => {
+        vscode.postMessage({ type: 'learningSummary' });
+    });
+
+    document.getElementById('autotuneStatus').addEventListener('click', () => {
+        vscode.postMessage({ type: 'autotuneStatus' });
     });
 
     // Request initial settings

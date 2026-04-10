@@ -73,15 +73,17 @@ pub async fn get_conversation_state(
     let state = server.conversation_state.lock().await;
 
     // Check if any checkpoint belongs to this conversation
-    let has_conversation = state.checkpoints.iter()
+    let has_conversation = state
+        .checkpoints
+        .iter()
         .any(|cp| cp.conversation_id == conversation_id);
 
     if has_conversation {
         // Return a clone of the state with only checkpoints for this conversation
         let mut filtered_state = state.clone();
-        filtered_state.checkpoints.retain(|cp|
-            cp.conversation_id == conversation_id
-        );
+        filtered_state
+            .checkpoints
+            .retain(|cp| cp.conversation_id == conversation_id);
         Ok(Some(filtered_state))
     } else {
         Ok(None)
@@ -98,11 +100,10 @@ pub async fn get_conversation_checkpoint(
 ) -> Result<Option<ConversationCheckpoint>> {
     let state = server.conversation_state.lock().await;
 
-    let checkpoint = state.checkpoints.iter()
-        .find(|cp|
-            cp.conversation_id == conversation_id &&
-            cp.checkpoint_id == checkpoint_id
-        )
+    let checkpoint = state
+        .checkpoints
+        .iter()
+        .find(|cp| cp.conversation_id == conversation_id && cp.checkpoint_id == checkpoint_id)
         .cloned();
 
     Ok(checkpoint)
@@ -118,7 +119,9 @@ pub async fn list_conversation_checkpoints(
 ) -> Result<Vec<ConversationCheckpoint>> {
     let state = server.conversation_state.lock().await;
 
-    let mut checkpoints: Vec<ConversationCheckpoint> = state.checkpoints.iter()
+    let mut checkpoints: Vec<ConversationCheckpoint> = state
+        .checkpoints
+        .iter()
         .filter(|cp| cp.conversation_id == conversation_id)
         .cloned()
         .collect();
@@ -137,21 +140,18 @@ pub async fn list_conversation_checkpoints(
 /// Delete conversation
 ///
 /// This function replaces the `AcpServer::delete_conversation` method.
-pub async fn delete_conversation(
-    server: &AcpServer,
-    conversation_id: &str,
-) -> Result<()> {
+pub async fn delete_conversation(server: &AcpServer, conversation_id: &str) -> Result<()> {
     let mut state = server.conversation_state.lock().await;
 
     // Remove all checkpoints for this conversation
-    state.checkpoints.retain(|cp|
-        cp.conversation_id != conversation_id
-    );
+    state
+        .checkpoints
+        .retain(|cp| cp.conversation_id != conversation_id);
 
     // Remove branch heads for this conversation
-    state.branch_heads.retain(|_, head_id|
-        !head_id.contains(conversation_id)
-    );
+    state
+        .branch_heads
+        .retain(|_, head_id| !head_id.contains(conversation_id));
 
     Ok(())
 }
@@ -190,10 +190,7 @@ pub async fn set_branch_head(
 /// Clear old conversations
 ///
 /// This function replaces the `AcpServer::clear_old_conversations` method.
-pub async fn clear_old_conversations(
-    server: &AcpServer,
-    max_age_seconds: i64,
-) -> Result<usize> {
+pub async fn clear_old_conversations(server: &AcpServer, max_age_seconds: i64) -> Result<usize> {
     let mut state = server.conversation_state.lock().await;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -211,7 +208,9 @@ pub async fn clear_old_conversations(
     // Also clean up branch heads for removed conversations
     if removed > 0 {
         // Extract conversation IDs from remaining checkpoints
-        let remaining_conversations: std::collections::HashSet<String> = state.checkpoints.iter()
+        let remaining_conversations: std::collections::HashSet<String> = state
+            .checkpoints
+            .iter()
             .map(|cp| cp.conversation_id.clone())
             .collect();
 
@@ -231,15 +230,15 @@ pub async fn clear_old_conversations(
 /// Get conversation statistics
 ///
 /// This function replaces the `AcpServer::get_conversation_stats` method.
-pub async fn get_conversation_stats(
-    server: &AcpServer,
-) -> Result<Value> {
+pub async fn get_conversation_stats(server: &AcpServer) -> Result<Value> {
     let state = server.conversation_state.lock().await;
 
     // Count conversations by ID
     let mut conversation_counts: HashMap<String, usize> = HashMap::new();
     for checkpoint in &state.checkpoints {
-        *conversation_counts.entry(checkpoint.conversation_id.clone()).or_insert(0) += 1;
+        *conversation_counts
+            .entry(checkpoint.conversation_id.clone())
+            .or_insert(0) += 1;
     }
 
     let stats = json!({

@@ -65,10 +65,7 @@ pub async fn cache_put(
 /// Get cache entry count
 ///
 /// This function replaces the `AcpServer::cache_entry_count` method.
-pub async fn cache_entry_count(
-    _server: &AcpServer,
-    cache: Arc<ResponseCache>,
-) -> Result<u64> {
+pub async fn cache_entry_count(_server: &AcpServer, cache: Arc<ResponseCache>) -> Result<u64> {
     spawn_blocking(move || cache.entry_count())
         .await
         .map_err(|e| {
@@ -85,10 +82,7 @@ pub async fn cache_entry_count(
 /// Clear cache
 ///
 /// This function replaces the `AcpServer::cache_clear` method.
-pub async fn cache_clear(
-    _server: &AcpServer,
-    cache: Arc<ResponseCache>,
-) -> Result<usize> {
+pub async fn cache_clear(_server: &AcpServer, cache: Arc<ResponseCache>) -> Result<usize> {
     spawn_blocking(move || cache.clear_all())
         .await
         .map_err(|e| {
@@ -105,21 +99,16 @@ pub async fn cache_clear(
 /// Get cache statistics
 ///
 /// This function replaces the `AcpServer::cache_stats` method.
-pub async fn cache_stats(
-    _server: &AcpServer,
-    cache: Arc<ResponseCache>,
-) -> Result<CacheStats> {
-    let snapshot = spawn_blocking(move || cache.stats())
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "{}",
-                tf(
-                    "error.task_join",
-                    &[("task", "cache_stats"), ("error", &format!("{}", e))]
-                )
+pub async fn cache_stats(_server: &AcpServer, cache: Arc<ResponseCache>) -> Result<CacheStats> {
+    let snapshot = spawn_blocking(move || cache.stats()).await.map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            tf(
+                "error.task_join",
+                &[("task", "cache_stats"), ("error", &format!("{}", e))]
             )
-        })??;
+        )
+    })??;
 
     let total_size = snapshot.entry_count as usize;
     let max_size = snapshot.max_entries.max(1);

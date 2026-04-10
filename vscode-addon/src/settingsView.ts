@@ -66,6 +66,30 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                     case 'clearCache':
                         vscode.commands.executeCommand('go-on.cacheClear');
                         break;
+                    case 'breakerStatus':
+                        vscode.commands.executeCommand('go-on.breakerStatus');
+                        break;
+                    case 'clearVector':
+                        vscode.commands.executeCommand('go-on.vectorClear');
+                        break;
+                    case 'reloadConfig':
+                        vscode.commands.executeCommand('go-on.configReload');
+                        break;
+                    case 'workflowExecute':
+                        vscode.commands.executeCommand('go-on.workflowExecute');
+                        break;
+                    case 'taskPlan':
+                        vscode.commands.executeCommand('go-on.taskPlan');
+                        break;
+                    case 'taskExecute':
+                        vscode.commands.executeCommand('go-on.taskExecute');
+                        break;
+                    case 'learningSummary':
+                        vscode.commands.executeCommand('go-on.learningSummary');
+                        break;
+                    case 'autotuneStatus':
+                        vscode.commands.executeCommand('go-on.autotuneStatus');
+                        break;
                     case 'setLanguage':
                         await this._setLanguage(message.language);
                         break;
@@ -653,7 +677,15 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                         <button class="action-button" id="startGoOn">Start Go-On</button>
                         <button class="action-button" id="stopGoOn">Stop Go-On</button>
                         <button class="action-button" id="healthCheck">Health Check</button>
+                        <button class="action-button" id="breakerStatus">Breaker Status</button>
                         <button class="action-button danger" id="clearCache">Clear Cache</button>
+                        <button class="action-button danger" id="clearVector">Clear Vector</button>
+                        <button class="action-button" id="reloadConfig">Reload Config</button>
+                        <button class="action-button" id="workflowExecute">Workflow Execute</button>
+                        <button class="action-button" id="taskPlan">Task Plan</button>
+                        <button class="action-button" id="taskExecute">Task Execute</button>
+                        <button class="action-button" id="learningSummary">Learning Summary</button>
+                        <button class="action-button" id="autotuneStatus">Autotune Status</button>
                     </div>
 
                     <div style="margin-top: 20px; padding: 10px; background: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--vscode-textBlockQuote-border);">

@@ -329,8 +329,12 @@ mod tests {
         let db_path = dir.path().join("cache.sqlite3");
 
         let cache = ResponseCache::new(&db_path, 60, 10).expect("cache should initialize");
-        cache.put("k1", "r1", "agent", None).expect("cache put should succeed");
-        cache.put("k2", "r2", "agent", None).expect("cache put should succeed");
+        cache
+            .put("k1", "r1", "agent", None)
+            .expect("cache put should succeed");
+        cache
+            .put("k2", "r2", "agent", None)
+            .expect("cache put should succeed");
 
         let _ = cache.get("k1").expect("cache get should succeed");
         let _ = cache.get("k1").expect("cache get should succeed");

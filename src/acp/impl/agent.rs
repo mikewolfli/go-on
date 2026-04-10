@@ -80,11 +80,17 @@ pub async fn run_dual_review_gate(
     server.metrics.inc_review_gate();
 
     let review_span = parent_span.and_then(|parent| {
-        server.telemetry_runtime.lock().ok().and_then(|telemetry_guard| telemetry_guard.start_child_span(
-            parent,
-            "acp.chat.review_gate",
-            vec![opentelemetry::KeyValue::new("gate.mode", "dual")],
-        ))
+        server
+            .telemetry_runtime
+            .lock()
+            .ok()
+            .and_then(|telemetry_guard| {
+                telemetry_guard.start_child_span(
+                    parent,
+                    "acp.chat.review_gate",
+                    vec![opentelemetry::KeyValue::new("gate.mode", "dual")],
+                )
+            })
     });
 
     let timeout_policy = ReviewTimeoutPolicy::from_options(phase_options);
@@ -134,7 +140,9 @@ pub async fn run_dual_review_gate(
                 .find(|(name, _)| name == b)
                 .map(|(_, score)| *score)
                 .unwrap_or(0.0);
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         // Take top 2 reviewers for dual review
@@ -210,20 +218,20 @@ pub async fn run_dual_review_gate(
             },
             timeout_detected,
         ))
-    }.await;
+    }
+    .await;
 
     // Handle timeout
     if let Some(deadline) = gate_deadline {
         if Instant::now() > deadline {
             let timeout_duration_ms = started.elapsed().as_millis() as u64;
             server.metrics.inc_review_gate_timeout();
-            server.metrics.record_review_latency(timeout_duration_ms as f64);
+            server
+                .metrics
+                .record_review_latency(timeout_duration_ms as f64);
             if timeout_policy.fail_on_timeout {
                 server.metrics.inc_review_gate_rejected();
-                return Err(anyhow::anyhow!(
-                    "{}",
-                    tf("error.review_gate_timeout", &[])
-                ));
+                return Err(anyhow::anyhow!("{}", tf("error.review_gate_timeout", &[])));
             } else {
                 server.metrics.inc_review_gate_degraded();
                 match result {
@@ -260,7 +268,9 @@ pub async fn run_dual_review_gate(
                     server.metrics.inc_review_gate_degraded();
                 }
             }
-            server.metrics.record_review_latency(outcome.duration_ms as f64);
+            server
+                .metrics
+                .record_review_latency(outcome.duration_ms as f64);
             if outcome.passed {
                 server.metrics.inc_review_gate_approved();
             } else {
@@ -291,14 +301,20 @@ async fn run_single_review(
     let started = Instant::now();
 
     let _review_span = parent_span.and_then(|parent| {
-        server.telemetry_runtime.lock().ok().and_then(|telemetry_guard| telemetry_guard.start_child_span(
-            parent,
-            "acp.chat.single_review",
-            vec![
-                opentelemetry::KeyValue::new("reviewer", reviewer.to_string()),
-                opentelemetry::KeyValue::new("review.type", "single"),
-            ],
-        ))
+        server
+            .telemetry_runtime
+            .lock()
+            .ok()
+            .and_then(|telemetry_guard| {
+                telemetry_guard.start_child_span(
+                    parent,
+                    "acp.chat.single_review",
+                    vec![
+                        opentelemetry::KeyValue::new("reviewer", reviewer.to_string()),
+                        opentelemetry::KeyValue::new("review.type", "single"),
+                    ],
+                )
+            })
     });
 
     // Check deadline before starting to avoid unnecessary work
@@ -313,9 +329,12 @@ async fn run_single_review(
 
     // Look up reviewer agent from the registry
     let (_, registry) = routing_handles(server)?;
-    let agent = registry
-        .get(reviewer)
-        .ok_or_else(|| anyhow::anyhow!("{}", tf("error.reviewer_not_found", &[("reviewer", reviewer)])))?;
+    let agent = registry.get(reviewer).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{}",
+            tf("error.reviewer_not_found", &[("reviewer", reviewer)])
+        )
+    })?;
 
     // Build review messages: copy the original conversation and append a review prompt
     let mut review_messages = messages.to_vec();
@@ -331,7 +350,9 @@ async fn run_single_review(
     let sender = crate::agent::StreamingSender::from(sender);
     let agent_clone = agent.clone();
     let task = tokio::spawn(async move {
-        agent_clone.chat(review_messages, None, agent_options, sender).await
+        agent_clone
+            .chat(review_messages, None, agent_options, sender)
+            .await
     });
 
     let response = if let Some(deadline) = deadline {
@@ -371,30 +392,28 @@ async fn run_single_review(
 
     // Parse reviewer response: APPROVE unless the response contains REJECT or DENIED
     let upper = response.to_ascii_uppercase();
-    let passed = upper.contains("APPROVE") && !upper.contains("REJECT") && !upper.contains("DENIED");
+    let passed =
+        upper.contains("APPROVE") && !upper.contains("REJECT") && !upper.contains("DENIED");
 
     // Run deterministic signals and summarize into comments (BLUE8-M6/M7)
-        // M3: record reviewer outcome into online controller (learning loop)
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-        if let Ok(mut ctrl) = server.online_controller.lock() {
-            ctrl.record_agent_outcome("review", reviewer, passed, elapsed_ms);
-        }
+    // M3: record reviewer outcome into online controller (learning loop)
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    if let Ok(mut ctrl) = server.online_controller.lock() {
+        ctrl.record_agent_outcome("review", reviewer, passed, elapsed_ms);
+    }
 
     let syntax_signal = DeterministicVerifier::run_syntax_check("");
     let compass_signals = DeterministicVerifier::run_quality_compass_checks();
     let all_signals_count = 1 + compass_signals.len();
-    let passed_signals_count = usize::from(syntax_signal.passed)
-        + compass_signals.iter().filter(|s| s.passed).count();
+    let passed_signals_count =
+        usize::from(syntax_signal.passed) + compass_signals.iter().filter(|s| s.passed).count();
     let signal_summary = format!(
         "deterministic: syntax={}, compass={}/{} passed",
         if syntax_signal.passed { "ok" } else { "fail" },
         passed_signals_count,
         all_signals_count,
     );
-    let comments = vec![
-        format!("{}: {}", reviewer, response.trim()),
-        signal_summary,
-    ];
+    let comments = vec![format!("{}: {}", reviewer, response.trim()), signal_summary];
 
     Ok(ReviewGateOutcome {
         passed,
@@ -405,7 +424,9 @@ async fn run_single_review(
 }
 
 /// Get routing handles (flow manager and agent registry)
-fn routing_handles(server: &AcpServer) -> Result<(Arc<FlowManager>, Arc<crate::agent::AgentRegistry>)> {
+fn routing_handles(
+    server: &AcpServer,
+) -> Result<(Arc<FlowManager>, Arc<crate::agent::AgentRegistry>)> {
     let flow = server
         .flow_manager
         .as_ref()

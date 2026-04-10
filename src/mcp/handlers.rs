@@ -84,7 +84,10 @@ impl McpServer {
             .cloned()
             .unwrap_or_else(|| json!({}));
 
-        info!("MCP: Calling tool '{}' with input: {:?}", tool_name, tool_input);
+        info!(
+            "MCP: Calling tool '{}' with input: {:?}",
+            tool_name, tool_input
+        );
 
         let tool = self
             .tool_registry

@@ -71,7 +71,10 @@ async fn test_mcp_error_handling() {
     let response = server.handle_request(request).await;
     assert!(response.is_ok(), "Request should not panic");
     let resp = response.unwrap();
-    assert!(resp.error.is_some(), "Error should be present for unknown method");
+    assert!(
+        resp.error.is_some(),
+        "Error should be present for unknown method"
+    );
 }
 
 #[tokio::test]
@@ -93,7 +96,10 @@ async fn test_mcp_tool_call_rejects_missing_required_arguments() {
         .await
         .expect("request should return response envelope");
     assert!(response.error.is_some());
-    let message = response.error.expect("error object should be present").message;
+    let message = response
+        .error
+        .expect("error object should be present")
+        .message;
     assert!(message.contains("requires arguments.path"));
 }
 

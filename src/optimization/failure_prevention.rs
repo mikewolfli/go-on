@@ -210,7 +210,9 @@ impl FailurePrevention {
         self.health_monitors.insert(name.to_string(), health);
         self.failure_counts.entry(name.to_string()).or_insert(0);
         self.total_requests.entry(name.to_string()).or_insert(0);
-        self.successful_requests.entry(name.to_string()).or_insert(0);
+        self.successful_requests
+            .entry(name.to_string())
+            .or_insert(0);
     }
 
     /// Update service health

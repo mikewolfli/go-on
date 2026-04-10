@@ -974,7 +974,8 @@ pub struct RuntimeMetrics {
     inner: StdMutex<MetricsSnapshot>,
 }
 
-const METRIC_LATENCY_BUCKETS_MS: [f64; 9] = [1.0, 5.0, 10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0];
+const METRIC_LATENCY_BUCKETS_MS: [f64; 9] =
+    [1.0, 5.0, 10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0];
 
 fn latency_bucket_index_ms(duration_ms: f64) -> usize {
     for (idx, boundary) in METRIC_LATENCY_BUCKETS_MS.iter().enumerate() {
