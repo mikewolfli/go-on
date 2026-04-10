@@ -206,7 +206,7 @@ pub trait Agent: Send + Sync {
 ```text
 .
 ├── Cargo.toml
-├── config.toml.example
+├── config.toml.autopilot-adaptive
 ├── README.md
 └── src
     ├── main.rs               # Entry: load config and run ACP main loop

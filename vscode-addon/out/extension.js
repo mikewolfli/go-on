@@ -303,17 +303,17 @@ async function resolveConfigPath(workspaceRoot, configuredConfigPath, runtimeDir
     if (await pathExists(bundledConfigPath)) {
         return bundledConfigPath;
     }
-    const workspaceConfigExamplePath = path.join(workspaceRoot, 'config.toml.example');
-    if (await pathExists(workspaceConfigExamplePath)) {
+    const workspaceConfigTemplatePath = path.join(workspaceRoot, 'config.toml.autopilot-adaptive');
+    if (await pathExists(workspaceConfigTemplatePath)) {
         await fsPromises.mkdir(path.dirname(workspaceConfigPath), { recursive: true });
-        await fsPromises.copyFile(workspaceConfigExamplePath, workspaceConfigPath);
+        await fsPromises.copyFile(workspaceConfigTemplatePath, workspaceConfigPath);
         vscode.window.showInformationMessage(`Go-On config created from workspace template: ${workspaceConfigPath}`);
         return workspaceConfigPath;
     }
-    const bundledConfigExamplePath = path.join(runtimeDir, 'config.toml.example');
-    if (await pathExists(bundledConfigExamplePath)) {
+    const bundledConfigTemplatePath = path.join(runtimeDir, 'config.toml.autopilot-adaptive');
+    if (await pathExists(bundledConfigTemplatePath)) {
         await fsPromises.mkdir(path.dirname(workspaceConfigPath), { recursive: true });
-        await fsPromises.copyFile(bundledConfigExamplePath, workspaceConfigPath);
+        await fsPromises.copyFile(bundledConfigTemplatePath, workspaceConfigPath);
         vscode.window.showInformationMessage(`Go-On config created from runtime template: ${workspaceConfigPath}`);
         return workspaceConfigPath;
     }

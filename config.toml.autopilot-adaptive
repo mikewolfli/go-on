@@ -42,7 +42,7 @@ api_key_env = "WENXIN_API_KEY"
 secret_key_env = "WENXIN_SECRET_KEY"
 
 [flow]
-name = "Autopilot Complex"
+name = "Autopilot Adaptive"
 phases = ["planning", "coding", "review", "delivery"]
 
 [phases.planning]
@@ -56,8 +56,8 @@ agents = ["copilot", "deepseek"]
 fallback = true
 
 [phases.coding.options]
-autopilot_complexity = "complex"
-request_timeout_seconds = 180
+autopilot_complexity = "auto"
+request_timeout_seconds = 150
 review_timeout_seconds = 60
 cache_enabled = true
 vector_enabled = true

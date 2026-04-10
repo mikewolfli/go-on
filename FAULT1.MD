@@ -12,7 +12,7 @@
 > ✅ FAULT1-1.1-M1：性能内存指标已去占位化（Windows API + Linux `/proc/self/status` 采样路径）
 > ✅ FAULT1-1.0-M2：Telemetry/Tracing 最小 OTLP 上报链路已闭环（OTLP gRPC + stdout fallback，`init_otel_provider` 实现已替换占位 stub；unused `tracing-opentelemetry@0.23` dep 已移除）
 > ✅ FAULT1-1.1-M3：strict 与 early 规则冲突已消解（agent stage 指令与 setup 默认 review 模板统一 strict）
-> ✅ FAULT1-1.0-M4：provider 产品面已收敛（README 新增 qwen/qianfan [experimental] 说明；config.toml.example 新增 qwen/qianfan 注释示例段）
+> ✅ FAULT1-1.0-M4：provider 产品面已收敛（README 新增 qwen/qianfan [experimental] 说明；唯一模板 `config.toml.autopilot-adaptive` 承载配置示例）
 > ✅ FAULT1-1.0-M5：`dead_code` 豁免范围首轮收缩（33 → 28 文件；从 error/i18n/i18n_watcher/mode/memory 移除文件级 allow，架构占位内容以 22 条 warning 显式可见；测试全绿 196+23）
 
 ## Positioning
@@ -100,7 +100,7 @@
 - ✅ M1：性能指标真实性闭环（Windows K32GetProcessMemoryInfo + Linux /proc/self/status）。
 - ✅ M2：Telemetry/Tracing 最小 OTLP 闭环（真实 SdkTracerProvider，OTLP gRPC 或 stdout fallback）。
 - ✅ M3：移除 early 宽松评审文案（qwen/wenxin/qianfan/setup 统一 strict）。
-- ✅ M4：provider 产品面一致化（README + config.toml.example 新增 qwen/qianfan [experimental]）。
+- ✅ M4：provider 产品面一致化（README + `config.toml.autopilot-adaptive` 统一承载模板示例）。
 - ✅ M5：dead_code 豁免首轮收缩（33 → 28，22 条 warning 可见，测试全绿）。
 - ✅ M6：发布前全链路复核与文档回写（196 单元 + 23 集成测试全绿，FAULT1 回写完毕）。
 

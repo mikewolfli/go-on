@@ -53,7 +53,8 @@ jobs:
           STAGE_DIR="dist/stage"
           mkdir -p "$STAGE_DIR"
           cp "target/${{ matrix.target }}/release/${{ matrix.executable }}" "$STAGE_DIR/${{ matrix.executable }}"
-          cp config.toml.example "$STAGE_DIR/config.toml.example"
+          cp config.toml.autopilot-adaptive "$STAGE_DIR/config.toml.autopilot-adaptive"
+          cp config.toml.autopilot-adaptive "$STAGE_DIR/config.toml"
           cp -R RULES "$STAGE_DIR/RULES"
           cp -R languages "$STAGE_DIR/languages"
           tar -czf "dist/${{ matrix.archive }}" -C "$STAGE_DIR" .
@@ -64,7 +65,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist/stage | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.executable }}" "dist/stage/${{ matrix.executable }}"
-          Copy-Item "config.toml.example" "dist/stage/config.toml.example"
+          Copy-Item "config.toml.autopilot-adaptive" "dist/stage/config.toml.autopilot-adaptive"
+          Copy-Item "config.toml.autopilot-adaptive" "dist/stage/config.toml"
           Copy-Item "RULES" "dist/stage/RULES" -Recurse
           Copy-Item "languages" "dist/stage/languages" -Recurse
           Compress-Archive -Path "dist/stage/*" -DestinationPath "dist/${{ matrix.archive }}" -Force

@@ -37,6 +37,611 @@ pub struct AppConfig {
     pub model_selection_mode: String,
 }
 
+/// Simplified adaptive configuration for AI-driven setup
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdaptiveConfig {
+    /// Whether to use adaptive mode (AI determines best configuration)
+    #[serde(default = "default_true")]
+    pub adaptive_mode: bool,
+
+    /// Minimum configuration required for operation
+    pub minimal_config: MinimalConfig,
+
+    /// Learning preferences for AI adaptation
+    #[serde(default)]
+    pub learning_preferences: LearningPreferences,
+
+    /// Conversation history for context-aware adaptation
+    #[serde(default)]
+    pub conversation_context: Vec<ConversationContext>,
+}
+
+/// Minimal configuration required for operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MinimalConfig {
+    /// Default phase name
+    #[serde(default = "default_coding_phase")]
+    pub default_phase: String,
+
+    /// Available AI providers (auto-detected from environment)
+    #[serde(default)]
+    pub available_providers: Vec<String>,
+
+    /// Whether to enable caching
+    #[serde(default = "default_true")]
+    pub enable_cache: bool,
+
+    /// Whether to enable vector memory
+    #[serde(default = "default_true")]
+    pub enable_vector_memory: bool,
+}
+
+/// Learning preferences for AI adaptation
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LearningPreferences {
+    /// Preferred communication style
+    #[serde(default = "default_communication_style")]
+    pub communication_style: String,
+
+    /// Preferred level of detail
+    #[serde(default = "default_detail_level")]
+    pub detail_level: String,
+
+    /// Learning speed preference
+    #[serde(default = "default_learning_speed")]
+    pub learning_speed: String,
+
+    /// Whether to ask for clarification when uncertain
+    #[serde(default = "default_true")]
+    pub ask_for_clarification: bool,
+
+    /// Whether to adapt based on conversation history
+    #[serde(default = "default_true")]
+    pub adapt_from_history: bool,
+}
+
+/// Conversation context for adaptive configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationContext {
+    /// Conversation ID
+    pub conversation_id: String,
+    /// User preferences expressed in conversation
+    pub expressed_preferences: Vec<String>,
+    /// Successful adaptations from this conversation
+    pub successful_adaptations: Vec<String>,
+    /// Timestamp of last interaction
+    pub last_interaction: i64,
+}
+
+// Default value functions
+fn default_true() -> bool {
+    true
+}
+fn default_coding_phase() -> String {
+    "coding".to_string()
+}
+fn default_communication_style() -> String {
+    "direct".to_string()
+}
+fn default_detail_level() -> String {
+    "balanced".to_string()
+}
+fn default_learning_speed() -> String {
+    "adaptive".to_string()
+}
+fn default_evaluate_interval() -> u32 {
+    20
+}
+fn default_min_query_chars_step() -> u32 {
+    20
+}
+
+/// Convert AppConfig to AdaptiveConfig
+impl From<AppConfig> for AdaptiveConfig {
+    fn from(config: AppConfig) -> Self {
+        let mut available_providers: Vec<String> = config
+            .agents
+            .values()
+            .filter_map(|agent| normalize_provider_name(&agent.agent_type))
+            .collect();
+        available_providers.sort();
+        available_providers.dedup();
+
+        if available_providers.is_empty() {
+            available_providers.push("copilot".to_string());
+        }
+
+        AdaptiveConfig {
+            adaptive_mode: true,
+            minimal_config: MinimalConfig {
+                default_phase: config.default_phase,
+                available_providers,
+                enable_cache: config.cache.is_some(),
+                enable_vector_memory: config.vector.is_some(),
+            },
+            learning_preferences: LearningPreferences::default(),
+            conversation_context: Vec::new(),
+        }
+    }
+}
+
+/// Create adaptive configuration from minimal input
+impl AdaptiveConfig {
+    /// Create adaptive configuration with auto-detection
+    pub fn auto_detect() -> Self {
+        let mut available_providers = Vec::new();
+
+        if std::env::var("OPENAI_API_KEY").is_ok() {
+            available_providers.push("openai".to_string());
+        }
+        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+            available_providers.push("anthropic".to_string());
+        }
+        if std::env::var("DEEPSEEK_API_KEY").is_ok() {
+            available_providers.push("deepseek".to_string());
+        }
+        if std::env::var("WENXIN_API_KEY").is_ok() && std::env::var("WENXIN_SECRET_KEY").is_ok() {
+            available_providers.push("wenxin".to_string());
+        }
+        if std::env::var("DOUBAO_API_KEY").is_ok() {
+            available_providers.push("doubao".to_string());
+        }
+
+        if available_providers.is_empty() {
+            available_providers.push("copilot".to_string());
+        }
+
+        AdaptiveConfig {
+            adaptive_mode: true,
+            minimal_config: MinimalConfig {
+                default_phase: default_coding_phase(),
+                available_providers,
+                enable_cache: true,
+                enable_vector_memory: true,
+            },
+            learning_preferences: LearningPreferences::default(),
+            conversation_context: Vec::new(),
+        }
+    }
+
+    /// Learn from conversation and adapt configuration
+    pub fn learn_from_conversation(
+        &mut self,
+        conversation_id: &str,
+        user_message: &str,
+        ai_response: &str,
+    ) {
+        // Extract preferences from conversation
+        let preferences = self.extract_preferences(user_message, ai_response);
+
+        // Find or create conversation context
+        let context = self
+            .conversation_context
+            .iter_mut()
+            .find(|ctx| ctx.conversation_id == conversation_id);
+
+        if let Some(ctx) = context {
+            ctx.expressed_preferences.extend(preferences);
+            ctx.last_interaction = now_ts();
+        } else {
+            self.conversation_context.push(ConversationContext {
+                conversation_id: conversation_id.to_string(),
+                expressed_preferences: preferences,
+                successful_adaptations: Vec::new(),
+                last_interaction: now_ts(),
+            });
+        }
+
+        // Apply learning to preferences
+        self.adapt_from_conversation_history();
+    }
+
+    /// Extract preferences from conversation messages
+    fn extract_preferences(&self, user_message: &str, ai_response: &str) -> Vec<String> {
+        let mut preferences = Vec::new();
+
+        // Simple preference extraction (in real implementation, use NLP)
+        let text = format!("{} {}", user_message, ai_response).to_lowercase();
+
+        if text.contains("detailed") || text.contains("thorough") || text.contains("comprehensive")
+        {
+            preferences.push("prefers_detailed_responses".to_string());
+        }
+
+        if text.contains("brief") || text.contains("concise") || text.contains("short") {
+            preferences.push("prefers_brief_responses".to_string());
+        }
+
+        if text.contains("explain") || text.contains("teach") || text.contains("educate") {
+            preferences.push("wants_explanations".to_string());
+        }
+
+        if text.contains("fast") || text.contains("quick") || text.contains("efficient") {
+            preferences.push("values_speed".to_string());
+        }
+
+        if text.contains("accurate") || text.contains("precise") || text.contains("correct") {
+            preferences.push("values_accuracy".to_string());
+        }
+
+        preferences
+    }
+
+    /// Adapt configuration based on conversation history
+    fn adapt_from_conversation_history(&mut self) {
+        // Analyze all conversation contexts to find patterns
+        let mut preference_counts = std::collections::HashMap::new();
+
+        for ctx in &self.conversation_context {
+            for pref in &ctx.expressed_preferences {
+                *preference_counts.entry(pref.clone()).or_insert(0) += 1;
+            }
+        }
+
+        // Apply most common preferences
+        for (pref, count) in preference_counts {
+            if count >= 2 {
+                // At least mentioned in 2 conversations
+                match pref.as_str() {
+                    "prefers_detailed_responses" => {
+                        self.learning_preferences.detail_level = "detailed".to_string();
+                    }
+                    "prefers_brief_responses" => {
+                        self.learning_preferences.detail_level = "brief".to_string();
+                    }
+                    "wants_explanations" => {
+                        self.learning_preferences.communication_style = "explanatory".to_string();
+                    }
+                    "values_speed" => {
+                        self.learning_preferences.learning_speed = "fast".to_string();
+                    }
+                    "values_accuracy" => {
+                        self.learning_preferences.ask_for_clarification = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Generate AppConfig from adaptive configuration
+    pub fn to_app_config(&self) -> AppConfig {
+        let providers = normalized_provider_list(&self.minimal_config.available_providers);
+        let planning_agents = providers.clone();
+        let coding_agents = providers.clone();
+        let review_agents = preferred_review_agents(&providers);
+        let delivery_agents = preferred_delivery_agents(&providers);
+
+        let mut agents = HashMap::new();
+        for provider in &providers {
+            if let Some(config) = default_agent_config(provider) {
+                agents.insert(provider.clone(), config);
+            }
+        }
+
+        let flow = FlowConfig {
+            name: "Adaptive Flow".to_string(),
+            phases: vec![
+                "planning".to_string(),
+                "coding".to_string(),
+                "review".to_string(),
+                "delivery".to_string(),
+            ],
+        };
+
+        let mut phases = HashMap::new();
+        phases.insert(
+            "planning".to_string(),
+            PhaseConfig {
+                description: "Adaptive planning phase".to_string(),
+                agents: planning_agents,
+                fallback: Some(true),
+                principles: Some(adaptive_principles(&self.learning_preferences, "planning")),
+                options: Some(PhaseOptions {
+                    request_timeout_seconds: Some(120),
+                    ..PhaseOptions::default()
+                }),
+            },
+        );
+        phases.insert(
+            "coding".to_string(),
+            PhaseConfig {
+                description: "Adaptive coding phase".to_string(),
+                agents: coding_agents,
+                fallback: Some(true),
+                principles: Some(adaptive_principles(&self.learning_preferences, "coding")),
+                options: Some(adaptive_coding_options(
+                    self.minimal_config.enable_cache,
+                    self.minimal_config.enable_vector_memory,
+                    &review_agents,
+                )),
+            },
+        );
+        phases.insert(
+            "review".to_string(),
+            PhaseConfig {
+                description: "Adaptive review phase".to_string(),
+                agents: review_agents.clone(),
+                fallback: Some(true),
+                principles: Some(adaptive_principles(&self.learning_preferences, "review")),
+                options: Some(adaptive_review_options()),
+            },
+        );
+        phases.insert(
+            "delivery".to_string(),
+            PhaseConfig {
+                description: "Adaptive delivery phase".to_string(),
+                agents: delivery_agents,
+                fallback: Some(false),
+                principles: Some(adaptive_principles(&self.learning_preferences, "delivery")),
+                options: Some(PhaseOptions {
+                    request_timeout_seconds: Some(90),
+                    ..PhaseOptions::default()
+                }),
+            },
+        );
+
+        let cache = if self.minimal_config.enable_cache {
+            Some(CacheConfig {
+                enabled: true,
+                path: "acp_cache.sqlite3".to_string(),
+                default_ttl_seconds: 3600,
+                max_entries: 5000,
+            })
+        } else {
+            None
+        };
+
+        let vector = if self.minimal_config.enable_vector_memory {
+            Some(VectorConfig {
+                enabled: true,
+                auto_mode: true,
+                path: "acp_vector.sqlite3".to_string(),
+                dimensions: 192,
+                min_query_chars: 80,
+                top_k: 2,
+                min_similarity: 0.82,
+                max_snippet_chars: 800,
+                max_entries: 10000,
+                summary_enabled: true,
+                summary_trigger_messages: 8,
+                summary_max_chars: 1200,
+            })
+        } else {
+            None
+        };
+
+        AppConfig {
+            default_phase: self.minimal_config.default_phase.clone(),
+            agents,
+            flow,
+            phases,
+            runtime: Some(RuntimeConfig::default()),
+            cache,
+            vector,
+            autotune: Some(default_autotune_config()),
+            model_selection_mode: "adaptive".to_string(),
+        }
+    }
+}
+
+fn normalize_provider_name(agent_type: &str) -> Option<String> {
+    match agent_type {
+        "copilot" => Some("copilot".to_string()),
+        "deepseek" => Some("deepseek".to_string()),
+        "wenxin" => Some("wenxin".to_string()),
+        "openai" => Some("openai".to_string()),
+        "doubao" => Some("doubao".to_string()),
+        "claude" | "anthropic" => Some("anthropic".to_string()),
+        _ => None,
+    }
+}
+
+fn normalized_provider_list(providers: &[String]) -> Vec<String> {
+    let mut normalized: Vec<String> = providers
+        .iter()
+        .filter_map(|provider| normalize_provider_name(provider))
+        .collect();
+    normalized.sort();
+    normalized.dedup();
+
+    if normalized.is_empty() {
+        normalized.push("copilot".to_string());
+    }
+
+    normalized
+}
+
+fn default_agent_config(provider: &str) -> Option<AgentConfig> {
+    match provider {
+        "copilot" => Some(AgentConfig {
+            agent_type: "copilot".to_string(),
+            url: Some("http://127.0.0.1:8080".to_string()),
+            chat_path: None,
+            api_key_env: None,
+            secret_key_env: None,
+            anthropic_version: None,
+            model: None,
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "deepseek" => Some(AgentConfig {
+            agent_type: "deepseek".to_string(),
+            url: None,
+            chat_path: None,
+            api_key_env: Some("DEEPSEEK_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            model: Some("deepseek-chat".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "wenxin" => Some(AgentConfig {
+            agent_type: "wenxin".to_string(),
+            url: None,
+            chat_path: None,
+            api_key_env: Some("WENXIN_API_KEY".to_string()),
+            secret_key_env: Some("WENXIN_SECRET_KEY".to_string()),
+            anthropic_version: None,
+            model: Some("ERNIE-Bot".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "anthropic" => Some(AgentConfig {
+            agent_type: "claude".to_string(),
+            url: Some("https://api.anthropic.com".to_string()),
+            chat_path: None,
+            api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: Some("2023-06-01".to_string()),
+            model: Some("claude-3-7-sonnet-latest".to_string()),
+            max_tokens: Some(4096),
+            supports_system: Some(true),
+        }),
+        "openai" => Some(AgentConfig {
+            agent_type: "openai".to_string(),
+            url: Some("https://api.openai.com/v1".to_string()),
+            chat_path: None,
+            api_key_env: Some("OPENAI_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            model: Some("gpt-4o-mini".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "doubao" => Some(AgentConfig {
+            agent_type: "doubao".to_string(),
+            url: Some("https://ark.cn-beijing.volces.com/api/v3".to_string()),
+            chat_path: Some("/chat/completions".to_string()),
+            api_key_env: Some("DOUBAO_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            model: Some("doubao-1-5-pro-32k-250115".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        _ => None,
+    }
+}
+
+fn preferred_review_agents(providers: &[String]) -> Vec<String> {
+    let mut reviewers: Vec<String> = providers
+        .iter()
+        .filter(|provider| provider.as_str() != "copilot")
+        .cloned()
+        .collect();
+
+    if reviewers.is_empty() {
+        reviewers = providers.to_vec();
+    }
+
+    if reviewers.is_empty() {
+        vec!["copilot".to_string()]
+    } else {
+        reviewers
+    }
+}
+
+fn preferred_delivery_agents(providers: &[String]) -> Vec<String> {
+    if providers.iter().any(|provider| provider == "copilot") {
+        return vec!["copilot".to_string()];
+    }
+
+    providers
+        .first()
+        .cloned()
+        .map(|provider| vec![provider])
+        .unwrap_or_else(|| vec!["copilot".to_string()])
+}
+
+fn adaptive_principles(preferences: &LearningPreferences, phase: &str) -> Vec<String> {
+    let mut principles = vec![
+        "Adapt agent choice to the task and available models".to_string(),
+        "Prefer evidence-backed results and explicit verification".to_string(),
+    ];
+
+    if preferences.ask_for_clarification {
+        principles
+            .push("Ask for clarification only when uncertainty blocks correctness".to_string());
+    }
+
+    match phase {
+        "planning" => principles.push("Keep plans minimal and execution-oriented".to_string()),
+        "coding" => principles.push("Make the smallest correct change".to_string()),
+        "review" => {
+            principles.push("Prioritize regressions, risks, and missing validation".to_string())
+        }
+        "delivery" => principles.push("Summarize outcome and residual risks concisely".to_string()),
+        _ => {}
+    }
+
+    principles
+}
+
+fn adaptive_coding_options(
+    enable_cache: bool,
+    enable_vector_memory: bool,
+    review_agents: &[String],
+) -> PhaseOptions {
+    let mut extra = HashMap::new();
+    extra.insert("review_gate_timeout_seconds".to_string(), Value::from(90));
+    extra.insert("phase_max_inflight".to_string(), Value::from(24));
+    extra.insert("global_max_inflight".to_string(), Value::from(128));
+
+    PhaseOptions {
+        cache_enabled: Some(enable_cache),
+        vector_enabled: Some(enable_vector_memory),
+        summary_enabled: Some(enable_vector_memory),
+        autopilot_complexity: Some("auto".to_string()),
+        full_auto_review_agents: Some(review_agents.iter().take(2).cloned().collect()),
+        request_timeout_seconds: Some(150),
+        review_timeout_seconds: Some(60),
+        extra,
+        ..PhaseOptions::default()
+    }
+}
+
+fn adaptive_review_options() -> PhaseOptions {
+    let mut extra = HashMap::new();
+    extra.insert("review_timeout_policy".to_string(), Value::from("reject"));
+    extra.insert("review_gate_timeout_seconds".to_string(), Value::from(90));
+    extra.insert("phase_max_inflight".to_string(), Value::from(16));
+    extra.insert("global_max_inflight".to_string(), Value::from(128));
+
+    PhaseOptions {
+        request_timeout_seconds: Some(60),
+        extra,
+        ..PhaseOptions::default()
+    }
+}
+
+fn default_autotune_config() -> AutoTuneConfig {
+    AutoTuneConfig {
+        enabled: false,
+        evaluate_interval: default_autotune_evaluate_interval(),
+        min_query_chars_step: default_autotune_min_query_chars_step(),
+        min_query_chars_min: default_autotune_min_query_chars_min(),
+        min_query_chars_max: default_autotune_min_query_chars_max(),
+        max_top_k: default_autotune_max_top_k(),
+        low_precision_threshold: default_autotune_low_precision(),
+        high_precision_threshold: default_autotune_high_precision(),
+        state_path: default_autotune_state_path(),
+        cooldown_windows: default_autotune_cooldown_windows(),
+        min_vector_searches: default_autotune_min_vector_searches(),
+        summary_trigger_min: default_autotune_summary_trigger_min(),
+        summary_trigger_max: default_autotune_summary_trigger_max(),
+    }
+}
+
+/// Helper function to get current timestamp
+fn now_ts() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 /// Configuration warning severity levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1600,7 +2205,7 @@ fn profile_recommendations_for(
     let mut recommendations = Vec::new();
     recommendations.push(match profile.as_str() {
         "full" => {
-            "use config.full.toml profile and keep all safeguards/review settings enabled"
+            "use config.toml.autopilot-adaptive and keep review and safeguard defaults enabled"
                 .to_string()
         }
         "minimal" => {
@@ -2318,12 +2923,12 @@ mod tests {
     }
 
     #[test]
-    fn config_example_loads_and_validates() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.toml.example");
-        let cfg = AppConfig::load(&path).expect("config.toml.example should parse");
+    fn adaptive_template_loads_and_validates() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.toml.autopilot-adaptive");
+        let cfg = AppConfig::load(&path).expect("config.toml.autopilot-adaptive should parse");
 
         cfg.validate()
-            .expect("config.toml.example should be internally consistent");
+            .expect("config.toml.autopilot-adaptive should be internally consistent");
     }
 
     #[test]

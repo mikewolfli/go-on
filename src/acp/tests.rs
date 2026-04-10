@@ -11,6 +11,7 @@ mod tests {
     use crate::acp::prelude::*;
     use crate::acp::server::ServerBuilder;
     use crate::config::{AgentConfig, AppConfig, FlowConfig, PhaseConfig};
+    use crate::core::config::AdaptiveConfig;
 
     /// Create a vector config fixture for testing
     pub fn vector_config_fixture() -> crate::config::VectorConfig {
@@ -128,6 +129,7 @@ mod tests {
         let server = phase_inference_server("coding", &["coding", "review"]);
 
         // Test that conversation state is accessible
+        // Note: conversation_state is Arc<Mutex<ConversationState>>
         let state = server.conversation_state.blocking_lock();
         assert!(state.checkpoints.is_empty());
     }
@@ -181,9 +183,11 @@ mod tests {
         let server = phase_inference_server("coding", &["coding", "review"]);
 
         // Test basic metrics
-        assert_eq!(server.metrics.successful_requests(), 0);
-        assert_eq!(server.metrics.failed_requests(), 0);
-        assert_eq!(server.metrics.active_requests(), 0);
+        // Note: metrics() returns &Arc<RuntimeMetrics>
+        let metrics = server.metrics();
+        assert_eq!(metrics.successful_requests(), 0);
+        assert_eq!(metrics.failed_requests(), 0);
+        assert_eq!(metrics.active_requests(), 0);
     }
 
     /// Test lifecycle management
@@ -203,25 +207,17 @@ mod tests {
     /// Test server builder
     #[test]
     fn test_server_builder() {
-        let _config = AppConfig {
-            default_phase: "test".to_string(),
-            agents: HashMap::new(),
-            flow: FlowConfig {
-                name: "test".to_string(),
-                phases: Vec::new(),
-            },
-            phases: HashMap::new(),
-            runtime: None,
-            cache: None,
-            vector: None,
-            autotune: None,
-            model_selection_mode: "auto".to_string(),
-        };
+        // Use adaptive configuration
+        let adaptive_config = AdaptiveConfig::auto_detect();
+        let config = adaptive_config.to_app_config();
+        assert_eq!(config.model_selection_mode, "adaptive");
+        assert!(config.phases.contains_key("coding"));
 
         let builder = ServerBuilder::new();
         let server = builder.build().expect("Failed to build server");
 
-        // flow_manager is None when no config is provided to the builder
+        // Note: The config field doesn't exist on the new AcpServer structure
+        // This test is simplified for migration
         assert!(server.flow_manager.is_none());
     }
 
@@ -312,14 +308,23 @@ mod tests {
                 last_touched_at: 1,
             },
         );
+        let mut store = std::collections::HashMap::new();
+        store.insert(
+            "conv1".to_string(),
+            crate::acp::prelude::ConversationState::default(),
+        );
+        store.insert(
+            "conv2".to_string(),
+            crate::acp::prelude::ConversationState::default(),
+        );
 
         let order = Arc::new(std::sync::Mutex::new(vec![
             "conv1".to_string(),
             "conv2".to_string(),
         ]));
 
-        // Use the function from helpers module
-        use crate::acp::helpers::conversation::evict_oldest_conversation;
+        // Use the function from prelude module
+        use crate::acp::prelude::evict_oldest_conversation;
         let evicted = evict_oldest_conversation(&mut store, &order);
 
         assert_eq!(evicted, Some("conv1".to_string()));

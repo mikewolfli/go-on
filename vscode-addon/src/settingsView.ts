@@ -530,9 +530,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                         <div class="setting-item">
                             <label for="defaultTemplate">Default Config Template:</label>
                             <select id="defaultTemplate">
-                                <option value="config.toml.autopilot-simple">autopilot-simple</option>
-                                <option value="config.toml.autopilot-complex">autopilot-complex</option>
-                                <option value="config.toml.example">example</option>
+                                <option value="config.toml.autopilot-adaptive">autopilot-adaptive</option>
                             </select>
                         </div>
                         <div class="action-buttons">

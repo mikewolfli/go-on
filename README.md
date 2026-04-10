@@ -6,7 +6,7 @@ go-on is a Rust ACP runtime with MCP adapter capabilities, focused on agent orch
 
 ## Version
 
-- Core runtime version: 0.4.1
+- Core runtime version: 0.4.2
 - Default compile profile: `local-acp-sqlite`
 - Optional profile flag: `server-mcp-postgres` (feature scaffold)
 
@@ -46,10 +46,22 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
+## Config Files (Current)
+
+- Single template: `config.toml.autopilot-adaptive`
+- Active runtime config: `config.toml`
+
+If you want to reset local config to latest template:
+
+```bash
+cp config.toml.autopilot-adaptive config.toml
+cargo run -- --config config.toml --validate-config
+```
+
 ## VS Code Add-on
 
 - Extension docs: [vscode-addon/README.md](vscode-addon/README.md)
-- Synced extension version: 0.4.1
+- Synced extension version: 0.4.2
 
 ## Roadmaps
 

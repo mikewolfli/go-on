@@ -2,7 +2,7 @@
   "name": "go-on-vscode",
   "displayName": "Go-On VS Code Extension",
   "description": "VS Code extension for the Go-On Rust ACP proxy",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -284,7 +284,7 @@
         "go-on.releaseTag": {
           "type": "string",
           "default": "latest",
-          "description": "Release tag to download from (for example v0.4.1). Use latest for newest release"
+          "description": "Release tag to download from (for example v0.4.2). Use latest for newest release"
         },
         "go-on.autoStart": {
           "type": "boolean",

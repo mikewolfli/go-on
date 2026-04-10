@@ -5,12 +5,22 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use crate::config::AdaptiveConfig;
 use crate::i18n::runtime::{t, tf};
 use anyhow::{Context, Result};
 
-// 简化模式和复杂模式配置文件模板名称
-const SIMPLE_TEMPLATE: &str = "config.toml.autopilot-simple";
-const COMPLEX_TEMPLATE: &str = "config.toml.autopilot-complex";
+// 自适应配置模板名称
+const ADAPTIVE_TEMPLATE: &str = "config.toml.autopilot-adaptive";
+
+// AI提供商列表和对应的环境变量
+const AI_PROVIDERS: &[(&str, &[&str])] = &[
+    ("openai", &["OPENAI_API_KEY"]),
+    ("anthropic", &["ANTHROPIC_API_KEY"]),
+    ("deepseek", &["DEEPSEEK_API_KEY"]),
+    ("wenxin", &["WENXIN_API_KEY", "WENXIN_SECRET_KEY"]),
+    ("doubao", &["DOUBAO_API_KEY"]),
+    ("copilot", &[]), // 本地运行，不需要API密钥
+];
 
 // Secret key targets used for keyring operations.
 // Each tuple is (command name, keyring service, keyring account).
@@ -27,11 +37,10 @@ const SECRET_TARGETS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Setup profile mode: simple autopilot or complex autopilot.
+/// Setup profile mode: adaptive autopilot with AI-driven configuration.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SetupProfile {
-    Simple,
-    Complex,
+    Adaptive,
 }
 
 /// Secret storage mode for setup: environment variables or system keyring.
@@ -39,6 +48,7 @@ pub enum SetupProfile {
 pub enum SecretMode {
     Env,
     Keyring,
+    AutoDetect,
 }
 
 /// Options controlling go-on setup behavior.
@@ -103,31 +113,50 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
         return Ok(());
     }
 
-    let profile = match options.profile {
-        Some(value) => value,
-        None => match prompt_choice(&t("setup.prompt_profile"), &["1", "2"], "1")?.as_str() {
-            "2" => SetupProfile::Complex,
-            _ => SetupProfile::Simple,
-        },
-    };
-    let template_name = match profile {
-        SetupProfile::Simple => SIMPLE_TEMPLATE,
-        SetupProfile::Complex => COMPLEX_TEMPLATE,
-    };
+    let _profile = options.profile.unwrap_or(SetupProfile::Adaptive);
+    let template_name = ADAPTIVE_TEMPLATE;
 
-    let template_path = find_template(template_name)
+    let _template_path = find_template(template_name)
         .ok_or_else(|| anyhow::anyhow!("template file '{}' not found", template_name))?;
-    let mut content = fs::read_to_string(&template_path)
-        .with_context(|| format!("failed to read setup template: {}", template_path.display()))?;
 
     let secret_mode = match options.secret_mode {
         Some(value) => value,
-        None => match prompt_choice(&t("setup.prompt_secret_mode"), &["1", "2"], "2")?.as_str() {
-            "1" => SecretMode::Env,
-            _ => SecretMode::Keyring,
-        },
+        None => {
+            // 自动检测：如果已有环境变量，使用Env模式，否则询问
+            let has_env_vars = !detect_available_providers_from_env().is_empty();
+            if has_env_vars {
+                println!("{}", t("setup.auto_detected_env_vars"));
+                SecretMode::Env
+            } else {
+                match prompt_choice(&t("setup.prompt_secret_mode"), &["1", "2", "3"], "3")?.as_str()
+                {
+                    "1" => SecretMode::Env,
+                    "2" => SecretMode::Keyring,
+                    _ => SecretMode::AutoDetect,
+                }
+            }
+        }
     };
 
+    // 检测可用的AI提供商
+    let available_providers = detect_available_providers(&secret_mode);
+
+    let mut adaptive_config = AdaptiveConfig::auto_detect();
+    if available_providers.is_empty() {
+        println!("{}", t("setup.no_providers_detected"));
+        println!("{}", t("setup.setup_copilot_only"));
+        adaptive_config.minimal_config.available_providers = vec!["copilot".to_string()];
+    } else {
+        println!("{}", t("setup.detected_providers"));
+        for provider in &available_providers {
+            println!("  - {}", provider);
+        }
+        adaptive_config.minimal_config.available_providers = available_providers;
+    }
+
+    let mut content = generate_adaptive_config_toml(&adaptive_config, &secret_mode);
+
+    // 如果使用keyring模式，转换环境变量占位符
     if secret_mode == SecretMode::Keyring {
         content = convert_env_placeholders_to_keyring(&content);
     }
@@ -141,12 +170,22 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
 
     write_default_rules(config_path.parent().unwrap_or_else(|| Path::new(".")))?;
 
-    let should_store_secrets = secret_mode == SecretMode::Keyring
-        && if options.prompt_for_secrets {
-            prompt_yes_no(&t("setup.prompt_store_secrets"), true)?
-        } else {
-            false
-        };
+    let should_store_secrets = match secret_mode {
+        SecretMode::Keyring => {
+            if options.prompt_for_secrets {
+                prompt_yes_no(&t("setup.prompt_store_secrets"), true)?
+            } else {
+                false
+            }
+        }
+
+        SecretMode::AutoDetect => {
+            // 自动检测模式下，询问是否要设置API密钥
+            prompt_yes_no(&t("setup.prompt_setup_api_keys"), true)?
+        }
+        _ => false,
+    };
+
     if should_store_secrets {
         store_keyring_secrets_interactive()?;
     }
@@ -164,26 +203,26 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
 
 /// Parse setup profile string to SetupProfile enum.
 ///
-/// Accepts case-insensitive "simple" or "complex".
+/// Accepts case-insensitive "adaptive".
 pub fn parse_setup_profile(value: &str) -> Result<SetupProfile> {
-    if value.eq_ignore_ascii_case("simple") {
-        return Ok(SetupProfile::Simple);
-    }
-    if value.eq_ignore_ascii_case("complex") {
-        return Ok(SetupProfile::Complex);
+    if value.eq_ignore_ascii_case("adaptive") {
+        return Ok(SetupProfile::Adaptive);
     }
     anyhow::bail!("{}", tf("error.invalid_setup_profile", &[("value", value)]))
 }
 
 /// Parse secret mode string to SecretMode enum.
 ///
-/// Accepts case-insensitive "env" or "keyring".
+/// Accepts case-insensitive "env", "keyring", or "auto".
 pub fn parse_secret_mode(value: &str) -> Result<SecretMode> {
     if value.eq_ignore_ascii_case("env") {
         return Ok(SecretMode::Env);
     }
     if value.eq_ignore_ascii_case("keyring") {
         return Ok(SecretMode::Keyring);
+    }
+    if value.eq_ignore_ascii_case("auto") || value.eq_ignore_ascii_case("autodetect") {
+        return Ok(SecretMode::AutoDetect);
     }
     anyhow::bail!("{}", tf("error.invalid_secret_mode", &[("value", value)]))
 }
@@ -292,6 +331,242 @@ pub fn run_secret_command(
             Ok(())
         }
     }
+}
+
+fn detect_available_providers(secret_mode: &SecretMode) -> Vec<String> {
+    let env_providers = detect_available_providers_from_env();
+    let keyring_providers = detect_available_providers_from_keyring();
+
+    let mut providers = Vec::new();
+    for (provider, _) in AI_PROVIDERS {
+        if *provider == "copilot" {
+            continue;
+        }
+
+        let include = match secret_mode {
+            SecretMode::Env => env_providers.iter().any(|item| item == provider),
+            SecretMode::Keyring => keyring_providers.iter().any(|item| item == provider),
+            SecretMode::AutoDetect => {
+                env_providers.iter().any(|item| item == provider)
+                    || keyring_providers.iter().any(|item| item == provider)
+            }
+        };
+
+        if include {
+            providers.push((*provider).to_string());
+        }
+    }
+
+    if providers.is_empty() {
+        providers.push("copilot".to_string());
+    }
+
+    providers
+}
+
+fn detect_available_providers_from_env() -> Vec<String> {
+    AI_PROVIDERS
+        .iter()
+        .filter(|(provider, required_envs)| {
+            *provider != "copilot"
+                && !required_envs.is_empty()
+                && required_envs.iter().all(|name| std::env::var(name).is_ok())
+        })
+        .map(|(provider, _)| (*provider).to_string())
+        .collect()
+}
+
+fn detect_available_providers_from_keyring() -> Vec<String> {
+    AI_PROVIDERS
+        .iter()
+        .filter(|(provider, required_envs)| {
+            *provider != "copilot"
+                && !required_envs.is_empty()
+                && required_envs
+                    .iter()
+                    .all(|env_name| keyring_secret_available(env_name))
+        })
+        .map(|(provider, _)| (*provider).to_string())
+        .collect()
+}
+
+fn keyring_secret_available(env_name: &str) -> bool {
+    let Some((service, account)) = keyring_target_for_env(env_name) else {
+        return false;
+    };
+
+    keyring::Entry::new(service, account)
+        .and_then(|entry| entry.get_password())
+        .is_ok()
+}
+
+fn keyring_target_for_env(env_name: &str) -> Option<(&'static str, &'static str)> {
+    match env_name {
+        "DEEPSEEK_API_KEY" => Some(("go-on", "deepseek_api_key")),
+        "WENXIN_API_KEY" => Some(("go-on", "wenxin_api_key")),
+        "WENXIN_SECRET_KEY" => Some(("go-on", "wenxin_secret_key")),
+        "ANTHROPIC_API_KEY" => Some(("go-on", "anthropic_api_key")),
+        "DOUBAO_API_KEY" => Some(("go-on", "doubao_api_key")),
+        "OPENAI_API_KEY" => Some(("go-on", "openai_compatible_api_key")),
+        _ => None,
+    }
+}
+
+fn secret_reference(env_name: &str, secret_mode: &SecretMode) -> String {
+    match secret_mode {
+        SecretMode::Env => env_name.to_string(),
+        SecretMode::Keyring => keyring_reference(env_name).unwrap_or_else(|| env_name.to_string()),
+        SecretMode::AutoDetect => {
+            if std::env::var(env_name).is_ok() {
+                env_name.to_string()
+            } else {
+                keyring_reference(env_name).unwrap_or_else(|| env_name.to_string())
+            }
+        }
+    }
+}
+
+fn keyring_reference(env_name: &str) -> Option<String> {
+    keyring_target_for_env(env_name)
+        .map(|(service, account)| format!("keyring://{}/{}", service, account))
+}
+
+fn generate_adaptive_config_toml(
+    adaptive_config: &AdaptiveConfig,
+    secret_mode: &SecretMode,
+) -> String {
+    let providers = if adaptive_config
+        .minimal_config
+        .available_providers
+        .is_empty()
+    {
+        vec!["copilot".to_string()]
+    } else {
+        adaptive_config.minimal_config.available_providers.clone()
+    };
+    let review_agents = non_copilot_agents(&providers);
+    let delivery_agents = if providers.iter().any(|item| item == "copilot") {
+        vec!["copilot".to_string()]
+    } else {
+        vec![providers[0].clone()]
+    };
+
+    let mut content = String::new();
+    content.push_str(&format!(
+        "default_phase = \"{}\"\nmodel_selection_mode = \"adaptive\"\n\n",
+        adaptive_config.minimal_config.default_phase
+    ));
+
+    if adaptive_config.minimal_config.enable_cache {
+        content.push_str(
+            "[cache]\nenabled = true\npath = \"acp_cache.sqlite3\"\ndefault_ttl_seconds = 3600\nmax_entries = 5000\n\n",
+        );
+    }
+
+    if adaptive_config.minimal_config.enable_vector_memory {
+        content.push_str(
+            "[vector]\nenabled = true\nauto_mode = true\npath = \"acp_vector.sqlite3\"\ndimensions = 192\nmin_query_chars = 80\ntop_k = 2\nmin_similarity = 0.82\nmax_snippet_chars = 800\nmax_entries = 10000\nsummary_enabled = true\nsummary_trigger_messages = 8\nsummary_max_chars = 1200\n\n",
+        );
+    }
+
+    content.push_str(
+        "[runtime]\nmaintenance_interval_seconds = 60\nhealth_interval_seconds = 120\nshutdown_drain_seconds = 30\nsqlite_vacuum_interval_cycles = 60\n\n",
+    );
+
+    for provider in &providers {
+        append_agent_block(&mut content, provider, secret_mode);
+    }
+
+    content.push_str("[flow]\nname = \"Autopilot Adaptive\"\nphases = [\"planning\", \"coding\", \"review\", \"delivery\"]\n\n");
+    content.push_str(&format!(
+        "[phases.planning]\ndescription = \"Adaptive planning phase\"\nagents = {}\nfallback = true\nprinciples = [\"Choose the smallest correct plan\", \"Use the available agents adaptively\"]\n\n",
+        toml_array(&providers)
+    ));
+    content.push_str(&format!(
+        "[phases.coding]\ndescription = \"Adaptive coding phase\"\nagents = {}\nfallback = true\nprinciples = [\"Make the smallest correct change\", \"Do not claim done without verification\"]\n\n",
+        toml_array(&providers)
+    ));
+    content.push_str(&format!(
+        "[phases.coding.options]\nautopilot_complexity = \"auto\"\nrequest_timeout_seconds = 150\nreview_timeout_seconds = 60\ncache_enabled = {}\nvector_enabled = {}\nsummary_enabled = {}\nfull_auto_review_agents = {}\nphase_max_inflight = 24\nglobal_max_inflight = 128\n\n",
+        adaptive_config.minimal_config.enable_cache,
+        adaptive_config.minimal_config.enable_vector_memory,
+        adaptive_config.minimal_config.enable_vector_memory,
+        toml_array(&review_agents)
+    ));
+    content.push_str(&format!(
+        "[phases.review]\ndescription = \"Adaptive review phase\"\nagents = {}\nfallback = true\n\n",
+        toml_array(&review_agents)
+    ));
+    content.push_str(
+        "[phases.review.options]\nrequest_timeout_seconds = 60\nreview_timeout_policy = \"reject\"\nreview_min_response_chars = 12\n\n",
+    );
+    content.push_str(&format!(
+        "[phases.delivery]\ndescription = \"Adaptive delivery phase\"\nagents = {}\nfallback = false\n",
+        toml_array(&delivery_agents)
+    ));
+
+    content
+}
+
+fn append_agent_block(content: &mut String, provider: &str, secret_mode: &SecretMode) {
+    match provider {
+        "copilot" => {
+            content.push_str(
+                "[agents.copilot]\ntype = \"copilot\"\nurl = \"http://127.0.0.1:8080\"\n\n",
+            );
+        }
+        "deepseek" => {
+            content.push_str(&format!(
+                "[agents.deepseek]\ntype = \"deepseek\"\napi_key_env = \"{}\"\nmodel = \"deepseek-chat\"\n\n",
+                secret_reference("DEEPSEEK_API_KEY", secret_mode)
+            ));
+        }
+        "wenxin" => {
+            content.push_str(&format!(
+                "[agents.wenxin]\ntype = \"wenxin\"\napi_key_env = \"{}\"\nsecret_key_env = \"{}\"\nmodel = \"ERNIE-Bot\"\n\n",
+                secret_reference("WENXIN_API_KEY", secret_mode),
+                secret_reference("WENXIN_SECRET_KEY", secret_mode)
+            ));
+        }
+        "anthropic" => {
+            content.push_str(&format!(
+                "[agents.anthropic]\ntype = \"claude\"\nurl = \"https://api.anthropic.com\"\napi_key_env = \"{}\"\nmodel = \"claude-3-7-sonnet-latest\"\nanthropic_version = \"2023-06-01\"\nmax_tokens = 4096\n\n",
+                secret_reference("ANTHROPIC_API_KEY", secret_mode)
+            ));
+        }
+        "openai" => {
+            content.push_str(&format!(
+                "[agents.openai]\ntype = \"openai\"\nurl = \"https://api.openai.com/v1\"\napi_key_env = \"{}\"\nmodel = \"gpt-4o-mini\"\nsupports_system = true\n\n",
+                secret_reference("OPENAI_API_KEY", secret_mode)
+            ));
+        }
+        "doubao" => {
+            content.push_str(&format!(
+                "[agents.doubao]\ntype = \"doubao\"\nurl = \"https://ark.cn-beijing.volces.com/api/v3\"\nchat_path = \"/chat/completions\"\napi_key_env = \"{}\"\nmodel = \"doubao-1-5-pro-32k-250115\"\nsupports_system = true\n\n",
+                secret_reference("DOUBAO_API_KEY", secret_mode)
+            ));
+        }
+        _ => {}
+    }
+}
+
+fn non_copilot_agents(providers: &[String]) -> Vec<String> {
+    let filtered: Vec<String> = providers
+        .iter()
+        .filter(|item| item.as_str() != "copilot")
+        .cloned()
+        .collect();
+
+    if filtered.is_empty() {
+        providers.to_vec()
+    } else {
+        filtered
+    }
+}
+
+fn toml_array(items: &[String]) -> String {
+    let quoted: Vec<String> = items.iter().map(|item| format!("\"{}\"", item)).collect();
+    format!("[{}]", quoted.join(", "))
 }
 
 /// Locate setup template file for the provided template name.
@@ -493,12 +768,12 @@ mod tests {
     #[test]
     fn parses_setup_profile_secret_mode_and_action() {
         assert!(matches!(
-            parse_setup_profile("simple").unwrap(),
-            SetupProfile::Simple
+            parse_setup_profile("adaptive").unwrap(),
+            SetupProfile::Adaptive
         ));
         assert!(matches!(
-            parse_setup_profile("complex").unwrap(),
-            SetupProfile::Complex
+            parse_secret_mode("auto").unwrap(),
+            SecretMode::AutoDetect
         ));
         assert!(matches!(parse_secret_mode("env").unwrap(), SecretMode::Env));
         assert!(matches!(

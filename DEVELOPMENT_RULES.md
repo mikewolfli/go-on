@@ -46,12 +46,12 @@ Follow these rules for all feature work, bug fixes, and refactors.
 
 ## 5. Config And Validation Rules
 
-- All config changes must keep `config.toml.example` valid.
+- All config changes must keep `config.toml.autopilot-adaptive` valid.
 - `AppConfig::validate()` is the source of truth for constraints.
 - Adding new config fields requires:
   - struct update in `src/config.rs`
   - validation update in `src/config.rs`
-  - example update in `config.toml.example`
+  - template update in `config.toml.autopilot-adaptive`
   - docs update in `README.md`
   - tests for valid and invalid cases
 - Startup and reload must both enforce required env vars via `missing_env_vars`.
@@ -91,7 +91,7 @@ Follow these rules for all feature work, bug fixes, and refactors.
 
 - Keep these docs in sync with behavior:
   - `README.md`
-  - `config.toml.example`
+  - `config.toml.autopilot-adaptive`
   - this file (`DEVELOPMENT_RULES.md`)
 - Any user-visible behavior change requires README updates in the same change.
 - Do not document features that are not implemented.

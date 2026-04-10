@@ -201,5 +201,5 @@ fn main() {
     println!("Chinese translations are mostly complete.");
     println!("\nTo test the actual i18n functionality, run:");
     println!("  cd go-on");
-    println!("  cargo run -- --validate-config config.toml.example");
+    println!("  cargo run -- --validate-config config.toml.autopilot-adaptive");
 }

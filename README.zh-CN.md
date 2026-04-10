@@ -6,7 +6,7 @@ go-on 是一个基于 Rust 的 ACP 运行时（包含 MCP 适配层能力），�
 
 ## 版本信息
 
-- 核心运行时版本：0.4.1
+- 核心运行时版本：0.4.2
 - 默认编译配置：`local-acp-sqlite`
 - 可选配置特性：`server-mcp-postgres`（当前为能力预留）
 
@@ -46,10 +46,22 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
+## 配置文件（当前）
+
+- 唯一模板：`config.toml.autopilot-adaptive`
+- 运行时生效配置：`config.toml`
+
+如需将本地配置重置为最新模板：
+
+```bash
+cp config.toml.autopilot-adaptive config.toml
+cargo run -- --config config.toml --validate-config
+```
+
 ## VS Code 插件
 
 - 插件文档： [vscode-addon/README.md](vscode-addon/README.md)
-- 当前同步版本：0.4.1
+- 当前同步版本：0.4.2
 
 ## 路线图
 
