@@ -4,6 +4,7 @@ pub mod graph;
 pub mod mode;
 pub mod orchestrator;
 pub mod roles;
+pub mod skill;
 pub mod task_decomposer;
 pub mod task_graph;
 pub mod task_router;

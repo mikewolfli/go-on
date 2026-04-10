@@ -18,8 +18,10 @@ use crate::cost_optimizer::CostOptimizer;
 use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
 use crate::flow_with_models::FlowModelSelector;
+use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::memory_response_cache::MemoryResponseCache;
 use crate::observability::telemetry::TelemetryRuntime;
+use crate::orchestration::skill::SkillRegistry;
 use crate::reinforcement::ArtifactLedger;
 use crate::vector::VectorStore;
 
@@ -85,6 +87,10 @@ pub struct AcpServer {
     pub flow_model_selector: Arc<StdMutex<FlowModelSelector>>,
     /// Memory response cache
     pub memory_response_cache: Arc<StdMutex<MemoryResponseCache>>,
+    /// Cross-request memory policy store
+    pub memory_store: Arc<StdMutex<MemoryStore>>,
+    /// Registry for MCP skills
+    pub skill_registry: Arc<StdMutex<SkillRegistry>>,
     /// Telemetry runtime
     pub telemetry_runtime: Arc<StdMutex<TelemetryRuntime>>,
     /// PUA enforcement plan
@@ -233,6 +239,12 @@ impl AcpServer {
         self.metrics.inc_successful_requests();
         self.metrics.total_requests()
     }
+
+    pub fn register_skill(&self, skill: Arc<dyn crate::orchestration::skill::Skill>) {
+        if let Ok(mut registry) = self.skill_registry.lock() {
+            registry.register(skill);
+        }
+    }
 }
 
 /// Server builder for constructing AcpServer instances
@@ -337,12 +349,19 @@ impl ServerBuilder {
         let dynamic_parameter_tuner = Arc::new(StdMutex::new(DynamicParameterTuner::default()));
         let resource_allocator = Arc::new(StdMutex::new(ResourceAllocator {}));
         let cost_optimizer = Arc::new(StdMutex::new(CostOptimizer::new()));
-        let failure_prevention = Arc::new(StdMutex::new(FailurePrevention::new()));
+        let mut failure_prevention_state = FailurePrevention::new();
+        if let Some(agent_registry) = &self.agent_registry {
+            for name in agent_registry.names() {
+                failure_prevention_state.register_service(&name);
+            }
+        }
+        let failure_prevention = Arc::new(StdMutex::new(failure_prevention_state));
         let flow_model_selector = Arc::new(StdMutex::new(FlowModelSelector {}));
         let memory_response_cache = Arc::new(StdMutex::new(
-            self.memory_response_cache
-                .unwrap_or_else(|| MemoryResponseCache::default()),
+            self.memory_response_cache.unwrap_or_default(),
         ));
+        let memory_store = Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default())));
+        let skill_registry = Arc::new(StdMutex::new(SkillRegistry::default()));
         let telemetry_runtime = Arc::new(StdMutex::new(TelemetryRuntime::new(
             &RuntimeConfig::default(),
         )));
@@ -390,6 +409,8 @@ impl ServerBuilder {
             failure_prevention,
             flow_model_selector,
             memory_response_cache,
+            memory_store,
+            skill_registry,
             telemetry_runtime,
             pua_enforcement_plan,
             artifact_ledger,

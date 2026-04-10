@@ -8,7 +8,6 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
@@ -146,7 +145,7 @@ impl AnthropicAgent {
     async fn stream_sse(
         &self,
         response: reqwest::Response,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         stream_sse_events(response, move |data| match parse_anthropic_event(data) {
             Ok((action, maybe_text)) => {
@@ -177,7 +176,7 @@ impl AnthropicAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "claude.api_key_env")?;
 
@@ -247,7 +246,7 @@ impl Agent for AnthropicAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 

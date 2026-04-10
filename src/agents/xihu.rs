@@ -1,4 +1,4 @@
-//! Xihu (西湖心辰) agent implementation
+//! Xihu agent implementation
 //!
 //! This module provides an implementation for the Xihu AI API.
 
@@ -8,7 +8,6 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
@@ -82,7 +81,7 @@ impl XihuAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "xihu.api_key_env")?;
         let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
@@ -114,7 +113,7 @@ impl Agent for XihuAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 

@@ -40,8 +40,8 @@ pub struct MemoryPolicy {
     pub staleness_max_days: u32,
 }
 
-impl MemoryPolicy {
-    pub fn default() -> Self {
+impl Default for MemoryPolicy {
+    fn default() -> Self {
         Self {
             transient_max_size: 10,
             episodic_max_size: 50,
@@ -52,7 +52,9 @@ impl MemoryPolicy {
             staleness_max_days: 30,
         }
     }
+}
 
+impl MemoryPolicy {
     pub fn should_retain(&self, entry: &MemoryEntry) -> bool {
         entry.usefulness >= self.usefulness_threshold && entry.staleness <= self.staleness_max_days
     }

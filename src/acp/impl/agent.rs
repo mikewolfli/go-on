@@ -277,6 +277,7 @@ pub async fn run_dual_review_gate(
 }
 
 /// Run single review by calling the reviewer agent and parsing its APPROVE/REJECT response.
+#[allow(clippy::too_many_arguments)]
 async fn run_single_review(
     server: &AcpServer,
     _id: Option<Value>,
@@ -326,7 +327,8 @@ async fn run_single_review(
     let agent_options = phase_options.and_then(|opts| opts.agent_options());
 
     // Spawn and collect agent response, enforcing the reviewer deadline via tokio timeout
-    let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
+    let (sender, mut receiver) = mpsc::channel::<String>(2048);
+    let sender = crate::agent::StreamingSender::from(sender);
     let agent_clone = agent.clone();
     let task = tokio::spawn(async move {
         agent_clone.chat(review_messages, None, agent_options, sender).await

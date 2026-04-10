@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Health status of a service
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +70,8 @@ pub struct FailurePrevention {
     circuit_breakers: HashMap<String, CircuitBreakerState>,
     failure_counts: HashMap<String, u32>,
     health_monitors: HashMap<String, ServiceHealth>,
+    total_requests: HashMap<String, u64>,
+    successful_requests: HashMap<String, u64>,
     anomaly_thresholds: AnomalyThresholds,
     max_failure_threshold: u32,
     open_duration_ms: u32,
@@ -88,6 +91,8 @@ impl FailurePrevention {
             circuit_breakers: HashMap::new(),
             failure_counts: HashMap::new(),
             health_monitors: HashMap::new(),
+            total_requests: HashMap::new(),
+            successful_requests: HashMap::new(),
             anomaly_thresholds: AnomalyThresholds {
                 error_rate_threshold: 0.1, // 10% error rate
                 latency_spike_multiplier: 2.0,
@@ -137,6 +142,7 @@ impl FailurePrevention {
 
     /// Record failure for a service
     pub fn record_failure(&mut self, service_name: &str) {
+        self.ensure_service_registered(service_name);
         let count = self
             .failure_counts
             .entry(service_name.to_string())
@@ -146,13 +152,35 @@ impl FailurePrevention {
         if *count >= self.max_failure_threshold {
             self.open_circuit(service_name);
         }
+
+        self.update_health_from_counters(service_name, None);
     }
 
     /// Record success and reset failure count
     pub fn record_success(&mut self, service_name: &str) {
+        self.ensure_service_registered(service_name);
         self.failure_counts.insert(service_name.to_string(), 0);
         self.circuit_breakers
             .insert(service_name.to_string(), CircuitBreakerState::Closed);
+        self.update_health_from_counters(service_name, None);
+    }
+
+    pub fn record_outcome(&mut self, service_name: &str, success: bool, latency_ms: u64) {
+        self.ensure_service_registered(service_name);
+        *self
+            .total_requests
+            .entry(service_name.to_string())
+            .or_insert(0) += 1;
+        if success {
+            *self
+                .successful_requests
+                .entry(service_name.to_string())
+                .or_insert(0) += 1;
+            self.record_success(service_name);
+        } else {
+            self.record_failure(service_name);
+        }
+        self.update_health_from_counters(service_name, Some(latency_ms as f64));
     }
 
     /// Open circuit breaker for a service (predictive failure prevention)
@@ -180,6 +208,9 @@ impl FailurePrevention {
             last_check_timestamp: 0u64,
         };
         self.health_monitors.insert(name.to_string(), health);
+        self.failure_counts.entry(name.to_string()).or_insert(0);
+        self.total_requests.entry(name.to_string()).or_insert(0);
+        self.successful_requests.entry(name.to_string()).or_insert(0);
     }
 
     /// Update service health
@@ -241,6 +272,53 @@ impl FailurePrevention {
     pub fn get_health_report(&self) -> Vec<ServiceHealth> {
         self.health_monitors.values().cloned().collect()
     }
+
+    fn ensure_service_registered(&mut self, name: &str) {
+        if !self.health_monitors.contains_key(name) {
+            self.register_service(name);
+        }
+    }
+
+    fn update_health_from_counters(&mut self, name: &str, latency_ms: Option<f64>) {
+        let total = self.total_requests.get(name).copied().unwrap_or(0);
+        let success = self.successful_requests.get(name).copied().unwrap_or(0);
+        let failure_count = self.failure_counts.get(name).copied().unwrap_or(0) as f64;
+        let success_rate = if total == 0 {
+            1.0
+        } else {
+            success as f64 / total as f64
+        };
+        let error_rate = if total == 0 {
+            0.0
+        } else {
+            (total.saturating_sub(success)) as f64 / total as f64
+        };
+
+        if let Some(health) = self.health_monitors.get_mut(name) {
+            if let Some(latency_ms) = latency_ms {
+                let samples = total.max(1) as f64;
+                let previous_weight = (samples - 1.0).max(0.0);
+                health.avg_latency_ms = if previous_weight == 0.0 {
+                    latency_ms
+                } else {
+                    ((health.avg_latency_ms * previous_weight) + latency_ms) / samples
+                };
+            }
+            health.success_rate = success_rate;
+            health.error_rate = error_rate.max(failure_count / self.max_failure_threshold as f64);
+            health.last_check_timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            health.status = if health.error_rate > self.anomaly_thresholds.error_rate_threshold {
+                HealthStatus::Unhealthy
+            } else if health.success_rate < self.anomaly_thresholds.success_rate_threshold {
+                HealthStatus::Degraded
+            } else {
+                HealthStatus::Healthy
+            };
+        }
+    }
 }
 
 impl Default for FailurePrevention {
@@ -299,5 +377,23 @@ mod tests {
         prevention.update_service_health("api", 0.4, 0.6, 100.0);
 
         assert!(prevention.should_degrade("api"));
+    }
+
+    #[test]
+    fn test_record_outcome_updates_health() {
+        let mut prevention = FailurePrevention::new();
+        prevention.register_service("api");
+
+        for _ in 0..5 {
+            prevention.record_outcome("api", false, 900);
+        }
+
+        let health = prevention
+            .get_health_report()
+            .into_iter()
+            .find(|item| item.service_name == "api")
+            .unwrap();
+        assert!(health.error_rate > 0.1);
+        assert!(matches!(health.status, HealthStatus::Unhealthy));
     }
 }

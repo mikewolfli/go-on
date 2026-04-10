@@ -7,7 +7,6 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::agent::{Agent, Message};
@@ -84,7 +83,7 @@ impl CopilotAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let messages = self.merge_principles_into_messages(messages, principles);
 
@@ -112,7 +111,7 @@ impl Agent for CopilotAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 

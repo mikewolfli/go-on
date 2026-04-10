@@ -10,7 +10,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
@@ -152,7 +152,7 @@ impl WenxinAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let token = self.get_access_token().await?;
         let target_model = Self::resolve_target_model(&options);
@@ -180,7 +180,7 @@ impl Agent for WenxinAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 

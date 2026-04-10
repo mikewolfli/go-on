@@ -183,8 +183,6 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::Value;
     use std::collections::HashMap;
-    use tokio::sync::mpsc;
-
     use crate::agent::{Agent, Message};
 
     use super::*;
@@ -201,7 +199,7 @@ mod tests {
             _messages: Vec<Message>,
             _principles: Option<Vec<String>>,
             _options: Option<HashMap<String, Value>>,
-            _sender: mpsc::UnboundedSender<String>,
+            _sender: crate::agent::StreamingSender,
         ) -> anyhow::Result<()> {
             Ok(())
         }

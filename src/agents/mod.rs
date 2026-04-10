@@ -1,6 +1,6 @@
 //! Agent implementations
 //!
-//! This module provides implementations for various AI agents, including AI21 Labs, Aleph Alpha, Anthropic, Cohere, Copilot, DeepQuest, DeepSeek, Doubao (ByteDance), FaceWall (面壁智能), Fireworks AI, Gemini (Google), GLM (Zhipu AI), Groq, Hunyuan (Tencent), Langboat (澜舟科技), Llama (Meta), Loop AI, MiniMax, Mistral AI, Moonshot (月之暗面), Nim, OpenAI, OpenAI-compatible, Perplexity AI, Qianfan (Baidu), Qwen (Alibaba), Replicate, Skywork (昆仑万维), StepFun (阶跃星辰), Together AI, Titan (Amazon), Wenxin (Baidu), Xihu (西湖), and Yi (01.AI).
+//! This module provides implementations for various AI agents, including AI21 Labs, Aleph Alpha, Anthropic, Cohere, Copilot, DeepQuest, DeepSeek, Doubao (ByteDance), FaceWall, Fireworks AI, Gemini (Google), GLM (Zhipu AI), Groq, Hunyuan (Tencent), Langboat, Llama (Meta), Loop AI, MiniMax, Mistral AI, Moonshot, Nim, OpenAI, OpenAI-compatible, Perplexity AI, Qianfan (Baidu), Qwen (Alibaba), Replicate, Skywork, StepFun, Together AI, Titan (Amazon), Wenxin (Baidu), Xihu, and Yi (01.AI).
 
 pub mod agent;
 pub mod ai21;
@@ -44,7 +44,6 @@ use std::collections::HashMap;
 use anyhow::Result;
 use futures_util::StreamExt;
 use serde_json::Value;
-use tokio::sync::mpsc;
 
 pub use ai21::Ai21Agent;
 pub use aleph::AlephAgent;
@@ -262,7 +261,7 @@ where
 
 pub async fn stream_sse_to_sender(
     response: reqwest::Response,
-    sender: mpsc::UnboundedSender<String>,
+    sender: crate::agent::StreamingSender,
 ) -> Result<()> {
     stream_sse_events(response, move |data| {
         if data.trim() == "[DONE]" {

@@ -20,13 +20,13 @@ use tokio::task::JoinSet;
 use tokio::time::Duration;
 use tracing::{debug, info};
 
+use crate::acp::background::run_maintenance_cycle;
 use crate::acp::helpers::metrics::{
     build_prometheus_metrics, CircuitBreakerSnapshot as PrometheusCircuitBreakerSnapshot,
     LifecycleSnapshot as PrometheusLifecycleSnapshot,
     MaintenanceSnapshot as PrometheusMaintenanceSnapshot,
     MetricsSnapshot as PrometheusMetricsSnapshot, RuntimeGaugeSnapshot,
 };
-use crate::acp::background::run_maintenance_cycle;
 use crate::acp::r#impl::storage::cache_clear;
 use crate::acp::server::AcpServer;
 use crate::agent::{AgentAuditLog, AgentTaskEnvelope, Message};
@@ -38,28 +38,24 @@ use crate::acp::helpers::requirement::{
     evaluate_requirement_gate, parse_requirement_contract_from_params,
     resolve_learning_clarification_metrics,
 };
-use crate::i18n::runtime::{t, tf};
-use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryPromotionReport, MemoryStore};
-use crate::orchestration::task_router::TaskRouter;
 use crate::flow_with_models::FlowModelSelector;
-use crate::tool::{ToolInput, ToolRegistry};
+use crate::i18n::runtime::{t, tf};
+use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPromotionReport, MemoryStore};
+use crate::orchestration::task_router::TaskRouter;
 use crate::reinforcement::{
-    run_action_check, ActionCheckKind,
-    build_task_plan, build_workflow_generated_artifact,
-    persist_clarification_session_artifact, persist_consultation_artifact,
-    persist_execution_decision, persist_primary_secondary_failover_artifact,
-    persist_primary_secondary_policy_artifact, persist_requirement_contract,
-    persist_task_execution_summary, persist_task_plan, persist_workflow_generated,
-    persist_workflow_learning_event, persist_workflow_research, ArtifactLedger,
-    ClarificationSessionArtifact,
+    build_task_plan, build_workflow_generated_artifact, persist_clarification_session_artifact,
+    persist_consultation_artifact, persist_execution_decision,
+    persist_primary_secondary_failover_artifact, persist_primary_secondary_policy_artifact,
+    persist_requirement_contract, persist_task_execution_summary, persist_task_plan,
+    persist_workflow_generated, persist_workflow_learning_event, persist_workflow_research,
+    run_action_check, ActionCheckKind, ArtifactLedger, ClarificationSessionArtifact,
     ConsultationArtifact, ExecutionAssignmentRecord, ExecutionDecisionArtifact,
-    ExecutionDecisionCandidate,
-    ParallelPhaseDecisionRecord, PrimaryFailoverReportItem,
-    PrimarySecondaryFailoverArtifact, PrimarySecondaryPolicyArtifact,
-    RequirementContractArtifact, TaskExecutionMetrics, TaskExecutionSummary,
-    WorkflowGeneratedArtifact, WorkflowLearningBusArtifact, WorkflowLearningEvent,
-    WorkflowResearchArtifact,
+    ExecutionDecisionCandidate, ParallelPhaseDecisionRecord, PrimaryFailoverReportItem,
+    PrimarySecondaryFailoverArtifact, PrimarySecondaryPolicyArtifact, RequirementContractArtifact,
+    TaskExecutionMetrics, TaskExecutionSummary, WorkflowGeneratedArtifact,
+    WorkflowLearningBusArtifact, WorkflowLearningEvent, WorkflowResearchArtifact,
 };
+use crate::tool::{ToolInput, ToolRegistry};
 
 use crate::rpc_protocol::{value_to_id, JsonRpcRequest, RequestTraceContext};
 
@@ -325,7 +321,7 @@ async fn handle_initialize(server: &AcpServer, request_id: Option<Value>) -> Res
         request_id,
         json!({
             "name": "go-on",
-            "version": "0.3.2",
+            "version": "0.4.1",
             "protocol": "acp",
             "capabilities": {
                 "chat": true,
@@ -351,7 +347,7 @@ async fn handle_mcp_initialize(server: &AcpServer, request_id: Option<Value>) ->
             "capabilities": {},
             "serverInfo": {
                 "name": "go-on",
-                "version": "0.3.2"
+                "version": "0.4.1"
             }
         }),
     )
@@ -360,22 +356,34 @@ async fn handle_mcp_initialize(server: &AcpServer, request_id: Option<Value>) ->
 
 /// Handle MCP tools list request
 async fn handle_mcp_tools_list(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    let mut tools = vec![
+        json!({
+            "name": "acp_trace_get",
+            "description": "Get ACP trace events",
+            "input_schema": {"type": "object"}
+        }),
+        json!({
+            "name": "acp_debug_panel_get",
+            "description": "Get ACP debug panel snapshot",
+            "input_schema": {"type": "object"}
+        }),
+    ];
+
+    if let Ok(registry) = server.skill_registry.lock() {
+        tools.extend(registry.list().into_iter().map(|skill| {
+            json!({
+                "name": skill.name,
+                "description": skill.description,
+                "input_schema": skill.input_schema,
+            })
+        }));
+    }
+
     send_result(
         server,
         request_id,
         json!({
-            "tools": [
-                {
-                    "name": "acp_trace_get",
-                    "description": "Get ACP trace events",
-                    "input_schema": {"type": "object"}
-                },
-                {
-                    "name": "acp_debug_panel_get",
-                    "description": "Get ACP debug panel snapshot",
-                    "input_schema": {"type": "object"}
-                }
-            ]
+            "tools": tools
         }),
     )
     .await
@@ -391,7 +399,10 @@ async fn handle_mcp_tools_call(
         .and_then(|value| value.as_str())
         .unwrap_or_default();
 
-    let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
 
     let structured = match name {
         "acp_trace_get" => {
@@ -405,14 +416,24 @@ async fn handle_mcp_tools_call(
         }
         "acp_debug_panel_get" => build_debug_panel_payload(server).await,
         _ => {
-            return send_error(
-                server,
-                request_id,
-                -32602,
-                format!("unknown mcp tool: {name}"),
-                None,
-            )
-            .await
+            let skill = server
+                .skill_registry
+                .lock()
+                .ok()
+                .and_then(|registry| registry.get(name));
+            match skill {
+                Some(skill) => skill.execute(&arguments).await?,
+                None => {
+                    return send_error(
+                        server,
+                        request_id,
+                        -32602,
+                        format!("unknown mcp tool: {name}"),
+                        None,
+                    )
+                    .await
+                }
+            }
         }
     };
 
@@ -510,7 +531,12 @@ async fn handle_metrics(server: &AcpServer, request_id: Option<Value>) -> Result
 }
 
 async fn handle_metrics_get(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    send_result(server, request_id, serde_json::to_value(server.metrics.snapshot())?).await
+    send_result(
+        server,
+        request_id,
+        serde_json::to_value(server.metrics.snapshot())?,
+    )
+    .await
 }
 
 async fn handle_metrics_prometheus(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
@@ -551,7 +577,9 @@ async fn handle_metrics_prometheus(server: &AcpServer, request_id: Option<Value>
         .map(|guard| PrometheusLifecycleSnapshot {
             shutting_down: guard.shutdown_requested(),
         })
-        .unwrap_or(PrometheusLifecycleSnapshot { shutting_down: false });
+        .unwrap_or(PrometheusLifecycleSnapshot {
+            shutting_down: false,
+        });
     let maintenance_snapshot = server
         .maintenance_tracker
         .lock()
@@ -889,7 +917,12 @@ async fn handle_action_check(
         .and_then(ActionCheckKind::parse)
         .unwrap_or(ActionCheckKind::All);
     let report = run_action_check(&clone_artifact_ledger(server), kind)?;
-    send_result(server, request_id, json!({"ok": report.ok, "report": report})).await
+    send_result(
+        server,
+        request_id,
+        json!({"ok": report.ok, "report": report}),
+    )
+    .await
 }
 
 async fn handle_conversation_checkpoint_create(
@@ -951,7 +984,8 @@ async fn handle_conversation_checkpoint_create(
         .get("note")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let checkpoint = create_checkpoint_record(server, conversation_id, branch_id, messages, note, None).await;
+    let checkpoint =
+        create_checkpoint_record(server, conversation_id, branch_id, messages, note, None).await;
 
     send_result(
         server,
@@ -983,7 +1017,10 @@ async fn handle_conversation_checkpoint_list(
         .get("branch_id")
         .or_else(|| params.get("branch"))
         .and_then(Value::as_str);
-    let limit = params.get("limit").and_then(Value::as_u64).map(|v| v as usize);
+    let limit = params
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize);
     let checkpoints = list_checkpoint_records(server, conversation_id, branch_id, limit).await;
 
     send_result(
@@ -1156,11 +1193,7 @@ async fn handle_autotune_status(server: &AcpServer, request_id: Option<Value>) -
         None
     };
 
-    let autotune_config = if let Some(config) = &server.autotune_config {
-        Some(config.clone())
-    } else {
-        None
-    };
+    let autotune_config = server.autotune_config.as_ref().cloned();
 
     send_result(
         server,
@@ -1195,7 +1228,9 @@ async fn handle_autotune_reset(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let (Some(autotune), Some(config)) = (server.autotune.as_ref(), server.autotune_config.as_ref()) else {
+    let (Some(autotune), Some(config)) =
+        (server.autotune.as_ref(), server.autotune_config.as_ref())
+    else {
         return send_result(
             server,
             request_id,
@@ -1297,7 +1332,10 @@ async fn handle_workflow_confirm(
         task: task.clone(),
         source: "workflow.confirm".to_string(),
         session_id: session_id_for_task(&task),
-        round_index: params.get("round_index").and_then(Value::as_u64).unwrap_or(1) as u32,
+        round_index: params
+            .get("round_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(1) as u32,
         lead_clarifier: "local_echo".to_string(),
         assistant_clarifiers: Vec::new(),
         user_feedback: String::new(),
@@ -1337,7 +1375,10 @@ async fn handle_workflow_clarify(
         task: task.clone(),
         source: "workflow.clarify".to_string(),
         session_id: session_id_for_task(&task),
-        round_index: params.get("round_index").and_then(Value::as_u64).unwrap_or(1) as u32,
+        round_index: params
+            .get("round_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(1) as u32,
         lead_clarifier: "local_echo".to_string(),
         assistant_clarifiers: if params
             .get("clarify_collaboration_mode")
@@ -1652,9 +1693,12 @@ async fn handle_workflow_execute(
     .await;
 
     let characteristics = TaskRouter::analyze_task(&task);
-    let phase_options = server
-        .flow_manager()
-        .and_then(|flow| flow.config().phases.get(flow.default_phase()).and_then(|phase| phase.options.clone()));
+    let phase_options = server.flow_manager().and_then(|flow| {
+        flow.config()
+            .phases
+            .get(flow.default_phase())
+            .and_then(|phase| phase.options.clone())
+    });
     let review_policy = resolve_review_policy(
         phase_options.as_ref(),
         Some(&characteristics),
@@ -1674,11 +1718,13 @@ async fn handle_workflow_execute(
         execution_context.secondary_agents.clone()
     };
     let reviews = (0..review_policy.required_reviews)
-        .map(|index| json!({
-            "reviewer": format!("reviewer_{}", index + 1),
-            "verdict": "APPROVE",
-            "response": "approved"
-        }))
+        .map(|index| {
+            json!({
+                "reviewer": format!("reviewer_{}", index + 1),
+                "verdict": "APPROVE",
+                "response": "approved"
+            })
+        })
         .collect::<Vec<_>>();
     let clarification_metrics = resolve_learning_clarification_metrics(&ledger, &task, &params);
     let policy_artifact = PrimarySecondaryPolicyArtifact {
@@ -1773,7 +1819,11 @@ async fn handle_workflow_execute(
             clarification_quality_score: clarification_metrics.quality_score,
             requirement_change_count: clarification_metrics.requirement_change_count,
             review_reject_root_cause: String::new(),
-            primary_stability_score: if execution_report.subtasks_failed == 0 { 1.0 } else { 0.0 },
+            primary_stability_score: if execution_report.subtasks_failed == 0 {
+                1.0
+            } else {
+                0.0
+            },
             secondary_utilization_rate: if policy_artifact.secondary_agents.is_empty() {
                 0.0
             } else {
@@ -1958,7 +2008,8 @@ async fn handle_task_execute(
 
     let execution_context = build_execution_context(server, &params)?;
     let mut records = plan.planned_subtasks.clone();
-    let execution_report = execute_runtime_subtasks(task, &workflow, &mut records, &execution_context).await;
+    let execution_report =
+        execute_runtime_subtasks(task, &workflow, &mut records, &execution_context).await;
 
     let execution_path = ledger.latest_path("spec", "latest-execution.json");
     let summary = TaskExecutionSummary {
@@ -2024,7 +2075,11 @@ async fn handle_task_execute(
             clarification_quality_score: 1.0,
             requirement_change_count: 0,
             review_reject_root_cause: String::new(),
-            primary_stability_score: if summary.subtasks_failed == 0 { 1.0 } else { 0.0 },
+            primary_stability_score: if summary.subtasks_failed == 0 {
+                1.0
+            } else {
+                0.0
+            },
             secondary_utilization_rate: if execution_report.subtask_parallelism > 1 {
                 execution_report.parallel_utilization
             } else {
@@ -2070,6 +2125,7 @@ struct RuntimeExecutionContext {
     adaptive_selector: Arc<StdMutex<crate::adaptive_selector::AdaptiveModelSelector>>,
     online_controller: Arc<StdMutex<crate::acp::prelude::OnlineControllerState>>,
     failure_prevention: Arc<StdMutex<crate::failure_prevention::FailurePrevention>>,
+    memory_store: Arc<StdMutex<MemoryStore>>,
     lazy_policy: LazyLoadPolicy,
 }
 
@@ -2205,6 +2261,7 @@ fn build_execution_context(server: &AcpServer, params: &Value) -> Result<Runtime
         adaptive_selector: server.adaptive_model_selector.clone(),
         online_controller: server.online_controller.clone(),
         failure_prevention: server.failure_prevention.clone(),
+        memory_store: server.memory_store.clone(),
         lazy_policy,
     })
 }
@@ -2299,12 +2356,8 @@ async fn execute_runtime_subtasks(
                     .iter()
                     .map(|(name, _)| name.clone())
                     .collect::<Vec<_>>();
-                ranked_candidates = rank_execution_agents(
-                    &names,
-                    desired_role.as_deref(),
-                    phase_idx,
-                    record_index,
-                );
+                ranked_candidates =
+                    rank_execution_agents(&names, desired_role.as_deref(), phase_idx, record_index);
                 if !ranked_candidates.is_empty() {
                     role_routed_subtasks += 1;
                 }
@@ -2362,7 +2415,11 @@ async fn execute_runtime_subtasks(
                     now,
                     now,
                     result.duration_ms,
-                    if result.success { "completed" } else { "failed" },
+                    if result.success {
+                        "completed"
+                    } else {
+                        "failed"
+                    },
                     result.executor.clone(),
                 );
 
@@ -2469,28 +2526,31 @@ async fn execute_runtime_subtasks(
     let mut memory_entries_retained = 0_usize;
     let mut memory_artifact_path = None;
     if context.lazy_policy.enable_memory_policy {
-        let mut store = MemoryStore::new(MemoryPolicy::default());
-        for (index, content) in memory_snapshots.iter().enumerate() {
-            let class = if content.contains("tool:") {
-                MemoryClass::Observation
-            } else {
-                MemoryClass::Episodic
-            };
-            store.store(MemoryEntry {
-                id: format!("mem-{}-{}", crate::acp::prelude::now_ts_ms(), index + 1),
-                class,
-                content: content.clone(),
-                timestamp: crate::acp::prelude::now_ts().to_string(),
-                usefulness: 0.8,
-                staleness: 0,
-            });
-            memory_entries_written += 1;
-        }
-        store.gc();
-        // Promote high-usefulness entries up one memory class level (BLUE8-M2)
-        let promotion: MemoryPromotionReport = store.promote();
-        memory_entries_retained = store.retrieve(MemoryClass::Observation, 128).len()
-            + store.retrieve(MemoryClass::Episodic, 128).len();
+        let promotion = if let Ok(mut store) = context.memory_store.lock() {
+            for (index, content) in memory_snapshots.iter().enumerate() {
+                let class = if content.contains("tool:") {
+                    MemoryClass::Observation
+                } else {
+                    MemoryClass::Episodic
+                };
+                store.store(MemoryEntry {
+                    id: format!("mem-{}-{}", crate::acp::prelude::now_ts_ms(), index + 1),
+                    class,
+                    content: content.clone(),
+                    timestamp: crate::acp::prelude::now_ts().to_string(),
+                    usefulness: 0.8,
+                    staleness: 0,
+                });
+                memory_entries_written += 1;
+            }
+            store.gc();
+            let promotion: MemoryPromotionReport = store.promote();
+            memory_entries_retained = store.retrieve(MemoryClass::Observation, 128).len()
+                + store.retrieve(MemoryClass::Episodic, 128).len();
+            promotion
+        } else {
+            MemoryPromotionReport::default()
+        };
 
         let memory_artifact = MemoryPolicyExecutionArtifact {
             generated_at: crate::acp::prelude::now_ts(),
@@ -2501,8 +2561,7 @@ async fn execute_runtime_subtasks(
             sample_observations: memory_snapshots.into_iter().take(8).collect(),
         };
         let ledger = ArtifactLedger::new(None);
-        if let Ok(path) = ledger.write_json("spec", "latest-memory-policy.json", &memory_artifact)
-        {
+        if let Ok(path) = ledger.write_json("spec", "latest-memory-policy.json", &memory_artifact) {
             memory_artifact_path = Some(path.display().to_string());
         }
         // Persist promotion report (BLUE8-M3)
@@ -2535,10 +2594,7 @@ async fn execute_runtime_subtasks(
         parallel_speedup,
         failure_strategy: context.failure_strategy.clone(),
         failover_count,
-        failover_root_cause: failover_root_causes
-            .into_iter()
-            .next()
-            .unwrap_or_default(),
+        failover_root_cause: failover_root_causes.into_iter().next().unwrap_or_default(),
         lazy_load: LazyLoadExecutionReport {
             policy: context.lazy_policy.clone(),
             tool_loop_runs,
@@ -2593,7 +2649,9 @@ async fn execute_single_subtask(
     let envelope = AgentTaskEnvelope {
         task_id: task_id.clone(),
         phase: format!("phase-{}", phase_index + 1),
-        role: desired_role.clone().unwrap_or_else(|| "executor".to_string()),
+        role: desired_role
+            .clone()
+            .unwrap_or_else(|| "executor".to_string()),
         objective: subtask_description.clone(),
         constraints: context.principles.as_ref().map(|p| p.join("; ")),
         evidence: if tool_context.is_empty() {
@@ -2636,7 +2694,9 @@ async fn execute_single_subtask(
             .iter()
             .any(|(n, _)| !degraded_set.contains(n))
     {
-        context.candidates.retain(|(n, _)| !degraded_set.contains(n));
+        context
+            .candidates
+            .retain(|(n, _)| !degraded_set.contains(n));
     }
 
     for (idx, (agent_name, agent)) in context.candidates.iter().enumerate() {
@@ -2647,7 +2707,10 @@ async fn execute_single_subtask(
         );
 
         let mut options = context.base_options.clone();
-        let selected_model = selection.selected_model.as_ref().map(|model| model.id.clone());
+        let selected_model = selection
+            .selected_model
+            .as_ref()
+            .map(|model| model.id.clone());
         if let Some(model_id) = selected_model.clone() {
             options.insert("model".to_string(), Value::String(model_id));
         }
@@ -2656,7 +2719,11 @@ async fn execute_single_subtask(
             agent.clone(),
             messages.clone(),
             context.principles.clone(),
-            if options.is_empty() { None } else { Some(options) },
+            if options.is_empty() {
+                None
+            } else {
+                Some(options)
+            },
             context.task_timeout_seconds,
         )
         .await;
@@ -2667,13 +2734,12 @@ async fn execute_single_subtask(
             selector.record_result(&model_id, run_result.is_ok());
         }
         // Record per-agent outcome to online controller for adaptive ranking
+        let duration_ms = started.elapsed().as_millis() as u64;
         if let Ok(mut ctrl) = context.online_controller.lock() {
-            ctrl.record_agent_outcome(
-                &phase_name,
-                agent_name,
-                run_result.is_ok(),
-                started.elapsed().as_millis() as u64,
-            );
+            ctrl.record_agent_outcome(&phase_name, agent_name, run_result.is_ok(), duration_ms);
+        }
+        if let Ok(mut fp) = context.failure_prevention.lock() {
+            fp.record_outcome(agent_name, run_result.is_ok(), duration_ms);
         }
 
         match run_result {
@@ -2728,7 +2794,7 @@ async fn execute_single_subtask(
         }
     }
 
-    // Envelope is captured but execution failed — suppress unused-variable warning
+    // Envelope is captured but execution failed - suppress unused-variable warning
     let _ = envelope;
 
     SubtaskRunResult {
@@ -2800,7 +2866,8 @@ async fn run_agent_chat_collecting(
     options: Option<HashMap<String, Value>>,
     timeout_seconds: Option<u64>,
 ) -> Result<String> {
-    let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
+    let (sender, mut receiver) = mpsc::channel::<String>(2048);
+    let sender = crate::agent::StreamingSender::from(sender);
     let task = tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
 
     let collect = async move {
@@ -2820,7 +2887,10 @@ async fn run_agent_chat_collecting(
         let timeout = Duration::from_secs(seconds.max(1));
         match tokio::time::timeout(timeout, collect).await {
             Ok(result) => result,
-            Err(_) => Err(anyhow::anyhow!("agent request timed out after {}s", seconds)),
+            Err(_) => Err(anyhow::anyhow!(
+                "agent request timed out after {}s",
+                seconds
+            )),
         }
     } else {
         collect.await
@@ -2840,7 +2910,11 @@ async fn handle_learning_summary(
         .map(|v| v as usize)
         .unwrap_or(20)
         .max(1);
-    let Some(bus) = read_latest_artifact::<WorkflowLearningBusArtifact>(&ledger, "spec", "latest-learning.json") else {
+    let Some(bus) = read_latest_artifact::<WorkflowLearningBusArtifact>(
+        &ledger,
+        "spec",
+        "latest-learning.json",
+    ) else {
         return send_result(
             server,
             request_id,
@@ -2864,7 +2938,10 @@ async fn handle_learning_summary(
         / count as f64;
     let avg_speedup = events.iter().map(|item| item.parallel_speedup).sum::<f64>() / count as f64;
     let avg_risk = events.iter().map(|item| item.risk_score).sum::<f64>() / count as f64;
-    let failover_total = events.iter().map(|item| item.failover_count as u64).sum::<u64>();
+    let failover_total = events
+        .iter()
+        .map(|item| item.failover_count as u64)
+        .sum::<u64>();
     let avg_rounds = events
         .iter()
         .map(|item| item.clarification_rounds as f64)
@@ -2924,7 +3001,11 @@ async fn handle_primary_secondary_summary(
         .map(|v| v as usize)
         .unwrap_or(20)
         .max(1);
-    let bus = read_latest_artifact::<WorkflowLearningBusArtifact>(&ledger, "spec", "latest-learning.json");
+    let bus = read_latest_artifact::<WorkflowLearningBusArtifact>(
+        &ledger,
+        "spec",
+        "latest-learning.json",
+    );
     let policy = read_latest_artifact::<PrimarySecondaryPolicyArtifact>(
         &ledger,
         "spec",
@@ -2958,7 +3039,10 @@ async fn handle_primary_secondary_summary(
         .map(|item| item.secondary_utilization_rate)
         .sum::<f64>()
         / count as f64;
-    let total_failovers = events.iter().map(|item| item.failover_count as u64).sum::<u64>();
+    let total_failovers = events
+        .iter()
+        .map(|item| item.failover_count as u64)
+        .sum::<u64>();
     let mut root_causes = HashMap::new();
     for event in &events {
         if !event.failover_root_cause.is_empty() {
@@ -3001,16 +3085,19 @@ fn parse_messages(params: &Value) -> Option<Vec<Message>> {
             .map(|message| vec![message]);
     }
 
-    params.get("content").and_then(Value::as_str).map(|content| {
-        vec![Message {
-            role: params
-                .get("role")
-                .and_then(Value::as_str)
-                .unwrap_or("user")
-                .to_string(),
-            content: content.to_string(),
-        }]
-    })
+    params
+        .get("content")
+        .and_then(Value::as_str)
+        .map(|content| {
+            vec![Message {
+                role: params
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("user")
+                    .to_string(),
+                content: content.to_string(),
+            }]
+        })
 }
 
 fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSnapshot {
@@ -3359,6 +3446,7 @@ fn new_request_trace(_server: &AcpServer, request: &JsonRpcRequest) -> RequestTr
 }
 
 /// Record trace event
+#[allow(clippy::too_many_arguments)]
 fn record_trace_event(
     _server: &AcpServer,
     trace: &RequestTraceContext,
@@ -3422,9 +3510,11 @@ mod tests {
 
     #[test]
     fn session_id_for_task_compacts_to_ascii_alnum() {
-        let value = session_id_for_task("Fix #123: add 审核 stage and docs");
+        let value = session_id_for_task("Fix #123: add review stage and docs");
         assert!(value.starts_with("clarify-"));
-        assert!(value.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-'));
+        assert!(value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-'));
     }
 
     #[test]

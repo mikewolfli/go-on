@@ -1,7 +1,12 @@
 [package]
 name = "go-on"
-version = "0.3.2"
+version = "0.4.1"
 edition = "2021"
+
+[features]
+default = ["local-acp-sqlite"]
+local-acp-sqlite = []
+server-mcp-postgres = []
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

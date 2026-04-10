@@ -14,6 +14,7 @@ use tracing::{debug, info, warn};
 
 use crate::cache::ResponseCache;
 use crate::config::RuntimeConfig;
+use crate::memory_module::MemoryStore;
 use crate::memory_response_cache::MemoryResponseCache;
 use crate::vector::VectorStore;
 
@@ -26,6 +27,8 @@ use super::prelude::{
 pub struct MaintenanceCycleResult {
     /// Number of expired entries removed from memory cache
     pub memory_expired_removed: usize,
+    /// Whether runtime memory store GC was executed
+    pub memory_store_gc_ran: bool,
     /// Number of expired entries removed from SQLite cache
     pub sqlite_expired_removed: usize,
     /// Whether cache vacuum was performed
@@ -42,6 +45,7 @@ pub struct MaintenanceCycleResult {
 pub async fn run_background_maintenance_loop(
     runtime_config: Arc<std::sync::Mutex<RuntimeConfig>>,
     memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
+    memory_store: Arc<std::sync::Mutex<MemoryStore>>,
     cache: Arc<std::sync::Mutex<Option<Arc<ResponseCache>>>>,
     vector_store: Arc<std::sync::Mutex<Option<Arc<VectorStore>>>>,
     maintenance: Arc<std::sync::Mutex<MaintenanceTracker>>,
@@ -76,6 +80,7 @@ pub async fn run_background_maintenance_loop(
 
                 if let Err(err) = perform_maintenance_cycle(
                     Arc::clone(&memory_cache),
+                    Arc::clone(&memory_store),
                     Arc::clone(&cache),
                     Arc::clone(&vector_store),
                     Arc::clone(&maintenance),
@@ -114,6 +119,7 @@ pub async fn run_background_maintenance_loop(
 /// Perform maintenance cycle
 pub async fn perform_maintenance_cycle(
     memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
+    memory_store: Arc<std::sync::Mutex<MemoryStore>>,
     cache: Arc<std::sync::Mutex<Option<Arc<ResponseCache>>>>,
     vector_store: Arc<std::sync::Mutex<Option<Arc<VectorStore>>>>,
     maintenance: Arc<std::sync::Mutex<MaintenanceTracker>>,
@@ -124,18 +130,25 @@ pub async fn perform_maintenance_cycle(
         guard.note_started();
     }
 
-    let mut result = MaintenanceCycleResult::default();
+    let mut result = MaintenanceCycleResult {
+        memory_expired_removed: if let Ok(guard) = memory_cache.lock() {
+            guard.purge_expired()
+        } else {
+            0
+        },
+        ..MaintenanceCycleResult::default()
+    };
 
     // Clean memory cache
-    result.memory_expired_removed = if let Ok(guard) = memory_cache.lock() {
-        guard.purge_expired()
-    } else {
-        0
-    };
     debug!(
         "{}: cleaned {} expired entries from memory cache",
         source, result.memory_expired_removed
     );
+
+    if let Ok(mut guard) = memory_store.lock() {
+        guard.gc();
+        result.memory_store_gc_ran = true;
+    }
 
     // Clean SQLite cache if available
     if let Some(cache_ref) = cache.lock().ok().and_then(|guard| guard.clone()) {
@@ -213,6 +226,7 @@ pub async fn perform_maintenance_cycle(
 }
 
 /// Perform health check cycle
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_health_check_cycle(
     memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
     cache: Arc<std::sync::Mutex<Option<Arc<ResponseCache>>>>,
@@ -314,6 +328,7 @@ pub async fn start_background_tasks(
 ) -> Result<()> {
     let runtime_config = Arc::new(std::sync::Mutex::new(server.runtime_config.clone()));
     let memory_cache = Arc::clone(&server.memory_response_cache);
+    let memory_store = Arc::clone(&server.memory_store);
 
     let cache = Arc::new(std::sync::Mutex::new(server.response_cache.clone()));
     let vector_store = Arc::new(std::sync::Mutex::new(server.vector_store.clone()));
@@ -331,6 +346,7 @@ pub async fn start_background_tasks(
         run_background_maintenance_loop(
             runtime_config,
             memory_cache,
+            memory_store,
             cache,
             vector_store,
             maintenance,
@@ -357,6 +373,7 @@ pub async fn run_maintenance_cycle(
 ) -> Result<MaintenanceCycleResult> {
     let runtime_config = Arc::new(std::sync::Mutex::new(server.runtime_config.clone()));
     let memory_cache = Arc::clone(&server.memory_response_cache);
+    let memory_store = Arc::clone(&server.memory_store);
 
     let cache = Arc::new(std::sync::Mutex::new(server.response_cache.clone()));
     let vector_store = Arc::new(std::sync::Mutex::new(server.vector_store.clone()));
@@ -365,6 +382,7 @@ pub async fn run_maintenance_cycle(
 
     perform_maintenance_cycle(
         memory_cache,
+        memory_store,
         cache,
         vector_store,
         maintenance,

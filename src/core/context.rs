@@ -41,6 +41,12 @@ impl SystemContext {
     }
 }
 
+impl Default for SystemContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Global context holder (can be made thread-safe with Arc<Mutex<>>)
 pub struct GlobalContext {
     pub system: SystemContext,
@@ -51,5 +57,11 @@ impl GlobalContext {
         Self {
             system: SystemContext::new(),
         }
+    }
+}
+
+impl Default for GlobalContext {
+    fn default() -> Self {
+        Self::new()
     }
 }

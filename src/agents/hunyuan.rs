@@ -1,4 +1,4 @@
-//! Hunyuan (腾讯混元) agent implementation
+//! Hunyuan agent implementation
 //!
 //! This module provides an implementation for the Tencent Hunyuan API.
 
@@ -8,7 +8,6 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
@@ -85,7 +84,7 @@ impl HunyuanAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "hunyuan.api_key_env")?;
         let secret_key = resolve_secret(&self.secret_key_env, "hunyuan.secret_key_env")?;
@@ -119,7 +118,7 @@ impl Agent for HunyuanAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 

@@ -87,6 +87,12 @@ impl ToolRegistry {
     }
 }
 
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct ReadFileTool;
 impl Tool for ReadFileTool {
     fn name(&self) -> &'static str {

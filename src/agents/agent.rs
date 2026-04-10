@@ -117,10 +117,34 @@ pub struct Message {
     pub content: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct StreamingSender {
+    inner: mpsc::Sender<String>,
+}
+
+impl StreamingSender {
+    pub fn new(inner: mpsc::Sender<String>) -> Self {
+        Self { inner }
+    }
+
+    pub fn send(
+        &self,
+        token: String,
+    ) -> std::result::Result<(), mpsc::error::TrySendError<String>> {
+        self.inner.try_send(token)
+    }
+}
+
+impl From<mpsc::Sender<String>> for StreamingSender {
+    fn from(inner: mpsc::Sender<String>) -> Self {
+        Self::new(inner)
+    }
+}
+
 /// Agent trait defining the interface for all AI agents
 ///
-/// Phase 0/1: 推荐所有 agent 入口方法都支持 AgentTaskEnvelope 作为输入，AgentTaskResult 作为输出，
-/// 并在决策点生成 AgentAuditLog 结构，便于后续 trace/replay/audit。
+/// Phase 0/1: all agent entrypoints should support AgentTaskEnvelope as input
+/// and AgentTaskResult as output, and produce AgentAuditLog at decision points.
 #[async_trait]
 pub trait Agent: Send + Sync {
     /// Send chat messages to the agent and receive streaming responses
@@ -129,7 +153,7 @@ pub trait Agent: Send + Sync {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: StreamingSender,
     ) -> Result<()>;
 
     /// Get available models for this provider
@@ -310,6 +334,12 @@ impl AgentRegistry {
         }
 
         result
+    }
+}
+
+impl Default for AgentRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -682,7 +712,7 @@ impl Agent for LocalEchoAgent {
         messages: Vec<Message>,
         _principles: Option<Vec<String>>,
         _options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: StreamingSender,
     ) -> Result<()> {
         let content = messages
             .iter()
@@ -704,7 +734,7 @@ impl Agent for LocalApproveAgent {
         _messages: Vec<Message>,
         _principles: Option<Vec<String>>,
         _options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: StreamingSender,
     ) -> Result<()> {
         let _ = sender.send("APPROVE\nlocal reviewer approved".to_string());
         Ok(())
@@ -720,7 +750,7 @@ impl Agent for LocalSlowApproveAgent {
         _messages: Vec<Message>,
         _principles: Option<Vec<String>>,
         _options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: StreamingSender,
     ) -> Result<()> {
         sleep(Duration::from_millis(1_500)).await;
         let _ = sender.send("APPROVE\nlocal slow reviewer approved".to_string());
@@ -764,7 +794,7 @@ pub(crate) fn resolve_secret(secret_ref: &str, field_name: &str) -> Result<Strin
             anyhow::bail!("keyring entry for {} resolved to empty value", field_name);
         }
 
-        // 验证密钥安全性
+        // Validate secret security
         validate_secret_security(&value, field_name)?;
 
         return Ok(value);
@@ -773,26 +803,26 @@ pub(crate) fn resolve_secret(secret_ref: &str, field_name: &str) -> Result<Strin
     let value = std::env::var(secret_ref)
         .with_context(|| format!("missing environment variable {}", secret_ref))?;
 
-    // 验证密钥安全性
+    // Validate secret security
     validate_secret_security(&value, secret_ref)?;
 
     Ok(value)
 }
 
-/// 验证密钥的安全性
+/// Validate secret safety.
 ///
-/// # 参数
-/// * `secret` - 要验证的密钥
-/// * `field_name` - 字段名称，用于错误消息
+/// # Arguments
+/// * `secret` - Secret value to validate.
+/// * `field_name` - Field name used in warnings and errors.
 ///
-/// # 返回
-/// * `Result<()>` - 如果密钥安全则返回Ok，否则返回错误
+/// # Returns
+/// * `Result<()>` - Ok if checks pass, error on invalid values.
 fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
     if secret.trim().is_empty() {
         anyhow::bail!("{} is empty", field_name);
     }
 
-    // 检查是否有换行符（可能是多行密钥或注入尝试）
+    // Detect newline characters (possible multiline secret or injection attempt)
     if secret.contains('\n') || secret.contains('\r') {
         warn!(
             "{} contains newline characters, which may be a security issue",
@@ -800,7 +830,7 @@ fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
         );
     }
 
-    // 检查密钥长度
+    // Check minimum secret length
     if secret.len() < 8 {
         warn!(
             "{} is very short ({} characters), which may be insecure",
@@ -809,7 +839,7 @@ fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
         );
     }
 
-    // 检查是否包含常见的不安全模式
+    // Detect common insecure patterns
     let insecure_patterns = [
         ("password", "contains the word 'password'"),
         ("123456", "contains simple numeric sequence"),

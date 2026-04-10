@@ -120,3 +120,9 @@ impl EvaluationSuite {
         total / self.results.len() as f32
     }
 }
+
+impl Default for EvaluationSuite {
+    fn default() -> Self {
+        Self::new()
+    }
+}

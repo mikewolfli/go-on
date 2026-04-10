@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
 
@@ -57,13 +58,21 @@ impl Language {
     }
 
     /// Parse from string
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_code(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "zh_cn" | "zh-cn" | "chinese" | "simplified" => Language::ZhCN,
             "zh_tw" | "zh-tw" | "traditional" | "taiwanese" => Language::ZhTW,
             "en" | "en_us" | "en-us" | "english" => Language::EnUS,
             _ => Language::EnUS, // Default fallback
         }
+    }
+}
+
+impl FromStr for Language {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(Self::from_code(s))
     }
 }
 
@@ -326,13 +335,13 @@ mod tests {
 
     #[test]
     fn test_language_detection() {
-        let en = Language::from_str("en");
+        let en = Language::from_code("en");
         assert_eq!(en, Language::EnUS);
 
-        let zh = Language::from_str("zh_cn");
+        let zh = Language::from_code("zh_cn");
         assert_eq!(zh, Language::ZhCN);
 
-        let tw = Language::from_str("zh_tw");
+        let tw = Language::from_code("zh_tw");
         assert_eq!(tw, Language::ZhTW);
     }
 
@@ -345,7 +354,7 @@ mod tests {
 
     #[test]
     fn test_fallback_to_english() {
-        let unknown = Language::from_str("unknown_lang");
+        let unknown = Language::from_code("unknown_lang");
         assert_eq!(unknown, Language::EnUS);
     }
 }

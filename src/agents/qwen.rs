@@ -1,4 +1,4 @@
-//! Qwen (千问) agent implementation
+//! Qwen agent implementation
 //!
 //! This module provides an implementation for the Alibaba Qwen API.
 
@@ -10,7 +10,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
@@ -139,7 +139,7 @@ impl QwenAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let token = self.get_access_token().await?;
         let endpoint = format!(
@@ -165,7 +165,7 @@ impl Agent for QwenAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 

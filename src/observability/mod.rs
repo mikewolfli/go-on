@@ -11,6 +11,8 @@
 //! These modules work together to provide comprehensive visibility into
 //! system behavior, performance characteristics, and operational health.
 
+#![allow(clippy::module_inception)]
+
 pub mod observability;
 pub mod performance;
 pub mod telemetry;

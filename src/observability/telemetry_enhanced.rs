@@ -295,6 +295,12 @@ impl MetricsRecorder {
     }
 }
 
+impl Default for MetricsRecorder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Structured logging macros for common patterns
 pub mod log {
     use super::*;
@@ -421,5 +427,11 @@ impl HealthMetrics {
                 1.0
             },
         })
+    }
+}
+
+impl Default for HealthMetrics {
+    fn default() -> Self {
+        Self::new()
     }
 }

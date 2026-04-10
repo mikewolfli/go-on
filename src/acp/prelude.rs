@@ -436,7 +436,7 @@ pub fn enforce_checkpoint_capacity(
     // Prefer removing oldest checkpoints, but keep the rollback target when requested.
     while overflow > 0 && cursor < state.checkpoints.len() {
         let checkpoint = &state.checkpoints[cursor];
-        if rollback_target.map_or(false, |target| checkpoint.checkpoint_id == target) {
+        if rollback_target.is_some_and(|target| checkpoint.checkpoint_id == target) {
             cursor += 1;
             continue;
         }
@@ -489,8 +489,9 @@ struct CircuitBreakerState {
 }
 
 /// Circuit breaker stage
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 enum CircuitBreakerStage {
+    #[default]
     Closed,
     Open,
     HalfOpen,
@@ -505,12 +506,6 @@ impl Default for CircuitBreakerState {
             last_state_change: 0,
             open_until: None,
         }
-    }
-}
-
-impl Default for CircuitBreakerStage {
-    fn default() -> Self {
-        Self::Closed
     }
 }
 

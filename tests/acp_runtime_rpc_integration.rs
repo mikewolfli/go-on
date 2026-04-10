@@ -2,8 +2,8 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -154,7 +154,10 @@ impl RpcHarness {
                     }
                     thread::sleep(Duration::from_millis(20));
                 }
-                Err(err) => panic!("failed to wait for child: {err}; stderr tail:\n{}", self.stderr_tail(30)),
+                Err(err) => panic!(
+                    "failed to wait for child: {err}; stderr tail:\n{}",
+                    self.stderr_tail(30)
+                ),
             }
         }
     }
@@ -485,6 +488,7 @@ fallback = false
 }
 
 fn write_autotune_enabled_config(path: &Path, state_path: &Path) {
+    let escaped_state_path = state_path.display().to_string().replace('\\', "\\\\");
     let config = format!(
         r#"default_phase = "coding"
 
@@ -509,7 +513,7 @@ fallback = true
 enabled = true
 state_path = "{state_path}"
 "#,
-        state_path = state_path.display(),
+        state_path = escaped_state_path,
     );
 
     fs::write(path, config).expect("failed to write autotune-enabled config file");
@@ -638,14 +642,13 @@ fn rpc_mcp_adapter_initialize_list_and_call() {
     assert!(called["result"]["content"].is_array());
     assert_eq!(called["result"]["structuredContent"]["ok"], true);
     assert!(called["result"]["structuredContent"]["events"].is_array());
-    assert!(called["result"]["structuredContent"]["total"]
-        .as_u64()
-        .expect("mcp trace total should be integer")
-        >= 1);
-    assert_eq!(
-        called["result"]["structuredContent"]["limit"],
-        json!(5)
+    assert!(
+        called["result"]["structuredContent"]["total"]
+            .as_u64()
+            .expect("mcp trace total should be integer")
+            >= 1
     );
+    assert_eq!(called["result"]["structuredContent"]["limit"], json!(5));
 
     let unknown = harness.request(
         5,
@@ -913,10 +916,12 @@ fn rpc_unknown_method_and_config_reload() {
     assert!(message.contains("unknown method"));
 
     let metrics_after_unknown = harness.request(1010, "metrics", None);
-    assert!(metrics_after_unknown["result"]["metrics"]["failed_requests"]
-        .as_u64()
-        .expect("failed_requests should be integer")
-        >= 1);
+    assert!(
+        metrics_after_unknown["result"]["metrics"]["failed_requests"]
+            .as_u64()
+            .expect("failed_requests should be integer")
+            >= 1
+    );
 
     write_test_config(&config_path, 30, 45, 7);
 
@@ -1805,7 +1810,8 @@ fn rpc_workflow_research_persists_artifact_and_plan() {
     assert!(Path::new(plan_artifact_path).exists());
 
     let artifact_raw = fs::read_to_string(artifact_path).expect("read research artifact");
-    let artifact_json: Value = serde_json::from_str(&artifact_raw).expect("parse research artifact");
+    let artifact_json: Value =
+        serde_json::from_str(&artifact_raw).expect("parse research artifact");
     assert_eq!(
         artifact_json["task"],
         "Research cross-module impact of introducing stricter audit evidence"
@@ -1925,22 +1931,35 @@ fn rpc_autotune_reset_restores_default_state_and_persists() {
 
     let status_before = harness.request(181, "autotune.status", None);
     assert_eq!(status_before["result"]["enabled"], true);
-    assert_eq!(status_before["result"]["state"]["current_min_query_chars"], 240);
+    assert_eq!(
+        status_before["result"]["state"]["current_min_query_chars"],
+        240
+    );
 
     let reset = harness.request(182, "autotune.reset", None);
     assert_eq!(reset["result"]["ok"], true);
     assert_eq!(reset["result"]["reset"], true);
     assert_eq!(reset["result"]["enabled"], true);
-    assert_eq!(reset["result"]["state_before"]["current_min_query_chars"], 240);
-    assert_eq!(reset["result"]["state_after"]["current_min_query_chars"], 40);
+    assert_eq!(
+        reset["result"]["state_before"]["current_min_query_chars"],
+        240
+    );
+    assert_eq!(
+        reset["result"]["state_after"]["current_min_query_chars"],
+        40
+    );
 
     let status_after = harness.request(183, "autotune.status", None);
-    assert_eq!(status_after["result"]["state"]["current_min_query_chars"], 40);
+    assert_eq!(
+        status_after["result"]["state"]["current_min_query_chars"],
+        40
+    );
     assert_eq!(status_after["result"]["state"]["window_phase"], 0);
     assert_eq!(status_after["result"]["state"]["cooldown_remaining"], 0);
 
     let persisted_raw = fs::read_to_string(&state_path).expect("read persisted autotune state");
-    let persisted: Value = serde_json::from_str(&persisted_raw).expect("parse persisted autotune state");
+    let persisted: Value =
+        serde_json::from_str(&persisted_raw).expect("parse persisted autotune state");
     assert_eq!(persisted["current_min_query_chars"], 40);
     assert_eq!(persisted["window_phase"], 0);
 

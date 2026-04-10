@@ -1,4 +1,4 @@
-//! DeepQuest (深度求索) agent implementation
+//! DeepQuest agent implementation
 //!
 //! This module provides an implementation for the DeepQuest AI API.
 
@@ -8,7 +8,6 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
@@ -82,7 +81,7 @@ impl DeepQuestAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "deepquest.api_key_env")?;
         let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
@@ -114,7 +113,7 @@ impl Agent for DeepQuestAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
-        sender: mpsc::UnboundedSender<String>,
+        sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 

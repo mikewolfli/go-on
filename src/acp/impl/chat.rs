@@ -13,6 +13,7 @@ use opentelemetry::{Context as OtelContext, KeyValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
+use tokio::time::Duration;
 use tracing::info;
 
 use crate::acp::server::AcpServer;
@@ -86,22 +87,28 @@ pub async fn handle_chat(
     });
 
     let result = async {
-        let lifecycle_guard = server
-            .lifecycle_state
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to lock lifecycle state"))?;
-        if lifecycle_guard.is_shutting_down() {
+        let lifecycle_snapshot = {
+            let lifecycle_guard = server
+                .lifecycle_state
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Failed to lock lifecycle state"))?;
+            if lifecycle_guard.is_shutting_down() {
+                Some(serde_json::to_value(lifecycle_guard.snapshot())?)
+            } else {
+                None
+            }
+        };
+        if let Some(snapshot) = lifecycle_snapshot {
             send_error(
                 server,
                 id,
                 -32031,
                 "server is shutting down".to_string(),
-                Some(serde_json::to_value(lifecycle_guard.snapshot())?),
+                Some(snapshot),
             )
             .await?;
             return Ok(());
         }
-        drop(lifecycle_guard); // Release the lock before continuing
 
         let params_value = params.unwrap_or_else(|| json!({}));
         let chat_params: ChatParams = match serde_json::from_value(params_value) {
@@ -331,6 +338,10 @@ async fn process_chat_request(
             params.messages.clone(),
             phase.principles.clone(),
             phase.options.as_ref().and_then(|opts| opts.agent_options()),
+            phase
+                .options
+                .as_ref()
+                .and_then(|opts| opts.request_timeout_seconds),
         )
         .await
         {
@@ -420,19 +431,36 @@ async fn run_agent_collecting(
     messages: Vec<Message>,
     principles: Option<Vec<String>>,
     options: Option<std::collections::HashMap<String, Value>>,
+    timeout_seconds: Option<u64>,
 ) -> Result<String> {
-    let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
+    let (sender, mut receiver) = mpsc::channel::<String>(2048);
+    let sender = crate::agent::StreamingSender::from(sender);
     let task = tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
 
-    let mut response = String::new();
-    while let Some(token) = receiver.recv().await {
-        response.push_str(&token);
-    }
+    let collect = async move {
+        let mut response = String::new();
+        while let Some(token) = receiver.recv().await {
+            response.push_str(&token);
+        }
 
-    match task.await {
-        Ok(Ok(())) => Ok(response),
-        Ok(Err(err)) => Err(err),
-        Err(join_err) => Err(anyhow::anyhow!("agent task panicked: {join_err}")),
+        match task.await {
+            Ok(Ok(())) => Ok::<String, anyhow::Error>(response),
+            Ok(Err(err)) => Err(err),
+            Err(join_err) => Err(anyhow::anyhow!("agent task panicked: {join_err}")),
+        }
+    };
+
+    if let Some(seconds) = timeout_seconds {
+        let timeout = Duration::from_secs(seconds.max(1));
+        match tokio::time::timeout(timeout, collect).await {
+            Ok(result) => result,
+            Err(_) => Err(anyhow::anyhow!(
+                "agent request timed out after {}s",
+                seconds
+            )),
+        }
+    } else {
+        collect.await
     }
 }
 
@@ -562,6 +590,7 @@ fn routing_handles(
 }
 
 /// Record trace event
+#[allow(clippy::too_many_arguments)]
 fn record_trace_event(
     _server: &AcpServer,
     _trace: &RequestTraceContext,

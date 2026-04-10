@@ -8,6 +8,8 @@
 //! - **Memory Response Cache**: Specialized caching for AI responses
 //! - **Vector**: Vector storage and similarity search operations
 
+#![allow(clippy::module_inception)]
+
 pub mod cache;
 pub mod memory;
 pub mod memory_response_cache;

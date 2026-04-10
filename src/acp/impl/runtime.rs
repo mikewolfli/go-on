@@ -28,7 +28,9 @@ use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
 use crate::flow_with_models::FlowModelSelector;
 use crate::memory_response_cache::MemoryResponseCache;
+use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::observability::telemetry::TelemetryRuntime;
+use crate::orchestration::skill::SkillRegistry;
 use crate::reinforcement::ArtifactLedger;
 use crate::rpc_protocol::JsonRpcRequest;
 use crate::vector::VectorStore;
@@ -36,6 +38,7 @@ use crate::vector::VectorStore;
 /// Create a new ACP server instance
 ///
 /// This function replaces the `AcpServer::new` constructor.
+#[allow(clippy::too_many_arguments)]
 pub fn new_acp_server(
     flow: Arc<FlowManager>,
     registry: Arc<AgentRegistry>,
@@ -97,15 +100,20 @@ pub fn new_acp_server(
                 RuntimeMetrics,
             };
 
+            let mut failure_prevention_state = FailurePrevention::new();
+            for name in registry.names() {
+                failure_prevention_state.register_service(&name);
+            }
+
             AcpServer {
                 flow_manager: Some(flow.clone()),
                 agent_registry: Some(registry.clone()),
                 response_cache: cache.clone(),
                 vector_store: vector_store.clone(),
-                vector_config: vector_config,
-                autotune: autotune,
-                autotune_config: autotune_config,
-                autotune_state_path: autotune_state_path,
+                vector_config,
+                autotune,
+                autotune_config,
+                autotune_state_path,
                 config_path: config_path.clone(),
                 runtime_config: runtime_config.clone(),
                 metrics: Arc::new(RuntimeMetrics::new()),
@@ -124,9 +132,11 @@ pub fn new_acp_server(
                 dynamic_parameter_tuner: Arc::new(StdMutex::new(DynamicParameterTuner::default())),
                 resource_allocator: Arc::new(StdMutex::new(ResourceAllocator {})),
                 cost_optimizer: Arc::new(StdMutex::new(CostOptimizer::new())),
-                failure_prevention: Arc::new(StdMutex::new(FailurePrevention::new())),
+                failure_prevention: Arc::new(StdMutex::new(failure_prevention_state)),
                 flow_model_selector: Arc::new(StdMutex::new(FlowModelSelector {})),
                 memory_response_cache: Arc::new(StdMutex::new(MemoryResponseCache::default())),
+                memory_store: Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default()))),
+                skill_registry: Arc::new(StdMutex::new(SkillRegistry::default())),
                 telemetry_runtime: Arc::new(StdMutex::new(TelemetryRuntime::new(&runtime_config))),
                 pua_enforcement_plan: Arc::new(StdMutex::new(crate::pua::PuaEnforcementPlan {
                     escalation_level: String::new(),

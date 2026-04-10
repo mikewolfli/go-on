@@ -14,7 +14,7 @@ use crate::i18n::runtime::{I18nManager, Language};
 
 fn report_language() -> Language {
     if let Ok(explicit) = std::env::var("GO_ON_LANG") {
-        return Language::from_str(&explicit);
+        return Language::from_code(&explicit);
     }
     Language::detect_system()
 }

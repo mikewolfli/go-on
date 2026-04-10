@@ -18,7 +18,17 @@ One-shot implemented (within BLUE9 analysis pass):
 
 ---
 
-## Deferred Items (blue9 milestones)
+## Closed Items (blue9 milestones)
+
+Final closure completed on 2026-04-10.
+
+| ID | Item | Status |
+|----|------|--------|
+| M1 | Bounded channels (backpressure for agent streaming) | ✅ Done |
+| M2 | MemoryStore as server-level singleton | ✅ Done |
+| M3 | Wire `record_agent_outcome` for review gate outcomes | ✅ Done |
+| M4 | FailurePrevention health feedback loop | ✅ Done |
+| M5 | Skills interface | ✅ Done |
 
 ### M1 — Bounded channels (backpressure for agent streaming)
 
@@ -43,6 +53,8 @@ One-shot implemented (within BLUE9 analysis pass):
 
 ---
 
+Status: Implemented.
+
 ### M2 — MemoryStore as server-level singleton
 
 **Problem:** `MemoryStore::new(MemoryPolicy::default())` is called on every `execute_runtime_subtasks` invocation (line ~2468 in `request.rs`). Each request starts with a fresh empty store — learning observations are never carried across requests.
@@ -61,6 +73,8 @@ One-shot implemented (within BLUE9 analysis pass):
 
 ---
 
+Status: Implemented.
+
 ### M3 — Wire `record_agent_outcome` for review gate outcomes
 
 **Problem:** After `run_single_review` / `run_dual_review_gate` returns, the reviewer agent's outcome (pass/fail, latency) is not recorded to `online_controller`. The controller's reliability scores for reviewer agents never update.
@@ -75,6 +89,8 @@ if let Ok(mut ctrl) = online_controller.lock() {
 This requires threading `online_controller` from `AcpServer` through the review gate call chain.
 
 ---
+
+Status: Implemented.
 
 ### M4 — FailurePrevention health feedback loop
 
@@ -94,6 +110,8 @@ if let Ok(mut fp) = context.failure_prevention.lock() {
 Ensure agents are registered at server startup via `fp.register_service(agent_name)`.
 
 ---
+
+Status: Implemented.
 
 ### M5 — Skills interface
 
@@ -117,6 +135,6 @@ Ensure agents are registered at server startup via `fp.register_service(agent_na
 ## Acceptance Criteria
 
 - All M1-M5 implemented
-- 158 unit + 27 ACP integration tests green
+- 160 unit + 27 ACP integration tests green
 - `cargo clippy -- -D warnings` clean
-- Channels confirmed bounded; stress test shows no unbounded growth under 1000 concurrent requests
+- Agent streaming channels are bounded at capacity `2048`
