@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::Result;
 use reqwest;
+use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, Notify};
@@ -315,6 +316,226 @@ pub fn autotune_handle(server: &AcpServer) -> Option<Arc<tokio::sync::Mutex<Auto
     server.autotune.clone()
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct OpenAiChatRequest {
+    model: Option<String>,
+    messages: Vec<OpenAiChatMessage>,
+    #[serde(default)]
+    stream: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OpenAiChatMessage {
+    role: String,
+    content: serde_json::Value,
+}
+
+impl OpenAiChatMessage {
+    fn content_text(&self) -> Option<String> {
+        if let Some(text) = self.content.as_str() {
+            return Some(text.to_string());
+        }
+
+        if let Some(parts) = self.content.as_array() {
+            let merged = parts
+                .iter()
+                .filter_map(|part| {
+                    part.get("type")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| *value == "text")?;
+                    part.get("text")
+                        .and_then(|value| value.as_str())
+                        .map(ToString::to_string)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !merged.is_empty() {
+                return Some(merged);
+            }
+        }
+
+        None
+    }
+}
+
+fn openai_to_chat_params(req: &OpenAiChatRequest) -> crate::acp::r#impl::chat::ChatParams {
+    let messages = req
+        .messages
+        .iter()
+        .filter_map(|m| {
+            let content = m.content_text()?;
+            Some(crate::agent::Message {
+                role: m.role.clone(),
+                content,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    crate::acp::r#impl::chat::ChatParams {
+        mode: "ask".to_string(),
+        messages,
+        conversation_id: None,
+        branch_id: None,
+        phase: Some("delivery".to_string()),
+        options: None,
+        requirement_contract: None,
+        plan: None,
+        vector_hits: None,
+        execution_decision_candidate: None,
+    }
+}
+
+fn build_openai_completion(
+    request_id: &str,
+    model: &str,
+    response_text: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": request_id,
+        "object": "chat.completion",
+        "created": crate::acp::prelude::now_ts(),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": response_text,
+            },
+            "finish_reason": "stop",
+        }]
+    })
+}
+
+fn build_openai_chunk(
+    request_id: &str,
+    model: &str,
+    content: &str,
+    finish_reason: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": request_id,
+        "object": "chat.completion.chunk",
+        "created": crate::acp::prelude::now_ts(),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "content": content,
+            },
+            "finish_reason": finish_reason,
+        }]
+    })
+}
+
+async fn write_openai_sse_data(socket: &mut TcpStream, payload: &serde_json::Value) -> Result<()> {
+    let frame = format!("data: {}\n\n", serde_json::to_string(payload)?);
+    socket.write_all(frame.as_bytes()).await?;
+    Ok(())
+}
+
+async fn write_openai_sse_done(socket: &mut TcpStream) -> Result<()> {
+    socket.write_all(b"data: [DONE]\n\n").await?;
+    Ok(())
+}
+
+async fn handle_openai_chat_completions(
+    socket: &mut TcpStream,
+    server: Arc<AcpServer>,
+    body: serde_json::Value,
+) -> Result<()> {
+    let openai_req: OpenAiChatRequest = serde_json::from_value(body)?;
+    let model = openai_req
+        .model
+        .clone()
+        .unwrap_or_else(|| "go-on".to_string());
+    let request_id = format!("chatcmpl-{}", crate::acp::prelude::now_ts_ms());
+    let params = openai_to_chat_params(&openai_req);
+
+    if !openai_req.stream {
+        let trace = http_trace_context("openai.chat.completions");
+        let result = crate::acp::r#impl::chat::process_chat_request(
+            server.as_ref(),
+            &params,
+            None,
+            &trace,
+            None,
+        )
+        .await;
+        let result = match result {
+            Ok(result) => result,
+            Err(err) => {
+                let payload = serde_json::json!({
+                    "error": {
+                        "message": err.to_string(),
+                        "type": "go_on_upstream_error"
+                    }
+                });
+                write_http_json_response(socket, 502, payload).await?;
+                return Ok(());
+            }
+        };
+        let response_text = result
+            .get("response")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let payload = build_openai_completion(&request_id, &model, response_text);
+        write_http_json_response(socket, 200, payload).await?;
+        return Ok(());
+    }
+
+    write_sse_headers(socket).await?;
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let trace = http_trace_context("openai.chat.completions.stream");
+    let server_ref = Arc::clone(&server);
+    let task = tokio::spawn(async move {
+        crate::acp::r#impl::chat::process_chat_request(
+            server_ref.as_ref(),
+            &params,
+            Some(crate::acp::r#impl::chat::StreamObserver::sse(tx)),
+            &trace,
+            None,
+        )
+        .await
+    });
+
+    while let Some(frame) = rx.recv().await {
+        if frame.event != "chunk" {
+            continue;
+        }
+        let token = frame
+            .payload
+            .get("token")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        if token.is_empty() {
+            continue;
+        }
+        let payload = build_openai_chunk(&request_id, &model, token, None);
+        write_openai_sse_data(socket, &payload).await?;
+    }
+
+    match task.await {
+        Ok(Ok(_)) => {
+            let done_payload = build_openai_chunk(&request_id, &model, "", Some("stop"));
+            write_openai_sse_data(socket, &done_payload).await?;
+            write_openai_sse_done(socket).await?;
+        }
+        Ok(Err(err)) => {
+            let payload = serde_json::json!({"error": {"message": err.to_string()}});
+            write_openai_sse_data(socket, &payload).await?;
+            write_openai_sse_done(socket).await?;
+        }
+        Err(err) => {
+            let payload = serde_json::json!({"error": {"message": format!("chat task panicked: {err}")}});
+            write_openai_sse_data(socket, &payload).await?;
+            write_openai_sse_done(socket).await?;
+        }
+    }
+
+    Ok(())
+}
+
 async fn handle_http_connection(socket: &mut TcpStream, server: Arc<AcpServer>) -> Result<()> {
     let mut buffer = vec![0u8; 64 * 1024];
     let bytes_read = socket.read(&mut buffer).await?;
@@ -422,6 +643,9 @@ async fn handle_http_connection(socket: &mut TcpStream, server: Arc<AcpServer>) 
                 }
             }
         }
+        "/chat/completions" | "/v1/chat/completions" | "/chat/chat/completions" => {
+            handle_openai_chat_completions(socket, Arc::clone(&server), body).await?;
+        }
         _ => {
             write_http_json_response(socket, 404, serde_json::json!({"error": "not found"}))
                 .await?;
@@ -460,6 +684,7 @@ async fn write_http_json_response(
         200 => "OK",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        502 => "Bad Gateway",
         _ => "OK",
     };
     let body = serde_json::to_vec(&value)?;

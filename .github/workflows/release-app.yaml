@@ -57,6 +57,7 @@ jobs:
           cp config.toml.autopilot-adaptive "$STAGE_DIR/config.toml"
           cp -R RULES "$STAGE_DIR/RULES"
           cp -R languages "$STAGE_DIR/languages"
+          cp start-go-on.sh "$STAGE_DIR/start-go-on.sh"
           tar -czf "dist/${{ matrix.archive }}" -C "$STAGE_DIR" .
 
       - name: Package Windows bundle
@@ -69,6 +70,7 @@ jobs:
           Copy-Item "config.toml.autopilot-adaptive" "dist/stage/config.toml"
           Copy-Item "RULES" "dist/stage/RULES" -Recurse
           Copy-Item "languages" "dist/stage/languages" -Recurse
+          Copy-Item "start-go-on.bat" "dist/stage/start-go-on.bat"
           Compress-Archive -Path "dist/stage/*" -DestinationPath "dist/${{ matrix.archive }}" -Force
 
       - name: Upload to GitHub Release

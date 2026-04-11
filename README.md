@@ -6,7 +6,7 @@ go-on is a Rust ACP runtime with MCP adapter capabilities, focused on agent orch
 
 ## Version
 
-- Core runtime version: 0.4.2
+- Core runtime version: 0.4.7
 - Default compile profile: `local-acp-sqlite`
 - Optional profile flag: `server-mcp-postgres` (feature scaffold)
 
@@ -71,7 +71,7 @@ cargo run -- --config config.toml --validate-config
 ## VS Code Add-on
 
 - Extension docs: [vscode-addon/README.md](vscode-addon/README.md)
-- Synced extension version: 0.4.2
+- Synced extension version: 0.4.7
 
 ## Roadmaps
 
@@ -84,3 +84,53 @@ cargo run -- --config config.toml --validate-config
 ## License
 
 Same as repository policy.
+
+## Quick Start: go-on with Zed
+
+### 1. Start go-on backend
+
+For macOS/Linux:
+```sh
+./start-go-on.sh
+```
+For Windows:
+```bat
+start-go-on.bat
+```
+This will launch go-on on port 8090 and write logs to go-on.log.
+
+### 2. Zed Integration (OpenAI Compatible)
+
+1. Open Zed, go to Agent Panel settings.
+2. Add an OpenAI Compatible provider.
+3. Set API URL to: `http://127.0.0.1:8090/v1`
+4. Example settings.json snippet:
+```json
+{
+	"language_models": {
+		"openai_compatible": {
+			"go-on": {
+				"api_url": "http://127.0.0.1:8090/v1",
+				"available_models": [
+					{
+						"name": "go-on",
+						"max_tokens": 200000,
+						"max_output_tokens": 32000,
+						"max_completion_tokens": 200000,
+						"capabilities": {
+							"tools": true,
+							"images": false,
+							"parallel_tool_calls": false,
+							"prompt_cache_key": false,
+							"chat_completions": true
+						}
+					}
+				]
+			}
+		}
+	}
+}
+```
+5. Set go-on as the default model if needed.
+
+> Note: go-on must be running before Zed can connect. Automatic start/stop is not yet supported by Zed.

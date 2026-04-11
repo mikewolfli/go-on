@@ -1,0 +1,23 @@
+{
+  "tasks": [
+    {
+      "label": "go-on: build release",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["build", "--release"],
+      "problemMatcher": []
+    },
+    {
+      "label": "go-on: start (manual fallback)",
+      "type": "shell",
+      "command": "./zedconfig/scripts/start-go-on.sh",
+      "problemMatcher": []
+    },
+    {
+      "label": "go-on: stop (manual fallback)",
+      "type": "shell",
+      "command": "./zedconfig/scripts/stop-go-on.sh",
+      "problemMatcher": []
+    }
+  ]
+}
