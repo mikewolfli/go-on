@@ -527,7 +527,8 @@ async fn handle_openai_chat_completions(
             write_openai_sse_done(socket).await?;
         }
         Err(err) => {
-            let payload = serde_json::json!({"error": {"message": format!("chat task panicked: {err}")}});
+            let payload =
+                serde_json::json!({"error": {"message": format!("chat task panicked: {err}")}});
             write_openai_sse_data(socket, &payload).await?;
             write_openai_sse_done(socket).await?;
         }
