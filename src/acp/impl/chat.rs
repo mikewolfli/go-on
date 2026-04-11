@@ -346,8 +346,8 @@ pub(crate) async fn process_chat_request(
         }
     };
 
-    let vector_context = load_vector_context(server, &phase.phase_name, phase.options.as_ref(), params)
-        .await;
+    let vector_context =
+        load_vector_context(server, &phase.phase_name, phase.options.as_ref(), params).await;
     let agent_messages = merge_context_into_messages(
         &params.messages,
         build_vector_context_message(
@@ -916,9 +916,15 @@ async fn load_vector_context(
     ) {
         Ok((hits, feedback)) => {
             server.metrics.record_vector_search(hits.len());
-            apply_autotune_feedback(server, phase_options, settings.auto_mode, feedback.avg_similarity)
-                .await;
-            let reranked_hits = rerank_hits_with_phase_summary(hits, summary.as_deref(), settings.top_k);
+            apply_autotune_feedback(
+                server,
+                phase_options,
+                settings.auto_mode,
+                feedback.avg_similarity,
+            )
+            .await;
+            let reranked_hits =
+                rerank_hits_with_phase_summary(hits, summary.as_deref(), settings.top_k);
             VectorContext {
                 hits: reranked_hits
                     .into_iter()
@@ -1093,7 +1099,11 @@ fn extract_terms(text: &str, max_terms: usize) -> Vec<String> {
     terms
 }
 
-fn load_recent_knowledge_context(server: &AcpServer, phase_name: &str, limit: usize) -> Vec<String> {
+fn load_recent_knowledge_context(
+    server: &AcpServer,
+    phase_name: &str,
+    limit: usize,
+) -> Vec<String> {
     let ledger = crate::acp::r#impl::runtime::artifact_ledger(server);
     let path = ledger.latest_path("spec", "latest-knowledge.json");
     if !Path::new(&path).exists() {
@@ -1250,15 +1260,15 @@ async fn generate_phase_summary_text(
         return None;
     }
 
-    Some(normalize_phase_summary(compact, &fallback_summary, max_chars))
+    Some(normalize_phase_summary(
+        compact,
+        &fallback_summary,
+        max_chars,
+    ))
 }
 
 fn build_summary_dialogue(messages: &[Message], response_text: &str, max_chars: usize) -> String {
-    let mut parts = messages
-        .iter()
-        .rev()
-        .take(8)
-        .collect::<Vec<_>>();
+    let mut parts = messages.iter().rev().take(8).collect::<Vec<_>>();
     parts.reverse();
 
     let mut rendered = parts
@@ -1301,7 +1311,10 @@ async fn effective_vector_settings(
     if !vector_config.enabled {
         return None;
     }
-    if matches!(phase_options.and_then(|opts| opts.vector_enabled), Some(false)) {
+    if matches!(
+        phase_options.and_then(|opts| opts.vector_enabled),
+        Some(false)
+    ) {
         return None;
     }
 
@@ -1351,11 +1364,18 @@ async fn apply_autotune_feedback(
     auto_mode: bool,
     precision: f32,
 ) {
-    if !auto_mode || matches!(phase_options.and_then(|opts| opts.vector_enabled), Some(false)) {
+    if !auto_mode
+        || matches!(
+            phase_options.and_then(|opts| opts.vector_enabled),
+            Some(false)
+        )
+    {
         return;
     }
 
-    let (Some(autotune), Some(config)) = (server.autotune.as_ref(), server.autotune_config.as_ref()) else {
+    let (Some(autotune), Some(config)) =
+        (server.autotune.as_ref(), server.autotune_config.as_ref())
+    else {
         return;
     };
 
@@ -1374,7 +1394,9 @@ fn latest_user_message(messages: &[Message]) -> Option<&str> {
     messages
         .iter()
         .rev()
-        .find(|message| message.role.eq_ignore_ascii_case("user") && !message.content.trim().is_empty())
+        .find(|message| {
+            message.role.eq_ignore_ascii_case("user") && !message.content.trim().is_empty()
+        })
         .map(|message| message.content.trim())
 }
 
@@ -1463,7 +1485,9 @@ fn build_phase_summary(messages: &[Message], response_text: &str, max_chars: usi
 
     let constraints = collect_signal_lines(
         messages,
-        &["must", "need", "require", "不要", "不能", "必须", "完整", "一次"],
+        &[
+            "must", "need", "require", "不要", "不能", "必须", "完整", "一次",
+        ],
         2,
         80,
     )
@@ -1476,7 +1500,16 @@ fn build_phase_summary(messages: &[Message], response_text: &str, max_chars: usi
 
     let decisions = collect_lines_from_text(
         response_text,
-        &["implemented", "enabled", "fixed", "added", "updated", "完成", "已", "接入"],
+        &[
+            "implemented",
+            "enabled",
+            "fixed",
+            "added",
+            "updated",
+            "完成",
+            "已",
+            "接入",
+        ],
         3,
         90,
     )
@@ -1489,7 +1522,9 @@ fn build_phase_summary(messages: &[Message], response_text: &str, max_chars: usi
 
     let risks = collect_lines_from_text(
         response_text,
-        &["risk", "pending", "todo", "warning", "timeout", "fallback", "风险", "待", "告警"],
+        &[
+            "risk", "pending", "todo", "warning", "timeout", "fallback", "风险", "待", "告警",
+        ],
         2,
         80,
     )
@@ -1564,10 +1599,9 @@ fn collect_lines_from_text(
         }
 
         let lower = trimmed.to_ascii_lowercase();
-        if keywords
-            .iter()
-            .any(|keyword| lower.contains(&keyword.to_ascii_lowercase()) || trimmed.contains(keyword))
-        {
+        if keywords.iter().any(|keyword| {
+            lower.contains(&keyword.to_ascii_lowercase()) || trimmed.contains(keyword)
+        }) {
             selected.push(truncate_chars(trimmed, max_chars));
         }
 
@@ -1679,9 +1713,15 @@ async fn persist_chat_knowledge(
         store.gc();
         let promotion = store.promote();
         promoted_count = promotion.promoted_count;
-        retained_entries = store.retrieve(crate::memory_module::MemoryClass::Observation, 256).len()
-            + store.retrieve(crate::memory_module::MemoryClass::Episodic, 256).len()
-            + store.retrieve(crate::memory_module::MemoryClass::Semantic, 256).len()
+        retained_entries = store
+            .retrieve(crate::memory_module::MemoryClass::Observation, 256)
+            .len()
+            + store
+                .retrieve(crate::memory_module::MemoryClass::Episodic, 256)
+                .len()
+            + store
+                .retrieve(crate::memory_module::MemoryClass::Semantic, 256)
+                .len()
             + store
                 .retrieve(crate::memory_module::MemoryClass::ProjectState, 256)
                 .len();
@@ -1756,7 +1796,11 @@ fn derive_verification_steps(response_text: &str) -> Vec<String> {
 }
 
 fn derive_knowledge_confidence(reusable_insights: &[String], verification_steps: &[String]) -> f64 {
-    let base = if reusable_insights.is_empty() { 0.72 } else { 0.82 };
+    let base = if reusable_insights.is_empty() {
+        0.72
+    } else {
+        0.82
+    };
     let verification_bonus = (verification_steps.len().min(3) as f64) * 0.05;
     let insight_bonus = (reusable_insights.len().min(3) as f64) * 0.03;
     (base + verification_bonus + insight_bonus).clamp(0.0, 0.98)
@@ -1842,8 +1886,8 @@ mod tests {
 
     use anyhow::Result;
     use async_trait::async_trait;
-    use serde_json::Value;
     use serde_json::json;
+    use serde_json::Value;
 
     use crate::acp::server::ServerBuilder;
     use crate::agent::{Agent, AgentRegistry, Message, StreamingSender};
@@ -1996,13 +2040,19 @@ mod tests {
 
         assert_eq!(result["branch_id"], "feature-a");
         assert_eq!(result["response"], "streamed answer");
-        assert_eq!(result["vector_hits"].as_array().map(|items| items.len()), Some(1));
+        assert_eq!(
+            result["vector_hits"].as_array().map(|items| items.len()),
+            Some(1)
+        );
         assert_eq!(result["checkpoint"]["branch_id"], "feature-a");
         assert_eq!(result["knowledge"]["vector_memory_written"], true);
         assert!(result["knowledge"]["artifact_path"].is_string());
 
         let captured = seen_messages.lock().expect("messages lock").clone();
-        assert_eq!(captured.first().map(|msg| msg.role.as_str()), Some("system"));
+        assert_eq!(
+            captured.first().map(|msg| msg.role.as_str()),
+            Some("system")
+        );
         let system_text = &captured.first().expect("system message expected").content;
         assert!(system_text.contains("Existing coding summary"));
         assert!(system_text.contains("stream notifications"));
@@ -2046,7 +2096,11 @@ mod tests {
             &["intent".to_string()],
             &["constraints".to_string()],
             &["decisions".to_string()],
-            &["fallback".to_string(), "risk".to_string(), "timeout".to_string()],
+            &[
+                "fallback".to_string(),
+                "risk".to_string(),
+                "timeout".to_string(),
+            ],
             &["next".to_string(), "validation".to_string()],
         );
         let intent_only = super::weighted_section_overlap(
@@ -2054,7 +2108,11 @@ mod tests {
             &["intent".to_string()],
             &["constraints".to_string()],
             &["decisions".to_string()],
-            &["fallback".to_string(), "risk".to_string(), "timeout".to_string()],
+            &[
+                "fallback".to_string(),
+                "risk".to_string(),
+                "timeout".to_string(),
+            ],
             &["next".to_string(), "validation".to_string()],
         );
 

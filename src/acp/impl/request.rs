@@ -27,8 +27,8 @@ use crate::acp::helpers::metrics::{
     MaintenanceSnapshot as PrometheusMaintenanceSnapshot,
     MetricsSnapshot as PrometheusMetricsSnapshot, RuntimeGaugeSnapshot,
 };
-use crate::acp::r#impl::storage::cache_clear;
 use crate::acp::prelude::enforce_checkpoint_capacity;
+use crate::acp::r#impl::storage::cache_clear;
 use crate::acp::server::AcpServer;
 use crate::agent::{AgentAuditLog, AgentTaskEnvelope, Message};
 use crate::config::{validate_runtime_readiness, AppConfig, AutoTuneState};
@@ -52,12 +52,12 @@ use crate::reinforcement::{
     recommend_agent_order_from_execution_history, recommend_failure_strategy_from_learning,
     recommend_parallelism_from_learning, recommend_predicted_success_rate_from_learning,
     recommend_work_grade_from_learning, run_action_check, ActionCheckKind, ArtifactLedger,
-    ClarificationSessionArtifact,
-    ConsultationArtifact, ExecutionAssignmentRecord, ExecutionDecisionArtifact,
-    ExecutionDecisionCandidate, KnowledgeBusArtifact, ParallelPhaseDecisionRecord, PrimaryFailoverReportItem,
-    PrimarySecondaryFailoverArtifact, PrimarySecondaryPolicyArtifact, RequirementContractArtifact,
-    TaskExecutionMetrics, TaskExecutionSummary, WorkflowGeneratedArtifact,
-    WorkflowLearningBusArtifact, WorkflowLearningEvent, WorkflowResearchArtifact,
+    ClarificationSessionArtifact, ConsultationArtifact, ExecutionAssignmentRecord,
+    ExecutionDecisionArtifact, ExecutionDecisionCandidate, KnowledgeBusArtifact,
+    ParallelPhaseDecisionRecord, PrimaryFailoverReportItem, PrimarySecondaryFailoverArtifact,
+    PrimarySecondaryPolicyArtifact, RequirementContractArtifact, TaskExecutionMetrics,
+    TaskExecutionSummary, WorkflowGeneratedArtifact, WorkflowLearningBusArtifact,
+    WorkflowLearningEvent, WorkflowResearchArtifact,
 };
 use crate::tool::{ToolInput, ToolRegistry};
 use crate::vector::VectorStore;
@@ -2326,7 +2326,10 @@ fn infer_workflow_parallelism(workflow: &WorkflowGeneratedArtifact) -> usize {
         .max(1)
 }
 
-fn rebalance_execution_order(execution_order: &[Vec<String>], parallelism_limit: usize) -> Vec<Vec<String>> {
+fn rebalance_execution_order(
+    execution_order: &[Vec<String>],
+    parallelism_limit: usize,
+) -> Vec<Vec<String>> {
     let limit = parallelism_limit.max(1);
     if limit == 1 {
         return execution_order
@@ -2443,9 +2446,9 @@ async fn execute_runtime_subtasks(
                             historical_order.iter().position(|n| n == &candidate.agent)
                         {
                             let hist_score =
-                                  historical_order.len().saturating_sub(pos) as f64 / hist_len;
-                            candidate.score =
-                                  (candidate.score * 0.60 + hist_score * 0.40).clamp(0.0_f64, 1.0_f64);
+                                historical_order.len().saturating_sub(pos) as f64 / hist_len;
+                            candidate.score = (candidate.score * 0.60 + hist_score * 0.40)
+                                .clamp(0.0_f64, 1.0_f64);
                             candidate.reason =
                                 format!("{}, hist_rank={}", candidate.reason, pos + 1);
                         }
@@ -2730,11 +2733,13 @@ async fn execute_single_subtask(
         let execution_phase = format!("phase-{}", phase_index + 1);
         let semantic_phase = context.app_config.default_phase.clone();
         let mut search_phases = vec![execution_phase];
-        if !semantic_phase.is_empty() && !search_phases.iter().any(|phase| phase == &semantic_phase) {
+        if !semantic_phase.is_empty() && !search_phases.iter().any(|phase| phase == &semantic_phase)
+        {
             search_phases.push(semantic_phase);
         }
 
-        let snippets = collect_vector_context_snippets(store, &search_phases, &subtask_description, 3);
+        let snippets =
+            collect_vector_context_snippets(store, &search_phases, &subtask_description, 3);
 
         if snippets.is_empty() {
             String::new()
@@ -3066,11 +3071,8 @@ async fn handle_learning_summary(
         .map(|v| v as usize)
         .unwrap_or(20)
         .max(1);
-    let knowledge_bus = read_latest_artifact::<KnowledgeBusArtifact>(
-        &ledger,
-        "spec",
-        "latest-knowledge.json",
-    );
+    let knowledge_bus =
+        read_latest_artifact::<KnowledgeBusArtifact>(&ledger, "spec", "latest-knowledge.json");
     let Some(bus) = read_latest_artifact::<WorkflowLearningBusArtifact>(
         &ledger,
         "spec",
@@ -3936,7 +3938,11 @@ mod tests {
         let store = VectorStore::new(&db_path, 64, 256).expect("vector store should initialize");
 
         store
-            .upsert("coding", "fix retrieval alignment", "semantic-phase knowledge")
+            .upsert(
+                "coding",
+                "fix retrieval alignment",
+                "semantic-phase knowledge",
+            )
             .expect("semantic phase upsert should succeed");
 
         // No entries under execution phase key; this verifies we still retrieve
@@ -3946,6 +3952,8 @@ mod tests {
             collect_vector_context_snippets(&store, &phases, "fix retrieval alignment", 3);
 
         assert!(!snippets.is_empty());
-        assert!(snippets.iter().any(|s| s.contains("semantic-phase knowledge")));
+        assert!(snippets
+            .iter()
+            .any(|s| s.contains("semantic-phase knowledge")));
     }
 }

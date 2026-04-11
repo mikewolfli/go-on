@@ -579,7 +579,10 @@ mod tests {
             .expect("search should work");
 
         // Verify fresh entry ranked first (highest blended score).
-        let first_snippet = hits.first().map(|h| h.response_snippet.as_str()).unwrap_or("");
+        let first_snippet = hits
+            .first()
+            .map(|h| h.response_snippet.as_str())
+            .unwrap_or("");
         assert!(
             first_snippet.contains("fresh"),
             "fresh entry should rank first but got: {first_snippet:?}"

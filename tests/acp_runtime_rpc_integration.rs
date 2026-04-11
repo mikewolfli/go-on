@@ -114,7 +114,10 @@ impl RpcHarness {
 
     fn raw_request(&mut self, payload: &Value) {
         let body = serde_json::to_string(payload).expect("failed to encode raw request");
-        let stdin = self.stdin.as_mut().expect("stdin already closed in raw_request");
+        let stdin = self
+            .stdin
+            .as_mut()
+            .expect("stdin already closed in raw_request");
         writeln!(stdin, "{body}").expect("failed to write raw request");
         stdin.flush().expect("failed to flush raw request");
     }
@@ -570,7 +573,12 @@ fn find_free_port() -> u16 {
     port
 }
 
-fn http_request(addr: &str, method: &str, path: &str, body: Option<&str>) -> std::io::Result<String> {
+fn http_request(
+    addr: &str,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+) -> std::io::Result<String> {
     let mut stream = std::net::TcpStream::connect(addr)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let body = body.unwrap_or("");

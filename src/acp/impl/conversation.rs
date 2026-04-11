@@ -5,8 +5,8 @@
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -32,17 +32,15 @@ pub async fn create_conversation_checkpoint(
         anyhow::bail!("checkpoint message exceeds maximum supported size");
     }
 
-    Ok(
-        crate::acp::r#impl::request::create_checkpoint_record(
-            server,
-            conversation_id,
-            branch.as_deref().unwrap_or("main"),
-            vec![message.clone()],
-            note,
-            None,
-        )
-        .await,
+    Ok(crate::acp::r#impl::request::create_checkpoint_record(
+        server,
+        conversation_id,
+        branch.as_deref().unwrap_or("main"),
+        vec![message.clone()],
+        note,
+        None,
     )
+    .await)
 }
 
 /// Get conversation state

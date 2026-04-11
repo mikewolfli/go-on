@@ -121,7 +121,10 @@ mod test_suite {
         let state = server.conversation_state.blocking_lock();
         assert_eq!(state.checkpoints.len(), 1);
         assert_eq!(state.checkpoints[0].checkpoint_id, checkpoint.checkpoint_id);
-        assert_eq!(state.branch_heads.get("conv-test:main"), Some(&checkpoint.checkpoint_id));
+        assert_eq!(
+            state.branch_heads.get("conv-test:main"),
+            Some(&checkpoint.checkpoint_id)
+        );
     }
 
     /// Test conversation state management

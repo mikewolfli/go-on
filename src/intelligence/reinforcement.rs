@@ -1854,7 +1854,9 @@ fallback = true
         // Bus should have exactly 1 event and it must be the high-confidence one.
         assert_eq!(bus.events.len(), 1);
         assert!((bus.events[0].confidence - 0.9).abs() < f64::EPSILON);
-        assert!(bus.events[0].reusable_insights.contains(&"insight-high".to_string()));
+        assert!(bus.events[0]
+            .reusable_insights
+            .contains(&"insight-high".to_string()));
     }
 
     #[test]
@@ -1901,6 +1903,8 @@ fallback = true
             serde_json::from_str(&raw).expect("should deserialize knowledge bus");
         assert_eq!(bus.events.len(), 1);
         assert!((bus.events[0].confidence - 0.95).abs() < f64::EPSILON);
-        assert!(bus.events[0].reusable_insights.contains(&"new-insight".to_string()));
+        assert!(bus.events[0]
+            .reusable_insights
+            .contains(&"new-insight".to_string()));
     }
 }

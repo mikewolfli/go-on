@@ -488,7 +488,11 @@ async fn write_sse_event(
     event: &str,
     payload: &serde_json::Value,
 ) -> Result<()> {
-    let frame = format!("event: {}\ndata: {}\n\n", event, serde_json::to_string(payload)?);
+    let frame = format!(
+        "event: {}\ndata: {}\n\n",
+        event,
+        serde_json::to_string(payload)?
+    );
     debug!("ACP SSE event: {}", event);
     socket.write_all(frame.as_bytes()).await?;
     Ok(())
