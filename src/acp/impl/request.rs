@@ -28,6 +28,7 @@ use crate::acp::helpers::metrics::{
     MetricsSnapshot as PrometheusMetricsSnapshot, RuntimeGaugeSnapshot,
 };
 use crate::acp::r#impl::storage::cache_clear;
+use crate::acp::prelude::enforce_checkpoint_capacity;
 use crate::acp::server::AcpServer;
 use crate::agent::{AgentAuditLog, AgentTaskEnvelope, Message};
 use crate::config::{validate_runtime_readiness, AppConfig, AutoTuneState};
@@ -48,14 +49,18 @@ use crate::reinforcement::{
     persist_primary_secondary_failover_artifact, persist_primary_secondary_policy_artifact,
     persist_requirement_contract, persist_task_execution_summary, persist_task_plan,
     persist_workflow_generated, persist_workflow_learning_event, persist_workflow_research,
-    run_action_check, ActionCheckKind, ArtifactLedger, ClarificationSessionArtifact,
+    recommend_agent_order_from_execution_history, recommend_failure_strategy_from_learning,
+    recommend_parallelism_from_learning, recommend_predicted_success_rate_from_learning,
+    recommend_work_grade_from_learning, run_action_check, ActionCheckKind, ArtifactLedger,
+    ClarificationSessionArtifact,
     ConsultationArtifact, ExecutionAssignmentRecord, ExecutionDecisionArtifact,
-    ExecutionDecisionCandidate, ParallelPhaseDecisionRecord, PrimaryFailoverReportItem,
+    ExecutionDecisionCandidate, KnowledgeBusArtifact, ParallelPhaseDecisionRecord, PrimaryFailoverReportItem,
     PrimarySecondaryFailoverArtifact, PrimarySecondaryPolicyArtifact, RequirementContractArtifact,
     TaskExecutionMetrics, TaskExecutionSummary, WorkflowGeneratedArtifact,
     WorkflowLearningBusArtifact, WorkflowLearningEvent, WorkflowResearchArtifact,
 };
 use crate::tool::{ToolInput, ToolRegistry};
+use crate::vector::VectorStore;
 
 use crate::rpc_protocol::{value_to_id, JsonRpcRequest, RequestTraceContext};
 
@@ -123,7 +128,6 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         None,
         0,
     );
-
     let request_id = request.id.clone();
     let result = match request.method.as_str() {
         "initialize" => handle_initialize(server, request_id).await,
@@ -356,28 +360,7 @@ async fn handle_mcp_initialize(server: &AcpServer, request_id: Option<Value>) ->
 
 /// Handle MCP tools list request
 async fn handle_mcp_tools_list(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    let mut tools = vec![
-        json!({
-            "name": "acp_trace_get",
-            "description": "Get ACP trace events",
-            "input_schema": {"type": "object"}
-        }),
-        json!({
-            "name": "acp_debug_panel_get",
-            "description": "Get ACP debug panel snapshot",
-            "input_schema": {"type": "object"}
-        }),
-    ];
-
-    if let Ok(registry) = server.skill_registry.lock() {
-        tools.extend(registry.list().into_iter().map(|skill| {
-            json!({
-                "name": skill.name,
-                "description": skill.description,
-                "input_schema": skill.input_schema,
-            })
-        }));
-    }
+    let tools = build_mcp_tool_descriptors(server);
 
     send_result(
         server,
@@ -404,36 +387,10 @@ async fn handle_mcp_tools_call(
         .cloned()
         .unwrap_or_else(|| json!({}));
 
-    let structured = match name {
-        "acp_trace_get" => {
-            let trace = build_trace_payload(&arguments);
-            json!({
-                "ok": true,
-                "events": trace.get("events").cloned().unwrap_or_else(|| json!([])),
-                "total": trace.get("total").cloned().unwrap_or_else(|| json!(0)),
-                "limit": trace.get("limit").cloned().unwrap_or_else(|| json!(100)),
-            })
-        }
-        "acp_debug_panel_get" => build_debug_panel_payload(server).await,
-        _ => {
-            let skill = server
-                .skill_registry
-                .lock()
-                .ok()
-                .and_then(|registry| registry.get(name));
-            match skill {
-                Some(skill) => skill.execute(&arguments).await?,
-                None => {
-                    return send_error(
-                        server,
-                        request_id,
-                        -32602,
-                        format!("unknown mcp tool: {name}"),
-                        None,
-                    )
-                    .await
-                }
-            }
+    let structured = match execute_mcp_tool_call(server, name, &arguments).await {
+        Ok(structured) => structured,
+        Err(err) => {
+            return send_error(server, request_id, -32602, err.to_string(), None).await;
         }
     };
 
@@ -600,12 +557,12 @@ async fn handle_metrics_prometheus(server: &AcpServer, request_id: Option<Value>
             cache_lookup_total: 0,
             cache_hit_total: 0,
             cache_store_total: 0,
-            vector_search_total: 0,
-            vector_hit_total: 0,
-            vector_store_total: 0,
-            summary_read_total: 0,
-            summary_hit_total: 0,
-            summary_store_total: 0,
+            vector_search_total: metrics.vector_search_total,
+            vector_hit_total: metrics.vector_hit_total,
+            vector_store_total: metrics.vector_store_total,
+            summary_read_total: metrics.summary_read_total,
+            summary_hit_total: metrics.summary_hit_total,
+            summary_store_total: metrics.summary_store_total,
             agent_failures_total: metrics.failed_requests,
             agent_timeout_failures_total: 0,
             agent_panic_failures_total: 0,
@@ -1570,9 +1527,10 @@ async fn handle_workflow_generate(
         .await;
     }
 
-    let plan = build_task_plan(task);
+    let mut plan = build_task_plan(task);
     let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
-    let workflow = build_workflow_generated_artifact(&plan);
+    let mut workflow = build_workflow_generated_artifact(&plan);
+    let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
     let workflow_artifact_path = persist_workflow_generated(&ledger, &workflow)?;
 
     record_trace_event(
@@ -1598,6 +1556,9 @@ async fn handle_workflow_generate(
             "ok": true,
             "plan": plan,
             "workflow": workflow,
+            "adaptive": {
+                "planning": adaptive_planning,
+            },
             "plan_artifact_path": plan_artifact_path.display().to_string(),
             "workflow_artifact_path": workflow_artifact_path.display().to_string(),
             "requirement_gate": {
@@ -1677,9 +1638,10 @@ async fn handle_workflow_execute(
         .await;
     }
 
-    let plan = build_task_plan(&task);
+    let mut plan = build_task_plan(&task);
     let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
-    let workflow = build_workflow_generated_artifact(&plan);
+    let mut workflow = build_workflow_generated_artifact(&plan);
+    let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
     let workflow_artifact_path = persist_workflow_generated(&ledger, &workflow)?;
 
     let execution_context = build_execution_context(server, &params)?;
@@ -1845,6 +1807,10 @@ async fn handle_workflow_execute(
             "workflow_artifact_path": workflow_artifact_path.display().to_string(),
             "learning_artifact_path": learning_artifact_path.display().to_string(),
             "execution_mode": "runtime_execute",
+            "adaptive": {
+                "planning": adaptive_planning,
+                "execution_defaults": execution_context.adaptive_defaults,
+            },
             "lazy_load": execution_report.lazy_load,
             "review_policy": review_policy,
             "reviews": reviews,
@@ -2001,9 +1967,10 @@ async fn handle_task_execute(
         .await;
     }
 
-    let plan = build_task_plan(task);
+    let mut plan = build_task_plan(task);
     let plan_path = persist_task_plan(&ledger, &plan)?;
-    let workflow = build_workflow_generated_artifact(&plan);
+    let mut workflow = build_workflow_generated_artifact(&plan);
+    let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
     let workflow_path = persist_workflow_generated(&ledger, &workflow)?;
 
     let execution_context = build_execution_context(server, &params)?;
@@ -2100,6 +2067,10 @@ async fn handle_task_execute(
             "plan": plan,
             "workflow": workflow,
             "summary": summary,
+            "adaptive": {
+                "planning": adaptive_planning,
+                "execution_defaults": execution_context.adaptive_defaults,
+            },
             "lazy_load": execution_report.lazy_load,
             "artifacts": {
                 "plan": plan_path.display().to_string(),
@@ -2127,6 +2098,28 @@ struct RuntimeExecutionContext {
     failure_prevention: Arc<StdMutex<crate::failure_prevention::FailurePrevention>>,
     memory_store: Arc<StdMutex<MemoryStore>>,
     lazy_policy: LazyLoadPolicy,
+    adaptive_defaults: AdaptiveExecutionDefaults,
+    artifact_ledger: ArtifactLedger,
+    vector_store: Option<Arc<VectorStore>>,
+}
+
+#[derive(Clone, Serialize)]
+struct AdaptiveExecutionDefaults {
+    recommended_failure_strategy: String,
+    applied_failure_strategy: String,
+    failure_strategy_from_learning: bool,
+    recommended_mode: String,
+    applied_mode: String,
+    mode_from_learning: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct AdaptivePlanningReport {
+    predicted_success_before: f32,
+    predicted_success_after: f32,
+    parallelism_before: usize,
+    recommended_parallelism: usize,
+    parallelism_after: usize,
 }
 
 struct RuntimeExecutionReport {
@@ -2216,20 +2209,25 @@ fn build_execution_context(server: &AcpServer, params: &Value) -> Result<Runtime
         .and_then(|options| options.agent_options())
         .unwrap_or_default();
 
+    let ledger = clone_artifact_ledger(server);
+    let default_failure_strategy = recommend_failure_strategy_from_learning(&ledger, "tolerant");
+    let pinned_failure_strategy = params.get("failure_strategy").and_then(Value::as_str);
     let failure_strategy = params
         .get("failure_strategy")
         .and_then(Value::as_str)
-        .unwrap_or("tolerant")
+        .unwrap_or(default_failure_strategy.as_str())
         .to_ascii_lowercase();
     let complexity = params
         .get("complexity")
         .and_then(Value::as_u64)
         .map(|value| value as u8)
         .unwrap_or(3);
+    let default_mode = recommend_work_grade_from_learning(&ledger, "agent");
+    let pinned_mode = params.get("mode").and_then(Value::as_str);
     let mode = params
         .get("mode")
         .and_then(Value::as_str)
-        .unwrap_or("agent")
+        .unwrap_or(default_mode.as_str())
         .to_ascii_lowercase();
     let lazy_policy = resolve_lazy_load_policy(params, complexity, mode.as_str());
 
@@ -2257,12 +2255,22 @@ fn build_execution_context(server: &AcpServer, params: &Value) -> Result<Runtime
         primary_agent,
         secondary_agents,
         candidates: resolved.agents,
-        failure_strategy,
+        failure_strategy: failure_strategy.clone(),
         adaptive_selector: server.adaptive_model_selector.clone(),
         online_controller: server.online_controller.clone(),
         failure_prevention: server.failure_prevention.clone(),
         memory_store: server.memory_store.clone(),
         lazy_policy,
+        adaptive_defaults: AdaptiveExecutionDefaults {
+            recommended_failure_strategy: default_failure_strategy,
+            applied_failure_strategy: failure_strategy.clone(),
+            failure_strategy_from_learning: pinned_failure_strategy.is_none(),
+            recommended_mode: default_mode,
+            applied_mode: mode.clone(),
+            mode_from_learning: pinned_mode.is_none(),
+        },
+        artifact_ledger: ledger,
+        vector_store: server.vector_store.clone(),
     })
 }
 
@@ -2305,6 +2313,67 @@ fn resolve_lazy_load_policy(params: &Value, complexity: u8, mode: &str) -> LazyL
         enable_role_collaboration: role_collaboration,
         enable_memory_policy: memory_policy,
         activation_reasons,
+    }
+}
+
+fn infer_workflow_parallelism(workflow: &WorkflowGeneratedArtifact) -> usize {
+    workflow
+        .execution_order
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn rebalance_execution_order(execution_order: &[Vec<String>], parallelism_limit: usize) -> Vec<Vec<String>> {
+    let limit = parallelism_limit.max(1);
+    if limit == 1 {
+        return execution_order
+            .iter()
+            .flat_map(|phase| phase.iter().cloned().map(|node| vec![node]))
+            .collect();
+    }
+
+    let mut rebalanced = Vec::new();
+    for phase in execution_order {
+        if phase.len() <= limit {
+            rebalanced.push(phase.clone());
+            continue;
+        }
+
+        for chunk in phase.chunks(limit) {
+            rebalanced.push(chunk.to_vec());
+        }
+    }
+    rebalanced
+}
+
+fn apply_learning_plan_feedback(
+    ledger: &ArtifactLedger,
+    plan: &mut crate::reinforcement::TaskPlanArtifact,
+    workflow: &mut WorkflowGeneratedArtifact,
+) -> AdaptivePlanningReport {
+    let predicted_success_before = plan.routing.predicted_success_rate;
+    plan.routing.predicted_success_rate = recommend_predicted_success_rate_from_learning(
+        ledger,
+        plan.routing.predicted_success_rate,
+        plan.characteristics.complexity,
+    );
+
+    let parallelism_before = infer_workflow_parallelism(workflow);
+    let recommended_parallelism =
+        recommend_parallelism_from_learning(ledger, parallelism_before, 1, 4);
+    workflow.execution_order =
+        rebalance_execution_order(&workflow.execution_order, recommended_parallelism);
+    let parallelism_after = infer_workflow_parallelism(workflow);
+
+    AdaptivePlanningReport {
+        predicted_success_before,
+        predicted_success_after: plan.routing.predicted_success_rate,
+        parallelism_before,
+        recommended_parallelism,
+        parallelism_after,
     }
 }
 
@@ -2358,6 +2427,36 @@ async fn execute_runtime_subtasks(
                     .collect::<Vec<_>>();
                 ranked_candidates =
                     rank_execution_agents(&names, desired_role.as_deref(), phase_idx, record_index);
+                // Blend in historical execution success: re-score using Bayesian
+                // success rates from past TaskExecutionSummary records so that
+                // agents with stronger real outcomes are preferred over agents
+                // whose ranking is based on list-position heuristics alone.
+                let historical_order = recommend_agent_order_from_execution_history(
+                    &context.artifact_ledger,
+                    &names,
+                    20,
+                );
+                if historical_order.len() > 1 {
+                    let hist_len = historical_order.len() as f64;
+                    for candidate in ranked_candidates.iter_mut() {
+                        if let Some(pos) =
+                            historical_order.iter().position(|n| n == &candidate.agent)
+                        {
+                            let hist_score =
+                                  historical_order.len().saturating_sub(pos) as f64 / hist_len;
+                            candidate.score =
+                                  (candidate.score * 0.60 + hist_score * 0.40).clamp(0.0_f64, 1.0_f64);
+                            candidate.reason =
+                                format!("{}, hist_rank={}", candidate.reason, pos + 1);
+                        }
+                    }
+                    ranked_candidates.sort_by(|a, b| {
+                        b.score
+                            .partial_cmp(&a.score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| a.agent.cmp(&b.agent))
+                    });
+                }
                 if !ranked_candidates.is_empty() {
                     role_routed_subtasks += 1;
                 }
@@ -2625,10 +2724,38 @@ async fn execute_single_subtask(
     if !tool_context.is_empty() {
         tool_observations.push(tool_context.clone());
     }
+    // Inject relevant knowledge from vector memory so agents have prior
+    // context without needing to re-derive it from scratch.
+    let vector_context_prefix = if let Some(store) = &context.vector_store {
+        let execution_phase = format!("phase-{}", phase_index + 1);
+        let semantic_phase = context.app_config.default_phase.clone();
+        let mut search_phases = vec![execution_phase];
+        if !semantic_phase.is_empty() && !search_phases.iter().any(|phase| phase == &semantic_phase) {
+            search_phases.push(semantic_phase);
+        }
+
+        let snippets = collect_vector_context_snippets(store, &search_phases, &subtask_description, 3);
+
+        if snippets.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "Relevant context from memory:\n{}\n",
+                snippets
+                    .iter()
+                    .map(|snippet| format!("• {}", snippet))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        }
+    } else {
+        String::new()
+    };
     let messages = vec![Message {
         role: "user".to_string(),
         content: format!(
-            "Parent task: {}\nSubtask: {}\n{}\nReturn concrete implementation outcome and concise verification.",
+            "{}Parent task: {}\nSubtask: {}\n{}\nReturn concrete implementation outcome and concise verification.",
+            vector_context_prefix,
             task,
             subtask_description,
             if tool_context.is_empty() {
@@ -2817,6 +2944,35 @@ async fn execute_single_subtask(
     }
 }
 
+fn collect_vector_context_snippets(
+    store: &VectorStore,
+    search_phases: &[String],
+    subtask_description: &str,
+    max_snippets: usize,
+) -> Vec<String> {
+    let mut snippets: Vec<String> = Vec::new();
+    for phase in search_phases {
+        if let Ok((hits, _)) = store.search(phase, subtask_description, max_snippets, 0.25, 512) {
+            for hit in hits {
+                let snippet = hit.response_snippet.trim();
+                if snippet.is_empty() {
+                    continue;
+                }
+                if !snippets.iter().any(|existing| existing == snippet) {
+                    snippets.push(snippet.to_string());
+                }
+                if snippets.len() >= max_snippets {
+                    break;
+                }
+            }
+        }
+        if snippets.len() >= max_snippets {
+            break;
+        }
+    }
+    snippets
+}
+
 fn run_lazy_tool_loop(task: &str, subtask: &str, record_index: usize) -> String {
     let registry = ToolRegistry::new();
     let Some(search_tool) = registry.get("search_files") else {
@@ -2910,6 +3066,11 @@ async fn handle_learning_summary(
         .map(|v| v as usize)
         .unwrap_or(20)
         .max(1);
+    let knowledge_bus = read_latest_artifact::<KnowledgeBusArtifact>(
+        &ledger,
+        "spec",
+        "latest-knowledge.json",
+    );
     let Some(bus) = read_latest_artifact::<WorkflowLearningBusArtifact>(
         &ledger,
         "spec",
@@ -2918,7 +3079,17 @@ async fn handle_learning_summary(
         return send_result(
             server,
             request_id,
-            json!({"ok": true, "summary": {"sampled_events": 0, "totals": {}, "averages": {}, "rates": {}}, "events": []}),
+            json!({
+                "ok": true,
+                "summary": {"sampled_events": 0, "totals": {}, "averages": {}, "rates": {}},
+                "knowledge": knowledge_bus.as_ref().map(|bus| json!({
+                    "total_events": bus.total_events,
+                    "sampled_events": bus.events.len().min(window),
+                    "latest_generated_at": bus.generated_at,
+                    "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
+                })).unwrap_or_else(|| json!({"total_events": 0, "sampled_events": 0, "recent": []})),
+                "events": []
+            }),
         )
         .await;
     };
@@ -2982,6 +3153,12 @@ async fn handle_learning_summary(
                     "gates_pass_rate": gates_pass_rate,
                 }
             },
+                "knowledge": knowledge_bus.as_ref().map(|bus| json!({
+                    "total_events": bus.total_events,
+                    "sampled_events": bus.events.len().min(window),
+                    "latest_generated_at": bus.generated_at,
+                    "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
+                })).unwrap_or_else(|| json!({"total_events": 0, "sampled_events": 0, "recent": []})),
             "events": events,
         }),
     )
@@ -3262,7 +3439,7 @@ fn read_latest_artifact<T: DeserializeOwned>(
     serde_json::from_str(&raw).ok()
 }
 
-async fn create_checkpoint_record(
+pub(crate) async fn create_checkpoint_record(
     server: &AcpServer,
     conversation_id: &str,
     branch_id: &str,
@@ -3290,7 +3467,179 @@ async fn create_checkpoint_record(
     state.branch_heads.insert(branch_key, checkpoint_id);
     state.last_touched_at = crate::acp::prelude::now_ts();
     state.checkpoints.push(checkpoint.clone());
+    enforce_checkpoint_capacity(&mut state, 0, Some(&checkpoint.checkpoint_id));
     checkpoint
+}
+
+fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
+    let mut tools = vec![
+        json!({
+            "name": "acp_trace_get",
+            "description": "Get ACP trace events",
+            "input_schema": {"type": "object"}
+        }),
+        json!({
+            "name": "acp_debug_panel_get",
+            "description": "Get ACP debug panel snapshot",
+            "input_schema": {"type": "object"}
+        }),
+    ];
+
+    let registry = ToolRegistry::new();
+    let mut builtins = registry.names();
+    builtins.sort_unstable();
+    tools.extend(builtins.into_iter().map(|name| {
+        serde_json::to_value(local_tool_descriptor(name)).unwrap_or_else(|_| {
+            json!({
+                "name": name,
+                "description": "Registered MCP tool",
+                "input_schema": {"type": "object"}
+            })
+        })
+    }));
+
+    if let Ok(registry) = server.skill_registry.lock() {
+        tools.extend(registry.list().into_iter().map(|skill| {
+            json!({
+                "name": skill.name,
+                "description": skill.description,
+                "input_schema": skill.input_schema,
+            })
+        }));
+    }
+
+    tools
+}
+
+async fn execute_mcp_tool_call(server: &AcpServer, name: &str, arguments: &Value) -> Result<Value> {
+    match name {
+        "acp_trace_get" => {
+            let trace = build_trace_payload(arguments);
+            Ok(json!({
+                "ok": true,
+                "events": trace.get("events").cloned().unwrap_or_else(|| json!([])),
+                "total": trace.get("total").cloned().unwrap_or_else(|| json!(0)),
+                "limit": trace.get("limit").cloned().unwrap_or_else(|| json!(100)),
+            }))
+        }
+        "acp_debug_panel_get" => Ok(build_debug_panel_payload(server).await),
+        _ => {
+            let registry = ToolRegistry::new();
+            if let Some(tool) = registry.get(name) {
+                validate_tool_arguments(name, arguments)?;
+                let result = tool.run(&ToolInput {
+                    task_id: format!("mcp-tool-{name}"),
+                    phase: "mcp".to_string(),
+                    agent_role: "tool".to_string(),
+                    objective: format!("Execute MCP tool '{name}'"),
+                    constraints: None,
+                    evidence: None,
+                    payload: arguments.clone(),
+                })?;
+                return Ok(serde_json::to_value(result)?);
+            }
+
+            let skill = server
+                .skill_registry
+                .lock()
+                .ok()
+                .and_then(|registry| registry.get(name));
+            match skill {
+                Some(skill) => skill.execute(arguments).await,
+                None => anyhow::bail!("unknown mcp tool: {name}"),
+            }
+        }
+    }
+}
+
+fn local_tool_descriptor(name: &'static str) -> Value {
+    match name {
+        "read_file" => json!({
+            "name": name,
+            "description": "Read contents of a file",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to read"}
+                },
+                "required": ["path"]
+            }
+        }),
+        "write_file" => json!({
+            "name": name,
+            "description": "Write contents to a file",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to write"},
+                    "content": {"type": "string", "description": "Content to write"},
+                    "mode": {"type": "string", "enum": ["overwrite", "append"], "description": "Write mode"}
+                },
+                "required": ["path", "content"]
+            }
+        }),
+        "search_files" => json!({
+            "name": name,
+            "description": "Search for files matching a glob pattern",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Search pattern/glob"},
+                    "directory": {"type": "string", "description": "Search directory"}
+                },
+                "required": ["pattern"]
+            }
+        }),
+        "apply_patch" => json!({
+            "name": name,
+            "description": "Apply a patch artifact",
+            "input_schema": {"type": "object"}
+        }),
+        "run_tests" => json!({
+            "name": name,
+            "description": "Run test suite",
+            "input_schema": {"type": "object"}
+        }),
+        "inspect_git_diff" => json!({
+            "name": name,
+            "description": "Inspect git diff",
+            "input_schema": {"type": "object"}
+        }),
+        other => json!({
+            "name": other,
+            "description": "Registered MCP tool",
+            "input_schema": {"type": "object"}
+        }),
+    }
+}
+
+fn validate_tool_arguments(tool_name: &str, tool_input: &Value) -> Result<()> {
+    match tool_name {
+        "read_file" => {
+            tool_input
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("read_file requires arguments.path"))?;
+        }
+        "write_file" => {
+            tool_input
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("write_file requires arguments.path"))?;
+            tool_input
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("write_file requires arguments.content"))?;
+        }
+        "search_files" => {
+            tool_input
+                .get("pattern")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("search_files requires arguments.pattern"))?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 async fn list_checkpoint_records(
@@ -3506,7 +3855,11 @@ fn record_trace_event(
 
 #[cfg(test)]
 mod tests {
-    use super::session_id_for_task;
+    use super::{
+        collect_vector_context_snippets, infer_workflow_parallelism, rebalance_execution_order,
+        session_id_for_task,
+    };
+    use crate::vector::VectorStore;
 
     #[test]
     fn session_id_for_task_compacts_to_ascii_alnum() {
@@ -3520,5 +3873,79 @@ mod tests {
     #[test]
     fn session_id_for_task_has_fallback_when_empty() {
         assert_eq!(session_id_for_task("!!!"), "clarify-session");
+    }
+
+    #[test]
+    fn rebalance_execution_order_splits_wide_phase_by_limit() {
+        let execution_order = vec![
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["d".to_string()],
+        ];
+        let rebalanced = rebalance_execution_order(&execution_order, 2);
+
+        assert_eq!(
+            rebalanced,
+            vec![
+                vec!["a".to_string(), "b".to_string()],
+                vec!["c".to_string()],
+                vec!["d".to_string()]
+            ]
+        );
+    }
+
+    #[test]
+    fn rebalance_execution_order_limit_one_serializes_all_nodes() {
+        let execution_order = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["c".to_string()],
+        ];
+        let rebalanced = rebalance_execution_order(&execution_order, 1);
+
+        assert_eq!(
+            rebalanced,
+            vec![
+                vec!["a".to_string()],
+                vec!["b".to_string()],
+                vec!["c".to_string()]
+            ]
+        );
+    }
+
+    #[test]
+    fn infer_workflow_parallelism_reads_max_phase_width() {
+        let workflow = crate::reinforcement::WorkflowGeneratedArtifact {
+            generated_at: 0,
+            task: "task".to_string(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            execution_order: vec![
+                vec!["a".to_string()],
+                vec!["b".to_string(), "c".to_string(), "d".to_string()],
+            ],
+            auto_gates: Vec::new(),
+            routing_summary: serde_json::json!({}),
+        };
+
+        assert_eq!(infer_workflow_parallelism(&workflow), 3);
+    }
+
+    #[test]
+    fn collect_vector_context_snippets_searches_execution_and_semantic_phase() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = dir.path().join("request-vector-dual-phase.sqlite3");
+        let store = VectorStore::new(&db_path, 64, 256).expect("vector store should initialize");
+
+        store
+            .upsert("coding", "fix retrieval alignment", "semantic-phase knowledge")
+            .expect("semantic phase upsert should succeed");
+
+        // No entries under execution phase key; this verifies we still retrieve
+        // by semantic phase fallback and avoid false miss caused by key mismatch.
+        let phases = vec!["phase-1".to_string(), "coding".to_string()];
+        let snippets =
+            collect_vector_context_snippets(&store, &phases, "fix retrieval alignment", 3);
+
+        assert!(!snippets.is_empty());
+        assert!(snippets.iter().any(|s| s.contains("semantic-phase knowledge")));
     }
 }

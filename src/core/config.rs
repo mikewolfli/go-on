@@ -186,6 +186,36 @@ impl AdaptiveConfig {
         if std::env::var("DOUBAO_API_KEY").is_ok() {
             available_providers.push("doubao".to_string());
         }
+        if std::env::var("GEMINI_API_KEY").is_ok() {
+            available_providers.push("gemini".to_string());
+        }
+        if std::env::var("GROQ_API_KEY").is_ok() {
+            available_providers.push("groq".to_string());
+        }
+        if std::env::var("MISTRAL_API_KEY").is_ok() {
+            available_providers.push("mistral".to_string());
+        }
+        if std::env::var("MINIMAX_API_KEY").is_ok() {
+            available_providers.push("minimax".to_string());
+        }
+        if std::env::var("GLM_API_KEY").is_ok() {
+            available_providers.push("glm".to_string());
+        }
+        if std::env::var("YI_API_KEY").is_ok() {
+            available_providers.push("yi".to_string());
+        }
+        if std::env::var("MOONSHOT_API_KEY").is_ok() {
+            available_providers.push("moonshot".to_string());
+        }
+        if std::env::var("QIANFAN_API_KEY").is_ok() && std::env::var("QIANFAN_SECRET_KEY").is_ok() {
+            available_providers.push("qianfan".to_string());
+        }
+        if std::env::var("QWEN_API_KEY").is_ok() && std::env::var("QWEN_SECRET_KEY").is_ok() {
+            available_providers.push("qwen".to_string());
+        }
+        if std::env::var("HUNYUAN_API_KEY").is_ok() && std::env::var("HUNYUAN_SECRET_KEY").is_ok() {
+            available_providers.push("hunyuan".to_string());
+        }
 
         if available_providers.is_empty() {
             available_providers.push("copilot".to_string());
@@ -433,6 +463,16 @@ fn normalize_provider_name(agent_type: &str) -> Option<String> {
         "openai" => Some("openai".to_string()),
         "doubao" => Some("doubao".to_string()),
         "claude" | "anthropic" => Some("anthropic".to_string()),
+        "gemini" => Some("gemini".to_string()),
+        "groq" => Some("groq".to_string()),
+        "mistral" => Some("mistral".to_string()),
+        "minimax" => Some("minimax".to_string()),
+        "glm" => Some("glm".to_string()),
+        "yi" => Some("yi".to_string()),
+        "moonshot" => Some("moonshot".to_string()),
+        "qianfan" => Some("qianfan".to_string()),
+        "qwen" => Some("qwen".to_string()),
+        "hunyuan" => Some("hunyuan".to_string()),
         _ => None,
     }
 }
@@ -517,6 +557,116 @@ fn default_agent_config(provider: &str) -> Option<AgentConfig> {
             secret_key_env: None,
             anthropic_version: None,
             model: Some("doubao-1-5-pro-32k-250115".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "gemini" => Some(AgentConfig {
+            agent_type: "gemini".to_string(),
+            url: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
+            chat_path: None,
+            api_key_env: Some("GEMINI_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            model: Some("gemini-2.0-flash".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "groq" => Some(AgentConfig {
+            agent_type: "groq".to_string(),
+            url: Some("https://api.groq.com/openai/v1".to_string()),
+            chat_path: None,
+            api_key_env: Some("GROQ_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            model: Some("llama-3.3-70b-versatile".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "mistral" => Some(AgentConfig {
+            agent_type: "mistral".to_string(),
+            url: Some("https://api.mistral.ai/v1".to_string()),
+            chat_path: None,
+            api_key_env: Some("MISTRAL_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            model: Some("mistral-small-latest".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "minimax" => Some(AgentConfig {
+            agent_type: "minimax".to_string(),
+            url: Some("https://api.minimax.chat/v1".to_string()),
+            chat_path: None,
+            api_key_env: Some("MINIMAX_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            model: Some("MiniMax-Text-01".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "glm" => Some(AgentConfig {
+            agent_type: "glm".to_string(),
+            url: Some("https://open.bigmodel.cn/api/paas/v4".to_string()),
+            chat_path: None,
+            api_key_env: Some("GLM_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            model: Some("glm-4-flash".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "yi" => Some(AgentConfig {
+            agent_type: "yi".to_string(),
+            url: Some("https://api.lingyiwanwu.com/v1".to_string()),
+            chat_path: None,
+            api_key_env: Some("YI_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            model: Some("yi-lightning".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "moonshot" => Some(AgentConfig {
+            agent_type: "moonshot".to_string(),
+            url: Some("https://api.moonshot.cn/v1".to_string()),
+            chat_path: None,
+            api_key_env: Some("MOONSHOT_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            model: Some("moonshot-v1-8k".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "qianfan" => Some(AgentConfig {
+            agent_type: "qianfan".to_string(),
+            url: None,
+            chat_path: None,
+            api_key_env: Some("QIANFAN_API_KEY".to_string()),
+            secret_key_env: Some("QIANFAN_SECRET_KEY".to_string()),
+            anthropic_version: None,
+            model: Some("ERNIE-Bot".to_string()),
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "qwen" => Some(AgentConfig {
+            agent_type: "qwen".to_string(),
+            url: None,
+            chat_path: None,
+            api_key_env: Some("QWEN_API_KEY".to_string()),
+            secret_key_env: Some("QWEN_SECRET_KEY".to_string()),
+            anthropic_version: None,
+            model: None,
+            max_tokens: None,
+            supports_system: Some(true),
+        }),
+        "hunyuan" => Some(AgentConfig {
+            agent_type: "hunyuan".to_string(),
+            url: Some("https://hunyuan.tencentcloudapi.com".to_string()),
+            chat_path: None,
+            api_key_env: Some("HUNYUAN_API_KEY".to_string()),
+            secret_key_env: Some("HUNYUAN_SECRET_KEY".to_string()),
+            anthropic_version: None,
+            model: Some("hunyuan-turbo".to_string()),
             max_tokens: None,
             supports_system: Some(true),
         }),
@@ -711,6 +861,9 @@ pub struct RuntimeConfig {
     /// Shutdown drain time in seconds
     #[serde(default = "default_runtime_shutdown_drain_seconds")]
     pub shutdown_drain_seconds: u64,
+    /// Optional ACP HTTP bind address for REST/SSE endpoints
+    #[serde(default)]
+    pub acp_http_bind_addr: Option<String>,
     /// How often background maintenance performs SQLite VACUUM cycles
     #[serde(default = "default_runtime_sqlite_vacuum_interval_cycles")]
     pub sqlite_vacuum_interval_cycles: u64,
@@ -740,6 +893,7 @@ impl Default for RuntimeConfig {
             maintenance_interval_seconds: default_runtime_maintenance_interval_seconds(),
             health_interval_seconds: default_runtime_health_interval_seconds(),
             shutdown_drain_seconds: default_runtime_shutdown_drain_seconds(),
+            acp_http_bind_addr: None,
             sqlite_vacuum_interval_cycles: default_runtime_sqlite_vacuum_interval_cycles(),
             otel_enabled: false,
             otel_exporter: default_runtime_otel_exporter(),
@@ -2531,6 +2685,7 @@ mod tests {
             maintenance_interval_seconds: 0,
             health_interval_seconds: 30,
             shutdown_drain_seconds: 10,
+            acp_http_bind_addr: None,
             sqlite_vacuum_interval_cycles: 60,
             otel_enabled: false,
             otel_exporter: "otlp".to_string(),
@@ -2976,6 +3131,7 @@ mod tests {
             maintenance_interval_seconds: 20,
             health_interval_seconds: 120,
             shutdown_drain_seconds: 30,
+            acp_http_bind_addr: None,
             sqlite_vacuum_interval_cycles: 60,
             otel_enabled: true,
             otel_exporter: "otlp".to_string(),

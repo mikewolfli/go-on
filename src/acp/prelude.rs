@@ -129,6 +129,18 @@ pub struct MetricsSnapshot {
     pub cpu_usage_percent: f64,
     /// Total chat requests
     pub chat_requests_total: u64,
+    /// Vector search requests executed
+    pub vector_search_total: u64,
+    /// Vector hits returned across searches
+    pub vector_hit_total: u64,
+    /// Vector entries stored
+    pub vector_store_total: u64,
+    /// Summary lookups executed
+    pub summary_read_total: u64,
+    /// Summary cache hits
+    pub summary_hit_total: u64,
+    /// Summary entries stored
+    pub summary_store_total: u64,
     /// Cumulative chat duration in milliseconds
     pub chat_latency_sum_ms: f64,
     /// Chat latency histogram bucket counts (ms buckets +Inf)
@@ -1165,6 +1177,34 @@ impl RuntimeMetrics {
         }
     }
 
+    pub fn record_vector_search(&self, hit_count: usize) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.vector_search_total = guard.vector_search_total.saturating_add(1);
+            guard.vector_hit_total = guard.vector_hit_total.saturating_add(hit_count as u64);
+        }
+    }
+
+    pub fn record_vector_store(&self) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.vector_store_total = guard.vector_store_total.saturating_add(1);
+        }
+    }
+
+    pub fn record_summary_read(&self, hit: bool) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.summary_read_total = guard.summary_read_total.saturating_add(1);
+            if hit {
+                guard.summary_hit_total = guard.summary_hit_total.saturating_add(1);
+            }
+        }
+    }
+
+    pub fn record_summary_store(&self) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.summary_store_total = guard.summary_store_total.saturating_add(1);
+        }
+    }
+
     /// Record review gate latency.
     pub fn record_review_latency(&self, duration_ms: f64) {
         if let Ok(mut guard) = self.inner.lock() {
@@ -1228,5 +1268,23 @@ mod tests {
         assert_eq!(snapshot.chat_latency_bucket_counts[1], 1); // <= 5ms
         assert_eq!(snapshot.review_latency_sum_ms, 5001.0);
         assert_eq!(snapshot.review_latency_bucket_counts[8], 1); // <= 10000ms
+    }
+
+    #[test]
+    fn runtime_metrics_record_vector_and_summary_counters() {
+        let metrics = RuntimeMetrics::new();
+        metrics.record_vector_search(2);
+        metrics.record_vector_store();
+        metrics.record_summary_read(true);
+        metrics.record_summary_read(false);
+        metrics.record_summary_store();
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.vector_search_total, 1);
+        assert_eq!(snapshot.vector_hit_total, 2);
+        assert_eq!(snapshot.vector_store_total, 1);
+        assert_eq!(snapshot.summary_read_total, 2);
+        assert_eq!(snapshot.summary_hit_total, 1);
+        assert_eq!(snapshot.summary_store_total, 1);
     }
 }

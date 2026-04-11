@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -12,7 +12,10 @@ use tempfile::tempdir;
 
 struct RpcHarness {
     child: Child,
-    stdin: ChildStdin,
+    // Option so we can explicitly drop (close) stdin before wait_for_exit to
+    // prevent the write-side pipe race: the child blocks on its stdin reader
+    // until EOF, which only arrives once the write end is closed.
+    stdin: Option<ChildStdin>,
     stdout_rx: Receiver<Value>,
     stderr_lines: Arc<Mutex<Vec<String>>>,
     // Serialize this integration suite to avoid flaky child-process pipe races.
@@ -83,7 +86,7 @@ impl RpcHarness {
 
         Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             stdout_rx,
             stderr_lines,
             _suite_guard: suite_guard,
@@ -102,16 +105,25 @@ impl RpcHarness {
         }
 
         let body = serde_json::to_string(&payload).expect("failed to encode request");
-        writeln!(self.stdin, "{body}").expect("failed to write request to stdin");
-        self.stdin.flush().expect("failed to flush request");
+        let stdin = self.stdin.as_mut().expect("stdin already closed");
+        writeln!(stdin, "{body}").expect("failed to write request to stdin");
+        stdin.flush().expect("failed to flush request");
 
         self.read_response_for_id(id, Duration::from_secs(8))
     }
 
     fn raw_request(&mut self, payload: &Value) {
         let body = serde_json::to_string(payload).expect("failed to encode raw request");
-        writeln!(self.stdin, "{body}").expect("failed to write raw request");
-        self.stdin.flush().expect("failed to flush raw request");
+        let stdin = self.stdin.as_mut().expect("stdin already closed in raw_request");
+        writeln!(stdin, "{body}").expect("failed to write raw request");
+        stdin.flush().expect("failed to flush raw request");
+    }
+
+    /// Close the write end of the child's stdin pipe so the child sees EOF.
+    /// Must be called after sending the final request (e.g. "shutdown") and
+    /// before `wait_for_exit` to avoid a pipe-write race that causes flaky hangs.
+    fn close_stdin(&mut self) {
+        drop(self.stdin.take());
     }
 
     fn read_response_for_id(&mut self, id: u64, timeout: Duration) -> Value {
@@ -141,6 +153,10 @@ impl RpcHarness {
     }
 
     fn wait_for_exit(&mut self, timeout: Duration) {
+        // Close the write end of stdin so the child sees EOF and can exit cleanly.
+        // Without this, the child's stdin-reader blocks and the process never terminates,
+        // causing a timing race in the multi-process pipe harness.
+        self.close_stdin();
         let deadline = Instant::now() + timeout;
         loop {
             match self.child.try_wait() {
@@ -519,6 +535,59 @@ state_path = "{state_path}"
     fs::write(path, config).expect("failed to write autotune-enabled config file");
 }
 
+fn write_http_stream_config(path: &Path, bind_addr: &str) {
+    let config = format!(
+        r#"default_phase = "coding"
+
+[flow]
+name = "HTTP Stream"
+phases = ["coding"]
+
+[runtime]
+maintenance_interval_seconds = 30
+health_interval_seconds = 45
+shutdown_drain_seconds = 7
+acp_http_bind_addr = "{bind_addr}"
+
+[agents.local_echo]
+type = "local_echo"
+
+[phases.coding]
+description = "Coding"
+agents = ["local_echo"]
+fallback = true
+"#,
+        bind_addr = bind_addr,
+    );
+
+    fs::write(path, config).expect("failed to write HTTP stream config file");
+}
+
+fn find_free_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    port
+}
+
+fn http_request(addr: &str, method: &str, path: &str, body: Option<&str>) -> std::io::Result<String> {
+    let mut stream = std::net::TcpStream::connect(addr)?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let body = body.unwrap_or("");
+    let request = format!(
+        "{} {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        method,
+        path,
+        addr,
+        body.len(),
+        body,
+    );
+    stream.write_all(request.as_bytes())?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    Ok(response)
+}
+
 #[test]
 fn rpc_initialize_health_phase_and_shutdown() {
     let temp = tempdir().expect("failed to create temp dir");
@@ -560,6 +629,70 @@ fn rpc_initialize_health_phase_and_shutdown() {
     assert_eq!(shutdown["result"]["ok"], true);
 
     harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn http_chat_stream_emits_sse_and_persists_knowledge() {
+    let _suite_guard = match suite_guard().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    let bind_addr = format!("127.0.0.1:{}", find_free_port());
+    write_http_stream_config(&config_path, &bind_addr);
+
+    let mut child = Command::new(binary_path())
+        .arg("--config")
+        .arg(&config_path)
+        .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn go-on for HTTP stream test");
+
+    let started = Instant::now();
+    loop {
+        if started.elapsed() > Duration::from_secs(5) {
+            let _ = child.kill();
+            panic!("timed out waiting for ACP HTTP server");
+        }
+        if let Ok(response) = http_request(&bind_addr, "GET", "/health", None) {
+            if response.contains("200 OK") {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let body = json!({
+        "mode": "ask",
+        "messages": [{"role": "user", "content": "Explain how to validate rust changes with tests and clippy."}],
+        "phase": "coding",
+        "conversation_id": "http-conv",
+        "branch_id": "main"
+    })
+    .to_string();
+    let response = http_request(&bind_addr, "POST", "/chat/stream", Some(&body))
+        .expect("HTTP SSE request should succeed");
+
+    assert!(response.contains("200 OK"));
+    assert!(response.contains("Content-Type: text/event-stream"));
+    assert!(response.contains("event: chunk"));
+    assert!(response.contains("event: done"));
+    assert!(response.contains("event: result"));
+
+    let knowledge_path = temp
+        .path()
+        .join(".goon")
+        .join("spec")
+        .join("latest-knowledge.json");
+    let raw = fs::read_to_string(&knowledge_path).expect("knowledge artifact should exist");
+    assert!(raw.contains("reusable_insights"));
+    assert!(raw.contains("verification_steps"));
+
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[test]

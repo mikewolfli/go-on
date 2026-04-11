@@ -204,6 +204,7 @@ impl VectorStore {
         }
 
         let query_embedding = embed_text(query, self.dimensions);
+        let now = now_ts();
         let conn = self
             .conn
             .lock()
@@ -211,7 +212,7 @@ impl VectorStore {
 
         let mut stmt = conn.prepare(
             "
-            SELECT memory_key, response_text, embedding_json
+            SELECT memory_key, response_text, embedding_json, updated_at
             FROM vector_memory
             WHERE phase = ?1
             ORDER BY updated_at DESC
@@ -220,12 +221,14 @@ impl VectorStore {
         )?;
 
         let mut rows = stmt.query(params![phase])?;
+        // (memory_key, blended_score, response_text)
         let mut scored: Vec<(String, f32, String)> = Vec::new();
 
         while let Some(row) = rows.next()? {
             let memory_key: String = row.get(0)?;
             let response_text: String = row.get(1)?;
             let embedding_json: String = row.get(2)?;
+            let updated_at: i64 = row.get(3)?;
 
             let memory_embedding: Vec<f32> = match serde_json::from_str(&embedding_json) {
                 Ok(v) => v,
@@ -236,16 +239,27 @@ impl VectorStore {
             }
 
             let similarity = cosine_similarity(&query_embedding, &memory_embedding);
-            if similarity >= min_similarity {
-                scored.push((memory_key, similarity, response_text));
+            if similarity < min_similarity {
+                continue;
             }
+
+            // Time-decay weight: entries age at roughly 1/(1 + age_days * 0.05).
+            // At 0 days: weight = 1.0.  At 20 days: weight ≈ 0.5.  At 200 days: weight ≈ 0.09.
+            // Blended score = 70% similarity + 30% recency, keeping the raw similarity
+            // above min_similarity gate (already checked above) while demoting stale entries.
+            const DECAY_FACTOR: f64 = 0.05;
+            let age_secs = (now - updated_at).max(0) as f64;
+            let age_days = age_secs / 86_400.0;
+            let recency_weight = (1.0 / (1.0 + age_days * DECAY_FACTOR)) as f32;
+            let blended = similarity * 0.70 + recency_weight * 0.30;
+
+            scored.push((memory_key, blended, response_text));
         }
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);
 
         if !scored.is_empty() {
-            let now = now_ts();
             for (memory_key, _, _) in &scored {
                 conn.execute(
                     "
@@ -261,8 +275,8 @@ impl VectorStore {
 
         let hits: Vec<VectorHit> = scored
             .into_iter()
-            .map(|(_, similarity, response_text)| VectorHit {
-                similarity,
+            .map(|(_, blended_score, response_text)| VectorHit {
+                similarity: blended_score,
                 response_snippet: trim_chars(&response_text, max_snippet_chars),
             })
             .collect();
@@ -520,5 +534,55 @@ mod tests {
         let feedback = VectorPrecisionFeedback::new(&hits);
         assert_eq!(feedback.hit_count, 0);
         assert!((feedback.avg_similarity - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn vector_search_time_decay_demotes_stale_entry() {
+        use rusqlite::{params, Connection};
+
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = dir.path().join("vector_decay.sqlite3");
+
+        let store = VectorStore::new(&db_path, 64, 200).expect("vector store init should work");
+
+        // Insert a fresh entry with an identical query to get identical embeddings.
+        store
+            .upsert("coding", "rust async performance", "fresh answer")
+            .expect("fresh upsert should work");
+
+        // Back-date an entry to 180 days ago directly in SQLite to simulate stale knowledge.
+        // The memory_key is deterministic from (phase, query_text).
+        let stale_ts: i64 = super::now_ts() - 180 * 86_400;
+        {
+            let conn = Connection::open(&db_path).expect("should open db");
+            conn.execute(
+                "INSERT OR REPLACE INTO vector_memory(memory_key, phase, query_text, response_text, embedding_json, created_at, updated_at, hit_count)
+                 VALUES('__stale_key__', 'coding', 'rust async performance stale', 'stale answer', '[]', ?1, ?1, 0)",
+                params![stale_ts],
+            )
+            .expect("stale insert should work");
+
+            // Give the stale entry a valid embedding so it computes a real similarity.
+            let embedding = super::embed_text("rust async performance stale", 64);
+            let embedding_json =
+                serde_json::to_string(&embedding).expect("should serialize embedding");
+            conn.execute(
+                "UPDATE vector_memory SET embedding_json = ?1 WHERE memory_key = '__stale_key__'",
+                params![embedding_json],
+            )
+            .expect("stale embedding update should work");
+        }
+
+        // The fresh entry should rank higher than the stale one despite similar embeddings.
+        let (hits, _) = store
+            .search("coding", "rust async performance", 5, 0.0, 200)
+            .expect("search should work");
+
+        // Verify fresh entry ranked first (highest blended score).
+        let first_snippet = hits.first().map(|h| h.response_snippet.as_str()).unwrap_or("");
+        assert!(
+            first_snippet.contains("fresh"),
+            "fresh entry should rank first but got: {first_snippet:?}"
+        );
     }
 }

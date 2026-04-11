@@ -2,7 +2,7 @@
   "name": "go-on-vscode",
   "displayName": "Go-On VS Code Extension",
   "description": "VS Code extension for the Go-On Rust ACP proxy",
-  "version": "0.4.2",
+  "version": "0.4.6",
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -40,6 +40,18 @@
     "onCommand:go-on.taskExecute",
     "onCommand:go-on.learningSummary",
     "onCommand:go-on.autotuneStatus",
+    "onCommand:go-on.autotuneGet",
+    "onCommand:go-on.autotuneReset",
+    "onCommand:go-on.metricsGet",
+    "onCommand:go-on.metricsReset",
+    "onCommand:go-on.traceMetrics",
+    "onCommand:go-on.traceGet",
+    "onCommand:go-on.breakerReset",
+    "onCommand:go-on.maintenanceGc",
+    "onCommand:go-on.checkpointCreate",
+    "onCommand:go-on.checkpointList",
+    "onCommand:go-on.conversationRollback",
+    "onCommand:go-on.primarySecondarySummary",
     "onView:go-on-workflow",
     "onView:go-on-process-flow"
   ],
@@ -170,6 +182,66 @@
         "command": "go-on.autotuneStatus",
         "title": "Get Autotune Status (RPC)",
         "icon": "$(pulse)"
+      },
+      {
+        "command": "go-on.autotuneGet",
+        "title": "Get Autotune Parameters (RPC)",
+        "icon": "$(settings)"
+      },
+      {
+        "command": "go-on.autotuneReset",
+        "title": "Reset Autotune State (RPC)",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "go-on.metricsGet",
+        "title": "Get Runtime Metrics (RPC)",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "go-on.metricsReset",
+        "title": "Reset Runtime Metrics (RPC)",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "go-on.traceMetrics",
+        "title": "Get Trace Metrics (RPC)",
+        "icon": "$(flame)"
+      },
+      {
+        "command": "go-on.traceGet",
+        "title": "Get Trace Events (RPC)",
+        "icon": "$(output)"
+      },
+      {
+        "command": "go-on.breakerReset",
+        "title": "Reset Circuit Breaker (RPC)",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "go-on.maintenanceGc",
+        "title": "Run Maintenance GC (RPC)",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "go-on.checkpointCreate",
+        "title": "Create Conversation Checkpoint (RPC)",
+        "icon": "$(save)"
+      },
+      {
+        "command": "go-on.checkpointList",
+        "title": "List Conversation Checkpoints (RPC)",
+        "icon": "$(list-ordered)"
+      },
+      {
+        "command": "go-on.conversationRollback",
+        "title": "Rollback Conversation (RPC)",
+        "icon": "$(debug-step-back)"
+      },
+      {
+        "command": "go-on.primarySecondarySummary",
+        "title": "Primary/Secondary Agent Summary (RPC)",
+        "icon": "$(mirror)"
       }
     ],
     "views": {
@@ -284,7 +356,7 @@
         "go-on.releaseTag": {
           "type": "string",
           "default": "latest",
-          "description": "Release tag to download from (for example v0.4.2). Use latest for newest release"
+          "description": "Release tag to download from (for example v0.4.6). Use latest for newest release"
         },
         "go-on.autoStart": {
           "type": "boolean",
@@ -301,17 +373,45 @@
         "go-on.chat.model": {
           "type": "string",
           "default": "auto",
-          "enum": ["auto", "copilot", "deepseek", "wenxin", "openai_compatible", "doubao", "claude"],
+          "enum": [
+            "auto",
+            "copilot",
+            "deepseek",
+            "wenxin",
+            "openai",
+            "doubao",
+            "anthropic",
+            "gemini",
+            "groq",
+            "mistral",
+            "minimax",
+            "glm",
+            "yi",
+            "moonshot",
+            "qianfan",
+            "qwen",
+            "hunyuan"
+          ],
           "enumDescriptions": [
             "Automatically select based on configuration",
-            "GitHub Copilot",
+            "GitHub Copilot (local)",
             "DeepSeek",
-            "Wenxin",
-            "OpenAI Compatible",
-            "Doubao",
-            "Claude"
+            "Wenxin / ERNIE-Bot",
+            "OpenAI (GPT-4o etc)",
+            "Doubao (ByteDance)",
+            "Anthropic Claude",
+            "Google Gemini",
+            "Groq (fast inference)",
+            "Mistral AI",
+            "MiniMax",
+            "Zhipu GLM",
+            "01.AI Yi",
+            "Moonshot Kimi",
+            "Baidu Qianfan",
+            "Alibaba Qwen",
+            "Tencent Hunyuan"
           ],
-          "description": "Default AI model to use for chat"
+          "description": "Default AI model/provider to use for chat"
         },
         "go-on.chat.temperature": {
           "type": "number",

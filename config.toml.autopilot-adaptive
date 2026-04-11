@@ -26,6 +26,28 @@ maintenance_interval_seconds = 60
 health_interval_seconds = 120
 shutdown_drain_seconds = 30
 sqlite_vacuum_interval_cycles = 60
+# acp_http_bind_addr = "127.0.0.1:8090"   # Uncomment to enable REST/SSE
+otel_enabled = false
+otel_exporter = "otlp"
+# otel_endpoint = "http://localhost:4317"   # Uncomment for Jaeger/OTLP
+otel_service_name = "go-on"
+otel_sample_ratio = 1.0
+trace_slow_top_n = 20
+
+[autotune]
+enabled = false
+evaluate_interval = 20
+min_query_chars_step = 20
+min_query_chars_min = 40
+min_query_chars_max = 300
+max_top_k = 4
+low_precision_threshold = 0.35
+high_precision_threshold = 0.75
+state_path = "acp_autotune_state.json"
+cooldown_windows = 2
+min_vector_searches = 5
+summary_trigger_min = 3
+summary_trigger_max = 20
 
 [agents.copilot]
 type = "copilot"

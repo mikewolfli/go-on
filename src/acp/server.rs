@@ -153,6 +153,12 @@ impl AcpServer {
         };
         let runtime_snapshot = self.metrics.snapshot();
         metrics.chat_requests_total = runtime_snapshot.chat_requests_total;
+        metrics.vector_search_total = runtime_snapshot.vector_search_total;
+        metrics.vector_hit_total = runtime_snapshot.vector_hit_total;
+        metrics.vector_store_total = runtime_snapshot.vector_store_total;
+        metrics.summary_read_total = runtime_snapshot.summary_read_total;
+        metrics.summary_hit_total = runtime_snapshot.summary_hit_total;
+        metrics.summary_store_total = runtime_snapshot.summary_store_total;
         metrics.review_gate_total = runtime_snapshot.review_gate_total;
         metrics.review_gate_approved_total = runtime_snapshot.review_gate_approved_total;
         metrics.review_gate_rejected_total = runtime_snapshot.review_gate_rejected_total;

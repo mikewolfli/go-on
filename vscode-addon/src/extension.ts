@@ -1361,6 +1361,194 @@ export function activate(context: vscode.ExtensionContext) {
         return await updateRulesMarkdownFiles(context, payload);
     });
 
+    // autotune.get — retrieve current autotune parameters
+    let autotuneGetRpcCommand = vscode.commands.registerCommand('go-on.autotuneGet', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('autotune.get');
+            vscode.window.showInformationMessage(`autotune.get: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`autotune.get failed: ${error.message}`);
+        }
+    });
+
+    // autotune.reset — reset autotune learning state
+    let autotuneResetRpcCommand = vscode.commands.registerCommand('go-on.autotuneReset', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        const confirm = await vscode.window.showWarningMessage(
+            'Reset autotune state? This will clear learned parameters.',
+            'Reset', 'Cancel'
+        );
+        if (confirm !== 'Reset') { return; }
+        try {
+            const result = await goOnManager.sendRequest('autotune.reset', {});
+            vscode.window.showInformationMessage(`autotune.reset: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`autotune.reset failed: ${error.message}`);
+        }
+    });
+
+    // metrics.get — retrieve runtime metrics snapshot
+    let metricsGetRpcCommand = vscode.commands.registerCommand('go-on.metricsGet', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('metrics.get');
+            vscode.window.showInformationMessage(`metrics: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`metrics.get failed: ${error.message}`);
+        }
+    });
+
+    // metrics.reset — reset runtime metric counters
+    let metricsResetRpcCommand = vscode.commands.registerCommand('go-on.metricsReset', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        const confirm = await vscode.window.showWarningMessage(
+            'Reset all runtime metric counters?',
+            'Reset', 'Cancel'
+        );
+        if (confirm !== 'Reset') { return; }
+        try {
+            await goOnManager.sendRequest('metrics.reset');
+            vscode.window.showInformationMessage('Metrics reset.');
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`metrics.reset failed: ${error.message}`);
+        }
+    });
+
+    // trace.metrics — aggregated trace timing metrics
+    let traceMetricsRpcCommand = vscode.commands.registerCommand('go-on.traceMetrics', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('trace.metrics');
+            vscode.window.showInformationMessage(`trace.metrics: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`trace.metrics failed: ${error.message}`);
+        }
+    });
+
+    // trace.get — fetch recent trace events
+    let traceGetRpcCommand = vscode.commands.registerCommand('go-on.traceGet', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('trace.get', {});
+            vscode.window.showInformationMessage(`trace.get: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`trace.get failed: ${error.message}`);
+        }
+    });
+
+    // breaker.reset — reset circuit breaker for a specific agent
+    let breakerResetRpcCommand = vscode.commands.registerCommand('go-on.breakerReset', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        const agent = await vscode.window.showInputBox({
+            prompt: 'Agent name to reset circuit breaker for',
+            placeHolder: 'e.g. copilot, deepseek, gemini'
+        });
+        if (!agent) { return; }
+        try {
+            const result = await goOnManager.sendRequest('breaker.reset', { agent });
+            vscode.window.showInformationMessage(`breaker.reset: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`breaker.reset failed: ${error.message}`);
+        }
+    });
+
+    // maintenance.gc — trigger in-process garbage collection
+    let maintenanceGcRpcCommand = vscode.commands.registerCommand('go-on.maintenanceGc', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            await goOnManager.sendRequest('maintenance.gc');
+            vscode.window.showInformationMessage('Maintenance GC completed.');
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`maintenance.gc failed: ${error.message}`);
+        }
+    });
+
+    // conversation.checkpoint.create — create a conversation checkpoint
+    let checkpointCreateRpcCommand = vscode.commands.registerCommand('go-on.checkpointCreate', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('conversation.checkpoint.create', {});
+            vscode.window.showInformationMessage(`Checkpoint created: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`checkpoint.create failed: ${error.message}`);
+        }
+    });
+
+    // conversation.checkpoint.list — list conversation checkpoints
+    let checkpointListRpcCommand = vscode.commands.registerCommand('go-on.checkpointList', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('conversation.checkpoint.list', {});
+            vscode.window.showInformationMessage(`Checkpoints: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`checkpoint.list failed: ${error.message}`);
+        }
+    });
+
+    // conversation.rollback — roll back conversation to a checkpoint
+    let conversationRollbackRpcCommand = vscode.commands.registerCommand('go-on.conversationRollback', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        const checkpointId = await vscode.window.showInputBox({
+            prompt: 'Checkpoint ID to roll back to',
+            placeHolder: 'e.g. ckpt-001'
+        });
+        if (!checkpointId) { return; }
+        try {
+            const result = await goOnManager.sendRequest('conversation.rollback', { checkpoint_id: checkpointId });
+            vscode.window.showInformationMessage(`Rolled back: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`conversation.rollback failed: ${error.message}`);
+        }
+    });
+
+    // primary_secondary.summary — get primary/secondary agent execution summary
+    let primarySecondarySummaryRpcCommand = vscode.commands.registerCommand('go-on.primarySecondarySummary', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('primary_secondary.summary', {});
+            vscode.window.showInformationMessage(`primary_secondary.summary: ${JSON.stringify(result)}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`primary_secondary.summary failed: ${error.message}`);
+        }
+    });
+
     // Runtime download/start is intentionally deferred until the Chat view is opened.
 
     context.subscriptions.push(
@@ -1395,7 +1583,19 @@ export function activate(context: vscode.ExtensionContext) {
         keyringListCommand,
         applyDefaultConfigCommand,
         updateWorkflowMappingCommand,
-        updateRulesCommand
+        updateRulesCommand,
+        autotuneGetRpcCommand,
+        autotuneResetRpcCommand,
+        metricsGetRpcCommand,
+        metricsResetRpcCommand,
+        traceMetricsRpcCommand,
+        traceGetRpcCommand,
+        breakerResetRpcCommand,
+        maintenanceGcRpcCommand,
+        checkpointCreateRpcCommand,
+        checkpointListRpcCommand,
+        conversationRollbackRpcCommand,
+        primarySecondarySummaryRpcCommand
     );
 
     // Guarantee chat visibility even when the activity bar icon is hidden by layout settings.

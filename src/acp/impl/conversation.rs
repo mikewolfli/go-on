@@ -5,8 +5,8 @@
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
-use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -15,8 +15,6 @@ use crate::acp::prelude::ConversationCheckpoint;
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
 
-/// Maximum number of conversations to track in memory
-const MAX_CONVERSATIONS_TRACKED: usize = 1000;
 /// Maximum characters allowed in checkpoint messages
 const MAX_CHECKPOINT_MESSAGE_CHARS: usize = 100_000;
 
@@ -30,37 +28,21 @@ pub async fn create_conversation_checkpoint(
     note: Option<String>,
     branch: Option<String>,
 ) -> Result<ConversationCheckpoint> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-
-    let checkpoint = ConversationCheckpoint {
-        checkpoint_id: format!("{}-{}", conversation_id, timestamp),
-        conversation_id: conversation_id.to_string(),
-        branch_id: branch.unwrap_or_else(|| "main".to_string()),
-        parent_checkpoint_id: None,
-        created_at: timestamp,
-        note,
-        messages: vec![message.clone()],
-    };
-
-    // Store checkpoint in conversation state
-    let mut state = server.conversation_state.lock().await;
-    state.checkpoints.push(checkpoint.clone());
-
-    // Limit number of checkpoints
-    if state.checkpoints.len() > MAX_CONVERSATIONS_TRACKED {
-        state.checkpoints.remove(0);
+    if message.content.chars().count() > MAX_CHECKPOINT_MESSAGE_CHARS {
+        anyhow::bail!("checkpoint message exceeds maximum supported size");
     }
 
-    // Update last touched timestamp
-    state.last_touched_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-
-    Ok(checkpoint)
+    Ok(
+        crate::acp::r#impl::request::create_checkpoint_record(
+            server,
+            conversation_id,
+            branch.as_deref().unwrap_or("main"),
+            vec![message.clone()],
+            note,
+            None,
+        )
+        .await,
+    )
 }
 
 /// Get conversation state

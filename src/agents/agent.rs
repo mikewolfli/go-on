@@ -269,6 +269,10 @@ impl AgentRegistry {
         self.agents.get(name).cloned()
     }
 
+    pub fn register_arc(&mut self, name: impl Into<String>, agent: Arc<dyn Agent>) {
+        self.agents.insert(name.into(), agent);
+    }
+
     pub fn names(&self) -> Vec<String> {
         let mut names = self.agents.keys().cloned().collect::<Vec<_>>();
         names.sort();

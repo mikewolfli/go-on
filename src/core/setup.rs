@@ -19,6 +19,16 @@ const AI_PROVIDERS: &[(&str, &[&str])] = &[
     ("deepseek", &["DEEPSEEK_API_KEY"]),
     ("wenxin", &["WENXIN_API_KEY", "WENXIN_SECRET_KEY"]),
     ("doubao", &["DOUBAO_API_KEY"]),
+    ("gemini", &["GEMINI_API_KEY"]),
+    ("groq", &["GROQ_API_KEY"]),
+    ("mistral", &["MISTRAL_API_KEY"]),
+    ("minimax", &["MINIMAX_API_KEY"]),
+    ("glm", &["GLM_API_KEY"]),
+    ("yi", &["YI_API_KEY"]),
+    ("moonshot", &["MOONSHOT_API_KEY"]),
+    ("qianfan", &["QIANFAN_API_KEY", "QIANFAN_SECRET_KEY"]),
+    ("qwen", &["QWEN_API_KEY", "QWEN_SECRET_KEY"]),
+    ("hunyuan", &["HUNYUAN_API_KEY", "HUNYUAN_SECRET_KEY"]),
     ("copilot", &[]), // 本地运行，不需要API密钥
 ];
 
@@ -30,6 +40,19 @@ const SECRET_TARGETS: &[(&str, &str, &str)] = &[
     ("wenxin_secret_key", "go-on", "wenxin_secret_key"),
     ("anthropic_api_key", "go-on", "anthropic_api_key"),
     ("doubao_api_key", "go-on", "doubao_api_key"),
+    ("gemini_api_key", "go-on", "gemini_api_key"),
+    ("groq_api_key", "go-on", "groq_api_key"),
+    ("mistral_api_key", "go-on", "mistral_api_key"),
+    ("minimax_api_key", "go-on", "minimax_api_key"),
+    ("glm_api_key", "go-on", "glm_api_key"),
+    ("yi_api_key", "go-on", "yi_api_key"),
+    ("moonshot_api_key", "go-on", "moonshot_api_key"),
+    ("qianfan_api_key", "go-on", "qianfan_api_key"),
+    ("qianfan_secret_key", "go-on", "qianfan_secret_key"),
+    ("qwen_api_key", "go-on", "qwen_api_key"),
+    ("qwen_secret_key", "go-on", "qwen_secret_key"),
+    ("hunyuan_api_key", "go-on", "hunyuan_api_key"),
+    ("hunyuan_secret_key", "go-on", "hunyuan_secret_key"),
     (
         "openai_compatible_api_key",
         "go-on",
@@ -407,6 +430,19 @@ fn keyring_target_for_env(env_name: &str) -> Option<(&'static str, &'static str)
         "WENXIN_SECRET_KEY" => Some(("go-on", "wenxin_secret_key")),
         "ANTHROPIC_API_KEY" => Some(("go-on", "anthropic_api_key")),
         "DOUBAO_API_KEY" => Some(("go-on", "doubao_api_key")),
+        "GEMINI_API_KEY" => Some(("go-on", "gemini_api_key")),
+        "GROQ_API_KEY" => Some(("go-on", "groq_api_key")),
+        "MISTRAL_API_KEY" => Some(("go-on", "mistral_api_key")),
+        "MINIMAX_API_KEY" => Some(("go-on", "minimax_api_key")),
+        "GLM_API_KEY" => Some(("go-on", "glm_api_key")),
+        "YI_API_KEY" => Some(("go-on", "yi_api_key")),
+        "MOONSHOT_API_KEY" => Some(("go-on", "moonshot_api_key")),
+        "QIANFAN_API_KEY" => Some(("go-on", "qianfan_api_key")),
+        "QIANFAN_SECRET_KEY" => Some(("go-on", "qianfan_secret_key")),
+        "QWEN_API_KEY" => Some(("go-on", "qwen_api_key")),
+        "QWEN_SECRET_KEY" => Some(("go-on", "qwen_secret_key")),
+        "HUNYUAN_API_KEY" => Some(("go-on", "hunyuan_api_key")),
+        "HUNYUAN_SECRET_KEY" => Some(("go-on", "hunyuan_secret_key")),
         "OPENAI_API_KEY" => Some(("go-on", "openai_compatible_api_key")),
         _ => None,
     }
@@ -546,6 +582,69 @@ fn append_agent_block(content: &mut String, provider: &str, secret_mode: &Secret
                 secret_reference("DOUBAO_API_KEY", secret_mode)
             ));
         }
+        "gemini" => {
+            content.push_str(&format!(
+                "[agents.gemini]\ntype = \"gemini\"\nurl = \"https://generativelanguage.googleapis.com/v1beta\"\napi_key_env = \"{}\"\nmodel = \"gemini-2.0-flash\"\n\n",
+                secret_reference("GEMINI_API_KEY", secret_mode)
+            ));
+        }
+        "groq" => {
+            content.push_str(&format!(
+                "[agents.groq]\ntype = \"groq\"\nurl = \"https://api.groq.com/openai/v1\"\napi_key_env = \"{}\"\nmodel = \"llama-3.3-70b-versatile\"\n\n",
+                secret_reference("GROQ_API_KEY", secret_mode)
+            ));
+        }
+        "mistral" => {
+            content.push_str(&format!(
+                "[agents.mistral]\ntype = \"mistral\"\nurl = \"https://api.mistral.ai/v1\"\napi_key_env = \"{}\"\nmodel = \"mistral-small-latest\"\n\n",
+                secret_reference("MISTRAL_API_KEY", secret_mode)
+            ));
+        }
+        "minimax" => {
+            content.push_str(&format!(
+                "[agents.minimax]\ntype = \"minimax\"\nurl = \"https://api.minimax.chat/v1\"\napi_key_env = \"{}\"\nmodel = \"MiniMax-Text-01\"\n\n",
+                secret_reference("MINIMAX_API_KEY", secret_mode)
+            ));
+        }
+        "glm" => {
+            content.push_str(&format!(
+                "[agents.glm]\ntype = \"glm\"\nurl = \"https://open.bigmodel.cn/api/paas/v4\"\napi_key_env = \"{}\"\nmodel = \"glm-4-flash\"\n\n",
+                secret_reference("GLM_API_KEY", secret_mode)
+            ));
+        }
+        "yi" => {
+            content.push_str(&format!(
+                "[agents.yi]\ntype = \"yi\"\nurl = \"https://api.lingyiwanwu.com/v1\"\napi_key_env = \"{}\"\nmodel = \"yi-lightning\"\n\n",
+                secret_reference("YI_API_KEY", secret_mode)
+            ));
+        }
+        "moonshot" => {
+            content.push_str(&format!(
+                "[agents.moonshot]\ntype = \"moonshot\"\nurl = \"https://api.moonshot.cn/v1\"\napi_key_env = \"{}\"\nmodel = \"moonshot-v1-8k\"\n\n",
+                secret_reference("MOONSHOT_API_KEY", secret_mode)
+            ));
+        }
+        "qianfan" => {
+            content.push_str(&format!(
+                "[agents.qianfan]\ntype = \"qianfan\"\napi_key_env = \"{}\"\nsecret_key_env = \"{}\"\nmodel = \"ERNIE-Bot\"\n\n",
+                secret_reference("QIANFAN_API_KEY", secret_mode),
+                secret_reference("QIANFAN_SECRET_KEY", secret_mode)
+            ));
+        }
+        "qwen" => {
+            content.push_str(&format!(
+                "[agents.qwen]\ntype = \"qwen\"\napi_key_env = \"{}\"\nsecret_key_env = \"{}\"\n\n",
+                secret_reference("QWEN_API_KEY", secret_mode),
+                secret_reference("QWEN_SECRET_KEY", secret_mode)
+            ));
+        }
+        "hunyuan" => {
+            content.push_str(&format!(
+                "[agents.hunyuan]\ntype = \"hunyuan\"\nurl = \"https://hunyuan.tencentcloudapi.com\"\napi_key_env = \"{}\"\nsecret_key_env = \"{}\"\nmodel = \"hunyuan-turbo\"\n\n",
+                secret_reference("HUNYUAN_API_KEY", secret_mode),
+                secret_reference("HUNYUAN_SECRET_KEY", secret_mode)
+            ));
+        }
         _ => {}
     }
 }
@@ -600,6 +699,19 @@ fn convert_env_placeholders_to_keyring(content: &str) -> String {
         ("WENXIN_SECRET_KEY", "keyring://go-on/wenxin_secret_key"),
         ("ANTHROPIC_API_KEY", "keyring://go-on/anthropic_api_key"),
         ("DOUBAO_API_KEY", "keyring://go-on/doubao_api_key"),
+        ("GEMINI_API_KEY", "keyring://go-on/gemini_api_key"),
+        ("GROQ_API_KEY", "keyring://go-on/groq_api_key"),
+        ("MISTRAL_API_KEY", "keyring://go-on/mistral_api_key"),
+        ("MINIMAX_API_KEY", "keyring://go-on/minimax_api_key"),
+        ("GLM_API_KEY", "keyring://go-on/glm_api_key"),
+        ("YI_API_KEY", "keyring://go-on/yi_api_key"),
+        ("MOONSHOT_API_KEY", "keyring://go-on/moonshot_api_key"),
+        ("QIANFAN_API_KEY", "keyring://go-on/qianfan_api_key"),
+        ("QIANFAN_SECRET_KEY", "keyring://go-on/qianfan_secret_key"),
+        ("QWEN_API_KEY", "keyring://go-on/qwen_api_key"),
+        ("QWEN_SECRET_KEY", "keyring://go-on/qwen_secret_key"),
+        ("HUNYUAN_API_KEY", "keyring://go-on/hunyuan_api_key"),
+        ("HUNYUAN_SECRET_KEY", "keyring://go-on/hunyuan_secret_key"),
         (
             "OTHER_PROVIDER_API_KEY",
             "keyring://go-on/openai_compatible_api_key",

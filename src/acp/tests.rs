@@ -4,7 +4,7 @@
 //! It's only compiled when running tests.
 
 #[cfg(test)]
-mod tests {
+mod test_suite {
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -121,6 +121,7 @@ mod tests {
         let state = server.conversation_state.blocking_lock();
         assert_eq!(state.checkpoints.len(), 1);
         assert_eq!(state.checkpoints[0].checkpoint_id, checkpoint.checkpoint_id);
+        assert_eq!(state.branch_heads.get("conv-test:main"), Some(&checkpoint.checkpoint_id));
     }
 
     /// Test conversation state management
@@ -287,27 +288,6 @@ mod tests {
     /// Test evicting oldest conversation
     #[test]
     fn test_evict_oldest_conversation() {
-        use crate::acp::helpers::conversation::ConversationState as HelperConversationState;
-
-        let mut store = std::collections::HashMap::new();
-        store.insert(
-            "conv1".to_string(),
-            HelperConversationState {
-                conversation_id: "conv1".to_string(),
-                checkpoints: Vec::new(),
-                branch_heads: HashMap::new(),
-                last_touched_at: 0,
-            },
-        );
-        store.insert(
-            "conv2".to_string(),
-            HelperConversationState {
-                conversation_id: "conv2".to_string(),
-                checkpoints: Vec::new(),
-                branch_heads: HashMap::new(),
-                last_touched_at: 1,
-            },
-        );
         let mut store = std::collections::HashMap::new();
         store.insert(
             "conv1".to_string(),
@@ -327,9 +307,9 @@ mod tests {
         use crate::acp::prelude::evict_oldest_conversation;
         let evicted = evict_oldest_conversation(&mut store, &order);
 
-        assert_eq!(evicted, Some("conv1".to_string()));
+        assert_eq!(evicted, Some("conv2".to_string()));
         assert_eq!(store.len(), 1);
-        assert!(store.contains_key("conv2"));
+        assert!(store.contains_key("conv1"));
     }
 
     /// Test timestamp utilities

@@ -222,6 +222,29 @@ pub struct WorkflowLearningBusArtifact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeInsightArtifact {
+    pub generated_at: i64,
+    pub conversation_id: String,
+    pub branch_id: String,
+    pub phase: String,
+    pub task: String,
+    pub agent: String,
+    pub source: String,
+    pub request_excerpt: String,
+    pub response_excerpt: String,
+    pub reusable_insights: Vec<String>,
+    pub verification_steps: Vec<String>,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeBusArtifact {
+    pub generated_at: i64,
+    pub total_events: usize,
+    pub events: Vec<KnowledgeInsightArtifact>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowOptimizationPolicyArtifact {
     pub generated_at: i64,
     pub task: String,
@@ -771,6 +794,66 @@ pub fn persist_workflow_learning_event(
     existing.total_events = existing.events.len();
 
     ledger.write_json("spec", "latest-learning.json", &existing)
+}
+
+pub fn persist_knowledge_insight_event(
+    ledger: &ArtifactLedger,
+    event: KnowledgeInsightArtifact,
+    max_events: usize,
+) -> Result<PathBuf> {
+    ledger.ensure_ready()?;
+
+    let max_events = max_events.max(1);
+    let latest_path = ledger.latest_path("spec", "latest-knowledge.json");
+    let mut existing = if latest_path.exists() {
+        fs::read_to_string(&latest_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<KnowledgeBusArtifact>(&raw).ok())
+            .unwrap_or(KnowledgeBusArtifact {
+                generated_at: now_ts(),
+                total_events: 0,
+                events: Vec::new(),
+            })
+    } else {
+        KnowledgeBusArtifact {
+            generated_at: now_ts(),
+            total_events: 0,
+            events: Vec::new(),
+        }
+    };
+
+    // Dedup + confidence arbitration:
+    // For events sharing (task, phase, agent), keep whichever has the higher confidence.
+    // If the incoming event has lower-or-equal confidence an existing entry for the same
+    // key, discard the incoming event (the existing knowledge is already at least as
+    // certain). If higher, replace the existing entry so the bus always holds the most
+    // confident conclusion per (task, phase, agent) combination.
+    let existing_pos = existing
+        .events
+        .iter()
+        .position(|e| e.task == event.task && e.phase == event.phase && e.agent == event.agent);
+    match existing_pos {
+        Some(idx) if existing.events[idx].confidence >= event.confidence => {
+            // Existing entry is at least as confident — no change needed.
+        }
+        Some(idx) => {
+            // Incoming event supersedes the existing one.
+            existing.events[idx] = event;
+        }
+        None => {
+            // No duplicate — append normally.
+            existing.events.push(event);
+            if existing.events.len() > max_events {
+                let overflow = existing.events.len() - max_events;
+                existing.events.drain(0..overflow);
+            }
+        }
+    }
+
+    existing.generated_at = now_ts();
+    existing.total_events = existing.events.len();
+
+    ledger.write_json("spec", "latest-knowledge.json", &existing)
 }
 
 pub fn persist_workflow_optimization_policy(
@@ -1722,5 +1805,102 @@ fallback = true
             .latest_path("retest", "latest-action-check.json")
             .exists());
         assert!(ledger.latest_path("final", "latest-summary.json").exists());
+    }
+
+    #[test]
+    fn knowledge_bus_dedup_discards_lower_confidence_event() {
+        let temp = tempdir().expect("tempdir should be created");
+        let config_path = temp.path().join("config.toml");
+        let ledger = ArtifactLedger::new(Some(&config_path));
+
+        let high = KnowledgeInsightArtifact {
+            generated_at: now_ts(),
+            conversation_id: "c1".to_string(),
+            branch_id: "main".to_string(),
+            phase: "coding".to_string(),
+            task: "fix-bug".to_string(),
+            agent: "copilot".to_string(),
+            source: "test".to_string(),
+            request_excerpt: "req".to_string(),
+            response_excerpt: "resp-high".to_string(),
+            reusable_insights: vec!["insight-high".to_string()],
+            verification_steps: vec![],
+            confidence: 0.9,
+        };
+        persist_knowledge_insight_event(&ledger, high, 100)
+            .expect("high-confidence event should persist");
+
+        let low = KnowledgeInsightArtifact {
+            generated_at: now_ts(),
+            conversation_id: "c2".to_string(),
+            branch_id: "main".to_string(),
+            phase: "coding".to_string(),
+            task: "fix-bug".to_string(),
+            agent: "copilot".to_string(),
+            source: "test".to_string(),
+            request_excerpt: "req".to_string(),
+            response_excerpt: "resp-low".to_string(),
+            reusable_insights: vec!["insight-low".to_string()],
+            verification_steps: vec![],
+            confidence: 0.4,
+        };
+        persist_knowledge_insight_event(&ledger, low, 100)
+            .expect("low-confidence event should persist without error");
+
+        let path = ledger.latest_path("spec", "latest-knowledge.json");
+        let raw = fs::read_to_string(&path).expect("knowledge file should exist");
+        let bus: KnowledgeBusArtifact =
+            serde_json::from_str(&raw).expect("should deserialize knowledge bus");
+        // Bus should have exactly 1 event and it must be the high-confidence one.
+        assert_eq!(bus.events.len(), 1);
+        assert!((bus.events[0].confidence - 0.9).abs() < f64::EPSILON);
+        assert!(bus.events[0].reusable_insights.contains(&"insight-high".to_string()));
+    }
+
+    #[test]
+    fn knowledge_bus_dedup_replaces_with_higher_confidence_event() {
+        let temp = tempdir().expect("tempdir should be created");
+        let config_path = temp.path().join("config.toml");
+        let ledger = ArtifactLedger::new(Some(&config_path));
+
+        let low = KnowledgeInsightArtifact {
+            generated_at: now_ts(),
+            conversation_id: "c1".to_string(),
+            branch_id: "main".to_string(),
+            phase: "coding".to_string(),
+            task: "refactor".to_string(),
+            agent: "copilot".to_string(),
+            source: "test".to_string(),
+            request_excerpt: "req".to_string(),
+            response_excerpt: "resp-old".to_string(),
+            reusable_insights: vec!["old-insight".to_string()],
+            verification_steps: vec![],
+            confidence: 0.5,
+        };
+        persist_knowledge_insight_event(&ledger, low, 100).expect("low event should persist");
+
+        let high = KnowledgeInsightArtifact {
+            generated_at: now_ts(),
+            conversation_id: "c2".to_string(),
+            branch_id: "main".to_string(),
+            phase: "coding".to_string(),
+            task: "refactor".to_string(),
+            agent: "copilot".to_string(),
+            source: "test".to_string(),
+            request_excerpt: "req".to_string(),
+            response_excerpt: "resp-new".to_string(),
+            reusable_insights: vec!["new-insight".to_string()],
+            verification_steps: vec![],
+            confidence: 0.95,
+        };
+        persist_knowledge_insight_event(&ledger, high, 100).expect("high event should persist");
+
+        let path = ledger.latest_path("spec", "latest-knowledge.json");
+        let raw = fs::read_to_string(&path).expect("knowledge file should exist");
+        let bus: KnowledgeBusArtifact =
+            serde_json::from_str(&raw).expect("should deserialize knowledge bus");
+        assert_eq!(bus.events.len(), 1);
+        assert!((bus.events[0].confidence - 0.95).abs() < f64::EPSILON);
+        assert!(bus.events[0].reusable_insights.contains(&"new-insight".to_string()));
     }
 }

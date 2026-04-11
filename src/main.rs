@@ -112,7 +112,7 @@ use anyhow::Result;
 use clap::Parser;
 use tracing::{error, info, warn};
 
-use crate::acp::r#impl::{new_acp_server, run_acp_server};
+use crate::acp::r#impl::{new_acp_server, run_acp_http_server, run_acp_server};
 use crate::agent::AgentRegistry;
 use crate::cache::ResponseCache;
 use crate::config::{
@@ -187,6 +187,10 @@ struct Cli {
     /// Build and persist a controlled task plan artifact for a complex task
     #[arg(long)]
     plan_task: Option<String>,
+
+    /// Bind ACP HTTP server and expose /health, /chat, and /chat/stream
+    #[arg(long)]
+    acp_http_bind: Option<String>,
 }
 
 /// Get the default configuration file path
@@ -627,6 +631,10 @@ async fn run() -> Result<()> {
         .runtime
         .clone()
         .unwrap_or_else(RuntimeConfig::default);
+    let acp_http_bind = cli
+        .acp_http_bind
+        .clone()
+        .or_else(|| runtime_config.acp_http_bind_addr.clone());
 
     // Create and run the ACP server
     let mut server = new_acp_server(
@@ -643,5 +651,9 @@ async fn run() -> Result<()> {
         Some(http_client),
         cli.verbose,
     );
-    run_acp_server(&mut server).await
+    if let Some(bind_addr) = acp_http_bind {
+        run_acp_http_server(Arc::new(server), bind_addr).await
+    } else {
+        run_acp_server(&mut server).await
+    }
 }
