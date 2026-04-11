@@ -10,7 +10,10 @@ go-on 是一个基于 Rust 的 ACP 运行时（包含 MCP 适配层能力），�
 - 默认编译配置：`local-acp-sqlite`
 - 可选配置特性：`server-mcp-postgres`（当前为能力预留）
 
+
 ## 当前源码结构
+
+所有主要实现代码均位于 `src/` 目录下：
 
 - `src/acp`：ACP 服务器、请求分发、聊天/审查/运行时/后台维护
 - `src/agents`：模型供应商适配器与统一代理接口
@@ -24,6 +27,13 @@ go-on 是一个基于 Rust 的 ACP 运行时（包含 MCP 适配层能力），�
 - `src/optimization`：成本/速度/可靠性/故障预防/工作流优化
 - `src/orchestration`：流程、模式、任务图、路由、工具编排
 - `src/protocol`：协议服务与 JSON-RPC 支持
+
+其他目录：
+
+- `test_i18n/`：i18n 集成测试
+- `tests/`：集成与场景测试
+
+项目根目录下无 core、agents 等同名目录，所有实现均在 src 下。
 
 ## 已实现 RPC 能力面
 

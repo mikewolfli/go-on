@@ -10,7 +10,10 @@ go-on is a Rust ACP runtime with MCP adapter capabilities, focused on agent orch
 - Default compile profile: `local-acp-sqlite`
 - Optional profile flag: `server-mcp-postgres` (feature scaffold)
 
+
 ## Current Source Structure
+
+All main implementation code is under the `src/` directory:
 
 - `src/acp`: ACP server, request dispatch, chat/review/runtime/background logic
 - `src/agents`: provider adapters and shared agent contract
@@ -24,6 +27,13 @@ go-on is a Rust ACP runtime with MCP adapter capabilities, focused on agent orch
 - `src/optimization`: cost/speed/reliability/failure-prevention/workflow optimizers
 - `src/orchestration`: flow, mode, task graph/router/decomposer/tool orchestration
 - `src/protocol`: protocol servers and JSON-RPC support
+
+Other directories:
+
+- `test_i18n/`: i18n integration tests
+- `tests/`: integration and scenario tests
+
+There are no top-level `core`, `agents`, etc. directories outside `src/`.
 
 ## Runtime RPC Surface (Implemented)
 
