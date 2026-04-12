@@ -39,6 +39,7 @@ FUTURE3 解决的是“能力形态升级”：从可用代理，演进到 OpenC
 | M3 | 引入任务图 TaskGraph（节点、依赖、重试、汇合、回滚） | `src/orchestration/graph/*` |
 | M4 | 建立统一工具协议 ToolRuntime（预算、权限、超时、幂等） | `src/orchestration/tool.rs`、`src/mcp/*` |
 | M5 | 角色化多代理协作协议（handoff schema + confidence + evidence） | `src/agents/*`、`src/orchestration/*` |
+|    | 【补充】角色体系将从IT/开发专用扩展为“通用工作角色”，支持如规划者、执行者、审核者、研究者、沟通者、决策者、支持者等跨行业角色，并允许通过配置动态扩展。handoff schema、委派与聚合机制需兼容任意行业/领域的角色协作。角色关键词与映射机制支持行业自定义，便于适配各类业务场景。 |
 | M6 | 审查系统升级为对抗式验证（静态检查 + 动态执行 + 证据裁决） | `src/intelligence/verification.rs`、`src/acp/impl/agent.rs` |
 | M7 | 记忆策略升级：transient/episodic/semantic/project-state/observation 全策略化 | `src/memory/*` |
 | M8 | 记忆漂移控制：相关性评分、陈旧检测、自动降级与清理 | `src/memory/*` |
