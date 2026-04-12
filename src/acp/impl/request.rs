@@ -329,7 +329,7 @@ async fn handle_initialize(server: &AcpServer, request_id: Option<Value>) -> Res
         request_id,
         json!({
             "name": "go-on",
-            "version": "0.4.1",
+            "version": "0.5.1",
             "protocol": "acp",
             "capabilities": {
                 "chat": true,
@@ -355,7 +355,7 @@ async fn handle_mcp_initialize(server: &AcpServer, request_id: Option<Value>) ->
             "capabilities": {},
             "serverInfo": {
                 "name": "go-on",
-                "version": "0.4.1"
+                "version": "0.5.1"
             }
         }),
     )
