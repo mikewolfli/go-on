@@ -395,7 +395,63 @@ fn print_runtime_status(config_path: &std::path::Path, report: &RuntimeHealthche
 struct StatusCompleteness {
     score: u32,
     missing: Vec<String>,
-    recommended: Vec<String>,
+    recommended: Vec<StatusRecommendation>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecommendationLevel {
+    Warning,
+    Info,
+}
+
+#[derive(Clone, Debug)]
+struct StatusRecommendation {
+    level: RecommendationLevel,
+    message: String,
+}
+
+impl StatusCompleteness {
+    fn push_warning(&mut self, message: String) {
+        self.recommended.push(StatusRecommendation {
+            level: RecommendationLevel::Warning,
+            message,
+        });
+    }
+
+    fn push_info(&mut self, message: String) {
+        self.recommended.push(StatusRecommendation {
+            level: RecommendationLevel::Info,
+            message,
+        });
+    }
+}
+
+fn inflight_recommendation(
+    field: &str,
+    expected: i64,
+    current: i64,
+) -> (RecommendationLevel, String) {
+    let delta = (expected - current).abs();
+    let ratio = if expected > 0 {
+        delta as f64 / expected as f64
+    } else {
+        0.0
+    };
+    let level = if ratio >= 0.25 {
+        RecommendationLevel::Warning
+    } else {
+        RecommendationLevel::Info
+    };
+    (
+        level,
+        format!(
+            "{} recommended={}, current={} (delta={:.0}%)",
+            field,
+            expected,
+            current,
+            ratio * 100.0
+        ),
+    )
 }
 
 fn build_completeness_report(
@@ -465,7 +521,7 @@ fn build_completeness_report(
             Some(timeout) if timeout == expected => score += 2.5,
             Some(timeout) => {
                 score += 1.5;
-                out.recommended.push(format!(
+                out.push_info(format!(
                     "phases.{}.options.request_timeout_seconds recommended={}, current={}",
                     phase_name, expected, timeout
                 ));
@@ -489,7 +545,7 @@ fn build_completeness_report(
         Some(timeout) if timeout == expected_review_timeout => score += 5.0,
         Some(timeout) => {
             score += 2.5;
-            out.recommended.push(format!(
+            out.push_info(format!(
                 "phases.coding.options.review_timeout_seconds recommended={}, current={}",
                 expected_review_timeout, timeout
             ));
@@ -528,10 +584,15 @@ fn build_completeness_report(
         Some(value) if value == expected_phase_inflight => score += 2.5,
         Some(value) => {
             score += 1.5;
-            out.recommended.push(format!(
-                "phases.coding.options.phase_max_inflight recommended={}, current={}",
-                expected_phase_inflight, value
-            ));
+            let (level, message) = inflight_recommendation(
+                "phases.coding.options.phase_max_inflight",
+                expected_phase_inflight,
+                value,
+            );
+            match level {
+                RecommendationLevel::Warning => out.push_warning(message),
+                RecommendationLevel::Info => out.push_info(message),
+            }
         }
         None => out
             .missing
@@ -542,10 +603,15 @@ fn build_completeness_report(
         Some(value) if value == expected_global_inflight => score += 2.5,
         Some(value) => {
             score += 1.5;
-            out.recommended.push(format!(
-                "phases.coding.options.global_max_inflight recommended={}, current={}",
-                expected_global_inflight, value
-            ));
+            let (level, message) = inflight_recommendation(
+                "phases.coding.options.global_max_inflight",
+                expected_global_inflight,
+                value,
+            );
+            match level {
+                RecommendationLevel::Warning => out.push_warning(message),
+                RecommendationLevel::Info => out.push_info(message),
+            }
         }
         None => out
             .missing
@@ -560,8 +626,7 @@ fn build_completeness_report(
     if cache_enabled == recommended_cache {
         score += 5.0;
     } else {
-        out.recommended
-            .push(format!("cache.enabled={} recommended", recommended_cache));
+        out.push_info(format!("cache.enabled={} recommended", recommended_cache));
     }
 
     let recommended_vector = provider_recommendation
@@ -582,15 +647,13 @@ fn build_completeness_report(
         if vector_enabled == recommended_vector {
             score += 5.0;
         } else {
-            out.recommended
-                .push(format!("vector.enabled={} recommended", recommended_vector));
+            out.push_info(format!("vector.enabled={} recommended", recommended_vector));
         }
     } else {
         if !recommended_vector {
             score += 5.0;
         } else {
-            out.recommended
-                .push(format!("vector.enabled={} recommended", recommended_vector));
+            out.push_info(format!("vector.enabled={} recommended", recommended_vector));
         }
     }
 
@@ -656,7 +719,11 @@ fn print_completeness_report(config: &crate::config::AppConfig, report: &Runtime
     if !completeness.recommended.is_empty() {
         println!("{}", tf("status.recommended_title", &[]));
         for item in completeness.recommended {
-            println!("- {}", item);
+            let level = match item.level {
+                RecommendationLevel::Warning => "warning",
+                RecommendationLevel::Info => "info",
+            };
+            println!("- [{}] {}", level, item.message);
         }
     }
 }
@@ -1215,7 +1282,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::build_completeness_report;
+    use super::{build_completeness_report, RecommendationLevel};
     use crate::config::{
         AgentConfig, AppConfig, CacheConfig, FlowConfig, PhaseConfig, PhaseOptions, RuntimeConfig,
         VectorConfig,
@@ -1366,11 +1433,19 @@ mod tests {
         assert!(report
             .recommended
             .iter()
-            .any(|item| item.contains("phases.coding.options.phase_max_inflight recommended=")));
+            .any(|item| item
+                .message
+                .contains("phases.coding.options.phase_max_inflight recommended=")));
         assert!(report
             .recommended
             .iter()
-            .any(|item| item.contains("phases.coding.options.global_max_inflight recommended=")));
+            .any(|item| item.level == RecommendationLevel::Warning));
+        assert!(report
+            .recommended
+            .iter()
+            .any(|item| item
+                .message
+                .contains("phases.coding.options.global_max_inflight recommended=")));
     }
 
     #[test]
