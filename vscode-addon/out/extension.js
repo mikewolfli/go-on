@@ -25,6 +25,7 @@ class GoOnManager {
         this.pendingRequests = new Map();
         this.statusItems = [];
         this.runtimeEnvOverrides = {};
+        this.lastWizardPromptAt = 0;
         this.updateStatus();
     }
     async start(configPath, executablePath, cwd) {
@@ -124,9 +125,16 @@ class GoOnManager {
             ...overrides
         };
     }
-    async sendRequest(method, params) {
+    async sendRequest(method, params, options) {
         if (!this.process) {
             throw new Error('Go-On is not running');
+        }
+        if (!options?.skipProviderGuard && this.requiresAiProvider(method)) {
+            const ready = await this.isAnyAiProviderReady();
+            if (!ready) {
+                await this.notifyAndOpenSetupWizard();
+                throw new Error('No runtime-ready AI provider configured. Setup wizard opened.');
+            }
         }
         const id = ++this.requestId;
         const request = {
@@ -147,6 +155,56 @@ class GoOnManager {
                 }
             }, 30000);
         });
+    }
+    requiresAiProvider(method) {
+        return new Set([
+            'chat',
+            'workflow.execute',
+            'task.plan',
+            'task.execute',
+            'learning.summary',
+            'primary_secondary.summary'
+        ]).has(method);
+    }
+    async isAnyAiProviderReady() {
+        const now = Date.now();
+        if (this.providerReadyCache && now - this.providerReadyCache.checkedAt < 5000) {
+            return this.providerReadyCache.ready;
+        }
+        try {
+            const report = await this.sendRequest('runtime.health', undefined, {
+                skipProviderGuard: true,
+            });
+            const components = Array.isArray(report?.components)
+                ? report.components
+                : Array.isArray(report?.report?.components)
+                    ? report.report.components
+                    : [];
+            const providerComponent = components.find((component) => component?.name === 'provider_dependencies');
+            if (!providerComponent) {
+                this.providerReadyCache = { checkedAt: now, ready: true };
+                return true;
+            }
+            const ready = Number(providerComponent?.details?.ready ?? 0);
+            const total = Number(providerComponent?.details?.total ?? 0);
+            const isReady = total > 0 && ready > 0;
+            this.providerReadyCache = { checkedAt: now, ready: isReady };
+            return isReady;
+        }
+        catch {
+            // Do not hard-block on guard probe failures.
+            this.providerReadyCache = { checkedAt: now, ready: true };
+            return true;
+        }
+    }
+    async notifyAndOpenSetupWizard() {
+        const now = Date.now();
+        if (now - this.lastWizardPromptAt < 5000) {
+            return;
+        }
+        this.lastWizardPromptAt = now;
+        await vscode.window.showWarningMessage('No runtime-ready AI provider is configured. Opening Go-On setup wizard now.');
+        await vscode.commands.executeCommand('go-on.openSettings');
     }
     updateStatus() {
         this.statusItems = [
