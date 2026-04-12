@@ -3,7 +3,78 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
-# 可执行文件名假定为 go-on
-./go-on --port 8090 > go-on.log 2>&1 &
-echo $! > go-on.pid
-echo "go-on 已启动，监听端口 8090，日志写入 go-on.log，PID: $(cat go-on.pid)"
+# go-on 进程管理脚本
+ACTION=${1:-start}
+GOON_BIN="./go-on"
+PID_FILE="go-on.pid"
+LOG_FILE="go-on.log"
+
+status() {
+	if [ -f "$PID_FILE" ]; then
+		PID=$(cat "$PID_FILE")
+		if kill -0 $PID 2>/dev/null; then
+			echo "go-on 正在运行 (PID: $PID)"
+			return 0
+		else
+			echo "go-on 进程不存在 (PID: $PID)，清理 pid 文件"
+			rm -f "$PID_FILE"
+			return 1
+		fi
+	else
+		echo "go-on 未运行"
+		return 1
+	fi
+}
+
+stop() {
+	if [ -f "$PID_FILE" ]; then
+		PID=$(cat "$PID_FILE")
+		if kill -0 $PID 2>/dev/null; then
+			kill $PID
+			echo "go-on 已停止 (PID: $PID)"
+			rm -f "$PID_FILE"
+			return 0
+		else
+			echo "go-on 进程不存在 (PID: $PID)，清理 pid 文件"
+			rm -f "$PID_FILE"
+			return 1
+		fi
+	else
+		echo "go-on 未运行，无需停止"
+		return 1
+	fi
+}
+
+start() {
+	status >/dev/null 2>&1 && {
+		echo "go-on 已在运行，无需重复启动"; return 0;
+	}
+	nohup "$GOON_BIN" > "$LOG_FILE" 2>&1 &
+	echo $! > "$PID_FILE"
+	echo "go-on 已启动，日志写入 $LOG_FILE，PID: $(cat $PID_FILE)"
+}
+
+restart() {
+	stop
+	sleep 1
+	start
+}
+
+case "$ACTION" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	restart)
+		restart
+		;;
+	status)
+		status
+		;;
+	*)
+		echo "用法: $0 {start|stop|restart|status}"
+		exit 1
+		;;
+esac

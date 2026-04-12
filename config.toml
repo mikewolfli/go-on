@@ -52,7 +52,6 @@ summary_trigger_max = 20
 [agents.copilot]
 type = "copilot"
 url = "http://127.0.0.1:8080"
-model = "gpt-4o-mini"
 
 [agents.deepseek]
 type = "deepseek"
@@ -63,7 +62,6 @@ model = "deepseek-chat"
 type = "wenxin"
 api_key_env = "WENXIN_API_KEY"
 secret_key_env = "WENXIN_SECRET_KEY"
-model = "ERNIE-Bot"
 
 [flow]
 name = "Autopilot Adaptive"
