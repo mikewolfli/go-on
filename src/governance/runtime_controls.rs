@@ -4,12 +4,44 @@ const ONLINE_CONTROLLER_WINDOW: usize = 64;
 const ONLINE_CONTROLLER_FAILURE_ESCALATION: f64 = 0.25;
 const ONLINE_CONTROLLER_P95_LATENCY_MS_ESCALATION: u64 = 15_000;
 const ONLINE_CONTROLLER_MIN_AGENT_SAMPLES: u64 = 3;
+const ONLINE_CONTROLLER_BANDIT_EXPLORATION: f64 = 1.4;
 
 #[derive(Debug, Default, Clone)]
 struct AgentSignalWindow {
     recent_failures: VecDeque<bool>,
     recent_latency_ms: VecDeque<u64>,
     attempts: u64,
+}
+
+#[derive(Debug, Default, Clone)]
+struct PhaseBanditArm {
+    pulls: u64,
+    reward_sum: f64,
+}
+
+impl PhaseBanditArm {
+    fn update(&mut self, reward: f64) {
+        self.pulls = self.pulls.saturating_add(1);
+        self.reward_sum += reward;
+    }
+
+    fn mean_reward(&self) -> f64 {
+        if self.pulls == 0 {
+            0.5
+        } else {
+            (self.reward_sum / self.pulls as f64).clamp(0.0, 1.0)
+        }
+    }
+
+    fn ucb_score(&self, total_pulls: u64) -> f64 {
+        if self.pulls == 0 {
+            return 1.0;
+        }
+        let mean = self.mean_reward();
+        let explore = ONLINE_CONTROLLER_BANDIT_EXPLORATION
+            * ((total_pulls.max(1) as f64).ln() / self.pulls as f64).sqrt();
+        (mean + explore).clamp(0.0, 2.0)
+    }
 }
 
 impl AgentSignalWindow {
@@ -70,6 +102,9 @@ pub(crate) struct OnlineControllerState {
     recent_latency_ms: VecDeque<u64>,
     agent_windows: HashMap<String, AgentSignalWindow>,
     phase_agent_windows: HashMap<String, AgentSignalWindow>,
+    phase_windows: HashMap<String, AgentSignalWindow>,
+    phase_bandit_arms: HashMap<String, PhaseBanditArm>,
+    phase_bandit_total_pulls: u64,
 }
 
 impl OnlineControllerState {
@@ -151,6 +186,82 @@ impl OnlineControllerState {
         scored
             .into_iter()
             .map(|(_, name, score)| (name, score))
+            .collect()
+    }
+
+    pub(crate) fn record_phase_outcome(&mut self, phase_name: &str, success: bool, duration_ms: u64) {
+        self.phase_windows
+            .entry(phase_name.to_string())
+            .or_default()
+            .record(success, duration_ms);
+
+        let latency_penalty = ((duration_ms as f64 / 15_000.0).clamp(0.0, 1.0)) * 0.4;
+        let reward = if success { 1.0 } else { 0.0 } - latency_penalty;
+        self.record_phase_reward(phase_name, reward.clamp(0.0, 1.0));
+    }
+
+    pub(crate) fn record_phase_reward(&mut self, phase_name: &str, reward: f64) {
+        self.phase_bandit_total_pulls = self.phase_bandit_total_pulls.saturating_add(1);
+        self.phase_bandit_arms
+            .entry(phase_name.to_string())
+            .or_default()
+            .update(reward.clamp(0.0, 1.0));
+    }
+
+    fn phase_reliability_score(&self, phase_name: &str) -> Option<f64> {
+        self.phase_windows
+            .get(phase_name)
+            .and_then(AgentSignalWindow::reliability_score)
+    }
+
+    pub(crate) fn recommend_phase(&self, phase_candidates: &[String]) -> Option<String> {
+        let mut scored = phase_candidates
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| {
+                let reliability = self.phase_reliability_score(name).unwrap_or(0.5);
+                let (bandit_ucb, mean_reward, pulls) = self
+                    .phase_bandit_arms
+                    .get(name)
+                    .map(|arm| {
+                        (
+                            arm.ucb_score(self.phase_bandit_total_pulls),
+                            arm.mean_reward(),
+                            arm.pulls,
+                        )
+                    })
+                    .unwrap_or((1.0, 0.5, 0));
+                let normalized_ucb = (bandit_ucb / 2.0).clamp(0.0, 1.0);
+                let composite = (0.55 * normalized_ucb + 0.30 * mean_reward + 0.15 * reliability)
+                    .clamp(0.0, 1.0);
+                (idx, name.clone(), composite, pulls)
+            })
+            .collect::<Vec<_>>();
+
+        if scored.is_empty() {
+            return None;
+        }
+
+        scored.sort_by(|left, right| match right.2.partial_cmp(&left.2) {
+            Some(std::cmp::Ordering::Equal) | None => right.3.cmp(&left.3).then_with(|| left.0.cmp(&right.0)),
+            Some(other) => other,
+        });
+
+        scored.into_iter().next().map(|(_, name, _, _)| name)
+    }
+
+    pub(crate) fn phase_policy_snapshot(&self, phase_candidates: &[String]) -> Vec<(String, f64, f64, u64)> {
+        phase_candidates
+            .iter()
+            .map(|name| {
+                let reliability = self.phase_reliability_score(name).unwrap_or(0.5);
+                let (mean_reward, pulls) = self
+                    .phase_bandit_arms
+                    .get(name)
+                    .map(|arm| (arm.mean_reward(), arm.pulls))
+                    .unwrap_or((0.5, 0));
+                (name.clone(), mean_reward, reliability, pulls)
+            })
             .collect()
     }
 

@@ -56,10 +56,95 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
+## Setup And Status
+
+Run interactive setup (provider selection + API key onboarding):
+
+```bash
+cargo run -- --setup --config config.toml
+```
+
+Wizard levels:
+
+```bash
+# Quick recommended setup
+cargo run -- --setup --setup-level quick --config config.toml
+
+# Standard recommended setup
+cargo run -- --setup --setup-level standard --config config.toml
+
+# Fully custom setup
+cargo run -- --setup --setup-level custom --config config.toml
+```
+
+During setup:
+
+- choose one or multiple model providers
+- choose secret mode (`env`, `keyring`, or `auto`)
+- optionally store only the selected providers' API keys into system keyring
+
+Provider list source:
+
+- Setup now reads provider capabilities from `providers.toml`.
+- To add a new provider to wizard selection, append one `[[providers]]` entry into `providers.toml`.
+- Setup and status now also read provider recommendation fields from `providers.toml`:
+	- `recommended_default_phase`
+	- `recommended_request_timeout_seconds`
+	- `recommended_review_timeout_seconds`
+	- `recommended_planning_request_timeout_seconds`
+	- `recommended_coding_request_timeout_seconds`
+	- `recommended_review_request_timeout_seconds`
+	- `recommended_delivery_request_timeout_seconds`
+	- `recommended_cache_enabled`
+	- `recommended_vector_enabled`
+	- `recommended_phase_max_inflight`
+	- `recommended_global_max_inflight`
+
+Apply provider recommendations to existing config in one command:
+
+```bash
+cargo run -- --apply-recommended --config config.toml
+```
+
+Check configured AI readiness:
+
+```bash
+cargo run -- --status --config config.toml
+```
+
+This prints overall runtime readiness plus each configured agent's ready flag, endpoint status, and missing environment variables.
+It also prints a configuration completeness score (0-100), missing items, and recommended adjustments.
+
+When startup finds no runtime-ready AI provider, it now auto-prompts you to either:
+
+- configure AI quickly
+- enter full wizard
+- continue startup without provider
+
+Add local model interface:
+
+```bash
+cargo run -- --add-local-model \
+	--local-model-name local_llm \
+	--local-model-url http://127.0.0.1:11434/v1 \
+	--local-model-type openai \
+	--local-model-model qwen2.5-coder \
+	--config config.toml
+
+# Register only under [agents], without auto-adding to phases
+cargo run -- --add-local-model \
+	--local-model-name local_shadow \
+	--local-model-url http://127.0.0.1:11434/v1 \
+	--local-model-register-only \
+	--config config.toml
+```
+
 ## Config Files (Current)
 
 - Single template: `config.toml.autopilot-adaptive`
 - Active runtime config: `config.toml`
+
+Provider credentials can be referenced by environment variable names or keyring references like `keyring://go-on/openai_compatible_api_key`.
 
 If you want to reset local config to latest template:
 

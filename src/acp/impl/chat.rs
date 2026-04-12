@@ -8,6 +8,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 use std::{fs, path::Path};
+use std::{net::ToSocketAddrs, net::TcpStream};
 
 use anyhow::Result;
 use opentelemetry::{Context as OtelContext, KeyValue};
@@ -25,6 +26,7 @@ use crate::config::PhaseOptions;
 use crate::evaluation::TraceEvent;
 use crate::flow::FlowManager;
 use crate::i18n::runtime::tf;
+use crate::orchestration::task_router::{TaskRouter, TaskType};
 use crate::pua::PuaEnforcementPlan;
 
 use crate::reinforcement::{
@@ -235,6 +237,141 @@ pub async fn should_escalate_approval_strategy(
         || phase_requires_escalation)
 }
 
+fn has_flow_phase(config: &crate::config::AppConfig, phase_name: &str) -> bool {
+    config.flow.phases.iter().any(|phase| phase == phase_name)
+}
+
+fn is_agent_runtime_ready(config: &crate::config::AppConfig, agent_name: &str) -> bool {
+    let Some(agent) = config.agents.get(agent_name) else {
+        return true;
+    };
+
+    for key in [agent.api_key_env.as_deref(), agent.secret_key_env.as_deref()] {
+        let Some(key_name) = key else {
+            continue;
+        };
+        if key_name.starts_with("keyring://") {
+            continue;
+        }
+        if std::env::var(key_name).is_err() {
+            return false;
+        }
+    }
+
+    let Some(url) = agent.url.as_deref() else {
+        return true;
+    };
+    let Some((host, port)) = extract_host_port(url) else {
+        return true;
+    };
+    let is_local = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
+    if !is_local {
+        return true;
+    }
+
+    let timeout = std::time::Duration::from_millis(250);
+    let addrs = format!("{}:{}", host, port)
+        .to_socket_addrs()
+        .ok()
+        .map(|iter| iter.collect::<Vec<_>>())
+        .unwrap_or_default();
+    if addrs.is_empty() {
+        return false;
+    }
+    addrs
+        .iter()
+        .any(|addr| TcpStream::connect_timeout(addr, timeout).is_ok())
+}
+
+fn extract_host_port(url: &str) -> Option<(String, u16)> {
+    let marker = "://";
+    let start = url.find(marker).map(|idx| idx + marker.len()).unwrap_or(0);
+    let rest = &url[start..];
+    let host_port = rest.split('/').next()?.trim();
+    if host_port.is_empty() {
+        return None;
+    }
+    if host_port.starts_with('[') {
+        let end = host_port.find(']')?;
+        let host = host_port[1..end].to_string();
+        let port = host_port[end + 1..]
+            .strip_prefix(':')
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(80);
+        return Some((host, port));
+    }
+    if let Some((host, port_raw)) = host_port.rsplit_once(':') {
+        if let Ok(port) = port_raw.parse::<u16>() {
+            return Some((host.to_string(), port));
+        }
+    }
+    Some((host_port.to_string(), 80))
+}
+
+fn infer_adaptive_phase(
+    config: &crate::config::AppConfig,
+    mode: &str,
+    messages: &[Message],
+) -> Option<String> {
+    let task = extract_task_description(messages);
+    if task.trim().is_empty() {
+        return None;
+    }
+
+    let characteristics = TaskRouter::analyze_task(&task);
+    let mut candidate = match characteristics.task_type {
+        TaskType::ArchitectureDesign => Some("planning"),
+        TaskType::CodeReview => {
+            if mode.eq_ignore_ascii_case("review") {
+                Some("review")
+            } else {
+                Some("coding")
+            }
+        }
+        TaskType::Documentation => Some("delivery"),
+        TaskType::BugFix
+        | TaskType::FeatureImplementation
+        | TaskType::Refactoring
+        | TaskType::TestImplementation
+        | TaskType::PerformanceOptimization
+        | TaskType::Unknown => Some("coding"),
+    };
+
+    if mode.eq_ignore_ascii_case("review") && has_flow_phase(config, "review") {
+        candidate = Some("review");
+    }
+
+    if characteristics.complexity >= 4 && has_flow_phase(config, "planning") {
+        candidate = Some("planning");
+    }
+
+    candidate
+        .filter(|phase| has_flow_phase(config, phase))
+        .map(str::to_string)
+}
+
+fn controller_recommended_phase(
+    server: &AcpServer,
+    config: &crate::config::AppConfig,
+    mode: &str,
+) -> Option<String> {
+    let candidates = config.flow.phases.clone();
+    let recommended = server
+        .online_controller
+        .lock()
+        .ok()
+        .and_then(|ctrl| ctrl.recommend_phase(&candidates))?;
+
+    if recommended == "review" && !mode.eq_ignore_ascii_case("review") {
+        return None;
+    }
+    if has_flow_phase(config, &recommended) {
+        Some(recommended)
+    } else {
+        None
+    }
+}
+
 /// Process chat request
 pub(crate) async fn process_chat_request(
     server: &AcpServer,
@@ -247,8 +384,55 @@ pub(crate) async fn process_chat_request(
 
     // Get routing handles
     let (flow, registry) = routing_handles(server)?;
+    let app_config = flow.config();
+    let requested_phase = params.phase.clone();
+    let adaptive_phase = if requested_phase.is_none() {
+        infer_adaptive_phase(app_config.as_ref(), &params.mode, &params.messages)
+    } else {
+        None
+    };
+    let controller_phase = if requested_phase.is_none() {
+        controller_recommended_phase(server, app_config.as_ref(), &params.mode)
+    } else {
+        None
+    };
 
-    let mut resolved = flow.resolve(params.phase.clone(), registry.as_ref())?;
+    let mut resolved = flow.resolve(
+        requested_phase
+            .clone()
+            .or_else(|| controller_phase.clone())
+            .or_else(|| adaptive_phase.clone()),
+        registry.as_ref(),
+    )?;
+    let original_count = resolved.agents.len();
+    resolved
+        .agents
+        .retain(|(agent_name, _)| is_agent_runtime_ready(app_config.as_ref(), agent_name));
+    if resolved.agents.is_empty() {
+        resolved = flow.resolve(
+            requested_phase
+                .clone()
+                .or_else(|| controller_phase.clone())
+                .or_else(|| adaptive_phase.clone()),
+            registry.as_ref(),
+        )?;
+    } else if resolved.agents.len() < original_count {
+        warn!(
+            phase = %resolved.phase.phase_name,
+            retained = resolved.agents.len(),
+            original = original_count,
+            "filtered runtime-unavailable agents before chat execution"
+        );
+    }
+    let phase_origin = if requested_phase.is_some() {
+        "requested"
+    } else if controller_phase.is_some() {
+        "controller"
+    } else if adaptive_phase.is_some() {
+        "adaptive"
+    } else {
+        "default"
+    };
     let phase = resolved.phase.clone();
     reorder_chat_agents_by_runtime_score(server, &phase.phase_name, &mut resolved.agents);
 
@@ -362,6 +546,7 @@ pub(crate) async fn process_chat_request(
     let mut last_err: Option<anyhow::Error> = None;
 
     for (agent_name, agent) in resolved.agents {
+        let attempt_started = std::time::Instant::now();
         match run_agent_collecting(
             server,
             StreamNotificationContext {
@@ -382,19 +567,46 @@ pub(crate) async fn process_chat_request(
         .await
         {
             Ok(output) => {
+                if let Ok(mut ctrl) = server.online_controller.lock() {
+                    ctrl.record_agent_outcome(
+                        &phase.phase_name,
+                        &agent_name,
+                        true,
+                        attempt_started.elapsed().as_millis() as u64,
+                    );
+                }
                 selected_agent = agent_name;
                 response_text = output;
                 last_err = None;
                 break;
             }
             Err(err) => {
+                if let Ok(mut ctrl) = server.online_controller.lock() {
+                    ctrl.record_agent_outcome(
+                        &phase.phase_name,
+                        &agent_name,
+                        false,
+                        attempt_started.elapsed().as_millis() as u64,
+                    );
+                }
                 last_err = Some(err);
             }
         }
     }
 
     if let Some(err) = last_err {
+        if let Ok(mut ctrl) = server.online_controller.lock() {
+            ctrl.record_phase_outcome(
+                &phase.phase_name,
+                false,
+                started.elapsed().as_millis() as u64,
+            );
+        }
         return Err(err);
+    }
+
+    if let Ok(mut ctrl) = server.online_controller.lock() {
+        ctrl.record_phase_outcome(&phase.phase_name, true, started.elapsed().as_millis() as u64);
     }
 
     persist_vector_memory(
@@ -490,6 +702,7 @@ pub(crate) async fn process_chat_request(
         "branch_id": branch_id,
         "mode": params.mode,
         "phase": phase.phase_name,
+        "phase_origin": phase_origin,
         "agent": selected_agent,
         "duration_ms": started.elapsed().as_millis() as u64,
         "response": response_text,

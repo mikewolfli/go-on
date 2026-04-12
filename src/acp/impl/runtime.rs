@@ -376,7 +376,9 @@ fn openai_to_chat_params(req: &OpenAiChatRequest) -> crate::acp::r#impl::chat::C
         messages,
         conversation_id: None,
         branch_id: None,
-        phase: Some("delivery".to_string()),
+        // Use configured default phase instead of forcing delivery,
+        // so deployment-specific fallback chains can be honored.
+        phase: None,
         options: None,
         requirement_contract: None,
         plan: None,
@@ -406,6 +408,30 @@ fn build_openai_completion(
     })
 }
 
+fn build_openai_models_response() -> serde_json::Value {
+    serde_json::json!({
+        "object": "list",
+        "data": [{
+            "id": "go-on",
+            "object": "model",
+            "created": crate::acp::prelude::now_ts(),
+            "owned_by": "go-on",
+        }]
+    })
+}
+
+fn build_root_capabilities_response() -> serde_json::Value {
+    serde_json::json!({
+        "service": "go-on",
+        "protocol": "acp-http",
+        "health": "/health",
+        "endpoints": {
+            "chat": ["/chat", "/chat/stream"],
+            "openai": ["/v1/models", "/models", "/v1/chat/completions", "/chat/completions"],
+        }
+    })
+}
+
 fn build_openai_chunk(
     request_id: &str,
     model: &str,
@@ -427,6 +453,21 @@ fn build_openai_chunk(
     })
 }
 
+fn is_setup_or_upstream_unavailable(err: &anyhow::Error) -> bool {
+    let msg = err.to_string().to_lowercase();
+    msg.contains("missing environment variable")
+        || msg.contains("error sending request")
+        || msg.contains("connection refused")
+        || msg.contains("timed out")
+}
+
+fn degraded_openai_message(err: &anyhow::Error) -> String {
+    format!(
+        "go-on is running, but upstream model service is unavailable. {}. Configure at least one reachable provider (for example set DEEPSEEK_API_KEY) or start your copilot-compatible upstream on 127.0.0.1:8080.",
+        err
+    )
+}
+
 async fn write_openai_sse_data(socket: &mut TcpStream, payload: &serde_json::Value) -> Result<()> {
     let frame = format!("data: {}\n\n", serde_json::to_string(payload)?);
     socket.write_all(frame.as_bytes()).await?;
@@ -443,7 +484,19 @@ async fn handle_openai_chat_completions(
     server: Arc<AcpServer>,
     body: serde_json::Value,
 ) -> Result<()> {
-    let openai_req: OpenAiChatRequest = serde_json::from_value(body)?;
+    let openai_req: OpenAiChatRequest = match serde_json::from_value(body) {
+        Ok(value) => value,
+        Err(err) => {
+            let payload = serde_json::json!({
+                "error": {
+                    "message": format!("invalid OpenAI chat request: {err}"),
+                    "type": "invalid_request_error"
+                }
+            });
+            write_http_json_response(socket, 400, payload).await?;
+            return Ok(());
+        }
+    };
     let model = openai_req
         .model
         .clone()
@@ -464,6 +517,15 @@ async fn handle_openai_chat_completions(
         let result = match result {
             Ok(result) => result,
             Err(err) => {
+                if is_setup_or_upstream_unavailable(&err) {
+                    let payload = build_openai_completion(
+                        &request_id,
+                        &model,
+                        &degraded_openai_message(&err),
+                    );
+                    write_http_json_response(socket, 200, payload).await?;
+                    return Ok(());
+                }
                 let payload = serde_json::json!({
                     "error": {
                         "message": err.to_string(),
@@ -522,6 +584,17 @@ async fn handle_openai_chat_completions(
             write_openai_sse_done(socket).await?;
         }
         Ok(Err(err)) => {
+            if is_setup_or_upstream_unavailable(&err) {
+                let payload = build_openai_chunk(
+                    &request_id,
+                    &model,
+                    &degraded_openai_message(&err),
+                    Some("stop"),
+                );
+                write_openai_sse_data(socket, &payload).await?;
+                write_openai_sse_done(socket).await?;
+                return Ok(());
+            }
             let payload = serde_json::json!({"error": {"message": err.to_string()}});
             write_openai_sse_data(socket, &payload).await?;
             write_openai_sse_done(socket).await?;
@@ -563,8 +636,23 @@ async fn handle_http_connection(socket: &mut TcpStream, server: Arc<AcpServer>) 
         .next()
         .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing path"))?;
 
-    if method == "GET" && path == "/health" {
-        write_http_json_response(socket, 200, serde_json::to_value(server.get_status())?).await?;
+    if method == "GET" {
+        match path {
+            "/health" => {
+                write_http_json_response(socket, 200, serde_json::to_value(server.get_status())?)
+                    .await?;
+            }
+            "/v1/models" | "/models" => {
+                write_http_json_response(socket, 200, build_openai_models_response()).await?;
+            }
+            "/" => {
+                write_http_json_response(socket, 200, build_root_capabilities_response()).await?;
+            }
+            _ => {
+                write_http_json_response(socket, 404, serde_json::json!({"error": "not found"}))
+                    .await?;
+            }
+        }
         return Ok(());
     }
 
@@ -579,6 +667,16 @@ async fn handle_http_connection(socket: &mut TcpStream, server: Arc<AcpServer>) 
     }
 
     let content_length = extract_content_length(header_part).unwrap_or(0);
+    if content_length == 0 {
+        write_http_json_response(
+            socket,
+            400,
+            serde_json::json!({"error": "request body required"}),
+        )
+        .await?;
+        return Ok(());
+    }
+
     let mut body_bytes = body_initial_part.as_bytes().to_vec();
     if body_bytes.len() < content_length {
         let mut remaining = vec![0u8; content_length - body_bytes.len()];
@@ -586,11 +684,33 @@ async fn handle_http_connection(socket: &mut TcpStream, server: Arc<AcpServer>) 
         body_bytes.extend_from_slice(&remaining);
     }
     body_bytes.truncate(content_length);
-    let body: serde_json::Value = serde_json::from_slice(&body_bytes)?;
+    let body: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+        Ok(value) => value,
+        Err(err) => {
+            write_http_json_response(
+                socket,
+                400,
+                serde_json::json!({"error": format!("invalid json body: {err}")}),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
 
     match path {
         "/chat" => {
-            let params: crate::acp::r#impl::chat::ChatParams = serde_json::from_value(body)?;
+            let params: crate::acp::r#impl::chat::ChatParams = match serde_json::from_value(body) {
+                Ok(value) => value,
+                Err(err) => {
+                    write_http_json_response(
+                        socket,
+                        400,
+                        serde_json::json!({"error": format!("invalid chat params: {err}")}),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
             let trace = http_trace_context("chat");
             let result = crate::acp::r#impl::chat::process_chat_request(
                 server.as_ref(),
@@ -603,7 +723,18 @@ async fn handle_http_connection(socket: &mut TcpStream, server: Arc<AcpServer>) 
             write_http_json_response(socket, 200, result).await?;
         }
         "/chat/stream" => {
-            let params: crate::acp::r#impl::chat::ChatParams = serde_json::from_value(body)?;
+            let params: crate::acp::r#impl::chat::ChatParams = match serde_json::from_value(body) {
+                Ok(value) => value,
+                Err(err) => {
+                    write_http_json_response(
+                        socket,
+                        400,
+                        serde_json::json!({"error": format!("invalid chat params: {err}")}),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
             write_sse_headers(socket).await?;
 
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -683,6 +814,7 @@ async fn write_http_json_response(
 ) -> Result<()> {
     let status_text = match status {
         200 => "OK",
+        400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
         502 => "Bad Gateway",

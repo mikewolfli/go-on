@@ -8,6 +8,7 @@
 //! - controlled task planning artifacts for sub-agent style decomposition
 
 use std::fs;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
@@ -20,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::cache::ResponseCache;
-use crate::config::{validate_runtime_readiness, AppConfig};
+use crate::config::{validate_runtime_readiness, AgentConfig, AppConfig};
 use crate::task_decomposer::{TaskDecomposer, TaskDecomposition};
 use crate::task_router::{RoutingDecision, TaskCharacteristics, TaskRouter};
 use crate::vector::VectorStore;
@@ -1322,8 +1323,9 @@ pub fn build_runtime_healthcheck_report(
     }
 
     if let Some(path) = config_path {
-        match AppConfig::load(path).and_then(|config| validate_runtime_readiness(path, &config)) {
-            Ok(report) => {
+        match AppConfig::load(path) {
+            Ok(config) => match validate_runtime_readiness(path, &config) {
+                Ok(report) => {
                 let status = if report.critical_count > 0 {
                     CheckStatus::Error
                 } else if report.warn_count > 0 || report.info_count > 0 {
@@ -1340,7 +1342,15 @@ pub fn build_runtime_healthcheck_report(
                     ),
                     details: serde_json::to_value(&report).unwrap_or_else(|_| json!({})),
                 });
-            }
+                    components.push(build_provider_dependency_component(&config));
+                }
+                Err(err) => components.push(ComponentReport {
+                    name: "config".to_string(),
+                    status: CheckStatus::Error,
+                    message: err.to_string(),
+                    details: json!({ "config_path": path.display().to_string() }),
+                }),
+            },
             Err(err) => components.push(ComponentReport {
                 name: "config".to_string(),
                 status: CheckStatus::Error,
@@ -1687,6 +1697,142 @@ where
     statuses
         .into_iter()
         .fold(CheckStatus::Healthy, |acc, status| acc.merge(status))
+}
+
+fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
+    let mut details = Vec::new();
+    let mut ready = 0usize;
+    let mut degraded = 0usize;
+
+    for (name, agent) in &config.agents {
+        let missing_envs = missing_envs_for_agent(agent);
+        let endpoint = agent.url.clone();
+        let endpoint_probe = endpoint
+            .as_deref()
+            .map(probe_local_endpoint)
+            .unwrap_or(CheckStatus::Skipped);
+
+        let env_ready = missing_envs.is_empty();
+        let endpoint_ready = matches!(endpoint_probe, CheckStatus::Healthy | CheckStatus::Skipped);
+        let agent_ready = env_ready && endpoint_ready;
+        if agent_ready {
+            ready += 1;
+        } else {
+            degraded += 1;
+        }
+
+        details.push(json!({
+            "agent": name,
+            "type": agent.agent_type,
+            "env_ready": env_ready,
+            "missing_envs": missing_envs,
+            "endpoint": endpoint,
+            "endpoint_status": match endpoint_probe {
+                CheckStatus::Healthy => "healthy",
+                CheckStatus::Warn => "warn",
+                CheckStatus::Error => "error",
+                CheckStatus::Skipped => "skipped",
+            },
+            "ready": agent_ready,
+        }));
+    }
+
+    let total = config.agents.len();
+    let status = if ready == 0 {
+        CheckStatus::Error
+    } else if degraded > 0 {
+        CheckStatus::Warn
+    } else {
+        CheckStatus::Healthy
+    };
+
+    ComponentReport {
+        name: "provider_dependencies".to_string(),
+        status,
+        message: format!(
+            "{} of {} configured agents are runtime-ready ({} degraded)",
+            ready, total, degraded
+        ),
+        details: json!({
+            "ready": ready,
+            "degraded": degraded,
+            "total": total,
+            "agents": details,
+        }),
+    }
+}
+
+fn missing_envs_for_agent(agent: &AgentConfig) -> Vec<String> {
+    let mut missing = Vec::new();
+    for env_var in [agent.api_key_env.as_deref(), agent.secret_key_env.as_deref()] {
+        let Some(raw) = env_var else {
+            continue;
+        };
+        if raw.starts_with("keyring://") {
+            continue;
+        }
+        if std::env::var(raw).is_err() {
+            missing.push(raw.to_string());
+        }
+    }
+    missing
+}
+
+fn probe_local_endpoint(url: &str) -> CheckStatus {
+    let Some((host, port)) = extract_host_port(url) else {
+        return CheckStatus::Skipped;
+    };
+
+    let is_local = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
+    if !is_local {
+        return CheckStatus::Skipped;
+    }
+
+    let addrs = format!("{}:{}", host, port)
+        .to_socket_addrs()
+        .ok()
+        .map(|iter| iter.collect::<Vec<SocketAddr>>())
+        .unwrap_or_default();
+    if addrs.is_empty() {
+        return CheckStatus::Error;
+    }
+
+    let timeout = std::time::Duration::from_millis(250);
+    if addrs
+        .iter()
+        .any(|addr| TcpStream::connect_timeout(addr, timeout).is_ok())
+    {
+        CheckStatus::Healthy
+    } else {
+        CheckStatus::Error
+    }
+}
+
+fn extract_host_port(url: &str) -> Option<(String, u16)> {
+    let marker = "://";
+    let start = url.find(marker).map(|idx| idx + marker.len()).unwrap_or(0);
+    let rest = &url[start..];
+    let host_port = rest.split('/').next()?.trim();
+    if host_port.is_empty() {
+        return None;
+    }
+
+    if host_port.starts_with('[') {
+        let end = host_port.find(']')?;
+        let host = host_port[1..end].to_string();
+        let port = host_port[end + 1..]
+            .strip_prefix(':')
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(80);
+        return Some((host, port));
+    }
+
+    if let Some((host, port_raw)) = host_port.rsplit_once(':') {
+        if let Ok(port) = port_raw.parse::<u16>() {
+            return Some((host.to_string(), port));
+        }
+    }
+    Some((host_port.to_string(), 80))
 }
 
 fn now_ts() -> i64 {

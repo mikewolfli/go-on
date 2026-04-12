@@ -26,10 +26,10 @@ maintenance_interval_seconds = 60
 health_interval_seconds = 120
 shutdown_drain_seconds = 30
 sqlite_vacuum_interval_cycles = 60
-# acp_http_bind_addr = "127.0.0.1:8090"   # Uncomment to enable REST/SSE
+acp_http_bind_addr = "127.0.0.1:8090"   # Uncomment to enable REST/SSE
 otel_enabled = false
 otel_exporter = "otlp"
-# otel_endpoint = "http://localhost:4317"   # Uncomment for Jaeger/OTLP
+otel_endpoint = "http://localhost:4317"   # Uncomment for Jaeger/OTLP
 otel_service_name = "go-on"
 otel_sample_ratio = 1.0
 trace_slow_top_n = 20
@@ -49,19 +49,11 @@ min_vector_searches = 5
 summary_trigger_min = 3
 summary_trigger_max = 20
 
-[agents.copilot]
-type = "copilot"
-url = "http://127.0.0.1:8080"
-
-[agents.deepseek]
-type = "deepseek"
-api_key_env = "DEEPSEEK_API_KEY"
-model = "deepseek-chat"
-
-[agents.wenxin]
-type = "wenxin"
-api_key_env = "WENXIN_API_KEY"
-secret_key_env = "WENXIN_SECRET_KEY"
+[agents.primary]
+type = "openai"
+url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-4o-mini"
 
 [flow]
 name = "Autopilot Adaptive"
@@ -69,12 +61,12 @@ phases = ["planning", "coding", "review", "delivery"]
 
 [phases.planning]
 description = "Planning phase"
-agents = ["deepseek", "copilot"]
+agents = ["primary"]
 fallback = true
 
 [phases.coding]
 description = "Coding phase"
-agents = ["copilot", "deepseek"]
+agents = ["primary"]
 fallback = true
 
 [phases.coding.options]
@@ -84,14 +76,14 @@ review_timeout_seconds = 60
 cache_enabled = true
 vector_enabled = true
 summary_enabled = true
-full_auto_review_agents = ["deepseek", "wenxin"]
+full_auto_review_agents = ["primary"]
 review_gate_timeout_seconds = 90
 phase_max_inflight = 24
 global_max_inflight = 128
 
 [phases.review]
 description = "Review phase"
-agents = ["deepseek", "wenxin"]
+agents = ["primary"]
 fallback = true
 
 [phases.review.options]
@@ -104,5 +96,5 @@ global_max_inflight = 128
 
 [phases.delivery]
 description = "Delivery phase"
-agents = ["copilot"]
+agents = ["primary"]
 fallback = false

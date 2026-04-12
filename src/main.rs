@@ -107,6 +107,7 @@ pub use crate::protocol::rpc_protocol;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::{io::IsTerminal, io::Write};
 
 use anyhow::Result;
 use clap::Parser;
@@ -123,8 +124,13 @@ use crate::i18n::runtime::{init_i18n, tf};
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
     persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger,
+    RuntimeHealthcheckReport,
 };
-use crate::setup::{parse_secret_action, parse_secret_mode, parse_setup_profile, SetupOptions};
+use crate::setup::{
+    add_local_model, apply_recommended_to_config, parse_secret_action, parse_secret_mode,
+    parse_setup_level, parse_setup_profile, recommendation_snapshot_for_config,
+    LocalModelOptions, SetupLevel, SetupOptions,
+};
 use crate::vector::VectorStore;
 
 /// Command-line interface arguments for the go-on application
@@ -156,9 +162,49 @@ struct Cli {
     #[arg(long)]
     setup_profile: Option<String>,
 
+    /// Setup wizard level to use (quick|standard|custom)
+    #[arg(long)]
+    setup_level: Option<String>,
+
     /// Secret mode for setup
     #[arg(long)]
     setup_secrets: Option<String>,
+
+    /// Add or update a local model agent entry in config
+    #[arg(long, default_value_t = false)]
+    add_local_model: bool,
+
+    /// Local model agent name when using --add-local-model
+    #[arg(long)]
+    local_model_name: Option<String>,
+
+    /// Local model endpoint URL when using --add-local-model
+    #[arg(long)]
+    local_model_url: Option<String>,
+
+    /// Local model provider type when using --add-local-model (default: openai)
+    #[arg(long)]
+    local_model_type: Option<String>,
+
+    /// Local model model-id when using --add-local-model
+    #[arg(long)]
+    local_model_model: Option<String>,
+
+    /// Optional API key env var field for local model when using --add-local-model
+    #[arg(long)]
+    local_model_api_key_env: Option<String>,
+
+    /// Optional secret key env var field for local model when using --add-local-model
+    #[arg(long)]
+    local_model_secret_key_env: Option<String>,
+
+    /// Only register local model under [agents], do not auto-attach it to phase agent lists
+    #[arg(long, default_value_t = false)]
+    local_model_register_only: bool,
+
+    /// Apply provider capability recommendations to current config.toml and exit
+    #[arg(long, default_value_t = false)]
+    apply_recommended: bool,
 
     /// Force setup even if files exist
     #[arg(long, default_value_t = false)]
@@ -187,6 +233,10 @@ struct Cli {
     /// Build and persist a controlled task plan artifact for a complex task
     #[arg(long)]
     plan_task: Option<String>,
+
+    /// Print configured AI providers and runtime readiness status
+    #[arg(long, default_value_t = false)]
+    status: bool,
 
     /// Bind ACP HTTP server and expose /health, /chat, and /chat/stream
     #[arg(long)]
@@ -238,6 +288,466 @@ fn resolve_config_relative_path(config_path: &std::path::Path, raw_path: &str) -
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
             .join(candidate)
+    }
+}
+
+fn print_runtime_status(config_path: &std::path::Path, report: &RuntimeHealthcheckReport) {
+    println!("{}", tf("status.title", &[]));
+    println!(
+        "{}",
+        tf(
+            "status.config_path",
+            &[("path", &config_path.to_string_lossy())]
+        )
+    );
+    println!(
+        "{}",
+        tf(
+            "status.overall",
+            &[("status", &format!("{:?}", report.overall_status))]
+        )
+    );
+
+    let provider_component = report
+        .components
+        .iter()
+        .find(|component| component.name == "provider_dependencies");
+
+    let Some(component) = provider_component else {
+        println!("{}", tf("status.no_provider_component", &[]));
+        println!("{}", tf("status.done", &[]));
+        return;
+    };
+
+    let configured_agents = component
+        .details
+        .get("total")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    println!(
+        "{}",
+        tf(
+            "status.configured_agents",
+            &[("count", &configured_agents.to_string())]
+        )
+    );
+
+    let details = component
+        .details
+        .get("agents")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    for item in details {
+        let name = item
+            .get("agent")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown");
+        let agent_type = item
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown");
+        let ready = item
+            .get("ready")
+            .and_then(|value| value.as_bool())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "false".to_string());
+        let endpoint_status = item
+            .get("endpoint_status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown");
+        let missing_envs = item
+            .get("missing_envs")
+            .and_then(|value| value.as_array())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|entry| entry.as_str())
+                    .collect::<Vec<&str>>()
+            })
+            .unwrap_or_default();
+        let missing_envs = if missing_envs.is_empty() {
+            "-".to_string()
+        } else {
+            missing_envs.join("|")
+        };
+
+        println!(
+            "{}",
+            tf(
+                "status.agent_line",
+                &[
+                    ("name", name),
+                    ("type", agent_type),
+                    ("ready", &ready),
+                    ("endpoint_status", endpoint_status),
+                    ("missing_envs", &missing_envs),
+                ]
+            )
+        );
+    }
+
+    println!("{}", tf("status.done", &[]));
+}
+
+#[derive(Default)]
+struct StatusCompleteness {
+    score: u32,
+    missing: Vec<String>,
+    recommended: Vec<String>,
+}
+
+fn build_completeness_report(
+    config: &crate::config::AppConfig,
+    report: &RuntimeHealthcheckReport,
+) -> StatusCompleteness {
+    let mut out = StatusCompleteness::default();
+    let mut score = 0.0_f64;
+    let provider_recommendation = recommendation_snapshot_for_config(config);
+
+    let provider = report
+        .components
+        .iter()
+        .find(|component| component.name == "provider_dependencies");
+
+    let (ready, total) = provider
+        .and_then(|component| {
+            let ready = component
+                .details
+                .get("ready")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            let total = component
+                .details
+                .get("total")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            Some((ready, total))
+        })
+        .unwrap_or((0, 0));
+
+    if total > 0 {
+        score += 30.0 * (ready as f64 / total as f64);
+        if ready < total {
+            out.missing
+                .push("provider credentials or endpoint readiness incomplete".to_string());
+        }
+    }
+
+    if total > 0 {
+        score += 25.0 * (ready as f64 / total as f64);
+    }
+
+    for phase_name in ["planning", "coding", "review", "delivery"] {
+        let expected = provider_recommendation
+            .as_ref()
+            .map(|item| match phase_name {
+                "planning" => item.planning_request_timeout_seconds,
+                "coding" => item.coding_request_timeout_seconds,
+                "review" => item.review_request_timeout_seconds,
+                _ => item.delivery_request_timeout_seconds,
+            })
+            .unwrap_or(match phase_name {
+                "planning" => 120,
+                "coding" => 150,
+                "review" => 60,
+                _ => 90,
+            });
+
+        let actual = config
+            .phases
+            .get(phase_name)
+            .and_then(|phase| phase.options.as_ref())
+            .and_then(|options| options.request_timeout_seconds);
+
+        match actual {
+            Some(timeout) if timeout == expected => score += 2.5,
+            Some(timeout) => {
+                score += 1.5;
+                out.recommended.push(format!(
+                    "phases.{}.options.request_timeout_seconds recommended={}, current={}",
+                    phase_name, expected, timeout
+                ));
+            }
+            None => out
+                .missing
+                .push(format!("phases.{}.options.request_timeout_seconds", phase_name)),
+        }
+    }
+
+    let expected_review_timeout = provider_recommendation
+        .as_ref()
+        .map(|item| item.coding_review_timeout_seconds)
+        .unwrap_or(60);
+    let actual_review_timeout = config
+        .phases
+        .get("coding")
+        .and_then(|phase| phase.options.as_ref())
+        .and_then(|options| options.review_timeout_seconds);
+    match actual_review_timeout {
+        Some(timeout) if timeout == expected_review_timeout => score += 5.0,
+        Some(timeout) => {
+            score += 2.5;
+            out.recommended.push(format!(
+                "phases.coding.options.review_timeout_seconds recommended={}, current={}",
+                expected_review_timeout, timeout
+            ));
+        }
+        None => out
+            .missing
+            .push("phases.coding.options.review_timeout_seconds".to_string()),
+    }
+
+    let expected_phase_inflight = provider_recommendation
+        .as_ref()
+        .map(|item| item.phase_max_inflight as i64)
+        .unwrap_or(24);
+    let expected_global_inflight = provider_recommendation
+        .as_ref()
+        .map(|item| item.global_max_inflight as i64)
+        .unwrap_or(128);
+    let coding_options = config
+        .phases
+        .get("coding")
+        .and_then(|phase| phase.options.as_ref());
+    let actual_phase_inflight = coding_options.and_then(|options| {
+        options
+            .extra
+            .get("phase_max_inflight")
+            .and_then(|value| value.as_i64())
+    });
+    let actual_global_inflight = coding_options.and_then(|options| {
+        options
+            .extra
+            .get("global_max_inflight")
+            .and_then(|value| value.as_i64())
+    });
+
+    match actual_phase_inflight {
+        Some(value) if value == expected_phase_inflight => score += 2.5,
+        Some(value) => {
+            score += 1.5;
+            out.recommended.push(format!(
+                "phases.coding.options.phase_max_inflight recommended={}, current={}",
+                expected_phase_inflight, value
+            ));
+        }
+        None => out
+            .missing
+            .push("phases.coding.options.phase_max_inflight".to_string()),
+    }
+
+    match actual_global_inflight {
+        Some(value) if value == expected_global_inflight => score += 2.5,
+        Some(value) => {
+            score += 1.5;
+            out.recommended.push(format!(
+                "phases.coding.options.global_max_inflight recommended={}, current={}",
+                expected_global_inflight, value
+            ));
+        }
+        None => out
+            .missing
+            .push("phases.coding.options.global_max_inflight".to_string()),
+    }
+
+    let recommended_cache = provider_recommendation
+        .as_ref()
+        .map(|item| item.cache_enabled)
+        .unwrap_or(true);
+    let cache_enabled = config.cache.as_ref().map(|cache| cache.enabled).unwrap_or(false);
+    if cache_enabled == recommended_cache {
+        score += 5.0;
+    } else {
+        out.recommended
+            .push(format!("cache.enabled={} recommended", recommended_cache));
+    }
+
+    let recommended_vector = provider_recommendation
+        .as_ref()
+        .map(|item| item.vector_enabled)
+        .unwrap_or(true);
+    let vector_enabled = config
+        .vector
+        .as_ref()
+        .map(|vector| vector.enabled)
+        .unwrap_or(false);
+    if config
+        .vector
+        .as_ref()
+        .map(|vector| vector.enabled)
+        .unwrap_or(false)
+    {
+        if vector_enabled == recommended_vector {
+            score += 5.0;
+        } else {
+            out.recommended
+                .push(format!("vector.enabled={} recommended", recommended_vector));
+        }
+    } else {
+        if !recommended_vector {
+            score += 5.0;
+        } else {
+            out.recommended
+                .push(format!("vector.enabled={} recommended", recommended_vector));
+        }
+    }
+
+    if config.phases.contains_key("review") {
+        score += 5.0;
+    } else {
+        out.missing.push("review phase missing".to_string());
+    }
+
+    if config.phases.contains_key("delivery") {
+        score += 5.0;
+    } else {
+        out.missing.push("delivery phase missing".to_string());
+    }
+
+    if config
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.health_interval_seconds > 0)
+        .unwrap_or(false)
+    {
+        score += 5.0;
+    } else {
+        out.missing
+            .push("runtime.health_interval_seconds missing".to_string());
+    }
+
+    if config
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.maintenance_interval_seconds > 0)
+        .unwrap_or(false)
+    {
+        score += 5.0;
+    } else {
+        out.missing
+            .push("runtime.maintenance_interval_seconds missing".to_string());
+    }
+
+    out.score = score.round().clamp(0.0, 100.0) as u32;
+    out
+}
+
+fn print_completeness_report(config: &crate::config::AppConfig, report: &RuntimeHealthcheckReport) {
+    let completeness = build_completeness_report(config, report);
+    println!(
+        "{}",
+        tf(
+            "status.completeness",
+            &[("score", &completeness.score.to_string())]
+        )
+    );
+
+    if completeness.missing.is_empty() {
+        println!("{}", tf("status.missing_none", &[]));
+    } else {
+        println!("{}", tf("status.missing_title", &[]));
+        for item in completeness.missing {
+            println!("- {}", item);
+        }
+    }
+
+    if !completeness.recommended.is_empty() {
+        println!("{}", tf("status.recommended_title", &[]));
+        for item in completeness.recommended {
+            println!("- {}", item);
+        }
+    }
+}
+
+fn provider_ready_counts(report: &RuntimeHealthcheckReport) -> Option<(u64, u64)> {
+    let component = report
+        .components
+        .iter()
+        .find(|component| component.name == "provider_dependencies")?;
+    let ready = component
+        .details
+        .get("ready")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let total = component
+        .details
+        .get("total")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    Some((ready, total))
+}
+
+fn maybe_prompt_ai_onboarding(cli: &Cli, config_path: &std::path::Path) -> Result<bool> {
+    if cli.setup
+        || cli.validate_config
+        || cli.healthcheck
+        || cli.status
+        || cli.add_local_model
+        || cli.apply_recommended
+        || cli.secret.is_some()
+        || cli.plan_task.is_some()
+        || cli.action_check.is_some()
+    {
+        return Ok(false);
+    }
+
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return Ok(false);
+    }
+
+    let report = build_runtime_healthcheck_report(Some(config_path), None, None)?;
+    let Some((ready, total)) = provider_ready_counts(&report) else {
+        return Ok(false);
+    };
+    if total == 0 || ready > 0 {
+        return Ok(false);
+    }
+
+    println!("No runtime-ready AI provider is configured.");
+    println!("Choose next step:");
+    println!("  1) Configure AI provider now (quick setup)");
+    println!("  2) Enter full setup wizard");
+    println!("  3) Continue startup without provider");
+    print!("Selection [2]: ");
+    std::io::stdout().flush().ok();
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let value = input.trim();
+    let selection = if value.is_empty() { "2" } else { value };
+
+    match selection {
+        "1" => {
+            crate::setup::run_setup_with_options(
+                config_path,
+                SetupOptions {
+                    profile: Some(parse_setup_profile("adaptive")?),
+                    level: Some(SetupLevel::Quick),
+                    secret_mode: None,
+                    force: true,
+                    prompt_for_secrets: true,
+                },
+            )?;
+            println!("AI provider quick setup completed. Re-run go-on to start service.");
+            Ok(true)
+        }
+        "2" => {
+            crate::setup::run_setup_with_options(
+                config_path,
+                SetupOptions {
+                    profile: Some(parse_setup_profile("adaptive")?),
+                    level: None,
+                    secret_mode: None,
+                    force: true,
+                    prompt_for_secrets: true,
+                },
+            )?;
+            println!("Setup wizard completed. Re-run go-on to start service.");
+            Ok(true)
+        }
+        _ => Ok(false),
     }
 }
 
@@ -407,7 +917,7 @@ async fn run() -> Result<()> {
 
     // Determine configuration file path
     let config_path = match cli.config {
-        Some(path) => path,
+        Some(ref path) => path.clone(),
         None => default_config_path()?,
     };
 
@@ -440,6 +950,27 @@ async fn run() -> Result<()> {
         return Ok(());
     }
 
+    if cli.add_local_model {
+        add_local_model(
+            &config_path,
+            LocalModelOptions {
+                name: cli.local_model_name.clone(),
+                url: cli.local_model_url.clone(),
+                agent_type: cli.local_model_type.clone(),
+                model: cli.local_model_model.clone(),
+                api_key_env: cli.local_model_api_key_env.clone(),
+                secret_key_env: cli.local_model_secret_key_env.clone(),
+                apply_to_phases: !cli.local_model_register_only,
+            },
+        )?;
+        return Ok(());
+    }
+
+    if cli.apply_recommended {
+        apply_recommended_to_config(&config_path)?;
+        return Ok(());
+    }
+
     // Handle setup wizard
     if cli.setup {
         let options = SetupOptions {
@@ -447,6 +978,11 @@ async fn run() -> Result<()> {
                 .setup_profile
                 .as_deref()
                 .map(parse_setup_profile)
+                .transpose()?,
+            level: cli
+                .setup_level
+                .as_deref()
+                .map(parse_setup_level)
                 .transpose()?,
             secret_mode: cli
                 .setup_secrets
@@ -457,6 +993,10 @@ async fn run() -> Result<()> {
             prompt_for_secrets: cli.setup_profile.is_none() && cli.setup_secrets.is_none(),
         };
         setup::run_setup_with_options(&config_path, options)?;
+        return Ok(());
+    }
+
+    if maybe_prompt_ai_onboarding(&cli, &config_path)? {
         return Ok(());
     }
 
@@ -611,6 +1151,17 @@ async fn run() -> Result<()> {
         return Ok(());
     }
 
+    if cli.status {
+        let report = build_runtime_healthcheck_report(
+            Some(&config_path),
+            cache.as_deref(),
+            vector_store.as_deref(),
+        )?;
+        print_runtime_status(&config_path, &report);
+        print_completeness_report(config.as_ref(), &report);
+        return Ok(());
+    }
+
     if let Some(raw_kind) = cli.action_check.as_deref() {
         let kind = ActionCheckKind::parse(raw_kind).ok_or_else(|| {
             anyhow::anyhow!(
@@ -655,5 +1206,185 @@ async fn run() -> Result<()> {
         run_acp_http_server(Arc::new(server), bind_addr).await
     } else {
         run_acp_server(&mut server).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::json;
+
+    use super::build_completeness_report;
+    use crate::config::{
+        AgentConfig, AppConfig, CacheConfig, FlowConfig, PhaseConfig, PhaseOptions, RuntimeConfig,
+        VectorConfig,
+    };
+    use crate::reinforcement::{CheckStatus, ComponentReport, RuntimeHealthcheckReport};
+
+    fn openai_config_with_inflight(
+        phase_max_inflight: Option<i64>,
+        global_max_inflight: Option<i64>,
+    ) -> AppConfig {
+        let mut agents = HashMap::new();
+        agents.insert(
+            "primary".to_string(),
+            AgentConfig {
+                agent_type: "openai".to_string(),
+                url: Some("https://api.openai.com/v1".to_string()),
+                chat_path: None,
+                api_key_env: Some("OPENAI_API_KEY".to_string()),
+                secret_key_env: None,
+                anthropic_version: None,
+                model: Some("gpt-4o-mini".to_string()),
+                max_tokens: None,
+                supports_system: Some(true),
+            },
+        );
+
+        let mut coding_extra = HashMap::new();
+        if let Some(value) = phase_max_inflight {
+            coding_extra.insert("phase_max_inflight".to_string(), json!(value));
+        }
+        if let Some(value) = global_max_inflight {
+            coding_extra.insert("global_max_inflight".to_string(), json!(value));
+        }
+
+        let mut phases = HashMap::new();
+        phases.insert(
+            "planning".to_string(),
+            PhaseConfig {
+                description: "planning".to_string(),
+                agents: vec!["primary".to_string()],
+                fallback: Some(true),
+                principles: None,
+                options: Some(PhaseOptions {
+                    request_timeout_seconds: Some(120),
+                    ..PhaseOptions::default()
+                }),
+            },
+        );
+        phases.insert(
+            "coding".to_string(),
+            PhaseConfig {
+                description: "coding".to_string(),
+                agents: vec!["primary".to_string()],
+                fallback: Some(true),
+                principles: None,
+                options: Some(PhaseOptions {
+                    request_timeout_seconds: Some(150),
+                    review_timeout_seconds: Some(60),
+                    extra: coding_extra,
+                    ..PhaseOptions::default()
+                }),
+            },
+        );
+        phases.insert(
+            "review".to_string(),
+            PhaseConfig {
+                description: "review".to_string(),
+                agents: vec!["primary".to_string()],
+                fallback: Some(true),
+                principles: None,
+                options: Some(PhaseOptions {
+                    request_timeout_seconds: Some(60),
+                    ..PhaseOptions::default()
+                }),
+            },
+        );
+        phases.insert(
+            "delivery".to_string(),
+            PhaseConfig {
+                description: "delivery".to_string(),
+                agents: vec!["primary".to_string()],
+                fallback: Some(false),
+                principles: None,
+                options: Some(PhaseOptions {
+                    request_timeout_seconds: Some(90),
+                    ..PhaseOptions::default()
+                }),
+            },
+        );
+
+        AppConfig {
+            default_phase: "coding".to_string(),
+            agents,
+            flow: FlowConfig {
+                name: "flow".to_string(),
+                phases: vec![
+                    "planning".to_string(),
+                    "coding".to_string(),
+                    "review".to_string(),
+                    "delivery".to_string(),
+                ],
+            },
+            phases,
+            runtime: Some(RuntimeConfig::default()),
+            cache: Some(CacheConfig {
+                enabled: true,
+                path: "acp_cache.sqlite3".to_string(),
+                default_ttl_seconds: 3600,
+                max_entries: 5000,
+            }),
+            vector: Some(VectorConfig {
+                enabled: true,
+                auto_mode: true,
+                path: "acp_vector.sqlite3".to_string(),
+                dimensions: 192,
+                min_query_chars: 80,
+                top_k: 2,
+                min_similarity: 0.82,
+                max_snippet_chars: 800,
+                max_entries: 10000,
+                summary_enabled: true,
+                summary_trigger_messages: 8,
+                summary_max_chars: 1200,
+            }),
+            autotune: None,
+            model_selection_mode: "adaptive".to_string(),
+        }
+    }
+
+    fn ready_report() -> RuntimeHealthcheckReport {
+        RuntimeHealthcheckReport {
+            generated_at: 0,
+            overall_status: CheckStatus::Healthy,
+            components: vec![ComponentReport {
+                name: "provider_dependencies".to_string(),
+                status: CheckStatus::Healthy,
+                message: "ok".to_string(),
+                details: json!({"ready": 1, "total": 1, "agents": []}),
+            }],
+        }
+    }
+
+    #[test]
+    fn completeness_reports_inflight_recommendation_mismatch() {
+        let cfg = openai_config_with_inflight(Some(8), Some(32));
+        let report = build_completeness_report(&cfg, &ready_report());
+
+        assert!(report
+            .recommended
+            .iter()
+            .any(|item| item.contains("phases.coding.options.phase_max_inflight recommended=")));
+        assert!(report
+            .recommended
+            .iter()
+            .any(|item| item.contains("phases.coding.options.global_max_inflight recommended=")));
+    }
+
+    #[test]
+    fn completeness_reports_missing_inflight_keys() {
+        let cfg = openai_config_with_inflight(None, None);
+        let report = build_completeness_report(&cfg, &ready_report());
+
+        assert!(report
+            .missing
+            .iter()
+            .any(|item| item == "phases.coding.options.phase_max_inflight"));
+        assert!(report
+            .missing
+            .iter()
+            .any(|item| item == "phases.coding.options.global_max_inflight"));
     }
 }

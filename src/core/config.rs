@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use tracing::{info, warn};
@@ -136,6 +137,111 @@ fn default_min_query_chars_step() -> u32 {
     20
 }
 
+const PROVIDER_CAPABILITY_FILE: &str = "providers.toml";
+
+#[derive(Debug, Clone, Deserialize)]
+struct ProviderSpec {
+    name: String,
+    #[serde(rename = "type")]
+    agent_type: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    chat_path: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    api_key_env: Option<String>,
+    #[serde(default)]
+    secret_key_env: Option<String>,
+    #[serde(default)]
+    anthropic_version: Option<String>,
+    #[serde(default)]
+    max_tokens: Option<u32>,
+    #[serde(default)]
+    supports_system: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderCapabilityCatalog {
+    providers: Vec<ProviderSpec>,
+}
+
+static PROVIDER_SPECS: OnceLock<Vec<ProviderSpec>> = OnceLock::new();
+
+fn provider_specs() -> &'static [ProviderSpec] {
+    PROVIDER_SPECS
+        .get_or_init(load_provider_specs)
+        .as_slice()
+}
+
+fn load_provider_specs() -> Vec<ProviderSpec> {
+    if let Some(path) = find_template(PROVIDER_CAPABILITY_FILE) {
+        if let Ok(content) = fs::read_to_string(path) {
+            if let Ok(catalog) = toml::from_str::<ProviderCapabilityCatalog>(&content) {
+                if !catalog.providers.is_empty() {
+                    return catalog.providers;
+                }
+            }
+        }
+    }
+    vec![
+        ProviderSpec {
+            name: "copilot".to_string(),
+            agent_type: "copilot".to_string(),
+            url: Some("http://127.0.0.1:8080".to_string()),
+            chat_path: None,
+            model: None,
+            api_key_env: None,
+            secret_key_env: None,
+            anthropic_version: None,
+            max_tokens: None,
+            supports_system: Some(true),
+        },
+        ProviderSpec {
+            name: "openai".to_string(),
+            agent_type: "openai".to_string(),
+            url: Some("https://api.openai.com/v1".to_string()),
+            chat_path: None,
+            model: Some("gpt-4o-mini".to_string()),
+            api_key_env: Some("OPENAI_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            max_tokens: None,
+            supports_system: Some(true),
+        },
+        ProviderSpec {
+            name: "anthropic".to_string(),
+            agent_type: "claude".to_string(),
+            url: Some("https://api.anthropic.com".to_string()),
+            chat_path: None,
+            model: Some("claude-3-7-sonnet-latest".to_string()),
+            api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: Some("2023-06-01".to_string()),
+            max_tokens: Some(4096),
+            supports_system: Some(true),
+        },
+    ]
+}
+
+fn find_template(name: &str) -> Option<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(name));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join(name));
+    }
+    candidates.into_iter().find(|path| path.exists())
+}
+
+fn provider_spec_by_name(name: &str) -> Option<&'static ProviderSpec> {
+    provider_specs().iter().find(|spec| spec.name == name)
+}
+
 /// Convert AppConfig to AdaptiveConfig
 impl From<AppConfig> for AdaptiveConfig {
     fn from(config: AppConfig) -> Self {
@@ -171,51 +277,24 @@ impl AdaptiveConfig {
     pub fn auto_detect() -> Self {
         let mut available_providers = Vec::new();
 
-        if std::env::var("OPENAI_API_KEY").is_ok() {
-            available_providers.push("openai".to_string());
+        for spec in provider_specs() {
+            let mut required = Vec::new();
+            if let Some(api) = spec.api_key_env.as_ref() {
+                required.push(api);
+            }
+            if let Some(secret) = spec.secret_key_env.as_ref() {
+                required.push(secret);
+            }
+            if required.is_empty() {
+                continue;
+            }
+            if required.iter().all(|name| std::env::var(name).is_ok()) {
+                available_providers.push(spec.name.clone());
+            }
         }
-        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
-            available_providers.push("anthropic".to_string());
-        }
-        if std::env::var("DEEPSEEK_API_KEY").is_ok() {
-            available_providers.push("deepseek".to_string());
-        }
-        if std::env::var("WENXIN_API_KEY").is_ok() && std::env::var("WENXIN_SECRET_KEY").is_ok() {
-            available_providers.push("wenxin".to_string());
-        }
-        if std::env::var("DOUBAO_API_KEY").is_ok() {
-            available_providers.push("doubao".to_string());
-        }
-        if std::env::var("GEMINI_API_KEY").is_ok() {
-            available_providers.push("gemini".to_string());
-        }
-        if std::env::var("GROQ_API_KEY").is_ok() {
-            available_providers.push("groq".to_string());
-        }
-        if std::env::var("MISTRAL_API_KEY").is_ok() {
-            available_providers.push("mistral".to_string());
-        }
-        if std::env::var("MINIMAX_API_KEY").is_ok() {
-            available_providers.push("minimax".to_string());
-        }
-        if std::env::var("GLM_API_KEY").is_ok() {
-            available_providers.push("glm".to_string());
-        }
-        if std::env::var("YI_API_KEY").is_ok() {
-            available_providers.push("yi".to_string());
-        }
-        if std::env::var("MOONSHOT_API_KEY").is_ok() {
-            available_providers.push("moonshot".to_string());
-        }
-        if std::env::var("QIANFAN_API_KEY").is_ok() && std::env::var("QIANFAN_SECRET_KEY").is_ok() {
-            available_providers.push("qianfan".to_string());
-        }
-        if std::env::var("QWEN_API_KEY").is_ok() && std::env::var("QWEN_SECRET_KEY").is_ok() {
-            available_providers.push("qwen".to_string());
-        }
-        if std::env::var("HUNYUAN_API_KEY").is_ok() && std::env::var("HUNYUAN_SECRET_KEY").is_ok() {
-            available_providers.push("hunyuan".to_string());
-        }
+
+        available_providers.sort();
+        available_providers.dedup();
 
         if available_providers.is_empty() {
             available_providers.push("copilot".to_string());
@@ -456,25 +535,14 @@ impl AdaptiveConfig {
 }
 
 fn normalize_provider_name(agent_type: &str) -> Option<String> {
-    match agent_type {
-        "copilot" => Some("copilot".to_string()),
-        "deepseek" => Some("deepseek".to_string()),
-        "wenxin" => Some("wenxin".to_string()),
-        "openai" => Some("openai".to_string()),
-        "doubao" => Some("doubao".to_string()),
-        "claude" | "anthropic" => Some("anthropic".to_string()),
-        "gemini" => Some("gemini".to_string()),
-        "groq" => Some("groq".to_string()),
-        "mistral" => Some("mistral".to_string()),
-        "minimax" => Some("minimax".to_string()),
-        "glm" => Some("glm".to_string()),
-        "yi" => Some("yi".to_string()),
-        "moonshot" => Some("moonshot".to_string()),
-        "qianfan" => Some("qianfan".to_string()),
-        "qwen" => Some("qwen".to_string()),
-        "hunyuan" => Some("hunyuan".to_string()),
-        _ => None,
-    }
+    provider_specs()
+        .iter()
+        .find(|spec| {
+            spec.agent_type.eq_ignore_ascii_case(agent_type)
+                || spec.name.eq_ignore_ascii_case(agent_type)
+                || (spec.name == "anthropic" && agent_type.eq_ignore_ascii_case("claude"))
+        })
+        .map(|spec| spec.name.clone())
 }
 
 fn normalized_provider_list(providers: &[String]) -> Vec<String> {
@@ -493,185 +561,18 @@ fn normalized_provider_list(providers: &[String]) -> Vec<String> {
 }
 
 fn default_agent_config(provider: &str) -> Option<AgentConfig> {
-    match provider {
-        "copilot" => Some(AgentConfig {
-            agent_type: "copilot".to_string(),
-            url: Some("http://127.0.0.1:8080".to_string()),
-            chat_path: None,
-            api_key_env: None,
-            secret_key_env: None,
-            anthropic_version: None,
-            model: None,
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "deepseek" => Some(AgentConfig {
-            agent_type: "deepseek".to_string(),
-            url: None,
-            chat_path: None,
-            api_key_env: Some("DEEPSEEK_API_KEY".to_string()),
-            secret_key_env: None,
-            anthropic_version: None,
-            model: Some("deepseek-chat".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "wenxin" => Some(AgentConfig {
-            agent_type: "wenxin".to_string(),
-            url: None,
-            chat_path: None,
-            api_key_env: Some("WENXIN_API_KEY".to_string()),
-            secret_key_env: Some("WENXIN_SECRET_KEY".to_string()),
-            anthropic_version: None,
-            model: Some("ERNIE-Bot".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "anthropic" => Some(AgentConfig {
-            agent_type: "claude".to_string(),
-            url: Some("https://api.anthropic.com".to_string()),
-            chat_path: None,
-            api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
-            secret_key_env: None,
-            anthropic_version: Some("2023-06-01".to_string()),
-            model: Some("claude-3-7-sonnet-latest".to_string()),
-            max_tokens: Some(4096),
-            supports_system: Some(true),
-        }),
-        "openai" => Some(AgentConfig {
-            agent_type: "openai".to_string(),
-            url: Some("https://api.openai.com/v1".to_string()),
-            chat_path: None,
-            api_key_env: Some("OPENAI_API_KEY".to_string()),
-            secret_key_env: None,
-            anthropic_version: None,
-            model: Some("gpt-4o-mini".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "doubao" => Some(AgentConfig {
-            agent_type: "doubao".to_string(),
-            url: Some("https://ark.cn-beijing.volces.com/api/v3".to_string()),
-            chat_path: Some("/chat/completions".to_string()),
-            api_key_env: Some("DOUBAO_API_KEY".to_string()),
-            secret_key_env: None,
-            anthropic_version: None,
-            model: Some("doubao-1-5-pro-32k-250115".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "gemini" => Some(AgentConfig {
-            agent_type: "gemini".to_string(),
-            url: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
-            chat_path: None,
-            api_key_env: Some("GEMINI_API_KEY".to_string()),
-            secret_key_env: None,
-            anthropic_version: None,
-            model: Some("gemini-2.0-flash".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "groq" => Some(AgentConfig {
-            agent_type: "groq".to_string(),
-            url: Some("https://api.groq.com/openai/v1".to_string()),
-            chat_path: None,
-            api_key_env: Some("GROQ_API_KEY".to_string()),
-            secret_key_env: None,
-            anthropic_version: None,
-            model: Some("llama-3.3-70b-versatile".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "mistral" => Some(AgentConfig {
-            agent_type: "mistral".to_string(),
-            url: Some("https://api.mistral.ai/v1".to_string()),
-            chat_path: None,
-            api_key_env: Some("MISTRAL_API_KEY".to_string()),
-            secret_key_env: None,
-            anthropic_version: None,
-            model: Some("mistral-small-latest".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "minimax" => Some(AgentConfig {
-            agent_type: "minimax".to_string(),
-            url: Some("https://api.minimax.chat/v1".to_string()),
-            chat_path: None,
-            api_key_env: Some("MINIMAX_API_KEY".to_string()),
-            secret_key_env: None,
-            anthropic_version: None,
-            model: Some("MiniMax-Text-01".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "glm" => Some(AgentConfig {
-            agent_type: "glm".to_string(),
-            url: Some("https://open.bigmodel.cn/api/paas/v4".to_string()),
-            chat_path: None,
-            api_key_env: Some("GLM_API_KEY".to_string()),
-            secret_key_env: None,
-            anthropic_version: None,
-            model: Some("glm-4-flash".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "yi" => Some(AgentConfig {
-            agent_type: "yi".to_string(),
-            url: Some("https://api.lingyiwanwu.com/v1".to_string()),
-            chat_path: None,
-            api_key_env: Some("YI_API_KEY".to_string()),
-            secret_key_env: None,
-            anthropic_version: None,
-            model: Some("yi-lightning".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "moonshot" => Some(AgentConfig {
-            agent_type: "moonshot".to_string(),
-            url: Some("https://api.moonshot.cn/v1".to_string()),
-            chat_path: None,
-            api_key_env: Some("MOONSHOT_API_KEY".to_string()),
-            secret_key_env: None,
-            anthropic_version: None,
-            model: Some("moonshot-v1-8k".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "qianfan" => Some(AgentConfig {
-            agent_type: "qianfan".to_string(),
-            url: None,
-            chat_path: None,
-            api_key_env: Some("QIANFAN_API_KEY".to_string()),
-            secret_key_env: Some("QIANFAN_SECRET_KEY".to_string()),
-            anthropic_version: None,
-            model: Some("ERNIE-Bot".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "qwen" => Some(AgentConfig {
-            agent_type: "qwen".to_string(),
-            url: None,
-            chat_path: None,
-            api_key_env: Some("QWEN_API_KEY".to_string()),
-            secret_key_env: Some("QWEN_SECRET_KEY".to_string()),
-            anthropic_version: None,
-            model: None,
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        "hunyuan" => Some(AgentConfig {
-            agent_type: "hunyuan".to_string(),
-            url: Some("https://hunyuan.tencentcloudapi.com".to_string()),
-            chat_path: None,
-            api_key_env: Some("HUNYUAN_API_KEY".to_string()),
-            secret_key_env: Some("HUNYUAN_SECRET_KEY".to_string()),
-            anthropic_version: None,
-            model: Some("hunyuan-turbo".to_string()),
-            max_tokens: None,
-            supports_system: Some(true),
-        }),
-        _ => None,
-    }
+    let spec = provider_spec_by_name(provider)?;
+    Some(AgentConfig {
+        agent_type: spec.agent_type.clone(),
+        url: spec.url.clone(),
+        chat_path: spec.chat_path.clone(),
+        api_key_env: spec.api_key_env.clone(),
+        secret_key_env: spec.secret_key_env.clone(),
+        anthropic_version: spec.anthropic_version.clone(),
+        model: spec.model.clone(),
+        max_tokens: spec.max_tokens,
+        supports_system: Some(spec.supports_system.unwrap_or(true)),
+    })
 }
 
 fn preferred_review_agents(providers: &[String]) -> Vec<String> {
@@ -3222,6 +3123,30 @@ fallback = true
             .expect("review principles should exist");
         assert!(review.iter().any(|v| v == "shared one"));
         assert!(review.iter().any(|v| v == "shared two"));
+    }
+
+    #[test]
+    fn normalize_provider_name_maps_claude_to_anthropic() {
+        assert_eq!(
+            super::normalize_provider_name("claude").as_deref(),
+            Some("anthropic")
+        );
+        assert_eq!(
+            super::normalize_provider_name("anthropic").as_deref(),
+            Some("anthropic")
+        );
+    }
+
+    #[test]
+    fn default_agent_config_reads_provider_specs() {
+        let openai = super::default_agent_config("openai")
+            .expect("openai should be available in provider specs");
+        assert_eq!(openai.agent_type, "openai");
+        assert_eq!(openai.api_key_env.as_deref(), Some("OPENAI_API_KEY"));
+        assert_eq!(
+            openai.url.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
     }
 
     #[test]

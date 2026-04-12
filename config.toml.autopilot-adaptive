@@ -1,6 +1,10 @@
 default_phase = "coding"
 model_selection_mode = "adaptive"
 
+# Setup guidance:
+# - Run `go-on --setup --config config.toml` to choose providers interactively.
+# - Run `go-on --status --config config.toml` to inspect configured AI readiness.
+
 [cache]
 enabled = true
 path = "acp_cache.sqlite3"
@@ -49,19 +53,15 @@ min_vector_searches = 5
 summary_trigger_min = 3
 summary_trigger_max = 20
 
-[agents.copilot]
-type = "copilot"
-url = "http://127.0.0.1:8080"
-
-[agents.deepseek]
-type = "deepseek"
-api_key_env = "DEEPSEEK_API_KEY"
-model = "deepseek-chat"
-
-[agents.wenxin]
-type = "wenxin"
-api_key_env = "WENXIN_API_KEY"
-secret_key_env = "WENXIN_SECRET_KEY"
+[agents.primary]
+# Replace this with your chosen provider type, for example:
+# openai | deepseek | claude | gemini | qwen | etc.
+type = "openai"
+url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-4o-mini"
+# api_key_env can also reference keyring, for example:
+# api_key_env = "keyring://go-on/openai_compatible_api_key"
 
 [flow]
 name = "Autopilot Adaptive"
@@ -69,12 +69,12 @@ phases = ["planning", "coding", "review", "delivery"]
 
 [phases.planning]
 description = "Planning phase"
-agents = ["deepseek", "copilot"]
+agents = ["primary"]
 fallback = true
 
 [phases.coding]
 description = "Coding phase"
-agents = ["copilot", "deepseek"]
+agents = ["primary"]
 fallback = true
 
 [phases.coding.options]
@@ -84,14 +84,14 @@ review_timeout_seconds = 60
 cache_enabled = true
 vector_enabled = true
 summary_enabled = true
-full_auto_review_agents = ["deepseek", "wenxin"]
+full_auto_review_agents = ["primary"]
 review_gate_timeout_seconds = 90
 phase_max_inflight = 24
 global_max_inflight = 128
 
 [phases.review]
 description = "Review phase"
-agents = ["deepseek", "wenxin"]
+agents = ["primary"]
 fallback = true
 
 [phases.review.options]
@@ -104,5 +104,5 @@ global_max_inflight = 128
 
 [phases.delivery]
 description = "Delivery phase"
-agents = ["copilot"]
+agents = ["primary"]
 fallback = false

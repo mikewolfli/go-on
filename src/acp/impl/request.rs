@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
@@ -279,6 +280,9 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         }
         "learning.summary" => {
             handle_learning_summary(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "phase.policy.replay" => {
+            handle_phase_policy_replay(server, request.params.unwrap_or_default(), request_id).await
         }
         "primary_secondary.summary" => {
             handle_primary_secondary_summary(server, request.params.unwrap_or_default(), request_id)
@@ -2111,6 +2115,7 @@ struct AdaptiveExecutionDefaults {
     recommended_mode: String,
     applied_mode: String,
     mode_from_learning: bool,
+    filtered_unavailable_agents: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -2231,13 +2236,18 @@ fn build_execution_context(server: &AcpServer, params: &Value) -> Result<Runtime
         .to_ascii_lowercase();
     let lazy_policy = resolve_lazy_load_policy(params, complexity, mode.as_str());
 
-    let primary_agent = resolved
-        .agents
+    let app_config = flow.config();
+    let mut candidates = resolved.agents.clone();
+    let unavailable_agents = filter_unavailable_agents(app_config.as_ref(), &mut candidates);
+    if candidates.is_empty() {
+        candidates = resolved.agents;
+    }
+
+    let primary_agent = candidates
         .first()
         .map(|(name, _)| name.clone())
         .unwrap_or_else(|| "local_echo".to_string());
-    let secondary_agents = resolved
-        .agents
+    let secondary_agents = candidates
         .iter()
         .skip(1)
         .map(|(name, _)| name.clone())
@@ -2251,10 +2261,10 @@ fn build_execution_context(server: &AcpServer, params: &Value) -> Result<Runtime
             .and_then(|options| options.request_timeout_seconds),
         principles: resolved.phase.principles.clone(),
         base_options,
-        app_config: flow.config(),
+        app_config: app_config.clone(),
         primary_agent,
         secondary_agents,
-        candidates: resolved.agents,
+        candidates,
         failure_strategy: failure_strategy.clone(),
         adaptive_selector: server.adaptive_model_selector.clone(),
         online_controller: server.online_controller.clone(),
@@ -2268,10 +2278,90 @@ fn build_execution_context(server: &AcpServer, params: &Value) -> Result<Runtime
             recommended_mode: default_mode,
             applied_mode: mode.clone(),
             mode_from_learning: pinned_mode.is_none(),
+            filtered_unavailable_agents: unavailable_agents,
         },
         artifact_ledger: ledger,
         vector_store: server.vector_store.clone(),
     })
+}
+
+fn filter_unavailable_agents(
+    config: &AppConfig,
+    candidates: &mut Vec<(String, Arc<dyn crate::agent::Agent>)>,
+) -> Vec<String> {
+    let mut unavailable = Vec::new();
+    candidates.retain(|(name, _)| {
+        let ready = is_agent_runtime_ready(config, name);
+        if !ready {
+            unavailable.push(name.clone());
+        }
+        ready
+    });
+    unavailable
+}
+
+fn is_agent_runtime_ready(config: &AppConfig, agent_name: &str) -> bool {
+    let Some(agent) = config.agents.get(agent_name) else {
+        return true;
+    };
+    for key in [agent.api_key_env.as_deref(), agent.secret_key_env.as_deref()] {
+        let Some(key_name) = key else {
+            continue;
+        };
+        if key_name.starts_with("keyring://") {
+            continue;
+        }
+        if std::env::var(key_name).is_err() {
+            return false;
+        }
+    }
+    let Some(url) = agent.url.as_deref() else {
+        return true;
+    };
+    let Some((host, port)) = extract_host_port(url) else {
+        return true;
+    };
+    let is_local = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
+    if !is_local {
+        return true;
+    }
+    let timeout = std::time::Duration::from_millis(250);
+    let addrs = format!("{}:{}", host, port)
+        .to_socket_addrs()
+        .ok()
+        .map(|iter| iter.collect::<Vec<_>>())
+        .unwrap_or_default();
+    if addrs.is_empty() {
+        return false;
+    }
+    addrs
+        .iter()
+        .any(|addr| TcpStream::connect_timeout(addr, timeout).is_ok())
+}
+
+fn extract_host_port(url: &str) -> Option<(String, u16)> {
+    let marker = "://";
+    let start = url.find(marker).map(|idx| idx + marker.len()).unwrap_or(0);
+    let rest = &url[start..];
+    let host_port = rest.split('/').next()?.trim();
+    if host_port.is_empty() {
+        return None;
+    }
+    if host_port.starts_with('[') {
+        let end = host_port.find(']')?;
+        let host = host_port[1..end].to_string();
+        let port = host_port[end + 1..]
+            .strip_prefix(':')
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(80);
+        return Some((host, port));
+    }
+    if let Some((host, port_raw)) = host_port.rsplit_once(':') {
+        if let Ok(port) = port_raw.parse::<u16>() {
+            return Some((host.to_string(), port));
+        }
+    }
+    Some((host_port.to_string(), 80))
 }
 
 fn resolve_lazy_load_policy(params: &Value, complexity: u8, mode: &str) -> LazyLoadPolicy {
@@ -2846,16 +2936,17 @@ async fn execute_single_subtask(
         if let Some(model_id) = selected_model.clone() {
             options.insert("model".to_string(), Value::String(model_id));
         }
+        let request_options = if options.is_empty() {
+            None
+        } else {
+            Some(options)
+        };
 
         let run_result = run_agent_chat_collecting(
             agent.clone(),
             messages.clone(),
             context.principles.clone(),
-            if options.is_empty() {
-                None
-            } else {
-                Some(options)
-            },
+            request_options.clone(),
             context.task_timeout_seconds,
         )
         .await;
@@ -2876,6 +2967,45 @@ async fn execute_single_subtask(
 
         match run_result {
             Ok(response) if !response.trim().is_empty() => {
+                let model_tool_calls = extract_model_tool_calls(&response, 3);
+                let model_tool_observations = execute_model_tool_calls(
+                    task.as_str(),
+                    subtask_description.as_str(),
+                    record_index,
+                    &model_tool_calls,
+                );
+
+                let mut final_response = response;
+                if !model_tool_observations.is_empty() {
+                    tool_observations.extend(model_tool_observations.clone());
+                    let mut followup_messages = messages.clone();
+                    followup_messages.push(Message {
+                        role: "assistant".to_string(),
+                        content: final_response.clone(),
+                    });
+                    followup_messages.push(Message {
+                        role: "user".to_string(),
+                        content: format!(
+                            "Tool execution results:\n{}\n\nIncorporate these observations and provide the final executable outcome.",
+                            model_tool_observations.join("\n")
+                        ),
+                    });
+
+                    if let Ok(followup) = run_agent_chat_collecting(
+                        agent.clone(),
+                        followup_messages,
+                        context.principles.clone(),
+                        request_options.clone(),
+                        context.task_timeout_seconds,
+                    )
+                    .await
+                    {
+                        if !followup.trim().is_empty() {
+                            final_response = followup;
+                        }
+                    }
+                }
+
                 // Build audit log for this successful execution (BLUE8-M5)
                 let audit = AgentAuditLog {
                     agent: agent_name.clone(),
@@ -2883,9 +3013,10 @@ async fn execute_single_subtask(
                     task_id: task_id.clone(),
                     decision: "executed".to_string(),
                     rationale: Some(format!(
-                        "subtask completed; failover={}; tool_loop={}",
+                        "subtask completed; failover={}; tool_loop={}; model_tool_calls={}",
                         idx > 0,
                         context.lazy_policy.enable_tool_loop,
+                        model_tool_calls.len(),
                     )),
                     timestamp: crate::acp::prelude::now_ts().to_string(),
                 };
@@ -2907,8 +3038,9 @@ async fn execute_single_subtask(
                     },
                     desired_role,
                     candidate_scores,
-                    response_excerpt: response.chars().take(220).collect(),
-                    tool_loop_used: context.lazy_policy.enable_tool_loop,
+                    response_excerpt: final_response.chars().take(220).collect(),
+                    tool_loop_used: context.lazy_policy.enable_tool_loop
+                        || !model_tool_observations.is_empty(),
                     tool_observations,
                     audit_log_json,
                 };
@@ -3018,6 +3150,262 @@ fn run_lazy_tool_loop(task: &str, subtask: &str, record_index: usize) -> String 
         }
         Err(_) => String::new(),
     }
+}
+
+#[derive(Clone, Debug)]
+struct ModelToolCall {
+    name: String,
+    arguments: Value,
+}
+
+fn extract_model_tool_calls(response: &str, max_calls: usize) -> Vec<ModelToolCall> {
+    let mut calls = Vec::new();
+
+    for block in extract_json_code_blocks(response) {
+        if let Ok(value) = serde_json::from_str::<Value>(&block) {
+            append_model_tool_calls_from_value(&value, &mut calls, max_calls);
+            if calls.len() >= max_calls {
+                return calls;
+            }
+        }
+    }
+
+    if calls.is_empty() {
+        if let Ok(value) = serde_json::from_str::<Value>(response.trim()) {
+            append_model_tool_calls_from_value(&value, &mut calls, max_calls);
+        }
+    }
+
+    calls.truncate(max_calls);
+    calls
+}
+
+fn extract_json_code_blocks(response: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(start_rel) = response[cursor..].find("```json") {
+        let start = cursor + start_rel + "```json".len();
+        if let Some(end_rel) = response[start..].find("```") {
+            let end = start + end_rel;
+            blocks.push(response[start..end].trim().to_string());
+            cursor = end + 3;
+        } else {
+            break;
+        }
+    }
+
+    blocks
+}
+
+fn append_model_tool_calls_from_value(
+    value: &Value,
+    out: &mut Vec<ModelToolCall>,
+    max_calls: usize,
+) {
+    if out.len() >= max_calls {
+        return;
+    }
+
+    if let Some(tool_calls) = value.get("tool_calls").and_then(Value::as_array) {
+        for call in tool_calls {
+            if out.len() >= max_calls {
+                break;
+            }
+            let name = call
+                .get("name")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    call.get("function")
+                        .and_then(Value::as_object)
+                        .and_then(|f| f.get("name"))
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let arguments = parse_tool_call_arguments(call);
+            out.push(ModelToolCall { name, arguments });
+        }
+        return;
+    }
+
+    if let Some(choices) = value.get("choices").and_then(Value::as_array) {
+        for choice in choices {
+            if out.len() >= max_calls {
+                break;
+            }
+            if let Some(message_tool_calls) = choice
+                .get("message")
+                .and_then(Value::as_object)
+                .and_then(|msg| msg.get("tool_calls"))
+                .and_then(Value::as_array)
+            {
+                append_model_tool_calls_from_value(
+                    &json!({"tool_calls": message_tool_calls}),
+                    out,
+                    max_calls,
+                );
+            }
+        }
+    }
+
+    if let Some(output) = value.get("output").and_then(Value::as_array) {
+        for item in output {
+            if out.len() >= max_calls {
+                break;
+            }
+            if item.get("type").and_then(Value::as_str) == Some("tool_call") {
+                let name = item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                let arguments = parse_tool_call_arguments(item);
+                out.push(ModelToolCall { name, arguments });
+            }
+        }
+    }
+
+    if value.get("name").and_then(Value::as_str).is_some() {
+        let name = value
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            let arguments = parse_tool_call_arguments(value);
+            out.push(ModelToolCall { name, arguments });
+        }
+    }
+}
+
+fn parse_tool_call_arguments(value: &Value) -> Value {
+    if let Some(args) = value.get("arguments") {
+        return parse_argument_value(args);
+    }
+    if let Some(function) = value.get("function") {
+        if let Some(args) = function.get("arguments") {
+            return parse_argument_value(args);
+        }
+    }
+    json!({})
+}
+
+fn parse_argument_value(value: &Value) -> Value {
+    match value {
+        Value::String(raw) => serde_json::from_str::<Value>(raw).unwrap_or_else(|_| json!({})),
+        Value::Object(_) => value.clone(),
+        _ => json!({}),
+    }
+}
+
+fn normalize_tool_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>()
+}
+
+fn tool_name_similarity(left: &str, right: &str) -> f64 {
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+    if left == right {
+        return 1.0;
+    }
+    let shared_prefix = left
+        .chars()
+        .zip(right.chars())
+        .take_while(|(l, r)| l == r)
+        .count() as f64;
+    let prefix_score = shared_prefix / left.len().max(right.len()) as f64;
+    let overlap = left.chars().filter(|ch| right.contains(*ch)).count() as f64;
+    let overlap_score = overlap / left.len().max(right.len()) as f64;
+    (0.5 * prefix_score + 0.5 * overlap_score).clamp(0.0, 1.0)
+}
+
+fn resolve_auto_tool_name(requested_name: &str, registry: &ToolRegistry) -> Option<String> {
+    if registry.get(requested_name).is_some() {
+        return Some(requested_name.to_string());
+    }
+
+    let normalized_requested = normalize_tool_name(requested_name);
+    registry
+        .names()
+        .into_iter()
+        .map(|name| {
+            let score = tool_name_similarity(&normalized_requested, &normalize_tool_name(name));
+            (name.to_string(), score)
+        })
+        .filter(|(_, score)| *score >= 0.6)
+        .max_by(|left, right| {
+            left.1
+                .partial_cmp(&right.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(name, _)| name)
+}
+
+fn execute_model_tool_calls(
+    task: &str,
+    subtask: &str,
+    record_index: usize,
+    calls: &[ModelToolCall],
+) -> Vec<String> {
+    let mut observations = Vec::new();
+    let registry = ToolRegistry::new();
+
+    for (idx, call) in calls.iter().enumerate() {
+        let Some(resolved_name) = resolve_auto_tool_name(call.name.as_str(), &registry) else {
+            observations.push(format!("tool:auto {} unavailable", call.name));
+            continue;
+        };
+        let Some(tool) = registry.get(resolved_name.as_str()) else {
+            observations.push(format!("tool:auto {} unavailable", call.name));
+            continue;
+        };
+
+        if let Err(err) = validate_tool_arguments(resolved_name.as_str(), &call.arguments) {
+            observations.push(format!("tool:auto {} invalid_arguments: {}", resolved_name, err));
+            continue;
+        }
+
+        let input = ToolInput {
+            task_id: format!("model-tool-{}-{}", record_index + 1, idx + 1),
+            phase: "execution".to_string(),
+            agent_role: "coder".to_string(),
+            objective: task.to_string(),
+            constraints: Some("model-driven-tool-calls".to_string()),
+            evidence: Some(subtask.to_string()),
+            payload: call.arguments.clone(),
+        };
+
+        match tool.run(&input) {
+            Ok(output) => {
+                let snippet = serde_json::to_string(&output)
+                    .unwrap_or_else(|_| "tool result serialization failed".to_string());
+                observations.push(format!(
+                    "tool:auto {} ok {}",
+                    resolved_name,
+                    snippet.chars().take(220).collect::<String>()
+                ));
+            }
+            Err(err) => {
+                observations.push(format!("tool:auto {} failed {}", resolved_name, err));
+            }
+        }
+    }
+
+    observations
 }
 
 async fn run_agent_chat_collecting(
@@ -3162,6 +3550,132 @@ async fn handle_learning_summary(
                     "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
                 })).unwrap_or_else(|| json!({"total_events": 0, "sampled_events": 0, "recent": []})),
             "events": events,
+        }),
+    )
+    .await
+}
+
+async fn handle_phase_policy_replay(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let window = params
+        .get("limit")
+        .or_else(|| params.get("window"))
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(200)
+        .max(1);
+    let mode = params
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("agent")
+        .to_string();
+
+    let events = trace_events()
+        .lock()
+        .map(|guard| {
+            guard
+                .iter()
+                .rev()
+                .filter(|event| event.event_type == "phase.agent")
+                .take(window)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut phase_stats: HashMap<String, (u64, u64, u64)> = HashMap::new();
+    for event in &events {
+        let entry = phase_stats.entry(event.phase.clone()).or_insert((0, 0, 0));
+        entry.0 = entry.0.saturating_add(1);
+        if event.status.eq_ignore_ascii_case("ok") {
+            entry.1 = entry.1.saturating_add(1);
+        }
+        entry.2 = entry.2.saturating_add(event.duration_ms);
+    }
+
+    let mut ranked = phase_stats
+        .iter()
+        .map(|(phase, (attempts, successes, total_duration_ms))| {
+            let success_rate = if *attempts == 0 {
+                0.0
+            } else {
+                *successes as f64 / *attempts as f64
+            };
+            let avg_latency_ms = if *attempts == 0 {
+                0.0
+            } else {
+                *total_duration_ms as f64 / *attempts as f64
+            };
+            let latency_factor = if avg_latency_ms <= f64::EPSILON {
+                0.5
+            } else {
+                (1.0 / (1.0 + (avg_latency_ms / 5000.0))).clamp(0.0, 1.0)
+            };
+            let empirical_score = (0.75 * success_rate + 0.25 * latency_factor).clamp(0.0, 1.0);
+            json!({
+                "phase": phase,
+                "attempts": attempts,
+                "successes": successes,
+                "success_rate": success_rate,
+                "avg_latency_ms": avg_latency_ms,
+                "empirical_score": empirical_score,
+            })
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        right
+            .get("empirical_score")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+            .partial_cmp(&left.get("empirical_score").and_then(Value::as_f64).unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let candidate_phases = server
+        .flow_manager
+        .as_ref()
+        .map(|flow| flow.config().flow.phases.clone())
+        .unwrap_or_default();
+    let (controller_recommended, controller_snapshot) = server
+        .online_controller
+        .lock()
+        .ok()
+        .map(|ctrl| {
+            (
+                ctrl.recommend_phase(&candidate_phases),
+                ctrl.phase_policy_snapshot(&candidate_phases),
+            )
+        })
+        .unwrap_or((None, Vec::new()));
+    let empirical_best = ranked
+        .first()
+        .and_then(|row| row.get("phase"))
+        .and_then(Value::as_str)
+        .map(|value| value.to_string());
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "mode": mode,
+            "sampled_events": events.len(),
+            "candidate_phases": candidate_phases,
+            "controller_recommended_phase": controller_recommended,
+            "empirical_best_phase": empirical_best,
+            "controller_phase_policy": controller_snapshot.into_iter().map(|(phase, mean_reward, reliability, pulls)| json!({
+                "phase": phase,
+                "mean_reward": mean_reward,
+                "reliability": reliability,
+                "pulls": pulls,
+            })).collect::<Vec<_>>(),
+            "phase_scores": ranked,
+            "agreement": {
+                "matches_empirical_best": controller_recommended.is_some() && controller_recommended == empirical_best,
+            }
         }),
     )
     .await
@@ -3506,6 +4020,13 @@ fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
                 "name": skill.name,
                 "description": skill.description,
                 "input_schema": skill.input_schema,
+                "x_runtime": {
+                    "score": skill.score,
+                    "total_calls": skill.total_calls,
+                    "success_calls": skill.success_calls,
+                    "failure_calls": skill.failure_calls,
+                    "average_latency_ms": skill.average_latency_ms,
+                }
             })
         }));
     }
@@ -3541,13 +4062,32 @@ async fn execute_mcp_tool_call(server: &AcpServer, name: &str, arguments: &Value
                 return Ok(serde_json::to_value(result)?);
             }
 
-            let skill = server
-                .skill_registry
-                .lock()
-                .ok()
-                .and_then(|registry| registry.get(name));
+            let resolved_skill_name = server.skill_registry.lock().ok().and_then(|registry| {
+                if registry.get(name).is_some() {
+                    Some(name.to_string())
+                } else {
+                    registry.best_match_with_input(name, arguments)
+                }
+            });
+            let skill = resolved_skill_name
+                .as_ref()
+                .and_then(|resolved| {
+                    server
+                        .skill_registry
+                        .lock()
+                        .ok()
+                        .and_then(|registry| registry.get(resolved))
+                });
             match skill {
-                Some(skill) => skill.execute(arguments).await,
+                Some(skill) => {
+                    let started = Instant::now();
+                    let outcome = skill.execute(arguments).await;
+                    let skill_name = resolved_skill_name.as_deref().unwrap_or(name);
+                    if let Ok(mut registry) = server.skill_registry.lock() {
+                        registry.record_outcome(skill_name, outcome.is_ok(), started.elapsed());
+                    }
+                    outcome
+                }
                 None => anyhow::bail!("unknown mcp tool: {name}"),
             }
         }

@@ -56,10 +56,95 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
+## Setup 与状态检查
+
+执行交互式 setup（含提供商选择 + API Key 配置）：
+
+```bash
+cargo run -- --setup --config config.toml
+```
+
+向导级别：
+
+```bash
+# Quick 快速推荐配置
+cargo run -- --setup --setup-level quick --config config.toml
+
+# Standard 标准推荐配置
+cargo run -- --setup --setup-level standard --config config.toml
+
+# Custom 完全自定义配置
+cargo run -- --setup --setup-level custom --config config.toml
+```
+
+setup 过程中可以：
+
+- 选择一个或多个模型提供商
+- 选择密钥模式（`env`、`keyring`、`auto`）
+- 可选地仅为已选提供商写入系统 keyring
+
+提供商来源：
+
+- setup 向导现在从 `providers.toml` 读取可选 provider 能力。
+- 新增 provider 只需在 `providers.toml` 追加一个 `[[providers]]` 条目，无需改 setup 代码。
+- setup 与 status 还会读取 `providers.toml` 中的推荐参数字段：
+	- `recommended_default_phase`
+	- `recommended_request_timeout_seconds`
+	- `recommended_review_timeout_seconds`
+	- `recommended_planning_request_timeout_seconds`
+	- `recommended_coding_request_timeout_seconds`
+	- `recommended_review_request_timeout_seconds`
+	- `recommended_delivery_request_timeout_seconds`
+	- `recommended_cache_enabled`
+	- `recommended_vector_enabled`
+	- `recommended_phase_max_inflight`
+	- `recommended_global_max_inflight`
+
+一键将当前配置对齐到能力源推荐值：
+
+```bash
+cargo run -- --apply-recommended --config config.toml
+```
+
+检查已配置 AI 的运行时就绪状态：
+
+```bash
+cargo run -- --status --config config.toml
+```
+
+该命令会输出整体就绪状态，以及每个已配置 agent 的 ready 标记、端点状态和缺失环境变量。
+同时会输出配置完整度评分（0-100）、未配置项和推荐调整项。
+
+当启动时检测到“没有 runtime-ready 的 AI provider”，程序会自动进入引导选择：
+
+- 快速配置 AI
+- 进入完整 Wizard
+- 无 provider 继续启动
+
+新增本地模型加入接口：
+
+```bash
+cargo run -- --add-local-model \
+	--local-model-name local_llm \
+	--local-model-url http://127.0.0.1:11434/v1 \
+	--local-model-type openai \
+	--local-model-model qwen2.5-coder \
+	--config config.toml
+
+# 只注册到 [agents]，不自动接入 phases
+cargo run -- --add-local-model \
+	--local-model-name local_shadow \
+	--local-model-url http://127.0.0.1:11434/v1 \
+	--local-model-register-only \
+	--config config.toml
+```
+
 ## 配置文件（当前）
 
 - 唯一模板：`config.toml.autopilot-adaptive`
 - 运行时生效配置：`config.toml`
+
+提供商凭据可使用环境变量名，或使用 `keyring://go-on/openai_compatible_api_key` 这类 keyring 引用。
 
 如需将本地配置重置为最新模板：
 
