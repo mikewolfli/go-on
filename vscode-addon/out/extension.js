@@ -355,6 +355,7 @@ async function extractArchive(archivePath, destinationDir) {
 async function resolveConfigPath(workspaceRoot, configuredConfigPath, runtimeDir) {
     const workspaceConfigPath = path.resolve(workspaceRoot, configuredConfigPath);
     if (await pathExists(workspaceConfigPath)) {
+        await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, workspaceConfigPath);
         return workspaceConfigPath;
     }
     const bundledConfigPath = path.join(runtimeDir, 'config.toml');
@@ -365,6 +366,7 @@ async function resolveConfigPath(workspaceRoot, configuredConfigPath, runtimeDir
     if (await pathExists(workspaceConfigTemplatePath)) {
         await fsPromises.mkdir(path.dirname(workspaceConfigPath), { recursive: true });
         await fsPromises.copyFile(workspaceConfigTemplatePath, workspaceConfigPath);
+        await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, workspaceConfigPath);
         vscode.window.showInformationMessage(`Go-On config created from workspace template: ${workspaceConfigPath}`);
         return workspaceConfigPath;
     }
@@ -372,10 +374,31 @@ async function resolveConfigPath(workspaceRoot, configuredConfigPath, runtimeDir
     if (await pathExists(bundledConfigTemplatePath)) {
         await fsPromises.mkdir(path.dirname(workspaceConfigPath), { recursive: true });
         await fsPromises.copyFile(bundledConfigTemplatePath, workspaceConfigPath);
+        await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, workspaceConfigPath);
         vscode.window.showInformationMessage(`Go-On config created from runtime template: ${workspaceConfigPath}`);
         return workspaceConfigPath;
     }
     throw new Error(`Config not found. Checked workspace path '${workspaceConfigPath}' and bundled path '${bundledConfigPath}'.`);
+}
+async function ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, configPath) {
+    const targetDir = path.dirname(configPath);
+    const targetProvidersPath = path.join(targetDir, 'providers.toml');
+    if (await pathExists(targetProvidersPath)) {
+        return;
+    }
+    const sourceCandidates = [
+        path.join(workspaceRoot, 'providers.toml'),
+        path.join(runtimeDir, 'providers.toml')
+    ];
+    for (const candidate of sourceCandidates) {
+        if (!(await pathExists(candidate))) {
+            continue;
+        }
+        await fsPromises.mkdir(targetDir, { recursive: true });
+        await fsPromises.copyFile(candidate, targetProvidersPath);
+        vscode.window.showInformationMessage(`Go-On providers catalog synced: ${targetProvidersPath}`);
+        return;
+    }
 }
 async function ensureGoOnBinary(workspaceRoot, config, context) {
     const configuredExecutablePath = config.get('executablePath', './target/release/go-on');
@@ -589,6 +612,7 @@ async function applyDefaultConfigTemplate(context, templateFile) {
         throw new Error(`Template not found: ${templateFile}`);
     }
     await fsPromises.copyFile(sourcePath, configPath);
+    await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, configPath);
     return configPath;
 }
 async function updateWorkflowMappingConfig(context, mapping) {

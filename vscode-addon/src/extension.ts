@@ -457,6 +457,7 @@ async function resolveConfigPath(
 ): Promise<string> {
     const workspaceConfigPath = path.resolve(workspaceRoot, configuredConfigPath);
     if (await pathExists(workspaceConfigPath)) {
+        await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, workspaceConfigPath);
         return workspaceConfigPath;
     }
 
@@ -469,6 +470,7 @@ async function resolveConfigPath(
     if (await pathExists(workspaceConfigTemplatePath)) {
         await fsPromises.mkdir(path.dirname(workspaceConfigPath), { recursive: true });
         await fsPromises.copyFile(workspaceConfigTemplatePath, workspaceConfigPath);
+        await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, workspaceConfigPath);
         vscode.window.showInformationMessage(`Go-On config created from workspace template: ${workspaceConfigPath}`);
         return workspaceConfigPath;
     }
@@ -477,6 +479,7 @@ async function resolveConfigPath(
     if (await pathExists(bundledConfigTemplatePath)) {
         await fsPromises.mkdir(path.dirname(workspaceConfigPath), { recursive: true });
         await fsPromises.copyFile(bundledConfigTemplatePath, workspaceConfigPath);
+        await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, workspaceConfigPath);
         vscode.window.showInformationMessage(`Go-On config created from runtime template: ${workspaceConfigPath}`);
         return workspaceConfigPath;
     }
@@ -484,6 +487,33 @@ async function resolveConfigPath(
     throw new Error(
         `Config not found. Checked workspace path '${workspaceConfigPath}' and bundled path '${bundledConfigPath}'.`
     );
+}
+
+async function ensureProvidersTomlForConfig(
+    workspaceRoot: string,
+    runtimeDir: string,
+    configPath: string
+): Promise<void> {
+    const targetDir = path.dirname(configPath);
+    const targetProvidersPath = path.join(targetDir, 'providers.toml');
+    if (await pathExists(targetProvidersPath)) {
+        return;
+    }
+
+    const sourceCandidates = [
+        path.join(workspaceRoot, 'providers.toml'),
+        path.join(runtimeDir, 'providers.toml')
+    ];
+
+    for (const candidate of sourceCandidates) {
+        if (!(await pathExists(candidate))) {
+            continue;
+        }
+        await fsPromises.mkdir(targetDir, { recursive: true });
+        await fsPromises.copyFile(candidate, targetProvidersPath);
+        vscode.window.showInformationMessage(`Go-On providers catalog synced: ${targetProvidersPath}`);
+        return;
+    }
 }
 
 async function ensureGoOnBinary(
@@ -762,6 +792,7 @@ async function applyDefaultConfigTemplate(
     }
 
     await fsPromises.copyFile(sourcePath, configPath);
+    await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, configPath);
     return configPath;
 }
 
