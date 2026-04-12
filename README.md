@@ -4,9 +4,7 @@
 
 go-on is a Rust ACP runtime with MCP adapter capabilities, focused on agent orchestration, runtime safety, and extensible workflow execution.
 
-## Version
-
-- Core runtime version: 0.4.7
+- Core runtime version: 0.5.1
 - Default compile profile: `local-acp-sqlite`
 - Optional profile flag: `server-mcp-postgres` (feature scaffold)
 
