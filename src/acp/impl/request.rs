@@ -1,9 +1,84 @@
-//! Request handling implementation functions for ACP server
-//!
-//! This module contains standalone functions that implement request handling
-//! functionality previously in the `impl AcpServer` block in `impl/request.rs`.
-//! These functions take `AcpServer` as their first parameter to maintain
-//! compatibility with the original implementation.
+/// 协议模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolMode {
+    Auto,
+    Acp,
+    Mcp,
+}
+
+impl ProtocolMode {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "acp" => ProtocolMode::Acp,
+            "mcp" => ProtocolMode::Mcp,
+            _ => ProtocolMode::Auto,
+        }
+    }
+}
+
+/// 从config.toml/runtime_config读取协议模式
+fn get_protocol_mode(server: &AcpServer) -> ProtocolMode {
+    // 尝试从runtime_config.protocol_mode读取
+    if let Some(mode) = server.runtime_config.protocol_mode.as_deref() {
+        ProtocolMode::from_str(mode)
+    } else {
+        ProtocolMode::Auto
+    }
+}
+
+/// 判断请求属于MCP协议
+fn is_mcp_request(method: &str) -> bool {
+    method.starts_with("mcp.") || method == "mcp.initialize"
+}
+
+/// 判断请求属于ACP/A2A协议
+fn is_acp_request(method: &str) -> bool {
+    // ACP/A2A常用方法
+    matches!(
+        method,
+        "initialize"
+            | "chat"
+            | "phase"
+            | "phase.status"
+            | "metrics.get"
+            | "metrics"
+            | "metrics.prometheus"
+            | "shutdown"
+            | "health"
+            | "runtime.health"
+            | "breaker.status"
+            | "breaker.reset"
+            | "cache.clear"
+            | "vector.clear"
+            | "maintenance.gc"
+            | "action.check"
+            | "conversation.checkpoint.create"
+            | "conversation.checkpoint.list"
+            | "conversation.rollback"
+            | "conversation.checkpoint.prune"
+            | "config.reload"
+            | "autotune.get"
+            | "autotune.status"
+            | "autotune.reset"
+            | "workflow.confirm"
+            | "workflow.clarify"
+            | "workflow.research"
+            | "workflow.consult"
+            | "workflow.generate"
+            | "workflow.execute"
+            | "task.plan"
+            | "task.execute"
+            | "learning.summary"
+            | "phase.policy.replay"
+            | "primary_secondary.summary"
+    )
+}
+// Request handling implementation functions for ACP server
+//
+// This module contains standalone functions that implement request handling
+// functionality previously in the `impl AcpServer` block in `impl/request.rs`.
+// These functions take `AcpServer` as其 first parameter to maintain
+// compatibility with the original implementation.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -106,6 +181,39 @@ pub(crate) fn append_trace_event(event: TraceEvent) {
 ///
 /// This function replaces the `AcpServer::handle_request` method.
 pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Result<()> {
+    // 协议自适应分发
+    let protocol_mode = get_protocol_mode(server);
+    let method = request.method.as_str();
+    match protocol_mode {
+        ProtocolMode::Acp => {
+            if !is_acp_request(method) {
+                return send_error(
+                    server,
+                    request.id,
+                    -32601,
+                    format!("ACP模式下不支持方法: {}", method),
+                    None,
+                )
+                .await;
+            }
+        }
+        ProtocolMode::Mcp => {
+            if !is_mcp_request(method) {
+                return send_error(
+                    server,
+                    request.id,
+                    -32601,
+                    format!("MCP模式下不支持方法: {}", method),
+                    None,
+                )
+                .await;
+            }
+        }
+        ProtocolMode::Auto => {
+            // 若为MCP方法，优先走MCP分支，否则走ACP
+            // 允许混用
+        }
+    }
     let started = Instant::now();
     server.metrics.inc_active_requests();
     let trace = new_request_trace(server, &request);

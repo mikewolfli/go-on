@@ -1249,10 +1249,22 @@ async fn run() -> Result<()> {
     }
 
     // Get runtime configuration
-    let runtime_config = config
+    let mut runtime_config = config
         .runtime
         .clone()
         .unwrap_or_else(RuntimeConfig::default);
+    // 注入[protocol]mode
+    // 若未引入config_file模块，可用toml库直接读取[protocol]节
+    // 兼容性修正：直接用toml::Value解析
+    if let Ok(config_str) = std::fs::read_to_string(&config_path) {
+        if let Ok(toml_value) = config_str.parse::<toml::Value>() {
+            if let Some(protocol_section) = toml_value.get("protocol") {
+                if let Some(mode) = protocol_section.get("mode").and_then(|v| v.as_str()) {
+                    runtime_config.protocol_mode = Some(mode.to_string());
+                }
+            }
+        }
+    }
     let acp_http_bind = cli
         .acp_http_bind
         .clone()

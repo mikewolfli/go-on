@@ -751,6 +751,9 @@ impl ConfigHealthReport {
 /// Runtime configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuntimeConfig {
+    /// 协议模式: auto/acp/mcp
+    #[serde(default)]
+    pub protocol_mode: Option<String>,
     /// Maintenance interval in seconds
     #[serde(default = "default_runtime_maintenance_interval_seconds")]
     pub maintenance_interval_seconds: u64,
@@ -789,6 +792,7 @@ pub struct RuntimeConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
+            protocol_mode: None,
             maintenance_interval_seconds: default_runtime_maintenance_interval_seconds(),
             health_interval_seconds: default_runtime_health_interval_seconds(),
             shutdown_drain_seconds: default_runtime_shutdown_drain_seconds(),

@@ -49,6 +49,15 @@ start() {
 	status >/dev/null 2>&1 && {
 		echo "go-on 已在运行，无需重复启动"; return 0;
 	}
+	if [ ! -x "$GOON_BIN" ]; then
+		echo "错误: $GOON_BIN 不存在或不可执行，请先编译 go-on 二进制文件。"
+		exit 1
+	fi
+	# 输出当前协议模式
+	if grep -q "^mode" config.toml 2>/dev/null; then
+		PROTO_MODE=$(grep "^mode" config.toml | head -n1 | cut -d'=' -f2 | tr -d ' "')
+		echo "[info] 当前协议模式: $PROTO_MODE"
+	fi
 	nohup "$GOON_BIN" > "$LOG_FILE" 2>&1 &
 	echo $! > "$PID_FILE"
 	echo "go-on 已启动，日志写入 $LOG_FILE，PID: $(cat $PID_FILE)"

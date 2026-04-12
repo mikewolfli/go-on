@@ -1,6 +1,13 @@
 default_phase = "coding"
 model_selection_mode = "adaptive"
 
+[protocol]
+# 协议模式: auto/acp/mcp
+# auto: 自动识别（推荐，兼容Zed external agent和MCP LLM provider）
+# acp: 仅支持ACP/A2A协议（Zed external agent专用）
+# mcp: 仅支持MCP协议（MCP工具链/大模型服务专用）
+mode = "auto"
+
 [cache]
 enabled = true
 path = "acp_cache.sqlite3"
@@ -50,6 +57,7 @@ summary_trigger_min = 3
 summary_trigger_max = 20
 
 [agents.primary]
+# type 可选: openai | deepseek | claude | gemini | qwen | 其他支持的provider
 type = "openai"
 url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"

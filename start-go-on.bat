@@ -53,6 +53,13 @@ if "%ACTION%"=="start" (
 		echo go-on 已在运行，无需重复启动
 		exit /b 0
 	)
+	if not exist %EXE% (
+		echo 错误: %EXE% 不存在，请先编译 go-on 可执行文件。
+		exit /b 1
+	)
+	REM 输出当前协议模式
+	for /f "tokens=2 delims==" %%M in ('findstr /b /c:"mode" config.toml') do set PROTO_MODE=%%M
+	if not "%PROTO_MODE%"=="" echo [info] 当前协议模式: %PROTO_MODE%
 	start /b %EXE% > %LOG_FILE% 2>&1
 	REM 等待进程启动
 	timeout /t 1 >nul
