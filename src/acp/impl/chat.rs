@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 use std::{fs, path::Path};
-use std::{net::ToSocketAddrs, net::TcpStream};
+use std::{net::TcpStream, net::ToSocketAddrs};
 
 use anyhow::Result;
 use opentelemetry::{Context as OtelContext, KeyValue};
@@ -246,7 +246,10 @@ fn is_agent_runtime_ready(config: &crate::config::AppConfig, agent_name: &str) -
         return true;
     };
 
-    for key in [agent.api_key_env.as_deref(), agent.secret_key_env.as_deref()] {
+    for key in [
+        agent.api_key_env.as_deref(),
+        agent.secret_key_env.as_deref(),
+    ] {
         let Some(key_name) = key else {
             continue;
         };
@@ -606,7 +609,11 @@ pub(crate) async fn process_chat_request(
     }
 
     if let Ok(mut ctrl) = server.online_controller.lock() {
-        ctrl.record_phase_outcome(&phase.phase_name, true, started.elapsed().as_millis() as u64);
+        ctrl.record_phase_outcome(
+            &phase.phase_name,
+            true,
+            started.elapsed().as_millis() as u64,
+        );
     }
 
     persist_vector_memory(

@@ -189,7 +189,12 @@ impl OnlineControllerState {
             .collect()
     }
 
-    pub(crate) fn record_phase_outcome(&mut self, phase_name: &str, success: bool, duration_ms: u64) {
+    pub(crate) fn record_phase_outcome(
+        &mut self,
+        phase_name: &str,
+        success: bool,
+        duration_ms: u64,
+    ) {
         self.phase_windows
             .entry(phase_name.to_string())
             .or_default()
@@ -243,14 +248,19 @@ impl OnlineControllerState {
         }
 
         scored.sort_by(|left, right| match right.2.partial_cmp(&left.2) {
-            Some(std::cmp::Ordering::Equal) | None => right.3.cmp(&left.3).then_with(|| left.0.cmp(&right.0)),
+            Some(std::cmp::Ordering::Equal) | None => {
+                right.3.cmp(&left.3).then_with(|| left.0.cmp(&right.0))
+            }
             Some(other) => other,
         });
 
         scored.into_iter().next().map(|(_, name, _, _)| name)
     }
 
-    pub(crate) fn phase_policy_snapshot(&self, phase_candidates: &[String]) -> Vec<(String, f64, f64, u64)> {
+    pub(crate) fn phase_policy_snapshot(
+        &self,
+        phase_candidates: &[String],
+    ) -> Vec<(String, f64, f64, u64)> {
         phase_candidates
             .iter()
             .map(|name| {

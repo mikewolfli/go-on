@@ -170,9 +170,7 @@ struct ProviderCapabilityCatalog {
 static PROVIDER_SPECS: OnceLock<Vec<ProviderSpec>> = OnceLock::new();
 
 fn provider_specs() -> &'static [ProviderSpec] {
-    PROVIDER_SPECS
-        .get_or_init(load_provider_specs)
-        .as_slice()
+    PROVIDER_SPECS.get_or_init(load_provider_specs).as_slice()
 }
 
 fn load_provider_specs() -> Vec<ProviderSpec> {
@@ -3143,10 +3141,7 @@ fallback = true
             .expect("openai should be available in provider specs");
         assert_eq!(openai.agent_type, "openai");
         assert_eq!(openai.api_key_env.as_deref(), Some("OPENAI_API_KEY"));
-        assert_eq!(
-            openai.url.as_deref(),
-            Some("https://api.openai.com/v1")
-        );
+        assert_eq!(openai.url.as_deref(), Some("https://api.openai.com/v1"));
     }
 
     #[test]

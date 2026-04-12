@@ -123,13 +123,12 @@ use crate::flow::FlowManager;
 use crate::i18n::runtime::{init_i18n, tf};
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
-    persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger,
-    RuntimeHealthcheckReport,
+    persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger, RuntimeHealthcheckReport,
 };
 use crate::setup::{
     add_local_model, apply_recommended_to_config, parse_secret_action, parse_secret_mode,
-    parse_setup_level, parse_setup_profile, recommendation_snapshot_for_config,
-    LocalModelOptions, SetupLevel, SetupOptions,
+    parse_setup_level, parse_setup_profile, recommendation_snapshot_for_config, LocalModelOptions,
+    SetupLevel, SetupOptions,
 };
 use crate::vector::VectorStore;
 
@@ -468,7 +467,7 @@ fn build_completeness_report(
         .find(|component| component.name == "provider_dependencies");
 
     let (ready, total) = provider
-        .and_then(|component| {
+        .map(|component| {
             let ready = component
                 .details
                 .get("ready")
@@ -479,7 +478,7 @@ fn build_completeness_report(
                 .get("total")
                 .and_then(|value| value.as_u64())
                 .unwrap_or(0);
-            Some((ready, total))
+            (ready, total)
         })
         .unwrap_or((0, 0));
 
@@ -526,9 +525,10 @@ fn build_completeness_report(
                     phase_name, expected, timeout
                 ));
             }
-            None => out
-                .missing
-                .push(format!("phases.{}.options.request_timeout_seconds", phase_name)),
+            None => out.missing.push(format!(
+                "phases.{}.options.request_timeout_seconds",
+                phase_name
+            )),
         }
     }
 
@@ -622,7 +622,11 @@ fn build_completeness_report(
         .as_ref()
         .map(|item| item.cache_enabled)
         .unwrap_or(true);
-    let cache_enabled = config.cache.as_ref().map(|cache| cache.enabled).unwrap_or(false);
+    let cache_enabled = config
+        .cache
+        .as_ref()
+        .map(|cache| cache.enabled)
+        .unwrap_or(false);
     if cache_enabled == recommended_cache {
         score += 5.0;
     } else {
@@ -1430,22 +1434,16 @@ mod tests {
         let cfg = openai_config_with_inflight(Some(8), Some(32));
         let report = build_completeness_report(&cfg, &ready_report());
 
-        assert!(report
-            .recommended
-            .iter()
-            .any(|item| item
-                .message
-                .contains("phases.coding.options.phase_max_inflight recommended=")));
+        assert!(report.recommended.iter().any(|item| item
+            .message
+            .contains("phases.coding.options.phase_max_inflight recommended=")));
         assert!(report
             .recommended
             .iter()
             .any(|item| item.level == RecommendationLevel::Warning));
-        assert!(report
-            .recommended
-            .iter()
-            .any(|item| item
-                .message
-                .contains("phases.coding.options.global_max_inflight recommended=")));
+        assert!(report.recommended.iter().any(|item| item
+            .message
+            .contains("phases.coding.options.global_max_inflight recommended=")));
     }
 
     #[test]

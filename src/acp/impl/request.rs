@@ -2304,7 +2304,10 @@ fn is_agent_runtime_ready(config: &AppConfig, agent_name: &str) -> bool {
     let Some(agent) = config.agents.get(agent_name) else {
         return true;
     };
-    for key in [agent.api_key_env.as_deref(), agent.secret_key_env.as_deref()] {
+    for key in [
+        agent.api_key_env.as_deref(),
+        agent.secret_key_env.as_deref(),
+    ] {
         let Some(key_name) = key else {
             continue;
         };
@@ -3375,7 +3378,10 @@ fn execute_model_tool_calls(
         };
 
         if let Err(err) = validate_tool_arguments(resolved_name.as_str(), &call.arguments) {
-            observations.push(format!("tool:auto {} invalid_arguments: {}", resolved_name, err));
+            observations.push(format!(
+                "tool:auto {} invalid_arguments: {}",
+                resolved_name, err
+            ));
             continue;
         }
 
@@ -3630,7 +3636,12 @@ async fn handle_phase_policy_replay(
             .get("empirical_score")
             .and_then(Value::as_f64)
             .unwrap_or(0.0)
-            .partial_cmp(&left.get("empirical_score").and_then(Value::as_f64).unwrap_or(0.0))
+            .partial_cmp(
+                &left
+                    .get("empirical_score")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0),
+            )
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
@@ -4069,15 +4080,13 @@ async fn execute_mcp_tool_call(server: &AcpServer, name: &str, arguments: &Value
                     registry.best_match_with_input(name, arguments)
                 }
             });
-            let skill = resolved_skill_name
-                .as_ref()
-                .and_then(|resolved| {
-                    server
-                        .skill_registry
-                        .lock()
-                        .ok()
-                        .and_then(|registry| registry.get(resolved))
-                });
+            let skill = resolved_skill_name.as_ref().and_then(|resolved| {
+                server
+                    .skill_registry
+                    .lock()
+                    .ok()
+                    .and_then(|registry| registry.get(resolved))
+            });
             match skill {
                 Some(skill) => {
                     let started = Instant::now();

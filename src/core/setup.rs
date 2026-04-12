@@ -200,9 +200,7 @@ impl Default for SetupOptions {
 }
 
 fn provider_specs() -> &'static [ProviderSpec] {
-    PROVIDER_SPECS
-        .get_or_init(load_provider_specs)
-        .as_slice()
+    PROVIDER_SPECS.get_or_init(load_provider_specs).as_slice()
 }
 
 fn load_provider_specs() -> Vec<ProviderSpec> {
@@ -371,7 +369,8 @@ fn aggregate_provider_recommendations(providers: &[String]) -> ProviderRecommend
             .recommended_planning_request_timeout_seconds
             .or(spec.recommended_request_timeout_seconds)
         {
-            rec.planning_request_timeout_seconds = rec.planning_request_timeout_seconds.max(timeout);
+            rec.planning_request_timeout_seconds =
+                rec.planning_request_timeout_seconds.max(timeout);
         }
         if let Some(timeout) = spec
             .recommended_coding_request_timeout_seconds
@@ -390,7 +389,8 @@ fn aggregate_provider_recommendations(providers: &[String]) -> ProviderRecommend
             .recommended_delivery_request_timeout_seconds
             .or(spec.recommended_request_timeout_seconds)
         {
-            rec.delivery_request_timeout_seconds = rec.delivery_request_timeout_seconds.max(timeout);
+            rec.delivery_request_timeout_seconds =
+                rec.delivery_request_timeout_seconds.max(timeout);
         }
         if let Some(cache_enabled) = spec.recommended_cache_enabled {
             cache_votes.push(cache_enabled);
@@ -498,21 +498,15 @@ pub fn apply_recommended_to_config(config_path: &Path) -> Result<()> {
     let mut created_phases = Vec::new();
 
     for (phase_name, timeout) in [
-        (
-            "planning",
-            recommendations.planning_request_timeout_seconds,
-        ),
+        ("planning", recommendations.planning_request_timeout_seconds),
         ("coding", recommendations.coding_request_timeout_seconds),
         ("review", recommendations.review_request_timeout_seconds),
-        (
-            "delivery",
-            recommendations.delivery_request_timeout_seconds,
-        ),
+        ("delivery", recommendations.delivery_request_timeout_seconds),
     ] {
-        if !phases
+        if phases
             .get(phase_name)
             .and_then(|value| value.as_table())
-            .is_some()
+            .is_none()
         {
             created_phases.push(phase_name.to_string());
             phases.insert(
@@ -521,7 +515,10 @@ pub fn apply_recommended_to_config(config_path: &Path) -> Result<()> {
             );
         }
 
-        let Some(phase) = phases.get_mut(phase_name).and_then(|value| value.as_table_mut()) else {
+        let Some(phase) = phases
+            .get_mut(phase_name)
+            .and_then(|value| value.as_table_mut())
+        else {
             continue;
         };
         let options = ensure_table(phase, "options");
@@ -531,7 +528,10 @@ pub fn apply_recommended_to_config(config_path: &Path) -> Result<()> {
         );
     }
 
-    if let Some(coding_phase) = phases.get_mut("coding").and_then(|value| value.as_table_mut()) {
+    if let Some(coding_phase) = phases
+        .get_mut("coding")
+        .and_then(|value| value.as_table_mut())
+    {
         let options = ensure_table(coding_phase, "options");
         options.insert(
             "review_timeout_seconds".to_string(),
@@ -598,9 +598,7 @@ fn default_phase_table(
     table
 }
 
-fn collect_provider_names_from_toml(
-    table: &toml::map::Map<String, toml::Value>,
-) -> Vec<String> {
+fn collect_provider_names_from_toml(table: &toml::map::Map<String, toml::Value>) -> Vec<String> {
     let mut names: BTreeSet<String> = BTreeSet::new();
     let Some(agents) = table.get("agents").and_then(|value| value.as_table()) else {
         return Vec::new();
@@ -941,11 +939,7 @@ fn prompt_provider_selection(detected_providers: &[String]) -> Result<Vec<String
             detected_providers.join(",")
         };
 
-        print!(
-            "{} [{}]: ",
-            t("setup.provider_selection_prompt"),
-            default
-        );
+        print!("{} [{}]: ", t("setup.provider_selection_prompt"), default);
         io::stdout().flush().context("failed to flush stdout")?;
 
         let mut input = String::new();
@@ -990,7 +984,10 @@ fn prompt_provider_selection(detected_providers: &[String]) -> Result<Vec<String
         if let Some(value) = invalid {
             println!(
                 "{}",
-                tf("error.invalid_provider_selection", &[("value", value.as_str())])
+                tf(
+                    "error.invalid_provider_selection",
+                    &[("value", value.as_str())]
+                )
             );
             continue;
         }
@@ -1121,7 +1118,7 @@ fn secret_reference(env_name: &str, secret_mode: &SecretMode) -> String {
 
 fn keyring_reference(env_name: &str) -> Option<String> {
     keyring_target_for_env(env_name)
-    .map(|(service, account)| format!("keyring://{}/{}", service, account))
+        .map(|(service, account)| format!("keyring://{}/{}", service, account))
 }
 
 fn generate_adaptive_config_toml(
@@ -1363,7 +1360,10 @@ fn store_keyring_secrets_interactive(selected_providers: &[String]) -> Result<()
     let mut required_envs = Vec::new();
     for provider in selected_providers {
         for env_name in required_envs_for_provider(provider) {
-            if !required_envs.iter().any(|existing: &String| existing == &env_name) {
+            if !required_envs
+                .iter()
+                .any(|existing: &String| existing == &env_name)
+            {
                 required_envs.push(env_name);
             }
         }
@@ -1597,7 +1597,9 @@ pub fn add_local_model(config_path: &Path, mut options: LocalModelOptions) -> Re
     if options.apply_to_phases {
         let phases = ensure_table(table, "phases");
         for phase_name in ["planning", "coding", "review", "delivery"] {
-            let Some(phase) = phases.get_mut(phase_name).and_then(|value| value.as_table_mut())
+            let Some(phase) = phases
+                .get_mut(phase_name)
+                .and_then(|value| value.as_table_mut())
             else {
                 continue;
             };
@@ -1665,10 +1667,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        apply_recommended_to_config,
-        convert_env_placeholders_to_keyring, parse_secret_action, parse_secret_mode,
-        parse_setup_level,
-        parse_setup_profile, SecretAction, SecretMode, SetupProfile,
+        apply_recommended_to_config, convert_env_placeholders_to_keyring, parse_secret_action,
+        parse_secret_mode, parse_setup_level, parse_setup_profile, SecretAction, SecretMode,
+        SetupProfile,
     };
 
     #[test]
@@ -1685,7 +1686,10 @@ mod tests {
             parse_setup_profile("adaptive").unwrap(),
             SetupProfile::Adaptive
         ));
-        assert!(matches!(parse_setup_level("quick").unwrap(), super::SetupLevel::Quick));
+        assert!(matches!(
+            parse_setup_level("quick").unwrap(),
+            super::SetupLevel::Quick
+        ));
         assert!(matches!(
             parse_setup_level("standard").unwrap(),
             super::SetupLevel::Standard

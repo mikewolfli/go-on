@@ -1326,22 +1326,22 @@ pub fn build_runtime_healthcheck_report(
         match AppConfig::load(path) {
             Ok(config) => match validate_runtime_readiness(path, &config) {
                 Ok(report) => {
-                let status = if report.critical_count > 0 {
-                    CheckStatus::Error
-                } else if report.warn_count > 0 || report.info_count > 0 {
-                    CheckStatus::Warn
-                } else {
-                    CheckStatus::Healthy
-                };
-                components.push(ComponentReport {
-                    name: "config".to_string(),
-                    status,
-                    message: format!(
-                        "config score {}/100, profile {}",
-                        report.score, report.profile_recommendation
-                    ),
-                    details: serde_json::to_value(&report).unwrap_or_else(|_| json!({})),
-                });
+                    let status = if report.critical_count > 0 {
+                        CheckStatus::Error
+                    } else if report.warn_count > 0 || report.info_count > 0 {
+                        CheckStatus::Warn
+                    } else {
+                        CheckStatus::Healthy
+                    };
+                    components.push(ComponentReport {
+                        name: "config".to_string(),
+                        status,
+                        message: format!(
+                            "config score {}/100, profile {}",
+                            report.score, report.profile_recommendation
+                        ),
+                        details: serde_json::to_value(&report).unwrap_or_else(|_| json!({})),
+                    });
                     components.push(build_provider_dependency_component(&config));
                 }
                 Err(err) => components.push(ComponentReport {
@@ -1764,7 +1764,10 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
 
 fn missing_envs_for_agent(agent: &AgentConfig) -> Vec<String> {
     let mut missing = Vec::new();
-    for env_var in [agent.api_key_env.as_deref(), agent.secret_key_env.as_deref()] {
+    for env_var in [
+        agent.api_key_env.as_deref(),
+        agent.secret_key_env.as_deref(),
+    ] {
         let Some(raw) = env_var else {
             continue;
         };

@@ -201,7 +201,10 @@ fn extract_intent_tokens(input: &Value) -> std::collections::BTreeSet<String> {
     tokenize_text(&chunks.join(" "))
 }
 
-fn semantic_similarity(intent_tokens: &std::collections::BTreeSet<String>, skill: &Arc<dyn Skill>) -> f64 {
+fn semantic_similarity(
+    intent_tokens: &std::collections::BTreeSet<String>,
+    skill: &Arc<dyn Skill>,
+) -> f64 {
     if intent_tokens.is_empty() {
         return 0.5;
     }
@@ -263,7 +266,11 @@ fn cosine_similarity(left: &[f64], right: &[f64]) -> f64 {
     if left.len() != right.len() || left.is_empty() {
         return 0.0;
     }
-    let dot = left.iter().zip(right.iter()).map(|(l, r)| l * r).sum::<f64>();
+    let dot = left
+        .iter()
+        .zip(right.iter())
+        .map(|(l, r)| l * r)
+        .sum::<f64>();
     let left_norm = left.iter().map(|x| x * x).sum::<f64>().sqrt();
     let right_norm = right.iter().map(|x| x * x).sum::<f64>().sqrt();
     if left_norm <= f64::EPSILON || right_norm <= f64::EPSILON {
