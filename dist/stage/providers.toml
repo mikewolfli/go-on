@@ -1,0 +1,618 @@
+
+[[providers]]
+name = "openai"
+type = "openai"
+url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+supports_system = true
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+
+
+[[providers]]
+name = "anthropic"
+type = "claude"
+url = "https://api.anthropic.com"
+model = "claude-3-7-sonnet-latest"
+api_key_env = "ANTHROPIC_API_KEY"
+anthropic_version = "2023-06-01"
+max_tokens = 4096
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 180
+recommended_review_timeout_seconds = 75
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 16
+recommended_global_max_inflight = 96
+
+
+[[providers]]
+name = "deepseek"
+type = "deepseek"
+model = "deepseek-chat"
+api_key_env = "DEEPSEEK_API_KEY"
+supports_system = true
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 120
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 32
+recommended_global_max_inflight = 128
+
+
+[[providers]]
+name = "wenxin"
+type = "wenxin"
+model = "ERNIE-Bot"
+api_key_env = "WENXIN_API_KEY"
+secret_key_env = "WENXIN_SECRET_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 180
+recommended_review_timeout_seconds = 90
+recommended_cache_enabled = true
+recommended_vector_enabled = false
+recommended_phase_max_inflight = 16
+recommended_global_max_inflight = 96
+
+
+[[providers]]
+name = "doubao"
+type = "doubao"
+url = "https://ark.cn-beijing.volces.com/api/v3"
+chat_path = "/chat/completions"
+model = "doubao-1-5-pro-32k-250115"
+api_key_env = "DOUBAO_API_KEY"
+supports_system = true
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+
+
+[[providers]]
+name = "gemini"
+type = "gemini"
+url = "https://generativelanguage.googleapis.com/v1beta"
+model = "gemini-2.0-flash"
+api_key_env = "GEMINI_API_KEY"
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+
+
+[[providers]]
+name = "groq"
+type = "groq"
+url = "https://api.groq.com/openai/v1"
+model = "llama-3.3-70b-versatile"
+api_key_env = "GROQ_API_KEY"
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 120
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 32
+recommended_global_max_inflight = 128
+
+[[providers]]
+name = "mistral"
+type = "mistral"
+url = "https://api.mistral.ai/v1"
+model = "mistral-small-latest"
+api_key_env = "MISTRAL_API_KEY"
+region = "Europe"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+
+[[providers]]
+name = "minimax"
+type = "minimax"
+url = "https://api.minimax.chat/v1"
+model = "MiniMax-Text-01"
+api_key_env = "MINIMAX_API_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+
+
+[[providers]]
+name = "glm"
+type = "glm"
+url = "https://open.bigmodel.cn/api/paas/v4"
+model = "glm-4-flash"
+api_key_env = "GLM_API_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+
+
+[[providers]]
+name = "yi"
+type = "yi"
+url = "https://api.lingyiwanwu.com/v1"
+model = "yi-lightning"
+api_key_env = "YI_API_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+
+
+[[providers]]
+name = "moonshot"
+type = "moonshot"
+url = "https://api.moonshot.cn/v1"
+model = "moonshot-v1-8k"
+api_key_env = "MOONSHOT_API_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+
+
+[[providers]]
+name = "qianfan"
+type = "qianfan"
+model = "ERNIE-Bot"
+api_key_env = "QIANFAN_API_KEY"
+secret_key_env = "QIANFAN_SECRET_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 180
+recommended_review_timeout_seconds = 90
+recommended_cache_enabled = true
+recommended_vector_enabled = false
+recommended_phase_max_inflight = 16
+recommended_global_max_inflight = 96
+
+
+[[providers]]
+name = "qwen"
+type = "qwen"
+api_key_env = "QWEN_API_KEY"
+secret_key_env = "QWEN_SECRET_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 180
+recommended_review_timeout_seconds = 90
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 16
+recommended_global_max_inflight = 96
+
+
+[[providers]]
+name = "hunyuan"
+type = "hunyuan"
+url = "https://hunyuan.tencentcloudapi.com"
+model = "hunyuan-turbo"
+api_key_env = "HUNYUAN_API_KEY"
+secret_key_env = "HUNYUAN_SECRET_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 180
+recommended_review_timeout_seconds = 90
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 16
+recommended_global_max_inflight = 96
+
+
+[[providers]]
+name = "copilot"
+type = "copilot"
+url = "http://127.0.0.1:8080"
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 120
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+
+[[providers]]
+name = "local_openai"
+type = "openai"
+url = "http://127.0.0.1:11434/v1"
+model = "local-model"
+supports_system = true
+region = "Local"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 180
+recommended_review_timeout_seconds = 90
+recommended_cache_enabled = true
+recommended_vector_enabled = false
+recommended_phase_max_inflight = 12
+recommended_global_max_inflight = 64
+recommended_planning_request_timeout_seconds = 120
+recommended_coding_request_timeout_seconds = 180
+recommended_review_request_timeout_seconds = 90
+recommended_delivery_request_timeout_seconds = 120
+
+[[providers]]
+name = "openai_compatible"
+type = "openai_compatible"
+url = "http://127.0.0.1:8080/v1"
+model = "compatible-model"
+api_key_env = "OPENAI_COMPATIBLE_API_KEY"
+supports_system = true
+region = "Local"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+recommended_planning_request_timeout_seconds = 120
+recommended_coding_request_timeout_seconds = 150
+recommended_review_request_timeout_seconds = 60
+recommended_delivery_request_timeout_seconds = 90
+
+[[providers]]
+name = "ai21"
+type = "ai21"
+url = "https://api.ai21.com/studio/v1"
+model = "jamba-1.5-mini"
+api_key_env = "AI21_API_KEY"
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 70
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 20
+recommended_global_max_inflight = 96
+recommended_planning_request_timeout_seconds = 120
+recommended_coding_request_timeout_seconds = 150
+recommended_review_request_timeout_seconds = 70
+recommended_delivery_request_timeout_seconds = 100
+
+[[providers]]
+name = "aleph"
+type = "aleph"
+url = "https://api.aleph-alpha.com"
+model = "luminous-base-control"
+api_key_env = "ALEPH_API_KEY"
+region = "Europe"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 160
+recommended_review_timeout_seconds = 80
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 16
+recommended_global_max_inflight = 96
+recommended_planning_request_timeout_seconds = 130
+recommended_coding_request_timeout_seconds = 160
+recommended_review_request_timeout_seconds = 80
+recommended_delivery_request_timeout_seconds = 110
+
+[[providers]]
+name = "cohere"
+type = "cohere"
+url = "https://api.cohere.ai/v1"
+model = "command-r-plus"
+api_key_env = "COHERE_API_KEY"
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 70
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 20
+recommended_global_max_inflight = 96
+recommended_planning_request_timeout_seconds = 120
+recommended_coding_request_timeout_seconds = 150
+recommended_review_request_timeout_seconds = 70
+recommended_delivery_request_timeout_seconds = 100
+
+[[providers]]
+name = "deepquest"
+type = "deepquest"
+url = "https://api.deepquest.ai/v1"
+model = "deepquest-chat"
+api_key_env = "DEEPQUEST_API_KEY"
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 140
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+recommended_planning_request_timeout_seconds = 110
+recommended_coding_request_timeout_seconds = 140
+recommended_review_request_timeout_seconds = 60
+recommended_delivery_request_timeout_seconds = 90
+
+[[providers]]
+name = "facewall"
+type = "facewall"
+url = "https://api.facewall.ai/v1"
+model = "facewall-chat"
+api_key_env = "FACEWALL_API_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 75
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 20
+recommended_global_max_inflight = 96
+recommended_planning_request_timeout_seconds = 120
+recommended_coding_request_timeout_seconds = 150
+recommended_review_request_timeout_seconds = 75
+recommended_delivery_request_timeout_seconds = 100
+
+[[providers]]
+name = "fireworks"
+type = "fireworks"
+url = "https://api.fireworks.ai/inference/v1"
+model = "accounts/fireworks/models/llama-v3p1-8b-instruct"
+api_key_env = "FIREWORKS_API_KEY"
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 130
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+recommended_planning_request_timeout_seconds = 100
+recommended_coding_request_timeout_seconds = 130
+recommended_review_request_timeout_seconds = 60
+recommended_delivery_request_timeout_seconds = 90
+
+[[providers]]
+name = "langboat"
+type = "langboat"
+url = "https://api.langboat.com/v1"
+model = "langboat-chat"
+api_key_env = "LANGBOAT_API_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 70
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 20
+recommended_global_max_inflight = 96
+recommended_planning_request_timeout_seconds = 120
+recommended_coding_request_timeout_seconds = 150
+recommended_review_request_timeout_seconds = 70
+recommended_delivery_request_timeout_seconds = 100
+
+[[providers]]
+name = "llama"
+type = "llama"
+url = "http://127.0.0.1:11434/v1"
+model = "llama3"
+supports_system = true
+region = "Local"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 180
+recommended_review_timeout_seconds = 90
+recommended_cache_enabled = true
+recommended_vector_enabled = false
+recommended_phase_max_inflight = 12
+recommended_global_max_inflight = 64
+recommended_planning_request_timeout_seconds = 130
+recommended_coding_request_timeout_seconds = 180
+recommended_review_request_timeout_seconds = 90
+recommended_delivery_request_timeout_seconds = 120
+
+[[providers]]
+name = "loopai"
+type = "loopai"
+url = "https://api.loopai.com/v1"
+model = "loopai-chat"
+api_key_env = "LOOPAI_API_KEY"
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 70
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 20
+recommended_global_max_inflight = 96
+recommended_planning_request_timeout_seconds = 120
+recommended_coding_request_timeout_seconds = 150
+recommended_review_request_timeout_seconds = 70
+recommended_delivery_request_timeout_seconds = 100
+
+[[providers]]
+name = "nim"
+type = "nim"
+url = "https://integrate.api.nvidia.com/v1"
+model = "meta/llama-3.1-70b-instruct"
+api_key_env = "NIM_API_KEY"
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 70
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 20
+recommended_global_max_inflight = 96
+recommended_planning_request_timeout_seconds = 120
+recommended_coding_request_timeout_seconds = 150
+recommended_review_request_timeout_seconds = 70
+recommended_delivery_request_timeout_seconds = 100
+
+[[providers]]
+name = "perplexity"
+type = "perplexity"
+url = "https://api.perplexity.ai"
+model = "sonar"
+api_key_env = "PERPLEXITY_API_KEY"
+region = "Global"
+recommended_default_phase = "planning"
+recommended_request_timeout_seconds = 170
+recommended_review_timeout_seconds = 80
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 16
+recommended_global_max_inflight = 96
+recommended_planning_request_timeout_seconds = 170
+recommended_coding_request_timeout_seconds = 150
+recommended_review_request_timeout_seconds = 80
+recommended_delivery_request_timeout_seconds = 120
+
+[[providers]]
+name = "replicate"
+type = "replicate"
+url = "https://api.replicate.com/v1"
+model = "meta/meta-llama-3-70b-instruct"
+api_key_env = "REPLICATE_API_TOKEN"
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 180
+recommended_review_timeout_seconds = 90
+recommended_cache_enabled = true
+recommended_vector_enabled = false
+recommended_phase_max_inflight = 12
+recommended_global_max_inflight = 64
+recommended_planning_request_timeout_seconds = 130
+recommended_coding_request_timeout_seconds = 180
+recommended_review_request_timeout_seconds = 90
+recommended_delivery_request_timeout_seconds = 120
+
+[[providers]]
+name = "skywork"
+type = "skywork"
+url = "https://api.skywork.ai/v1"
+model = "skywork-chat"
+api_key_env = "SKYWORK_API_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 70
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 20
+recommended_global_max_inflight = 96
+recommended_planning_request_timeout_seconds = 120
+recommended_coding_request_timeout_seconds = 150
+recommended_review_request_timeout_seconds = 70
+recommended_delivery_request_timeout_seconds = 100
+
+[[providers]]
+name = "stepfun"
+type = "stepfun"
+url = "https://api.stepfun.com/v1"
+model = "step-1v-8k"
+api_key_env = "STEPFUN_API_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 70
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 20
+recommended_global_max_inflight = 96
+recommended_planning_request_timeout_seconds = 120
+recommended_coding_request_timeout_seconds = 150
+recommended_review_request_timeout_seconds = 70
+recommended_delivery_request_timeout_seconds = 100
+
+[[providers]]
+name = "titan"
+type = "titan"
+url = "https://api.titanml.co/v1"
+model = "titan-chat"
+api_key_env = "TITAN_API_KEY"
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 70
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 20
+recommended_global_max_inflight = 96
+recommended_planning_request_timeout_seconds = 120
+recommended_coding_request_timeout_seconds = 150
+recommended_review_request_timeout_seconds = 70
+recommended_delivery_request_timeout_seconds = 100
+
+[[providers]]
+name = "together"
+type = "together"
+url = "https://api.together.xyz/v1"
+model = "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"
+api_key_env = "TOGETHER_API_KEY"
+region = "Global"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 130
+recommended_review_timeout_seconds = 60
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 24
+recommended_global_max_inflight = 128
+recommended_planning_request_timeout_seconds = 100
+recommended_coding_request_timeout_seconds = 130
+recommended_review_request_timeout_seconds = 60
+recommended_delivery_request_timeout_seconds = 90
+
+[[providers]]
+name = "xihu"
+type = "xihu"
+url = "https://api.xihu.ai/v1"
+model = "xihu-chat"
+api_key_env = "XIHU_API_KEY"
+region = "China"
+recommended_default_phase = "coding"
+recommended_request_timeout_seconds = 150
+recommended_review_timeout_seconds = 70
+recommended_cache_enabled = true
+recommended_vector_enabled = true
+recommended_phase_max_inflight = 20
+recommended_global_max_inflight = 96
+recommended_planning_request_timeout_seconds = 120
+recommended_coding_request_timeout_seconds = 150
+recommended_review_request_timeout_seconds = 70
+recommended_delivery_request_timeout_seconds = 100

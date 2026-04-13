@@ -10,3 +10,11 @@ tmp_provider_fail_config.toml
 tmp_provider_fail_config2.toml
 tmp_review_collision.toml
 .goon/
+
+# GUI build and dependencies
+GUI/node_modules/
+GUI/dist/
+GUI/.vite/
+GUI/src-tauri/target/
+GUI/src-tauri/gen/
+

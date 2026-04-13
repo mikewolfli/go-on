@@ -1283,7 +1283,25 @@ impl AppConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
-        let mut cfg: AppConfig = toml::from_str(&content)
+
+        let normalized = if content.trim().is_empty() {
+            let bootstrap = default_non_ai_config_toml();
+            fs::write(path, &bootstrap).with_context(|| {
+                format!(
+                    "failed to write bootstrap defaults to blank config: {}",
+                    path.display()
+                )
+            })?;
+            info!(
+                "blank config detected; wrote non-AI bootstrap defaults to {}",
+                path.display()
+            );
+            bootstrap
+        } else {
+            content
+        };
+
+        let mut cfg: AppConfig = toml::from_str(&normalized)
             .with_context(|| format!("failed to parse toml: {}", path.display()))?;
         normalize_nested_phase_option_extra(&mut cfg);
         apply_auto_rules(path, &mut cfg);
@@ -1296,7 +1314,7 @@ impl AppConfig {
     /// - Checking that flow.phases is not empty
     /// - Verifying that default_phase is in flow.phases
     /// - Ensuring all phases in flow.phases are defined
-    /// - Validating that each phase has at least one agent
+    /// - Validating that each phase references only defined agents
     /// - Checking that all agents referenced in phases exist
     /// - Validating phase options
     /// - Verifying complex autopilot requirements
@@ -1325,10 +1343,6 @@ impl AppConfig {
                 .phases
                 .get(phase_name)
                 .with_context(|| format!("phase '{}' missing in [phases]", phase_name))?;
-
-            if phase_cfg.agents.is_empty() {
-                anyhow::bail!("phase '{}' must contain at least one agent", phase_name);
-            }
 
             for agent_name in &phase_cfg.agents {
                 if !self.agents.contains_key(agent_name) {
@@ -1515,6 +1529,105 @@ impl AppConfig {
 
         Ok(())
     }
+}
+
+fn default_non_ai_config_toml() -> String {
+    [
+        "default_phase = \"coding\"",
+        "model_selection_mode = \"adaptive\"",
+        "",
+        "[protocol]",
+        "mode = \"auto\"",
+        "",
+        "[cache]",
+        "enabled = true",
+        "path = \"acp_cache.sqlite3\"",
+        "default_ttl_seconds = 3600",
+        "max_entries = 5000",
+        "",
+        "[vector]",
+        "enabled = true",
+        "auto_mode = true",
+        "path = \"acp_vector.sqlite3\"",
+        "dimensions = 192",
+        "min_query_chars = 80",
+        "top_k = 2",
+        "min_similarity = 0.82",
+        "max_snippet_chars = 800",
+        "max_entries = 10000",
+        "summary_enabled = true",
+        "summary_trigger_messages = 8",
+        "summary_max_chars = 1200",
+        "",
+        "[runtime]",
+        "maintenance_interval_seconds = 60",
+        "health_interval_seconds = 120",
+        "shutdown_drain_seconds = 30",
+        "sqlite_vacuum_interval_cycles = 60",
+        "",
+        "[autotune]",
+        "enabled = false",
+        "evaluate_interval = 20",
+        "min_query_chars_step = 20",
+        "min_query_chars_min = 40",
+        "min_query_chars_max = 300",
+        "max_top_k = 4",
+        "low_precision_threshold = 0.35",
+        "high_precision_threshold = 0.75",
+        "state_path = \"acp_autotune_state.json\"",
+        "cooldown_windows = 2",
+        "min_vector_searches = 5",
+        "summary_trigger_min = 3",
+        "summary_trigger_max = 20",
+        "",
+        "[agents]",
+        "",
+        "[flow]",
+        "name = \"Autopilot Adaptive\"",
+        "phases = [\"planning\", \"coding\", \"review\", \"delivery\"]",
+        "",
+        "[phases.planning]",
+        "description = \"Planning phase\"",
+        "agents = []",
+        "fallback = true",
+        "",
+        "[phases.coding]",
+        "description = \"Coding phase\"",
+        "agents = []",
+        "fallback = true",
+        "",
+        "[phases.coding.options]",
+        "autopilot_complexity = \"auto\"",
+        "request_timeout_seconds = 150",
+        "review_timeout_seconds = 60",
+        "cache_enabled = true",
+        "vector_enabled = true",
+        "summary_enabled = true",
+        "full_auto_review_agents = []",
+        "phase_max_inflight = 24",
+        "global_max_inflight = 128",
+        "",
+        "[phases.review]",
+        "description = \"Review phase\"",
+        "agents = []",
+        "fallback = true",
+        "",
+        "[phases.review.options]",
+        "request_timeout_seconds = 60",
+        "review_timeout_policy = \"reject\"",
+        "review_min_response_chars = 12",
+        "phase_max_inflight = 16",
+        "global_max_inflight = 128",
+        "",
+        "[phases.delivery]",
+        "description = \"Delivery phase\"",
+        "agents = []",
+        "fallback = false",
+        "",
+        "[phases.delivery.options]",
+        "request_timeout_seconds = 90",
+    ]
+    .join("\n")
 }
 
 fn normalize_nested_phase_option_extra(config: &mut AppConfig) {
@@ -2551,6 +2664,18 @@ mod tests {
                 .contains("phase 'coding' references undefined agent 'missing'"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn validate_accepts_phase_with_no_agents() {
+        let mut cfg = valid_config();
+        cfg.phases
+            .get_mut("coding")
+            .expect("coding phase must exist")
+            .agents = vec![];
+
+        cfg.validate()
+            .expect("phase without agents should be allowed for AI-optional templates");
     }
 
     #[test]

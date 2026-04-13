@@ -1,0 +1,39 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "go-on GUI",
+  "version": "0.1.0",
+  "identifier": "com.goon.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5174"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "go-on GUI",
+        "width": 1280,
+        "height": 820,
+        "resizable": true
+      },
+      {
+        "label": "mini",
+        "title": "go-on Mini Console",
+        "width": 360,
+        "height": 240,
+        "decorations": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "url": "#/mini"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

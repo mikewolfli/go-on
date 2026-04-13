@@ -21,7 +21,13 @@
 //! go-on --config /path/to/config.toml
 //!
 //! # Validate configuration without starting server
-//! go-on --validate-config
+//! go-on --doctor --config /path/to/config.toml
+//!
+//! # Run guided onboarding
+//! go-on --init --config /path/to/config.toml
+//!
+//! # Check readiness and completeness
+//! go-on --check --config /path/to/config.toml
 //!
 //! # Enable verbose logging
 //! go-on --verbose
@@ -105,11 +111,12 @@ pub use crate::orchestration::tool;
 pub use crate::protocol::mcp_server;
 pub use crate::protocol::rpc_protocol;
 
+use std::fs;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::{io::IsTerminal, io::Write};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use tracing::{error, info, warn};
 
@@ -117,7 +124,8 @@ use crate::acp::r#impl::{new_acp_server, run_acp_http_server, run_acp_server};
 use crate::agent::AgentRegistry;
 use crate::cache::ResponseCache;
 use crate::config::{
-    validate_runtime_readiness, AppConfig, AutoTuneState, ConfigWarning, RuntimeConfig,
+    is_agent_env_ready, validate_runtime_readiness, AppConfig, AutoTuneState, ConfigWarning,
+    RuntimeConfig,
 };
 use crate::flow::FlowManager;
 use crate::i18n::runtime::{init_i18n, tf};
@@ -128,7 +136,7 @@ use crate::reinforcement::{
 use crate::setup::{
     add_local_model, apply_recommended_to_config, parse_secret_action, parse_secret_mode,
     parse_setup_level, parse_setup_profile, recommendation_snapshot_for_config, LocalModelOptions,
-    SetupLevel, SetupOptions,
+    SetupOptions,
 };
 use crate::vector::VectorStore;
 
@@ -150,11 +158,11 @@ struct Cli {
     verbose: bool,
 
     /// Validate configuration and exit
-    #[arg(long, default_value_t = false)]
+    #[arg(long, visible_alias = "doctor", default_value_t = false)]
     validate_config: bool,
 
     /// Run setup wizard
-    #[arg(long, default_value_t = false)]
+    #[arg(long, visible_alias = "init", default_value_t = false)]
     setup: bool,
 
     /// Setup profile to use
@@ -170,30 +178,30 @@ struct Cli {
     setup_secrets: Option<String>,
 
     /// Add or update a local model agent entry in config
-    #[arg(long, default_value_t = false)]
+    #[arg(long, visible_alias = "add-model", default_value_t = false)]
     add_local_model: bool,
 
-    /// Local model agent name when using --add-local-model
+    /// Local model agent name when using --add-model
     #[arg(long)]
     local_model_name: Option<String>,
 
-    /// Local model endpoint URL when using --add-local-model
+    /// Local model endpoint URL when using --add-model
     #[arg(long)]
     local_model_url: Option<String>,
 
-    /// Local model provider type when using --add-local-model (default: openai)
+    /// Local model provider type when using --add-model (default: openai)
     #[arg(long)]
     local_model_type: Option<String>,
 
-    /// Local model model-id when using --add-local-model
+    /// Local model model-id when using --add-model
     #[arg(long)]
     local_model_model: Option<String>,
 
-    /// Optional API key env var field for local model when using --add-local-model
+    /// Optional API key env var field for local model when using --add-model
     #[arg(long)]
     local_model_api_key_env: Option<String>,
 
-    /// Optional secret key env var field for local model when using --add-local-model
+    /// Optional secret key env var field for local model when using --add-model
     #[arg(long)]
     local_model_secret_key_env: Option<String>,
 
@@ -234,7 +242,7 @@ struct Cli {
     plan_task: Option<String>,
 
     /// Print configured AI providers and runtime readiness status
-    #[arg(long, default_value_t = false)]
+    #[arg(long, visible_alias = "check", default_value_t = false)]
     status: bool,
 
     /// Bind ACP HTTP server and expose /health, /chat, and /chat/stream
@@ -809,58 +817,125 @@ fn maybe_prompt_ai_onboarding(cli: &Cli, config_path: &std::path::Path) -> Resul
         return Ok(false);
     }
 
-    let report = build_runtime_healthcheck_report(Some(config_path), None, None)?;
-    let Some((ready, total)) = provider_ready_counts(&report) else {
+    let Some(state) = detect_ai_onboarding_state(config_path)? else {
         return Ok(false);
     };
-    if total == 0 || ready > 0 {
-        return Ok(false);
-    }
 
-    println!("No runtime-ready AI provider is configured.");
-    println!("Choose next step:");
-    println!("  1) Configure AI provider now (quick setup)");
-    println!("  2) Enter full setup wizard");
-    println!("  3) Continue startup without provider");
-    print!("Selection [2]: ");
-    std::io::stdout().flush().ok();
+    info!("starting onboarding flow for state={}", state.as_str());
+    println!("欢迎设置，还差 2 步就能开始。");
+    println!("推荐：1) 快速设置（推荐值 + 最少输入，约 30 秒）");
+    println!("      2) 高级设置（展开所有细项）");
+    println!("      3) 稍后再配（先进入基础可用状态）");
+    print!("选择 [1]: ");
+    std::io::Write::flush(&mut std::io::stdout()).ok();
 
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
-    let value = input.trim();
-    let selection = if value.is_empty() { "2" } else { value };
+    let selection = input.trim();
+    let selection = if selection.is_empty() { "1" } else { selection };
 
     match selection {
-        "1" => {
-            crate::setup::run_setup_with_options(
-                config_path,
-                SetupOptions {
-                    profile: Some(parse_setup_profile("adaptive")?),
-                    level: Some(SetupLevel::Quick),
-                    secret_mode: None,
-                    force: true,
-                    prompt_for_secrets: true,
-                },
-            )?;
-            println!("AI provider quick setup completed. Re-run go-on to start service.");
-            Ok(true)
-        }
         "2" => {
             crate::setup::run_setup_with_options(
                 config_path,
                 SetupOptions {
                     profile: Some(parse_setup_profile("adaptive")?),
-                    level: None,
+                    level: Some(parse_setup_level("custom")?),
                     secret_mode: None,
                     force: true,
                     prompt_for_secrets: true,
                 },
             )?;
-            println!("Setup wizard completed. Re-run go-on to start service.");
+            println!("设置完成。下一步：go-on --check --config config.toml");
             Ok(true)
         }
-        _ => Ok(false),
+        "3" => {
+            println!("已跳过 AI 提供商配置。待完成：AI 提供商");
+            println!("下一步：go-on --check --config config.toml");
+            Ok(true)
+        }
+        _ => {
+            crate::setup::run_setup_with_options(
+                config_path,
+                SetupOptions {
+                    profile: Some(parse_setup_profile("adaptive")?),
+                    level: Some(parse_setup_level("quick")?),
+                    secret_mode: None,
+                    force: true,
+                    prompt_for_secrets: true,
+                },
+            )?;
+            println!("设置完成。下一步：go-on --check --config config.toml");
+            Ok(true)
+        }
     }
+}
+
+enum AiOnboardingState {
+    MissingConfig,
+    BlankConfig,
+    InvalidConfig,
+    NoAgents,
+    AgentsNotReady,
+}
+
+impl AiOnboardingState {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::MissingConfig => "missing_config",
+            Self::BlankConfig => "blank_config",
+            Self::InvalidConfig => "invalid_config",
+            Self::NoAgents => "no_agents",
+            Self::AgentsNotReady => "agents_not_ready",
+        }
+    }
+}
+
+fn detect_ai_onboarding_state(config_path: &std::path::Path) -> Result<Option<AiOnboardingState>> {
+    if !config_path.exists() {
+        return Ok(Some(AiOnboardingState::MissingConfig));
+    }
+
+    let content = fs::read_to_string(config_path)
+        .with_context(|| format!("failed to read config file: {}", config_path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(Some(AiOnboardingState::BlankConfig));
+    }
+
+    let root: toml::Value = match toml::from_str(&content) {
+        Ok(value) => value,
+        Err(_) => return Ok(Some(AiOnboardingState::InvalidConfig)),
+    };
+
+    let no_agents = root
+        .get("agents")
+        .and_then(|value| value.as_table())
+        .map(|table| table.is_empty())
+        .unwrap_or(true);
+    if no_agents {
+        return Ok(Some(AiOnboardingState::NoAgents));
+    }
+
+    let config = match AppConfig::load(config_path) {
+        Ok(cfg) => cfg,
+        Err(_) => return Ok(Some(AiOnboardingState::InvalidConfig)),
+    };
+
+    if config.agents.is_empty() {
+        return Ok(Some(AiOnboardingState::NoAgents));
+    }
+
+    let ready = config
+        .agents
+        .keys()
+        .filter(|name| is_agent_env_ready(&config, name))
+        .count();
+
+    if ready == 0 {
+        return Ok(Some(AiOnboardingState::AgentsNotReady));
+    }
+
+    Ok(None)
 }
 
 async fn initialize_cache(

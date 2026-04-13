@@ -1,0 +1,79 @@
+name: Release App Bundles
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }} bundle
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux
+            target: x86_64-unknown-linux-gnu
+            archive: go-on-linux.tar.gz
+            executable: go-on
+          - os: macos-latest
+            label: macos
+            target: aarch64-apple-darwin
+            archive: go-on-macos.tar.gz
+            executable: go-on
+          - os: windows-latest
+            label: windows
+            target: x86_64-pc-windows-msvc
+            archive: go-on-windows.zip
+            executable: go-on.exe
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package Linux and macOS bundle
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          STAGE_DIR="dist/stage"
+          mkdir -p "$STAGE_DIR"
+          cp "target/${{ matrix.target }}/release/${{ matrix.executable }}" "$STAGE_DIR/${{ matrix.executable }}"
+          cp config.toml.autopilot-adaptive "$STAGE_DIR/config.toml.autopilot-adaptive"
+          cp config.toml.autopilot-adaptive "$STAGE_DIR/config.toml"
+          cp -R RULES "$STAGE_DIR/RULES"
+          cp -R languages "$STAGE_DIR/languages"
+          tar -czf "dist/${{ matrix.archive }}" -C "$STAGE_DIR" .
+
+      - name: Package Windows bundle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/stage | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.executable }}" "dist/stage/${{ matrix.executable }}"
+          Copy-Item "config.toml.autopilot-adaptive" "dist/stage/config.toml.autopilot-adaptive"
+          Copy-Item "config.toml.autopilot-adaptive" "dist/stage/config.toml"
+          Copy-Item "RULES" "dist/stage/RULES" -Recurse
+          Copy-Item "languages" "dist/stage/languages" -Recurse
+          Compress-Archive -Path "dist/stage/*" -DestinationPath "dist/${{ matrix.archive }}" -Force
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.archive }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

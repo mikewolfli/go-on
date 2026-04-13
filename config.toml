@@ -1,15 +1,12 @@
-# Go-On runtime config (clean, deduplicated)
-# If you deploy to another folder (e.g. D:\Tools\go-on), copy this file there as well.
-
-default_phase = "coding"
+﻿default_phase = "coding"
 model_selection_mode = "adaptive"
 
 [protocol]
-# Protocol mode: auto/acp/mcp
-# auto: auto-detect (recommended)
-# acp: ACP/A2A only
-# mcp: MCP only
 mode = "auto"
+
+# Welcome: 还差 2 步就能开始
+# 1) go-on --init --config config.toml
+# 2) go-on --check --config config.toml
 
 [cache]
 enabled = true
@@ -36,7 +33,7 @@ maintenance_interval_seconds = 60
 health_interval_seconds = 120
 shutdown_drain_seconds = 30
 sqlite_vacuum_interval_cycles = 60
-acp_http_bind_addr = "127.0.0.1:8090"
+# acp_http_bind_addr = "127.0.0.1:8090"
 otel_enabled = false
 otel_exporter = "otlp"
 otel_endpoint = "http://localhost:4317"
@@ -59,26 +56,7 @@ min_vector_searches = 5
 summary_trigger_min = 3
 summary_trigger_max = 20
 
-[agents.primary]
-# Supported types include: openai | deepseek | claude | gemini | qwen | copilot | ...
-# 支持的 agent 类型 / Supported agent types
-type = "deepseek"
-api_key_env = "keyring://go-on/deepseek_api_key"
-model = "deepseek-chat"
-
-# --- GitHub Copilot agent example -------------------------------------------------
-# 使用方式 / How to use:
-#   1. 将 agents.primary.type 改为 "copilot" / Change agents.primary.type to "copilot"
-#   2. 设置环境变量 / Set env var:
-#        $env:GITHUB_TOKEN = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-#      （GitHub PAT 或 OAuth token，需有 GitHub Copilot 订阅）
-#   3. 删除不需要的 url / api_key_env / model 字段，或保留（会被忽略）
-#
-# [agents.copilot_example]
-# type        = "copilot"
-# api_key_env = "GITHUB_TOKEN"   # 默认值，可省略 / optional, this is the default
-# model       = "gpt-4o"         # 可选，copilot 默认模型 / optional Copilot model
-# ----------------------------------------------------------------------------------
+[agents]
 
 [flow]
 name = "Autopilot Adaptive"
@@ -86,12 +64,12 @@ phases = ["planning", "coding", "review", "delivery"]
 
 [phases.planning]
 description = "Planning phase"
-agents = ["primary"]
+agents = []
 fallback = true
 
 [phases.coding]
 description = "Coding phase"
-agents = ["primary"]
+agents = []
 fallback = true
 
 [phases.coding.options]
@@ -101,19 +79,17 @@ review_timeout_seconds = 60
 cache_enabled = true
 vector_enabled = true
 summary_enabled = true
-full_auto_review_agents = ["primary"]
-review_gate_timeout_seconds = 90
+full_auto_review_agents = []
 phase_max_inflight = 24
 global_max_inflight = 128
 
 [phases.review]
 description = "Review phase"
-agents = ["primary"]
+agents = []
 fallback = true
 
 [phases.review.options]
 request_timeout_seconds = 60
-review_gate_timeout_seconds = 90
 review_timeout_policy = "reject"
 review_min_response_chars = 12
 phase_max_inflight = 16
@@ -121,5 +97,8 @@ global_max_inflight = 128
 
 [phases.delivery]
 description = "Delivery phase"
-agents = ["primary"]
+agents = []
 fallback = false
+
+[phases.delivery.options]
+request_timeout_seconds = 90
