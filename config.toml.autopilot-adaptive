@@ -63,7 +63,7 @@ summary_trigger_max = 20
 [agents.primary]
 # type 可选: openai | deepseek | claude | gemini | qwen | 其他支持的provider
 type = "deepseek"
-api_key_env = "DEEPSEEK_API_KEY"
+api_key_env = "keyring://go-on/deepseek_api_key"
 model = "deepseek-chat"
 # api_key_env can also reference keyring, for example:
 # api_key_env = "keyring://go-on/openai_compatible_api_key"

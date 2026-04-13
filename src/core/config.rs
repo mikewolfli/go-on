@@ -2341,10 +2341,21 @@ fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
         anyhow::anyhow!("failed to open keyring entry for {}: {}", field_name, err)
     })?;
     let secret = entry.get_password().map_err(|err| {
-        anyhow::anyhow!("failed to read keyring entry for {}: {}", field_name, err)
+        anyhow::anyhow!(
+            "keyring entry for {}/{} not found or cannot be read: {}. \
+             Hint: Run 'go-on --setup --config config.toml' to store credentials in keyring.",
+            service,
+            account,
+            err
+        )
     })?;
     if secret.trim().is_empty() {
-        anyhow::bail!("keyring entry for {} resolved to empty value", field_name);
+        anyhow::bail!(
+            "keyring entry for {}/{} resolved to empty value. \
+             Hint: Run 'go-on --setup --config config.toml' to update the credential.",
+            service,
+            account
+        );
     }
 
     // 验证密钥安全性
