@@ -28,15 +28,23 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "tray_show" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                // 显示主窗口，隐藏迷你窗口
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.show();
+                    let _ = main.set_focus();
+                }
+                if let Some(mini) = app.get_webview_window("mini") {
+                    let _ = mini.hide();
                 }
             }
             "tray_mini" => {
-                if let Some(window) = app.get_webview_window("mini") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                // 显示迷你窗口，隐藏主窗口
+                if let Some(mini) = app.get_webview_window("mini") {
+                    let _ = mini.show();
+                    let _ = mini.set_focus();
+                }
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.hide();
                 }
             }
             "tray_start" => {
@@ -84,6 +92,7 @@ fn main() {
                 thread::sleep(Duration::from_secs(1));
             });
 
+            // 主窗口关闭时只隐藏自己
             if let Some(main) = app.get_webview_window("main") {
                 let app_handle = app.handle().clone();
                 main.on_window_event(move |event| {
@@ -91,6 +100,30 @@ fn main() {
                         api.prevent_close();
                         if let Some(window) = app_handle.get_webview_window("main") {
                             let _ = window.hide();
+                        }
+                    }
+                    // 若主窗口显示，则隐藏迷你窗口
+                    if let tauri::WindowEvent::Focused(true) = event {
+                        if let Some(mini) = app_handle.get_webview_window("mini") {
+                            let _ = mini.hide();
+                        }
+                    }
+                });
+            }
+            // 迷你窗口关闭时只隐藏自己
+            if let Some(mini) = app.get_webview_window("mini") {
+                let app_handle = app.handle().clone();
+                mini.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        if let Some(window) = app_handle.get_webview_window("mini") {
+                            let _ = window.hide();
+                        }
+                    }
+                    // 若迷你窗口显示，则隐藏主窗口
+                    if let tauri::WindowEvent::Focused(true) = event {
+                        if let Some(main) = app_handle.get_webview_window("main") {
+                            let _ = main.hide();
                         }
                     }
                 });

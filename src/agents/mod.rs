@@ -143,6 +143,41 @@ pub fn option_u64(options: &Option<HashMap<String, Value>>, key: &str) -> Option
         .and_then(|v| v.as_u64())
 }
 
+/// Apply common OpenAI chat completion options into payload.
+///
+/// This keeps compatibility with OpenAI-compatible fields while allowing
+/// providers to ignore unknown keys safely.
+pub fn apply_openai_common_options(payload: &mut Value, options: &Option<HashMap<String, Value>>) {
+    let Some(map) = options.as_ref() else {
+        return;
+    };
+
+    const KEYS: &[&str] = &[
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "n",
+        "stop",
+        "presence_penalty",
+        "frequency_penalty",
+        "logit_bias",
+        "user",
+        "seed",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "function_call",
+        "functions",
+    ];
+
+    for key in KEYS {
+        if let Some(value) = map.get(*key) {
+            payload[*key] = value.clone();
+        }
+    }
+}
+
 /// SSE event action
 pub(crate) enum SseEventAction {
     /// Continue processing events

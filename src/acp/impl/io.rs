@@ -16,6 +16,10 @@ use crate::rpc_protocol::{JsonRpcError, JsonRpcResponse};
 ///
 /// This function replaces the `AcpServer::send_result` method.
 pub async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Result<()> {
+    // JSON-RPC notification (no id) must not produce a response.
+    if id.is_none() {
+        return Ok(());
+    }
     write_response(
         server,
         JsonRpcResponse {

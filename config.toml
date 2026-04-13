@@ -58,18 +58,24 @@ summary_trigger_max = 20
 
 [agents]
 
+[agents.deepseek]
+type = "deepseek"
+api_key_env = "keyring://go-on/deepseek_api_key"
+model = "deepseek-chat"
+supports_system = true
+
 [flow]
 name = "Autopilot Adaptive"
 phases = ["planning", "coding", "review", "delivery"]
 
 [phases.planning]
 description = "Planning phase"
-agents = []
+agents = ["deepseek"]
 fallback = true
 
 [phases.coding]
 description = "Coding phase"
-agents = []
+agents = ["deepseek"]
 fallback = true
 
 [phases.coding.options]
@@ -79,13 +85,13 @@ review_timeout_seconds = 60
 cache_enabled = true
 vector_enabled = true
 summary_enabled = true
-full_auto_review_agents = []
+full_auto_review_agents = ["deepseek"]
 phase_max_inflight = 24
 global_max_inflight = 128
 
 [phases.review]
 description = "Review phase"
-agents = []
+agents = ["deepseek"]
 fallback = true
 
 [phases.review.options]
@@ -97,7 +103,7 @@ global_max_inflight = 128
 
 [phases.delivery]
 description = "Delivery phase"
-agents = []
+agents = ["deepseek"]
 fallback = false
 
 [phases.delivery.options]

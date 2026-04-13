@@ -168,20 +168,33 @@ const executionHistory = ref([
 
 const planOutput = ref("");
 const rawOutput = ref("");
+const plannedTask = ref("");
 const activeWorkflows = ref(0);
 const totalExecuted = ref(3);
 const successCount = ref(2);
 const failureCount = ref(1);
 
+function taskTextById(taskId: string) {
+  const task = tasks.value.find((item) => item.id === taskId);
+  if (!task) {
+    return taskId;
+  }
+  return `${task.name}: ${task.description}`;
+}
+
 async function loadTasks() {
   loadingTasks.value = true;
   try {
-    const result = await invokeRuntimeRpc("workflow.list", "{}");
+    const result = await invokeRuntimeRpc("debug_panel.get", "{}");
     rawOutput.value = result;
 
     const data = JSON.parse(result);
-    if (data.ok && Array.isArray(data.tasks)) {
-      tasks.value = data.tasks;
+    if (data?.panel) {
+      const conversations = data.panel.conversations;
+      if (conversations) {
+        activeWorkflows.value = Number(conversations.count || 0);
+        totalExecuted.value = Number(conversations.checkpoints || totalExecuted.value);
+      }
     }
     ElMessage.success(t("common.loaded"));
   } catch (err) {
@@ -193,7 +206,9 @@ async function loadTasks() {
 
 async function planTask(taskId: string) {
   try {
-    const params = JSON.stringify({ task_id: taskId });
+    const task = taskTextById(taskId);
+    plannedTask.value = task;
+    const params = JSON.stringify({ task });
     const result = await invokeRuntimeRpc("task.plan", params);
     planOutput.value = result;
     ElMessage.success(t("workflow.planGenerated"));
@@ -205,7 +220,8 @@ async function planTask(taskId: string) {
 async function executeTask(taskId: string) {
   executingId.value = taskId;
   try {
-    const params = JSON.stringify({ task_id: taskId });
+    const task = taskTextById(taskId);
+    const params = JSON.stringify({ task, requirement_confirmed: true });
     const result = await invokeRuntimeRpc("task.execute", params);
     rawOutput.value = result;
 
@@ -240,8 +256,13 @@ async function confirmExecutePlan() {
 
   executingPlan.value = true;
   try {
-    const params = JSON.stringify({ plan: planOutput.value });
-    const result = await invokeRuntimeRpc("workflow.execute_plan", params);
+    const task = plannedTask.value || tasks.value[0]?.name || "workflow task";
+    const params = JSON.stringify({
+      task,
+      requirement_confirmed: true,
+      plan: planOutput.value,
+    });
+    const result = await invokeRuntimeRpc("workflow.execute", params);
     rawOutput.value = result;
 
     const data = JSON.parse(result);

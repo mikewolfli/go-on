@@ -71,6 +71,12 @@ fn is_acp_request(method: &str) -> bool {
             | "learning.summary"
             | "phase.policy.replay"
             | "primary_secondary.summary"
+             // diagnostics / ops – also used by vscode-addon in ACP mode
+             | "metrics.reset"
+             | "trace.get"
+             | "trace.metrics"
+             | "debug_panel.get"
+             | "debug.panel.get"
     )
 }
 // Request handling implementation functions for ACP server
@@ -437,7 +443,7 @@ async fn handle_initialize(server: &AcpServer, request_id: Option<Value>) -> Res
         request_id,
         json!({
             "name": "go-on",
-            "version": "0.5.1",
+            "version": env!("CARGO_PKG_VERSION"),
             "protocol": "acp",
             "capabilities": {
                 "chat": true,
@@ -463,7 +469,7 @@ async fn handle_mcp_initialize(server: &AcpServer, request_id: Option<Value>) ->
             "capabilities": {},
             "serverInfo": {
                 "name": "go-on",
-                "version": "0.5.1"
+                "version": env!("CARGO_PKG_VERSION")
             }
         }),
     )

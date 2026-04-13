@@ -164,7 +164,12 @@ function toggleTheme() {
 
 async function onStart() {
   try {
-    await startService();
+    const exists = await backendExecutableExists();
+    if (!exists) {
+      await ensureBackendAndStart();
+    } else {
+      await startBackendWithChecks();
+    }
     await runtime.refreshAll();
     ElMessage.success(t("toast.serviceStarted"));
   } catch (error) {
@@ -184,7 +189,12 @@ async function onStop() {
 
 async function onRestart() {
   try {
-    await restartService();
+    const exists = await backendExecutableExists();
+    if (!exists) {
+      await ensureBackendAndStart();
+    } else {
+      await restartService();
+    }
     await runtime.refreshAll();
     ElMessage.success(t("toast.serviceRestarted"));
   } catch (error) {

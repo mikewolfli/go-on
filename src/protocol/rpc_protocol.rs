@@ -20,7 +20,6 @@ pub(crate) struct RequestTraceContext {
 #[derive(Debug, Serialize)]
 pub(crate) struct JsonRpcResponse {
     pub(crate) jsonrpc: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) id: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) result: Option<Value>,

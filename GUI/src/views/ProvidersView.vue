@@ -93,6 +93,10 @@ async function importCopilotToken() {
       envVar.value = "GITHUB_COPILOT_TOKEN";
       apiKey.value = result.tokenPlain;
       ElMessage.success(t("providers.copilotImported"));
+    } else if (result.userCode && result.verificationUri) {
+      provider.value = "copilot";
+      envVar.value = "GITHUB_COPILOT_TOKEN";
+      ElMessage.info(result.note);
     } else {
       ElMessage.warning(t("providers.copilotMissing"));
     }

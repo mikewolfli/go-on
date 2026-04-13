@@ -68,7 +68,11 @@ pub fn check_health(
 
             let endpoint_counter = inner.endpoint_health.entry(endpoint.clone()).or_default();
             endpoint_counter.total += 1;
-            endpoint_counter.success += 1;
+            if code >= 200 && code < 300 {
+                endpoint_counter.success += 1;
+            } else {
+                endpoint_counter.failure += 1;
+            }
             if endpoint_counter.total == 1 {
                 endpoint_counter.avg_latency_ms = elapsed;
             } else {

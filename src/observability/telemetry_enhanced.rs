@@ -120,6 +120,7 @@ pub fn init_telemetry(config: &TelemetryConfig) -> anyhow::Result<()> {
     // Configure logging layer
     if config.enable_logging {
         let fmt_layer = fmt::layer()
+            .with_writer(std::io::stderr)
             .with_target(true)
             .with_thread_ids(true)
             .with_thread_names(true)

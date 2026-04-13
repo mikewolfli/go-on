@@ -31,6 +31,11 @@ echo "=== 步骤5: 运行i18n模块测试 ==="
 cargo test i18n::tests::test_language_detection -- --nocapture
 echo "✅ i18n测试通过"
 
+# 5.1 OpenAI兼容回归测试
+echo "=== 步骤5.1: 运行OpenAI兼容回归测试 ==="
+cargo test openai_http_request_matrix_regression -- --nocapture
+echo "✅ OpenAI兼容回归测试通过"
+
 # 6. 验证语言文件
 echo "=== 步骤6: 验证语言文件 ==="
 if [ -f "languages/en_US.json" ]; then

@@ -320,20 +320,55 @@ pub fn autotune_handle(server: &AcpServer) -> Option<Arc<tokio::sync::Mutex<Auto
 struct OpenAiChatRequest {
     model: Option<String>,
     messages: Vec<OpenAiChatMessage>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u64>,
+    n: Option<u64>,
+    stop: Option<serde_json::Value>,
+    presence_penalty: Option<f64>,
+    frequency_penalty: Option<f64>,
+    logit_bias: Option<serde_json::Value>,
+    user: Option<String>,
+    seed: Option<i64>,
+    response_format: Option<serde_json::Value>,
+    tools: Option<serde_json::Value>,
+    tool_choice: Option<serde_json::Value>,
+    parallel_tool_calls: Option<bool>,
+    function_call: Option<serde_json::Value>,
+    functions: Option<serde_json::Value>,
     #[serde(default)]
     stream: bool,
+    #[serde(flatten)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct OpenAiChatMessage {
     role: String,
+    #[serde(default)]
     content: serde_json::Value,
+    name: Option<String>,
+    tool_call_id: Option<String>,
+    function_call: Option<serde_json::Value>,
+    tool_calls: Option<serde_json::Value>,
+    refusal: Option<serde_json::Value>,
 }
 
 impl OpenAiChatMessage {
-    fn content_text(&self) -> Option<String> {
+    fn normalized_role(&self) -> String {
+        match self.role.as_str() {
+            "system" | "user" | "assistant" => self.role.clone(),
+            _ => "user".to_string(),
+        }
+    }
+
+    fn content_text(&self) -> String {
         if let Some(text) = self.content.as_str() {
-            return Some(text.to_string());
+            return text.to_string();
+        }
+
+        if self.content.is_null() {
+            return String::new();
         }
 
         if let Some(parts) = self.content.as_array() {
@@ -350,11 +385,63 @@ impl OpenAiChatMessage {
                 .collect::<Vec<_>>()
                 .join("\n");
             if !merged.is_empty() {
-                return Some(merged);
+                return merged;
             }
+
+            return serde_json::to_string(parts).unwrap_or_default();
         }
 
-        None
+        if self.content.is_object() {
+            if let Some(text) = self.content.get("text").and_then(|value| value.as_str()) {
+                return text.to_string();
+            }
+
+            return serde_json::to_string(&self.content).unwrap_or_default();
+        }
+
+        serde_json::to_string(&self.content).unwrap_or_default()
+    }
+
+    fn to_agent_message(&self) -> crate::agent::Message {
+        let mut metadata: Vec<String> = Vec::new();
+        if let Some(name) = &self.name {
+            metadata.push(format!("[name] {}", name));
+        }
+        if let Some(tool_call_id) = &self.tool_call_id {
+            metadata.push(format!("[tool_call_id] {}", tool_call_id));
+        }
+        if let Some(function_call) = &self.function_call {
+            metadata.push(format!(
+                "[function_call] {}",
+                serde_json::to_string(function_call).unwrap_or_default()
+            ));
+        }
+        if let Some(tool_calls) = &self.tool_calls {
+            metadata.push(format!(
+                "[tool_calls] {}",
+                serde_json::to_string(tool_calls).unwrap_or_default()
+            ));
+        }
+        if let Some(refusal) = &self.refusal {
+            metadata.push(format!(
+                "[refusal] {}",
+                serde_json::to_string(refusal).unwrap_or_default()
+            ));
+        }
+
+        let content = self.content_text();
+        let final_content = if metadata.is_empty() {
+            content
+        } else if content.is_empty() {
+            metadata.join("\n")
+        } else {
+            format!("{}\n{}", content, metadata.join("\n"))
+        };
+
+        crate::agent::Message {
+            role: self.normalized_role(),
+            content: final_content,
+        }
     }
 }
 
@@ -362,14 +449,70 @@ fn openai_to_chat_params(req: &OpenAiChatRequest) -> crate::acp::r#impl::chat::C
     let messages = req
         .messages
         .iter()
-        .filter_map(|m| {
-            let content = m.content_text()?;
-            Some(crate::agent::Message {
-                role: m.role.clone(),
-                content,
-            })
-        })
+        .map(OpenAiChatMessage::to_agent_message)
         .collect::<Vec<_>>();
+
+    let mut extra = req.extra.clone();
+    if let Some(model) = &req.model {
+        extra.insert("model".to_string(), serde_json::json!(model));
+    }
+    if let Some(value) = req.temperature {
+        extra.insert("temperature".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = req.top_p {
+        extra.insert("top_p".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = req.max_tokens {
+        extra.insert("max_tokens".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = req.n {
+        extra.insert("n".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = &req.stop {
+        extra.insert("stop".to_string(), value.clone());
+    }
+    if let Some(value) = req.presence_penalty {
+        extra.insert("presence_penalty".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = req.frequency_penalty {
+        extra.insert("frequency_penalty".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = &req.logit_bias {
+        extra.insert("logit_bias".to_string(), value.clone());
+    }
+    if let Some(value) = &req.user {
+        extra.insert("user".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = req.seed {
+        extra.insert("seed".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = &req.response_format {
+        extra.insert("response_format".to_string(), value.clone());
+    }
+    if let Some(value) = &req.tools {
+        extra.insert("tools".to_string(), value.clone());
+    }
+    if let Some(value) = &req.tool_choice {
+        extra.insert("tool_choice".to_string(), value.clone());
+    }
+    if let Some(value) = req.parallel_tool_calls {
+        extra.insert("parallel_tool_calls".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = &req.function_call {
+        extra.insert("function_call".to_string(), value.clone());
+    }
+    if let Some(value) = &req.functions {
+        extra.insert("functions".to_string(), value.clone());
+    }
+
+    let options = if extra.is_empty() {
+        None
+    } else {
+        Some(crate::config::PhaseOptions {
+            extra,
+            ..Default::default()
+        })
+    };
 
     crate::acp::r#impl::chat::ChatParams {
         mode: "ask".to_string(),
@@ -379,7 +522,7 @@ fn openai_to_chat_params(req: &OpenAiChatRequest) -> crate::acp::r#impl::chat::C
         // Use configured default phase instead of forcing delivery,
         // so deployment-specific fallback chains can be honored.
         phase: None,
-        options: None,
+        options,
         requirement_contract: None,
         plan: None,
         vector_hits: None,
@@ -427,7 +570,7 @@ fn build_root_capabilities_response() -> serde_json::Value {
         "health": "/health",
         "endpoints": {
             "chat": ["/chat", "/chat/stream"],
-            "openai": ["/v1/models", "/models", "/v1/chat/completions", "/chat/completions"],
+            "openai": ["/v1/models", "/v1/model", "/models", "/v1/chat/completions", "/chat/completions"],
         }
     })
 }
@@ -642,7 +785,7 @@ async fn handle_http_connection(socket: &mut TcpStream, server: Arc<AcpServer>) 
                 write_http_json_response(socket, 200, serde_json::to_value(server.get_status())?)
                     .await?;
             }
-            "/v1/models" | "/models" => {
+            "/v1/models" | "/v1/model" | "/models" => {
                 write_http_json_response(socket, 200, build_openai_models_response()).await?;
             }
             "/" => {
@@ -854,4 +997,91 @@ async fn write_sse_event(
     debug!("ACP SSE event: {}", event);
     socket.write_all(frame.as_bytes()).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_to_chat_params_maps_options_and_roles() {
+        let req = OpenAiChatRequest {
+            model: Some("m1".to_string()),
+            messages: vec![
+                OpenAiChatMessage {
+                    role: "assistant".to_string(),
+                    content: serde_json::Value::Null,
+                    name: None,
+                    tool_call_id: None,
+                    function_call: None,
+                    tool_calls: Some(serde_json::json!([{"id":"t1"}])),
+                    refusal: None,
+                },
+                OpenAiChatMessage {
+                    role: "tool".to_string(),
+                    content: serde_json::json!({"result": 3}),
+                    name: None,
+                    tool_call_id: Some("t1".to_string()),
+                    function_call: None,
+                    tool_calls: None,
+                    refusal: None,
+                },
+                OpenAiChatMessage {
+                    role: "user".to_string(),
+                    content: serde_json::json!([
+                        {"type":"text","text":"hello"},
+                        {"type":"text","text":"world"}
+                    ]),
+                    name: None,
+                    tool_call_id: None,
+                    function_call: None,
+                    tool_calls: None,
+                    refusal: None,
+                },
+            ],
+            temperature: Some(0.2),
+            top_p: Some(0.9),
+            max_tokens: Some(64),
+            n: Some(2),
+            stop: Some(serde_json::json!(["END"])),
+            presence_penalty: Some(0.1),
+            frequency_penalty: Some(0.2),
+            logit_bias: Some(serde_json::json!({"10": -1})),
+            user: Some("u1".to_string()),
+            seed: Some(42),
+            response_format: Some(serde_json::json!({"type":"json_object"})),
+            tools: Some(serde_json::json!([{"type":"function"}])),
+            tool_choice: Some(serde_json::json!("auto")),
+            parallel_tool_calls: Some(true),
+            function_call: Some(serde_json::json!("auto")),
+            functions: Some(serde_json::json!([{"name":"f"}])),
+            stream: false,
+            extra: std::collections::HashMap::from([(
+                "custom_flag".to_string(),
+                serde_json::json!(true),
+            )]),
+        };
+
+        let params = openai_to_chat_params(&req);
+        assert_eq!(params.mode, "ask");
+        assert_eq!(params.messages.len(), 3);
+        assert_eq!(params.messages[1].role, "user"); // tool role normalized
+        assert!(params.messages[1].content.contains("tool_call_id"));
+        assert!(params.messages[2].content.contains("hello"));
+
+        let options = params.options.expect("expected options");
+        assert_eq!(options.extra.get("model"), Some(&serde_json::json!("m1")));
+        assert_eq!(
+            options.extra.get("max_tokens"),
+            Some(&serde_json::json!(64))
+        );
+        assert_eq!(
+            options.extra.get("response_format"),
+            Some(&serde_json::json!({"type":"json_object"}))
+        );
+        assert_eq!(
+            options.extra.get("custom_flag"),
+            Some(&serde_json::json!(true))
+        );
+    }
 }

@@ -27,7 +27,16 @@ pub fn invoke_runtime_rpc(
     }
 
     let config_path = std::path::Path::new(&working_dir).join("config.toml");
-    let mut cmd = Command::new(&executable);
+    let executable_path = {
+        let path = std::path::PathBuf::from(&executable);
+        if path.is_absolute() {
+            path
+        } else {
+            std::path::PathBuf::from(&working_dir).join(path)
+        }
+    };
+
+    let mut cmd = Command::new(&executable_path);
     cmd.current_dir(&working_dir)
         .arg("--config")
         .arg(config_path)
@@ -104,7 +113,19 @@ pub fn invoke_runtime_rpc(
     let _ = child.wait();
 
     match result {
-        Ok(v) => Ok(serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string())),
+        Ok(v) => {
+            if let Some(err) = v.get("error") {
+                let code = err.get("code").and_then(|x| x.as_i64()).unwrap_or(-1);
+                let message = err
+                    .get("message")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("unknown rpc error");
+                return Err(format!("rpc_error:{code}:{message}"));
+            }
+
+            let payload = v.get("result").cloned().unwrap_or(v);
+            Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string()))
+        }
         Err(err) => Err(err),
     }
 }

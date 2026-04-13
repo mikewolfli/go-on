@@ -169,27 +169,30 @@ const overallScore = computed(() => {
 async function refreshBreakdown() {
   loading.value = true;
   try {
-    // Get cache status
-    const cacheResult = await invokeRuntimeRpc("runtime.cache_status", "{}");
-    const cacheData = JSON.parse(cacheResult);
-    if (cacheData.ok) {
-      cacheStatus.type = cacheData.healthy ? "success" : "warning";
-      cacheStatus.text = cacheData.healthy ? t("common.healthy") : t("common.degraded");
-      cacheStatus.hitRate = cacheData.hit_rate || 0;
-      cacheStatus.size = cacheData.size || "0B";
-      cacheStatus.lastUpdate = "just now";
-    }
+    // Use supported APIs for runtime and debug information.
+    const panelResult = await invokeRuntimeRpc("debug_panel.get", "{}");
+    const panelData = JSON.parse(panelResult);
+    const runtimeOk = Boolean(panelData?.panel?.runtime_health?.ok);
 
-    // Get vector status
-    const vectorResult = await invokeRuntimeRpc("runtime.vector_status", "{}");
-    const vectorData = JSON.parse(vectorResult);
-    if (vectorData.ok) {
-      vectorStatus.type = vectorData.healthy ? "success" : "warning";
-      vectorStatus.text = vectorData.healthy ? t("common.healthy") : t("common.degraded");
-      vectorStatus.dimensions = vectorData.dimensions || 1536;
-      vectorStatus.vectors = vectorData.count || 0;
-      vectorStatus.lastUpdate = "just now";
-    }
+    const metricsResult = await invokeRuntimeRpc("metrics.get", "{}");
+    const metricsData = JSON.parse(metricsResult);
+    const metrics = metricsData?.metrics || {};
+
+    const cacheLookupTotal = Number(metrics.cache_lookup_total || 0);
+    const cacheHitTotal = Number(metrics.cache_hit_total || 0);
+    const cacheHitRate = cacheLookupTotal > 0 ? Math.round((cacheHitTotal / cacheLookupTotal) * 100) : 0;
+
+    cacheStatus.type = runtimeOk ? "success" : "warning";
+    cacheStatus.text = runtimeOk ? t("common.healthy") : t("common.degraded");
+    cacheStatus.hitRate = cacheHitRate;
+    cacheStatus.size = String(metrics.cache_store_total ?? 0);
+    cacheStatus.lastUpdate = "just now";
+
+    vectorStatus.type = runtimeOk ? "success" : "warning";
+    vectorStatus.text = runtimeOk ? t("common.healthy") : t("common.degraded");
+    vectorStatus.dimensions = Number(metrics.embedding_dimension || 0);
+    vectorStatus.vectors = Number(metrics.vector_store_total || 0);
+    vectorStatus.lastUpdate = "just now";
 
     // Get breaker status
     const breakerResult = await invokeRuntimeRpc("breaker.status", "{}");
@@ -205,15 +208,19 @@ async function refreshBreakdown() {
     }
 
     // Get rate limiter status
-    const rateLimiterResult = await invokeRuntimeRpc("runtime.rate_limiter_status", "{}");
+    const rateLimiterResult = await invokeRuntimeRpc("phase.status", "{}");
     const rateLimiterData = JSON.parse(rateLimiterResult);
-    if (rateLimiterData.ok) {
-      rateLimiterStatus.type = rateLimiterData.healthy ? "success" : "warning";
-      rateLimiterStatus.text = rateLimiterData.healthy ? t("common.normal") : t("common.limited");
-      rateLimiterStatus.currentRate = rateLimiterData.current_rate || 0;
-      rateLimiterStatus.limit = rateLimiterData.limit || 100;
-      rateLimiterStatus.rejectedCount = rateLimiterData.rejected_count || 0;
-    }
+    const bucketMap = rateLimiterData?.rate_limiter?.buckets || {};
+    const tracked = Number(rateLimiterData?.rate_limiter?.tracked || 0);
+    const bucketValues = Object.values(bucketMap)
+      .map((v) => Number(v || 0))
+      .filter((v) => Number.isFinite(v));
+    const currentRate = bucketValues.length > 0 ? Math.max(...bucketValues) : 0;
+    rateLimiterStatus.type = runtimeOk ? "success" : "warning";
+    rateLimiterStatus.text = runtimeOk ? t("common.normal") : t("common.limited");
+    rateLimiterStatus.currentRate = currentRate;
+    rateLimiterStatus.limit = Math.max(100, tracked);
+    rateLimiterStatus.rejectedCount = 0;
 
     ElMessage.success(t("common.refreshed"));
   } catch (err) {

@@ -15,6 +15,10 @@ use anyhow::{Context, Result};
 const ADAPTIVE_TEMPLATE: &str = "config.toml.autopilot-adaptive";
 const PROVIDER_CAPABILITY_FILE: &str = "providers.toml";
 
+/// Compile-time embedded providers.toml — ensures full provider list is always
+/// available even when the binary is run from a directory without providers.toml.
+const EMBEDDED_PROVIDERS_TOML: &str = include_str!("../../providers.toml");
+
 #[derive(Clone, Debug, serde::Deserialize)]
 struct ProviderSpec {
     name: String,
@@ -226,6 +230,13 @@ fn load_provider_specs() -> Vec<ProviderSpec> {
             }
         }
     }
+    // Fallback: use compile-time embedded providers.toml so the full list is
+    // always available regardless of the binary's working directory.
+    if let Ok(catalog) = toml::from_str::<ProviderCapabilityCatalog>(EMBEDDED_PROVIDERS_TOML) {
+        if !catalog.providers.is_empty() {
+            return catalog.providers;
+        }
+    }
     built_in_provider_specs()
 }
 
@@ -333,7 +344,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             url: Some("http://127.0.0.1:8080".to_string()),
             chat_path: None,
             model: None,
-            api_key_env: None,
+            api_key_env: Some("GITHUB_COPILOT_TOKEN".to_string()),
             secret_key_env: None,
             anthropic_version: None,
             max_tokens: None,
@@ -712,8 +723,13 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
 
     // 检测可用的AI提供商
     let detected_providers = detect_available_providers(&secret_mode);
-    let available_providers = prompt_provider_selection(&detected_providers)?;
-    let custom_agents = prompt_additional_agents()?;
+    let available_providers = prompt_provider_selection(&detected_providers, setup_level)?;
+    // Quick mode: skip extra-agent prompt to keep the flow minimal.
+    let custom_agents = if setup_level == SetupLevel::Quick {
+        Vec::new()
+    } else {
+        prompt_additional_agents()?
+    };
 
     let mut adaptive_config = AdaptiveConfig::auto_detect();
     apply_setup_level_to_config(&mut adaptive_config, setup_level)?;
@@ -1028,7 +1044,7 @@ fn prompt_additional_agents() -> Result<Vec<CustomAgentSpec>> {
     ];
 
     if !prompt_yes_no(
-        "Add custom agents not in the catalog? (e.g. self-hosted)",
+        "Add extra agents beyond the catalog above? (e.g. self-hosted / local models) [n]",
         false,
     )? {
         return Ok(Vec::new());
@@ -1129,7 +1145,112 @@ fn prompt_additional_agents() -> Result<Vec<CustomAgentSpec>> {
     Ok(agents)
 }
 
-fn prompt_provider_selection(detected_providers: &[String]) -> Result<Vec<String>> {
+/// Prompt the user to select one or more providers.
+/// - Quick level: flat numbered list, no region step.
+/// - Standard / Custom level: two-step region → provider flow.
+fn prompt_provider_selection(
+    detected_providers: &[String],
+    setup_level: SetupLevel,
+) -> Result<Vec<String>> {
+    if matches!(setup_level, SetupLevel::Quick) {
+        return prompt_provider_selection_quick(detected_providers);
+    }
+    prompt_provider_selection_full(detected_providers)
+}
+
+/// Flat provider picker for Quick setup — no region step, single numbered list.
+fn prompt_provider_selection_quick(detected_providers: &[String]) -> Result<Vec<String>> {
+    let specs = provider_specs();
+    loop {
+        println!("\nSelect a provider:");
+        println!();
+        for (i, spec) in specs.iter().enumerate() {
+            let mark = if detected_providers.contains(&spec.name) {
+                " * (detected)"
+            } else {
+                ""
+            };
+            let region = spec.region.as_deref().unwrap_or("Other");
+            println!("  {:>2}. {}{}  [{}]", i + 1, spec.name, mark, region);
+        }
+        if !detected_providers.is_empty() {
+            let default_nums: Vec<String> = detected_providers
+                .iter()
+                .filter_map(|p| {
+                    specs
+                        .iter()
+                        .position(|s| &s.name == p)
+                        .map(|i| (i + 1).to_string())
+                })
+                .collect();
+            println!(
+                "\n  (* = key detected in env / keyring. Default: {})",
+                default_nums.join(",")
+            );
+            print!(
+                "\nEnter number(s) or \"all\" [{}]: ",
+                default_nums.join(",")
+            );
+        } else {
+            print!("\nEnter number(s) or \"all\": ");
+        }
+        io::stdout().flush().context("failed to flush stdout")?;
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .context("failed to read input")?;
+        let value = input.trim();
+        if value.is_empty() {
+            if detected_providers.is_empty() {
+                println!("  At least one provider is required.");
+                continue;
+            }
+            return Ok(detected_providers.to_vec());
+        }
+        if value.eq_ignore_ascii_case("all") {
+            return Ok(specs.iter().map(|s| s.name.clone()).collect());
+        }
+        let mut selected: Vec<String> = Vec::new();
+        let mut invalid = None;
+        for token in value.split(',') {
+            let raw = token.trim();
+            if raw.is_empty() {
+                continue;
+            }
+            if let Ok(idx) = raw.parse::<usize>() {
+                if idx >= 1 && idx <= specs.len() {
+                    let name = specs[idx - 1].name.clone();
+                    if !selected.contains(&name) {
+                        selected.push(name);
+                    }
+                    continue;
+                }
+            }
+            if let Some(spec) = specs.iter().find(|s| s.name.eq_ignore_ascii_case(raw)) {
+                if !selected.contains(&spec.name) {
+                    selected.push(spec.name.clone());
+                }
+            } else {
+                invalid = Some(raw.to_string());
+                break;
+            }
+        }
+        if let Some(bad) = invalid {
+            println!(
+                "  Invalid selection: '{}'. Enter a number from the list above.",
+                bad
+            );
+            continue;
+        }
+        if selected.is_empty() {
+            println!("  At least one provider is required.");
+            continue;
+        }
+        return Ok(selected);
+    }
+}
+
+fn prompt_provider_selection_full(detected_providers: &[String]) -> Result<Vec<String>> {
     const REGION_ORDER: &[&str] = &["Global", "China", "Europe", "Local", "Other"];
 
     let specs = provider_specs();

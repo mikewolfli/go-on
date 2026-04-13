@@ -1378,7 +1378,10 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         try {
-            const result = await goOnManager.sendRequest('task.execute', { task });
+            const result = await goOnManager.sendRequest('task.execute', {
+                task,
+                requirement_confirmed: true,
+            });
             vscode.window.showInformationMessage(`task.execute completed: ${JSON.stringify(result)}`);
         } catch (error: any) {
             vscode.window.showErrorMessage(`task.execute failed: ${error.message}`);
@@ -1642,8 +1645,25 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showErrorMessage('Go-On is not running. Start it first.');
             return;
         }
+        const conversationId = await vscode.window.showInputBox({
+            prompt: 'Conversation ID',
+            placeHolder: 'e.g. default-session'
+        });
+        if (!conversationId) {
+            return;
+        }
+        const message = await vscode.window.showInputBox({
+            prompt: 'Checkpoint message',
+            placeHolder: 'Describe current conversation state'
+        });
+        if (!message) {
+            return;
+        }
         try {
-            const result = await goOnManager.sendRequest('conversation.checkpoint.create', {});
+            const result = await goOnManager.sendRequest('conversation.checkpoint.create', {
+                conversation_id: conversationId,
+                messages: [{ role: 'user', content: message }],
+            });
             vscode.window.showInformationMessage(`Checkpoint created: ${JSON.stringify(result)}`);
         } catch (error: any) {
             vscode.window.showErrorMessage(`checkpoint.create failed: ${error.message}`);
@@ -1656,8 +1676,17 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showErrorMessage('Go-On is not running. Start it first.');
             return;
         }
+        const conversationId = await vscode.window.showInputBox({
+            prompt: 'Conversation ID',
+            placeHolder: 'e.g. default-session'
+        });
+        if (!conversationId) {
+            return;
+        }
         try {
-            const result = await goOnManager.sendRequest('conversation.checkpoint.list', {});
+            const result = await goOnManager.sendRequest('conversation.checkpoint.list', {
+                conversation_id: conversationId,
+            });
             vscode.window.showInformationMessage(`Checkpoints: ${JSON.stringify(result)}`);
         } catch (error: any) {
             vscode.window.showErrorMessage(`checkpoint.list failed: ${error.message}`);
@@ -1675,8 +1704,18 @@ export function activate(context: vscode.ExtensionContext) {
             placeHolder: 'e.g. ckpt-001'
         });
         if (!checkpointId) { return; }
+        const conversationId = await vscode.window.showInputBox({
+            prompt: 'Conversation ID',
+            placeHolder: 'e.g. default-session'
+        });
+        if (!conversationId) {
+            return;
+        }
         try {
-            const result = await goOnManager.sendRequest('conversation.rollback', { checkpoint_id: checkpointId });
+            const result = await goOnManager.sendRequest('conversation.rollback', {
+                conversation_id: conversationId,
+                checkpoint_id: checkpointId,
+            });
             vscode.window.showInformationMessage(`Rolled back: ${JSON.stringify(result)}`);
         } catch (error: any) {
             vscode.window.showErrorMessage(`conversation.rollback failed: ${error.message}`);

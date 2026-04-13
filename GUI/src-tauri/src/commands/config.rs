@@ -4,6 +4,8 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
 use crate::state::AppState;
@@ -13,9 +15,147 @@ use crate::state::AppState;
 pub struct CopilotTokenResult {
     pub found: bool,
     pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub token_masked: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub token_plain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_in_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll_interval_seconds: Option<u64>,
     pub note: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GithubDeviceCodeResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    #[allow(dead_code)]
+    verification_uri_complete: Option<String>,
+    expires_in: u64,
+    interval: Option<u64>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GithubAccessTokenResponse {
+    access_token: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct DeviceFlowSession {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    expires_at: u64,
+    interval_seconds: u64,
+}
+
+const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
+const GITHUB_DEVICE_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
+// GitHub CLI OAuth App client id (public).
+const GITHUB_OAUTH_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
+
+static DEVICE_FLOW_SESSION: OnceLock<Mutex<Option<DeviceFlowSession>>> = OnceLock::new();
+
+fn device_flow_session() -> &'static Mutex<Option<DeviceFlowSession>> {
+    DEVICE_FLOW_SESSION.get_or_init(|| Mutex::new(None))
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn token_result_found(source: String, token: String, note: String) -> CopilotTokenResult {
+    CopilotTokenResult {
+        found: true,
+        source,
+        token_masked: Some(mask_token(&token)),
+        token_plain: Some(token),
+        verification_uri: None,
+        user_code: None,
+        expires_in_seconds: None,
+        poll_interval_seconds: None,
+        note,
+    }
+}
+
+fn token_result_pending(source: String, session: &DeviceFlowSession, note: String) -> CopilotTokenResult {
+    let now = now_secs();
+    CopilotTokenResult {
+        found: false,
+        source,
+        token_masked: None,
+        token_plain: None,
+        verification_uri: Some(session.verification_uri.clone()),
+        user_code: Some(session.user_code.clone()),
+        expires_in_seconds: Some(session.expires_at.saturating_sub(now)),
+        poll_interval_seconds: Some(session.interval_seconds),
+        note,
+    }
+}
+
+fn start_device_flow() -> Result<DeviceFlowSession, String> {
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post(GITHUB_DEVICE_CODE_URL)
+        .header("Accept", "application/json")
+        .header("User-Agent", "go-on-gui/0.5.3")
+        .form(&[("client_id", GITHUB_OAUTH_CLIENT_ID), ("scope", "read:user")])
+        .send()
+        .map_err(|e| format!("failed to request GitHub device code: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("device code request failed ({status}): {body}"));
+    }
+
+    let payload: GithubDeviceCodeResponse = response
+        .json()
+        .map_err(|e| format!("invalid device code response: {e}"))?;
+
+    Ok(DeviceFlowSession {
+        device_code: payload.device_code,
+        user_code: payload.user_code,
+        verification_uri: payload.verification_uri,
+        expires_at: now_secs() + payload.expires_in,
+        interval_seconds: payload.interval.unwrap_or(5).max(1),
+    })
+}
+
+fn poll_device_flow_access_token(session: &DeviceFlowSession) -> Result<GithubAccessTokenResponse, String> {
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post(GITHUB_DEVICE_TOKEN_URL)
+        .header("Accept", "application/json")
+        .header("User-Agent", "go-on-gui/0.5.3")
+        .form(&[
+            ("client_id", GITHUB_OAUTH_CLIENT_ID),
+            ("device_code", session.device_code.as_str()),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+        ])
+        .send()
+        .map_err(|e| format!("failed to poll GitHub access token: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("access token polling failed ({status}): {body}"));
+    }
+
+    response
+        .json::<GithubAccessTokenResponse>()
+        .map_err(|e| format!("invalid access token response: {e}"))
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -228,8 +368,22 @@ pub fn backend_executable_exists(state: State<'_, AppState>) -> Result<bool, Str
         .0
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
+
+    let configured = inner.config.executable_path.trim();
+    if configured.is_empty() {
+        return Ok(false);
+    }
+
     let resolved = resolve_executable_path(&inner.config.executable_path, &inner.config.working_dir);
-    Ok(resolved.exists() && resolved.is_file())
+    if !resolved.exists() || !resolved.is_file() {
+        return Ok(false);
+    }
+
+    if !is_expected_backend_filename(&resolved) {
+        return Ok(false);
+    }
+
+    Ok(validate_executable_identity(&resolved).is_ok())
 }
 
 #[tauri::command]
@@ -372,13 +526,11 @@ pub fn fetch_github_copilot_token() -> Result<CopilotTokenResult, String> {
     for key in candidates {
         if let Ok(value) = std::env::var(key) {
             if !value.trim().is_empty() {
-                return Ok(CopilotTokenResult {
-                    found: true,
-                    source: format!("env:{key}"),
-                    token_masked: Some(mask_token(&value)),
-                    token_plain: Some(value),
-                    note: "token found in environment".to_string(),
-                });
+                return Ok(token_result_found(
+                    format!("env:{key}"),
+                    value,
+                    "token found in environment".to_string(),
+                ));
             }
         }
     }
@@ -388,22 +540,87 @@ pub fn fetch_github_copilot_token() -> Result<CopilotTokenResult, String> {
         if out.status.success() {
             let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !token.is_empty() {
-                return Ok(CopilotTokenResult {
-                    found: true,
-                    source: "gh auth token".to_string(),
-                    token_masked: Some(mask_token(&token)),
-                    token_plain: Some(token),
-                    note: "token retrieved via GitHub CLI".to_string(),
-                });
+                return Ok(token_result_found(
+                    "gh auth token".to_string(),
+                    token,
+                    "token retrieved via GitHub CLI".to_string(),
+                ));
             }
         }
     }
 
-    Ok(CopilotTokenResult {
-        found: false,
-        source: "none".to_string(),
-        token_masked: None,
-        token_plain: None,
-        note: "not found in env or gh cli".to_string(),
-    })
+    // Device Flow fallback:
+    // 1) First click returns user_code + verification_uri.
+    // 2) User verifies on GitHub.
+    // 3) Next click polls and returns the access token.
+    let lock = device_flow_session();
+    let mut guard = lock
+        .lock()
+        .map_err(|_| "device flow session lock poisoned".to_string())?;
+
+    if let Some(existing) = guard.as_mut() {
+        if now_secs() >= existing.expires_at {
+            *guard = None;
+        } else {
+            let poll = poll_device_flow_access_token(existing)?;
+            if let Some(token) = poll.access_token {
+                *guard = None;
+                return Ok(token_result_found(
+                    "github_device_flow".to_string(),
+                    token,
+                    "token retrieved via GitHub device verification".to_string(),
+                ));
+            }
+
+            let err = poll.error.unwrap_or_else(|| "authorization_pending".to_string());
+            let desc = poll.error_description.unwrap_or_default();
+
+            if err == "slow_down" {
+                existing.interval_seconds = existing.interval_seconds.saturating_add(5);
+            }
+            if err == "expired_token" || err == "access_denied" {
+                *guard = None;
+                return Ok(CopilotTokenResult {
+                    found: false,
+                    source: "github_device_flow".to_string(),
+                    token_masked: None,
+                    token_plain: None,
+                    verification_uri: None,
+                    user_code: None,
+                    expires_in_seconds: None,
+                    poll_interval_seconds: None,
+                    note: format!(
+                        "device flow {err}; please click import again to generate a new verification code. {desc}"
+                    )
+                    .trim()
+                    .to_string(),
+                });
+            }
+
+            return Ok(token_result_pending(
+                "github_device_flow".to_string(),
+                existing,
+                format!(
+                    "verification pending: open {} and enter code {}. Then click import again. {}",
+                    existing.verification_uri,
+                    existing.user_code,
+                    desc
+                )
+                .trim()
+                .to_string(),
+            ));
+        }
+    }
+
+    let session = start_device_flow()?;
+    let result = token_result_pending(
+        "github_device_flow".to_string(),
+        &session,
+        format!(
+            "open {} and enter code {} to authorize. Then click import again.",
+            session.verification_uri, session.user_code
+        ),
+    );
+    *guard = Some(session);
+    Ok(result)
 }

@@ -1086,7 +1086,10 @@ function activate(context) {
             return;
         }
         try {
-            const result = await goOnManager.sendRequest('task.execute', { task });
+            const result = await goOnManager.sendRequest('task.execute', {
+                task,
+                requirement_confirmed: true,
+            });
             vscode.window.showInformationMessage(`task.execute completed: ${JSON.stringify(result)}`);
         }
         catch (error) {
@@ -1323,8 +1326,25 @@ function activate(context) {
             vscode.window.showErrorMessage('Go-On is not running. Start it first.');
             return;
         }
+        const conversationId = await vscode.window.showInputBox({
+            prompt: 'Conversation ID',
+            placeHolder: 'e.g. default-session'
+        });
+        if (!conversationId) {
+            return;
+        }
+        const message = await vscode.window.showInputBox({
+            prompt: 'Checkpoint message',
+            placeHolder: 'Describe current conversation state'
+        });
+        if (!message) {
+            return;
+        }
         try {
-            const result = await goOnManager.sendRequest('conversation.checkpoint.create', {});
+            const result = await goOnManager.sendRequest('conversation.checkpoint.create', {
+                conversation_id: conversationId,
+                messages: [{ role: 'user', content: message }],
+            });
             vscode.window.showInformationMessage(`Checkpoint created: ${JSON.stringify(result)}`);
         }
         catch (error) {
@@ -1337,8 +1357,17 @@ function activate(context) {
             vscode.window.showErrorMessage('Go-On is not running. Start it first.');
             return;
         }
+        const conversationId = await vscode.window.showInputBox({
+            prompt: 'Conversation ID',
+            placeHolder: 'e.g. default-session'
+        });
+        if (!conversationId) {
+            return;
+        }
         try {
-            const result = await goOnManager.sendRequest('conversation.checkpoint.list', {});
+            const result = await goOnManager.sendRequest('conversation.checkpoint.list', {
+                conversation_id: conversationId,
+            });
             vscode.window.showInformationMessage(`Checkpoints: ${JSON.stringify(result)}`);
         }
         catch (error) {
@@ -1358,8 +1387,18 @@ function activate(context) {
         if (!checkpointId) {
             return;
         }
+        const conversationId = await vscode.window.showInputBox({
+            prompt: 'Conversation ID',
+            placeHolder: 'e.g. default-session'
+        });
+        if (!conversationId) {
+            return;
+        }
         try {
-            const result = await goOnManager.sendRequest('conversation.rollback', { checkpoint_id: checkpointId });
+            const result = await goOnManager.sendRequest('conversation.rollback', {
+                conversation_id: conversationId,
+                checkpoint_id: checkpointId,
+            });
             vscode.window.showInformationMessage(`Rolled back: ${JSON.stringify(result)}`);
         }
         catch (error) {

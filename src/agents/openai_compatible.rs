@@ -12,7 +12,7 @@ use tokio::time::sleep;
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
 use crate::agents::{
-    option_f64, option_string, option_u64, principles_to_text, stream_sse_to_sender,
+    apply_openai_common_options, option_string, principles_to_text, stream_sse_to_sender,
 };
 
 pub struct OpenAiCompatibleAgent {
@@ -103,9 +103,6 @@ impl OpenAiCompatibleAgent {
         options: Option<HashMap<String, Value>>,
     ) -> Value {
         let model = option_string(&options, "model").unwrap_or_else(|| self.model.clone());
-        let temperature = option_f64(&options, "temperature");
-        let max_tokens = option_u64(&options, "max_tokens");
-        let top_p = option_f64(&options, "top_p");
 
         let mut payload = json!({
             "model": model,
@@ -113,15 +110,7 @@ impl OpenAiCompatibleAgent {
             "stream": true
         });
 
-        if let Some(value) = temperature {
-            payload["temperature"] = Value::from(value);
-        }
-        if let Some(value) = max_tokens {
-            payload["max_tokens"] = Value::from(value);
-        }
-        if let Some(value) = top_p {
-            payload["top_p"] = Value::from(value);
-        }
+        apply_openai_common_options(&mut payload, &options);
 
         payload
     }

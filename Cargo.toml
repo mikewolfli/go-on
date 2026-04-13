@@ -27,7 +27,7 @@ opentelemetry-stdout = "0.31"
 lazy_static = "1.4"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 sha2 = "0.11.0"
-keyring = "3"
+keyring = { version = "3", features = ["apple-native"] }
 opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.31", features = ["trace", "grpc-tonic"] }

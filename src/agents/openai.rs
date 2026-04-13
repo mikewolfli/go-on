@@ -12,7 +12,7 @@ use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
-use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
+use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
 pub struct OpenAiAgent {
     api_key_env: String,
@@ -62,12 +62,7 @@ impl OpenAiAgent {
             "stream": true
         });
 
-        if let Some(value) = option_f64(options, "temperature") {
-            payload["temperature"] = Value::from(value);
-        }
-        if let Some(value) = option_f64(options, "top_p") {
-            payload["top_p"] = Value::from(value);
-        }
+        apply_openai_common_options(&mut payload, options);
 
         payload
     }

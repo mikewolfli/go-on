@@ -97,6 +97,10 @@ export interface CopilotTokenResult {
     source: string;
     tokenMasked?: string;
     tokenPlain?: string;
+    verificationUri?: string;
+    userCode?: string;
+    expiresInSeconds?: number;
+    pollIntervalSeconds?: number;
     note: string;
 }
 

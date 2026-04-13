@@ -203,6 +203,7 @@ class ConfigManager {
                 copilot: {
                     type: 'copilot',
                     url: 'http://127.0.0.1:8080',
+                    api_key_env: 'GITHUB_COPILOT_TOKEN',
                     region: 'us',
                 },
                 deepseek: {
