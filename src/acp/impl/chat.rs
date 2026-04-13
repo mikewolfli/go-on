@@ -5,7 +5,9 @@
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 use std::{fs, path::Path};
 use std::{net::TcpStream, net::ToSocketAddrs};
@@ -58,6 +60,44 @@ pub struct ChatParams {
     pub vector_hits: Option<Vec<serde_json::Value>>,
     /// Optional execution decision candidate
     pub execution_decision_candidate: Option<ExecutionDecisionCandidate>,
+}
+
+#[derive(Default)]
+struct AgentSwitchState {
+    forced_agent_by_phase: HashMap<String, String>,
+    primary_agent_by_phase: HashMap<String, String>,
+}
+
+static AGENT_SWITCH_STATE: OnceLock<StdMutex<AgentSwitchState>> = OnceLock::new();
+
+fn agent_switch_state() -> &'static StdMutex<AgentSwitchState> {
+    AGENT_SWITCH_STATE.get_or_init(|| StdMutex::new(AgentSwitchState::default()))
+}
+
+fn is_quota_or_token_limit_error(error_text: &str) -> bool {
+    let text = error_text.to_ascii_lowercase();
+    text.contains("429")
+        || text.contains("rate limit")
+        || text.contains("quota")
+        || text.contains("insufficient_quota")
+        || text.contains("token") && text.contains("limit")
+        || text.contains("token") && text.contains("exhaust")
+        || text.contains("billing")
+        || text.contains("credit") && text.contains("insufficient")
+}
+
+fn reorder_agents_with_priority(
+    agents: &mut Vec<(String, Arc<dyn crate::agent::Agent>)>,
+    preferred: &str,
+) -> bool {
+    if let Some(index) = agents.iter().position(|(name, _)| name == preferred) {
+        if index > 0 {
+            let selected = agents.remove(index);
+            agents.insert(0, selected);
+        }
+        return true;
+    }
+    false
 }
 
 /// Handle chat request
@@ -439,6 +479,44 @@ pub(crate) async fn process_chat_request(
     let phase = resolved.phase.clone();
     reorder_chat_agents_by_runtime_score(server, &phase.phase_name, &mut resolved.agents);
 
+    let configured_primary_agent = phase.agent_names.first().cloned();
+    let preferred_agent_from_request = params
+        .options
+        .as_ref()
+        .and_then(|opts| opts.extra.get("preferred_agent"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+
+    if let Some(primary) = configured_primary_agent.clone() {
+        if let Ok(mut state) = agent_switch_state().lock() {
+            state
+                .primary_agent_by_phase
+                .insert(phase.phase_name.clone(), primary);
+        }
+    }
+
+    // Priority order rules:
+    // 1) If request explicitly chooses preferred_agent, honor it immediately and persist choice.
+    // 2) Otherwise, if phase has a stored forced fallback agent, probe primary first and then forced agent.
+    if let Some(preferred) = preferred_agent_from_request.clone() {
+        if reorder_agents_with_priority(&mut resolved.agents, &preferred) {
+            if let Ok(mut state) = agent_switch_state().lock() {
+                state
+                    .forced_agent_by_phase
+                    .insert(phase.phase_name.clone(), preferred);
+            }
+        }
+    } else if let Ok(state) = agent_switch_state().lock() {
+        if let Some(forced) = state.forced_agent_by_phase.get(&phase.phase_name) {
+            let primary = state.primary_agent_by_phase.get(&phase.phase_name);
+            if let Some(primary_name) = primary {
+                // Auto-recover strategy: always probe primary first, then fallback agent.
+                let _ = reorder_agents_with_priority(&mut resolved.agents, forced);
+                let _ = reorder_agents_with_priority(&mut resolved.agents, primary_name);
+            }
+        }
+    }
+
     // Phase-level rate limiter support migrated from legacy ACP behavior.
     if let Some(options) = phase.options.as_ref() {
         let rpm_limit = options
@@ -547,9 +625,34 @@ pub(crate) async fn process_chat_request(
     let mut selected_agent = String::new();
     let mut response_text = String::new();
     let mut last_err: Option<anyhow::Error> = None;
+    let candidate_agents = resolved
+        .agents
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    let mut quota_failed_agents: Vec<String> = Vec::new();
+    let mut agent_attempts: Vec<Value> = Vec::new();
+
+    let mut base_agent_options = phase
+        .options
+        .as_ref()
+        .and_then(|opts| opts.agent_options())
+        .unwrap_or_default();
+    if let Some(request_options) = params.options.as_ref() {
+        for (key, value) in &request_options.extra {
+            base_agent_options.insert(key.clone(), value.clone());
+        }
+    }
 
     for (agent_name, agent) in resolved.agents {
         let attempt_started = std::time::Instant::now();
+
+        let mut per_attempt_options = base_agent_options.clone();
+        if agent_name.eq_ignore_ascii_case("copilot") && !per_attempt_options.contains_key("model")
+        {
+            per_attempt_options.insert("model".to_string(), json!("auto"));
+        }
+
         match run_agent_collecting(
             server,
             StreamNotificationContext {
@@ -561,7 +664,7 @@ pub(crate) async fn process_chat_request(
             agent,
             agent_messages.clone(),
             phase.principles.clone(),
-            phase.options.as_ref().and_then(|opts| opts.agent_options()),
+            Some(per_attempt_options),
             phase
                 .options
                 .as_ref()
@@ -578,12 +681,29 @@ pub(crate) async fn process_chat_request(
                         attempt_started.elapsed().as_millis() as u64,
                     );
                 }
+                agent_attempts.push(json!({
+                    "agent": agent_name,
+                    "ok": true,
+                    "duration_ms": attempt_started.elapsed().as_millis() as u64
+                }));
                 selected_agent = agent_name;
                 response_text = output;
                 last_err = None;
                 break;
             }
             Err(err) => {
+                let err_text = err.to_string();
+                let quota_limited = is_quota_or_token_limit_error(&err_text);
+                if quota_limited {
+                    quota_failed_agents.push(agent_name.clone());
+                }
+                agent_attempts.push(json!({
+                    "agent": agent_name,
+                    "ok": false,
+                    "quota_limited": quota_limited,
+                    "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                    "error": err_text
+                }));
                 if let Ok(mut ctrl) = server.online_controller.lock() {
                     ctrl.record_agent_outcome(
                         &phase.phase_name,
@@ -598,6 +718,19 @@ pub(crate) async fn process_chat_request(
     }
 
     if let Some(err) = last_err {
+        let all_attempts_quota_limited = !agent_attempts.is_empty()
+            && agent_attempts.iter().all(|attempt| {
+                attempt
+                    .get("ok")
+                    .and_then(|value| value.as_bool())
+                    .map(|ok| !ok)
+                    .unwrap_or(false)
+                    && attempt
+                        .get("quota_limited")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false)
+            });
+
         if let Ok(mut ctrl) = server.online_controller.lock() {
             ctrl.record_phase_outcome(
                 &phase.phase_name,
@@ -605,7 +738,41 @@ pub(crate) async fn process_chat_request(
                 started.elapsed().as_millis() as u64,
             );
         }
+
+        if all_attempts_quota_limited {
+            let switch_prompt = format!(
+                "All available agents hit token/quota limits in phase '{}'. Choose another agent via options.preferred_agent and retry.",
+                phase.phase_name
+            );
+            return Ok(json!({
+                "done": false,
+                "mode": params.mode,
+                "phase": phase.phase_name,
+                "phase_origin": phase_origin,
+                "requires_user_action": true,
+                "action": "switch_agent",
+                "prompt": switch_prompt,
+                "available_agents": candidate_agents,
+                "quota_failed_agents": quota_failed_agents,
+                "agent_attempts": agent_attempts,
+                "hint": {
+                    "options_field": "options.extra.preferred_agent",
+                    "example": {
+                        "preferred_agent": candidate_agents.first().cloned().unwrap_or_else(|| "primary".to_string())
+                    }
+                }
+            }));
+        }
+
         return Err(err);
+    }
+
+    if let Some(primary) = configured_primary_agent {
+        if selected_agent == primary {
+            if let Ok(mut state) = agent_switch_state().lock() {
+                state.forced_agent_by_phase.remove(&phase.phase_name);
+            }
+        }
     }
 
     if let Ok(mut ctrl) = server.online_controller.lock() {
@@ -703,6 +870,24 @@ pub(crate) async fn process_chat_request(
         }
     }
 
+    let switched_from_quota_limit = !quota_failed_agents.is_empty() && !selected_agent.is_empty();
+    let agent_switch_notice = if switched_from_quota_limit {
+        Some(json!({
+            "type": "quota_fallback",
+            "message": format!(
+                "Some agents reached token/quota limits ({}). Active agent switched to '{}'. You can choose agent via options.extra.preferred_agent.",
+                quota_failed_agents.join(", "),
+                selected_agent
+            ),
+            "quota_failed_agents": quota_failed_agents,
+            "active_agent": selected_agent.clone(),
+            "available_agents": candidate_agents,
+            "auto_recover": "primary agent is probed first on subsequent requests; if recovered, routing switches back automatically"
+        }))
+    } else {
+        None
+    };
+
     let result = json!({
         "done": true,
         "conversation_id": conversation_id,
@@ -717,7 +902,9 @@ pub(crate) async fn process_chat_request(
         "vector_hits": vector_context.hits,
         "summary_used": vector_context.summary.is_some(),
         "knowledge": knowledge,
-        "reviews": reviews
+        "reviews": reviews,
+        "agent_attempts": agent_attempts,
+        "agent_switch_notice": agent_switch_notice
     });
 
     Ok(result)

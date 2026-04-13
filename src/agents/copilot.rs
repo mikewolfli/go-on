@@ -78,6 +78,35 @@ impl CopilotAgent {
         payload
     }
 
+    fn is_quota_or_limit_error(message: &str) -> bool {
+        let text = message.to_ascii_lowercase();
+        text.contains("429")
+            || text.contains("rate limit")
+            || text.contains("quota")
+            || text.contains("token") && text.contains("limit")
+            || text.contains("insufficient_quota")
+            || text.contains("billing")
+            || text.contains("exceeded") && text.contains("limit")
+    }
+
+    fn should_try_free_model(options: &Option<HashMap<String, Value>>) -> bool {
+        match option_string(options, "model") {
+            None => true,
+            Some(model) => {
+                let model = model.to_ascii_lowercase();
+                model == "auto" || model == "copilot"
+            }
+        }
+    }
+
+    fn with_free_model(options: &Option<HashMap<String, Value>>) -> Option<HashMap<String, Value>> {
+        let mut next = options.clone().unwrap_or_default();
+        let fallback_model = option_string(options, "copilot_fallback_model")
+            .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        next.insert("model".to_string(), json!(fallback_model));
+        Some(next)
+    }
+
     async fn chat_once(
         &self,
         messages: Vec<Message>,
@@ -114,19 +143,31 @@ impl Agent for CopilotAgent {
         sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
+        let mut free_model_attempted = false;
+
+        let mut active_options = options.clone();
 
         for attempt in 0..=2 {
             match self
                 .chat_once(
                     messages.clone(),
                     principles.clone(),
-                    options.clone(),
+                    active_options.clone(),
                     sender.clone(),
                 )
                 .await
             {
                 Ok(()) => return Ok(()),
                 Err(err) => {
+                    let err_text = err.to_string();
+                    if !free_model_attempted
+                        && Self::should_try_free_model(&active_options)
+                        && Self::is_quota_or_limit_error(&err_text)
+                    {
+                        free_model_attempted = true;
+                        active_options = Self::with_free_model(&active_options);
+                        continue;
+                    }
                     last_error = Some(err);
                     if attempt < 2 {
                         sleep(Duration::from_secs(1_u64 << attempt)).await;
