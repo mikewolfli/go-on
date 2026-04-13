@@ -536,19 +536,13 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             Ok(Arc::new(LocalSlowApproveAgent))
         }
         "copilot" => {
-            // Read GitHub OAuth token from env var.
-            // 从环境变量读取 GitHub OAuth token（默认 GITHUB_TOKEN）
+            // Store the env var name; the token value is read lazily on first request.
+            // 存储环境变量名，token 值在首次请求时懒读取
             let token_env = config
                 .api_key_env
                 .clone()
                 .unwrap_or_else(|| "GITHUB_TOKEN".to_string());
-            let github_token = std::env::var(&token_env).with_context(|| {
-                format!(
-                    "env var `{token_env}` not set — set it to a GitHub personal access token \
-                     with Copilot access, e.g.: $env:{token_env}=\"ghp_...\""
-                )
-            })?;
-            Ok(Arc::new(CopilotAgent::new(github_token, client)))
+            Ok(Arc::new(CopilotAgent::new(token_env, client)))
         }
         "deepseek" => {
             let api_key_env = required_field("deepseek", &config.api_key_env, "api_key_env")?;

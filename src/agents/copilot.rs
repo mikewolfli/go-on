@@ -1,8 +1,8 @@
 //! copilot.rs — GitHub Copilot agent via OAuth device-flow token.
 //!
 //! 认证流程 / Auth flow:
-//!   1. 启动时从环境变量读取 GitHub OAuth token（默认 GITHUB_TOKEN）
-//!      Read GitHub OAuth token from env var at startup (default: GITHUB_TOKEN)
+//!   1. 首次请求时从环境变量读取 GitHub OAuth token（默认 GITHUB_TOKEN）
+//!      On first request, read GitHub OAuth token from env var (default: GITHUB_TOKEN)
 //!   2. 首次请求时向 api.github.com/copilot_internal/v2/token 换取有时效的 Copilot API token
 //!      On first request, exchange for a short-lived Copilot API token
 //!   3. 缓存该 token，到期前自动刷新
@@ -34,17 +34,20 @@ struct CachedToken {
 }
 
 pub struct CopilotAgent {
-    /// GitHub OAuth token read from env var at construction time.
-    github_token: String,
+    /// Name of the environment variable holding the GitHub OAuth token.
+    token_env: String,
     client: reqwest::Client,
     /// Short-lived Copilot API token, auto-refreshed.
     cached: Mutex<Option<CachedToken>>,
 }
 
 impl CopilotAgent {
-    pub fn new(github_token: String, client: reqwest::Client) -> Self {
+    /// Create a new agent. `token_env` is the **name** of the environment variable
+    /// that holds the GitHub OAuth token (e.g. `"GITHUB_TOKEN"`). The variable is
+    /// read lazily on the first chat request, not at construction time.
+    pub fn new(token_env: String, client: reqwest::Client) -> Self {
         Self {
-            github_token,
+            token_env,
             client,
             cached: Mutex::new(None),
         }
@@ -71,10 +74,17 @@ impl CopilotAgent {
         }
 
         // Slow path: fetch a new token.
+        let github_token = std::env::var(&self.token_env).with_context(|| {
+            format!(
+                "env var `{}` not set — set it to a GitHub personal access token \
+                 with Copilot access, e.g.: $env:{}=\"ghp_...\"",
+                self.token_env, self.token_env
+            )
+        })?;
         let response = self
             .client
             .get(COPILOT_TOKEN_URL)
-            .header("Authorization", format!("token {}", self.github_token))
+            .header("Authorization", format!("token {}", github_token))
             .header("Accept", "application/json")
             .header("User-Agent", "go-on/1.0")
             .send()
@@ -293,7 +303,7 @@ mod tests {
     }
 
     fn agent() -> CopilotAgent {
-        CopilotAgent::new("http://127.0.0.1:8080".to_string(), reqwest::Client::new())
+        CopilotAgent::new("GITHUB_TOKEN".to_string(), reqwest::Client::new())
     }
 
     #[test]

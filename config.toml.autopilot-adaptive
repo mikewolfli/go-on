@@ -1,11 +1,12 @@
+default_phase = "coding"
+model_selection_mode = "adaptive"
+
 # [protocol] 配置说明
 # auto: 自动识别（推荐，兼容Zed external agent和MCP LLM provider）
 # acp: 仅支持ACP/A2A协议（Zed external agent专用）
 # mcp: 仅支持MCP协议（MCP工具链/大模型服务专用）
 [protocol]
 mode = "auto"
-default_phase = "coding"
-model_selection_mode = "adaptive"
 
 # Setup guidance:
 # - Run `go-on --setup --config config.toml` to choose providers interactively.
