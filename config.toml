@@ -62,10 +62,9 @@ summary_trigger_max = 20
 [agents.primary]
 # Supported types include: openai | deepseek | claude | gemini | qwen | copilot | ...
 # 支持的 agent 类型 / Supported agent types
-type = "openai"
-url = "https://api.openai.com/v1"
-api_key_env = "OPENAI_API_KEY"
-model = "gpt-4o-mini"
+type = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+model = "deepseek-chat"
 
 # --- GitHub Copilot agent example -------------------------------------------------
 # 使用方式 / How to use:
