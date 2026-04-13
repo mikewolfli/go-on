@@ -1,0 +1,33 @@
+---
+name: Build Backend and GUI
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build backend
+        run: cargo build --release
+      - name: Build GUI
+        working-directory: ./GUI
+        run: |
+          npm ci
+          npm run build
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-on-backend
+          path: target/release/go-on
+      - name: Upload GUI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-on-gui-dist
+          path: GUI/dist/

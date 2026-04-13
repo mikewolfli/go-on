@@ -24,7 +24,11 @@ export default defineConfig({
                 manualChunks(id) {
                     if (id.includes("node_modules")) {
                         if (id.includes("element-plus")) {
-                            return "ui-element-plus";
+                            const match = id.match(/element-plus\/es\/components\/([^/]+)/);
+                            if (match?.[1]) {
+                                return `ep-${match[1]}`;
+                            }
+                            return "ui-element-plus-core";
                         }
                         if (id.includes("echarts")) {
                             return "viz-echarts";

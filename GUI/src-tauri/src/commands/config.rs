@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use tauri::State;
@@ -17,6 +18,14 @@ pub struct CopilotTokenResult {
     pub note: String,
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoConfigureResult {
+    pub linked: bool,
+    pub executable_path: Option<String>,
+    pub reason: String,
+}
+
 fn env_file_path(working_dir: &str) -> PathBuf {
     PathBuf::from(working_dir).join(".env.goon")
 }
@@ -27,6 +36,87 @@ fn config_file_path(working_dir: &str) -> PathBuf {
 
 fn config_template_path(working_dir: &str) -> PathBuf {
     PathBuf::from(working_dir).join("config.toml.autopilot-adaptive")
+}
+
+fn resolve_executable_path(executable_path: &str, working_dir: &str) -> PathBuf {
+    let path = PathBuf::from(executable_path);
+    if path.is_absolute() {
+        path
+    } else {
+        PathBuf::from(working_dir).join(path)
+    }
+}
+
+fn is_expected_backend_filename(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    let lower = name.to_lowercase();
+    lower == "go-on" || lower == "go-on.exe"
+}
+
+fn validate_executable_identity(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Err("file not found".to_string());
+    }
+    if !path.is_file() {
+        return Err("path is not a file".to_string());
+    }
+    if !is_expected_backend_filename(path) {
+        return Err("filename is not go-on/go-on.exe".to_string());
+    }
+
+    let probes = ["--version", "-V", "--help"];
+    for arg in probes {
+        if let Ok(output) = Command::new(path).arg(arg).output() {
+            let mut merged = String::new();
+            merged.push_str(&String::from_utf8_lossy(&output.stdout));
+            merged.push('\n');
+            merged.push_str(&String::from_utf8_lossy(&output.stderr));
+            let lower = merged.to_lowercase();
+            if lower.contains("go-on") {
+                return Ok(());
+            }
+        }
+    }
+
+    Err("identity probe failed".to_string())
+}
+
+fn discover_backend_executable(default_exe: &str) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            candidates.push(parent.join(default_exe));
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join(default_exe));
+    }
+
+    if cfg!(target_os = "windows") {
+        if let Ok(output) = Command::new("where").arg(default_exe).output() {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                if let Some(first) = text.lines().find(|line| !line.trim().is_empty()) {
+                    candidates.push(PathBuf::from(first.trim()));
+                }
+            }
+        }
+    } else if let Ok(output) = Command::new("which").arg(default_exe).output() {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            if let Some(first) = text.lines().find(|line| !line.trim().is_empty()) {
+                candidates.push(PathBuf::from(first.trim()));
+            }
+        }
+    }
+
+    candidates.into_iter().find(|p| {
+        p.exists() && p.is_file() && is_expected_backend_filename(p) && validate_executable_identity(p).is_ok()
+    })
 }
 
 fn load_env_file(path: &PathBuf) -> HashMap<String, String> {
@@ -96,6 +186,105 @@ pub fn configure_service(
     let env_path = env_file_path(&working_dir);
     inner.config.extra_env = load_env_file(&env_path);
     Ok(())
+}
+
+#[tauri::command]
+pub fn configure_service_by_executable(
+    state: State<'_, AppState>,
+    executable_path: String,
+) -> Result<(), String> {
+    let trimmed = executable_path.trim();
+    if trimmed.is_empty() {
+        return Err("executable path is empty".to_string());
+    }
+
+    let exe = PathBuf::from(trimmed);
+    let working_dir = exe
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_string_lossy()
+        .to_string();
+
+    let mut inner = state
+        .0
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+
+    inner.config.executable_path = exe.to_string_lossy().to_string();
+    inner.config.working_dir = working_dir.clone();
+    inner.config.log_path = PathBuf::from(&working_dir)
+        .join("go-on.log")
+        .to_string_lossy()
+        .to_string();
+
+    let env_path = env_file_path(&working_dir);
+    inner.config.extra_env = load_env_file(&env_path);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn backend_executable_exists(state: State<'_, AppState>) -> Result<bool, String> {
+    let inner = state
+        .0
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let resolved = resolve_executable_path(&inner.config.executable_path, &inner.config.working_dir);
+    Ok(resolved.exists() && resolved.is_file())
+}
+
+#[tauri::command]
+pub fn auto_configure_backend_path(state: State<'_, AppState>) -> Result<AutoConfigureResult, String> {
+    let default_exe = if cfg!(target_os = "windows") {
+        "go-on.exe"
+    } else {
+        "go-on"
+    };
+
+    let Some(found_exe) = discover_backend_executable(default_exe) else {
+        return Ok(AutoConfigureResult {
+            linked: false,
+            executable_path: None,
+            reason: "not_found_or_unverified".to_string(),
+        });
+    };
+
+    if let Err(reason) = validate_executable_identity(&found_exe) {
+        return Ok(AutoConfigureResult {
+            linked: false,
+            executable_path: Some(found_exe.to_string_lossy().to_string()),
+            reason,
+        });
+    }
+
+    let working_dir = found_exe
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_string_lossy()
+        .to_string();
+
+    let mut inner = state
+        .0
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+
+    inner.config.executable_path = found_exe.to_string_lossy().to_string();
+    inner.config.working_dir = working_dir.clone();
+    inner.config.log_path = PathBuf::from(&working_dir)
+        .join("go-on.log")
+        .to_string_lossy()
+        .to_string();
+    inner.config.extra_env = load_env_file(&env_file_path(&working_dir));
+
+    Ok(AutoConfigureResult {
+        linked: true,
+        executable_path: Some(found_exe.to_string_lossy().to_string()),
+        reason: "linked".to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
 }
 
 #[tauri::command]

@@ -1,7 +1,11 @@
 <template>
   <OfflineIndicator />
   <QuickNavigator />
-  <el-container style="height: 100vh">
+  <div v-if="monitorOnly" class="monitor-only-banner">
+    ⚠️ {{ t("app.monitorOnlyBanner") }}
+    <router-link to="/config" class="monitor-only-config-link">{{ t("app.monitorOnlyConfigLink") }}</router-link>
+  </div>
+  <el-container :style="monitorOnly ? 'height: calc(100vh - 36px)' : 'height: 100vh'">
     <el-aside width="220px" style="border-right: 1px solid #e5e7eb; padding: 12px;">
       <h3>{{ t("app.name") }}</h3>
       <el-menu :default-active="activePath" router>
@@ -51,7 +55,19 @@ import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useI18n } from "vue-i18n";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { startService, stopService, restartService, showMiniConsole } from "./services/bridge";
+import { open } from "@tauri-apps/plugin-dialog";
+import {
+  autoConfigureBackendPath,
+  backendExecutableExists,
+  checkHealth,
+  configureServiceByExecutable,
+  exitApp,
+  startService,
+  stopService,
+  restartService,
+  serviceStatus,
+  showMiniConsole,
+} from "./services/bridge";
 import { useRuntimeStore } from "./stores/runtime";
 import { getLocale, setLocale } from "./locales";
 import { currentTheme, toggleTheme as toggleThemeFunc } from "./utils/theme";
@@ -70,6 +86,70 @@ const crashCooldownMs = 60000;
 let lastCrashKey = "";
 let lastCrashAt = 0;
 let previousRunning = runtime.status.running;
+const MONITOR_ONLY_KEY = "goon.gui.monitorOnly";
+
+const monitorOnly = ref(localStorage.getItem(MONITOR_ONLY_KEY) === "true");
+
+function monitorOnlyModeEnabled(): boolean {
+  return monitorOnly.value;
+}
+
+function handleMonitorOnlyChanged(e: Event) {
+  monitorOnly.value = (e as CustomEvent<boolean>).detail;
+}
+
+function classifyStartupError(error: unknown): string {
+  const raw = String(error).toLowerCase();
+  if (raw.includes("startup_error:file_missing")) {
+    return "启动失败：未找到后台可执行文件，请重新选择路径。";
+  }
+  if (raw.includes("startup_error:not_a_file")) {
+    return "启动失败：配置路径不是可执行文件。";
+  }
+  if (raw.includes("startup_error:permission_denied")) {
+    return "启动失败：没有执行权限，请检查文件权限或以管理员身份运行。";
+  }
+  if (raw.includes("startup_error:exited_early")) {
+    return "启动失败：后台进程启动后立即退出，请检查日志和端口占用。";
+  }
+  if (raw.includes("startup_error:spawn_failed")) {
+    return "启动失败：无法拉起后台进程，请检查依赖与运行环境。";
+  }
+  return `启动失败：${String(error)}`;
+}
+
+async function waitForBackendHealthy(timeoutMs = 12000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const status = await serviceStatus();
+      if (!status.running) {
+        return false;
+      }
+      const health = await checkHealth();
+      if (health.ok) {
+        return true;
+      }
+    } catch {
+      // Continue polling until timeout.
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 800));
+  }
+  return false;
+}
+
+async function startBackendWithChecks() {
+  try {
+    await startService();
+  } catch (error) {
+    throw new Error(classifyStartupError(error));
+  }
+
+  const healthy = await waitForBackendHealthy();
+  if (!healthy) {
+    throw new Error("启动超时：后台进程未在 12 秒内就绪，请检查端口、配置或依赖。");
+  }
+}
 
 function onLocaleChange(value: string) {
   if (value === "en-US" || value === "zh-CN") {
@@ -112,7 +192,97 @@ async function onRestart() {
   }
 }
 
-onMounted(() => {
+async function ensureBackendAndStart() {
+  while (true) {
+    const exists = await backendExecutableExists();
+    if (exists) {
+      await startBackendWithChecks();
+      return;
+    }
+
+    await ElMessageBox.alert(
+      "未找到后台程序 go-on，请选择后台可执行文件。取消将直接退出 GUI。",
+      "配置后台路径",
+      {
+        confirmButtonText: "选择文件",
+        closeOnClickModal: false,
+        closeOnPressEscape: false,
+      },
+    );
+
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      title: "选择 go-on 后台可执行文件",
+      filters: [
+        { name: "Executable", extensions: ["exe", "bin", ""] },
+        { name: "All Files", extensions: ["*"] },
+      ],
+    });
+
+    if (!picked) {
+      await exitApp();
+      return;
+    }
+
+    const inputPath = Array.isArray(picked) ? picked[0] : picked;
+    if (!inputPath || !String(inputPath).trim()) {
+      ElMessage.warning("路径不能为空，请重新指定。")
+      continue;
+    }
+
+    await configureServiceByExecutable(String(inputPath));
+
+    const configuredExists = await backendExecutableExists();
+    if (!configuredExists) {
+      ElMessage.error("指定路径无效或文件不存在，请重新指定。")
+      continue;
+    }
+
+    await startBackendWithChecks();
+    ElMessage.success("后台已启动。")
+    return;
+  }
+}
+
+async function bootstrapBackend() {
+  const hasConfiguredPath = await backendExecutableExists();
+  if (hasConfiguredPath) {
+    return;
+  }
+
+  try {
+    const health = await checkHealth();
+    if (health.ok) {
+      const result = await autoConfigureBackendPath();
+      if (result.linked) {
+        ElMessage.success("检测到后台已运行，已自动关联并写入配置。")
+        return;
+      }
+      ElMessage.warning(`检测到后台在运行，但自动关联失败：${result.reason}`);
+    }
+  } catch {
+    // Ignore health probe failures and continue to manual path flow.
+  }
+
+  if (monitorOnlyModeEnabled()) {
+    ElMessage.warning("当前为仅监控模式：不会自动启动后台，请先手动启动 go-on。")
+    return;
+  }
+
+  await ensureBackendAndStart();
+}
+
+onMounted(async () => {
+  try {
+    await bootstrapBackend();
+  } catch (error) {
+    ElMessage.error(String(error));
+  }
+
+  monitorOnly.value = monitorOnlyModeEnabled();
+  window.addEventListener("goon:monitor-only-changed", handleMonitorOnlyChanged);
+
   runtime.startStatusPolling();
 
   watch(
@@ -156,9 +326,32 @@ onMounted(() => {
 
 onUnmounted(() => {
   runtime.stopStatusPolling();
+  window.removeEventListener("goon:monitor-only-changed", handleMonitorOnlyChanged);
   if (unlistenCrash) {
     unlistenCrash();
     unlistenCrash = undefined;
   }
 });
 </script>
+
+<style scoped>
+.monitor-only-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  border-bottom: 2px solid #f59e0b;
+  padding: 6px 16px;
+  font-size: 13px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.monitor-only-config-link {
+  color: #b45309;
+  text-decoration: underline;
+  font-weight: 500;
+}
+</style>

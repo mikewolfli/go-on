@@ -9,7 +9,9 @@
     "refresh": "Refresh",
     "miniConsole": "Mini Console",
     "language": "Language",
-    "toggleTheme": "Toggle Dark/Light Mode"
+    "toggleTheme": "Toggle Dark/Light Mode",
+    "monitorOnlyBanner": "Monitor-only mode · GUI will not auto-start backend",
+    "monitorOnlyConfigLink": "Go to Config to disable"
   },
   "menu": {
     "dashboard": "Dashboard",
@@ -124,6 +126,8 @@
     "title": "Service Paths",
     "executable": "go-on executable",
     "workingDir": "Working directory",
+    "monitorOnly": "Monitor only (no auto-start)",
+    "monitorOnlyHint": "When enabled, GUI will not auto-start backend and only connects to running instances",
     "save": "Save Path Config",
     "saved": "Service path configured"
   },

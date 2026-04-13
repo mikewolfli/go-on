@@ -1,0 +1,60 @@
+name: Release Backend and GUI
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Backend
+        run: cargo build --release
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build GUI
+        working-directory: ./GUI
+        run: |
+          npm install
+          npm run build
+          npm run tauri build
+
+      - name: Prepare package directory
+        run: |
+          mkdir -p release/go-on-backend
+          mkdir -p release/go-on-gui
+          cp target/release/go-on release/go-on-backend/
+          cp -r RULES release/go-on-backend/
+          cp -r languages release/go-on-backend/
+          cp config.toml* release/go-on-backend/ || true
+          cp providers.toml release/go-on-backend/ || true
+          cp README.md release/go-on-backend/ || true
+          cp README.zh-CN.md release/go-on-backend/ || true
+          cp start-go-on.sh release/go-on-backend/ || true
+          cp stop-go-on.sh release/go-on-backend/ || true
+          cp GUI/src-tauri/target/release/go-on-gui release/go-on-gui/ || true
+          cp -r GUI/dist release/go-on-gui/ || true
+          cp -r GUI/languages release/go-on-gui/ || true
+          cp GUI/README.md release/go-on-gui/ || true
+
+      - name: Archive all
+        run: |
+          cd release
+          tar -czf ../go-on-full-release.tar.gz .
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: go-on-full-release.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,5 +1,7 @@
 use std::fs::OpenOptions;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::thread;
 use std::time::SystemTime;
 
 use anyhow::{anyhow, Result};
@@ -79,6 +81,22 @@ fn start_service_impl(state: &AppState) -> Result<ServiceStatus> {
         return Ok(current_status(&mut inner));
     }
 
+    let exe_path = {
+        let path = PathBuf::from(&inner.config.executable_path);
+        if path.is_absolute() {
+            path
+        } else {
+            PathBuf::from(&inner.config.working_dir).join(path)
+        }
+    };
+
+    if !exe_path.exists() {
+        return Err(anyhow!("startup_error:file_missing:{}", exe_path.to_string_lossy()));
+    }
+    if !exe_path.is_file() {
+        return Err(anyhow!("startup_error:not_a_file:{}", exe_path.to_string_lossy()));
+    }
+
     let stdout_log = OpenOptions::new()
         .create(true)
         .append(true)
@@ -88,7 +106,7 @@ fn start_service_impl(state: &AppState) -> Result<ServiceStatus> {
         .append(true)
         .open(&inner.config.log_path)?;
 
-    let mut cmd = Command::new(&inner.config.executable_path);
+    let mut cmd = Command::new(&exe_path);
     cmd.current_dir(&inner.config.working_dir)
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(stderr_log));
@@ -97,7 +115,26 @@ fn start_service_impl(state: &AppState) -> Result<ServiceStatus> {
         cmd.env(k, v);
     }
 
-    let child = cmd.spawn()?;
+    let mut child = cmd.spawn().map_err(|e| {
+        let reason = match e.kind() {
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            std::io::ErrorKind::NotFound => "file_missing",
+            _ => "spawn_failed",
+        };
+        anyhow!("startup_error:{reason}:{}", e)
+    })?;
+
+    for _ in 0..4 {
+        thread::sleep(std::time::Duration::from_millis(300));
+        if let Ok(Some(status)) = child.try_wait() {
+            let code = status
+                .code()
+                .map(|x| x.to_string())
+                .unwrap_or_else(|| "signal".to_string());
+            return Err(anyhow!("startup_error:exited_early:{code}"));
+        }
+    }
+
     let pid = child.id();
 
     inner.process = Some(ManagedProcess {

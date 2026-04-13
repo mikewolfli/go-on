@@ -100,8 +100,30 @@ export interface CopilotTokenResult {
     note: string;
 }
 
+export interface AutoConfigureResult {
+    linked: boolean;
+    executablePath?: string;
+    reason: string;
+}
+
 export async function configureService(executablePath: string, workingDir: string) {
     return invoke<void>("configure_service", { executablePath, workingDir });
+}
+
+export async function configureServiceByExecutable(executablePath: string) {
+    return invoke<void>("configure_service_by_executable", { executablePath });
+}
+
+export async function backendExecutableExists() {
+    return invoke<boolean>("backend_executable_exists");
+}
+
+export async function autoConfigureBackendPath() {
+    return invoke<AutoConfigureResult>("auto_configure_backend_path");
+}
+
+export async function exitApp() {
+    return invoke<void>("exit_app");
 }
 
 export async function resetDefaultSettings() {

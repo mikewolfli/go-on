@@ -9,7 +9,9 @@
     "refresh": "刷新",
     "miniConsole": "浮动小窗",
     "language": "语言",
-    "toggleTheme": "切换深色/浅色模式"
+    "toggleTheme": "切换深色/浅色模式",
+    "monitorOnlyBanner": "监控模式 · GUI 不会自动启动后台",
+    "monitorOnlyConfigLink": "前往配置关闭"
   },
   "menu": {
     "dashboard": "总览",
@@ -124,6 +126,8 @@
     "title": "服务路径",
     "executable": "go-on 可执行文件",
     "workingDir": "工作目录",
+    "monitorOnly": "仅监控（不自动启动）",
+    "monitorOnlyHint": "开启后 GUI 不会自动拉起后台，仅连接已运行实例",
     "save": "保存路径配置",
     "saved": "服务路径已保存"
   },

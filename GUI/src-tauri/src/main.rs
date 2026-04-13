@@ -100,6 +100,10 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::config::configure_service,
+            commands::config::configure_service_by_executable,
+            commands::config::backend_executable_exists,
+            commands::config::auto_configure_backend_path,
+            commands::config::exit_app,
             commands::config::reset_default_settings,
             commands::config::set_provider_api_key,
             commands::config::clear_provider_api_key,
