@@ -83,8 +83,8 @@ Notes about workflow/process views:
 Key settings include:
 
 - `go-on.configPath`
-- `go-on.executablePath`
-- `go-on.autoDownloadBinary`
+- `go-on.executablePath` (recommended: set to a local absolute path)
+- `go-on.autoDownloadBinary` (default: false)
 - `go-on.releaseRepository`
 - `go-on.releaseTag`
 - `go-on.autoStart`

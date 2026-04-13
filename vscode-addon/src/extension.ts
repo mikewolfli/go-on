@@ -303,6 +303,16 @@ interface RuntimeResolution {
     runtimeDir: string;
 }
 
+function isSupportedExecutablePath(filePath: string): boolean {
+    const ext = path.extname(filePath).toLowerCase();
+    return ext === '.exe' || ext === '.bat' || ext === '.sh';
+}
+
+async function openExecutablePathSettings(): Promise<void> {
+    await vscode.commands.executeCommand('go-on.openSettings');
+    await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:go-on-vscode go-on.executablePath');
+}
+
 async function promptForManualBinaryPath(
     config: vscode.WorkspaceConfiguration,
     workspaceRoot: string | undefined,
@@ -319,7 +329,7 @@ async function promptForManualBinaryPath(
     );
 
     if (choice === openSettingsOption) {
-        await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:go-on-vscode go-on.executablePath');
+        await openExecutablePathSettings();
         throw new Error('Runtime download failed. Set go-on.executablePath and try again.');
     }
 
@@ -336,13 +346,19 @@ async function promptForManualBinaryPath(
     });
 
     if (!fileSelection || fileSelection.length === 0) {
-        await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:go-on-vscode go-on.executablePath');
+        await openExecutablePathSettings();
         throw new Error('No local binary selected. Set go-on.executablePath in settings and try again.');
     }
 
     const selectedPath = fileSelection[0].fsPath;
     if (!(await pathExists(selectedPath))) {
+        await openExecutablePathSettings();
         throw new Error(`Selected executable does not exist: ${selectedPath}`);
+    }
+
+    if (!isSupportedExecutablePath(selectedPath)) {
+        await openExecutablePathSettings();
+        throw new Error(`Selected file is not supported: ${selectedPath}. Please select an .exe, .bat, or .sh file.`);
     }
 
     if (os.platform() !== 'win32') {
@@ -523,27 +539,35 @@ async function ensureGoOnBinary(
 ): Promise<RuntimeResolution> {
     const configuredExecutablePath = config.get<string>('executablePath', './target/release/go-on');
 
+    const ensureSupportedPath = async (resolvedPath: string): Promise<RuntimeResolution> => {
+        if (!isSupportedExecutablePath(resolvedPath)) {
+            await openExecutablePathSettings();
+            throw new Error(
+                `Configured executable must be an .exe, .bat, or .sh file: ${resolvedPath}`
+            );
+        }
+        return {
+            executablePath: resolvedPath,
+            runtimeDir: path.dirname(resolvedPath)
+        };
+    };
+
     if (workspaceRoot) {
         const resolvedWorkspaceExecutable = path.isAbsolute(configuredExecutablePath)
             ? configuredExecutablePath
             : path.resolve(workspaceRoot, configuredExecutablePath);
         if (await pathExists(resolvedWorkspaceExecutable)) {
-            return {
-                executablePath: resolvedWorkspaceExecutable,
-                runtimeDir: path.dirname(resolvedWorkspaceExecutable)
-            };
+            return await ensureSupportedPath(resolvedWorkspaceExecutable);
         }
     } else if (path.isAbsolute(configuredExecutablePath) && await pathExists(configuredExecutablePath)) {
-        return {
-            executablePath: configuredExecutablePath,
-            runtimeDir: path.dirname(configuredExecutablePath)
-        };
+        return await ensureSupportedPath(configuredExecutablePath);
     }
 
-    const autoDownloadEnabled = config.get<boolean>('autoDownloadBinary', true);
+    const autoDownloadEnabled = config.get<boolean>('autoDownloadBinary', false);
     if (!autoDownloadEnabled) {
+        await openExecutablePathSettings();
         throw new Error(
-            `Configured executable does not exist: ${configuredExecutablePath}. Enable go-on.autoDownloadBinary or set go-on.executablePath.`
+            `Configured executable does not exist: ${configuredExecutablePath}. Set go-on.executablePath to a valid local runtime path.`
         );
     }
 
@@ -580,6 +604,11 @@ async function ensureGoOnBinary(
 
     if (!(await pathExists(executablePath))) {
         throw new Error(`Downloaded archive did not contain executable: ${executableName}`);
+    }
+
+    if (!isSupportedExecutablePath(executablePath)) {
+        await openExecutablePathSettings();
+        throw new Error(`Resolved runtime is not supported: ${executablePath}. Expected .exe, .bat, or .sh.`);
     }
 
     vscode.window.showInformationMessage('Go-On runtime download complete. Chat is ready to use.');
@@ -1214,7 +1243,19 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Open chat command
     let openChatCommand = vscode.commands.registerCommand('go-on.openChat', async () => {
-        // Always show chat first; backend preparation runs in background.
+        const config = vscode.workspace.getConfiguration('go-on');
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+        try {
+            await ensureGoOnBinary(workspaceRoot, config, context);
+        } catch (error: any) {
+            await revealGoOnView('settings');
+            vscode.window.showWarningMessage(
+                `Go-On executable is not ready: ${error?.message || error}. Please set a valid .exe, .bat, or .sh path in Settings.`
+            );
+            return;
+        }
+
         const opened = await revealGoOnView('chat');
         if (!opened) {
             vscode.window.showWarningMessage('Go-On Chat view is not available yet. Reload Window after installing/updating the extension.');

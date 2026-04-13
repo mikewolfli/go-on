@@ -345,8 +345,8 @@
         },
         "go-on.autoDownloadBinary": {
           "type": "boolean",
-          "default": true,
-          "description": "Automatically download Go-On runtime from GitHub releases when executablePath does not exist"
+          "default": false,
+          "description": "Automatically download Go-On runtime from GitHub releases when executablePath does not exist (disabled by default)"
         },
         "go-on.releaseRepository": {
           "type": "string",
