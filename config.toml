@@ -1,283 +1,75 @@
+# Go-On runtime config (clean, deduplicated)
+# If you deploy to another folder (e.g. D:\Tools\go-on), copy this file there as well.
+
 default_phase = "coding"
+model_selection_mode = "adaptive"
 
-[agents.primary]
-# type
-# 代理类型，可选 openai | deepseek | claude | gemini | qwen | 其他支持的provider。
-# Agent type: openai | deepseek | claude | gemini | qwen | other supported providers.
-# path
-# url
-# API 地址。
-# API endpoint URL.
-# 缓存数据库文件路径。
-# api_key_env
-# API密钥环境变量名。
-# API key environment variable name.
-# Path to cache database file.
-# model
-# 默认模型名。
-# Default model name.
-maintenance_interval_seconds = 60
+[protocol]
+# Protocol mode: auto/acp/mcp
+# auto: auto-detect (recommended)
+# acp: ACP/A2A only
+# mcp: MCP only
+mode = "auto"
 
-[flow]
-# name
-# 流程名称。
-# Flow name.
-# default_ttl_seconds
-# phases
-# 流程阶段列表。
-# List of workflow phases.
-# 缓存默认有效期（秒）。
+[cache]
+enabled = true
+path = "acp_cache.sqlite3"
+default_ttl_seconds = 3600
+max_entries = 5000
 
-[phases.planning]
-# description
-# 阶段描述。
-# Phase description.
-# Default cache TTL (seconds).
-# agents
-# 参与该阶段的代理。
-# Agents involved in this phase.
-health_interval_seconds = 120
-# fallback
-# 是否启用回退。
-# Whether to enable fallback.
-# max_entries
-
-[phases.coding]
-# description
-# 阶段描述。
-# Phase description.
-# 缓存最大条目数。
-# agents
-# 参与该阶段的代理。
-# Agents involved in this phase.
-# Maximum number of cache entries.
-# fallback
-# 是否启用回退。
-# Whether to enable fallback.
-shutdown_drain_seconds = 30
-
-[phases.coding.options]
-# autopilot_complexity
-# 自动驾驶复杂度。
-# Autopilot complexity.
-
-# request_timeout_seconds
-# 请求超时时间（秒）。
-# Request timeout (seconds).
 [vector]
-# review_timeout_seconds
-# 评审超时时间（秒）。
-# Review timeout (seconds).
-# enabled
-# cache_enabled
-# 是否启用缓存。
-# Whether to enable cache.
-# 是否启用向量数据库。
-# vector_enabled
-# 是否启用向量。
-# Whether to enable vector.
-# Whether to enable vector database.
-# summary_enabled
-# 是否启用摘要。
-# Whether to enable summary.
-sqlite_vacuum_interval_cycles = 60
-# full_auto_review_agents
-# 全自动评审代理。
-# Full auto review agents.
-# auto_mode
-# review_gate_timeout_seconds
-# 评审门限超时时间（秒）。
-# Review gate timeout (seconds).
-# 是否自动切换向量模式。
-# phase_max_inflight
-# 阶段最大并发数。
-# Max inflight per phase.
-# Whether to auto-switch vector mode.
-# global_max_inflight
-# 全局最大并发数。
-# Global max inflight.
-acp_http_bind_addr = "127.0.0.1:8090"   # Uncomment to enable REST/SSE
-
-[phases.review]
-# description
-# 阶段描述。
-# Phase description.
-# path
-# agents
-# 参与该阶段的代理。
-# Agents involved in this phase.
-# 向量数据库文件路径。
-# fallback
-# 是否启用回退。
-# Whether to enable fallback.
-# Path to vector database file.
-
-[phases.review.options]
-# request_timeout_seconds
-# 请求超时时间（秒）。
-# Request timeout (seconds).
-otel_enabled = false
-# review_gate_timeout_seconds
-# 评审门限超时时间（秒）。
-# Review gate timeout (seconds).
-# dimensions
-# review_timeout_policy
-# 评审超时策略。
-# Review timeout policy.
-# 向量维度。
-# review_min_response_chars
-# 评审最小回复字符数。
-# Minimum review response characters.
-# Vector dimensions.
-# phase_max_inflight
-# 阶段最大并发数。
-# Max inflight per phase.
-otel_exporter = "otlp"
-# global_max_inflight
-# 全局最大并发数。
-# Global max inflight.
-# min_query_chars
-
-[phases.delivery]
-# description
-# 阶段描述。
-# Phase description.
-# 最小查询字符数。
-# agents
-# 参与该阶段的代理。
-# Agents involved in this phase.
-# Minimum query characters.
-# fallback
-# 是否启用回退。
-# Whether to enable fallback.
-otel_endpoint = "http://localhost:4317"   # Uncomment for Jaeger/OTLP
-# top_k
-# 检索返回的top K条数。
-# Top K results to return.
-otel_service_name = "go-on"
-# min_similarity
-# 最小相似度阈值。
-# Minimum similarity threshold.
-otel_sample_ratio = 1.0
-# max_snippet_chars
-# 单条最大片段字符数。
-# Max snippet characters per entry.
-trace_slow_top_n = 20
-# max_entries
-# 向量库最大条目数。
-# Maximum number of vector entries.
-
-# summary_enabled
-# 是否启用摘要。
-# Whether to enable summary.
-[autotune]
-# summary_trigger_messages
-# 触发摘要的消息数。
-# Number of messages to trigger summary.
-enabled = false
-# summary_max_chars
-# 摘要最大字符数。
-# Maximum summary characters.
-evaluate_interval = 20
+enabled = true
+auto_mode = true
+path = "acp_vector.sqlite3"
+dimensions = 192
+min_query_chars = 80
+top_k = 2
+min_similarity = 0.82
+max_snippet_chars = 800
+max_entries = 10000
+summary_enabled = true
+summary_trigger_messages = 8
+summary_max_chars = 1200
 
 [runtime]
-# maintenance_interval_seconds
-# 运行时维护间隔（秒）。
-# Runtime maintenance interval (seconds).
-min_query_chars_step = 20
-# health_interval_seconds
-# 健康检查间隔（秒）。
-# Health check interval (seconds).
-min_query_chars_min = 40
-# shutdown_drain_seconds
-# 优雅关闭等待时间（秒）。
-# Graceful shutdown drain time (seconds).
-min_query_chars_max = 300
-# sqlite_vacuum_interval_cycles
-# SQLite VACUUM 间隔周期数。
-# SQLite VACUUM interval (cycles).
-max_top_k = 4
-# acp_http_bind_addr
-# ACP HTTP 监听地址，取消注释以启用 REST/SSE。
-# ACP HTTP bind address. Uncomment to enable REST/SSE.
-low_precision_threshold = 0.35
-# otel_enabled
-# 是否启用 OpenTelemetry。
-# Whether to enable OpenTelemetry.
-high_precision_threshold = 0.75
-# otel_exporter
-# OpenTelemetry 导出器类型。
-# OpenTelemetry exporter type.
-state_path = "acp_autotune_state.json"
-# otel_endpoint
-# OpenTelemetry 端点，取消注释以启用 Jaeger/OTLP。
-# OpenTelemetry endpoint. Uncomment for Jaeger/OTLP.
-cooldown_windows = 2
-# otel_service_name
-# OpenTelemetry 服务名。
-# OpenTelemetry service name.
-min_vector_searches = 5
-# otel_sample_ratio
-# OpenTelemetry 采样比例。
-# OpenTelemetry sample ratio.
-summary_trigger_min = 3
-# trace_slow_top_n
-# 慢请求追踪Top N。
-# Trace top N slow requests.
-summary_trigger_max = 20
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 30
+sqlite_vacuum_interval_cycles = 60
+acp_http_bind_addr = "127.0.0.1:8090"
+otel_enabled = false
+otel_exporter = "otlp"
+otel_endpoint = "http://localhost:4317"
+otel_service_name = "go-on"
+otel_sample_ratio = 1.0
+trace_slow_top_n = 20
 
 [autotune]
-# enabled
-# 是否启用自动调优。
-# Whether to enable autotune.
+enabled = false
+evaluate_interval = 20
+min_query_chars_step = 20
+min_query_chars_min = 40
+min_query_chars_max = 300
+max_top_k = 4
+low_precision_threshold = 0.35
+high_precision_threshold = 0.75
+state_path = "acp_autotune_state.json"
+cooldown_windows = 2
+min_vector_searches = 5
+summary_trigger_min = 3
+summary_trigger_max = 20
 
-# evaluate_interval
-# 自动调优评估间隔。
-# Autotune evaluation interval.
 [agents.primary]
-# min_query_chars_step
-# 查询字符步长。
-# Query character step.
-# type 可选: openai | deepseek | claude | gemini | qwen | 其他支持的provider
-# min_query_chars_min
-# 查询字符最小值。
-# Minimum query characters.
+# Supported types include: openai | deepseek | claude | gemini | qwen | ...
 type = "openai"
-# min_query_chars_max
-# 查询字符最大值。
-# Maximum query characters.
 url = "https://api.openai.com/v1"
-# max_top_k
-# 最大top_k。
-# Maximum top_k.
 api_key_env = "OPENAI_API_KEY"
-# low_precision_threshold
-# 低精度阈值。
-# Low precision threshold.
 model = "gpt-4o-mini"
-# high_precision_threshold
-# 高精度阈值。
-# High precision threshold.
 
-# state_path
-# 状态文件路径。
-# State file path.
 [flow]
-# cooldown_windows
-# 冷却窗口数。
-# Number of cooldown windows.
 name = "Autopilot Adaptive"
-# min_vector_searches
-# 最小向量检索次数。
-# Minimum vector searches.
 phases = ["planning", "coding", "review", "delivery"]
-# summary_trigger_min
-# 摘要触发最小值。
-# Minimum summary trigger.
 
-# summary_trigger_max
-# 摘要触发最大值。
-# Maximum summary trigger.
 [phases.planning]
 description = "Planning phase"
 agents = ["primary"]
