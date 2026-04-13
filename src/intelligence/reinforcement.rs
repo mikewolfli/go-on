@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::agent::{inspect_secret_pool, secret_pool_fingerprints};
 use crate::cache::ResponseCache;
 use crate::config::{validate_runtime_readiness, AgentConfig, AppConfig};
 use crate::task_decomposer::{TaskDecomposer, TaskDecomposition};
@@ -1706,6 +1707,14 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
 
     for (name, agent) in &config.agents {
         let missing_envs = missing_envs_for_agent(agent);
+        let api_key_status = secret_pool_status(
+            agent.api_key_env.as_deref(),
+            &format!("agents.{}.api_key_env", name),
+        );
+        let secret_key_status = secret_pool_status(
+            agent.secret_key_env.as_deref(),
+            &format!("agents.{}.secret_key_env", name),
+        );
         let endpoint = agent.url.clone();
         let endpoint_probe = endpoint
             .as_deref()
@@ -1726,6 +1735,8 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
             "type": agent.agent_type,
             "env_ready": env_ready,
             "missing_envs": missing_envs,
+            "api_key_status": api_key_status,
+            "secret_key_status": secret_key_status,
             "endpoint": endpoint,
             "endpoint_status": match endpoint_probe {
                 CheckStatus::Healthy => "healthy",
@@ -1762,19 +1773,36 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
     }
 }
 
+fn secret_pool_status(secret_ref: Option<&str>, field_name: &str) -> Value {
+    let Some(secret_ref) = secret_ref else {
+        return Value::Null;
+    };
+
+    match inspect_secret_pool(secret_ref, field_name) {
+        Ok(values) => json!({
+            "ref": secret_ref,
+            "count": values.len(),
+            "fingerprints": secret_pool_fingerprints(secret_ref, field_name).unwrap_or_default(),
+        }),
+        Err(error) => json!({
+            "ref": secret_ref,
+            "count": 0,
+            "fingerprints": [],
+            "error": error.to_string(),
+        }),
+    }
+}
+
 fn missing_envs_for_agent(agent: &AgentConfig) -> Vec<String> {
     let mut missing = Vec::new();
-    for env_var in [
-        agent.api_key_env.as_deref(),
-        agent.secret_key_env.as_deref(),
+    for (secret_ref, field_name) in [
+        (agent.api_key_env.as_deref(), "api_key_env"),
+        (agent.secret_key_env.as_deref(), "secret_key_env"),
     ] {
-        let Some(raw) = env_var else {
+        let Some(raw) = secret_ref else {
             continue;
         };
-        if raw.starts_with("keyring://") {
-            continue;
-        }
-        if std::env::var(raw).is_err() {
+        if inspect_secret_pool(raw, field_name).is_err() {
             missing.push(raw.to_string());
         }
     }

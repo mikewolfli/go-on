@@ -1,10 +1,20 @@
-//! copilot.rs
-//! Auto-generated English doc: module overview.
+//! copilot.rs — GitHub Copilot agent via OAuth device-flow token.
+//!
+//! 认证流程 / Auth flow:
+//!   1. 启动时从环境变量读取 GitHub OAuth token（默认 GITHUB_TOKEN）
+//!      Read GitHub OAuth token from env var at startup (default: GITHUB_TOKEN)
+//!   2. 首次请求时向 api.github.com/copilot_internal/v2/token 换取有时效的 Copilot API token
+//!      On first request, exchange for a short-lived Copilot API token
+//!   3. 缓存该 token，到期前自动刷新
+//!      Cache the token and auto-refresh before expiry
+//!   4. 调用 api.githubcopilot.com/chat/completions 完成对话
+//!      Call api.githubcopilot.com/chat/completions for chat
 //!
 use std::collections::HashMap;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::time::sleep;
@@ -14,14 +24,96 @@ use crate::agents::{
     option_f64, option_string, option_u64, principles_to_text, stream_sse_to_sender,
 };
 
+const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
+const COPILOT_COMPLETIONS_URL: &str = "https://api.githubcopilot.com/chat/completions";
+
+/// Cached Copilot API token with its expiry (Unix timestamp seconds).
+struct CachedToken {
+    token: String,
+    expires_at: u64,
+}
+
 pub struct CopilotAgent {
-    base_url: String,
+    /// GitHub OAuth token read from env var at construction time.
+    github_token: String,
     client: reqwest::Client,
+    /// Short-lived Copilot API token, auto-refreshed.
+    cached: Mutex<Option<CachedToken>>,
 }
 
 impl CopilotAgent {
-    pub fn new(base_url: String, client: reqwest::Client) -> Self {
-        Self { base_url, client }
+    pub fn new(github_token: String, client: reqwest::Client) -> Self {
+        Self {
+            github_token,
+            client,
+            cached: Mutex::new(None),
+        }
+    }
+
+    fn now_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    /// Return a valid Copilot API token, refreshing if needed.
+    async fn copilot_token(&self) -> Result<String> {
+        // Fast path: check cache without doing any async work.
+        {
+            let guard = self.cached.lock().unwrap();
+            if let Some(ref c) = *guard {
+                // Keep a 60-second safety margin before the stated expiry.
+                if Self::now_secs() + 60 < c.expires_at {
+                    return Ok(c.token.clone());
+                }
+            }
+        }
+
+        // Slow path: fetch a new token.
+        let response = self
+            .client
+            .get(COPILOT_TOKEN_URL)
+            .header("Authorization", format!("token {}", self.github_token))
+            .header("Accept", "application/json")
+            .header("User-Agent", "go-on/1.0")
+            .send()
+            .await
+            .context("failed to reach GitHub Copilot token endpoint")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "Copilot token refresh failed ({status}): {body}\n\
+                 Hint: ensure GITHUB_TOKEN is a valid GitHub OAuth token with Copilot access."
+            );
+        }
+
+        let body: Value = response
+            .json()
+            .await
+            .context("invalid JSON from Copilot token endpoint")?;
+
+        let token = body["token"]
+            .as_str()
+            .context("missing 'token' field in Copilot token response")?
+            .to_string();
+
+        let expires_at = body["expires_at"].as_u64().unwrap_or_else(|| {
+            // Default: treat token as valid for 25 minutes if field is absent.
+            Self::now_secs() + 1500
+        });
+
+        {
+            let mut guard = self.cached.lock().unwrap();
+            *guard = Some(CachedToken {
+                token: token.clone(),
+                expires_at,
+            });
+        }
+
+        Ok(token)
     }
 
     fn merge_principles_into_messages(
@@ -115,14 +207,23 @@ impl CopilotAgent {
         sender: crate::agent::StreamingSender,
     ) -> Result<()> {
         let messages = self.merge_principles_into_messages(messages, principles);
-
-        let endpoint = format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
+        let api_token = self.copilot_token().await?;
         let payload = self.build_payload(messages, options);
 
-        let response = self.client.post(endpoint).json(&payload).send().await?;
+        let response = self
+            .client
+            .post(COPILOT_COMPLETIONS_URL)
+            .header("Authorization", format!("Bearer {api_token}"))
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            // These headers identify the editor to GitHub's backend.
+            .header("Editor-Version", "vscode/1.90.0")
+            .header("Editor-Plugin-Version", "copilot-chat/0.17.0")
+            .header("Copilot-Integration-Id", "vscode-chat")
+            .json(&payload)
+            .send()
+            .await?;
+
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();

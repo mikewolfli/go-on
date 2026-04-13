@@ -9,7 +9,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -90,6 +90,146 @@ pub struct AgentAuditLog {
 
 /// Keyring prefix for secret references
 const KEYRING_PREFIX: &str = "keyring://";
+static SECRET_POOL_STATE: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+
+fn secret_pool_state() -> &'static Mutex<HashMap<String, usize>> {
+    SECRET_POOL_STATE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn split_secret_pool(raw: &str) -> Vec<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let multiline: Vec<String> = trimmed
+        .lines()
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect();
+    if multiline.len() > 1 {
+        return multiline;
+    }
+
+    if trimmed.contains(',') {
+        let comma_split: Vec<String> = trimmed
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect();
+        if comma_split.len() > 1 {
+            return comma_split;
+        }
+    }
+
+    vec![trimmed.to_string()]
+}
+
+fn load_secret_value(secret_ref: &str, field_name: &str) -> Result<String> {
+    if let Some(locator) = secret_ref.strip_prefix(KEYRING_PREFIX) {
+        let (service, account) = locator.split_once('/').ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid {} keyring reference '{}': expected keyring://<service>/<account>",
+                field_name,
+                secret_ref
+            )
+        })?;
+
+        if service.trim().is_empty() || account.trim().is_empty() {
+            anyhow::bail!(
+                "invalid {} keyring reference '{}': service/account must be non-empty",
+                field_name,
+                secret_ref
+            );
+        }
+
+        let entry = keyring::Entry::new(service, account)
+            .map_err(|err| anyhow::anyhow!("failed to open keyring entry: {}", err))?;
+        let value = entry
+            .get_password()
+            .map_err(|err| anyhow::anyhow!("failed to read keyring entry: {}", err))?;
+
+        if value.trim().is_empty() {
+            anyhow::bail!("keyring entry for {} resolved to empty value", field_name);
+        }
+
+        return Ok(value);
+    }
+
+    std::env::var(secret_ref)
+        .with_context(|| format!("missing environment variable {}", secret_ref))
+}
+
+fn rotation_group(field_name: &str) -> String {
+    field_name
+        .split('.')
+        .next()
+        .unwrap_or(field_name)
+        .to_string()
+}
+
+fn pick_secret_pool_index(field_name: &str, len: usize) -> usize {
+    if len <= 1 {
+        return 0;
+    }
+
+    let group = rotation_group(field_name);
+    let mut state = secret_pool_state().lock().unwrap();
+
+    if field_name.ends_with("api_key_env") {
+        let entry = state.entry(group).or_insert(0);
+        let index = *entry % len;
+        *entry = (*entry + 1) % len;
+        return index;
+    }
+
+    if field_name.ends_with("secret_key_env") {
+        let current = state.get(&group).copied().unwrap_or(1);
+        return (current + len - 1) % len;
+    }
+
+    let entry = state.entry(group).or_insert(0);
+    let index = *entry % len;
+    *entry = (*entry + 1) % len;
+    index
+}
+
+pub(crate) fn inspect_secret_pool(secret_ref: &str, field_name: &str) -> Result<Vec<String>> {
+    let value = load_secret_value(secret_ref, field_name)?;
+    let candidates = split_secret_pool(&value);
+    if candidates.is_empty() {
+        anyhow::bail!("{} resolved to an empty secret pool", field_name);
+    }
+
+    for candidate in &candidates {
+        validate_secret_security(candidate, field_name)?;
+    }
+
+    Ok(candidates)
+}
+
+fn mask_secret(secret: &str) -> String {
+    let chars: Vec<char> = secret.chars().collect();
+    let len = chars.len();
+    if len <= 8 {
+        return format!("{} (len={})", "*".repeat(len.min(4)), len);
+    }
+
+    let prefix: String = chars.iter().take(4).collect();
+    let suffix: String = chars.iter().skip(len.saturating_sub(4)).collect();
+    format!("{}...{}", prefix, suffix)
+}
+
+pub(crate) fn secret_pool_fingerprints(secret_ref: &str, field_name: &str) -> Result<Vec<String>> {
+    inspect_secret_pool(secret_ref, field_name).map(|values| {
+        values
+            .into_iter()
+            .map(|value| mask_secret(&value))
+            .collect()
+    })
+}
 
 /// Model information for provider selection
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -396,8 +536,19 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             Ok(Arc::new(LocalSlowApproveAgent))
         }
         "copilot" => {
-            let url = required_field("copilot", &config.url, "url")?;
-            Ok(Arc::new(CopilotAgent::new(url, client)))
+            // Read GitHub OAuth token from env var.
+            // 从环境变量读取 GitHub OAuth token（默认 GITHUB_TOKEN）
+            let token_env = config
+                .api_key_env
+                .clone()
+                .unwrap_or_else(|| "GITHUB_TOKEN".to_string());
+            let github_token = std::env::var(&token_env).with_context(|| {
+                format!(
+                    "env var `{token_env}` not set — set it to a GitHub personal access token \
+                     with Copilot access, e.g.: $env:{token_env}=\"ghp_...\""
+                )
+            })?;
+            Ok(Arc::new(CopilotAgent::new(github_token, client)))
         }
         "deepseek" => {
             let api_key_env = required_field("deepseek", &config.api_key_env, "api_key_env")?;
@@ -771,46 +922,9 @@ impl Agent for LocalSlowApproveAgent {
 /// # Returns
 /// * `Result<String>` - Returns Ok(secret) if resolved successfully, or an error if something goes wrong
 pub(crate) fn resolve_secret(secret_ref: &str, field_name: &str) -> Result<String> {
-    if let Some(locator) = secret_ref.strip_prefix(KEYRING_PREFIX) {
-        let (service, account) = locator.split_once('/').ok_or_else(|| {
-            anyhow::anyhow!(
-                "invalid {} keyring reference '{}': expected keyring://<service>/<account>",
-                field_name,
-                secret_ref
-            )
-        })?;
-
-        if service.trim().is_empty() || account.trim().is_empty() {
-            anyhow::bail!(
-                "invalid {} keyring reference '{}': service/account must be non-empty",
-                field_name,
-                secret_ref
-            );
-        }
-
-        let entry = keyring::Entry::new(service, account)
-            .map_err(|err| anyhow::anyhow!("failed to open keyring entry: {}", err))?;
-        let value = entry
-            .get_password()
-            .map_err(|err| anyhow::anyhow!("failed to read keyring entry: {}", err))?;
-
-        if value.trim().is_empty() {
-            anyhow::bail!("keyring entry for {} resolved to empty value", field_name);
-        }
-
-        // Validate secret security
-        validate_secret_security(&value, field_name)?;
-
-        return Ok(value);
-    }
-
-    let value = std::env::var(secret_ref)
-        .with_context(|| format!("missing environment variable {}", secret_ref))?;
-
-    // Validate secret security
-    validate_secret_security(&value, secret_ref)?;
-
-    Ok(value)
+    let candidates = inspect_secret_pool(secret_ref, field_name)?;
+    let index = pick_secret_pool_index(field_name, candidates.len());
+    Ok(candidates[index].clone())
 }
 
 /// Validate secret safety.
@@ -937,5 +1051,33 @@ mod tests {
             registry.is_ok(),
             "AgentRegistry should build all supported types"
         );
+    }
+
+    #[test]
+    fn split_secret_pool_supports_multiline_and_csv() {
+        assert_eq!(
+            split_secret_pool("key-a\nkey-b\nkey-c"),
+            vec!["key-a", "key-b", "key-c"]
+        );
+        assert_eq!(
+            split_secret_pool("key-a, key-b, key-c"),
+            vec!["key-a", "key-b", "key-c"]
+        );
+    }
+
+    #[test]
+    fn resolve_secret_rotates_through_secret_pool() {
+        let env_name = "GO_ON_TEST_MULTI_SECRET_POOL";
+        unsafe {
+            std::env::set_var(env_name, "alpha-key\nbeta-key\ngamma-key");
+        }
+
+        let one = resolve_secret(env_name, "openai.api_key_env").unwrap();
+        let two = resolve_secret(env_name, "openai.api_key_env").unwrap();
+        let three = resolve_secret(env_name, "openai.api_key_env").unwrap();
+
+        assert_eq!(one, "alpha-key");
+        assert_eq!(two, "beta-key");
+        assert_eq!(three, "gamma-key");
     }
 }

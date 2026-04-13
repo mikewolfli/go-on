@@ -13,6 +13,8 @@ use tracing::{info, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::agent::inspect_secret_pool;
+
 /// Application configuration structure
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
@@ -1898,10 +1900,9 @@ pub fn missing_env_vars(config: &AppConfig) -> Vec<String> {
     let mut missing = Vec::new();
 
     for agent in config.agents.values() {
-        for env_name in required_env_vars(agent) {
-            match std::env::var(env_name) {
-                Ok(value) if !value.trim().is_empty() => {}
-                _ => missing.push(env_name.to_string()),
+        for secret_ref in required_env_vars(agent) {
+            if inspect_secret_pool(&secret_ref, &secret_ref).is_err() {
+                missing.push(secret_ref);
             }
         }
     }
@@ -1915,11 +1916,9 @@ pub fn is_agent_env_ready(config: &AppConfig, agent_name: &str) -> bool {
     let Some(agent) = config.agents.get(agent_name) else {
         return false;
     };
-    required_env_vars(agent).into_iter().all(|env_name| {
-        std::env::var(env_name)
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false)
-    })
+    required_env_vars(agent)
+        .into_iter()
+        .all(|secret_ref| inspect_secret_pool(&secret_ref, &secret_ref).is_ok())
 }
 
 fn missing_env_vars_by_agent(config: &AppConfig) -> HashMap<String, Vec<String>> {
@@ -1928,11 +1927,7 @@ fn missing_env_vars_by_agent(config: &AppConfig) -> HashMap<String, Vec<String>>
     for (agent_name, agent) in &config.agents {
         let mut per_agent_missing = required_env_vars(agent)
             .into_iter()
-            .filter(|env_name| match std::env::var(env_name) {
-                Ok(value) => value.trim().is_empty(),
-                Err(_) => true,
-            })
-            .map(str::to_string)
+            .filter(|secret_ref| inspect_secret_pool(secret_ref, secret_ref).is_err())
             .collect::<Vec<_>>();
 
         if !per_agent_missing.is_empty() {
@@ -1945,17 +1940,13 @@ fn missing_env_vars_by_agent(config: &AppConfig) -> HashMap<String, Vec<String>>
     missing
 }
 
-fn required_env_vars(agent: &AgentConfig) -> Vec<&str> {
+fn required_env_vars(agent: &AgentConfig) -> Vec<String> {
     let mut envs = Vec::new();
     if let Some(value) = agent.api_key_env.as_deref() {
-        if !is_keyring_ref(value) {
-            envs.push(value);
-        }
+        envs.push(value.to_string());
     }
     if let Some(value) = agent.secret_key_env.as_deref() {
-        if !is_keyring_ref(value) {
-            envs.push(value);
-        }
+        envs.push(value.to_string());
     }
     envs
 }

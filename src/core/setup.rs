@@ -37,6 +37,8 @@ struct ProviderSpec {
     #[serde(default)]
     supports_system: Option<bool>,
     #[serde(default)]
+    region: Option<String>,
+    #[serde(default)]
     recommended_default_phase: Option<String>,
     #[serde(default)]
     recommended_request_timeout_seconds: Option<u64>,
@@ -66,6 +68,17 @@ struct ProviderCapabilityCatalog {
 }
 
 static PROVIDER_SPECS: OnceLock<Vec<ProviderSpec>> = OnceLock::new();
+
+/// Specification for a custom agent entered by the user during interactive setup.
+#[derive(Clone, Debug)]
+pub struct CustomAgentSpec {
+    pub name: String,
+    pub agent_type: String,
+    pub url: Option<String>,
+    pub api_key_env: Option<String>,
+    pub secret_key_env: Option<String>,
+    pub model: Option<String>,
+}
 
 #[derive(Clone, Debug)]
 pub struct LocalModelOptions {
@@ -229,6 +242,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             anthropic_version: None,
             max_tokens: None,
             supports_system: Some(true),
+            region: Some("Global".to_string()),
             recommended_default_phase: Some("coding".to_string()),
             recommended_request_timeout_seconds: Some(150),
             recommended_review_timeout_seconds: Some(60),
@@ -252,6 +266,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             anthropic_version: Some("2023-06-01".to_string()),
             max_tokens: Some(4096),
             supports_system: None,
+            region: Some("Global".to_string()),
             recommended_default_phase: Some("coding".to_string()),
             recommended_request_timeout_seconds: Some(180),
             recommended_review_timeout_seconds: Some(75),
@@ -275,6 +290,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             anthropic_version: None,
             max_tokens: None,
             supports_system: Some(true),
+            region: Some("Global".to_string()),
             recommended_default_phase: Some("coding".to_string()),
             recommended_request_timeout_seconds: Some(120),
             recommended_review_timeout_seconds: Some(60),
@@ -298,6 +314,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             anthropic_version: None,
             max_tokens: None,
             supports_system: None,
+            region: Some("China".to_string()),
             recommended_default_phase: Some("coding".to_string()),
             recommended_request_timeout_seconds: Some(180),
             recommended_review_timeout_seconds: Some(90),
@@ -321,6 +338,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             anthropic_version: None,
             max_tokens: None,
             supports_system: None,
+            region: Some("Global".to_string()),
             recommended_default_phase: Some("coding".to_string()),
             recommended_request_timeout_seconds: Some(120),
             recommended_review_timeout_seconds: Some(60),
@@ -695,6 +713,7 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
     // 检测可用的AI提供商
     let detected_providers = detect_available_providers(&secret_mode);
     let available_providers = prompt_provider_selection(&detected_providers)?;
+    let custom_agents = prompt_additional_agents()?;
 
     let mut adaptive_config = AdaptiveConfig::auto_detect();
     apply_setup_level_to_config(&mut adaptive_config, setup_level)?;
@@ -707,7 +726,7 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
     }
     adaptive_config.minimal_config.available_providers = available_providers;
 
-    let mut content = generate_adaptive_config_toml(&adaptive_config, &secret_mode);
+    let mut content = generate_adaptive_config_toml(&adaptive_config, &secret_mode, &custom_agents);
 
     // 如果使用keyring模式，转换环境变量占位符
     if secret_mode == SecretMode::Keyring {
@@ -740,7 +759,10 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
     };
 
     if should_store_secrets {
-        store_keyring_secrets_interactive(&adaptive_config.minimal_config.available_providers)?;
+        store_keyring_secrets_interactive(
+            &adaptive_config.minimal_config.available_providers,
+            &custom_agents,
+        )?;
     }
 
     println!("{}", t("setup.complete"));
@@ -824,15 +846,13 @@ pub fn run_secret_command(
             for (name, service, account) in SECRET_TARGETS {
                 let entry = keyring::Entry::new(service, account)
                     .map_err(|err| anyhow::anyhow!("failed to open keyring entry: {}", err))?;
-                let status = if entry.get_password().is_ok() {
-                    "present"
-                } else {
-                    "missing"
-                };
-                println!(
-                    "{}",
-                    tf("setup.secret_status", &[("name", name), ("status", status)])
-                );
+                match entry.get_password() {
+                    Ok(secret) => {
+                        let count = parse_secret_pool_entries(&secret).len();
+                        println!("{}: present ({} key(s))", name, count);
+                    }
+                    Err(_) => println!("{}: missing", name),
+                }
             }
             Ok(())
         }
@@ -840,7 +860,7 @@ pub fn run_secret_command(
             let (service, account) = resolve_secret_target(name)?;
             let value =
                 value.ok_or_else(|| anyhow::anyhow!("{}", t("error.secret_value_required")))?;
-            let entry = keyring::Entry::new(service, account).map_err(|err| {
+            let entry = keyring::Entry::new(&service, &account).map_err(|err| {
                 anyhow::anyhow!(
                     "{}",
                     tf("error.keyring_open", &[("error", &format!("{}", err))])
@@ -860,7 +880,7 @@ pub fn run_secret_command(
         }
         SecretAction::Get => {
             let (service, account) = resolve_secret_target(name)?;
-            let entry = keyring::Entry::new(service, account).map_err(|err| {
+            let entry = keyring::Entry::new(&service, &account).map_err(|err| {
                 anyhow::anyhow!(
                     "{}",
                     tf("error.keyring_open", &[("error", &format!("{}", err))])
@@ -877,18 +897,78 @@ pub fn run_secret_command(
         }
         SecretAction::Delete => {
             let (service, account) = resolve_secret_target(name)?;
-            let entry = keyring::Entry::new(service, account).map_err(|err| {
+            let entry = keyring::Entry::new(&service, &account).map_err(|err| {
                 anyhow::anyhow!(
                     "{}",
                     tf("error.keyring_open", &[("error", &format!("{}", err))])
                 )
             })?;
-            entry.delete_credential().map_err(|err| {
+            let current = entry.get_password().map_err(|err| {
                 anyhow::anyhow!(
                     "{}",
-                    tf("error.keyring_delete", &[("error", &format!("{}", err))])
+                    tf("error.keyring_read", &[("error", &format!("{}", err))])
                 )
             })?;
+            let mut values = parse_secret_pool_entries(&current);
+            if values.is_empty() {
+                anyhow::bail!("secret pool is empty");
+            }
+
+            if let Some(selector) = value {
+                if let Ok(index) = selector.parse::<usize>() {
+                    if index == 0 || index > values.len() {
+                        anyhow::bail!("invalid secret pool index {}", index);
+                    }
+                    values.remove(index - 1);
+                } else {
+                    let position = values
+                        .iter()
+                        .position(|item| item == selector)
+                        .ok_or_else(|| anyhow::anyhow!("secret pool item not found"))?;
+                    values.remove(position);
+                }
+            } else {
+                let secret_name = name.unwrap_or_default();
+                if values.len() == 1 {
+                    if !prompt_yes_no(
+                        &format!(
+                            "Delete the only key for {} ({})?",
+                            secret_name,
+                            mask_secret_pool_entry(&values[0])
+                        ),
+                        false,
+                    )? {
+                        println!("Canceled.");
+                        return Ok(());
+                    }
+                    values.clear();
+                } else {
+                    let Some(index) = prompt_secret_pool_deletion_selection(secret_name, &values)?
+                    else {
+                        println!("Canceled.");
+                        return Ok(());
+                    };
+                    values.remove(index);
+                }
+            }
+
+            if values.is_empty() {
+                entry.delete_credential().map_err(|err| {
+                    anyhow::anyhow!(
+                        "{}",
+                        tf("error.keyring_delete", &[("error", &format!("{}", err))])
+                    )
+                })?;
+            } else {
+                entry
+                    .set_password(&join_secret_pool_entries(&values))
+                    .map_err(|err| {
+                        anyhow::anyhow!(
+                            "{}",
+                            tf("error.keyring_write", &[("error", &format!("{}", err))])
+                        )
+                    })?;
+            }
             println!(
                 "{}",
                 tf(
@@ -926,20 +1006,218 @@ fn detect_available_providers(secret_mode: &SecretMode) -> Vec<String> {
     providers
 }
 
-fn prompt_provider_selection(detected_providers: &[String]) -> Result<Vec<String>> {
-    loop {
-        println!("{}", t("setup.provider_selection_title"));
-        for (index, spec) in provider_specs().iter().enumerate() {
-            println!("  {}. {}", index + 1, spec.name);
-        }
+/// Interactively ask the user whether they want to add any custom agents beyond the
+/// catalog providers.  Returns a (possibly empty) list of `CustomAgentSpec` values.
+fn prompt_additional_agents() -> Result<Vec<CustomAgentSpec>> {
+    const KNOWN_TYPES: &[&str] = &[
+        "openai",
+        "anthropic",
+        "gemini",
+        "deepseek",
+        "groq",
+        "glm",
+        "doubao",
+        "wenxin",
+        "hunyuan",
+        "qwen",
+        "moonshot",
+        "mistral",
+        "llama",
+        "copilot",
+        "openai_compatible",
+    ];
 
-        let default = if detected_providers.is_empty() {
-            "manual".to_string()
-        } else {
-            detected_providers.join(",")
+    if !prompt_yes_no(
+        "Add custom agents not in the catalog? (e.g. self-hosted)",
+        false,
+    )? {
+        return Ok(Vec::new());
+    }
+
+    let mut agents: Vec<CustomAgentSpec> = Vec::new();
+
+    loop {
+        println!("\n-- Custom agent {} --", agents.len() + 1);
+
+        // Name
+        let name = loop {
+            let raw = prompt_value("  Agent name (identifier, no spaces)")?;
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                println!("  Name is required.");
+                continue;
+            }
+            if trimmed.contains(|c: char| c.is_whitespace()) {
+                println!("  Name must not contain spaces.");
+                continue;
+            }
+            break trimmed;
         };
 
-        print!("{} [{}]: ", t("setup.provider_selection_prompt"), default);
+        // Type
+        println!("  Available types: {}", KNOWN_TYPES.join(", "));
+        let agent_type = loop {
+            let raw = prompt_value("  Agent type [openai_compatible]")?;
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                break "openai_compatible".to_string();
+            }
+            if KNOWN_TYPES.contains(&trimmed.as_str()) {
+                break trimmed;
+            }
+            println!("  Unknown type. Choose one of: {}", KNOWN_TYPES.join(", "));
+        };
+
+        // URL (required for non-managed types)
+        let url = {
+            let raw = prompt_value("  Base URL (leave empty to skip)")?;
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        };
+
+        // API key env var
+        let api_key_env = {
+            let raw = prompt_value("  API key env var name (leave empty to skip)")?;
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        };
+
+        // Secret key env var (e.g. for providers that need two keys)
+        let secret_key_env = {
+            let raw = prompt_value("  Secret key env var name (leave empty to skip)")?;
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        };
+
+        // Model
+        let model = {
+            let raw = prompt_value("  Model name (leave empty to skip)")?;
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        };
+
+        agents.push(CustomAgentSpec {
+            name,
+            agent_type,
+            url,
+            api_key_env,
+            secret_key_env,
+            model,
+        });
+
+        if !prompt_yes_no("Add another custom agent?", false)? {
+            break;
+        }
+    }
+
+    Ok(agents)
+}
+
+fn prompt_provider_selection(detected_providers: &[String]) -> Result<Vec<String>> {
+    const REGION_ORDER: &[&str] = &["Global", "China", "Europe", "Local", "Other"];
+
+    let specs = provider_specs();
+
+    // Build canonical ordered region list
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut ordered_regions: Vec<String> = Vec::new();
+    for &r in REGION_ORDER {
+        if specs
+            .iter()
+            .any(|s| s.region.as_deref().unwrap_or("Other") == r)
+            && seen.insert(r.to_string())
+        {
+            ordered_regions.push(r.to_string());
+        }
+    }
+    for spec in specs.iter() {
+        let r = spec.region.as_deref().unwrap_or("Other").to_string();
+        if seen.insert(r.clone()) {
+            ordered_regions.push(r);
+        }
+    }
+
+    // ── Step 1: select region(s) ──────────────────────────────────────────
+    let selected_regions: Vec<String> = loop {
+        println!("\nStep 1/2 — Select region(s)");
+        println!();
+        for (i, region) in ordered_regions.iter().enumerate() {
+            let region_specs: Vec<_> = specs
+                .iter()
+                .filter(|s| s.region.as_deref().unwrap_or("Other") == region.as_str())
+                .collect();
+            let det_count = region_specs
+                .iter()
+                .filter(|s| detected_providers.contains(&s.name))
+                .count();
+            let preview: Vec<&str> = region_specs
+                .iter()
+                .take(4)
+                .map(|s| s.name.as_str())
+                .collect();
+            let mut preview_str = preview.join(", ");
+            if region_specs.len() > 4 {
+                preview_str.push_str(&format!(", ... ({} total)", region_specs.len()));
+            }
+            let det_mark = if det_count > 0 {
+                format!(" [{} detected *]", det_count)
+            } else {
+                String::new()
+            };
+            println!("  {:>2}. {}{}  — {}", i + 1, region, det_mark, preview_str);
+        }
+        if !detected_providers.is_empty() {
+            println!("\n  (* = detected from environment / keyring)");
+        }
+
+        // Build default hint from detected providers' regions
+        let auto_regions: Vec<String> = {
+            let mut v: Vec<String> = Vec::new();
+            for p in detected_providers {
+                if let Some(spec) = specs.iter().find(|s| &s.name == p) {
+                    let r = spec.region.as_deref().unwrap_or("Other").to_string();
+                    if !v.contains(&r) {
+                        v.push(r);
+                    }
+                }
+            }
+            v
+        };
+        let default_hint = if auto_regions.is_empty() {
+            "all".to_string()
+        } else {
+            auto_regions
+                .iter()
+                .filter_map(|r| {
+                    ordered_regions
+                        .iter()
+                        .position(|x| x == r)
+                        .map(|i| (i + 1).to_string())
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+
+        print!(
+            "\nEnter region numbers (e.g. 1,3) or \"all\" [{}]: ",
+            default_hint
+        );
         io::stdout().flush().context("failed to flush stdout")?;
 
         let mut input = String::new();
@@ -948,45 +1226,158 @@ fn prompt_provider_selection(detected_providers: &[String]) -> Result<Vec<String
             .context("failed to read input")?;
         let value = input.trim();
 
-        if value.is_empty() || value.eq_ignore_ascii_case("auto") {
-            if detected_providers.is_empty() {
-                println!("{}", t("setup.provider_selection_required"));
-                continue;
+        if value.is_empty() {
+            if auto_regions.is_empty() {
+                break ordered_regions.clone();
+            } else {
+                break auto_regions;
             }
-            return Ok(detected_providers.to_vec());
+        }
+        if value.eq_ignore_ascii_case("all") {
+            break ordered_regions.clone();
         }
 
-        let mut selected = Vec::new();
+        let mut chosen: Vec<String> = Vec::new();
         let mut invalid = None;
         for token in value.split(',') {
             let raw = token.trim();
             if raw.is_empty() {
                 continue;
             }
+            if let Ok(idx) = raw.parse::<usize>() {
+                if idx >= 1 && idx <= ordered_regions.len() {
+                    let r = ordered_regions[idx - 1].clone();
+                    if !chosen.contains(&r) {
+                        chosen.push(r);
+                    }
+                    continue;
+                }
+            }
+            if let Some(r) = ordered_regions.iter().find(|r| r.eq_ignore_ascii_case(raw)) {
+                if !chosen.contains(r) {
+                    chosen.push(r.clone());
+                }
+            } else {
+                invalid = Some(raw.to_string());
+                break;
+            }
+        }
+        if let Some(bad) = invalid {
+            println!("  Invalid region: '{}'. Try again.", bad);
+            continue;
+        }
+        if chosen.is_empty() {
+            println!("  At least one region is required.");
+            continue;
+        }
+        break chosen;
+    };
 
-            if let Ok(index) = raw.parse::<usize>() {
-                if let Some(spec) = provider_specs().get(index.saturating_sub(1)) {
-                    selected.push(spec.name.clone());
+    // ── Step 2: select provider(s) within chosen region(s) ───────────────
+    loop {
+        println!(
+            "\nStep 2/2 — Select providers from: {}",
+            selected_regions.join(", ")
+        );
+        println!();
+
+        let mut index_map: Vec<String> = Vec::new();
+        for region in &selected_regions {
+            let mut first_in_region = true;
+            for spec in specs
+                .iter()
+                .filter(|s| s.region.as_deref().unwrap_or("Other") == region.as_str())
+            {
+                if first_in_region {
+                    println!("  [{}]", region);
+                    first_in_region = false;
+                }
+                index_map.push(spec.name.clone());
+                let mark = if detected_providers.contains(&spec.name) {
+                    " *"
+                } else {
+                    ""
+                };
+                println!("    {:>2}. {}{}", index_map.len(), spec.name, mark);
+            }
+        }
+
+        let scoped_detected: Vec<String> = detected_providers
+            .iter()
+            .filter(|p| index_map.contains(p))
+            .cloned()
+            .collect();
+
+        if !scoped_detected.is_empty() {
+            println!(
+                "\n  (* = detected. Default: {})",
+                scoped_detected.join(", ")
+            );
+        }
+
+        let default_hint = if scoped_detected.is_empty() {
+            "enter numbers or \"all\"".to_string()
+        } else {
+            scoped_detected
+                .iter()
+                .filter_map(|p| {
+                    index_map
+                        .iter()
+                        .position(|x| x == p)
+                        .map(|i| (i + 1).to_string())
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+
+        print!("\nSelect providers [{}]: ", default_hint);
+        io::stdout().flush().context("failed to flush stdout")?;
+
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .context("failed to read input")?;
+        let value = input.trim();
+
+        if value.is_empty() {
+            if scoped_detected.is_empty() {
+                println!("  At least one provider is required.");
+                continue;
+            }
+            return Ok(scoped_detected);
+        }
+        if value.eq_ignore_ascii_case("all") {
+            return Ok(index_map);
+        }
+
+        let mut selected: Vec<String> = Vec::new();
+        let mut invalid = None;
+        for token in value.split(',') {
+            let raw = token.trim();
+            if raw.is_empty() {
+                continue;
+            }
+            if let Ok(idx) = raw.parse::<usize>() {
+                if idx >= 1 && idx <= index_map.len() {
+                    selected.push(index_map[idx - 1].clone());
                     continue;
                 }
                 invalid = Some(raw.to_string());
                 break;
             }
-
-            if provider_specs().iter().any(|spec| spec.name == raw) {
+            if index_map.contains(&raw.to_string()) {
                 selected.push(raw.to_string());
             } else {
                 invalid = Some(raw.to_string());
                 break;
             }
         }
-
-        if let Some(value) = invalid {
+        if let Some(bad) = invalid {
             println!(
                 "{}",
                 tf(
                     "error.invalid_provider_selection",
-                    &[("value", value.as_str())]
+                    &[("value", bad.as_str())]
                 )
             );
             continue;
@@ -1124,15 +1515,22 @@ fn keyring_reference(env_name: &str) -> Option<String> {
 fn generate_adaptive_config_toml(
     adaptive_config: &AdaptiveConfig,
     secret_mode: &SecretMode,
+    custom_agents: &[CustomAgentSpec],
 ) -> String {
     let providers = adaptive_config.minimal_config.available_providers.clone();
+
+    // Combined list: catalog providers + custom agent names for phase arrays
+    let mut all_agent_names: Vec<String> = providers.clone();
+    for ca in custom_agents {
+        all_agent_names.push(ca.name.clone());
+    }
     let recommendations = aggregate_provider_recommendations(&providers);
-    let review_agents = if providers.len() > 1 {
-        providers.clone()
+    let review_agents = if all_agent_names.len() > 1 {
+        all_agent_names.clone()
     } else {
-        vec![providers[0].clone()]
+        vec![all_agent_names[0].clone()]
     };
-    let delivery_agents = vec![providers[0].clone()];
+    let delivery_agents = vec![all_agent_names[0].clone()];
 
     let mut content = String::new();
     content.push_str(&format!(
@@ -1162,11 +1560,14 @@ fn generate_adaptive_config_toml(
     for provider in &providers {
         append_agent_block(&mut content, provider, secret_mode);
     }
+    for custom in custom_agents {
+        append_custom_agent_block(&mut content, custom, secret_mode);
+    }
 
     content.push_str("[flow]\nname = \"Autopilot Adaptive\"\nphases = [\"planning\", \"coding\", \"review\", \"delivery\"]\n\n");
     content.push_str(&format!(
         "[phases.planning]\ndescription = \"Adaptive planning phase\"\nagents = {}\nfallback = true\nprinciples = [\"Choose the smallest correct plan\", \"Use the available agents adaptively\"]\n\n",
-        toml_array(&providers)
+        toml_array(&all_agent_names)
     ));
     content.push_str(&format!(
         "[phases.planning.options]\nrequest_timeout_seconds = {}\n\n",
@@ -1174,7 +1575,7 @@ fn generate_adaptive_config_toml(
     ));
     content.push_str(&format!(
         "[phases.coding]\ndescription = \"Adaptive coding phase\"\nagents = {}\nfallback = true\nprinciples = [\"Make the smallest correct change\", \"Do not claim done without verification\"]\n\n",
-        toml_array(&providers)
+        toml_array(&all_agent_names)
     ));
     content.push_str(&format!(
         "[phases.coding.options]\nautopilot_complexity = \"auto\"\nrequest_timeout_seconds = {}\nreview_timeout_seconds = {}\ncache_enabled = {}\nvector_enabled = {}\nsummary_enabled = {}\nfull_auto_review_agents = {}\nphase_max_inflight = {}\nglobal_max_inflight = {}\n\n",
@@ -1246,6 +1647,35 @@ fn append_agent_block(content: &mut String, provider: &str, secret_mode: &Secret
         }
         content.push('\n');
     }
+}
+
+fn append_custom_agent_block(
+    content: &mut String,
+    spec: &CustomAgentSpec,
+    secret_mode: &SecretMode,
+) {
+    content.push_str(&format!("[agents.{}]\n", spec.name));
+    content.push_str(&format!("type = \"{}\"\n", spec.agent_type));
+    if let Some(url) = spec.url.as_ref() {
+        content.push_str(&format!("url = \"{}\"\n", url));
+    }
+    if let Some(api_key_env) = spec.api_key_env.as_ref() {
+        content.push_str(&format!(
+            "api_key_env = \"{}\"\n",
+            secret_reference(api_key_env, secret_mode)
+        ));
+    }
+    if let Some(secret_key_env) = spec.secret_key_env.as_ref() {
+        content.push_str(&format!(
+            "secret_key_env = \"{}\"\n",
+            secret_reference(secret_key_env, secret_mode)
+        ));
+    }
+    if let Some(model) = spec.model.as_ref() {
+        content.push_str(&format!("model = \"{}\"\n", model));
+    }
+    content.push_str("supports_system = true\n");
+    content.push('\n');
 }
 
 fn toml_array(items: &[String]) -> String {
@@ -1355,7 +1785,10 @@ fn write_if_missing(path: &Path, content: &str) -> Result<()> {
 /// Interactive flow to store all configured secrets into system keyring.
 ///
 /// Prompts user for each secret key and stores non-empty values.
-fn store_keyring_secrets_interactive(selected_providers: &[String]) -> Result<()> {
+fn store_keyring_secrets_interactive(
+    selected_providers: &[String],
+    custom_agents: &[CustomAgentSpec],
+) -> Result<()> {
     println!("{}", t("setup.enter_secrets"));
     let mut required_envs = Vec::new();
     for provider in selected_providers {
@@ -1365,6 +1798,19 @@ fn store_keyring_secrets_interactive(selected_providers: &[String]) -> Result<()
                 .any(|existing: &String| existing == &env_name)
             {
                 required_envs.push(env_name);
+            }
+        }
+    }
+    for agent in custom_agents {
+        for env_name in [agent.api_key_env.as_ref(), agent.secret_key_env.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            if !required_envs
+                .iter()
+                .any(|existing: &String| existing == env_name)
+            {
+                required_envs.push(env_name.clone());
             }
         }
     }
@@ -1379,15 +1825,15 @@ fn store_keyring_secrets_interactive(selected_providers: &[String]) -> Result<()
             }
         }
 
-        let value = prompt_value(name)?;
-        if value.trim().is_empty() {
+        let values = prompt_secret_pool_values(name)?;
+        if values.is_empty() {
             continue;
         }
 
         let entry = keyring::Entry::new(service, account)
             .map_err(|err| anyhow::anyhow!("failed to open keyring entry: {}", err))?;
         entry
-            .set_password(value.trim())
+            .set_password(&join_secret_pool_entries(&values))
             .map_err(|err| anyhow::anyhow!("failed to write keyring entry: {}", err))?;
     }
 
@@ -1395,8 +1841,8 @@ fn store_keyring_secrets_interactive(selected_providers: &[String]) -> Result<()
         if handled_envs.contains(&env_name) {
             continue;
         }
-        let value = prompt_value(&env_name)?;
-        if value.trim().is_empty() {
+        let values = prompt_secret_pool_values(&env_name)?;
+        if values.is_empty() {
             continue;
         }
         let Some((service, account)) = keyring_target_for_env(&env_name) else {
@@ -1405,7 +1851,7 @@ fn store_keyring_secrets_interactive(selected_providers: &[String]) -> Result<()
         let entry = keyring::Entry::new(&service, &account)
             .map_err(|err| anyhow::anyhow!("failed to open keyring entry: {}", err))?;
         entry
-            .set_password(value.trim())
+            .set_password(&join_secret_pool_entries(&values))
             .map_err(|err| anyhow::anyhow!("failed to write keyring entry: {}", err))?;
     }
 
@@ -1439,13 +1885,104 @@ fn secret_name_to_env(secret_name: &str) -> Option<&'static str> {
 
 /// Resolve secret command name to keyring service/account.
 /// Used by run_secret_command handlers to map human-readable secret names.
-fn resolve_secret_target(name: Option<&str>) -> Result<(&'static str, &'static str)> {
+fn resolve_secret_target(name: Option<&str>) -> Result<(String, String)> {
     let name = name.ok_or_else(|| anyhow::anyhow!("--secret-name is required"))?;
-    SECRET_TARGETS
+    if let Some((_, service, account)) = SECRET_TARGETS
         .iter()
         .find(|(known_name, _, _)| *known_name == name)
-        .map(|(_, service, account)| (*service, *account))
+    {
+        return Ok((service.to_string(), account.to_string()));
+    }
+
+    if let Some(locator) = name.strip_prefix("keyring://") {
+        let (service, account) = locator.split_once('/').ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid keyring secret reference '{}': expected keyring://<service>/<account>",
+                name
+            )
+        })?;
+        return Ok((service.to_string(), account.to_string()));
+    }
+
+    keyring_target_for_env(name)
         .ok_or_else(|| anyhow::anyhow!("{}", tf("error.unknown_secret_name", &[("name", name)])))
+}
+
+fn parse_secret_pool_entries(raw: &str) -> Vec<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let multiline: Vec<String> = trimmed
+        .lines()
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect();
+    if multiline.len() > 1 {
+        return multiline;
+    }
+
+    if trimmed.contains(',') {
+        let comma_split: Vec<String> = trimmed
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect();
+        if comma_split.len() > 1 {
+            return comma_split;
+        }
+    }
+
+    vec![trimmed.to_string()]
+}
+
+fn join_secret_pool_entries(values: &[String]) -> String {
+    values.join("\n")
+}
+
+fn mask_secret_pool_entry(secret: &str) -> String {
+    let chars: Vec<char> = secret.chars().collect();
+    let len = chars.len();
+    if len <= 8 {
+        return format!("{} (len={})", "*".repeat(len.min(4)), len);
+    }
+
+    let prefix: String = chars.iter().take(4).collect();
+    let suffix: String = chars.iter().skip(len.saturating_sub(4)).collect();
+    format!("{}...{}", prefix, suffix)
+}
+
+fn prompt_secret_pool_deletion_selection(
+    secret_name: &str,
+    values: &[String],
+) -> Result<Option<usize>> {
+    if values.is_empty() {
+        return Ok(None);
+    }
+
+    println!("Select a key to delete from {}:", secret_name);
+    for (index, value) in values.iter().enumerate() {
+        println!("  {}. {}", index + 1, mask_secret_pool_entry(value));
+    }
+    println!("  0. Cancel");
+
+    loop {
+        let choice = prompt_value("Delete which key")?;
+        let trimmed = choice.trim();
+        if trimmed.is_empty() || trimmed == "0" {
+            return Ok(None);
+        }
+        if let Ok(index) = trimmed.parse::<usize>() {
+            if (1..=values.len()).contains(&index) {
+                return Ok(Some(index - 1));
+            }
+        }
+
+        println!("Invalid selection. Choose 0-{}.", values.len());
+    }
 }
 
 fn prompt_choice(prompt: &str, allowed: &[&str], default: &str) -> Result<String> {
@@ -1509,6 +2046,19 @@ fn prompt_value(prompt: &str) -> Result<String> {
         .read_line(&mut input)
         .context("failed to read input")?;
     Ok(input.trim().to_string())
+}
+
+fn prompt_secret_pool_values(prompt: &str) -> Result<Vec<String>> {
+    println!("{} (enter one key per line, leave blank to finish)", prompt);
+    let mut values = Vec::new();
+    loop {
+        let value = prompt_value(&format!("{} #{}", prompt, values.len() + 1))?;
+        if value.trim().is_empty() {
+            break;
+        }
+        values.push(value.trim().to_string());
+    }
+    Ok(values)
 }
 
 pub fn add_local_model(config_path: &Path, mut options: LocalModelOptions) -> Result<()> {

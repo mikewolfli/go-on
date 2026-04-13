@@ -554,6 +554,19 @@ impl ConfigValidator {
                     .insert(api_key_env.clone());
             }
         }
+        if let Some(secret_key_env) = &agent.secret_key_env {
+            if secret_key_env.starts_with("keyring://") {
+                result
+                    .dependencies
+                    .required_keyring_entries
+                    .insert(secret_key_env.clone());
+            } else {
+                result
+                    .dependencies
+                    .required_env_vars
+                    .insert(secret_key_env.clone());
+            }
+        }
 
         // Check URL configuration
         if let Some(url) = &agent.url {

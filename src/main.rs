@@ -385,6 +385,47 @@ fn print_runtime_status(config_path: &std::path::Path, report: &RuntimeHealthche
                 ]
             )
         );
+
+        for (label, key_status) in [
+            ("api_keys", item.get("api_key_status")),
+            ("secret_keys", item.get("secret_key_status")),
+        ] {
+            let Some(key_status) = key_status else {
+                continue;
+            };
+            if key_status.is_null() {
+                continue;
+            }
+
+            let secret_ref = key_status
+                .get("ref")
+                .and_then(|value| value.as_str())
+                .unwrap_or("-");
+            let count = key_status
+                .get("count")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            let fingerprints = key_status
+                .get("fingerprints")
+                .and_then(|value| value.as_array())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|entry| entry.as_str())
+                        .collect::<Vec<&str>>()
+                })
+                .unwrap_or_default();
+            let fingerprints = if fingerprints.is_empty() {
+                "-".to_string()
+            } else {
+                fingerprints.join(" | ")
+            };
+
+            println!(
+                "    {}: {} item(s) via {} -> {}",
+                label, count, secret_ref, fingerprints
+            );
+        }
     }
 
     println!("{}", tf("status.done", &[]));
