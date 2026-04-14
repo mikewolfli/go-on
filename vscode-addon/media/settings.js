@@ -257,6 +257,14 @@
         vscode.postMessage({ type: 'autotuneStatus' });
     });
 
+    document.getElementById('healthProbes').addEventListener('click', () => {
+        vscode.postMessage({ type: 'healthProbes' });
+    });
+
+    document.getElementById('governanceStatus').addEventListener('click', () => {
+        vscode.postMessage({ type: 'governanceStatus' });
+    });
+
     // Request initial settings
     vscode.postMessage({ type: 'requestSettings' });
 })();

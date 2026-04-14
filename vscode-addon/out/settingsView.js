@@ -52,6 +52,9 @@ class GoOnSettingsViewProvider {
                 case 'healthCheck':
                     vscode.commands.executeCommand('go-on.healthCheck');
                     break;
+                case 'healthProbes':
+                    vscode.commands.executeCommand('go-on.healthProbes');
+                    break;
                 case 'clearCache':
                     vscode.commands.executeCommand('go-on.cacheClear');
                     break;
@@ -78,6 +81,9 @@ class GoOnSettingsViewProvider {
                     break;
                 case 'autotuneStatus':
                     vscode.commands.executeCommand('go-on.autotuneStatus');
+                    break;
+                case 'governanceStatus':
+                    vscode.commands.executeCommand('go-on.governanceStatus');
                     break;
                 case 'setLanguage':
                     await this._setLanguage(message.language);
@@ -637,6 +643,7 @@ class GoOnSettingsViewProvider {
                         <button class="action-button" id="startGoOn">Start Go-On</button>
                         <button class="action-button" id="stopGoOn">Stop Go-On</button>
                         <button class="action-button" id="healthCheck">Health Check</button>
+                        <button class="action-button" id="healthProbes">Health Probes</button>
                         <button class="action-button" id="breakerStatus">Breaker Status</button>
                         <button class="action-button danger" id="clearCache">Clear Cache</button>
                         <button class="action-button danger" id="clearVector">Clear Vector</button>
@@ -646,6 +653,7 @@ class GoOnSettingsViewProvider {
                         <button class="action-button" id="taskExecute">Task Execute</button>
                         <button class="action-button" id="learningSummary">Learning Summary</button>
                         <button class="action-button" id="autotuneStatus">Autotune Status</button>
+                        <button class="action-button" id="governanceStatus">Governance Status</button>
                     </div>
 
                     <div style="margin-top: 20px; padding: 10px; background: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--vscode-textBlockQuote-border);">

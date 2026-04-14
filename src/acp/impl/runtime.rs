@@ -6,6 +6,7 @@
 //! compatibility with the original implementation.
 
 use std::path::Path;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -265,7 +266,7 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                 let (mut socket, peer_addr) = incoming?;
                 let server_ref = Arc::clone(&server);
                 tokio::spawn(async move {
-                    if let Err(err) = handle_http_connection(&mut socket, server_ref).await {
+                    if let Err(err) = handle_http_connection(&mut socket, server_ref, peer_addr).await {
                         warn!("ACP HTTP connection {} failed: {}", peer_addr, err);
                     }
                 });
@@ -1845,7 +1846,11 @@ async fn handle_responses_api_stream(
     Ok(())
 }
 
-async fn handle_http_connection(socket: &mut TcpStream, server: Arc<AcpServer>) -> Result<()> {
+async fn handle_http_connection(
+    socket: &mut TcpStream,
+    server: Arc<AcpServer>,
+    peer_addr: SocketAddr,
+) -> Result<()> {
     let mut buffer = vec![0u8; 64 * 1024];
     let bytes_read = socket.read(&mut buffer).await?;
     if bytes_read == 0 {
@@ -1870,6 +1875,10 @@ async fn handle_http_connection(socket: &mut TcpStream, server: Arc<AcpServer>) 
     let path = request_line_parts
         .next()
         .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing path"))?;
+
+    if apply_entry_guards(socket, server.as_ref(), header_part, method, path, peer_addr).await? {
+        return Ok(());
+    }
 
     if method == "GET" {
         match path {
@@ -2113,6 +2122,165 @@ fn extract_content_length(headers: &str) -> Option<usize> {
     })
 }
 
+fn extract_header_value(headers: &str, header_name: &str) -> Option<String> {
+    headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.trim().eq_ignore_ascii_case(header_name) {
+            Some(value.trim().to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn extract_entry_token(headers: &str) -> Option<String> {
+    if let Some(auth) = extract_header_value(headers, "authorization") {
+        let lower = auth.to_ascii_lowercase();
+        if lower.starts_with("bearer ") {
+            return Some(auth[7..].trim().to_string());
+        }
+    }
+
+    extract_header_value(headers, "x-api-key")
+        .or_else(|| extract_header_value(headers, "x-go-on-key"))
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn entry_guard_exempt_path(path: &str) -> bool {
+    matches!(path, "/" | "/health")
+}
+
+async fn write_entry_rejection(
+    socket: &mut TcpStream,
+    status: u16,
+    code: &str,
+    kind: &str,
+    message: String,
+    source: &str,
+    path: &str,
+    policy: &str,
+) -> Result<()> {
+    let trace_id = format!("entry-{}", crate::acp::prelude::now_ts_ms());
+    write_http_json_response(
+        socket,
+        status,
+        serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": code,
+                "kind": kind,
+                "message": message,
+                "source": source,
+                "path": path,
+                "policy": policy,
+                "trace_id": trace_id,
+            }
+        }),
+    )
+    .await
+}
+
+async fn apply_entry_guards(
+    socket: &mut TcpStream,
+    server: &AcpServer,
+    headers: &str,
+    method: &str,
+    path: &str,
+    peer_addr: SocketAddr,
+) -> Result<bool> {
+    if entry_guard_exempt_path(path) {
+        return Ok(false);
+    }
+
+    let source = peer_addr.ip().to_string();
+
+    if server.runtime_config.entry_auth_enabled {
+        let env_name = server.runtime_config.entry_auth_api_key_env.trim();
+        let expected_key = std::env::var(env_name)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        if expected_key.is_none() {
+            warn!(
+                "entry auth enabled but env '{}' is missing/empty; denying {} {} from {}",
+                env_name, method, path, source
+            );
+            write_entry_rejection(
+                socket,
+                503,
+                "ENTRY_AUTH_MISCONFIGURED",
+                "service_unavailable",
+                format!(
+                    "entry auth is enabled but env '{}' is missing or empty",
+                    env_name
+                ),
+                &source,
+                path,
+                "entry_auth",
+            )
+            .await?;
+            return Ok(true);
+        }
+
+        let provided = extract_entry_token(headers)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        if provided != expected_key {
+            warn!(
+                "entry auth rejected {} {} from {} (missing or invalid key)",
+                method, path, source
+            );
+            write_entry_rejection(
+                socket,
+                401,
+                "ENTRY_AUTH_REQUIRED",
+                "unauthorized",
+                "missing or invalid entry API key".to_string(),
+                &source,
+                path,
+                "entry_auth",
+            )
+            .await?;
+            return Ok(true);
+        }
+    }
+
+    let key = format!("entry:{}", source);
+    let rpm_limit = server.runtime_config.entry_rate_limit_rpm.max(1);
+    let burst = Some(server.runtime_config.entry_rate_limit_burst.max(1));
+    let allowed = server
+        .phase_rate_limiter
+        .lock()
+        .map(|guard| guard.allow(&key, rpm_limit, burst))
+        .unwrap_or(true);
+
+    if !allowed {
+        warn!(
+            "entry rate limit rejected {} {} from {} (rpm={}, burst={})",
+            method,
+            path,
+            source,
+            rpm_limit,
+            burst.unwrap_or(rpm_limit)
+        );
+        write_entry_rejection(
+            socket,
+            429,
+            "ENTRY_RATE_LIMITED",
+            "rate_limited",
+            "entry rate limit exceeded".to_string(),
+            &source,
+            path,
+            "entry_rate_limit",
+        )
+        .await?;
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
 fn http_trace_context(method: &str) -> RequestTraceContext {
     let request_id = format!("http-{}", crate::acp::prelude::now_ts_ms());
     let seed = Some(serde_json::json!(request_id.clone()));
@@ -2129,10 +2297,13 @@ async fn write_http_json_response(
 ) -> Result<()> {
     let status_text = match status {
         200 => "OK",
+        401 => "Unauthorized",
+        429 => "Too Many Requests",
         400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
         502 => "Bad Gateway",
+        503 => "Service Unavailable",
         _ => "OK",
     };
     let body = serde_json::to_vec(&value)?;

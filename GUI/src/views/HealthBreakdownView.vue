@@ -10,6 +10,24 @@
           {{ t("healthBreakdown.refresh") }}
         </el-button>
 
+        <el-card shadow="hover">
+          <template #header>
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+              <span>Probes</span>
+              <el-space>
+                <el-tag :type="liveness.type">liveness: {{ liveness.text }}</el-tag>
+                <el-tag :type="readiness.type">readiness: {{ readiness.text }}</el-tag>
+              </el-space>
+            </div>
+          </template>
+          <el-descriptions :columns="2" border>
+            <el-descriptions-item label="liveness ok">{{ liveness.ok }}</el-descriptions-item>
+            <el-descriptions-item label="uptime">{{ liveness.uptimeSeconds }}s</el-descriptions-item>
+            <el-descriptions-item label="readiness ok">{{ readiness.ok }}</el-descriptions-item>
+            <el-descriptions-item label="generated at">{{ readiness.generatedAt }}</el-descriptions-item>
+          </el-descriptions>
+        </el-card>
+
         <!-- Cache 健康 -->
         <el-card shadow="hover">
           <template #header>
@@ -124,6 +142,20 @@ import { invokeRuntimeRpc } from "../services/bridge";
 const { t } = useI18n();
 const loading = ref(false);
 
+const liveness = reactive({
+  type: "warning",
+  text: "unknown",
+  ok: false,
+  uptimeSeconds: 0,
+});
+
+const readiness = reactive({
+  type: "warning",
+  text: "unknown",
+  ok: false,
+  generatedAt: 0,
+});
+
 const cacheStatus = reactive({
   type: "success",
   text: "Healthy",
@@ -169,57 +201,57 @@ const overallScore = computed(() => {
 async function refreshBreakdown() {
   loading.value = true;
   try {
-    // Use supported APIs for runtime and debug information.
-    const panelResult = await invokeRuntimeRpc("debug_panel.get", "{}");
-    const panelData = JSON.parse(panelResult);
-    const runtimeOk = Boolean(panelData?.panel?.runtime_health?.ok);
+    const probesRaw = await invokeRuntimeRpc("health.probes", "{}");
+    const probesData = JSON.parse(probesRaw || "{}");
+    const probes = probesData?.probes || {};
 
-    const metricsResult = await invokeRuntimeRpc("metrics.get", "{}");
-    const metricsData = JSON.parse(metricsResult);
-    const metrics = metricsData?.metrics || {};
+    const livenessData = probes?.liveness || {};
+    liveness.ok = livenessData.ok === true;
+    liveness.text = String(livenessData.status || "unknown");
+    liveness.uptimeSeconds = Number(livenessData.uptime_seconds || 0);
+    liveness.type = liveness.ok ? "success" : "warning";
 
-    const cacheLookupTotal = Number(metrics.cache_lookup_total || 0);
-    const cacheHitTotal = Number(metrics.cache_hit_total || 0);
-    const cacheHitRate = cacheLookupTotal > 0 ? Math.round((cacheHitTotal / cacheLookupTotal) * 100) : 0;
+    const readinessData = probes?.readiness || {};
+    readiness.ok = readinessData.ok === true;
+    readiness.text = String(readinessData.status || "unknown");
+    readiness.generatedAt = Number(readinessData.generated_at || 0);
+    readiness.type = readiness.text === "ready" ? "success" : readiness.text === "degraded" ? "warning" : "danger";
 
-    cacheStatus.type = runtimeOk ? "success" : "warning";
-    cacheStatus.text = runtimeOk ? t("common.healthy") : t("common.degraded");
-    cacheStatus.hitRate = cacheHitRate;
-    cacheStatus.size = String(metrics.cache_store_total ?? 0);
+    const dependencies = Array.isArray(probes?.dependencies) ? probes.dependencies : [];
+    const cacheDep = dependencies.find((item: any) => item?.name === "cache") || {};
+    const vectorDep = dependencies.find((item: any) => item?.name === "vector") || {};
+
+    const cacheEntries = Number(cacheDep?.details?.entries || 0);
+    cacheStatus.type = cacheDep?.status === "healthy" ? "success" : cacheDep?.status === "warn" ? "warning" : "danger";
+    cacheStatus.text = String(cacheDep?.status || "unknown");
+    cacheStatus.hitRate = cacheEntries > 0 ? 100 : 0;
+    cacheStatus.size = `${cacheEntries}`;
     cacheStatus.lastUpdate = "just now";
 
-    vectorStatus.type = runtimeOk ? "success" : "warning";
-    vectorStatus.text = runtimeOk ? t("common.healthy") : t("common.degraded");
-    vectorStatus.dimensions = Number(metrics.embedding_dimension || 0);
-    vectorStatus.vectors = Number(metrics.vector_store_total || 0);
+    const memoryEntries = Number(vectorDep?.details?.memory_entries || 0);
+    const summaryEntries = Number(vectorDep?.details?.summary_entries || 0);
+    vectorStatus.type = vectorDep?.status === "healthy" ? "success" : vectorDep?.status === "warn" ? "warning" : "danger";
+    vectorStatus.text = String(vectorDep?.status || "unknown");
+    vectorStatus.dimensions = 0;
+    vectorStatus.vectors = memoryEntries + summaryEntries;
     vectorStatus.lastUpdate = "just now";
 
-    // Get breaker status
-    const breakerResult = await invokeRuntimeRpc("breaker.status", "{}");
-    const breakerData = JSON.parse(breakerResult);
-    if (breakerData.ok) {
-      const state = breakerData.state || "closed";
-      breakerStatus.type =
-        state === "closed" ? "success" : state === "open" ? "danger" : "warning";
-      breakerStatus.text = state;
-      breakerStatus.failures = breakerData.failure_count || 0;
-      breakerStatus.lastTrip = breakerData.last_trip_time || "Never";
-      breakerStatus.recoveryTime = breakerData.recovery_timeout || 30;
-    }
+    const circuitBreakers = Array.isArray(probes?.circuit_breakers) ? probes.circuit_breakers : [];
+    const openCount = circuitBreakers.filter((item: any) => String(item?.state || "").toLowerCase() === "open").length;
+    breakerStatus.type = openCount === 0 ? "success" : "danger";
+    breakerStatus.text = openCount === 0 ? "closed" : "open";
+    breakerStatus.failures = circuitBreakers.reduce((sum: number, item: any) => sum + Number(item?.failure_count || 0), 0);
+    breakerStatus.lastTrip = openCount > 0 ? "recent" : "Never";
+    breakerStatus.recoveryTime = 30;
 
-    // Get rate limiter status
-    const rateLimiterResult = await invokeRuntimeRpc("phase.status", "{}");
-    const rateLimiterData = JSON.parse(rateLimiterResult);
-    const bucketMap = rateLimiterData?.rate_limiter?.buckets || {};
-    const tracked = Number(rateLimiterData?.rate_limiter?.tracked || 0);
-    const bucketValues = Object.values(bucketMap)
-      .map((v) => Number(v || 0))
-      .filter((v) => Number.isFinite(v));
-    const currentRate = bucketValues.length > 0 ? Math.max(...bucketValues) : 0;
-    rateLimiterStatus.type = runtimeOk ? "success" : "warning";
-    rateLimiterStatus.text = runtimeOk ? t("common.normal") : t("common.limited");
-    rateLimiterStatus.currentRate = currentRate;
-    rateLimiterStatus.limit = Math.max(100, tracked);
+    const limiter = probes?.rate_limiter || {};
+    const buckets = Array.isArray(limiter?.buckets) ? limiter.buckets : [];
+    const usedPercents = buckets.map((item: any) => Number(item?.used_percent || 0));
+    const maxUsed = usedPercents.length > 0 ? Math.max(...usedPercents) : 0;
+    rateLimiterStatus.type = maxUsed < 80 ? "success" : maxUsed < 95 ? "warning" : "danger";
+    rateLimiterStatus.text = maxUsed < 80 ? t("common.normal") : t("common.limited");
+    rateLimiterStatus.currentRate = Math.round(maxUsed);
+    rateLimiterStatus.limit = 100;
     rateLimiterStatus.rejectedCount = 0;
 
     ElMessage.success(t("common.refreshed"));

@@ -945,6 +945,23 @@ function activate(context) {
             vscode.window.showErrorMessage(`Health check failed: ${error.message}`);
         }
     });
+    let healthProbesCommand = vscode.commands.registerCommand('go-on.healthProbes', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('health.probes');
+            const probes = result?.probes ?? {};
+            const liveness = probes?.liveness?.status ?? 'unknown';
+            const readiness = probes?.readiness?.status ?? 'unknown';
+            const summary = probes?.summary ?? {};
+            vscode.window.showInformationMessage(`health.probes: liveness=${liveness}, readiness=${readiness}, error=${Number(summary.error ?? 0)}, warn=${Number(summary.warn ?? 0)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`health.probes failed: ${error.message}`);
+        }
+    });
     // Breaker status command
     let breakerStatusCommand = vscode.commands.registerCommand('go-on.breakerStatus', async () => {
         try {
@@ -1149,6 +1166,25 @@ function activate(context) {
         }
         catch (error) {
             vscode.window.showErrorMessage(`autotune.status failed: ${error.message}`);
+        }
+    });
+    let governanceStatusRpcCommand = vscode.commands.registerCommand('go-on.governanceStatus', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('governance.status');
+            const governance = result?.governance ?? {};
+            const strictEnabled = governance?.config?.production_strict === true;
+            const strictViolations = Number(governance?.config?.strict_violation_count ?? 0);
+            const entryAuthEnabled = governance?.config?.entry_auth_enabled === true;
+            const entryAuthKeyConfigured = governance?.config?.entry_auth_key_configured === true;
+            const entryRateLimit = Number(governance?.config?.entry_rate_limit_rpm ?? 0);
+            vscode.window.showInformationMessage(`governance=${governance?.status ?? 'unknown'}, strict=${strictEnabled ? 'on' : 'off'}, strict_violations=${strictViolations}, entry_auth=${entryAuthEnabled ? 'on' : 'off'}, entry_key=${entryAuthKeyConfigured ? 'set' : 'missing'}, entry_rpm=${entryRateLimit}, rules=${governance?.rules?.version ?? '-'}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`governance.status failed: ${error.message}`);
         }
     });
     // New session command
@@ -1449,7 +1485,7 @@ function activate(context) {
         }
     });
     // Runtime download/start is intentionally deferred until the Chat view is opened.
-    context.subscriptions.push(startCommand, stopCommand, sendRequestCommand, healthCheckCommand, breakerStatusCommand, cacheClearCommand, vectorClearCommand, configReloadCommand, shutdownCommand, openChatCommand, closeChatCommand, openSettingsCommand, clearChatCommand, exportChatCommand, newSessionCommand, switchSessionCommand, createWorkflowCommand, runWorkflowCommand, showProcessFlowCommand, workflowExecuteRpcCommand, taskPlanRpcCommand, taskExecuteRpcCommand, learningSummaryRpcCommand, autotuneStatusRpcCommand, refreshStatusMonitorCommand, keyringSetCommand, keyringGetCommand, keyringDeleteCommand, keyringListCommand, applyDefaultConfigCommand, updateWorkflowMappingCommand, updateRulesCommand, autotuneGetRpcCommand, autotuneResetRpcCommand, metricsGetRpcCommand, metricsResetRpcCommand, traceMetricsRpcCommand, traceGetRpcCommand, breakerResetRpcCommand, maintenanceGcRpcCommand, checkpointCreateRpcCommand, checkpointListRpcCommand, conversationRollbackRpcCommand, primarySecondarySummaryRpcCommand);
+    context.subscriptions.push(startCommand, stopCommand, sendRequestCommand, healthCheckCommand, healthProbesCommand, breakerStatusCommand, cacheClearCommand, vectorClearCommand, configReloadCommand, shutdownCommand, openChatCommand, closeChatCommand, openSettingsCommand, clearChatCommand, exportChatCommand, newSessionCommand, switchSessionCommand, createWorkflowCommand, runWorkflowCommand, showProcessFlowCommand, workflowExecuteRpcCommand, taskPlanRpcCommand, taskExecuteRpcCommand, learningSummaryRpcCommand, autotuneStatusRpcCommand, governanceStatusRpcCommand, refreshStatusMonitorCommand, keyringSetCommand, keyringGetCommand, keyringDeleteCommand, keyringListCommand, applyDefaultConfigCommand, updateWorkflowMappingCommand, updateRulesCommand, autotuneGetRpcCommand, autotuneResetRpcCommand, metricsGetRpcCommand, metricsResetRpcCommand, traceMetricsRpcCommand, traceGetRpcCommand, breakerResetRpcCommand, maintenanceGcRpcCommand, checkpointCreateRpcCommand, checkpointListRpcCommand, conversationRollbackRpcCommand, primarySecondarySummaryRpcCommand);
     // Guarantee chat visibility even when the activity bar icon is hidden by layout settings.
     setTimeout(() => {
         void vscode.commands.executeCommand('go-on.openChat');

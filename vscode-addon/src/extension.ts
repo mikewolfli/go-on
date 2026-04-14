@@ -1233,6 +1233,26 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    let healthProbesCommand = vscode.commands.registerCommand('go-on.healthProbes', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+
+        try {
+            const result = await goOnManager.sendRequest('health.probes');
+            const probes = (result as any)?.probes ?? {};
+            const liveness = probes?.liveness?.status ?? 'unknown';
+            const readiness = probes?.readiness?.status ?? 'unknown';
+            const summary = probes?.summary ?? {};
+            vscode.window.showInformationMessage(
+                `health.probes: liveness=${liveness}, readiness=${readiness}, error=${Number(summary.error ?? 0)}, warn=${Number(summary.warn ?? 0)}`
+            );
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`health.probes failed: ${error.message}`);
+        }
+    });
+
     // Breaker status command
     let breakerStatusCommand = vscode.commands.registerCommand('go-on.breakerStatus', async () => {
         try {
@@ -1455,6 +1475,28 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage(`autotune.status: ${JSON.stringify(result)}`);
         } catch (error: any) {
             vscode.window.showErrorMessage(`autotune.status failed: ${error.message}`);
+        }
+    });
+
+    let governanceStatusRpcCommand = vscode.commands.registerCommand('go-on.governanceStatus', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+
+        try {
+            const result = await goOnManager.sendRequest('governance.status');
+            const governance = (result as any)?.governance ?? {};
+            const strictEnabled = governance?.config?.production_strict === true;
+            const strictViolations = Number(governance?.config?.strict_violation_count ?? 0);
+            const entryAuthEnabled = governance?.config?.entry_auth_enabled === true;
+            const entryAuthKeyConfigured = governance?.config?.entry_auth_key_configured === true;
+            const entryRateLimit = Number(governance?.config?.entry_rate_limit_rpm ?? 0);
+            vscode.window.showInformationMessage(
+                `governance=${governance?.status ?? 'unknown'}, strict=${strictEnabled ? 'on' : 'off'}, strict_violations=${strictViolations}, entry_auth=${entryAuthEnabled ? 'on' : 'off'}, entry_key=${entryAuthKeyConfigured ? 'set' : 'missing'}, entry_rpm=${entryRateLimit}, rules=${governance?.rules?.version ?? '-'}`
+            );
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`governance.status failed: ${error.message}`);
         }
     });
 
@@ -1785,6 +1827,7 @@ export function activate(context: vscode.ExtensionContext) {
         stopCommand,
         sendRequestCommand,
         healthCheckCommand,
+        healthProbesCommand,
         breakerStatusCommand,
         cacheClearCommand,
         vectorClearCommand,
@@ -1805,6 +1848,7 @@ export function activate(context: vscode.ExtensionContext) {
         taskExecuteRpcCommand,
         learningSummaryRpcCommand,
         autotuneStatusRpcCommand,
+        governanceStatusRpcCommand,
         refreshStatusMonitorCommand,
         keyringSetCommand,
         keyringGetCommand,

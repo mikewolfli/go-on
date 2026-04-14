@@ -12,6 +12,21 @@
             <span>{{ t("security.securityScore") }}</span>
           </template>
           <el-space direction="vertical" fill style="width: 100%">
+            <el-space>
+              <el-tag :type="governanceState === 'healthy' ? 'success' : 'warning'">
+                governance: {{ governanceState }}
+              </el-tag>
+              <el-tag type="info">rules: {{ rulesVersion }}</el-tag>
+              <el-tag :type="strictEnabled ? 'success' : 'danger'">
+                production_strict: {{ strictEnabled ? 'on' : 'off' }}
+              </el-tag>
+              <el-tag :type="entryAuthEnabled ? 'success' : 'warning'">
+                entry_auth: {{ entryAuthEnabled ? 'on' : 'off' }}
+              </el-tag>
+              <el-tag type="info">
+                entry_rate_limit: {{ entryRateLimitRpm }}/min (burst {{ entryRateLimitBurst }})
+              </el-tag>
+            </el-space>
             <el-row :gutter="16">
               <el-col :span="6">
                 <el-statistic :title="t('security.overallScore')" :value="overallScore" suffix="/100" />
@@ -135,81 +150,33 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from "vue";
+import { onMounted, ref, reactive } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useI18n } from "vue-i18n";
+import { invokeRuntimeRpc } from "../services/bridge";
 
 const { t } = useI18n();
 
-const overallScore = ref(78);
-const credsScore = ref(85);
-const auditScore = ref(72);
-const configScore = ref(76);
+const overallScore = ref(65);
+const credsScore = ref(60);
+const auditScore = ref(60);
+const configScore = ref(60);
 
 const autoMaskSensitive = ref(true);
 const auditEnabled = ref(true);
+const governanceState = ref("unknown");
+const rulesVersion = ref("-");
+const strictEnabled = ref(false);
+const entryAuthEnabled = ref(false);
+const entryAuthKeyConfigured = ref(false);
+const entryRateLimitRpm = ref(0);
+const entryRateLimitBurst = ref(0);
 
-const sensitiveFields = ref([
-  { name: "OPENAI_API_KEY", location: ".env.goon", status: "masked", value: "sk-...***...xyz", actual_length: 48 },
-  { name: "ANTHROPIC_API_KEY", location: ".env.goon", status: "masked", value: "sk-ant-...***...abc", actual_length: 51 },
-  { name: "GITHUB_TOKEN", location: "env:GITHUB_TOKEN", status: "masked", value: "ghp_...***...def", actual_length: 36 },
-  { name: "database.password", location: "config.toml", status: "masked", value: "***", actual_length: 12 },
-]);
+const sensitiveFields = ref<Array<{ name: string; location: string; status: string; value: string; actual_length: number }>>([]);
 
-const risks = reactive([
-  {
-    id: "risk_001",
-    type: "warning",
-    title: t("security.risk1Title"),
-    description: t("security.risk1Desc"),
-    action: true,
-  },
-  {
-    id: "risk_002",
-    type: "info",
-    title: t("security.risk2Title"),
-    description: t("security.risk2Desc"),
-    action: false,
-  },
-  {
-    id: "risk_003",
-    type: "success",
-    title: t("security.risk3Title"),
-    description: t("security.risk3Desc"),
-    action: false,
-  },
-]);
+const risks = reactive<Array<{ id: string; type: "warning" | "info" | "success"; title: string; description: string; action: boolean }>>([]);
 
-const auditLogs = ref([
-  {
-    timestamp: "2026-04-13 14:45:30",
-    action: "api_key_set",
-    resource: "OPENAI_API_KEY",
-    user: "admin",
-    result: "success",
-  },
-  {
-    timestamp: "2026-04-13 14:30:15",
-    action: "config_read",
-    resource: "config.toml",
-    user: "anonymous",
-    result: "success",
-  },
-  {
-    timestamp: "2026-04-13 14:15:00",
-    action: "api_key_clear",
-    resource: "ANTHROPIC_API_KEY",
-    user: "admin",
-    result: "success",
-  },
-  {
-    timestamp: "2026-04-13 14:00:45",
-    action: "audit_log_export",
-    resource: "audit.log",
-    user: "admin",
-    result: "success",
-  },
-]);
+const auditLogs = ref<Array<{ timestamp: string; action: string; resource: string; user: string; result: string }>>([]);
 
 const recommendations = ref([
   {
@@ -226,12 +193,161 @@ const recommendations = ref([
   },
 ]);
 
+function normalizeLevelTag(level: string): "success" | "warning" {
+  return level.toLowerCase() === "healthy" ? "success" : "warning";
+}
+
+async function refreshGovernanceStatus() {
+  try {
+    const resultRaw = await invokeRuntimeRpc("governance.status", "{}");
+    const parsed = JSON.parse(resultRaw || "{}");
+    const governance = parsed?.governance || {};
+
+    governanceState.value = String(governance.status || "unknown");
+    rulesVersion.value = String(governance.rules?.version || "-");
+    strictEnabled.value = governance.config?.production_strict === true;
+    entryAuthEnabled.value = governance.config?.entry_auth_enabled === true;
+    entryAuthKeyConfigured.value = governance.config?.entry_auth_key_configured === true;
+    entryRateLimitRpm.value = Number(governance.config?.entry_rate_limit_rpm || 0);
+    entryRateLimitBurst.value = Number(governance.config?.entry_rate_limit_burst || 0);
+
+    const puaFailed = Number(governance.violations?.pua_recent_failed || 0);
+    const breakerOpen = Number(governance.violations?.breaker_open_count || 0);
+    const warningCount = Number(governance.config?.warning_count || 0);
+    const strictViolationCount = Number(governance.config?.strict_violation_count || 0);
+    const runtimeHealthy = governance.runtime?.is_healthy === true;
+
+    const governancePenalty = Math.min(
+      45,
+      puaFailed * 8 +
+        breakerOpen * 10 +
+        warningCount * 4 +
+        strictViolationCount * 12 +
+        (strictEnabled.value ? 0 : 6) +
+        (entryAuthEnabled.value ? 0 : 8) +
+        (entryAuthKeyConfigured.value || !entryAuthEnabled.value ? 0 : 10),
+    );
+    overallScore.value = Math.max(40, runtimeHealthy ? 100 - governancePenalty : 65 - governancePenalty);
+    credsScore.value = Math.max(40, 90 - warningCount * 8 - strictViolationCount * 10);
+    auditScore.value = Math.max(35, 95 - puaFailed * 10 - breakerOpen * 6);
+    configScore.value = Math.max(35, 95 - warningCount * 9 - strictViolationCount * 12 - (strictEnabled.value ? 0 : 8));
+
+    const files = Array.isArray(governance.rules?.files) ? governance.rules.files : [];
+    sensitiveFields.value = files.map((item: any) => ({
+      name: String(item.path || "unknown"),
+      location: "RULES",
+      status: "masked",
+      value: `size:${Number(item.size_bytes || 0)} bytes`,
+      actual_length: String(item.path || "").length,
+    }));
+
+    const nextRisks: Array<{ id: string; type: "warning" | "info" | "success"; title: string; description: string; action: boolean }> = [];
+    if (puaFailed > 0) {
+      nextRisks.push({
+        id: "pua_failed",
+        type: "warning",
+        title: `PUA violations: ${puaFailed}`,
+        description: "Recent PUA stage/check failures detected. Review safeguards and evidence requirements.",
+        action: true,
+      });
+    }
+    if (breakerOpen > 0) {
+      nextRisks.push({
+        id: "breaker_open",
+        type: "warning",
+        title: `Open breakers: ${breakerOpen}`,
+        description: "One or more circuit breakers are open. Validate upstream reliability and fallback path.",
+        action: true,
+      });
+    }
+    if (warningCount > 0) {
+      nextRisks.push({
+        id: "config_warn",
+        type: "info",
+        title: `Config warnings: ${warningCount}`,
+        description: "Runtime configuration warnings exist. Consider strict governance baseline before production rollout.",
+        action: false,
+      });
+    }
+    if (!strictEnabled.value) {
+      nextRisks.push({
+        id: "strict_disabled",
+        type: "warning",
+        title: "Production strict mode is OFF",
+        description: "Enable runtime.production_strict to enforce fail-fast safety guardrails before production rollout.",
+        action: true,
+      });
+    }
+    if (entryAuthEnabled.value && !entryAuthKeyConfigured.value) {
+      nextRisks.push({
+        id: "entry_auth_key_missing",
+        type: "warning",
+        title: "Entry auth key not configured",
+        description: "runtime.entry_auth_enabled=true but entry API key env is missing/empty; inbound HTTP requests will be rejected.",
+        action: true,
+      });
+    }
+    if (!entryAuthEnabled.value) {
+      nextRisks.push({
+        id: "entry_auth_disabled",
+        type: "info",
+        title: "Entry auth is OFF",
+        description: "For server-exposed ACP HTTP mode, enable runtime.entry_auth_enabled and configure entry API key env.",
+        action: true,
+      });
+    }
+    if (strictViolationCount > 0) {
+      nextRisks.push({
+        id: "strict_violation",
+        type: "warning",
+        title: `Strict violations: ${strictViolationCount}`,
+        description: "Unsafe runtime configuration is present (insecure upstream, missing secrets, or missing entry auth for exposed HTTP endpoint).",
+        action: true,
+      });
+    }
+    if (nextRisks.length === 0) {
+      nextRisks.push({
+        id: "healthy",
+        type: "success",
+        title: "Governance baseline healthy",
+        description: "No recent governance risk was detected in runtime, PUA checks, breaker status, and config warnings.",
+        action: false,
+      });
+    }
+    risks.splice(0, risks.length, ...nextRisks);
+
+    auditLogs.value = [
+      {
+        timestamp: new Date().toLocaleString(),
+        action: "governance.status",
+        resource: rulesVersion.value,
+        user: "system",
+        result: runtimeHealthy ? "success" : "warning",
+      },
+      {
+        timestamp: new Date().toLocaleString(),
+        action: "pua.summary",
+        resource: `failed=${puaFailed}`,
+        user: "system",
+        result: puaFailed === 0 ? "success" : "warning",
+      },
+      {
+        timestamp: new Date().toLocaleString(),
+        action: "config.warnings",
+        resource: `count=${warningCount}`,
+        user: "system",
+        result: warningCount === 0 ? "success" : "warning",
+      },
+    ];
+  } catch (error) {
+    ElMessage.error(`governance.status failed: ${error}`);
+  }
+}
+
 async function auditSensitiveFields() {
   ElMessage.info(t("security.auditRunning"));
-  // Simulating audit
-  setTimeout(() => {
-    ElMessage.success(t("security.auditComplete"));
-  }, 2000);
+  await refreshGovernanceStatus();
+  ElMessage.success(t("security.auditComplete"));
 }
 
 async function fixRisk(riskId: string) {
@@ -279,4 +395,9 @@ function convertToCSV(data: any[]): string {
 async function saveSecurity() {
   ElMessage.success(t("security.settingsSaved"));
 }
+
+onMounted(async () => {
+  await refreshGovernanceStatus();
+  ElMessage.info(`Governance: ${governanceState.value} (${normalizeLevelTag(governanceState.value)}), rules=${rulesVersion.value}`);
+});
 </script>

@@ -774,6 +774,21 @@ pub struct RuntimeConfig {
     /// Optional ACP HTTP bind address for REST/SSE endpoints
     #[serde(default)]
     pub acp_http_bind_addr: Option<String>,
+    /// Whether inbound entry auth is enabled at gateway/edge for exposed HTTP endpoints
+    #[serde(default)]
+    pub entry_auth_enabled: bool,
+    /// Env var name holding entry API key used for HTTP ingress auth
+    #[serde(default = "default_runtime_entry_auth_api_key_env")]
+    pub entry_auth_api_key_env: String,
+    /// Entry layer source-based rate limit (requests per minute)
+    #[serde(default = "default_runtime_entry_rate_limit_rpm")]
+    pub entry_rate_limit_rpm: u64,
+    /// Entry layer token bucket burst capacity per source
+    #[serde(default = "default_runtime_entry_rate_limit_burst")]
+    pub entry_rate_limit_burst: u64,
+    /// Enforce production strict fail-fast checks on unsafe runtime configuration
+    #[serde(default)]
+    pub production_strict: bool,
     /// How often background maintenance performs SQLite VACUUM cycles
     #[serde(default = "default_runtime_sqlite_vacuum_interval_cycles")]
     pub sqlite_vacuum_interval_cycles: u64,
@@ -807,6 +822,11 @@ impl Default for RuntimeConfig {
             health_interval_seconds: default_runtime_health_interval_seconds(),
             shutdown_drain_seconds: default_runtime_shutdown_drain_seconds(),
             acp_http_bind_addr: None,
+            entry_auth_enabled: false,
+            entry_auth_api_key_env: default_runtime_entry_auth_api_key_env(),
+            entry_rate_limit_rpm: default_runtime_entry_rate_limit_rpm(),
+            entry_rate_limit_burst: default_runtime_entry_rate_limit_burst(),
+            production_strict: false,
             sqlite_vacuum_interval_cycles: default_runtime_sqlite_vacuum_interval_cycles(),
             otel_enabled: false,
             otel_exporter: default_runtime_otel_exporter(),
@@ -828,6 +848,18 @@ fn default_runtime_health_interval_seconds() -> u64 {
 
 fn default_runtime_shutdown_drain_seconds() -> u64 {
     30
+}
+
+fn default_runtime_entry_auth_api_key_env() -> String {
+    "GO_ON_ENTRY_API_KEY".to_string()
+}
+
+fn default_runtime_entry_rate_limit_rpm() -> u64 {
+    240
+}
+
+fn default_runtime_entry_rate_limit_burst() -> u64 {
+    60
 }
 
 fn default_runtime_sqlite_vacuum_interval_cycles() -> u64 {
@@ -1448,6 +1480,15 @@ impl AppConfig {
             }
             if runtime.shutdown_drain_seconds == 0 {
                 anyhow::bail!("runtime.shutdown_drain_seconds must be > 0");
+            }
+            if runtime.entry_auth_api_key_env.trim().is_empty() {
+                anyhow::bail!("runtime.entry_auth_api_key_env must not be empty");
+            }
+            if runtime.entry_rate_limit_rpm == 0 {
+                anyhow::bail!("runtime.entry_rate_limit_rpm must be > 0");
+            }
+            if runtime.entry_rate_limit_burst == 0 {
+                anyhow::bail!("runtime.entry_rate_limit_burst must be > 0");
             }
             if runtime.sqlite_vacuum_interval_cycles == 0 {
                 anyhow::bail!("runtime.sqlite_vacuum_interval_cycles must be > 0");
@@ -2076,6 +2117,43 @@ fn is_keyring_ref(value: &str) -> bool {
     value.starts_with("keyring://")
 }
 
+pub fn collect_production_strict_violations(config: &AppConfig) -> Vec<String> {
+    let mut violations = Vec::new();
+
+    for (agent_name, agent) in &config.agents {
+        if let Some(url) = agent.url.as_deref() {
+            if url.starts_with("http://") {
+                violations.push(format!(
+                    "agents.{}.url uses insecure upstream HTTP ({})",
+                    agent_name, url
+                ));
+            }
+        }
+    }
+
+    let missing_by_agent = missing_env_vars_by_agent(config);
+    for (agent_name, missing_vars) in missing_by_agent {
+        violations.push(format!(
+            "agents.{} is missing required secrets: {}",
+            agent_name,
+            missing_vars.join(",")
+        ));
+    }
+
+    if let Some(runtime) = config.runtime.as_ref() {
+        if runtime.acp_http_bind_addr.is_some() && !runtime.entry_auth_enabled {
+            violations.push(
+                "runtime.acp_http_bind_addr is set but runtime.entry_auth_enabled=false"
+                    .to_string(),
+            );
+        }
+    }
+
+    violations.sort();
+    violations.dedup();
+    violations
+}
+
 pub fn validate_external_secret_refs(config: &AppConfig) -> Result<()> {
     for (agent_name, agent) in &config.agents {
         if let Some(value) = agent.api_key_env.as_deref() {
@@ -2094,8 +2172,26 @@ pub fn validate_runtime_readiness(
 ) -> Result<ConfigHealthReport> {
     config.validate()?;
 
+    let strict_enabled = config
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.production_strict)
+        .unwrap_or(false);
+
     let missing_by_agent = missing_env_vars_by_agent(config);
     if !missing_by_agent.is_empty() {
+        if strict_enabled {
+            let blocked = missing_by_agent
+                .iter()
+                .map(|(agent, vars)| format!("{}({})", agent, vars.join(",")))
+                .collect::<Vec<_>>()
+                .join("; ");
+            anyhow::bail!(
+                "production_strict is enabled and runtime readiness is blocked by missing agent secrets: {}",
+                blocked
+            );
+        }
+
         let total_agents = config.agents.len();
         let ready_agents = total_agents.saturating_sub(missing_by_agent.len());
         if ready_agents == 0 {
@@ -2118,6 +2214,17 @@ pub fn validate_runtime_readiness(
     }
 
     validate_external_secret_refs(config)?;
+
+    if strict_enabled {
+        let strict_violations = collect_production_strict_violations(config);
+        if !strict_violations.is_empty() {
+            anyhow::bail!(
+                "production_strict is enabled and unsafe configuration was detected: {}",
+                strict_violations.join("; ")
+            );
+        }
+    }
+
     Ok(build_config_health_report(config_path, config))
 }
 
@@ -2227,6 +2334,18 @@ fn collect_config_warnings_detailed(config_path: &Path, config: &AppConfig) -> V
     }
 
     if let Some(runtime) = &config.runtime {
+        if runtime.production_strict {
+            let strict_violations = collect_production_strict_violations(config);
+            if strict_violations.is_empty() {
+                warnings.push(ConfigWarning {
+                    code: "PRODUCTION_STRICT_ENABLED".to_string(),
+                    severity: ConfigWarningSeverity::Info,
+                    message: "runtime.production_strict=true; unsafe runtime configuration will fail fast at startup"
+                        .to_string(),
+                });
+            }
+        }
+
         if runtime.otel_enabled && runtime.otel_endpoint.is_none() {
             warnings.push(ConfigWarning {
                 code: "OTEL_ENDPOINT_DEFAULTED".to_string(),
@@ -2247,6 +2366,20 @@ fn collect_config_warnings_detailed(config_path: &Path, config: &AppConfig) -> V
                     runtime.otel_sample_ratio, runtime.maintenance_interval_seconds
                 ),
             });
+        }
+
+        if !runtime.production_strict {
+            let strict_violations = collect_production_strict_violations(config);
+            if !strict_violations.is_empty() {
+                warnings.push(ConfigWarning {
+                    code: "PRODUCTION_STRICT_RECOMMENDED".to_string(),
+                    severity: ConfigWarningSeverity::Warn,
+                    message: format!(
+                        "runtime.production_strict=false while {} strict violation(s) are present; consider enabling strict mode to enforce fail-fast guardrails",
+                        strict_violations.len()
+                    ),
+                });
+            }
         }
     }
 
@@ -2727,6 +2860,11 @@ mod tests {
             pua_report: false,
             deployment_target: None,
             acp_http_bind_addr: None,
+            entry_auth_enabled: false,
+            entry_auth_api_key_env: "GO_ON_ENTRY_API_KEY".to_string(),
+            entry_rate_limit_rpm: 240,
+            entry_rate_limit_burst: 60,
+            production_strict: false,
             sqlite_vacuum_interval_cycles: 60,
             otel_enabled: false,
             otel_exporter: "otlp".to_string(),
@@ -3119,6 +3257,85 @@ mod tests {
     }
 
     #[test]
+    fn runtime_readiness_strict_mode_fails_when_agent_secrets_missing() {
+        let mut cfg = valid_config();
+        cfg.runtime = Some(RuntimeConfig {
+            production_strict: true,
+            ..RuntimeConfig::default()
+        });
+
+        let dir = tempdir().expect("tempdir should be created");
+        let config_path = dir.path().join("config.toml");
+        fs::write(&config_path, "# test").expect("config marker should be written");
+
+        let err = super::validate_runtime_readiness(&config_path, &cfg)
+            .expect_err("strict mode should fail when any configured agent is missing secrets");
+        assert!(
+            err.to_string().contains("production_strict is enabled"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn runtime_readiness_strict_mode_fails_when_entry_auth_disabled_for_http_bind() {
+        let mut cfg = valid_config();
+        if let Some(agent) = cfg.agents.get_mut("copilot") {
+            agent.url = None;
+        }
+        if let Some(agent) = cfg.agents.get_mut("reviewer_a") {
+            agent.api_key_env = None;
+        }
+        if let Some(agent) = cfg.agents.get_mut("reviewer_b") {
+            agent.api_key_env = None;
+            agent.secret_key_env = None;
+        }
+        cfg.runtime = Some(RuntimeConfig {
+            production_strict: true,
+            acp_http_bind_addr: Some("127.0.0.1:8090".to_string()),
+            entry_auth_enabled: false,
+            ..RuntimeConfig::default()
+        });
+
+        let dir = tempdir().expect("tempdir should be created");
+        let config_path = dir.path().join("config.toml");
+        fs::write(&config_path, "# test").expect("config marker should be written");
+
+        let err = super::validate_runtime_readiness(&config_path, &cfg)
+            .expect_err("strict mode should fail when entry auth is disabled for exposed HTTP endpoint");
+        assert!(
+            err.to_string().contains("entry_auth_enabled=false"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn runtime_readiness_strict_mode_passes_with_safe_configuration() {
+        let mut cfg = valid_config();
+        if let Some(agent) = cfg.agents.get_mut("copilot") {
+            agent.url = None;
+        }
+        if let Some(agent) = cfg.agents.get_mut("reviewer_a") {
+            agent.api_key_env = None;
+        }
+        if let Some(agent) = cfg.agents.get_mut("reviewer_b") {
+            agent.api_key_env = None;
+            agent.secret_key_env = None;
+        }
+        cfg.runtime = Some(RuntimeConfig {
+            production_strict: true,
+            entry_auth_enabled: true,
+            ..RuntimeConfig::default()
+        });
+
+        let dir = tempdir().expect("tempdir should be created");
+        let config_path = dir.path().join("config.toml");
+        fs::write(&config_path, "# test").expect("config marker should be written");
+
+        super::validate_runtime_readiness(&config_path, &cfg)
+            .expect("strict mode should pass when all strict checks are satisfied");
+    }
+
+    #[test]
     fn adaptive_template_loads_and_validates() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.toml.autopilot-adaptive");
         let cfg = AppConfig::load(&path).expect("config.toml.autopilot-adaptive should parse");
@@ -3176,6 +3393,11 @@ mod tests {
             pua_report: false,
             deployment_target: None,
             acp_http_bind_addr: None,
+            entry_auth_enabled: false,
+            entry_auth_api_key_env: "GO_ON_ENTRY_API_KEY".to_string(),
+            entry_rate_limit_rpm: 240,
+            entry_rate_limit_burst: 60,
+            production_strict: false,
             sqlite_vacuum_interval_cycles: 60,
             otel_enabled: true,
             otel_exporter: "otlp".to_string(),

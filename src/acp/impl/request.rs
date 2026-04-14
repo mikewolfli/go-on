@@ -46,6 +46,7 @@ fn is_acp_request(method: &str) -> bool {
             | "shutdown"
             | "health"
             | "runtime.health"
+            | "health.probes"
             | "breaker.status"
             | "breaker.reset"
             | "cache.clear"
@@ -71,6 +72,7 @@ fn is_acp_request(method: &str) -> bool {
             | "learning.summary"
             | "phase.policy.replay"
             | "primary_secondary.summary"
+            | "governance.status"
              // diagnostics / ops – also used by vscode-addon in ACP mode
              | "metrics.reset"
              | "trace.get"
@@ -89,9 +91,9 @@ fn is_acp_request(method: &str) -> bool {
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
-use std::time::Instant;
+use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -115,7 +117,10 @@ use crate::acp::prelude::enforce_checkpoint_capacity;
 use crate::acp::r#impl::storage::cache_clear;
 use crate::acp::server::AcpServer;
 use crate::agent::{AgentAuditLog, AgentTaskEnvelope, Message};
-use crate::config::{validate_runtime_readiness, AppConfig, AutoTuneState};
+use crate::config::{
+    collect_config_warnings, collect_production_strict_violations, validate_runtime_readiness,
+    AppConfig, AutoTuneState,
+};
 use crate::evaluation::TraceEvent;
 
 use crate::acp::helpers::policy::{rank_execution_agents, resolve_review_policy};
@@ -136,6 +141,7 @@ use crate::pua::{
     TaskType,
 };
 use crate::reinforcement::{
+    build_runtime_healthcheck_report,
     build_task_plan, build_workflow_generated_artifact, persist_clarification_session_artifact,
     persist_consultation_artifact, persist_execution_decision,
     persist_primary_secondary_failover_artifact, persist_primary_secondary_policy_artifact,
@@ -144,6 +150,7 @@ use crate::reinforcement::{
     recommend_agent_order_from_execution_history, recommend_failure_strategy_from_learning,
     recommend_parallelism_from_learning, recommend_predicted_success_rate_from_learning,
     recommend_work_grade_from_learning, run_action_check, ActionCheckKind, ArtifactLedger,
+    CheckStatus,
     ClarificationSessionArtifact, ConsultationArtifact, ExecutionAssignmentRecord,
     ExecutionDecisionArtifact, ExecutionDecisionCandidate, KnowledgeBusArtifact,
     ParallelPhaseDecisionRecord, PrimaryFailoverReportItem, PrimarySecondaryFailoverArtifact,
@@ -628,6 +635,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         "trace.metrics" => handle_trace_metrics(server, request_id).await,
         "shutdown" => handle_shutdown(server, request_id).await,
         "health" | "runtime.health" => handle_health(server, request_id).await,
+        "health.probes" => handle_health_probes(server, request_id).await,
         "breaker.status" => handle_breaker_status(server, request_id).await,
         "breaker.reset" => {
             handle_breaker_reset(server, request.params.unwrap_or_default(), request_id).await
@@ -740,6 +748,9 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         }
         "learning.summary" => {
             handle_learning_summary(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "governance.status" => {
+            handle_governance_status(server, request.params.unwrap_or_default(), request_id).await
         }
         "phase.policy.replay" => {
             handle_phase_policy_replay(server, request.params.unwrap_or_default(), request_id).await
@@ -1248,6 +1259,394 @@ async fn handle_health(server: &AcpServer, request_id: Option<Value>) -> Result<
         }),
     )
     .await
+}
+
+fn check_status_label(value: CheckStatus) -> &'static str {
+    match value {
+        CheckStatus::Healthy => "healthy",
+        CheckStatus::Warn => "warn",
+        CheckStatus::Error => "error",
+        CheckStatus::Skipped => "skipped",
+    }
+}
+
+async fn handle_health_probes(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    let status = server.get_status();
+
+    let config_path = server.config_path.as_deref().map(Path::new);
+    let report = build_runtime_healthcheck_report(
+        config_path,
+        server.response_cache.as_deref(),
+        server.vector_store.as_deref(),
+    )?;
+
+    let healthy_count = report
+        .components
+        .iter()
+        .filter(|item| item.status == CheckStatus::Healthy)
+        .count();
+    let warn_count = report
+        .components
+        .iter()
+        .filter(|item| item.status == CheckStatus::Warn)
+        .count();
+    let error_count = report
+        .components
+        .iter()
+        .filter(|item| item.status == CheckStatus::Error)
+        .count();
+    let skipped_count = report
+        .components
+        .iter()
+        .filter(|item| item.status == CheckStatus::Skipped)
+        .count();
+
+    let readiness_status = if error_count > 0 {
+        "not_ready"
+    } else if warn_count > 0 {
+        "degraded"
+    } else {
+        "ready"
+    };
+
+    let liveness_ok = status.lifecycle.is_healthy || status.lifecycle.shutdown_requested;
+    let liveness_status = if liveness_ok { "alive" } else { "degraded" };
+
+    let circuit_breakers = status
+        .circuit_breakers
+        .iter()
+        .map(|item| {
+            json!({
+                "name": item.name,
+                "state": item.state,
+                "failure_count": item.failure_count,
+                "success_count": item.success_count,
+                "last_state_change": item.last_state_change,
+                "total_failures": item.total_failures,
+                "total_successes": item.total_successes,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let rate_limiter_buckets = server
+        .phase_rate_limiter
+        .lock()
+        .map(|guard| {
+            guard
+                .snapshot()
+                .into_iter()
+                .map(|(phase, (tokens, capacity))| {
+                    json!({
+                        "phase": phase,
+                        "tokens": tokens,
+                        "capacity": capacity,
+                        "used_percent": if capacity > 0.0 { ((capacity - tokens) / capacity * 100.0).clamp(0.0, 100.0) } else { 0.0 },
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let dependencies = report
+        .components
+        .iter()
+        .map(|item| {
+            json!({
+                "name": item.name,
+                "status": check_status_label(item.status),
+                "message": item.message,
+                "details": item.details,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "probes": {
+                "liveness": {
+                    "status": liveness_status,
+                    "ok": liveness_ok,
+                    "shutting_down": status.lifecycle.shutdown_requested,
+                    "uptime_seconds": status.lifecycle.uptime_seconds,
+                },
+                "readiness": {
+                    "status": readiness_status,
+                    "ok": error_count == 0,
+                    "overall_status": check_status_label(report.overall_status),
+                    "generated_at": report.generated_at,
+                },
+                "summary": {
+                    "healthy": healthy_count,
+                    "warn": warn_count,
+                    "error": error_count,
+                    "skipped": skipped_count,
+                },
+                "dependencies": dependencies,
+                "circuit_breakers": circuit_breakers,
+                "rate_limiter": {
+                    "tracked": rate_limiter_buckets.len(),
+                    "buckets": rate_limiter_buckets,
+                },
+                "timestamp": status.timestamp,
+            }
+        }),
+    )
+    .await
+}
+
+async fn handle_governance_status(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let status = server.get_status();
+    let runtime_snapshot = server.metrics.snapshot();
+
+    let pua_plan = server
+        .pua_enforcement_plan
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+
+    let pua_learning = pua_feedback_collector()
+        .extract_learning_data(200)
+        .unwrap_or_default();
+    let recent_failed = pua_learning.iter().filter(|record| !record.passed).count();
+
+    let rules = governance_rule_fingerprint(server.config_path.as_deref());
+    let config_summary = governance_config_summary(server.config_path.as_deref());
+
+    let entry_rate_snapshot = server
+        .phase_rate_limiter
+        .lock()
+        .map(|guard| guard.snapshot())
+        .unwrap_or_default();
+    let entry_sources_tracked = entry_rate_snapshot
+        .keys()
+        .filter(|name| name.starts_with("entry:"))
+        .count();
+
+    let breaker_open_count = status
+        .circuit_breakers
+        .iter()
+        .filter(|item| item.state.eq_ignore_ascii_case("open"))
+        .count();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "governance": {
+                "status": if status.lifecycle.is_healthy && recent_failed == 0 && breaker_open_count == 0 {
+                    "healthy"
+                } else {
+                    "degraded"
+                },
+                "runtime": {
+                    "is_healthy": status.lifecycle.is_healthy,
+                    "shutting_down": status.lifecycle.shutdown_requested,
+                    "uptime_seconds": status.lifecycle.uptime_seconds,
+                },
+                "rules": rules,
+                "pua": {
+                    "escalation_level": pua_plan.escalation_level,
+                    "red_line_count": pua_plan.red_lines.len(),
+                    "stage_requirement_count": pua_plan.stage_requirements.len(),
+                    "mandatory_safeguards_count": pua_plan.mandatory_safeguards.len(),
+                    "mandatory_evidence_count": pua_plan.mandatory_evidence.len(),
+                },
+                "violations": {
+                    "pua_recent_total": pua_learning.len(),
+                    "pua_recent_failed": recent_failed,
+                    "review_gate_rejected_total": runtime_snapshot.review_gate_rejected_total,
+                    "breaker_open_count": breaker_open_count,
+                },
+                "config": config_summary,
+                "entry_guard": {
+                    "auth_enabled": server.runtime_config.entry_auth_enabled,
+                    "auth_key_env": server.runtime_config.entry_auth_api_key_env,
+                    "auth_key_configured": std::env::var(&server.runtime_config.entry_auth_api_key_env)
+                        .ok()
+                        .map(|value| !value.trim().is_empty())
+                        .unwrap_or(false),
+                    "rate_limit_rpm": server.runtime_config.entry_rate_limit_rpm,
+                    "rate_limit_burst": server.runtime_config.entry_rate_limit_burst,
+                    "sources_tracked": entry_sources_tracked,
+                },
+                "timestamp": status.timestamp,
+            }
+        }),
+    )
+    .await
+}
+
+fn governance_rule_fingerprint(config_path: Option<&str>) -> Value {
+    let base_dir = config_path
+        .map(PathBuf::from)
+        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let mut files = Vec::new();
+
+    let shared = [
+        base_dir.join("RULES.md"),
+        base_dir.join("RULES").join("global.md"),
+        base_dir.join("RULES").join("common.md"),
+        base_dir.join("RULES").join("local.md"),
+    ];
+
+    for path in shared {
+        if let Some(item) = build_rule_file_info(&base_dir, &path) {
+            files.push(item);
+        }
+    }
+
+    let rules_dir = base_dir.join("RULES");
+    if let Ok(read_dir) = fs::read_dir(&rules_dir) {
+        let mut dynamic_paths = read_dir
+            .filter_map(|entry| entry.ok().map(|item| item.path()))
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("md"))
+            .collect::<Vec<_>>();
+        dynamic_paths.sort();
+
+        for path in dynamic_paths {
+            if let Some(item) = build_rule_file_info(&base_dir, &path) {
+                let already_known = files
+                    .iter()
+                    .any(|existing| existing.get("path") == item.get("path"));
+                if !already_known {
+                    files.push(item);
+                }
+            }
+        }
+    }
+
+    let file_count = files.len() as u64;
+    let total_bytes = files
+        .iter()
+        .filter_map(|item| item.get("size_bytes").and_then(Value::as_u64))
+        .sum::<u64>();
+    let latest_mtime_ts = files
+        .iter()
+        .filter_map(|item| item.get("mtime_ts").and_then(Value::as_i64))
+        .max()
+        .unwrap_or(0);
+
+    json!({
+        "version": format!("r{}-{}-{}", file_count, latest_mtime_ts, total_bytes),
+        "file_count": file_count,
+        "latest_mtime_ts": latest_mtime_ts,
+        "total_bytes": total_bytes,
+        "files": files,
+    })
+}
+
+fn build_rule_file_info(base_dir: &Path, path: &Path) -> Option<Value> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok();
+    let mtime_ts = modified
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_secs() as i64)
+        .unwrap_or(0);
+
+    let relative = path
+        .strip_prefix(base_dir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    Some(json!({
+        "path": relative,
+        "size_bytes": metadata.len(),
+        "mtime_ts": mtime_ts,
+    }))
+}
+
+fn governance_config_summary(config_path: Option<&str>) -> Value {
+    let Some(config_path) = config_path else {
+        return json!({
+            "loaded": false,
+            "production_strict": false,
+            "entry_auth_enabled": false,
+            "entry_auth_api_key_env": "GO_ON_ENTRY_API_KEY",
+            "entry_auth_key_configured": false,
+            "entry_rate_limit_rpm": 240,
+            "entry_rate_limit_burst": 60,
+            "strict_violation_count": 0,
+            "strict_violations": [],
+            "warning_count": 0,
+            "warnings": [],
+        });
+    };
+
+    let config_path_buf = PathBuf::from(config_path);
+    let config = match AppConfig::load(&config_path_buf) {
+        Ok(config) => config,
+        Err(err) => {
+            return json!({
+                "loaded": false,
+                "production_strict": false,
+                "entry_auth_enabled": false,
+                "entry_auth_api_key_env": "GO_ON_ENTRY_API_KEY",
+                "entry_auth_key_configured": false,
+                "entry_rate_limit_rpm": 240,
+                "entry_rate_limit_burst": 60,
+                "strict_violation_count": 1,
+                "strict_violations": [format!("failed_to_load_config:{}", err)],
+                "warning_count": 1,
+                "warnings": [format!("failed_to_load_config:{}", err)],
+            });
+        }
+    };
+
+    let warnings = collect_config_warnings(&config_path_buf, &config);
+    let strict_enabled = config
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.production_strict)
+        .unwrap_or(false);
+    let entry_auth_enabled = config
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.entry_auth_enabled)
+        .unwrap_or(false);
+    let entry_auth_api_key_env = config
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.entry_auth_api_key_env.clone())
+        .unwrap_or_else(|| "GO_ON_ENTRY_API_KEY".to_string());
+    let entry_auth_key_configured = std::env::var(&entry_auth_api_key_env)
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let entry_rate_limit_rpm = config
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.entry_rate_limit_rpm)
+        .unwrap_or(240);
+    let entry_rate_limit_burst = config
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.entry_rate_limit_burst)
+        .unwrap_or(60);
+    let strict_violations = collect_production_strict_violations(&config);
+    json!({
+        "loaded": true,
+        "production_strict": strict_enabled,
+        "entry_auth_enabled": entry_auth_enabled,
+        "entry_auth_api_key_env": entry_auth_api_key_env,
+        "entry_auth_key_configured": entry_auth_key_configured,
+        "entry_rate_limit_rpm": entry_rate_limit_rpm,
+        "entry_rate_limit_burst": entry_rate_limit_burst,
+        "strict_violation_count": strict_violations.len(),
+        "strict_violations": strict_violations,
+        "warning_count": warnings.len(),
+        "warnings": warnings,
+    })
 }
 
 async fn handle_breaker_status(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
