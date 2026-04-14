@@ -44,6 +44,31 @@ class GoOnManager {
     private providerReadyCache?: { checkedAt: number; ready: boolean };
     private lastWizardPromptAt = 0;
 
+    private classifyRpcErrorKind(message: string, data?: any): string {
+        const explicit = typeof data?.kind === 'string' ? data.kind : undefined;
+        if (explicit && explicit.trim().length > 0) {
+            return explicit;
+        }
+
+        const lower = String(message || '').toLowerCase();
+        if (lower.includes('pua')) return 'PuaViolation';
+        if (lower.includes('budget')) return 'BudgetExceeded';
+        if (lower.includes('hardening policy denied') || lower.includes('sandbox')) {
+            return 'SandboxBlocked';
+        }
+        return 'GeneralError';
+    }
+
+    private formatRpcError(error: { code: number; message: string; data?: any }): string {
+        const kind = this.classifyRpcErrorKind(error.message, error.data);
+        const context =
+            typeof error.data?.detail === 'string' &&
+            error.data.detail.includes(protocolContract.errors.requestErrorContextPrefix)
+                ? protocolContract.errors.requestErrorContextPrefix
+                : 'none';
+        return `rpc_error:${error.code}:${kind}:${error.message} (context=${context})`;
+    }
+
     constructor() {
         this.updateStatus();
     }
@@ -95,7 +120,7 @@ class GoOnManager {
                             if (pending) {
                                 this.pendingRequests.delete(response.id);
                                 if (response.error) {
-                                    pending.reject(new Error(response.error.message));
+                                    pending.reject(new Error(this.formatRpcError(response.error)));
                                 } else {
                                     pending.resolve(response.result);
                                 }

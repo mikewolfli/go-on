@@ -98,6 +98,12 @@ Key settings include:
 
 When `go-on.runtime.protocolMode` is not `from_config`, the extension starts runtime with `--protocol-mode <value>` so protocol switching is applied on the main startup chain.
 
+Error Trace Alignment (BLUE14 AGENT4)
+
+- Runtime JSON-RPC errors are surfaced as `rpc_error:<code>:<kind>:<message> (context=<...>)`.
+- `kind` is aligned with backend governance classes: `PuaViolation`, `BudgetExceeded`, `SandboxBlocked`.
+- When available, context includes the backend dispatch prefix `acp.handle_request.dispatch` for fast diagnosis.
+
 ## Development
 
 ```bash

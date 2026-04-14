@@ -171,6 +171,11 @@ assert.ok(contractSource.includes('vscodeAddonCompileCheckedInMainChain: true'))
 assert.ok(contractSource.includes('streamSetupUnavailableDegradesToCompleted: true'));
 assert.ok(extensionSource.includes('protocolContract.errors.providerNotReady'));
 assert.ok(extensionSource.includes('protocolContract.errors.setupWizardPrompt'));
+assert.deepEqual(contract.errors.requestErrorKinds, ['PuaViolation', 'BudgetExceeded', 'SandboxBlocked']);
+assert.equal(contract.errors.requestErrorContextPrefix, 'acp.handle_request.dispatch');
+assert.ok(extensionSource.includes('formatRpcError'));
+assert.ok(extensionSource.includes('rpc_error:'));
+assert.ok(extensionSource.includes('protocolContract.errors.requestErrorContextPrefix'));
 assert.ok(monitorSource.includes('protocolContract.statusTerms.healthy'));
 assert.ok(monitorSource.includes('protocolContract.statusTerms.healthCheckFailed'));
 

@@ -20,6 +20,29 @@ const i18n_1 = require("./i18n");
 const configManager_1 = require("./configManager");
 const protocolContract_1 = require("./protocolContract");
 class GoOnManager {
+    classifyRpcErrorKind(message, data) {
+        const explicit = typeof data?.kind === 'string' ? data.kind : undefined;
+        if (explicit && explicit.trim().length > 0) {
+            return explicit;
+        }
+        const lower = String(message || '').toLowerCase();
+        if (lower.includes('pua'))
+            return 'PuaViolation';
+        if (lower.includes('budget'))
+            return 'BudgetExceeded';
+        if (lower.includes('hardening policy denied') || lower.includes('sandbox')) {
+            return 'SandboxBlocked';
+        }
+        return 'GeneralError';
+    }
+    formatRpcError(error) {
+        const kind = this.classifyRpcErrorKind(error.message, error.data);
+        const context = typeof error.data?.detail === 'string' &&
+            error.data.detail.includes(protocolContract_1.protocolContract.errors.requestErrorContextPrefix)
+            ? protocolContract_1.protocolContract.errors.requestErrorContextPrefix
+            : 'none';
+        return `rpc_error:${error.code}:${kind}:${error.message} (context=${context})`;
+    }
     constructor() {
         this.process = null;
         this.requestId = 0;
@@ -65,7 +88,7 @@ class GoOnManager {
                             if (pending) {
                                 this.pendingRequests.delete(response.id);
                                 if (response.error) {
-                                    pending.reject(new Error(response.error.message));
+                                    pending.reject(new Error(this.formatRpcError(response.error)));
                                 }
                                 else {
                                     pending.resolve(response.result);

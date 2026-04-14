@@ -65,6 +65,8 @@ const fallbackContract = {
         setupWizardOpened: 'Setup wizard opened.',
         setupWizardPrompt: 'No runtime-ready AI provider is configured. Opening Go-On setup wizard now.',
         runtimeProbePassed: 'runtime.health semantic probe passed',
+        requestErrorKinds: ['PuaViolation', 'BudgetExceeded', 'SandboxBlocked'],
+        requestErrorContextPrefix: 'acp.handle_request.dispatch',
     },
     surfaces: {
         gui: {
