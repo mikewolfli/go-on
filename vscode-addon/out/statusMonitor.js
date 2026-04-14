@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StatusMonitor = void 0;
 const vscode = require("vscode");
+const protocolContract_1 = require("./protocolContract");
 class StatusMonitor {
     constructor(manager) {
         this.manager = manager;
@@ -34,8 +35,8 @@ class StatusMonitor {
                 }
                 catch (error) {
                     consecutiveFailures++;
-                    console.warn(`Health check failed (${consecutiveFailures}/${maxFailures}):`, error);
-                    this.statusBarItem.tooltip = `Go-On Status: Health check failed (${consecutiveFailures}/${maxFailures})\nClick to open chat`;
+                    console.warn(`${protocolContract_1.protocolContract.statusTerms.healthCheckFailed} (${consecutiveFailures}/${maxFailures}):`, error);
+                    this.statusBarItem.tooltip = `Go-On Status: ${protocolContract_1.protocolContract.statusTerms.healthCheckFailed} (${consecutiveFailures}/${maxFailures})\nClick to open chat`;
                     if (consecutiveFailures >= maxFailures) {
                         console.error('Max health check failures reached, stopping monitoring');
                         this.stopHealthMonitoring();
@@ -54,7 +55,7 @@ class StatusMonitor {
     updateHealthStatus(health) {
         // Update tooltip with health information
         const healthInfo = typeof health === 'object' ? JSON.stringify(health, null, 2) : String(health);
-        this.statusBarItem.tooltip = `Go-On Status: Healthy\nLast health check: ${new Date().toLocaleTimeString()}\n${healthInfo}\nClick to open chat`;
+        this.statusBarItem.tooltip = `Go-On Status: ${protocolContract_1.protocolContract.statusTerms.healthy}\nLast health check: ${new Date().toLocaleTimeString()}\n${healthInfo}\nClick to open chat`;
     }
     refresh() {
         this.updateStatus();

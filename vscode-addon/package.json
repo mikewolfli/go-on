@@ -484,9 +484,10 @@
     "vscode:prepublish": "npm run compile",
     "compile": "node ./node_modules/typescript/bin/tsc -p ./",
     "watch": "node ./node_modules/typescript/bin/tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
-    "test": "echo \"No tests specified\""
+    "check": "npm run compile && npm run lint",
+    "test:contract": "node ./scripts/contract-smoke.js",
+    "test": "npm run compile && npm run test:contract"
   },
   "devDependencies": {
     "@types/vscode": "^1.74.0",

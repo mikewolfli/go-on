@@ -26,8 +26,16 @@ jobs:
         working-directory: ./GUI
         run: |
           npm install
+          npm test
           npm run build
           npm run tauri build
+
+      - name: Build VS Code addon
+        working-directory: ./vscode-addon
+        run: |
+          npm install
+          npm run compile
+          npm test
 
       - name: Prepare package directory
         run: |

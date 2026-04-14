@@ -15,6 +15,7 @@ import { GoOnProcessFlowViewProvider } from './processFlowView';
 import { GoOnAdvancedEditProvider } from './advancedEdit';
 import { i18n } from './i18n';
 import { configManager } from './configManager';
+import { protocolContract } from './protocolContract';
 
 interface JsonRpcRequest {
     jsonrpc: '2.0';
@@ -170,7 +171,7 @@ class GoOnManager {
             const ready = await this.isAnyAiProviderReady();
             if (!ready) {
                 await this.notifyAndOpenSetupWizard();
-                throw new Error('No runtime-ready AI provider configured. Setup wizard opened.');
+                throw new Error(`${protocolContract.errors.providerNotReady} ${protocolContract.errors.setupWizardOpened}`);
             }
         }
 
@@ -255,7 +256,7 @@ class GoOnManager {
         this.lastWizardPromptAt = now;
 
         await vscode.window.showWarningMessage(
-            'No runtime-ready AI provider is configured. Opening Go-On setup wizard now.'
+            protocolContract.errors.setupWizardPrompt
         );
         await vscode.commands.executeCommand('go-on.openSettings');
     }

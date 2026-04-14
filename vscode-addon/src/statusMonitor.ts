@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 
+import { protocolContract } from './protocolContract';
+
 export class StatusMonitor {
     private statusBarItem: vscode.StatusBarItem;
     private healthCheckTimer: NodeJS.Timeout | undefined;
@@ -28,7 +30,7 @@ export class StatusMonitor {
     private startHealthMonitoring() {
         const config = vscode.workspace.getConfiguration('go-on');
         const interval = config.get<number>('health.interval', 300) * 1000; // Convert to milliseconds
-        
+
         let consecutiveFailures = 0;
         const maxFailures = 3;
 
@@ -40,10 +42,10 @@ export class StatusMonitor {
                     consecutiveFailures = 0; // Reset counter on success
                 } catch (error) {
                     consecutiveFailures++;
-                    console.warn(`Health check failed (${consecutiveFailures}/${maxFailures}):`, error);
-                    
-                    this.statusBarItem.tooltip = `Go-On Status: Health check failed (${consecutiveFailures}/${maxFailures})\nClick to open chat`;
-                    
+                    console.warn(`${protocolContract.statusTerms.healthCheckFailed} (${consecutiveFailures}/${maxFailures}):`, error);
+
+                    this.statusBarItem.tooltip = `Go-On Status: ${protocolContract.statusTerms.healthCheckFailed} (${consecutiveFailures}/${maxFailures})\nClick to open chat`;
+
                     if (consecutiveFailures >= maxFailures) {
                         console.error('Max health check failures reached, stopping monitoring');
                         this.stopHealthMonitoring();
@@ -64,7 +66,7 @@ export class StatusMonitor {
     private updateHealthStatus(health: any) {
         // Update tooltip with health information
         const healthInfo = typeof health === 'object' ? JSON.stringify(health, null, 2) : String(health);
-        this.statusBarItem.tooltip = `Go-On Status: Healthy\nLast health check: ${new Date().toLocaleTimeString()}\n${healthInfo}\nClick to open chat`;
+        this.statusBarItem.tooltip = `Go-On Status: ${protocolContract.statusTerms.healthy}\nLast health check: ${new Date().toLocaleTimeString()}\n${healthInfo}\nClick to open chat`;
     }
 
     public refresh() {

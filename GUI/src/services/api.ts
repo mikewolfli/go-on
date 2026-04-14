@@ -1,6 +1,8 @@
 import axios from "axios";
 
-export function buildClient(baseURL = "http://127.0.0.1:8090") {
+import { defaultRuntimeBaseUrl } from "./protocolContract";
+
+export function buildClient(baseURL = defaultRuntimeBaseUrl) {
     return axios.create({
         baseURL,
         timeout: 4000,

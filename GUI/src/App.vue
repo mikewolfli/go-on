@@ -55,7 +55,6 @@ import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useI18n } from "vue-i18n";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   autoConfigureBackendPath,
   backendExecutableExists,
@@ -68,6 +67,7 @@ import {
   serviceStatus,
   showMiniConsole,
 } from "./services/bridge";
+import { openDialog } from "./services/dialog";
 import { useRuntimeStore } from "./stores/runtime";
 import { getLocale, setLocale } from "./locales";
 import { currentTheme, toggleTheme as toggleThemeFunc } from "./utils/theme";
@@ -220,7 +220,7 @@ async function ensureBackendAndStart() {
       },
     );
 
-    const picked = await open({
+    const picked = await openDialog({
       multiple: false,
       directory: false,
       title: "选择 go-on 后台可执行文件",

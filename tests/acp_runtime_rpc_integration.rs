@@ -566,6 +566,37 @@ fallback = true
     fs::write(path, config).expect("failed to write HTTP stream config file");
 }
 
+fn write_auto_protocol_http_config(path: &Path, bind_addr: &str) {
+    let config = format!(
+        r#"default_phase = "coding"
+
+[protocol]
+mode = "auto"
+
+[flow]
+name = "Auto Protocol Coexistence"
+phases = ["coding"]
+
+[runtime]
+maintenance_interval_seconds = 30
+health_interval_seconds = 45
+shutdown_drain_seconds = 7
+acp_http_bind_addr = "{bind_addr}"
+
+[agents.local_echo]
+type = "local_echo"
+
+[phases.coding]
+description = "Coding"
+agents = ["local_echo"]
+fallback = true
+"#,
+        bind_addr = bind_addr,
+    );
+
+    fs::write(path, config).expect("failed to write auto protocol coexistence config file");
+}
+
 fn find_free_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
     let port = listener.local_addr().expect("local addr").port();
@@ -802,6 +833,65 @@ fn rpc_mcp_adapter_initialize_list_and_call() {
     assert_eq!(unknown["error"]["code"], -32602);
 
     let shutdown = harness.request(6, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_auto_mode_http_root_acp_and_mcp_coexist() {
+    // Session A: auto mode HTTP root capability assertions.
+    let temp_http = tempdir().expect("failed to create temp dir");
+    let config_http = temp_http.path().join("config.toml");
+    let bind_addr = format!("127.0.0.1:{}", find_free_port());
+    write_auto_protocol_http_config(&config_http, &bind_addr);
+
+    let mut http_child = Command::new(binary_path())
+        .arg("--config")
+        .arg(&config_http)
+        .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn go-on for auto HTTP protocol test");
+
+    let started = Instant::now();
+    loop {
+        if started.elapsed() > Duration::from_secs(5) {
+            let _ = http_child.kill();
+            panic!("timed out waiting for ACP HTTP server in auto protocol mode");
+        }
+        if let Ok(response) = http_request(&bind_addr, "GET", "/health", None) {
+            if response.contains("200 OK") {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let root = http_request(&bind_addr, "GET", "/", None).expect("GET / should succeed");
+    assert!(root.contains("200 OK"));
+    assert!(root.contains("\"service\":\"go-on\""));
+    assert!(root.contains("\"protocol\":\"acp-http\""));
+    assert!(root.contains("\"responses\":[\"/v1/responses\",\"/v1/responses/{id}\"]"));
+
+    let _ = http_child.kill();
+    let _ = http_child.wait();
+
+    // Session B: ACP + MCP adapter coexistence assertions in RPC stdio path.
+    let temp_rpc = tempdir().expect("failed to create temp dir");
+    let config_rpc = temp_rpc.path().join("config.toml");
+    write_test_config(&config_rpc, 60, 120, 5);
+
+    let mut harness = RpcHarness::spawn(&config_rpc);
+    let initialize = harness.request(1, "initialize", None);
+    assert_eq!(initialize["result"]["protocol"], "acp");
+    assert_eq!(initialize["result"]["capabilities"]["mcp_adapter"], true);
+
+    let mcp_init = harness.request(2, "mcp.initialize", Some(json!({})));
+    assert_eq!(mcp_init["result"]["protocolVersion"], "2024-11-05");
+    assert_eq!(mcp_init["result"]["serverInfo"]["name"], "go-on");
+
+    let shutdown = harness.request(3, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
     harness.wait_for_exit(Duration::from_secs(8));
 }

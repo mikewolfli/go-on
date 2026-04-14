@@ -3,6 +3,7 @@
 //! This module contains the main AcpServer struct definition and related
 //! server management functionality.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::Result;
@@ -103,6 +104,8 @@ pub struct AcpServer {
     pub output: Arc<Mutex<tokio::io::Stdout>>,
     /// Shutdown notification mechanism
     pub shutdown_notify: Arc<Notify>,
+    /// In-memory registry for Responses API objects
+    pub responses_api_store: Arc<StdMutex<HashMap<String, serde_json::Value>>>,
 }
 
 impl AcpServer {
@@ -387,6 +390,7 @@ impl ServerBuilder {
             self.artifact_ledger
                 .unwrap_or_else(|| ArtifactLedger::new(None)),
         ));
+        let responses_api_store = Arc::new(StdMutex::new(HashMap::new()));
 
         Ok(AcpServer {
             flow_manager: self.flow_manager,
@@ -423,6 +427,7 @@ impl ServerBuilder {
             verbose: self.verbose,
             output: Arc::new(Mutex::new(tokio::io::stdout())),
             shutdown_notify: Arc::new(Notify::new()),
+            responses_api_store,
         })
     }
 }

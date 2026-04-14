@@ -1,12 +1,67 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
 use std::{fs, path::PathBuf};
 
 struct ProbeResult {
     ok: bool,
     code: Option<u16>,
     detail: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CapabilityMatrix {
+    runtime: RuntimeContract,
+    openai: OpenAiContract,
+    errors: ErrorContract,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeContract {
+    base_url: String,
+    health_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiContract {
+    models_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ErrorContract {
+    runtime_probe_passed: String,
+}
+
+fn capability_matrix() -> &'static CapabilityMatrix {
+    static MATRIX: OnceLock<CapabilityMatrix> = OnceLock::new();
+    MATRIX.get_or_init(|| {
+        serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../contracts/editor-capability-matrix.json"
+        )))
+        .expect("editor capability matrix should be valid json")
+    })
+}
+
+fn runtime_health_endpoint() -> String {
+    let contract = capability_matrix();
+    format!(
+        "{}{}",
+        contract.runtime.base_url, contract.runtime.health_path
+    )
+}
+
+fn openai_models_endpoint() -> String {
+    let contract = capability_matrix();
+    format!(
+        "{}{}",
+        contract.runtime.base_url, contract.openai.models_path
+    )
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -122,6 +177,43 @@ fn probe_http(url: &str) -> ProbeResult {
     }
 }
 
+fn protocol_mode_from_config_text(text: &str) -> Option<&'static str> {
+    let mut in_protocol_section = false;
+
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        if line.starts_with('[') && line.ends_with(']') {
+            in_protocol_section = line.eq_ignore_ascii_case("[protocol]");
+            continue;
+        }
+
+        if !in_protocol_section {
+            continue;
+        }
+
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("mode") {
+            continue;
+        }
+
+        let value = value.trim().trim_matches('"').to_ascii_lowercase();
+        return match value.as_str() {
+            "acp" => Some("acp"),
+            "mcp" => Some("mcp"),
+            "auto" => Some("auto"),
+            _ => None,
+        };
+    }
+
+    None
+}
+
 fn detect_protocol_mode() -> String {
     let candidates = [
         PathBuf::from("config.toml"),
@@ -131,18 +223,8 @@ fn detect_protocol_mode() -> String {
 
     for path in candidates {
         if let Ok(text) = fs::read_to_string(&path) {
-            let lower = text.to_lowercase();
-            if let Some(idx) = lower.find("mode") {
-                let tail = &lower[idx..];
-                if tail.contains("\"acp\"") {
-                    return "acp".to_string();
-                }
-                if tail.contains("\"mcp\"") {
-                    return "mcp".to_string();
-                }
-                if tail.contains("\"auto\"") {
-                    return "auto-adaptive".to_string();
-                }
+            if let Some(mode) = protocol_mode_from_config_text(&text) {
+                return mode.to_string();
             }
         }
     }
@@ -156,9 +238,12 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
     let vscode_processes = count_processes(&["code.exe", "code", "code - insiders", "codium"]);
     let protocol_mode = detect_protocol_mode();
 
-    let zed_models_probe = probe_http("http://127.0.0.1:8090/v1/models");
-    let zed_health_probe = probe_http("http://127.0.0.1:8090/health");
-    let vscode_probe = probe_http("http://127.0.0.1:8090/health");
+    let models_endpoint = openai_models_endpoint();
+    let health_endpoint = runtime_health_endpoint();
+
+    let zed_models_probe = probe_http(&models_endpoint);
+    let zed_health_probe = probe_http(&health_endpoint);
+    let vscode_probe = probe_http(&health_endpoint);
 
     let vscode_addon_present = Path::new("vscode-addon/package.json").exists()
         && (Path::new("vscode-addon/out/extension.js").exists()
@@ -172,7 +257,7 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
             process_running: zed_processes > 0,
             process_count: zed_processes,
             transport: "ACP/A2A over HTTP".to_string(),
-            endpoint: Some("http://127.0.0.1:8090/health".to_string()),
+            endpoint: Some(health_endpoint.clone()),
             endpoint_ok: zed_health_probe.ok,
             endpoint_code: zed_health_probe.code,
             addon_present: false,
@@ -180,9 +265,8 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
                 if protocol_mode == "mcp" {
                     "Health reachable, but protocol mode is mcp; ACP/A2A may be rejected"
                         .to_string()
-                } else if protocol_mode == "auto-adaptive" {
-                    "Auto-adaptive mode enabled; ACP/A2A and MCP are negotiated automatically"
-                        .to_string()
+                } else if protocol_mode == "auto" {
+                    "Auto mode enabled; ACP/A2A and MCP are negotiated automatically".to_string()
                 } else {
                     "ACP/A2A path is reachable".to_string()
                 }
@@ -197,16 +281,15 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
             process_running: zed_processes > 0,
             process_count: zed_processes,
             transport: "OpenAI-Compatible /v1".to_string(),
-            endpoint: Some("http://127.0.0.1:8090/v1/models".to_string()),
+            endpoint: Some(models_endpoint.clone()),
             endpoint_ok: zed_models_probe.ok,
             endpoint_code: zed_models_probe.code,
             addon_present: false,
             note: if zed_models_probe.ok {
                 if protocol_mode == "acp" {
                     "Models endpoint reachable, but protocol mode is acp; MCP provider may be limited".to_string()
-                } else if protocol_mode == "auto-adaptive" {
-                    "Auto-adaptive mode enabled; MCP provider and ACP/A2A are both supported"
-                        .to_string()
+                } else if protocol_mode == "auto" {
+                    "Auto mode enabled; MCP provider and ACP/A2A are both supported".to_string()
                 } else {
                     "MCP LLM provider endpoint is reachable".to_string()
                 }
@@ -221,12 +304,15 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
             process_running: vscode_processes > 0,
             process_count: vscode_processes,
             transport: "Runtime RPC (extension)".to_string(),
-            endpoint: Some("http://127.0.0.1:8090/health".to_string()),
+            endpoint: Some(health_endpoint),
             endpoint_ok: vscode_probe.ok,
             endpoint_code: vscode_probe.code,
             addon_present: vscode_addon_present,
             note: if vscode_addon_present && vscode_probe.ok {
-                "Extension workspace detected; runtime.health semantic probe passed".to_string()
+                format!(
+                    "Extension workspace detected; {}",
+                    capability_matrix().errors.runtime_probe_passed
+                )
             } else if vscode_addon_present {
                 format!(
                     "Extension detected, but runtime probe failed: {}",
@@ -237,4 +323,51 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
             },
         },
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::protocol_mode_from_config_text;
+
+    #[test]
+    fn protocol_mode_parser_reads_protocol_section_only() {
+        let text = r#"
+model_selection_mode = "adaptive"
+
+[protocol]
+mode = "auto"
+
+[agents.sample]
+type = "mcp"
+"#;
+
+        assert_eq!(protocol_mode_from_config_text(text), Some("auto"));
+    }
+
+    #[test]
+    fn protocol_mode_parser_ignores_unrelated_mode_keys() {
+        let text = r#"
+model_selection_mode = "adaptive"
+execution_mode = "parallel"
+
+[agents.sample]
+type = "acp"
+
+[protocol]
+mode = "mcp"
+"#;
+
+        assert_eq!(protocol_mode_from_config_text(text), Some("mcp"));
+    }
+
+    #[test]
+    fn protocol_mode_parser_returns_none_without_protocol_section() {
+        let text = r#"
+model_selection_mode = "adaptive"
+[runtime]
+maintenance_interval_seconds = 30
+"#;
+
+        assert_eq!(protocol_mode_from_config_text(text), None);
+    }
 }

@@ -18,6 +18,7 @@ const processFlowView_1 = require("./processFlowView");
 const advancedEdit_1 = require("./advancedEdit");
 const i18n_1 = require("./i18n");
 const configManager_1 = require("./configManager");
+const protocolContract_1 = require("./protocolContract");
 class GoOnManager {
     constructor() {
         this.process = null;
@@ -133,7 +134,7 @@ class GoOnManager {
             const ready = await this.isAnyAiProviderReady();
             if (!ready) {
                 await this.notifyAndOpenSetupWizard();
-                throw new Error('No runtime-ready AI provider configured. Setup wizard opened.');
+                throw new Error(`${protocolContract_1.protocolContract.errors.providerNotReady} ${protocolContract_1.protocolContract.errors.setupWizardOpened}`);
             }
         }
         const id = ++this.requestId;
@@ -203,7 +204,7 @@ class GoOnManager {
             return;
         }
         this.lastWizardPromptAt = now;
-        await vscode.window.showWarningMessage('No runtime-ready AI provider is configured. Opening Go-On setup wizard now.');
+        await vscode.window.showWarningMessage(protocolContract_1.protocolContract.errors.setupWizardPrompt);
         await vscode.commands.executeCommand('go-on.openSettings');
     }
     updateStatus() {

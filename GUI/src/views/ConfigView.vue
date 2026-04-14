@@ -31,8 +31,8 @@
 import { onMounted, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
-import { open } from "@tauri-apps/plugin-dialog";
 import { configureService, serviceStatus } from "../services/bridge";
+import { openDialog } from "../services/dialog";
 
 const MONITOR_ONLY_KEY = "goon.gui.monitorOnly";
 const executablePath = ref("go-on");
@@ -55,7 +55,7 @@ onMounted(async () => {
 });
 
 async function pickExecutable() {
-  const picked = await open({
+  const picked = await openDialog({
     multiple: false,
     directory: false,
     title: "选择 go-on 后台可执行文件",
@@ -75,7 +75,7 @@ async function pickExecutable() {
 }
 
 async function pickWorkingDir() {
-  const picked = await open({
+  const picked = await openDialog({
     multiple: false,
     directory: true,
     title: "选择工作目录",
