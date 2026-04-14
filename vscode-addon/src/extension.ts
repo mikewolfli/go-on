@@ -48,7 +48,12 @@ class GoOnManager {
         this.updateStatus();
     }
 
-    async start(configPath: string, executablePath: string, cwd: string): Promise<void> {
+    async start(
+        configPath: string,
+        executablePath: string,
+        cwd: string,
+        protocolMode: string
+    ): Promise<void> {
         if (this.process) {
             throw new Error('Go-On is already running');
         }
@@ -57,7 +62,12 @@ class GoOnManager {
             let resolved = false;
             let stderrBuffer = '';
 
-            this.process = spawn(executablePath, ['--config', configPath, '--verbose'], {
+            const args = ['--config', configPath, '--verbose'];
+            if (protocolMode && protocolMode !== 'from_config') {
+                args.push('--protocol-mode', protocolMode);
+            }
+
+            this.process = spawn(executablePath, args, {
                 cwd,
                 env: {
                     ...process.env,
@@ -1124,7 +1134,13 @@ export function activate(context: vscode.ExtensionContext) {
                 runtime.runtimeDir
             );
 
-            await goOnManager.start(fullConfigPath, runtime.executablePath, workspaceFolder.uri.fsPath);
+            const protocolMode = config.get<string>('runtime.protocolMode', 'from_config');
+            await goOnManager.start(
+                fullConfigPath,
+                runtime.executablePath,
+                workspaceFolder.uri.fsPath,
+                protocolMode
+            );
         };
 
         try {

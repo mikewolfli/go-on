@@ -1988,97 +1988,118 @@ async fn handle_http_connection(socket: &mut TcpStream, server: Arc<AcpServer>) 
         }
     };
 
-    match path {
-        "/chat" => {
-            let params: crate::acp::r#impl::chat::ChatParams = match serde_json::from_value(body) {
-                Ok(value) => value,
-                Err(err) => {
-                    write_http_json_response(
-                        socket,
-                        400,
-                        serde_json::json!({"error": format!("invalid chat params: {err}")}),
+    let path_label = path.to_string();
+    let (dispatch_result, duration) =
+        crate::observability::performance::utils::measure_time_async(move || async move {
+            match path {
+                "/chat" => {
+                    let params: crate::acp::r#impl::chat::ChatParams =
+                        match serde_json::from_value(body) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                write_http_json_response(
+                                socket,
+                                400,
+                                serde_json::json!({"error": format!("invalid chat params: {err}")}),
+                            )
+                            .await?;
+                                return Ok(());
+                            }
+                        };
+                    let trace = http_trace_context("chat");
+                    let result = crate::acp::r#impl::chat::process_chat_request(
+                        server.as_ref(),
+                        &params,
+                        None,
+                        &trace,
+                        None,
                     )
                     .await?;
-                    return Ok(());
+                    write_http_json_response(socket, 200, result).await?;
                 }
-            };
-            let trace = http_trace_context("chat");
-            let result = crate::acp::r#impl::chat::process_chat_request(
-                server.as_ref(),
-                &params,
-                None,
-                &trace,
-                None,
-            )
-            .await?;
-            write_http_json_response(socket, 200, result).await?;
-        }
-        "/chat/stream" => {
-            let params: crate::acp::r#impl::chat::ChatParams = match serde_json::from_value(body) {
-                Ok(value) => value,
-                Err(err) => {
+                "/chat/stream" => {
+                    let params: crate::acp::r#impl::chat::ChatParams =
+                        match serde_json::from_value(body) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                write_http_json_response(
+                                socket,
+                                400,
+                                serde_json::json!({"error": format!("invalid chat params: {err}")}),
+                            )
+                            .await?;
+                                return Ok(());
+                            }
+                        };
+                    write_sse_headers(socket).await?;
+
+                    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+                    let trace = http_trace_context("chat.stream");
+                    let server_ref = Arc::clone(&server);
+                    let task = tokio::spawn(async move {
+                        crate::acp::r#impl::chat::process_chat_request(
+                            server_ref.as_ref(),
+                            &params,
+                            Some(crate::acp::r#impl::chat::StreamObserver::sse(tx)),
+                            &trace,
+                            None,
+                        )
+                        .await
+                    });
+
+                    while let Some(frame) = rx.recv().await {
+                        write_sse_event(socket, &frame.event, &frame.payload).await?;
+                    }
+
+                    match task.await {
+                        Ok(Ok(result)) => write_sse_event(socket, "result", &result).await?,
+                        Ok(Err(err)) => {
+                            write_sse_event(
+                                socket,
+                                "error",
+                                &serde_json::json!({"message": err.to_string()}),
+                            )
+                            .await?
+                        }
+                        Err(err) => write_sse_event(
+                            socket,
+                            "error",
+                            &serde_json::json!({"message": format!("chat task panicked: {err}")}),
+                        )
+                        .await?,
+                    }
+                }
+                "/chat/completions" | "/v1/chat/completions" | "/chat/chat/completions" => {
+                    handle_openai_chat_completions(socket, Arc::clone(&server), body).await?;
+                }
+                "/v1/responses" => {
+                    handle_responses_api(socket, Arc::clone(&server), body).await?;
+                }
+                _ => {
                     write_http_json_response(
                         socket,
-                        400,
-                        serde_json::json!({"error": format!("invalid chat params: {err}")}),
+                        404,
+                        serde_json::json!({"error": "not found"}),
                     )
                     .await?;
-                    return Ok(());
-                }
-            };
-            write_sse_headers(socket).await?;
-
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            let trace = http_trace_context("chat.stream");
-            let server_ref = Arc::clone(&server);
-            let task = tokio::spawn(async move {
-                crate::acp::r#impl::chat::process_chat_request(
-                    server_ref.as_ref(),
-                    &params,
-                    Some(crate::acp::r#impl::chat::StreamObserver::sse(tx)),
-                    &trace,
-                    None,
-                )
-                .await
-            });
-
-            while let Some(frame) = rx.recv().await {
-                write_sse_event(socket, &frame.event, &frame.payload).await?;
-            }
-
-            match task.await {
-                Ok(Ok(result)) => write_sse_event(socket, "result", &result).await?,
-                Ok(Err(err)) => {
-                    write_sse_event(
-                        socket,
-                        "error",
-                        &serde_json::json!({"message": err.to_string()}),
-                    )
-                    .await?
-                }
-                Err(err) => {
-                    write_sse_event(
-                        socket,
-                        "error",
-                        &serde_json::json!({"message": format!("chat task panicked: {err}")}),
-                    )
-                    .await?
                 }
             }
-        }
-        "/chat/completions" | "/v1/chat/completions" | "/chat/chat/completions" => {
-            handle_openai_chat_completions(socket, Arc::clone(&server), body).await?;
-        }
-        "/v1/responses" => {
-            handle_responses_api(socket, Arc::clone(&server), body).await?;
-        }
-        _ => {
-            write_http_json_response(socket, 404, serde_json::json!({"error": "not found"}))
-                .await?;
-        }
-    }
 
-    Ok(())
+            Ok(())
+        })
+        .await;
+
+    let success = dispatch_result.is_ok();
+    crate::observability::performance::record_global_operation(
+        success,
+        duration.as_secs_f64() * 1000.0,
+    );
+    info!(
+        "HTTP {} completed in {:?} (ok={})",
+        path_label, duration, success
+    );
+
+    dispatch_result
 }
 
 fn extract_content_length(headers: &str) -> Option<usize> {
@@ -2452,11 +2473,11 @@ mod tests {
             "error.message"
         );
         assert!(
-            err.as_object().map_or(true, |o| !o.contains_key("id")),
+            err.as_object().is_none_or(|o| !o.contains_key("id")),
             "error shape must not include id"
         );
         assert!(
-            err.as_object().map_or(true, |o| !o.contains_key("status")),
+            err.as_object().is_none_or(|o| !o.contains_key("status")),
             "error shape must not include status"
         );
 

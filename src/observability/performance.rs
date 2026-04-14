@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use tracing::info;
@@ -552,8 +554,37 @@ impl std::fmt::Display for TimeoutError {
 impl std::error::Error for TimeoutError {}
 
 /// Initialize performance monitoring
-pub fn init_performance_monitoring() -> Arc<PerformanceMonitor> {
-    let monitor = PerformanceMonitor::new(1000); // Keep last 1000 latencies
+pub fn init_performance_monitoring() -> Arc<Mutex<PerformanceMonitor>> {
+    let monitor = PERFORMANCE_MONITOR
+        .get_or_init(|| Arc::new(Mutex::new(PerformanceMonitor::new(1000))))
+        .clone();
     info!("Performance monitoring initialized");
-    Arc::new(monitor)
+    monitor
+}
+
+static PERFORMANCE_MONITOR: OnceLock<Arc<Mutex<PerformanceMonitor>>> = OnceLock::new();
+
+pub fn record_global_operation(success: bool, latency_ms: f64) {
+    if let Some(monitor) = PERFORMANCE_MONITOR.get() {
+        if let Ok(mut guard) = monitor.lock() {
+            guard.record_operation(success, latency_ms);
+        }
+    }
+}
+
+pub fn global_metrics_snapshot() -> Option<PerformanceMetrics> {
+    let monitor = PERFORMANCE_MONITOR.get()?;
+    monitor.lock().ok().map(|guard| guard.get_metrics())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::utils;
+
+    #[test]
+    fn performance_measure_time_returns_duration() {
+        let (result, duration) = utils::measure_time(|| 42u32);
+        assert_eq!(result, 42);
+        assert!(duration.as_nanos() > 0);
+    }
 }

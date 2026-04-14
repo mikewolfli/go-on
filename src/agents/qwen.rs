@@ -140,7 +140,7 @@ impl QwenAgent {
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let token = self.get_access_token().await?;
         let endpoint = format!(
             "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/qwen/workshop/chat/completions_pro?access_token={token}"
@@ -166,7 +166,7 @@ impl Agent for QwenAgent {
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
-    ) -> Result<()> {
+    ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 
         for attempt in 0..=2 {
@@ -189,7 +189,9 @@ impl Agent for QwenAgent {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("qwen request failed")))
+        Err(last_error
+            .unwrap_or_else(|| anyhow::anyhow!("qwen request failed"))
+            .into())
     }
 }
 

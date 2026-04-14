@@ -29,14 +29,18 @@ class GoOnManager {
         this.lastWizardPromptAt = 0;
         this.updateStatus();
     }
-    async start(configPath, executablePath, cwd) {
+    async start(configPath, executablePath, cwd, protocolMode) {
         if (this.process) {
             throw new Error('Go-On is already running');
         }
         return new Promise((resolve, reject) => {
             let resolved = false;
             let stderrBuffer = '';
-            this.process = (0, child_process_1.spawn)(executablePath, ['--config', configPath, '--verbose'], {
+            const args = ['--config', configPath, '--verbose'];
+            if (protocolMode && protocolMode !== 'from_config') {
+                args.push('--protocol-mode', protocolMode);
+            }
+            this.process = (0, child_process_1.spawn)(executablePath, args, {
                 cwd,
                 env: {
                     ...process.env,
@@ -853,7 +857,8 @@ function activate(context) {
         const tryStart = async () => {
             const runtime = await ensureGoOnBinary(workspaceFolder.uri.fsPath, config, context);
             const fullConfigPath = await resolveConfigPath(workspaceFolder.uri.fsPath, configuredConfigPath, runtime.runtimeDir);
-            await goOnManager.start(fullConfigPath, runtime.executablePath, workspaceFolder.uri.fsPath);
+            const protocolMode = config.get('runtime.protocolMode', 'from_config');
+            await goOnManager.start(fullConfigPath, runtime.executablePath, workspaceFolder.uri.fsPath, protocolMode);
         };
         try {
             await tryStart();

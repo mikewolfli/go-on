@@ -138,11 +138,25 @@ impl AcpServer {
     pub fn get_status(&self) -> crate::acp::prelude::ServerStatus {
         use crate::acp::prelude::{LifecycleSnapshot, MetricsSnapshot, ServerStatus};
 
+        let mut total_requests = self.metrics.total_requests();
+        let mut successful_requests = self.metrics.successful_requests();
+        let mut failed_requests = self.metrics.failed_requests();
+        let mut avg_request_duration_ms = self.metrics.avg_request_duration_ms();
+
+        if let Some(snapshot) = crate::observability::performance::global_metrics_snapshot() {
+            total_requests = total_requests.max(snapshot.total_ops);
+            successful_requests = successful_requests.max(snapshot.successful_ops);
+            failed_requests = failed_requests.max(snapshot.failed_ops);
+            if snapshot.total_ops > 0 {
+                avg_request_duration_ms = snapshot.avg_latency_ms;
+            }
+        }
+
         let mut metrics = MetricsSnapshot {
-            total_requests: self.metrics.total_requests(),
-            successful_requests: self.metrics.successful_requests(),
-            failed_requests: self.metrics.failed_requests(),
-            avg_request_duration_ms: self.metrics.avg_request_duration_ms(),
+            total_requests,
+            successful_requests,
+            failed_requests,
+            avg_request_duration_ms,
             active_requests: self.metrics.active_requests(),
             cache_hit_rate: 0.0,
             circuit_breaker_open_count: self

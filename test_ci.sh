@@ -6,6 +6,20 @@
 set -e  # 任何命令失败则退出
 echo "=== 开始CI测试 ==="
 
+run_strict_clippy() {
+    local uname_out
+    uname_out=$(uname -s 2>/dev/null || echo "unknown")
+    case "${uname_out}" in
+        MINGW*|MSYS*|CYGWIN*)
+            echo "检测到 Windows 环境，使用严格 bins 门禁（Unix-only 依赖 target 跳过）"
+            cargo clippy --bins -- -D warnings
+            ;;
+        *)
+            cargo clippy --all-targets -- -D warnings
+            ;;
+    esac
+}
+
 # 1. 构建项目
 echo "=== 步骤1: 构建项目 ==="
 cargo build --verbose
@@ -16,9 +30,9 @@ echo "=== 步骤2: 运行测试 ==="
 cargo test --all --verbose
 echo "✅ 测试通过"
 
-# 3. 代码检查 (允许未使用代码警告)
+# 3. 代码检查 (严格模式)
 echo "=== 步骤3: 代码检查 ==="
-cargo clippy --all -- -D warnings -A dead_code
+run_strict_clippy
 echo "✅ 代码检查通过"
 
 # 4. 格式化检查
@@ -401,6 +415,46 @@ echo "=== 步骤5.1aq: 运行ACP Core Unit Suite集成测试 ==="
 cargo test acp::tests::test_suite:: -- --nocapture
 echo "✅ ACP Core Unit Suite集成测试通过"
 
+# 6a BLUE14 P0-1 协议模式CLI主链测试
+echo "=== 步骤6a: 运行BLUE14协议模式CLI主链测试 ==="
+cargo test cli_protocol_mode -- --nocapture
+cargo run -- --help | grep -q "protocol-mode"
+echo "✅ BLUE14协议模式CLI主链测试通过"
+
+# 6b BLUE14 P0-2 性能监控主链测试
+echo "=== 步骤6b: 运行BLUE14性能监控主链测试 ==="
+cargo test performance_measure_time_returns_duration -- --nocapture
+cargo test http_chat_completions_updates_health_metrics_and_emits_latency_log -- --nocapture
+echo "✅ BLUE14性能监控主链测试通过"
+
+# 6c BLUE14 P1-1 错误分类边界主链测试
+echo "=== 步骤6c: 运行BLUE14错误分类边界主链测试 ==="
+cargo test agent_error_can_be_classified -- --nocapture
+echo "✅ BLUE14错误分类边界主链测试通过"
+
+# 6d BLUE14 P1-2 Clippy 静态分析门禁
+echo "=== 步骤6d: 运行BLUE14 Clippy静态分析门禁 ==="
+run_strict_clippy
+echo "✅ BLUE14 Clippy静态分析门禁通过"
+
+# 6e BLUE14 P1-2 Cargo Audit 依赖安全门禁
+echo "=== 步骤6e: 运行BLUE14 Cargo Audit依赖安全门禁 ==="
+if ! cargo --list | grep -q "^    audit$"; then
+    echo "cargo-audit 未安装，正在安装..."
+    cargo install cargo-audit --locked
+fi
+cargo audit
+echo "✅ BLUE14 Cargo Audit依赖安全门禁通过"
+
+# 6f BLUE14 P2-2 文档完整性主链测试
+echo "=== 步骤6f: 运行BLUE14文档完整性主链测试 ==="
+grep -q "BLUE14-P2-2-README-QUICKSTART" README.md
+grep -q "BLUE14-P2-2-README-MODES" README.md
+grep -q "BLUE14-P2-2-README-CHEATSHEET" README.md
+grep -q "BLUE14-P2-2-GUI-QUICKSTART" GUI/README.md
+grep -q "BLUE14-P2-2-VSCODE-QUICKSTART" vscode-addon/README.md
+echo "✅ BLUE14文档完整性主链测试通过"
+
 # 5.2 GUI 契约烟测
 echo "=== 步骤5.2: 运行GUI契约烟测 ==="
 cd GUI
@@ -461,10 +515,11 @@ echo ""
 echo "总结:"
 echo "1. 项目构建成功"
 echo "2. 所有测试通过"
-echo "3. 代码检查通过 (已忽略未使用代码警告)"
+echo "3. 代码检查通过 (clippy 严格模式)"
 echo "4. 代码格式化正确"
 echo "5. i18n系统工作正常"
 echo "6. 语言文件完整"
 echo "7. 关键翻译键都存在"
+echo "8. 文档关键章节完整"
 echo ""
 echo "GitHub Actions CI流程应该能成功运行。"

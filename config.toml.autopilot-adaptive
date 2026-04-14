@@ -2,7 +2,7 @@
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "auto"
+mode = "adaptive"
 
 # Setup guidance:
 # - Quick start (recommended): go-on --init --config config.toml

@@ -29,3 +29,15 @@ Desktop console for go-on built with Tauri 2 + Vue + Vite.
 - Tray menu supports Show/Start/Stop/Restart/Mini Console/Quit.
 - Built executable output:
   - `GUI/src-tauri/target/release/go-on-gui.exe`
+
+## 快速联调
+<!-- BLUE14-P2-2-GUI-QUICKSTART -->
+
+1. 先启动 backend：`../start-go-on.sh` 或 `..\\start-go-on.bat`
+2. 确认健康端点：`http://127.0.0.1:8090/health`
+3. 再启动 GUI：`npm run tauri dev`
+
+推荐协议模式：
+
+- backend `config.toml` 使用：`[protocol].mode = "adaptive"`
+- 若只走 GUI HTTP 链路，可用：`acp_http` 或 `mcp_http`

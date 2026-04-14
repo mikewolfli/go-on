@@ -364,7 +364,7 @@ async fn run_single_review(
             }
             match task.await {
                 Ok(Ok(())) => Ok::<String, anyhow::Error>(resp),
-                Ok(Err(err)) => Err(err),
+                Ok(Err(err)) => Err(err.into()),
                 Err(join_err) => Err(anyhow::anyhow!("reviewer task panicked: {join_err}")),
             }
         };
@@ -385,7 +385,7 @@ async fn run_single_review(
         }
         match task.await {
             Ok(Ok(())) => resp,
-            Ok(Err(err)) => return Err(err),
+            Ok(Err(err)) => return Err(err.into()),
             Err(join_err) => return Err(anyhow::anyhow!("reviewer task panicked: {join_err}")),
         }
     };

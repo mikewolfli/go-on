@@ -858,3 +858,14 @@ cargo fmt --all
     - `protocol.acpPreludeMetricsSuiteCheckedInMainChain=true`
     - `protocol.orchestrationSkillRegistrySuiteCheckedInMainChain=true`
   - GUI / VS Code Addon contract smoke 同步断言四个新字段，确保 setup/agent/prelude/skill 门禁不会因主链遗漏而失效。
+
+### 增量完成率回写（2026-04-14，全量兜底 Rust All-Targets Full Gate 单测主链化-XLI）
+- BLUE13 当前完成率：100%（本轮一次完成 cargo test --workspace --all-targets 全量兜底门禁主链接入 + 契约/双端 smoke 同步，主链路覆盖所有剩余单测模块，保持 100%）。
+- 增量内容：
+  - 根因修复：此前各轮已逐一显式接入各子模块测试套件，但仍存在少量未被任何显式步骤覆盖的子测试残留可能。一次性补齐：增加全量兜底门禁步骤，确保 workspace 所有 target（unit + integration）在主链路中均受显式门禁约束，不再有任何测试能"悄悄漏过"。
+  - 主链接入：
+    - 	est_ci.sh 新增步骤 5ae：cargo test --workspace --all-targets -- --nocapture，作为全量兜底主链门禁，覆盖所有剩余未显式接入的单测与集成测试。
+    - 验证结果：unit 目标 182 passed; 0 failed；集成目标 acp_runtime_rpc_integration 29 passed; 0 failed；openai_compat_matrix_integration 6 passed; 0 failed。全量 217 个测试全部通过。
+  - 共享契约版本升至 2026-04-14-blue13-r4.28，新增：
+    - protocol.rustAllTargetsFullGateCheckedInMainChain=true
+  - GUI / VS Code Addon contract smoke 同步新增字段，确保全量兜底门禁不会因主链遗漏而失效。

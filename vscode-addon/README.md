@@ -88,12 +88,15 @@ Key settings include:
 - `go-on.releaseRepository`
 - `go-on.releaseTag`
 - `go-on.autoStart`
+- `go-on.runtime.protocolMode` (`from_config` / `adaptive` / `acp_stdio` / `acp_http` / `mcp_stdio` / `mcp_http`)
 - `go-on.chat.*`
 - `go-on.cache.enabled`
 - `go-on.vector.enabled`
 - `go-on.health.interval`
 - `go-on.ui.*`
 - `go-on.advancedAI.*`
+
+When `go-on.runtime.protocolMode` is not `from_config`, the extension starts runtime with `--protocol-mode <value>` so protocol switching is applied on the main startup chain.
 
 ## Development
 
@@ -102,6 +105,14 @@ cd vscode-addon
 npm install
 npm run compile
 ```
+
+## Quick Start
+<!-- BLUE14-P2-2-VSCODE-QUICKSTART -->
+
+1. 启动 go-on backend（建议 `mode = "adaptive"`）。
+2. 在 VS Code 设置 `go-on.executablePath` 与 `go-on.configPath`。
+3. 若需强制协议，设置 `go-on.runtime.protocolMode` 为 `acp_stdio` / `acp_http` / `mcp_stdio` / `mcp_http`。
+4. 执行命令 `go-on.start`，并用 `go-on.healthCheck` 验证主链可用。
 
 ## Sync Policy
 

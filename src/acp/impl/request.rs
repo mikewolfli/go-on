@@ -3547,7 +3547,7 @@ async fn run_agent_chat_collecting(
 
         match task.await {
             Ok(Ok(())) => Ok::<String, anyhow::Error>(response),
-            Ok(Err(err)) => Err(err),
+            Ok(Err(err)) => Err(err.into()),
             Err(join_err) => Err(anyhow::anyhow!("agent task panicked: {join_err}")),
         }
     };

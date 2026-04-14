@@ -153,7 +153,7 @@ impl WenxinAgent {
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let token = self.get_access_token().await?;
         let target_model = Self::resolve_target_model(&options);
         let endpoint_path = Self::endpoint_for_model(&target_model);
@@ -181,7 +181,7 @@ impl Agent for WenxinAgent {
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
-    ) -> Result<()> {
+    ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 
         for attempt in 0..=2 {
@@ -204,7 +204,9 @@ impl Agent for WenxinAgent {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("wenxin request failed")))
+        Err(last_error
+            .unwrap_or_else(|| anyhow::anyhow!("wenxin request failed"))
+            .into())
     }
 
     fn available_models(&self) -> Vec<ModelInfo> {

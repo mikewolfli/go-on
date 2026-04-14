@@ -627,6 +627,14 @@ fn http_request(
     Ok(response)
 }
 
+fn http_json_body(response: &str) -> Value {
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b)
+        .expect("http response body should exist");
+    serde_json::from_str(body).expect("http response body should be json")
+}
+
 #[test]
 fn rpc_initialize_health_phase_and_shutdown() {
     let temp = tempdir().expect("failed to create temp dir");
@@ -732,6 +740,93 @@ fn http_chat_stream_emits_sse_and_persists_knowledge() {
 
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[test]
+fn http_chat_completions_updates_health_metrics_and_emits_latency_log() {
+    let _suite_guard = match suite_guard().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    let bind_addr = format!("127.0.0.1:{}", find_free_port());
+    write_http_stream_config(&config_path, &bind_addr);
+
+    let mut child = Command::new(binary_path())
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--verbose")
+        .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn go-on for HTTP completions metric test");
+
+    let started = Instant::now();
+    loop {
+        if started.elapsed() > Duration::from_secs(5) {
+            let _ = child.kill();
+            panic!("timed out waiting for ACP HTTP server");
+        }
+        if let Ok(response) = http_request(&bind_addr, "GET", "/health", None) {
+            if response.contains("200 OK") {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let completion_body = json!({
+        "model": "local-echo",
+        "messages": [{"role": "user", "content": "health metric smoke"}],
+        "stream": false
+    })
+    .to_string();
+
+    let completion_response = http_request(
+        &bind_addr,
+        "POST",
+        "/v1/chat/completions",
+        Some(&completion_body),
+    )
+    .expect("HTTP chat completions request should succeed");
+    assert!(completion_response.contains("HTTP/1.1 200 OK"));
+
+    let health_started = Instant::now();
+    let mut seen_total = 0_u64;
+    loop {
+        if health_started.elapsed() > Duration::from_secs(5) {
+            break;
+        }
+        if let Ok(response) = http_request(&bind_addr, "GET", "/health", None) {
+            if response.contains("200 OK") {
+                let body = http_json_body(&response);
+                seen_total = body["metrics"]["total_requests"].as_u64().unwrap_or(0);
+                if seen_total >= 1 {
+                    break;
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        seen_total >= 1,
+        "expected /health metrics.total_requests >= 1 after completion request"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let mut stderr_text = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let _ = stderr.read_to_string(&mut stderr_text);
+    }
+    assert!(
+        stderr_text.contains("HTTP /v1/chat/completions completed in"),
+        "expected latency log in stderr, got: {stderr_text}"
+    );
 }
 
 #[test]

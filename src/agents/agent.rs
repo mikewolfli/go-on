@@ -29,6 +29,7 @@ use crate::agents::{
     OpenAiAgent, OpenAiCompatibleAgent, PerplexityAgent, QianfanAgent, QwenAgent, ReplicateAgent,
     SkyworkAgent, StepFunAgent, TitanAgent, TogetherAgent, WenxinAgent, XihuAgent, YiAgent,
 };
+use crate::core::error::Result as AppResult;
 
 use crate::config::{AgentConfig, AppConfig};
 use crate::pua::PuaExecutionReport;
@@ -294,7 +295,7 @@ pub trait Agent: Send + Sync {
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         sender: StreamingSender,
-    ) -> Result<()>;
+    ) -> AppResult<()>;
 
     /// Get available models for this provider
     ///
@@ -318,7 +319,7 @@ pub trait Agent: Send + Sync {
     }
 
     /// (Phase 0/1 discipline) Structured agent task entrypoint
-    fn run_task(&self, envelope: AgentTaskEnvelope) -> Result<AgentTaskResult> {
+    fn run_task(&self, envelope: AgentTaskEnvelope) -> AppResult<AgentTaskResult> {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs().to_string())
@@ -355,7 +356,7 @@ pub trait Agent: Send + Sync {
             error: Some(AgentError::Runtime(
                 "run_task is unsupported for this provider without a concrete override".to_string(),
             )),
-            audit_log: Some(serde_json::to_string(&audit)?),
+            audit_log: Some(serde_json::to_string(&audit).map_err(anyhow::Error::from)?),
             pua_report: None,
         })
     }
@@ -537,7 +538,7 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
         }
         "copilot" => {
             // Store the env var name; the token value is read lazily on first request.
-            // 存储环境变量名，token 值在首次请求时懒读取
+            // Token content is not loaded here; it is resolved at request time.
             let token_env = config
                 .api_key_env
                 .clone()
@@ -862,7 +863,7 @@ impl Agent for LocalEchoAgent {
         _principles: Option<Vec<String>>,
         _options: Option<HashMap<String, Value>>,
         sender: StreamingSender,
-    ) -> Result<()> {
+    ) -> AppResult<()> {
         let content = messages
             .iter()
             .rev()
@@ -884,7 +885,7 @@ impl Agent for LocalApproveAgent {
         _principles: Option<Vec<String>>,
         _options: Option<HashMap<String, Value>>,
         sender: StreamingSender,
-    ) -> Result<()> {
+    ) -> AppResult<()> {
         let _ = sender.send("APPROVE\nlocal reviewer approved".to_string());
         Ok(())
     }
@@ -900,7 +901,7 @@ impl Agent for LocalSlowApproveAgent {
         _principles: Option<Vec<String>>,
         _options: Option<HashMap<String, Value>>,
         sender: StreamingSender,
-    ) -> Result<()> {
+    ) -> AppResult<()> {
         sleep(Duration::from_millis(1_500)).await;
         let _ = sender.send("APPROVE\nlocal slow reviewer approved".to_string());
         Ok(())
@@ -977,6 +978,7 @@ fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::{AgentConfig, AppConfig, FlowConfig, PhaseConfig, RuntimeConfig};
+    use crate::core::error::{AppError, NetworkError};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -1073,5 +1075,13 @@ mod tests {
         assert_eq!(one, "alpha-key");
         assert_eq!(two, "beta-key");
         assert_eq!(three, "gamma-key");
+    }
+
+    #[test]
+    fn agent_error_can_be_classified() {
+        let err = AppError::Network(NetworkError::RequestTimeout(
+            "service unavailable".to_string(),
+        ));
+        assert!(matches!(err, AppError::Network(_)));
     }
 }

@@ -363,6 +363,27 @@
           "default": false,
           "description": "Automatically start Go-On when workspace opens"
         },
+        "go-on.runtime.protocolMode": {
+          "type": "string",
+          "default": "from_config",
+          "enum": [
+            "from_config",
+            "adaptive",
+            "acp_stdio",
+            "acp_http",
+            "mcp_stdio",
+            "mcp_http"
+          ],
+          "enumDescriptions": [
+            "Use [protocol].mode from config.toml",
+            "Adaptive access mode",
+            "Force ACP over STDIO",
+            "Force ACP over HTTP",
+            "Force MCP over STDIO",
+            "Force MCP over HTTP"
+          ],
+          "description": "Runtime startup protocol mode override passed as --protocol-mode"
+        },
         "go-on.chat.maxHistory": {
           "type": "number",
           "default": 50,

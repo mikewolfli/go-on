@@ -297,7 +297,7 @@ where
 pub async fn stream_sse_to_sender(
     response: reqwest::Response,
     sender: crate::agent::StreamingSender,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     stream_sse_events(response, move |data| {
         if data.trim() == "[DONE]" {
             return Ok(SseEventAction::Stop);

@@ -204,9 +204,16 @@ fn protocol_mode_from_config_text(text: &str) -> Option<&'static str> {
 
         let value = value.trim().trim_matches('"').to_ascii_lowercase();
         return match value.as_str() {
-            "acp" => Some("acp"),
-            "mcp" => Some("mcp"),
-            "auto" => Some("auto"),
+            // canonical 5 options
+            "adaptive" => Some("adaptive"),
+            "acp_stdio" | "acp+stdio" => Some("acp_stdio"),
+            "acp_http" | "acp+http" => Some("acp_http"),
+            "mcp_stdio" | "mcp+stdio" => Some("mcp_stdio"),
+            "mcp_http" | "mcp+http" => Some("mcp_http"),
+            // backward-compatible aliases
+            "auto" => Some("adaptive"),
+            "acp" => Some("acp_stdio"),
+            "mcp" => Some("mcp_stdio"),
             _ => None,
         };
     }
@@ -230,6 +237,14 @@ fn detect_protocol_mode() -> String {
     }
 
     "unknown".to_string()
+}
+
+fn mode_supports_acp(mode: &str) -> bool {
+    matches!(mode, "adaptive" | "acp_stdio" | "acp_http")
+}
+
+fn mode_supports_mcp(mode: &str) -> bool {
+    matches!(mode, "adaptive" | "mcp_stdio" | "mcp_http")
 }
 
 #[tauri::command]
@@ -262,11 +277,12 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
             endpoint_code: zed_health_probe.code,
             addon_present: false,
             note: if zed_health_probe.ok {
-                if protocol_mode == "mcp" {
-                    "Health reachable, but protocol mode is mcp; ACP/A2A may be rejected"
+                if !mode_supports_acp(&protocol_mode) {
+                    "Health reachable, but current mode is MCP-only; ACP/A2A may be rejected"
                         .to_string()
-                } else if protocol_mode == "auto" {
-                    "Auto mode enabled; ACP/A2A and MCP are negotiated automatically".to_string()
+                } else if protocol_mode == "adaptive" {
+                    "Adaptive mode enabled; ACP/A2A and MCP are negotiated automatically"
+                        .to_string()
                 } else {
                     "ACP/A2A path is reachable".to_string()
                 }
@@ -286,10 +302,10 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
             endpoint_code: zed_models_probe.code,
             addon_present: false,
             note: if zed_models_probe.ok {
-                if protocol_mode == "acp" {
-                    "Models endpoint reachable, but protocol mode is acp; MCP provider may be limited".to_string()
-                } else if protocol_mode == "auto" {
-                    "Auto mode enabled; MCP provider and ACP/A2A are both supported".to_string()
+                if !mode_supports_mcp(&protocol_mode) {
+                    "Models endpoint reachable, but current mode is ACP-only; MCP provider may be limited".to_string()
+                } else if protocol_mode == "adaptive" {
+                    "Adaptive mode enabled; MCP provider and ACP/A2A are both supported".to_string()
                 } else {
                     "MCP LLM provider endpoint is reachable".to_string()
                 }
@@ -335,13 +351,13 @@ mod tests {
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "auto"
+mode = "adaptive"
 
 [agents.sample]
 type = "mcp"
 "#;
 
-        assert_eq!(protocol_mode_from_config_text(text), Some("auto"));
+        assert_eq!(protocol_mode_from_config_text(text), Some("adaptive"));
     }
 
     #[test]
@@ -357,7 +373,22 @@ type = "acp"
 mode = "mcp"
 "#;
 
-        assert_eq!(protocol_mode_from_config_text(text), Some("mcp"));
+    assert_eq!(protocol_mode_from_config_text(text), Some("mcp_stdio"));
+    }
+
+    #[test]
+    fn protocol_mode_parser_supports_all_five_options() {
+    let text = r#"
+[protocol]
+mode = "acp_http"
+"#;
+    assert_eq!(protocol_mode_from_config_text(text), Some("acp_http"));
+
+    let text = r#"
+[protocol]
+mode = "mcp_http"
+"#;
+    assert_eq!(protocol_mode_from_config_text(text), Some("mcp_http"));
     }
 
     #[test]

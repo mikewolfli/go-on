@@ -200,7 +200,7 @@ mod tests {
             _principles: Option<Vec<String>>,
             _options: Option<HashMap<String, Value>>,
             _sender: crate::agent::StreamingSender,
-        ) -> anyhow::Result<()> {
+        ) -> crate::core::error::Result<()> {
             Ok(())
         }
 

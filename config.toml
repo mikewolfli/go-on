@@ -2,7 +2,13 @@
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "auto"
+# 5 options:
+# - adaptive   (default, adaptive access)
+# - acp_stdio  (ACP over stdio)
+# - acp_http   (ACP over HTTP)
+# - mcp_stdio  (MCP over stdio)
+# - mcp_http   (MCP over HTTP)
+mode = "adaptive"
 
 # Welcome: 还差 2 步就能开始
 # 1) go-on --init --config config.toml

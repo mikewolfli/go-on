@@ -5,7 +5,7 @@
 - 在 go-on 的 `config.toml` 中设置：
 	```toml
 	[protocol]
-	mode = "acp"
+	mode = "acp_http"
 	```
 - 启动 go-on 后，在 Zed 设置面板 → Agents → 添加 External Agent，API URL 填写：
 	```
@@ -18,7 +18,7 @@
 - 在 go-on 的 `config.toml` 中设置：
 	```toml
 	[protocol]
-	mode = "mcp"
+	mode = "mcp_http"
 	```
 - 启动 go-on 后，在 Zed 设置面板 → Agents → 添加 OpenAI Compatible provider，API URL 填写：
 	```
@@ -58,16 +58,26 @@
 - 推荐配置：
 	```toml
 	[protocol]
-	mode = "auto"
+	mode = "adaptive"
 	```
-- go-on 会自动识别 Zed 客户端协议类型，兼容 ACP/A2A 与 MCP。
+- go-on 会自动识别客户端协议与传输场景，兼容 ACP/A2A 与 MCP。
+
+### 4. 协议接入模式（5 选项）
+
+`[protocol].mode` 支持以下 5 个值：
+
+- `adaptive`（默认）：自适应接入，按业务/上下文选择 ACP/MCP 与 transport。
+- `acp_stdio`：ACP + STDIO。
+- `acp_http`：ACP + HTTP。
+- `mcp_stdio`：MCP + STDIO。
+- `mcp_http`：MCP + HTTP。
 
 ---
 
 **操作步骤简述：**
 1. 启动 go-on（./start-go-on.sh 或 start-go-on.bat）。
 2. 在 Zed 设置中添加 agent，API URL 指向 go-on 服务地址。
-3. 根据实际需求选择 protocol mode（acp/mcp/auto）。
+3. 根据实际需求选择 protocol mode（adaptive/acp_stdio/acp_http/mcp_stdio/mcp_http）。
 4. 无需重启即可切换协议模式。
 
 如需更详细的 Zed 配置说明，可参考本节内容或官方文档。
@@ -222,26 +232,28 @@ cargo run -- --add-model \
 - Single template: `config.toml.autopilot-adaptive`
 - Active runtime config: `config.toml`
 
-### Protocol Mode (A2A/ACP/MCP auto-adapt)
+### Protocol Mode (5-option adaptive access)
 
 In `config.toml`, you can set protocol mode for Zed or other clients:
 
 ```toml
 [protocol]
-# auto: auto-detect (recommended), acp: only ACP/A2A, mcp: only MCP
-mode = "auto"
+# adaptive (default), acp_stdio, acp_http, mcp_stdio, mcp_http
+mode = "adaptive"
 ```
 
-**auto**: Detects protocol from incoming requests (Zed, Copilot Studio, etc.)
-**acp**: Only ACP/A2A methods allowed
-**mcp**: Only MCP methods allowed
+**adaptive**: Adaptive access (recommended)
+**acp_stdio**: ACP over stdio
+**acp_http**: ACP over HTTP
+**mcp_stdio**: MCP over stdio
+**mcp_http**: MCP over HTTP
 
 This ensures maximum compatibility with Zed (A2A/ACP) and new MCP-based clients.
 
 #### Zed Integration
 
-- For Zed external agent, set `mode = "auto"` (recommended) or `mode = "acp"` if only Zed is used.
-- For MCP tools/clients, set `mode = "auto"` or `mode = "mcp"`.
+- For Zed external agent over HTTP, use `mode = "acp_http"` (or `adaptive`).
+- For MCP tools/clients, use `mode = "mcp_http"`/`"mcp_stdio"` (or `adaptive`).
 
 No restart is needed after changing this config.
 
@@ -270,6 +282,70 @@ cargo run -- --doctor --config config.toml
 ## License
 
 Same as repository policy.
+
+## 快速开始（5分钟）
+<!-- BLUE14-P2-2-README-QUICKSTART -->
+
+1. 启动后端：
+
+```bash
+# Linux/macOS
+./start-go-on.sh
+
+# Windows
+start-go-on.bat
+```
+
+2. 使用默认自适应协议（推荐）：
+
+```toml
+[protocol]
+mode = "adaptive"
+```
+
+3. 连通性验证：
+
+```bash
+curl http://127.0.0.1:8090/health
+```
+
+4. 使用 VS Code 插件或 GUI 连接运行中的 go-on。
+
+## 四种模式（主用）
+<!-- BLUE14-P2-2-README-MODES -->
+
+日常使用建议优先选择下列四种主用模式；此外仍支持 `adaptive` 作为默认自动协商模式。
+
+| 模式 | 说明 | 典型场景 |
+|---|---|---|
+| `acp_stdio` | ACP over stdio | 本地 IDE 内嵌链路 |
+| `acp_http` | ACP over HTTP | GUI/外部 Agent 走 HTTP |
+| `mcp_stdio` | MCP over stdio | MCP 客户端本地接入 |
+| `mcp_http` | MCP over HTTP | 远程 MCP 服务接入 |
+
+附加模式：`adaptive`（默认）根据请求路径与上下文自动协商 ACP/MCP。
+
+## 配置速查
+<!-- BLUE14-P2-2-README-CHEATSHEET -->
+
+最常用运行参数：
+
+| 参数 | 作用 | 示例 |
+|---|---|---|
+| `--config` | 指定配置文件 | `--config config.toml` |
+| `--protocol-mode` | 覆盖配置中的协议模式 | `--protocol-mode mcp_http` |
+| `--acp-http-bind` | 指定 HTTP 监听地址 | `--acp-http-bind 127.0.0.1:8090` |
+| `--verbose` | 输出详细日志 | `--verbose` |
+
+最小可运行配置：
+
+```toml
+[runtime]
+acp_http_bind_addr = "127.0.0.1:8090"
+
+[protocol]
+mode = "adaptive"
+```
 
 ## Quick Start: go-on with Zed
 

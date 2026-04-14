@@ -129,6 +129,7 @@ use crate::config::{
 };
 use crate::flow::FlowManager;
 use crate::i18n::runtime::{init_i18n, tf};
+use crate::mcp_server::{McpHttpServer, McpStdioServer};
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
     persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger, RuntimeHealthcheckReport,
@@ -138,7 +139,69 @@ use crate::setup::{
     parse_setup_level, parse_setup_profile, recommendation_snapshot_for_config, LocalModelOptions,
     SetupOptions,
 };
+use crate::tool::ToolRegistry;
 use crate::vector::VectorStore;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccessMode {
+    Adaptive,
+    AcpStdio,
+    AcpHttp,
+    McpStdio,
+    McpHttp,
+}
+
+impl AccessMode {
+    fn from_config(value: Option<&str>) -> Self {
+        let Some(raw) = value else {
+            return Self::Adaptive;
+        };
+        match raw.trim().to_ascii_lowercase().as_str() {
+            // New 5-mode options
+            "adaptive" => Self::Adaptive,
+            "acp_stdio" | "acp+stdio" => Self::AcpStdio,
+            "acp_http" | "acp+http" => Self::AcpHttp,
+            "mcp_stdio" | "mcp+stdio" => Self::McpStdio,
+            "mcp_http" | "mcp+http" => Self::McpHttp,
+            // Backward-compatible aliases
+            "auto" => Self::Adaptive,
+            "acp" => Self::AcpStdio,
+            "mcp" => Self::McpStdio,
+            _ => Self::Adaptive,
+        }
+    }
+}
+
+fn normalize_protocol_mode(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        // canonical 5 options
+        "adaptive" => Some("adaptive"),
+        "acp_stdio" | "acp+stdio" => Some("acp_stdio"),
+        "acp_http" | "acp+http" => Some("acp_http"),
+        "mcp_stdio" | "mcp+stdio" => Some("mcp_stdio"),
+        "mcp_http" | "mcp+http" => Some("mcp_http"),
+        // backward-compatible aliases
+        "auto" => Some("adaptive"),
+        "acp" => Some("acp_stdio"),
+        "mcp" => Some("mcp_stdio"),
+        _ => None,
+    }
+}
+
+fn validate_cli_protocol_mode(raw: Option<&str>) -> Result<Option<String>> {
+    let Some(value) = raw else {
+        return Ok(None);
+    };
+
+    let normalized = normalize_protocol_mode(value).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid --protocol-mode '{}'; allowed: adaptive, acp_stdio, acp_http, mcp_stdio, mcp_http",
+            value
+        )
+    })?;
+
+    Ok(Some(normalized.to_string()))
+}
 
 /// Command-line interface arguments for the go-on application
 #[derive(Debug, Parser)]
@@ -248,6 +311,10 @@ struct Cli {
     /// Bind ACP HTTP server and expose /health, /chat, and /chat/stream
     #[arg(long)]
     acp_http_bind: Option<String>,
+
+    /// Access protocol mode override (adaptive|acp_stdio|acp_http|mcp_stdio|mcp_http)
+    #[arg(long, value_name = "MODE")]
+    protocol_mode: Option<String>,
 }
 
 /// Get the default configuration file path
@@ -1369,9 +1436,7 @@ async fn run() -> Result<()> {
         .runtime
         .clone()
         .unwrap_or_else(RuntimeConfig::default);
-    // 注入[protocol]mode
-    // 若未引入config_file模块，可用toml库直接读取[protocol]节
-    // 兼容性修正：直接用toml::Value解析
+    // Read [protocol].mode (supports 5 options with adaptive default)
     if let Ok(config_str) = std::fs::read_to_string(&config_path) {
         if let Ok(toml_value) = config_str.parse::<toml::Value>() {
             if let Some(protocol_section) = toml_value.get("protocol") {
@@ -1381,30 +1446,100 @@ async fn run() -> Result<()> {
             }
         }
     }
+
+    // CLI override has higher priority than config file protocol section.
+    if let Some(mode) = validate_cli_protocol_mode(cli.protocol_mode.as_deref())? {
+        runtime_config.protocol_mode = Some(mode);
+    }
+
+    let access_mode = AccessMode::from_config(runtime_config.protocol_mode.as_deref());
     let acp_http_bind = cli
         .acp_http_bind
         .clone()
         .or_else(|| runtime_config.acp_http_bind_addr.clone());
 
-    // Create and run the ACP server
-    let mut server = new_acp_server(
-        flow,
-        registry,
-        cache,
-        vector_store,
-        config.vector.clone(),
-        autotune_state,
-        autotune_config,
-        autotune_state_path,
-        Some(config_path.to_string_lossy().to_string()),
-        runtime_config,
-        Some(http_client),
-        cli.verbose,
-    );
-    if let Some(bind_addr) = acp_http_bind {
-        run_acp_http_server(Arc::new(server), bind_addr).await
-    } else {
-        run_acp_server(&mut server).await
+    match access_mode {
+        AccessMode::Adaptive => {
+            runtime_config.protocol_mode = Some("auto".to_string());
+            let mut server = new_acp_server(
+                flow,
+                registry,
+                cache,
+                vector_store,
+                config.vector.clone(),
+                autotune_state,
+                autotune_config,
+                autotune_state_path,
+                Some(config_path.to_string_lossy().to_string()),
+                runtime_config,
+                Some(http_client),
+                cli.verbose,
+            );
+            if let Some(bind_addr) = acp_http_bind {
+                run_acp_http_server(Arc::new(server), bind_addr).await
+            } else {
+                run_acp_server(&mut server).await
+            }
+        }
+        AccessMode::AcpStdio => {
+            runtime_config.protocol_mode = Some("acp".to_string());
+            let mut server = new_acp_server(
+                flow,
+                registry,
+                cache,
+                vector_store,
+                config.vector.clone(),
+                autotune_state,
+                autotune_config,
+                autotune_state_path,
+                Some(config_path.to_string_lossy().to_string()),
+                runtime_config,
+                Some(http_client),
+                cli.verbose,
+            );
+            run_acp_server(&mut server).await
+        }
+        AccessMode::AcpHttp => {
+            runtime_config.protocol_mode = Some("acp".to_string());
+            let bind_addr = acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string());
+            let server = new_acp_server(
+                flow,
+                registry,
+                cache,
+                vector_store,
+                config.vector.clone(),
+                autotune_state,
+                autotune_config,
+                autotune_state_path,
+                Some(config_path.to_string_lossy().to_string()),
+                runtime_config,
+                Some(http_client),
+                cli.verbose,
+            );
+            run_acp_http_server(Arc::new(server), bind_addr).await
+        }
+        AccessMode::McpStdio => {
+            let tool_registry = Arc::new(ToolRegistry::new());
+            let server = McpStdioServer::new(
+                registry,
+                tool_registry,
+                "go-on".to_string(),
+                env!("CARGO_PKG_VERSION").to_string(),
+            );
+            server.run().await
+        }
+        AccessMode::McpHttp => {
+            let bind_addr = acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string());
+            let tool_registry = Arc::new(ToolRegistry::new());
+            let server = McpHttpServer::new(
+                registry,
+                tool_registry,
+                "go-on".to_string(),
+                env!("CARGO_PKG_VERSION").to_string(),
+                bind_addr,
+            );
+            server.run().await
+        }
     }
 }
 
@@ -1414,7 +1549,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{build_completeness_report, RecommendationLevel};
+    use super::{build_completeness_report, validate_cli_protocol_mode, RecommendationLevel};
     use crate::config::{
         AgentConfig, AppConfig, CacheConfig, FlowConfig, PhaseConfig, PhaseOptions, RuntimeConfig,
         VectorConfig,
@@ -1587,5 +1722,48 @@ mod tests {
             .missing
             .iter()
             .any(|item| item == "phases.coding.options.global_max_inflight"));
+    }
+
+    #[test]
+    fn cli_protocol_mode_overrides_config() {
+        let mut runtime_config = RuntimeConfig {
+            protocol_mode: Some("adaptive".to_string()),
+            ..RuntimeConfig::default()
+        };
+
+        if let Some(mode) = validate_cli_protocol_mode(Some("mcp_http")).unwrap() {
+            runtime_config.protocol_mode = Some(mode);
+        }
+
+        assert_eq!(runtime_config.protocol_mode.as_deref(), Some("mcp_http"));
+    }
+
+    #[test]
+    fn cli_protocol_mode_accepts_all_valid_values() {
+        for mode in [
+            "adaptive",
+            "acp_stdio",
+            "acp_http",
+            "mcp_stdio",
+            "mcp_http",
+            "auto",
+            "acp",
+            "mcp",
+            "acp+http",
+            "mcp+stdio",
+        ] {
+            assert!(
+                validate_cli_protocol_mode(Some(mode)).is_ok(),
+                "mode={mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_protocol_mode_rejects_invalid_value() {
+        let err = validate_cli_protocol_mode(Some("invalid_mode")).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid --protocol-mode 'invalid_mode'"));
     }
 }

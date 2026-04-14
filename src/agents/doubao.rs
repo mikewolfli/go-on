@@ -5,7 +5,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::time::sleep;
@@ -85,7 +84,7 @@ impl DoubaoAgent {
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "doubao.api_key_env")?;
         let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let payload = self.build_payload(messages, principles, &options);
@@ -117,7 +116,7 @@ impl Agent for DoubaoAgent {
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
-    ) -> Result<()> {
+    ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 
         for attempt in 0..=2 {
@@ -140,6 +139,8 @@ impl Agent for DoubaoAgent {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("doubao request failed")))
+        Err(last_error
+            .unwrap_or_else(|| anyhow::anyhow!("doubao request failed"))
+            .into())
     }
 }

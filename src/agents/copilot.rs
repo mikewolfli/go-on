@@ -1,14 +1,10 @@
-//! copilot.rs — GitHub Copilot agent via OAuth device-flow token.
+//! copilot.rs - GitHub Copilot agent via OAuth device-flow token.
 //!
-//! 认证流程 / Auth flow:
-//!   1. 首次请求时从环境变量读取 GitHub OAuth token（默认 GITHUB_TOKEN）
-//!      On first request, read GitHub OAuth token from env var (default: GITHUB_TOKEN)
-//!   2. 首次请求时向 api.github.com/copilot_internal/v2/token 换取有时效的 Copilot API token
-//!      On first request, exchange for a short-lived Copilot API token
-//!   3. 缓存该 token，到期前自动刷新
-//!      Cache the token and auto-refresh before expiry
-//!   4. 调用 api.githubcopilot.com/chat/completions 完成对话
-//!      Call api.githubcopilot.com/chat/completions for chat
+//! Auth flow:
+//!   1. On first request, read GitHub OAuth token from env var (default: GITHUB_TOKEN).
+//!   2. Exchange it at api.github.com/copilot_internal/v2/token for a short-lived Copilot API token.
+//!   3. Cache the Copilot token and auto-refresh before expiry.
+//!   4. Call api.githubcopilot.com/chat/completions for chat streaming.
 //!
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -76,7 +72,7 @@ impl CopilotAgent {
         // Slow path: fetch a new token.
         let github_token = std::env::var(&self.token_env).with_context(|| {
             format!(
-                "env var `{}` not set — set it to a GitHub personal access token \
+                "env var `{}` not set; set it to a GitHub personal access token \
                  with Copilot access, e.g.: $env:{}=\"ghp_...\"",
                 self.token_env, self.token_env
             )
@@ -215,7 +211,7 @@ impl CopilotAgent {
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let messages = self.merge_principles_into_messages(messages, principles);
         let api_token = self.copilot_token().await?;
         let payload = self.build_payload(messages, options);
@@ -252,7 +248,7 @@ impl Agent for CopilotAgent {
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
-    ) -> Result<()> {
+    ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
         let mut free_model_attempted = false;
 
@@ -287,7 +283,9 @@ impl Agent for CopilotAgent {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("copilot request failed")))
+        Err(last_error
+            .unwrap_or_else(|| anyhow::anyhow!("copilot request failed"))
+            .into())
     }
 }
 

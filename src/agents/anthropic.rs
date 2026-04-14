@@ -146,7 +146,7 @@ impl AnthropicAgent {
         &self,
         response: reqwest::Response,
         sender: crate::agent::StreamingSender,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         stream_sse_events(response, move |data| match parse_anthropic_event(data) {
             Ok((action, maybe_text)) => {
                 if let Some(text) = maybe_text {
@@ -177,7 +177,7 @@ impl AnthropicAgent {
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "claude.api_key_env")?;
 
         let payload = self.to_anthropic_payload(messages, principles, options);
@@ -247,7 +247,7 @@ impl Agent for AnthropicAgent {
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
-    ) -> Result<()> {
+    ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 
         for attempt in 0..=2 {
@@ -270,7 +270,9 @@ impl Agent for AnthropicAgent {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("claude request failed")))
+        Err(last_error
+            .unwrap_or_else(|| anyhow::anyhow!("claude request failed"))
+            .into())
     }
 }
 

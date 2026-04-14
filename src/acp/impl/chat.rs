@@ -968,7 +968,7 @@ async fn run_agent_collecting(
                 .await?;
                 Ok::<String, anyhow::Error>(response)
             }
-            Ok(Err(err)) => Err(err),
+            Ok(Err(err)) => Err(err.into()),
             Err(join_err) => Err(anyhow::anyhow!("agent task panicked: {join_err}")),
         }
     };
@@ -2291,7 +2291,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    use anyhow::Result;
     use async_trait::async_trait;
     use serde_json::json;
     use serde_json::Value;
@@ -2318,7 +2317,7 @@ mod tests {
             _principles: Option<Vec<String>>,
             _options: Option<HashMap<String, Value>>,
             sender: StreamingSender,
-        ) -> Result<()> {
+        ) -> crate::core::error::Result<()> {
             *self.seen_messages.lock().expect("messages lock") = messages;
             sender
                 .send(self.output.clone())
