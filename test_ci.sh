@@ -443,7 +443,24 @@ if ! cargo --list | grep -q "^    audit$"; then
     echo "cargo-audit 未安装，正在安装..."
     cargo install cargo-audit --locked
 fi
-cargo audit
+audit_ok=0
+for attempt in 1 2 3; do
+    if cargo audit; then
+        audit_ok=1
+        break
+    fi
+    echo "cargo audit 第 ${attempt} 次失败，准备重试..."
+done
+
+if [ "$audit_ok" -eq 0 ]; then
+    if [ -d "$HOME/.cargo/advisory-db" ]; then
+        echo "cargo audit 在线更新失败，尝试使用本地 advisory cache (--no-fetch --stale)..."
+        cargo audit --no-fetch --stale
+    else
+        echo "❌ cargo audit 在线更新失败且本地 advisory DB 不存在"
+        exit 1
+    fi
+fi
 echo "✅ BLUE14 Cargo Audit依赖安全门禁通过"
 
 # 6f BLUE14 P2-2 文档完整性主链测试
@@ -454,6 +471,119 @@ grep -q "BLUE14-P2-2-README-CHEATSHEET" README.md
 grep -q "BLUE14-P2-2-GUI-QUICKSTART" GUI/README.md
 grep -q "BLUE14-P2-2-VSCODE-QUICKSTART" vscode-addon/README.md
 echo "✅ BLUE14文档完整性主链测试通过"
+
+# 6g BLUE14 AI1 Token优化与缓存主链测试
+echo "=== 步骤6g: 运行BLUE14 AI1 Token优化与缓存主链测试 ==="
+cargo test smart_compress_reduces_length_without_losing_system_prompt -- --nocapture
+cargo test context_cache_hit_avoids_model_call -- --nocapture
+echo "✅ BLUE14 AI1 Token优化与缓存主链测试通过"
+
+# 6h BLUE14 AI2/AI3 学习与强化学习主链测试
+echo "=== 步骤6h: 运行BLUE14 AI2/AI3 学习与强化学习主链测试 ==="
+cargo test feedback_system_collects_and_persists_event -- --nocapture
+cargo test experience_base_finds_similar_success_case -- --nocapture
+cargo test q_learning_updates_q_table_on_reward -- --nocapture
+cargo test reward_function_positive_for_successful_low_token_task -- --nocapture
+cargo test exploration_decays_toward_minimum -- --nocapture
+echo "✅ BLUE14 AI2/AI3 学习与强化学习主链测试通过"
+
+# 6i BLUE14 AI4 知识淬炼主链测试
+echo "=== 步骤6i: 运行BLUE14 AI4 知识淬炼主链测试 ==="
+cargo test distiller_filters_low_confidence_insights -- --nocapture
+cargo test deduplicate_removes_high_similarity_entries -- --nocapture
+cargo test aggregate_verdict_approve_when_all_signals_pass -- --nocapture
+echo "✅ BLUE14 AI4 知识淬炼主链测试通过"
+
+# 6j BLUE14 HD1 策略硬化主链测试
+echo "=== 步骤6j: 运行BLUE14 HD1 策略硬化主链测试 ==="
+cargo test strict_policy_denies_write_and_shell -- --nocapture
+echo "✅ BLUE14 HD1 策略硬化主链测试通过"
+
+# 6k BLUE14 P2-1 用户可见输出i18n主链测试
+echo "=== 步骤6k: 运行BLUE14 P2-1 用户可见输出i18n主链测试 ==="
+cargo test onboarding_and_status_keys_exist_in_all_languages -- --nocapture
+echo "✅ BLUE14 P2-1 用户可见输出i18n主链测试通过"
+
+# 6l BLUE14 HD2 资源配额实时跟踪主链测试
+echo "=== 步骤6l: 运行BLUE14 HD2 资源配额实时跟踪主链测试 ==="
+cargo test budget_tracker_rejects_on_token_overflow -- --nocapture
+cargo test budget_tracker_allows_within_limit_and_reports_remaining -- --nocapture
+echo "✅ BLUE14 HD2 资源配额实时跟踪主链测试通过"
+
+# 6m BLUE14 HD3 幂等性请求缓存主链测试
+echo "=== 步骤6m: 运行BLUE14 HD3 幂等性请求缓存主链测试 ==="
+cargo test idempotency_cache_returns_cached_result_within_ttl -- --nocapture
+cargo test idempotency_cache_evicts_expired_entries -- --nocapture
+cargo test idempotency_key_is_deterministic -- --nocapture
+echo "✅ BLUE14 HD3 幂等性请求缓存主链测试通过"
+
+# 6n BLUE14 HD4 审计日志收集与查询主链测试
+echo "=== 步骤6n: 运行BLUE14 HD4 审计日志收集与查询主链测试 ==="
+cargo test audit_logger_writes_and_reads_back_entry -- --nocapture
+cargo test audit_logger_query_by_path_filters_correctly -- --nocapture
+echo "✅ BLUE14 HD4 审计日志收集与查询主链测试通过"
+
+# 6o BLUE14 PUA1 规则引擎接入主链测试
+echo "=== 步骤6o: 运行BLUE14 PUA1 规则引擎接入主链测试 ==="
+cargo test pua_rule_engine_blocks_red_line_action -- --nocapture
+cargo test pua_rule_engine_fails_stage_with_missing_required_action -- --nocapture
+cargo test pua_rule_engine_passes_when_all_conditions_met -- --nocapture
+echo "✅ BLUE14 PUA1 规则引擎接入主链测试通过"
+
+# 6p BLUE14 PUA2 动态质量指南针主链测试
+echo "=== 步骤6p: 运行BLUE14 PUA2 动态质量指南针主链测试 ==="
+cargo test compass_adds_security_check_for_security_patch_task -- --nocapture
+cargo test compass_base_checks_always_present -- --nocapture
+cargo test quality_compass_compat_returns_five_items -- --nocapture
+echo "✅ BLUE14 PUA2 动态质量指南针主链测试通过"
+
+# 6q BLUE14 PUA3 学习与反馈系统主链测试
+echo "=== 步骤6q: 运行BLUE14 PUA3 学习与反馈系统主链测试 ==="
+cargo test pua_collector_writes_report_to_ndjson -- --nocapture
+cargo test pua_learning_data_extraction_returns_correct_records -- --nocapture
+echo "✅ BLUE14 PUA3 学习与反馈系统主链测试通过"
+
+# 6r BLUE14 PUA4 执行报告生成主链测试
+echo "=== 步骤6r: 运行BLUE14 PUA4 执行报告生成主链测试 ==="
+cargo test pua_report_status_fail_when_missing_checks_present -- --nocapture
+cargo test pua_report_status_pass_when_all_checks_complete -- --nocapture
+echo "✅ BLUE14 PUA4 执行报告生成主链测试通过"
+
+# 6s BLUE14 HSS2 RpcHarness 高级能力扩展主链测试
+echo "=== 步骤6s: 运行BLUE14 HSS2 RpcHarness 高级能力扩展主链测试 ==="
+cargo test concurrent_requests_return_consistent_responses -- --nocapture
+cargo test run_scenario_file_executes_runtime_health_requests -- --nocapture
+echo "✅ BLUE14 HSS2 RpcHarness 高级能力扩展主链测试通过"
+
+# 6t BLUE14 HSS3 数据驱动集成测试基础设施主链测试
+echo "=== 步骤6t: 运行BLUE14 HSS3 数据驱动集成测试基础设施主链测试 ==="
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE14 HSS3 数据驱动集成测试基础设施主链测试通过"
+
+# 6u BLUE14 AGENT1 PUA 字段合约烟雾覆盖主链测试
+echo "=== 步骤6u: 运行BLUE14 AGENT1 PUA 字段合约烟雾覆盖主链测试 ==="
+cargo test --test pua_contract_smoke -- --nocapture
+echo "✅ BLUE14 AGENT1 PUA 字段合约烟雾覆盖主链测试通过"
+
+# 6v BLUE14 AGENT2 学习系统与PUA反馈数据通道对齐主链测试
+echo "=== 步骤6v: 运行BLUE14 AGENT2 学习系统与PUA反馈数据通道对齐主链测试 ==="
+cargo test learning_record_roundtrip_supports_workflow_and_pua -- --nocapture
+cargo test analyze_patterns_reads_mixed_workflow_and_pua_records -- --nocapture
+cargo test pua_learning_data_extraction_returns_correct_records -- --nocapture
+echo "✅ BLUE14 AGENT2 学习系统与PUA反馈数据通道对齐主链测试通过"
+
+# 6w BLUE14 AGENT3 BudgetTracker 与 PUA escalation 联动主链测试
+echo "=== 步骤6w: 运行BLUE14 AGENT3 BudgetTracker 与 PUA escalation 联动主链测试 ==="
+cargo test budget_tracker_token_overflow_escalates_pua_level -- --nocapture
+cargo test budget_tracker_token_overflow_escalation_capped_at_l5 -- --nocapture
+echo "✅ BLUE14 AGENT3 BudgetTracker 与 PUA escalation 联动主链测试通过"
+
+# 6x BLUE14 AGENT4 tf!/anyhow 错误统一溯源主链测试
+echo "=== 步骤6x: 运行BLUE14 AGENT4 tf!/anyhow 错误统一溯源主链测试 ==="
+cargo test classify_request_error_kind_detects_pua_violation -- --nocapture
+cargo test classify_request_error_kind_detects_budget_exceeded -- --nocapture
+cargo test classify_request_error_kind_detects_sandbox_blocked -- --nocapture
+echo "✅ BLUE14 AGENT4 tf!/anyhow 错误统一溯源主链测试通过"
 
 # 5.2 GUI 契约烟测
 echo "=== 步骤5.2: 运行GUI契约烟测 ==="

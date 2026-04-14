@@ -572,6 +572,7 @@ version = "0.5.3"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64",
  "clap",
  "env",
  "futures-util",

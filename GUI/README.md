@@ -41,3 +41,8 @@ Desktop console for go-on built with Tauri 2 + Vue + Vite.
 
 - backend `config.toml` 使用：`[protocol].mode = "adaptive"`
 - 若只走 GUI HTTP 链路，可用：`acp_http` 或 `mcp_http`
+
+错误溯源对齐（BLUE14 AGENT4）：
+
+- GUI 运行时 RPC 错误会保留统一格式：`rpc_error:<code>:<kind>:<message> (context=<...>)`
+- `kind` 与 backend 对齐：`PuaViolation` / `BudgetExceeded` / `SandboxBlocked`

@@ -274,7 +274,18 @@
     "status.missing_title": "Missing configuration items:",
     "status.missing_none": "Missing configuration items: none",
     "status.recommended_title": "Recommended adjustments:",
+    "status.recommended_item": "- [{level}] {message}",
+    "status.secret_line": "    {label}: {count} item(s) via {secret_ref} -> {fingerprints}",
     "status.done": "Status check complete.",
+
+    "setup.onboarding_intro": "Welcome to setup, only 2 steps left to get started.",
+    "setup.onboarding_option_1": "Recommended: 1) Quick setup (recommended values + minimal input, about 30s)",
+    "setup.onboarding_option_2": "             2) Advanced setup (expand all details)",
+    "setup.onboarding_option_3": "             3) Configure later (enter basic usable state first)",
+    "setup.onboarding_select": "Choose [1]: ",
+    "setup.onboarding_done_next": "Setup complete. Next step: go-on --check --config config.toml",
+    "setup.onboarding_skipped": "Skipped AI provider configuration. Pending: AI provider",
+    "setup.onboarding_next": "Next step: go-on --check --config config.toml",
 
     "error.invalid_setup_level": "invalid setup level: {value}",
 

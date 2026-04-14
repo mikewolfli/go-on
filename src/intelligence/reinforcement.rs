@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 use crate::agent::{inspect_secret_pool, secret_pool_fingerprints};
 use crate::cache::ResponseCache;
 use crate::config::{validate_runtime_readiness, AgentConfig, AppConfig};
+use crate::pua::{append_learning_record, load_learning_records, LearningRecord};
 use crate::task_decomposer::{TaskDecomposer, TaskDecomposition};
 use crate::task_router::{RoutingDecision, TaskCharacteristics, TaskRouter};
 use crate::vector::VectorStore;
@@ -1896,9 +1897,286 @@ fn trim_chars(text: &str, max_chars: usize) -> String {
     result
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LearningPattern {
+    pub key: String,
+    pub sample_count: usize,
+    pub success_rate: f64,
+    pub avg_speedup: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LearningFeedbackSystem {
+    pub events: Vec<WorkflowLearningEvent>,
+    pub storage_path: PathBuf,
+}
+
+impl LearningFeedbackSystem {
+    pub fn new(storage_path: PathBuf) -> Self {
+        Self {
+            events: Vec::new(),
+            storage_path,
+        }
+    }
+
+    pub fn collect(&mut self, event: WorkflowLearningEvent) {
+        self.events.push(event.clone());
+        let _ = self.persist_event(&event);
+    }
+
+    pub fn analyze_patterns(&self, window: usize) -> Vec<LearningPattern> {
+        let window = window.max(1);
+        let mut grouped: HashMap<String, (usize, usize, f64)> = HashMap::new();
+
+        let recent = self
+            .events
+            .iter()
+            .rev()
+            .take(window)
+            .cloned()
+            .collect::<Vec<_>>();
+        for event in recent {
+            let key = format!("{}::{}", event.source, event.executor);
+            let entry = grouped.entry(key).or_insert((0, 0, 0.0));
+            entry.0 += 1;
+            if event.subtasks_failed == 0 {
+                entry.1 += 1;
+            }
+            entry.2 += event.parallel_speedup;
+        }
+
+        if let Ok(records) = load_learning_records(&self.storage_path, window * 4) {
+            for record in records {
+                match record {
+                    LearningRecord::Workflow(event) => {
+                        let Ok(event) = serde_json::from_value::<WorkflowLearningEvent>(event)
+                        else {
+                            continue;
+                        };
+                        let key = format!("{}::{}", event.source, event.executor);
+                        let entry = grouped.entry(key).or_insert((0, 0, 0.0));
+                        entry.0 += 1;
+                        if event.subtasks_failed == 0 {
+                            entry.1 += 1;
+                        }
+                        entry.2 += event.parallel_speedup;
+                    }
+                    LearningRecord::Pua(record) => {
+                        let key = format!("pua::{}", record.stage);
+                        let entry = grouped.entry(key).or_insert((0, 0, 0.0));
+                        entry.0 += 1;
+                        if record.passed {
+                            entry.1 += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        grouped
+            .into_iter()
+            .map(
+                |(key, (sample_count, success_count, speedup_sum))| LearningPattern {
+                    key,
+                    sample_count,
+                    success_rate: success_count as f64 / sample_count.max(1) as f64,
+                    avg_speedup: speedup_sum / sample_count.max(1) as f64,
+                },
+            )
+            .collect()
+    }
+
+    pub fn extract_insights(&self) -> Vec<KnowledgeInsightArtifact> {
+        self.events
+            .iter()
+            .filter(|event| event.subtasks_failed == 0 && event.predicted_success_rate >= 0.7)
+            .map(|event| KnowledgeInsightArtifact {
+                generated_at: now_ts(),
+                conversation_id: format!("learning-{}", event.generated_at),
+                branch_id: "main".to_string(),
+                phase: "execution".to_string(),
+                task: event.task.clone(),
+                agent: event.executor.clone(),
+                source: event.source.clone(),
+                request_excerpt: trim_chars(&event.task, 160),
+                response_excerpt: format!(
+                    "success_rate={:.2}, speedup={:.2}",
+                    event.predicted_success_rate, event.parallel_speedup
+                ),
+                reusable_insights: vec![
+                    "Prefer historical successful execution template".to_string()
+                ],
+                verification_steps: vec!["Replay with same constraints".to_string()],
+                confidence: event.predicted_success_rate as f64,
+            })
+            .collect()
+    }
+
+    fn persist_event(&self, event: &WorkflowLearningEvent) -> Result<()> {
+        fs::create_dir_all(&self.storage_path)?;
+        let filename = format!("event-{}-{}.json", event.generated_at, self.events.len());
+        let path = self.storage_path.join(filename);
+        let payload = serde_json::to_string_pretty(event)?;
+        fs::write(path, payload)?;
+        let workflow_value =
+            serde_json::to_value(event).context("serialize workflow event for learning record")?;
+        append_learning_record(
+            &self.storage_path,
+            &LearningRecord::Workflow(workflow_value),
+        )
+        .context("persist workflow learning record")?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuccessCase {
+    pub objective: String,
+    pub strategy: String,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailurePattern {
+    pub objective: String,
+    pub root_cause: String,
+    pub frequency: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExperienceKnowledgeBase {
+    pub success_cases: Vec<SuccessCase>,
+    pub failure_patterns: Vec<FailurePattern>,
+}
+
+impl ExperienceKnowledgeBase {
+    pub fn add_success_case(&mut self, case: SuccessCase) {
+        self.success_cases.push(case);
+    }
+
+    pub fn find_similar(&self, objective: &str) -> Option<&SuccessCase> {
+        let normalized = objective.to_ascii_lowercase();
+        self.success_cases
+            .iter()
+            .filter(|case| {
+                let probe = case.objective.to_ascii_lowercase();
+                probe.contains(&normalized) || normalized.contains(&probe)
+            })
+            .max_by(|a, b| {
+                a.confidence
+                    .partial_cmp(&b.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+
+    pub fn top_failure_patterns(&self, limit: usize) -> Vec<&FailurePattern> {
+        let mut patterns = self.failure_patterns.iter().collect::<Vec<_>>();
+        patterns.sort_by(|a, b| b.frequency.cmp(&a.frequency));
+        patterns.into_iter().take(limit).collect()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RlTaskExecutionMetrics {
+    pub tokens_used: u32,
+    pub success: bool,
+    pub quality_score: f64,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct QLearningAgent {
+    pub q_table: HashMap<(String, String), HashMap<String, f64>>,
+    pub learning_rate: f64,
+    pub discount_factor: f64,
+    pub exploration_rate: f64,
+}
+
+impl Default for QLearningAgent {
+    fn default() -> Self {
+        Self {
+            q_table: HashMap::new(),
+            learning_rate: 0.1,
+            discount_factor: 0.9,
+            exploration_rate: 0.2,
+        }
+    }
+}
+
+impl QLearningAgent {
+    pub fn choose_action(&self, state: &(String, String)) -> String {
+        if let Some(actions) = self.q_table.get(state) {
+            return actions
+                .iter()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(action, _)| action.clone())
+                .unwrap_or_else(|| "default".to_string());
+        }
+        "default".to_string()
+    }
+
+    pub fn update(
+        &mut self,
+        state: &(String, String),
+        action: &str,
+        reward: f64,
+        next_state: &(String, String),
+    ) {
+        let next_max = self
+            .q_table
+            .get(next_state)
+            .and_then(|m| m.values().copied().max_by(f64::total_cmp))
+            .unwrap_or(0.0);
+
+        let actions = self.q_table.entry(state.clone()).or_default();
+        let current = actions.get(action).copied().unwrap_or(0.0);
+        let updated =
+            current + self.learning_rate * (reward + self.discount_factor * next_max - current);
+        actions.insert(action.to_string(), updated);
+    }
+
+    pub fn decay_exploration(&mut self, rate: f64) {
+        self.exploration_rate = (self.exploration_rate * rate).max(0.01);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RewardFunction {
+    pub token_saving_weight: f64,
+    pub success_weight: f64,
+    pub quality_weight: f64,
+    pub speed_weight: f64,
+}
+
+impl Default for RewardFunction {
+    fn default() -> Self {
+        Self {
+            token_saving_weight: 0.3,
+            success_weight: 0.4,
+            quality_weight: 0.2,
+            speed_weight: 0.1,
+        }
+    }
+}
+
+impl RewardFunction {
+    pub fn calculate(&self, metrics: &RlTaskExecutionMetrics) -> f64 {
+        let token_saving = 1.0 - (metrics.tokens_used as f64 / 4096.0).min(1.0);
+        let success = if metrics.success { 1.0 } else { -1.0 };
+        let quality = metrics.quality_score.clamp(0.0, 1.0);
+        let speed = 1.0 - (metrics.duration_ms as f64 / 30_000.0).min(1.0);
+
+        token_saving * self.token_saving_weight
+            + success * self.success_weight
+            + quality * self.quality_weight
+            + speed * self.speed_weight
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pua::PuaLearningRecord;
 
     use tempfile::tempdir;
 
@@ -2083,5 +2361,219 @@ fallback = true
         assert!(bus.events[0]
             .reusable_insights
             .contains(&"new-insight".to_string()));
+    }
+
+    #[test]
+    fn feedback_system_collects_and_persists_event() {
+        let temp = tempdir().expect("tempdir should be created");
+        let learning_dir = temp.path().join(".goon").join("learning");
+        let mut system = LearningFeedbackSystem::new(learning_dir.clone());
+
+        let event = WorkflowLearningEvent {
+            generated_at: now_ts(),
+            task: "stabilize pipeline".to_string(),
+            complexity: 2,
+            predicted_success_rate: 0.9,
+            subtasks_total: 3,
+            subtasks_completed: 3,
+            subtasks_failed: 0,
+            subtasks_skipped: 0,
+            serial_work_ms: 200,
+            critical_path_ms: 120,
+            parallel_speedup: 1.5,
+            parallel_efficiency: 0.86,
+            executor: "copilot".to_string(),
+            source: "rpc".to_string(),
+            runtime_healthy: true,
+            gates_ok: true,
+            work_grade: "agent".to_string(),
+            risk_score: 0.1,
+            clarification_rounds: 0,
+            clarification_quality_score: 1.0,
+            requirement_change_count: 0,
+            review_reject_root_cause: String::new(),
+            primary_stability_score: 1.0,
+            secondary_utilization_rate: 0.0,
+            failover_count: 0,
+            failover_root_cause: String::new(),
+        };
+
+        system.collect(event);
+        assert_eq!(system.events.len(), 1);
+        let entries = fs::read_dir(learning_dir)
+            .expect("learning dir should exist")
+            .collect::<Vec<_>>();
+        assert!(!entries.is_empty());
+    }
+
+    #[test]
+    fn learning_record_roundtrip_supports_workflow_and_pua() {
+        let workflow = LearningRecord::Workflow(
+            serde_json::to_value(WorkflowLearningEvent {
+                generated_at: now_ts(),
+                task: "workflow-event".to_string(),
+                complexity: 1,
+                predicted_success_rate: 0.9,
+                subtasks_total: 1,
+                subtasks_completed: 1,
+                subtasks_failed: 0,
+                subtasks_skipped: 0,
+                serial_work_ms: 100,
+                critical_path_ms: 80,
+                parallel_speedup: 1.1,
+                parallel_efficiency: 0.7,
+                executor: "tester".to_string(),
+                source: "unit-test".to_string(),
+                runtime_healthy: true,
+                gates_ok: true,
+                work_grade: "agent".to_string(),
+                risk_score: 0.1,
+                clarification_rounds: 0,
+                clarification_quality_score: 1.0,
+                requirement_change_count: 0,
+                review_reject_root_cause: String::new(),
+                primary_stability_score: 1.0,
+                secondary_utilization_rate: 0.0,
+                failover_count: 0,
+                failover_root_cause: String::new(),
+            })
+            .expect("workflow event should serialize"),
+        );
+        let pua = LearningRecord::Pua(PuaLearningRecord {
+            stage: "verification".to_string(),
+            passed: true,
+            missing_checks: vec![],
+            escalation_level: 2,
+        });
+
+        let workflow_json =
+            serde_json::to_string(&workflow).expect("workflow learning record should serialize");
+        let pua_json = serde_json::to_string(&pua).expect("pua learning record should serialize");
+
+        let workflow_back: LearningRecord =
+            serde_json::from_str(&workflow_json).expect("workflow record should deserialize");
+        let pua_back: LearningRecord =
+            serde_json::from_str(&pua_json).expect("pua record should deserialize");
+
+        assert!(matches!(workflow_back, LearningRecord::Workflow(_)));
+        assert!(matches!(pua_back, LearningRecord::Pua(_)));
+    }
+
+    #[test]
+    fn analyze_patterns_reads_mixed_workflow_and_pua_records() {
+        let temp = tempdir().expect("tempdir should be created");
+        let learning_dir = temp.path().join(".goon").join("learning");
+        let mut system = LearningFeedbackSystem::new(learning_dir.clone());
+
+        system.collect(WorkflowLearningEvent {
+            generated_at: now_ts(),
+            task: "stabilize pipeline".to_string(),
+            complexity: 2,
+            predicted_success_rate: 0.9,
+            subtasks_total: 2,
+            subtasks_completed: 2,
+            subtasks_failed: 0,
+            subtasks_skipped: 0,
+            serial_work_ms: 180,
+            critical_path_ms: 100,
+            parallel_speedup: 1.4,
+            parallel_efficiency: 0.8,
+            executor: "copilot".to_string(),
+            source: "rpc".to_string(),
+            runtime_healthy: true,
+            gates_ok: true,
+            work_grade: "agent".to_string(),
+            risk_score: 0.2,
+            clarification_rounds: 0,
+            clarification_quality_score: 1.0,
+            requirement_change_count: 0,
+            review_reject_root_cause: String::new(),
+            primary_stability_score: 1.0,
+            secondary_utilization_rate: 0.0,
+            failover_count: 0,
+            failover_root_cause: String::new(),
+        });
+
+        append_learning_record(
+            &learning_dir,
+            &LearningRecord::Pua(PuaLearningRecord {
+                stage: "verification".to_string(),
+                passed: false,
+                missing_checks: vec!["proof".to_string()],
+                escalation_level: 3,
+            }),
+        )
+        .expect("pua learning record should persist");
+
+        let patterns = system.analyze_patterns(10);
+        assert!(patterns
+            .iter()
+            .any(|pattern| pattern.key.starts_with("rpc::")));
+        assert!(patterns
+            .iter()
+            .any(|pattern| pattern.key == "pua::verification"));
+    }
+
+    #[test]
+    fn experience_base_finds_similar_success_case() {
+        let mut kb = ExperienceKnowledgeBase::default();
+        kb.add_success_case(SuccessCase {
+            objective: "fix payment timeout".to_string(),
+            strategy: "switch to retry with jitter".to_string(),
+            confidence: 0.92,
+        });
+
+        let found = kb.find_similar("payment timeout");
+        assert!(found.is_some());
+        assert!(found
+            .expect("success case should be found")
+            .strategy
+            .contains("retry"));
+    }
+
+    #[test]
+    fn q_learning_updates_q_table_on_reward() {
+        let mut agent = QLearningAgent::default();
+        let state = ("coding".to_string(), "moderate".to_string());
+        let next_state = ("coding".to_string(), "moderate".to_string());
+
+        for _ in 0..10 {
+            agent.update(&state, "model-a", 0.9, &next_state);
+            agent.update(&state, "model-b", 0.2, &next_state);
+        }
+
+        let actions = agent
+            .q_table
+            .get(&state)
+            .expect("state should be present after updates");
+        let a = actions
+            .get("model-a")
+            .copied()
+            .expect("model-a should have q value");
+        let b = actions
+            .get("model-b")
+            .copied()
+            .expect("model-b should have q value");
+        assert!(a > b);
+    }
+
+    #[test]
+    fn reward_function_positive_for_successful_low_token_task() {
+        let reward = RewardFunction::default().calculate(&RlTaskExecutionMetrics {
+            tokens_used: 100,
+            success: true,
+            quality_score: 0.9,
+            duration_ms: 1200,
+        });
+        assert!(reward > 0.0);
+    }
+
+    #[test]
+    fn exploration_decays_toward_minimum() {
+        let mut agent = QLearningAgent::default();
+        for _ in 0..100 {
+            agent.decay_exploration(0.9);
+        }
+        assert!(agent.exploration_rate >= 0.01);
     }
 }

@@ -23,6 +23,7 @@ Archive/index policy:
 - If requirements are ambiguous, state your assumptions explicitly before proceeding.
 - Favor safe fallback behavior over hard failure whenever possible.
 - Strictly forbid any form of placeholder, incomplete, or fake implementation, as well as unclosed symbols or bulk edits that break structure.
+- Strictly forbid bridge-stub workarounds (especially test-only local shim modules that mimic production modules). If a dependency boundary issue appears, fix it in real project architecture (module ownership/export/refactor), not by patching test-local stubs.
 - All code must compile and pass self-checks in the target language.
 - All changes must include tests and documentation updates.
 - Code review and CI must focus on these standards and enforce them automatically.

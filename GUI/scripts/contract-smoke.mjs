@@ -95,8 +95,14 @@ assert.equal(contract.protocol.orchestrationSkillRegistrySuiteCheckedInMainChain
 assert.equal(contract.protocol.rustAllTargetsFullGateCheckedInMainChain, true);
 assert.ok(tauriSource.includes('fn protocol_mode_from_config_text'));
 assert.ok(tauriSource.includes('line.eq_ignore_ascii_case("[protocol]")'));
-assert.ok(tauriSource.includes('"auto" => Some("auto")'));
-assert.ok(tauriSource.includes('Auto mode enabled; ACP/A2A and MCP are negotiated automatically'));
+assert.ok(
+    tauriSource.includes('"auto" => Some("adaptive")') ||
+        tauriSource.includes('"auto" => Some("auto")')
+);
+assert.ok(
+    tauriSource.includes('Adaptive mode enabled; ACP/A2A and MCP are negotiated automatically') ||
+        tauriSource.includes('Auto mode enabled; ACP/A2A and MCP are negotiated automatically')
+);
 assert.equal(contract.openai.streamDoneMarker, '[DONE]');
 assert.equal(contract.responsesApi.path, '/v1/responses');
 assert.equal(contract.responsesApi.retrievalPath, '/v1/responses/{id}');
@@ -179,5 +185,9 @@ assert.ok(apiSource.includes('defaultRuntimeBaseUrl'));
 assert.ok(tauriSource.includes('capability_matrix()'));
 assert.ok(tauriSource.includes('runtime_health_endpoint()'));
 assert.ok(tauriSource.includes('openai_models_endpoint()'));
+assert.deepEqual(contract.errors.requestErrorKinds, ['PuaViolation', 'BudgetExceeded', 'SandboxBlocked']);
+assert.equal(contract.errors.requestErrorContextPrefix, 'acp.handle_request.dispatch');
+assert.ok(tauriSource.includes('rpc_error:{code}:{kind}:{message}'));
+assert.ok(tauriSource.includes('acp.handle_request.dispatch'));
 
 console.log('GUI contract smoke passed');

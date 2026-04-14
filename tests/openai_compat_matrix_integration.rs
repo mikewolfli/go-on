@@ -110,16 +110,26 @@ request_timeout_seconds = 1
 }
 
 async fn wait_healthy(client: &reqwest::Client, base_url: &str, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
+    // CI hosts can be bursty; enforce a reasonable minimum startup window.
+    let effective_timeout = timeout.max(Duration::from_secs(60));
+    let deadline = Instant::now() + effective_timeout;
+    let mut last_error = String::new();
     while Instant::now() < deadline {
-        if let Ok(resp) = client.get(format!("{base_url}/health")).send().await {
-            if resp.status().is_success() {
-                return;
+        match client.get(format!("{base_url}/health")).send().await {
+            Ok(resp) if resp.status().is_success() => return,
+            Ok(resp) => {
+                last_error = format!("health status={}", resp.status());
+            }
+            Err(err) => {
+                last_error = err.to_string();
             }
         }
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
     }
-    panic!("timed out waiting for /health");
+    panic!(
+        "timed out waiting for /health after {:?}, last_error={}",
+        effective_timeout, last_error
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

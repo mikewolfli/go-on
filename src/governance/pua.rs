@@ -3,6 +3,11 @@
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::roles::AgentRole;
 
@@ -24,6 +29,12 @@ pub struct PuaEnforcementPlan {
     pub stage_requirements: Vec<PuaStageRequirement>,
 }
 
+impl Default for PuaEnforcementPlan {
+    fn default() -> Self {
+        build_enforcement_plan("Default PUA enforcement plan", 1, false, false, false)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PuaExecutionReport {
     pub stage: String,
@@ -32,6 +43,411 @@ pub struct PuaExecutionReport {
     pub required_evidence: Vec<String>,
     pub completed_checks: Vec<String>,
     pub missing_checks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PuaViolationKind {
+    RedLine,
+    StageFail,
+    MissingEvidence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PuaViolation {
+    pub kind: PuaViolationKind,
+    pub detail: String,
+}
+
+impl std::fmt::Display for PuaViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}: {}", self.kind, self.detail)
+    }
+}
+
+impl std::error::Error for PuaViolation {}
+
+pub struct PuaRuleEngine {
+    plan: Arc<StdMutex<PuaEnforcementPlan>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TaskType {
+    BugFix,
+    FeatureAdd,
+    Refactor,
+    SecurityPatch,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum QualityCategory {
+    Safety,
+    Correctness,
+    Performance,
+    Style,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VerificationMethod {
+    AutoTest,
+    ManualReview,
+    StaticAnalysis,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskContext {
+    pub task_type: TaskType,
+    pub file_count: usize,
+    pub risk_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QualityCheck {
+    pub id: String,
+    pub description: String,
+    pub category: QualityCategory,
+    pub verification: VerificationMethod,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ContextRule {
+    pub id: String,
+    pub task_type: TaskType,
+    pub min_risk_score: f64,
+    pub min_file_count: usize,
+    pub check: QualityCheck,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicQualityCompass {
+    pub base_checks: Vec<QualityCheck>,
+    pub context_rules: Vec<ContextRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PuaLearningRecord {
+    pub stage: String,
+    pub passed: bool,
+    pub missing_checks: Vec<String>,
+    pub escalation_level: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum LearningRecord {
+    Workflow(serde_json::Value),
+    Pua(PuaLearningRecord),
+}
+
+pub const LEARNING_RECORDS_FILE: &str = "learning-records.ndjson";
+
+pub fn append_learning_record(storage_dir: &Path, record: &LearningRecord) -> std::io::Result<()> {
+    fs::create_dir_all(storage_dir)?;
+    let file_path = storage_dir.join(LEARNING_RECORDS_FILE);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file_path)?;
+    let line = serde_json::to_string(record)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
+    writeln!(file, "{}", line)
+}
+
+pub fn load_learning_records(
+    storage_dir: &Path,
+    limit: usize,
+) -> std::io::Result<Vec<LearningRecord>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let file_path = storage_dir.join(LEARNING_RECORDS_FILE);
+    if !file_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(file_path)?;
+    let mut records = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let record: LearningRecord = serde_json::from_str(trimmed)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
+        records.push(record);
+    }
+
+    if records.len() > limit {
+        Ok(records.split_off(records.len() - limit))
+    } else {
+        Ok(records)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PuaFeedbackCollector {
+    storage_path: PathBuf,
+}
+
+impl PuaFeedbackCollector {
+    pub fn new(storage_path: PathBuf) -> Self {
+        Self { storage_path }
+    }
+
+    pub fn collect(&self, report: &PuaExecutionReport) -> std::io::Result<()> {
+        let record = PuaLearningRecord {
+            stage: report.stage.clone(),
+            passed: report.status.eq_ignore_ascii_case("pass")
+                || report.status.eq_ignore_ascii_case("enforced"),
+            missing_checks: report.missing_checks.clone(),
+            escalation_level: parse_escalation_level(&report.escalation_level),
+        };
+        append_learning_record(&self.storage_path, &LearningRecord::Pua(record))
+    }
+
+    pub fn extract_learning_data(&self, limit: usize) -> std::io::Result<Vec<PuaLearningRecord>> {
+        let mut records = Vec::new();
+
+        for record in load_learning_records(&self.storage_path, limit.saturating_mul(4))? {
+            if let LearningRecord::Pua(pua) = record {
+                records.push(pua);
+            }
+        }
+
+        if records.len() > limit {
+            Ok(records.split_off(records.len() - limit))
+        } else {
+            Ok(records)
+        }
+    }
+}
+
+impl Default for DynamicQualityCompass {
+    fn default() -> Self {
+        Self {
+            base_checks: vec![
+                QualityCheck {
+                    id: "build-proof".to_string(),
+                    description: "Build proof captured".to_string(),
+                    category: QualityCategory::Correctness,
+                    verification: VerificationMethod::AutoTest,
+                    required: true,
+                },
+                QualityCheck {
+                    id: "error-case".to_string(),
+                    description: "Error cases tested".to_string(),
+                    category: QualityCategory::Correctness,
+                    verification: VerificationMethod::AutoTest,
+                    required: true,
+                },
+                QualityCheck {
+                    id: "pattern-scan".to_string(),
+                    description: "Pattern scan completed".to_string(),
+                    category: QualityCategory::Style,
+                    verification: VerificationMethod::ManualReview,
+                    required: true,
+                },
+            ],
+            context_rules: vec![
+                ContextRule {
+                    id: "security-threat-model".to_string(),
+                    task_type: TaskType::SecurityPatch,
+                    min_risk_score: 0.0,
+                    min_file_count: 0,
+                    check: QualityCheck {
+                        id: "security-threat-model".to_string(),
+                        description: "Threat model reviewed for security patch".to_string(),
+                        category: QualityCategory::Safety,
+                        verification: VerificationMethod::StaticAnalysis,
+                        required: true,
+                    },
+                },
+                ContextRule {
+                    id: "multi-file-regression".to_string(),
+                    task_type: TaskType::FeatureAdd,
+                    min_risk_score: 0.5,
+                    min_file_count: 3,
+                    check: QualityCheck {
+                        id: "multi-file-regression".to_string(),
+                        description: "Multi-file regression checks executed".to_string(),
+                        category: QualityCategory::Performance,
+                        verification: VerificationMethod::AutoTest,
+                        required: true,
+                    },
+                },
+            ],
+        }
+    }
+}
+
+impl DynamicQualityCompass {
+    pub fn get_checks(&self, context: &TaskContext) -> Vec<QualityCheck> {
+        let mut checks = self.base_checks.clone();
+
+        for rule in &self.context_rules {
+            if rule.task_type == context.task_type
+                && context.risk_score >= rule.min_risk_score
+                && context.file_count >= rule.min_file_count
+                && !checks.iter().any(|existing| existing.id == rule.check.id)
+            {
+                checks.push(rule.check.clone());
+            }
+        }
+
+        if context.risk_score >= 0.8 && !checks.iter().any(|check| check.id == "high-risk-review") {
+            checks.push(QualityCheck {
+                id: "high-risk-review".to_string(),
+                description: "High-risk changes require reviewer sign-off".to_string(),
+                category: QualityCategory::Safety,
+                verification: VerificationMethod::ManualReview,
+                required: true,
+            });
+        }
+
+        checks
+    }
+
+    pub fn quality_compass_compat(&self) -> Vec<String> {
+        quality_compass()
+    }
+}
+
+impl PuaRuleEngine {
+    pub fn new(plan: Arc<StdMutex<PuaEnforcementPlan>>) -> Self {
+        Self { plan }
+    }
+
+    pub fn check_red_lines(&self, action: &str) -> Result<(), PuaViolation> {
+        let plan = self.plan.lock().map_err(|_| PuaViolation {
+            kind: PuaViolationKind::MissingEvidence,
+            detail: "failed to lock PUA plan".to_string(),
+        })?;
+        if plan
+            .red_lines
+            .iter()
+            .any(|line| line.eq_ignore_ascii_case(action))
+        {
+            return Err(PuaViolation {
+                kind: PuaViolationKind::RedLine,
+                detail: format!("action '{}' matches a PUA red line", action),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn validate_stage(&self, stage: &str, completed: &[String]) -> Result<(), PuaViolation> {
+        let plan = self.plan.lock().map_err(|_| PuaViolation {
+            kind: PuaViolationKind::MissingEvidence,
+            detail: "failed to lock PUA plan".to_string(),
+        })?;
+
+        let requirement = match plan
+            .stage_requirements
+            .iter()
+            .find(|req| req.stage.eq_ignore_ascii_case(stage))
+        {
+            Some(req) => req,
+            None => return Ok(()),
+        };
+
+        if let Some(triggered) = requirement
+            .hard_fail_conditions
+            .iter()
+            .find(|cond| completed.iter().any(|item| item.eq_ignore_ascii_case(cond)))
+        {
+            return Err(PuaViolation {
+                kind: PuaViolationKind::RedLine,
+                detail: format!(
+                    "stage '{}' triggered hard-fail condition '{}'",
+                    requirement.stage, triggered
+                ),
+            });
+        }
+
+        let missing = requirement
+            .required_actions
+            .iter()
+            .filter(|required| {
+                !completed
+                    .iter()
+                    .any(|item| item.eq_ignore_ascii_case(required))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(PuaViolation {
+                kind: PuaViolationKind::StageFail,
+                detail: format!(
+                    "stage '{}' missing required actions: {}",
+                    requirement.stage,
+                    missing.join(", ")
+                ),
+            })
+        }
+    }
+
+    pub fn collect_evidence(&self, stage: &str) -> Vec<String> {
+        self.plan
+            .lock()
+            .ok()
+            .and_then(|plan| {
+                plan.stage_requirements
+                    .iter()
+                    .find(|req| req.stage.eq_ignore_ascii_case(stage))
+                    .map(|req| req.required_actions.clone())
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn collect_missing(&self, stage: &str, completed: &[String]) -> Vec<String> {
+        self.collect_evidence(stage)
+            .into_iter()
+            .filter(|required| {
+                !completed
+                    .iter()
+                    .any(|item| item.eq_ignore_ascii_case(required))
+            })
+            .collect()
+    }
+
+    pub fn generate_report(&self, stage: &str, completed: &[String]) -> PuaExecutionReport {
+        let missing_checks = self.collect_missing(stage, completed);
+        let escalation_level = self
+            .plan
+            .lock()
+            .ok()
+            .map(|plan| plan.escalation_level.clone())
+            .unwrap_or_else(|| "L0".to_string());
+
+        PuaExecutionReport {
+            stage: stage.to_string(),
+            status: if missing_checks.is_empty() {
+                "pass".to_string()
+            } else {
+                "fail".to_string()
+            },
+            escalation_level,
+            required_evidence: self.collect_evidence(stage),
+            completed_checks: completed.to_vec(),
+            missing_checks,
+        }
+    }
+
+    pub fn escalate(&self, _reason: &str) -> u8 {
+        let Ok(mut plan) = self.plan.lock() else {
+            return 0;
+        };
+
+        let current = parse_escalation_level(&plan.escalation_level);
+        let next = current.saturating_add(1).min(5);
+        plan.escalation_level = format!("L{}", next);
+        next
+    }
 }
 
 pub fn quality_compass() -> Vec<String> {
@@ -271,9 +687,27 @@ fn dedupe_roles(values: &mut Vec<AgentRole>) {
     *values = deduped;
 }
 
+fn parse_escalation_level(level: &str) -> u8 {
+    let trimmed = level.trim();
+    if let Some(digits) = trimmed.strip_prefix('L') {
+        return digits.parse::<u8>().unwrap_or(0);
+    }
+    trimmed.parse::<u8>().unwrap_or(0)
+}
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("{}-{}", prefix, nanos))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::{Arc, Mutex as StdMutex};
 
     #[test]
     fn builds_high_risk_plan() {
@@ -299,5 +733,267 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn pua_rule_engine_blocks_red_line_action() {
+        let plan = PuaEnforcementPlan {
+            escalation_level: "L1".to_string(),
+            mandatory_roles: vec![],
+            red_lines: vec!["dangerous.shell".to_string()],
+            quality_compass: vec![],
+            mandatory_safeguards: vec![],
+            mandatory_evidence: vec![],
+            stage_requirements: vec![],
+        };
+        let engine = PuaRuleEngine::new(Arc::new(StdMutex::new(plan)));
+        let err = engine
+            .check_red_lines("dangerous.shell")
+            .expect_err("red line should be blocked");
+        assert_eq!(err.kind, PuaViolationKind::RedLine);
+    }
+
+    #[test]
+    fn pua_rule_engine_fails_stage_with_missing_required_action() {
+        let plan = PuaEnforcementPlan {
+            escalation_level: "L1".to_string(),
+            mandatory_roles: vec![],
+            red_lines: vec![],
+            quality_compass: vec![],
+            mandatory_safeguards: vec![],
+            mandatory_evidence: vec![],
+            stage_requirements: vec![PuaStageRequirement {
+                stage: "execution".to_string(),
+                required_actions: vec!["record_evidence".to_string()],
+                hard_fail_conditions: vec![],
+            }],
+        };
+        let engine = PuaRuleEngine::new(Arc::new(StdMutex::new(plan)));
+        let err = engine
+            .validate_stage("execution", &["other_action".to_string()])
+            .expect_err("missing required action should fail");
+        assert_eq!(err.kind, PuaViolationKind::StageFail);
+    }
+
+    #[test]
+    fn pua_rule_engine_passes_when_all_conditions_met() {
+        let plan = PuaEnforcementPlan {
+            escalation_level: "L1".to_string(),
+            mandatory_roles: vec![],
+            red_lines: vec![],
+            quality_compass: vec![],
+            mandatory_safeguards: vec![],
+            mandatory_evidence: vec![],
+            stage_requirements: vec![PuaStageRequirement {
+                stage: "execution".to_string(),
+                required_actions: vec!["record_evidence".to_string()],
+                hard_fail_conditions: vec!["forbidden_action".to_string()],
+            }],
+        };
+        let engine = PuaRuleEngine::new(Arc::new(StdMutex::new(plan)));
+        assert!(engine
+            .validate_stage("execution", &["record_evidence".to_string()])
+            .is_ok());
+    }
+
+    #[test]
+    fn compass_adds_security_check_for_security_patch_task() {
+        let compass = DynamicQualityCompass::default();
+        let checks = compass.get_checks(&TaskContext {
+            task_type: TaskType::SecurityPatch,
+            file_count: 1,
+            risk_score: 0.4,
+        });
+
+        assert!(checks
+            .iter()
+            .any(|check| check.category == QualityCategory::Safety));
+    }
+
+    #[test]
+    fn compass_base_checks_always_present() {
+        let compass = DynamicQualityCompass::default();
+        let checks = compass.get_checks(&TaskContext {
+            task_type: TaskType::Refactor,
+            file_count: 1,
+            risk_score: 0.1,
+        });
+
+        assert!(checks.iter().any(|check| check.id == "build-proof"));
+        assert!(checks.iter().any(|check| check.id == "error-case"));
+        assert!(checks.iter().any(|check| check.id == "pattern-scan"));
+    }
+
+    #[test]
+    fn quality_compass_compat_returns_five_items() {
+        let compass = DynamicQualityCompass::default();
+        let compat = compass.quality_compass_compat();
+        assert_eq!(compat.len(), 5);
+    }
+
+    #[test]
+    fn pua_collector_writes_report_to_ndjson() {
+        let dir = unique_temp_dir("goon-pua-collector-write");
+        let collector = PuaFeedbackCollector::new(dir.clone());
+        let report = PuaExecutionReport {
+            stage: "execution".to_string(),
+            status: "fail".to_string(),
+            escalation_level: "L2".to_string(),
+            required_evidence: vec!["proof".to_string()],
+            completed_checks: vec!["check-a".to_string()],
+            missing_checks: vec!["check-b".to_string()],
+        };
+
+        collector.collect(&report).expect("collector should write");
+        let output = dir.join("learning-records.ndjson");
+        assert!(output.exists(), "feedback ndjson should exist");
+
+        let content = fs::read_to_string(output).expect("feedback file should be readable");
+        let first_line = content
+            .lines()
+            .next()
+            .expect("ndjson should contain one line");
+        let restored: LearningRecord =
+            serde_json::from_str(first_line).expect("line should decode as learning record");
+        match restored {
+            LearningRecord::Pua(record) => assert_eq!(record.stage, "execution"),
+            LearningRecord::Workflow(_) => panic!("expected pua learning record variant"),
+        }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pua_learning_data_extraction_returns_correct_records() {
+        let dir = unique_temp_dir("goon-pua-collector-read");
+        let collector = PuaFeedbackCollector::new(dir.clone());
+
+        collector
+            .collect(&PuaExecutionReport {
+                stage: "planning".to_string(),
+                status: "pass".to_string(),
+                escalation_level: "L1".to_string(),
+                required_evidence: vec![],
+                completed_checks: vec!["a".to_string()],
+                missing_checks: vec![],
+            })
+            .expect("first report should be written");
+
+        collector
+            .collect(&PuaExecutionReport {
+                stage: "execution".to_string(),
+                status: "fail".to_string(),
+                escalation_level: "L3".to_string(),
+                required_evidence: vec![],
+                completed_checks: vec!["b".to_string()],
+                missing_checks: vec!["c".to_string()],
+            })
+            .expect("second report should be written");
+
+        let records = collector
+            .extract_learning_data(5)
+            .expect("learning records should be readable");
+        assert_eq!(records.len(), 2);
+        assert!(records[0].passed);
+        assert!(!records[1].passed);
+        assert_eq!(records[1].escalation_level, 3);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pua_report_status_fail_when_missing_checks_present() {
+        let plan = PuaEnforcementPlan {
+            escalation_level: "L2".to_string(),
+            mandatory_roles: vec![],
+            red_lines: vec![],
+            quality_compass: vec![],
+            mandatory_safeguards: vec![],
+            mandatory_evidence: vec![],
+            stage_requirements: vec![PuaStageRequirement {
+                stage: "verification".to_string(),
+                required_actions: vec!["run_tests".to_string(), "validate_edge_case".to_string()],
+                hard_fail_conditions: vec![],
+            }],
+        };
+        let engine = PuaRuleEngine::new(Arc::new(StdMutex::new(plan)));
+        let report = engine.generate_report("verification", &["run_tests".to_string()]);
+
+        assert_eq!(report.status, "fail");
+        assert_eq!(
+            report.missing_checks,
+            vec!["validate_edge_case".to_string()]
+        );
+    }
+
+    #[test]
+    fn pua_report_status_pass_when_all_checks_complete() {
+        let plan = PuaEnforcementPlan {
+            escalation_level: "L1".to_string(),
+            mandatory_roles: vec![],
+            red_lines: vec![],
+            quality_compass: vec![],
+            mandatory_safeguards: vec![],
+            mandatory_evidence: vec![],
+            stage_requirements: vec![PuaStageRequirement {
+                stage: "verification".to_string(),
+                required_actions: vec!["run_tests".to_string()],
+                hard_fail_conditions: vec![],
+            }],
+        };
+        let engine = PuaRuleEngine::new(Arc::new(StdMutex::new(plan)));
+        let report = engine.generate_report("verification", &["run_tests".to_string()]);
+
+        assert_eq!(report.status, "pass");
+        assert!(report.missing_checks.is_empty());
+        assert_eq!(report.escalation_level, "L1");
+    }
+
+    #[test]
+    fn pua_rule_engine_escalate_increases_level_by_one() {
+        let plan = PuaEnforcementPlan {
+            escalation_level: "L1".to_string(),
+            mandatory_roles: vec![],
+            red_lines: vec![],
+            quality_compass: vec![],
+            mandatory_safeguards: vec![],
+            mandatory_evidence: vec![],
+            stage_requirements: vec![],
+        };
+        let shared = Arc::new(StdMutex::new(plan));
+        let engine = PuaRuleEngine::new(shared.clone());
+
+        let next = engine.escalate("budget overflow");
+        assert_eq!(next, 2);
+        let level = shared
+            .lock()
+            .expect("plan lock should succeed")
+            .escalation_level
+            .clone();
+        assert_eq!(level, "L2");
+    }
+
+    #[test]
+    fn pua_rule_engine_escalate_caps_at_l5() {
+        let plan = PuaEnforcementPlan {
+            escalation_level: "L5".to_string(),
+            mandatory_roles: vec![],
+            red_lines: vec![],
+            quality_compass: vec![],
+            mandatory_safeguards: vec![],
+            mandatory_evidence: vec![],
+            stage_requirements: vec![],
+        };
+        let shared = Arc::new(StdMutex::new(plan));
+        let engine = PuaRuleEngine::new(shared.clone());
+
+        let next = engine.escalate("budget overflow");
+        assert_eq!(next, 5);
+        let level = shared
+            .lock()
+            .expect("plan lock should succeed")
+            .escalation_level
+            .clone();
+        assert_eq!(level, "L5");
     }
 }

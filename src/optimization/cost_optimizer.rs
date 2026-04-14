@@ -6,7 +6,8 @@
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum CostTier {
     /// Ultra economical models (~0.01$/1K tokens)
@@ -46,6 +47,88 @@ pub struct CompressionResult {
     pub compressed_tokens: u32,
     pub compression_ratio: f64,
     pub compressed_content: String,
+}
+
+/// Cached response entry for semantically equivalent prompts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedResponse {
+    pub response: String,
+    pub created_at_unix: u64,
+}
+
+/// Lightweight semantic cache with bounded size and LRU eviction.
+#[derive(Debug, Clone, Default)]
+pub struct ContextCache {
+    semantic_cache: HashMap<u64, CachedResponse>,
+    lru_order: VecDeque<u64>,
+    max_entries: usize,
+}
+
+impl ContextCache {
+    pub fn new(max_entries: usize) -> Self {
+        Self {
+            semantic_cache: HashMap::new(),
+            lru_order: VecDeque::new(),
+            max_entries: max_entries.max(1),
+        }
+    }
+
+    pub fn get_by_semantic_key(&mut self, prompt: &str) -> Option<&CachedResponse> {
+        let key = semantic_hash(prompt);
+        if self.semantic_cache.contains_key(&key) {
+            Self::touch_key(&mut self.lru_order, key);
+        }
+        self.semantic_cache.get(&key)
+    }
+
+    pub fn insert(&mut self, prompt: &str, response: CachedResponse) {
+        let key = semantic_hash(prompt);
+        self.semantic_cache.insert(key, response);
+        Self::touch_key(&mut self.lru_order, key);
+        self.evict_lru();
+    }
+
+    pub fn len(&self) -> usize {
+        self.semantic_cache.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.semantic_cache.is_empty()
+    }
+
+    pub fn evict_lru(&mut self) {
+        while self.semantic_cache.len() > self.max_entries {
+            if let Some(oldest) = self.lru_order.pop_front() {
+                self.semantic_cache.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn touch_key(order: &mut VecDeque<u64>, key: u64) {
+        if let Some(pos) = order.iter().position(|existing| *existing == key) {
+            order.remove(pos);
+        }
+        order.push_back(key);
+    }
+}
+
+fn normalize_for_semantic_hash(input: &str) -> String {
+    input
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase()
+}
+
+fn semantic_hash(prompt: &str) -> u64 {
+    let normalized = normalize_for_semantic_hash(prompt);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    normalized.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Cost optimizer for reducing execution costs
@@ -188,6 +271,67 @@ impl CostOptimizer {
         }
     }
 
+    /// Semantic-aware compression that keeps system directives and recent context.
+    pub fn smart_compress(&self, original: &str, max_tokens: usize) -> CompressionResult {
+        if !self.compression_enabled {
+            return self.compress_prompt(original);
+        }
+
+        let max_chars = max_tokens.max(1) * 4;
+        if original.len() <= max_chars {
+            let tokens = (original.len() / 4) as u32;
+            return CompressionResult {
+                original_tokens: tokens,
+                compressed_tokens: tokens,
+                compression_ratio: 1.0,
+                compressed_content: original.to_string(),
+            };
+        }
+
+        let lines = original.lines().collect::<Vec<_>>();
+        let mut selected = Vec::new();
+
+        for line in &lines {
+            let lower = line.to_ascii_lowercase();
+            if lower.contains("system") || lower.contains("instruction") {
+                selected.push((*line).to_string());
+            }
+        }
+
+        for line in lines.iter().rev() {
+            if selected.len() >= 24 {
+                break;
+            }
+            selected.push((*line).to_string());
+        }
+        selected.reverse();
+
+        let mut compressed = selected
+            .into_iter()
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if compressed.len() > max_chars {
+            compressed.truncate(max_chars);
+        }
+
+        let original_tokens = (original.len() / 4) as u32;
+        let compressed_tokens = (compressed.len() / 4) as u32;
+        let compression_ratio = if original_tokens == 0 {
+            1.0
+        } else {
+            compressed_tokens as f64 / original_tokens as f64
+        };
+
+        CompressionResult {
+            original_tokens,
+            compressed_tokens,
+            compression_ratio,
+            compressed_content: compressed,
+        }
+    }
+
     /// Estimate cost for a model call
     pub fn estimate_cost(&self, model: &str, input_tokens: u32, output_tokens: u32) -> f64 {
         self.model_profiles
@@ -261,5 +405,34 @@ mod tests {
         let optimizer = CostOptimizer::new();
         let (passed, _fallback) = optimizer.check_cost_cap(0.5, 1.0);
         assert!(passed);
+    }
+
+    #[test]
+    fn smart_compress_reduces_length_without_losing_system_prompt() {
+        let optimizer = CostOptimizer::new();
+        let long = format!(
+            "System: You are a precise coding assistant.\n{}\nUser: summarize quickly",
+            "repeat context. ".repeat(400)
+        );
+
+        let result = optimizer.smart_compress(&long, 120);
+        assert!(result.compressed_content.contains("System:"));
+        assert!(result.compression_ratio <= 0.75);
+    }
+
+    #[test]
+    fn context_cache_hit_avoids_model_call() {
+        let mut cache = ContextCache::new(4);
+        cache.insert(
+            "System: keep style\nUser: hi",
+            CachedResponse {
+                response: "hello".to_string(),
+                created_at_unix: 1,
+            },
+        );
+
+        let hit = cache.get_by_semantic_key("system: keep style\n\nuser: hi");
+        assert!(hit.is_some());
+        assert_eq!(hit.expect("cache hit").response, "hello");
     }
 }

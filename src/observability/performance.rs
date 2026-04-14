@@ -580,10 +580,14 @@ pub fn global_metrics_snapshot() -> Option<PerformanceMetrics> {
 #[cfg(test)]
 mod tests {
     use super::utils;
+    use std::time::Duration;
 
     #[test]
     fn performance_measure_time_returns_duration() {
-        let (result, duration) = utils::measure_time(|| 42u32);
+        let (result, duration) = utils::measure_time(|| {
+            std::thread::sleep(Duration::from_millis(1));
+            42u32
+        });
         assert_eq!(result, 42);
         assert!(duration.as_nanos() > 0);
     }

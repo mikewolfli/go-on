@@ -273,7 +273,18 @@
     "status.missing_title": "未配置项:",
     "status.missing_none": "未配置项: 无",
     "status.recommended_title": "推荐调整项:",
+    "status.recommended_item": "- [{level}] {message}",
+    "status.secret_line": "    {label}: 通过 {secret_ref} 配置 {count} 项 -> {fingerprints}",
     "status.done": "状态检查完成。",
+
+    "setup.onboarding_intro": "欢迎设置，还差 2 步就能开始。",
+    "setup.onboarding_option_1": "推荐：1) 快速设置（推荐值 + 最少输入，约 30 秒）",
+    "setup.onboarding_option_2": "      2) 高级设置（展开所有细项）",
+    "setup.onboarding_option_3": "      3) 稍后再配（先进入基础可用状态）",
+    "setup.onboarding_select": "选择 [1]: ",
+    "setup.onboarding_done_next": "设置完成。下一步：go-on --check --config config.toml",
+    "setup.onboarding_skipped": "已跳过 AI 提供商配置。待完成：AI 提供商",
+    "setup.onboarding_next": "下一步：go-on --check --config config.toml",
 
     "error.invalid_setup_level": "无效的设置级别: {value}",
 

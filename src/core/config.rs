@@ -756,6 +756,12 @@ pub struct RuntimeConfig {
     /// 协议模式: auto/acp/mcp
     #[serde(default)]
     pub protocol_mode: Option<String>,
+    /// Emit PUA execution report into JSON-RPC response metadata when enabled
+    #[serde(default)]
+    pub pua_report: bool,
+    /// Deployment target for hardening profile selection: local-dev | ci | managed-service
+    #[serde(default)]
+    pub deployment_target: Option<String>,
     /// Maintenance interval in seconds
     #[serde(default = "default_runtime_maintenance_interval_seconds")]
     pub maintenance_interval_seconds: u64,
@@ -795,6 +801,8 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             protocol_mode: None,
+            pua_report: false,
+            deployment_target: None,
             maintenance_interval_seconds: default_runtime_maintenance_interval_seconds(),
             health_interval_seconds: default_runtime_health_interval_seconds(),
             shutdown_drain_seconds: default_runtime_shutdown_drain_seconds(),
@@ -2716,6 +2724,8 @@ mod tests {
             health_interval_seconds: 30,
             shutdown_drain_seconds: 10,
             protocol_mode: None,
+            pua_report: false,
+            deployment_target: None,
             acp_http_bind_addr: None,
             sqlite_vacuum_interval_cycles: 60,
             otel_enabled: false,
@@ -3163,6 +3173,8 @@ mod tests {
             health_interval_seconds: 120,
             shutdown_drain_seconds: 30,
             protocol_mode: None,
+            pua_report: false,
+            deployment_target: None,
             acp_http_bind_addr: None,
             sqlite_vacuum_interval_cycles: 60,
             otel_enabled: true,

@@ -497,8 +497,16 @@ fn print_runtime_status(config_path: &std::path::Path, report: &RuntimeHealthche
             };
 
             println!(
-                "    {}: {} item(s) via {} -> {}",
-                label, count, secret_ref, fingerprints
+                "{}",
+                tf(
+                    "status.secret_line",
+                    &[
+                        ("label", label),
+                        ("count", &count.to_string()),
+                        ("secret_ref", secret_ref),
+                        ("fingerprints", &fingerprints),
+                    ]
+                )
             );
         }
     }
@@ -843,7 +851,13 @@ fn print_completeness_report(config: &crate::config::AppConfig, report: &Runtime
                 RecommendationLevel::Warning => "warning",
                 RecommendationLevel::Info => "info",
             };
-            println!("- [{}] {}", level, item.message);
+            println!(
+                "{}",
+                tf(
+                    "status.recommended_item",
+                    &[("level", level), ("message", &item.message)]
+                )
+            );
         }
     }
 }
@@ -889,11 +903,11 @@ fn maybe_prompt_ai_onboarding(cli: &Cli, config_path: &std::path::Path) -> Resul
     };
 
     info!("starting onboarding flow for state={}", state.as_str());
-    println!("欢迎设置，还差 2 步就能开始。");
-    println!("推荐：1) 快速设置（推荐值 + 最少输入，约 30 秒）");
-    println!("      2) 高级设置（展开所有细项）");
-    println!("      3) 稍后再配（先进入基础可用状态）");
-    print!("选择 [1]: ");
+    println!("{}", tf("setup.onboarding_intro", &[]));
+    println!("{}", tf("setup.onboarding_option_1", &[]));
+    println!("{}", tf("setup.onboarding_option_2", &[]));
+    println!("{}", tf("setup.onboarding_option_3", &[]));
+    print!("{}", tf("setup.onboarding_select", &[]));
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
     let mut input = String::new();
@@ -913,12 +927,12 @@ fn maybe_prompt_ai_onboarding(cli: &Cli, config_path: &std::path::Path) -> Resul
                     prompt_for_secrets: true,
                 },
             )?;
-            println!("设置完成。下一步：go-on --check --config config.toml");
+            println!("{}", tf("setup.onboarding_done_next", &[]));
             Ok(true)
         }
         "3" => {
-            println!("已跳过 AI 提供商配置。待完成：AI 提供商");
-            println!("下一步：go-on --check --config config.toml");
+            println!("{}", tf("setup.onboarding_skipped", &[]));
+            println!("{}", tf("setup.onboarding_next", &[]));
             Ok(true)
         }
         _ => {
@@ -932,7 +946,7 @@ fn maybe_prompt_ai_onboarding(cli: &Cli, config_path: &std::path::Path) -> Resul
                     prompt_for_secrets: true,
                 },
             )?;
-            println!("设置完成。下一步：go-on --check --config config.toml");
+            println!("{}", tf("setup.onboarding_done_next", &[]));
             Ok(true)
         }
     }

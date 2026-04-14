@@ -120,7 +120,34 @@ pub fn invoke_runtime_rpc(
                     .get("message")
                     .and_then(|x| x.as_str())
                     .unwrap_or("unknown rpc error");
-                return Err(format!("rpc_error:{code}:{message}"));
+                let data = err.get("data");
+                let kind = data
+                    .and_then(|d| d.get("kind"))
+                    .and_then(|k| k.as_str())
+                    .map(|k| k.to_string())
+                    .unwrap_or_else(|| {
+                        let lower = message.to_ascii_lowercase();
+                        if lower.contains("pua") {
+                            "PuaViolation".to_string()
+                        } else if lower.contains("budget") {
+                            "BudgetExceeded".to_string()
+                        } else if lower.contains("sandbox")
+                            || lower.contains("hardening policy denied")
+                        {
+                            "SandboxBlocked".to_string()
+                        } else {
+                            "GeneralError".to_string()
+                        }
+                    });
+                let context = data
+                    .and_then(|d| d.get("detail"))
+                    .and_then(|detail| detail.as_str())
+                    .filter(|detail| detail.contains("acp.handle_request.dispatch"))
+                    .map(|_| "acp.handle_request.dispatch")
+                    .unwrap_or("none");
+                return Err(format!(
+                    "rpc_error:{code}:{kind}:{message} (context={context})"
+                ));
             }
 
             let payload = v.get("result").cloned().unwrap_or(v);

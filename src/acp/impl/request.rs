@@ -94,6 +94,8 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
 use anyhow::Result;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -122,9 +124,17 @@ use crate::acp::helpers::requirement::{
     resolve_learning_clarification_metrics,
 };
 use crate::flow_with_models::FlowModelSelector;
+use crate::governance::hardening::{
+    enforce_action, policy_bundle_for_target, task_budget_for_target, AuditLogger,
+    AutonomousEditAuditEntry, BudgetTracker, GovernanceAction, Idempotency, IdempotencyCache,
+};
 use crate::i18n::runtime::{t, tf};
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPromotionReport, MemoryStore};
 use crate::orchestration::task_router::TaskRouter;
+use crate::pua::{
+    DynamicQualityCompass, PuaExecutionReport, PuaFeedbackCollector, PuaRuleEngine, TaskContext,
+    TaskType,
+};
 use crate::reinforcement::{
     build_task_plan, build_workflow_generated_artifact, persist_clarification_session_artifact,
     persist_consultation_artifact, persist_execution_decision,
@@ -148,6 +158,11 @@ use crate::rpc_protocol::{value_to_id, JsonRpcRequest, RequestTraceContext};
 
 static TRACE_EVENTS: OnceLock<StdMutex<Vec<TraceEvent>>> = OnceLock::new();
 static ERROR_RESPONSE_IDS: OnceLock<StdMutex<HashSet<String>>> = OnceLock::new();
+static TOOL_BUDGET_TRACKERS: OnceLock<StdMutex<HashMap<String, BudgetTracker>>> = OnceLock::new();
+static TASK_EXECUTE_IDEMPOTENCY_CACHE: OnceLock<StdMutex<IdempotencyCache>> = OnceLock::new();
+static MCP_AUDIT_LOGGER: OnceLock<AuditLogger> = OnceLock::new();
+static PUA_FEEDBACK_COLLECTOR: OnceLock<PuaFeedbackCollector> = OnceLock::new();
+static PUA_RESPONSE_REPORTS: OnceLock<StdMutex<HashMap<String, String>>> = OnceLock::new();
 
 fn trace_events() -> &'static StdMutex<Vec<TraceEvent>> {
     TRACE_EVENTS.get_or_init(|| StdMutex::new(Vec::new()))
@@ -155,6 +170,263 @@ fn trace_events() -> &'static StdMutex<Vec<TraceEvent>> {
 
 fn error_response_ids() -> &'static StdMutex<HashSet<String>> {
     ERROR_RESPONSE_IDS.get_or_init(|| StdMutex::new(HashSet::new()))
+}
+
+fn pua_response_reports() -> &'static StdMutex<HashMap<String, String>> {
+    PUA_RESPONSE_REPORTS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+fn tool_budget_trackers() -> &'static StdMutex<HashMap<String, BudgetTracker>> {
+    TOOL_BUDGET_TRACKERS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+fn task_execute_idempotency_cache() -> &'static StdMutex<IdempotencyCache> {
+    TASK_EXECUTE_IDEMPOTENCY_CACHE
+        .get_or_init(|| StdMutex::new(IdempotencyCache::new(Duration::from_secs(300))))
+}
+
+fn mcp_audit_logger() -> &'static AuditLogger {
+    MCP_AUDIT_LOGGER.get_or_init(|| AuditLogger::new(Path::new(".goon").join("audit")))
+}
+
+fn pua_feedback_collector() -> &'static PuaFeedbackCollector {
+    PUA_FEEDBACK_COLLECTOR
+        .get_or_init(|| PuaFeedbackCollector::new(Path::new(".goon").join("learning")))
+}
+
+fn pua_report_enabled(server: &AcpServer, params: &Option<Value>) -> bool {
+    server.runtime_config.pua_report
+        || params
+            .as_ref()
+            .and_then(|value| value.get("debug_pua_report"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
+fn encode_pua_report(report: &PuaExecutionReport) -> Option<String> {
+    serde_json::to_vec(report)
+        .ok()
+        .map(|bytes| BASE64_STANDARD.encode(bytes))
+}
+
+fn stash_pua_report(id: Option<&Value>, encoded: String) {
+    let Some(id) = id else {
+        return;
+    };
+    if let Ok(mut guard) = pua_response_reports().lock() {
+        guard.insert(value_to_id(id), encoded);
+    }
+}
+
+fn take_pua_report(id: Option<&Value>) -> Option<String> {
+    let id = id?;
+    pua_response_reports()
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.remove(&value_to_id(id)))
+}
+
+fn inject_pua_report_into_result(result: Value, encoded: String) -> Value {
+    match result {
+        Value::Object(mut object) => {
+            let meta = object
+                .entry("meta".to_string())
+                .or_insert_with(|| json!({}));
+            if let Value::Object(meta_obj) = meta {
+                meta_obj.insert("x_pua_report".to_string(), Value::String(encoded));
+            }
+            Value::Object(object)
+        }
+        other => json!({
+            "value": other,
+            "meta": { "x_pua_report": encoded }
+        }),
+    }
+}
+
+fn inject_pua_report_into_error_data(data: Option<Value>, encoded: String) -> Value {
+    match data {
+        Some(Value::Object(mut object)) => {
+            let meta = object
+                .entry("meta".to_string())
+                .or_insert_with(|| json!({}));
+            if let Value::Object(meta_obj) = meta {
+                meta_obj.insert("x_pua_report".to_string(), Value::String(encoded));
+            }
+            Value::Object(object)
+        }
+        Some(other) => json!({
+            "data": other,
+            "meta": { "x_pua_report": encoded }
+        }),
+        None => json!({
+            "meta": { "x_pua_report": encoded }
+        }),
+    }
+}
+
+fn infer_pua_stage(method: &str) -> Option<&'static str> {
+    if matches!(method, "initialize" | "mcp.initialize") {
+        return Some("intake");
+    }
+    if matches!(method, "task.plan" | "workflow.clarify") {
+        return Some("planning");
+    }
+    if matches!(
+        method,
+        "task.execute"
+            | "workflow.execute"
+            | "workflow.generate"
+            | "workflow.research"
+            | "workflow.consult"
+            | "mcp.tools.call"
+            | "chat"
+    ) {
+        return Some("execution");
+    }
+    if matches!(method, "health" | "runtime.health" | "metrics.get") {
+        return Some("verification");
+    }
+    None
+}
+
+fn extract_pua_completed_actions(params: &Option<Value>, method: &str) -> Vec<String> {
+    let mut completed = vec![method.to_string()];
+    if let Some(raw) = params
+        .as_ref()
+        .and_then(|value| value.get("completed_actions"))
+        .and_then(Value::as_array)
+    {
+        for item in raw {
+            if let Some(text) = item.as_str() {
+                completed.push(text.to_string());
+            }
+        }
+    }
+    completed
+}
+
+fn infer_task_type(method: &str, params: &Option<Value>) -> TaskType {
+    let text_hint = params
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("task")
+                .and_then(Value::as_str)
+                .map(|s| s.to_ascii_lowercase())
+                .or_else(|| {
+                    value
+                        .get("action")
+                        .and_then(Value::as_str)
+                        .map(|s| s.to_ascii_lowercase())
+                })
+        })
+        .unwrap_or_default();
+
+    if text_hint.contains("security") || text_hint.contains("vuln") {
+        return TaskType::SecurityPatch;
+    }
+    if matches!(method, "workflow.generate" | "task.plan") {
+        return TaskType::FeatureAdd;
+    }
+    if matches!(method, "task.execute" | "workflow.execute") {
+        return TaskType::BugFix;
+    }
+    if matches!(method, "mcp.tools.call" | "workflow.consult") {
+        return TaskType::Refactor;
+    }
+    TaskType::Other
+}
+
+fn infer_file_count(params: &Option<Value>) -> usize {
+    params
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("changed_files")
+                .and_then(Value::as_array)
+                .map(|items| items.len())
+                .or_else(|| {
+                    value
+                        .get("files")
+                        .and_then(Value::as_array)
+                        .map(|items| items.len())
+                })
+        })
+        .unwrap_or(1)
+}
+
+fn infer_risk_score(method: &str, task_type: &TaskType) -> f64 {
+    if *task_type == TaskType::SecurityPatch {
+        return 0.9;
+    }
+    match method {
+        "mcp.tools.call" => 0.7,
+        "task.execute" | "workflow.execute" => 0.6,
+        "workflow.generate" => 0.5,
+        _ => 0.3,
+    }
+}
+
+fn classify_request_error_kind(error: &anyhow::Error) -> &'static str {
+    let message = error.to_string().to_ascii_lowercase();
+    if message.contains("pua") {
+        return "PuaViolation";
+    }
+    if message.contains("budget denied") || message.contains("budget exceeded") {
+        return "BudgetExceeded";
+    }
+    if message.contains("hardening policy denied") || message.contains("sandbox") {
+        return "SandboxBlocked";
+    }
+    "GeneralError"
+}
+
+fn attach_request_dispatch_context(error: anyhow::Error, method: &str) -> anyhow::Error {
+    let kind = classify_request_error_kind(&error);
+    error.context(format!(
+        "acp.handle_request.dispatch method={} kind={}",
+        method, kind
+    ))
+}
+
+fn build_pua_execution_report(
+    stage: &str,
+    completed_actions: &[String],
+    required_actions: &[String],
+    risk_score: f64,
+) -> PuaExecutionReport {
+    PuaExecutionReport {
+        stage: stage.to_string(),
+        status: if required_actions.iter().all(|required| {
+            completed_actions
+                .iter()
+                .any(|item| item.eq_ignore_ascii_case(required))
+        }) {
+            "pass".to_string()
+        } else {
+            "fail".to_string()
+        },
+        escalation_level: if risk_score >= 0.8 {
+            "L3"
+        } else if risk_score >= 0.6 {
+            "L2"
+        } else {
+            "L1"
+        }
+        .to_string(),
+        required_evidence: required_actions.to_vec(),
+        completed_checks: completed_actions.to_vec(),
+        missing_checks: required_actions
+            .iter()
+            .filter(|required| {
+                !completed_actions
+                    .iter()
+                    .any(|item| item.eq_ignore_ascii_case(required))
+            })
+            .cloned()
+            .collect::<Vec<_>>(),
+    }
 }
 
 fn mark_error_response(id: Option<&Value>) {
@@ -220,6 +492,80 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             // 允许混用
         }
     }
+
+    let pua_engine = PuaRuleEngine::new(server.pua_enforcement_plan.clone());
+    let task_type = infer_task_type(method, &request.params);
+    let task_context = TaskContext {
+        task_type: task_type.clone(),
+        file_count: infer_file_count(&request.params),
+        risk_score: infer_risk_score(method, &task_type),
+    };
+    let dynamic_compass = DynamicQualityCompass::default();
+    let dynamic_checks = dynamic_compass.get_checks(&task_context);
+    let dynamic_check_descriptions = dynamic_checks
+        .iter()
+        .map(|check| check.description.clone())
+        .collect::<Vec<_>>();
+
+    if let Err(violation) = pua_engine.check_red_lines(method) {
+        return send_error(
+            server,
+            request.id,
+            -32003,
+            format!("PUA red line violation: {}", violation.detail),
+            Some(json!({
+                "type": "pua_violation",
+                "kind": format!("{:?}", violation.kind),
+                "method": method,
+                "detail": violation.detail,
+                "quality_compass": dynamic_check_descriptions,
+            })),
+        )
+        .await;
+    }
+    if let Some(stage) = infer_pua_stage(method) {
+        let completed_actions = extract_pua_completed_actions(&request.params, method);
+        let required_actions = pua_engine.collect_evidence(stage);
+        let report = if required_actions.is_empty() {
+            build_pua_execution_report(
+                stage,
+                &completed_actions,
+                &required_actions,
+                task_context.risk_score,
+            )
+        } else {
+            pua_engine.generate_report(stage, &completed_actions)
+        };
+        if let Err(err) = pua_feedback_collector().collect(&report) {
+            debug!("failed to persist PUA feedback report: {}", err);
+        }
+        if pua_report_enabled(server, &request.params) {
+            if let Some(encoded) = encode_pua_report(&report) {
+                stash_pua_report(request.id.as_ref(), encoded);
+            }
+        }
+
+        if completed_actions.len() > 1 {
+            if let Err(violation) = pua_engine.validate_stage(stage, &completed_actions) {
+                return send_error(
+                    server,
+                    request.id,
+                    -32003,
+                    format!("PUA stage violation: {}", violation.detail),
+                    Some(json!({
+                        "type": "pua_violation",
+                        "kind": format!("{:?}", violation.kind),
+                        "stage": stage,
+                        "method": method,
+                        "detail": violation.detail,
+                        "quality_compass": dynamic_check_descriptions,
+                    })),
+                )
+                .await;
+            }
+        }
+    }
+
     let started = Instant::now();
     server.metrics.inc_active_requests();
     let trace = new_request_trace(server, &request);
@@ -412,7 +758,8 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             )
             .await
         }
-    };
+    }
+    .map_err(|error| attach_request_dispatch_context(error, request.method.as_str()));
 
     let duration_ms = started.elapsed().as_millis() as u64;
     let success = result.is_ok() && !take_error_response_mark(&trace.request_id);
@@ -508,9 +855,11 @@ async fn handle_mcp_tools_call(
     let structured = match execute_mcp_tool_call(server, name, &arguments).await {
         Ok(structured) => structured,
         Err(err) => {
+            record_mcp_tool_audit(name, &arguments, false, &err.to_string());
             return send_error(server, request_id, -32602, err.to_string(), None).await;
         }
     };
+    record_mcp_tool_audit(name, &arguments, true, "tool executed successfully");
 
     send_result(
         server,
@@ -521,6 +870,48 @@ async fn handle_mcp_tools_call(
         }),
     )
     .await
+}
+
+fn record_mcp_tool_audit(name: &str, arguments: &Value, success: bool, reason: &str) {
+    let action = governance_action_for_tool(name);
+    let reversible = matches!(action, GovernanceAction::Read | GovernanceAction::Search);
+    let file_path = audit_file_path_from_arguments(name, arguments);
+    let entry = AutonomousEditAuditEntry {
+        timestamp: crate::acp::prelude::now_ts().to_string(),
+        agent: "mcp.tools.call".to_string(),
+        file_path,
+        change_summary: format!(
+            "tool={} action={} status={}",
+            name,
+            governance_action_label(action),
+            if success { "ok" } else { "error" }
+        ),
+        approval_reason: reason.to_string(),
+        confidence_score: if success { 1.0 } else { 0.0 },
+        reversible,
+    };
+
+    if let Err(err) = mcp_audit_logger().record(&entry) {
+        debug!("failed to record mcp audit log: {}", err);
+    }
+}
+
+fn governance_action_label(action: GovernanceAction) -> &'static str {
+    match action {
+        GovernanceAction::Read => "read",
+        GovernanceAction::Search => "search",
+        GovernanceAction::Write => "write",
+        GovernanceAction::Shell => "shell",
+    }
+}
+
+fn audit_file_path_from_arguments(name: &str, arguments: &Value) -> String {
+    for key in ["path", "filePath", "sourcePdfPath"] {
+        if let Some(path) = arguments.get(key).and_then(Value::as_str) {
+            return path.to_string();
+        }
+    }
+    format!("tool:{name}")
 }
 
 /// Handle chat request
@@ -2048,6 +2439,36 @@ async fn handle_task_execute(
         .await;
     };
 
+    let idempotency_task_id = params
+        .get("task_id")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("conversation_id").and_then(Value::as_str))
+        .unwrap_or("task-execute");
+    let idempotency_phase = params
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("execute");
+    let idempotency_key = Idempotency::key(idempotency_task_id, idempotency_phase, task);
+
+    if let Some(cached) = {
+        let mut cache = task_execute_idempotency_cache()
+            .lock()
+            .map_err(|e| anyhow::anyhow!("failed to lock idempotency cache: {e}"))?;
+        cache.evict_expired();
+        cache
+            .get(&idempotency_key)
+            .map(|entry| entry.response.clone())
+    } {
+        let mut cached_response = cached;
+        if let Some(obj) = cached_response.as_object_mut() {
+            obj.insert(
+                "idempotency".to_string(),
+                json!({"hit": true, "key": idempotency_key}),
+            );
+        }
+        return send_result(server, request_id, cached_response).await;
+    }
+
     if !params
         .get("requirement_confirmed")
         .and_then(Value::as_bool)
@@ -2176,29 +2597,35 @@ async fn handle_task_execute(
         200,
     )?;
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "execution_mode": "runtime_execute",
-            "plan": plan,
-            "workflow": workflow,
-            "summary": summary,
-            "adaptive": {
-                "planning": adaptive_planning,
-                "execution_defaults": execution_context.adaptive_defaults,
-            },
-            "lazy_load": execution_report.lazy_load,
-            "artifacts": {
-                "plan": plan_path.display().to_string(),
-                "workflow": workflow_path.display().to_string(),
-                "execution": execution_path.display().to_string(),
-                "learning": learning_path.display().to_string(),
-            }
-        }),
-    )
-    .await
+    let response_payload = json!({
+        "ok": true,
+        "execution_mode": "runtime_execute",
+        "plan": plan,
+        "workflow": workflow,
+        "summary": summary,
+        "idempotency": {"hit": false, "key": idempotency_key},
+        "adaptive": {
+            "planning": adaptive_planning,
+            "execution_defaults": execution_context.adaptive_defaults,
+        },
+        "lazy_load": execution_report.lazy_load,
+        "artifacts": {
+            "plan": plan_path.display().to_string(),
+            "workflow": workflow_path.display().to_string(),
+            "execution": execution_path.display().to_string(),
+            "learning": learning_path.display().to_string(),
+        }
+    });
+
+    {
+        let mut cache = task_execute_idempotency_cache()
+            .lock()
+            .map_err(|e| anyhow::anyhow!("failed to lock idempotency cache: {e}"))?;
+        cache.evict_expired();
+        cache.insert(idempotency_key, response_payload.clone());
+    }
+
+    send_result(server, request_id, response_payload).await
 }
 
 #[derive(Clone)]
@@ -4160,6 +4587,54 @@ fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
 }
 
 async fn execute_mcp_tool_call(server: &AcpServer, name: &str, arguments: &Value) -> Result<Value> {
+    let policy = policy_bundle_for_target(server.runtime_config.deployment_target.as_deref());
+    let budget_scope = budget_scope_key(name, arguments);
+    let estimated_tokens = estimate_argument_tokens(arguments);
+    let pua_engine = PuaRuleEngine::new(server.pua_enforcement_plan.clone());
+    let remaining_tokens = {
+        let mut trackers = tool_budget_trackers()
+            .lock()
+            .map_err(|e| anyhow::anyhow!("failed to lock tool budget tracker: {e}"))?;
+        let tracker = trackers.entry(budget_scope.clone()).or_insert_with(|| {
+            BudgetTracker::new(task_budget_for_target(
+                server.runtime_config.deployment_target.as_deref(),
+            ))
+        });
+        tracker.check_wall_clock().map_err(|err| {
+            anyhow::anyhow!("budget denied tool '{name}' in scope '{budget_scope}': {err}")
+        })?;
+        tracker.record_tool_call().map_err(|err| {
+            anyhow::anyhow!("budget denied tool '{name}' in scope '{budget_scope}': {err}")
+        })?;
+        tracker
+            .consume_with_pua(estimated_tokens, &pua_engine)
+            .map_err(|err| {
+                anyhow::anyhow!("budget denied tool '{name}' in scope '{budget_scope}': {err}")
+            })?;
+        tracker.remaining_tokens()
+    };
+
+    let action = governance_action_for_tool(name);
+    let decision = enforce_action(&policy, action);
+    if !decision.allowed {
+        anyhow::bail!(
+            "hardening policy denied tool '{}' (policy={}, sandbox={}): {}",
+            name,
+            decision.policy_name,
+            decision.sandbox_level,
+            decision.reason
+        );
+    }
+    info!(
+        "hardening allow tool={} policy={} sandbox={} budget_scope={} estimated_tokens={} remaining_tokens={}",
+        name,
+        decision.policy_name,
+        decision.sandbox_level,
+        budget_scope,
+        estimated_tokens,
+        remaining_tokens
+    );
+
     match name {
         "acp_trace_get" => {
             let trace = build_trace_payload(arguments);
@@ -4215,6 +4690,38 @@ async fn execute_mcp_tool_call(server: &AcpServer, name: &str, arguments: &Value
             }
         }
     }
+}
+
+fn budget_scope_key(name: &str, arguments: &Value) -> String {
+    if let Some(task_id) = arguments.get("task_id").and_then(Value::as_str) {
+        return format!("task:{task_id}");
+    }
+    if let Some(conversation_id) = arguments.get("conversation_id").and_then(Value::as_str) {
+        return format!("conversation:{conversation_id}");
+    }
+    format!("tool:{name}")
+}
+
+fn estimate_argument_tokens(arguments: &Value) -> usize {
+    // Lightweight approximation keeps budget enforcement deterministic without model calls.
+    serde_json::to_string(arguments)
+        .map(|payload| (payload.len() / 4).max(1))
+        .unwrap_or(1)
+}
+
+fn governance_action_for_tool(name: &str) -> GovernanceAction {
+    let normalized = name.to_ascii_lowercase();
+    if normalized.contains("shell") || normalized.contains("command") {
+        return GovernanceAction::Shell;
+    }
+    if normalized.contains("write") || normalized.contains("edit") || normalized.contains("create")
+    {
+        return GovernanceAction::Write;
+    }
+    if normalized.contains("search") || normalized.contains("find") {
+        return GovernanceAction::Search;
+    }
+    GovernanceAction::Read
 }
 
 fn local_tool_descriptor(name: &'static str) -> Value {
@@ -4435,11 +4942,19 @@ async fn send_error(
     data: Option<Value>,
 ) -> Result<()> {
     mark_error_response(id.as_ref());
+    let data = match take_pua_report(id.as_ref()) {
+        Some(encoded) => Some(inject_pua_report_into_error_data(data, encoded)),
+        None => data,
+    };
     crate::acp::r#impl::io::send_error(server, id, code, message, data).await
 }
 
 /// Send result response
 async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Result<()> {
+    let result = match take_pua_report(id.as_ref()) {
+        Some(encoded) => inject_pua_report_into_result(result, encoded),
+        None => result,
+    };
     crate::acp::r#impl::io::send_result(server, id, result).await
 }
 
@@ -4521,8 +5036,8 @@ fn record_trace_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_vector_context_snippets, infer_workflow_parallelism, rebalance_execution_order,
-        session_id_for_task,
+        classify_request_error_kind, collect_vector_context_snippets, infer_workflow_parallelism,
+        rebalance_execution_order, session_id_for_task,
     };
     use crate::vector::VectorStore;
 
@@ -4618,5 +5133,23 @@ mod tests {
         assert!(snippets
             .iter()
             .any(|s| s.contains("semantic-phase knowledge")));
+    }
+
+    #[test]
+    fn classify_request_error_kind_detects_pua_violation() {
+        let error = anyhow::anyhow!("PUA red line violation: blocked action");
+        assert_eq!(classify_request_error_kind(&error), "PuaViolation");
+    }
+
+    #[test]
+    fn classify_request_error_kind_detects_budget_exceeded() {
+        let error = anyhow::anyhow!("budget denied tool 'x' in scope 'y': budget exceeded");
+        assert_eq!(classify_request_error_kind(&error), "BudgetExceeded");
+    }
+
+    #[test]
+    fn classify_request_error_kind_detects_sandbox_blocked() {
+        let error = anyhow::anyhow!("hardening policy denied tool 'shell': sandbox strict");
+        assert_eq!(classify_request_error_kind(&error), "SandboxBlocked");
     }
 }

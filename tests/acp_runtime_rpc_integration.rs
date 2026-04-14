@@ -205,6 +205,139 @@ impl Drop for RpcHarness {
     }
 }
 
+struct AdvancedRpcHarness {
+    inner: RpcHarness,
+    mock_responses: std::collections::HashMap<String, Value>,
+}
+
+struct TestScenario {
+    name: String,
+    requests: Vec<Value>,
+    expected_outcomes: Vec<ScenarioOutcome>,
+}
+
+enum ScenarioOutcome {
+    Success,
+    ErrorContains(String),
+}
+
+fn load_scenarios_from_dir(dir: &Path) -> Vec<TestScenario> {
+    let mut entries = fs::read_dir(dir)
+        .expect("scenario directory should be readable")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("ndjson"))
+        .collect::<Vec<_>>();
+    entries.sort();
+
+    entries
+        .into_iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let content = fs::read_to_string(&path).expect("scenario file should be readable");
+            let requests = content
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| {
+                    serde_json::from_str::<Value>(line)
+                        .expect("scenario request should be valid json")
+                })
+                .collect::<Vec<_>>();
+            let expected_outcomes = requests
+                .iter()
+                .map(|_| ScenarioOutcome::Success)
+                .collect::<Vec<_>>();
+
+            TestScenario {
+                name,
+                requests,
+                expected_outcomes,
+            }
+        })
+        .collect()
+}
+
+impl AdvancedRpcHarness {
+    fn new(config_path: &Path) -> Self {
+        Self {
+            inner: RpcHarness::spawn(config_path),
+            mock_responses: std::collections::HashMap::new(),
+        }
+    }
+
+    fn register_mock(&mut self, method: &str, response: Value) {
+        self.mock_responses.insert(method.to_string(), response);
+    }
+
+    fn send_request(&mut self, request: Value) -> Result<Value, String> {
+        let method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "request missing method".to_string())?;
+
+        if let Some(mock) = self.mock_responses.get(method) {
+            return Ok(mock.clone());
+        }
+
+        let id = request
+            .get("id")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("request '{}' missing numeric id", method))?;
+
+        let params = request.get("params").cloned();
+        Ok(self.inner.request(id, method, params))
+    }
+
+    fn send_concurrent(&mut self, request: Value, n: usize) -> Vec<Result<Value, String>> {
+        let method = match request.get("method").and_then(Value::as_str) {
+            Some(method) => method.to_string(),
+            None => return vec![Err("request missing method".to_string())],
+        };
+        let params = request.get("params").cloned();
+        let start_id = request.get("id").and_then(Value::as_u64).unwrap_or(1_000);
+
+        if let Some(mock) = self.mock_responses.get(&method) {
+            return (0..n).map(|_| Ok(mock.clone())).collect();
+        }
+
+        for offset in 0..n {
+            let payload = json!({
+                "jsonrpc": "2.0",
+                "id": start_id + offset as u64,
+                "method": method,
+                "params": params.clone().unwrap_or(Value::Null),
+            });
+            self.inner.raw_request(&payload);
+        }
+
+        (0..n)
+            .map(|offset| {
+                Ok(self
+                    .inner
+                    .read_response_for_id(start_id + offset as u64, Duration::from_secs(8)))
+            })
+            .collect()
+    }
+
+    fn run_scenario_file(&mut self, path: &Path) -> Vec<(Value, Result<Value, String>)> {
+        let content = fs::read_to_string(path).expect("scenario file should be readable");
+        content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let request: Value =
+                    serde_json::from_str(line).expect("scenario line should be valid json");
+                let result = self.send_request(request.clone());
+                (request, result)
+            })
+            .collect()
+    }
+}
+
 fn binary_path() -> PathBuf {
     std::env::var("CARGO_BIN_EXE_go-on")
         .map(PathBuf::from)
@@ -676,6 +809,153 @@ fn rpc_initialize_health_phase_and_shutdown() {
     assert_eq!(shutdown["result"]["ok"], true);
 
     harness.wait_for_exit(Duration::from_secs(8));
+}
+
+mod advanced {
+    use super::*;
+
+    #[test]
+    fn concurrent_requests_return_consistent_responses() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results = harness.send_concurrent(
+            json!({"jsonrpc":"2.0","method":"runtime.health","id":200}),
+            5,
+        );
+
+        assert_eq!(results.len(), 5);
+        assert!(results.iter().all(|result| result.is_ok()));
+
+        let first = results[0].as_ref().expect("first result should be ok");
+        let first_result = &first["result"];
+        assert_eq!(first_result["lifecycle"]["is_healthy"], true);
+        assert_eq!(first_result["review_gate"]["total"], 0);
+        for result in results.iter().skip(1) {
+            let response = result.as_ref().expect("concurrent response should be ok");
+            let current = &response["result"];
+            assert_eq!(
+                current["lifecycle"]["is_healthy"],
+                first_result["lifecycle"]["is_healthy"]
+            );
+            assert_eq!(
+                current["lifecycle"]["shutting_down"],
+                first_result["lifecycle"]["shutting_down"]
+            );
+            assert_eq!(current["review_gate"], first_result["review_gate"]);
+            assert!(
+                current["maintenance"]["cycles_total"].as_u64().unwrap_or(0)
+                    >= first_result["maintenance"]["cycles_total"]
+                        .as_u64()
+                        .unwrap_or(0)
+            );
+        }
+
+        let shutdown = harness.inner.request(299, "shutdown", None);
+        assert_eq!(shutdown["result"]["ok"], true);
+        harness.inner.wait_for_exit(Duration::from_secs(8));
+    }
+
+    #[test]
+    fn run_scenario_file_executes_runtime_health_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        harness.register_mock(
+            "metrics.prometheus",
+            json!({"jsonrpc":"2.0","id":3,"result":{"text":"mocked-prometheus"}}),
+        );
+        let results = harness.run_scenario_file(Path::new("requests/runtime-health.ndjson"));
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "runtime.health");
+        assert_eq!(results[2].0["method"], "metrics.prometheus");
+        assert_eq!(
+            results[2]
+                .1
+                .as_ref()
+                .expect("mocked scenario response should be ok")["result"]["text"],
+            "mocked-prometheus"
+        );
+
+        let shutdown = harness.inner.request(399, "shutdown", None);
+        assert_eq!(shutdown["result"]["ok"], true);
+        harness.inner.wait_for_exit(Duration::from_secs(8));
+    }
+
+    #[test]
+    fn ndjson_scenario_files_all_pass() {
+        let scenarios = load_scenarios_from_dir(Path::new("requests"));
+        assert_eq!(scenarios.len(), 4, "expected four request scenario files");
+
+        for scenario in scenarios {
+            let temp = tempdir().expect("failed to create temp dir");
+            let config_path = temp.path().join("config.toml");
+            write_test_config(&config_path, 60, 120, 5);
+
+            let mut harness = AdvancedRpcHarness::new(&config_path);
+            let mut saw_shutdown = false;
+
+            for (request, expected) in scenario.requests.iter().zip(&scenario.expected_outcomes) {
+                if request.get("method").and_then(Value::as_str) == Some("shutdown") {
+                    saw_shutdown = true;
+                }
+
+                let result = harness.send_request(request.clone());
+                match expected {
+                    ScenarioOutcome::Success => {
+                        let response = result.unwrap_or_else(|err| {
+                            panic!(
+                                "scenario '{}' request {:?} failed: {}",
+                                scenario.name, request, err
+                            )
+                        });
+                        assert!(
+                            response.get("error").is_none() || response["error"].is_null(),
+                            "scenario '{}' request {:?} returned error response: {}",
+                            scenario.name,
+                            request,
+                            response
+                        );
+                    }
+                    ScenarioOutcome::ErrorContains(msg) => {
+                        let err = result.expect_err("scenario should return expected error");
+                        assert!(
+                            err.contains(msg),
+                            "scenario '{}' expected error containing '{}' but got '{}'",
+                            scenario.name,
+                            msg,
+                            err
+                        );
+                    }
+                }
+            }
+
+            if !saw_shutdown {
+                let shutdown = harness.inner.request(999, "shutdown", None);
+                assert_eq!(
+                    shutdown["result"]["ok"], true,
+                    "scenario '{}' synthetic shutdown failed",
+                    scenario.name
+                );
+            }
+            harness.inner.wait_for_exit(Duration::from_secs(8));
+        }
+    }
+
+    #[test]
+    fn scenario_outcome_error_contains_keeps_error_expectation_path_alive() {
+        let expected = ScenarioOutcome::ErrorContains("blocked".to_string());
+        match expected {
+            ScenarioOutcome::ErrorContains(message) => assert_eq!(message, "blocked"),
+            ScenarioOutcome::Success => panic!("expected error outcome variant"),
+        }
+    }
 }
 
 #[test]

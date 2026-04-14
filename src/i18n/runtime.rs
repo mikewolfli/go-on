@@ -332,6 +332,8 @@ pub fn current_language() -> Language {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
+    use std::path::PathBuf;
 
     #[test]
     fn test_language_detection() {
@@ -356,5 +358,43 @@ mod tests {
     fn test_fallback_to_english() {
         let unknown = Language::from_code("unknown_lang");
         assert_eq!(unknown, Language::EnUS);
+    }
+
+    #[test]
+    fn onboarding_and_status_keys_exist_in_all_languages() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let required = [
+            "status.secret_line",
+            "status.recommended_item",
+            "setup.onboarding_intro",
+            "setup.onboarding_option_1",
+            "setup.onboarding_option_2",
+            "setup.onboarding_option_3",
+            "setup.onboarding_select",
+            "setup.onboarding_done_next",
+            "setup.onboarding_skipped",
+            "setup.onboarding_next",
+        ];
+
+        for lang in ["en_US", "zh_CN", "zh_TW"] {
+            let path = root.join("languages").join(format!("{}.json", lang));
+            let raw = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
+            let json: Value = serde_json::from_str(&raw)
+                .unwrap_or_else(|e| panic!("failed to parse {}: {}", path.display(), e));
+            let messages = json
+                .get("messages")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("messages object missing in {}", path.display()));
+
+            for key in required {
+                assert!(
+                    messages.contains_key(key),
+                    "missing key '{}' in {}",
+                    key,
+                    path.display()
+                );
+            }
+        }
     }
 }
