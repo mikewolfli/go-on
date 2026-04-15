@@ -104,7 +104,10 @@ impl AdaptiveModelSelector {
             })
             .collect::<Vec<_>>();
         ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        ranked.into_iter().map(|(agent_name, _)| agent_name).collect()
+        ranked
+            .into_iter()
+            .map(|(agent_name, _)| agent_name)
+            .collect()
     }
 
     pub fn snapshot(&self) -> AdaptiveSelectorSnapshot {

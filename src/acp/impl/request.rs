@@ -2067,11 +2067,11 @@ async fn handle_health_probes(server: &AcpServer, request_id: Option<Value>) -> 
 
 async fn handle_runtime_stability(
     server: &AcpServer,
-    params: Value,
+    _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
     let status = server.get_status();
-    let metrics = server.metrics.snapshot();
+    let _metrics = server.metrics.snapshot();
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
         config_path,

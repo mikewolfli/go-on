@@ -648,6 +648,12 @@ cargo test run_scenario_file_executes_observability_alerts_benchmark_requests --
 cargo test ndjson_scenario_files_all_pass -- --nocapture
 echo "✅ BLUE15 P2-2 可观测性完善（追踪覆盖率与告警）主链测试通过"
 
+# 6af2 BLUE15 P0-2 运行稳定性基线（健康检查、优雅停机、配置校验）主链测试
+echo "=== 步骤6af2: 运行BLUE15 P0-2 运行稳定性基线（健康检查、优雅停机、配置校验）主链测试 ==="
+cargo test run_scenario_file_executes_runtime_stability_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 P0-2 运行稳定性基线（健康检查、优雅停机、配置校验）主链测试通过"
+
 # 6ag BLUE15 P0-1 生产化安全基线（鉴权、限流、反向代理、TLS）主链测试
 echo "=== 步骤6ag: 运行BLUE15 P0-1 生产化安全基线（鉴权、限流、反向代理、TLS）主链测试 ==="
 cargo test run_scenario_file_executes_security_baseline_benchmark_requests -- --nocapture

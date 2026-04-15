@@ -1151,6 +1151,43 @@ mod advanced {
     }
 
     #[test]
+    fn run_scenario_file_executes_runtime_stability_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/runtime-stability-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 5);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "runtime.stability");
+        assert_eq!(results[2].0["method"], "config.reload");
+        assert_eq!(results[3].0["method"], "runtime.health");
+        assert_eq!(results[4].0["method"], "shutdown");
+
+        let stability = results[1]
+            .1
+            .as_ref()
+            .expect("runtime.stability should succeed");
+        assert!(
+            stability["result"].get("stability").is_some(),
+            "runtime.stability should return stability payload"
+        );
+        assert!(
+            stability["result"]["stability"].get("checks").is_some(),
+            "runtime.stability should include baseline checks"
+        );
+        assert!(
+            stability["result"]["stability"]
+                .get("safe_restart_ready")
+                .is_some(),
+            "runtime.stability should report safe restart readiness"
+        );
+    }
+
+    #[test]
     fn run_scenario_file_executes_security_baseline_benchmark_requests() {
         let temp = tempdir().expect("failed to create temp dir");
         let config_path = temp.path().join("config.toml");
@@ -1548,8 +1585,8 @@ mod advanced {
         let scenarios = load_scenarios_from_dir(Path::new("requests"));
         assert_eq!(
             scenarios.len(),
-            22,
-            "expected twenty two request scenario files"
+            23,
+            "expected twenty three request scenario files"
         );
 
         for scenario in scenarios {

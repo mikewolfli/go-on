@@ -1232,6 +1232,165 @@ function activate(context) {
             vscode.window.showErrorMessage(`rl.alignment.offline_eval failed: ${error.message}`);
         }
     });
+    let hardnessStatusRpcCommand = vscode.commands.registerCommand('go-on.hardnessStatus', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        const task = await vscode.window.showInputBox({
+            prompt: 'Task text for hardness.status',
+            placeHolder: 'Describe the task to evaluate routing hardness',
+            value: 'Assess multi-file routing and budget orchestration update'
+        });
+        if (task === undefined) {
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('hardness.status', {
+                task,
+                changed_files: ['src/acp/impl/request.rs', 'tests/acp_runtime_rpc_integration.rs'],
+                tool_dependencies: ['search_files', 'read_file', 'write_file']
+            });
+            const hardness = result?.hardness ?? {};
+            const budget = hardness?.budget ?? {};
+            vscode.window.showInformationMessage(`hardness.status: level=${String(hardness?.level ?? 'unknown')}, score=${Number(hardness?.score ?? 0).toFixed(1)}, timeout=${Number(budget?.timeout_seconds ?? 0)}s, parallelism_cap=${Number(budget?.parallelism_cap ?? 1)}, mode=${String(budget?.recommended_mode ?? 'agent')}, reviews=${Number(budget?.required_reviews ?? 1)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`hardness.status failed: ${error.message}`);
+        }
+    });
+    let costStatusRpcCommand = vscode.commands.registerCommand('go-on.costStatus', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        const task = await vscode.window.showInputBox({
+            prompt: 'Task text for cost.status',
+            placeHolder: 'Describe the task to evaluate token/cost governance',
+            value: 'Optimize token budget and model cost routing for multi-step task'
+        });
+        if (task === undefined) {
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('cost.status', {
+                task,
+                changed_files: ['src/acp/impl/request.rs', 'vscode-addon/src/extension.ts'],
+                tool_dependencies: ['search_files', 'read_file', 'write_file'],
+                max_output_tokens: 1800
+            });
+            const cost = result?.cost ?? {};
+            const budget = cost?.budget ?? {};
+            const compression = cost?.compression ?? {};
+            const routing = cost?.routing ?? {};
+            const telemetry = cost?.telemetry ?? {};
+            vscode.window.showInformationMessage(`cost.status: class=${String(budget?.budget_class ?? 'unknown')}, input=${Number(budget?.input_tokens_estimate ?? 0)}, output=${Number(budget?.output_tokens_budget ?? 0)}, total=${Number(budget?.total_tokens_budget ?? 0)}, compress=${Boolean(compression?.triggered)}, tier=${String(routing?.preferred_model_tier ?? 'economy')}, est_cost=${Number(telemetry?.estimated_total_cost ?? 0).toFixed(4)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`cost.status failed: ${error.message}`);
+        }
+    });
+    let configBaselineRpcCommand = vscode.commands.registerCommand('go-on.configBaseline', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('config.baseline');
+            const baseline = result?.baseline ?? {};
+            const status = String(baseline?.status ?? 'unknown');
+            const protocolMode = String(baseline?.effective?.protocol_mode ?? 'auto');
+            const strictEnabled = baseline?.effective?.production_strict === true;
+            const migration = baseline?.migration ?? {};
+            const legacyCount = Number(migration?.legacy_key_count ?? 0);
+            const explicitCount = Number(baseline?.file?.runtime_explicit_field_count ?? 0);
+            vscode.window.showInformationMessage(`config.baseline: status=${status}, protocol=${protocolMode}, strict=${strictEnabled ? 'on' : 'off'}, runtime_explicit=${explicitCount}, legacy_keys=${legacyCount}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`config.baseline failed: ${error.message}`);
+        }
+    });
+    let errorContractRpcCommand = vscode.commands.registerCommand('go-on.errorContract', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('error.contract');
+            const contract = result?.contract ?? {};
+            const version = String(contract?.version ?? 'unknown');
+            const kinds = Array.isArray(contract?.kinds) ? contract.kinds : [];
+            const retryableKinds = kinds.filter((item) => item?.retry?.retryable === true).length;
+            vscode.window.showInformationMessage(`error.contract: version=${version}, kinds=${kinds.length}, retryable_kinds=${retryableKinds}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`error.contract failed: ${error.message}`);
+        }
+    });
+    let buildReproRpcCommand = vscode.commands.registerCommand('go-on.buildRepro', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('build.repro');
+            const build = result?.build ?? {};
+            const repro = build?.reproducibility ?? {};
+            const requiredPresent = Number(repro?.required_present ?? 0);
+            const requiredTotal = Number(repro?.required_total ?? 0);
+            const status = String(build?.status ?? 'unknown');
+            const commit = String(build?.build?.git_commit_short ?? '-');
+            const releaseItems = Array.isArray(build?.release_manifest?.items)
+                ? build.release_manifest.items.length
+                : 0;
+            vscode.window.showInformationMessage(`build.repro: status=${status}, required=${requiredPresent}/${requiredTotal}, commit=${commit}, release_items=${releaseItems}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`build.repro failed: ${error.message}`);
+        }
+    });
+    let dataLifecycleRpcCommand = vscode.commands.registerCommand('go-on.dataLifecycle', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('data.lifecycle', { execute_gc: false });
+            const lifecycle = result?.lifecycle ?? {};
+            const storage = lifecycle?.storage ?? {};
+            const waterline = storage?.waterline ?? {};
+            const status = String(waterline?.status ?? 'unknown');
+            const totalBytes = Number(storage?.total_bytes ?? 0);
+            const targetCount = Array.isArray(storage?.targets) ? storage.targets.length : 0;
+            const alerts = Array.isArray(waterline?.alerts) ? waterline.alerts.length : 0;
+            vscode.window.showInformationMessage(`data.lifecycle: status=${status}, total_bytes=${totalBytes}, targets=${targetCount}, alerts=${alerts}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`data.lifecycle failed: ${error.message}`);
+        }
+    });
+    let optimizationPeakRpcCommand = vscode.commands.registerCommand('go-on.optimizationPeak', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('optimization.peak', {
+                task: 'BLUE15 one-shot optimization peak',
+                freeze_mode: 'strict'
+            });
+            const peak = result?.peak ?? {};
+            const overallPass = peak?.overall_pass === true;
+            const gates = Array.isArray(peak?.gates) ? peak.gates : [];
+            const passed = gates.filter((item) => item?.passed === true).length;
+            const status = String(peak?.status ?? 'unknown');
+            const version = String(peak?.version ?? '-');
+            vscode.window.showInformationMessage(`optimization.peak: status=${status}, overall_pass=${overallPass}, gates=${passed}/${gates.length}, version=${version}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`optimization.peak failed: ${error.message}`);
+        }
+    });
     let autotuneStatusRpcCommand = vscode.commands.registerCommand('go-on.autotuneStatus', async () => {
         if (!goOnManager.isRunning()) {
             vscode.window.showErrorMessage('Go-On is not running. Start it first.');
@@ -1506,6 +1665,24 @@ function activate(context) {
             vscode.window.showErrorMessage(`quality.baseline failed: ${error.message}`);
         }
     });
+    // runtime.stability — check runtime stability baseline
+    let runtimeStabilityRpcCommand = vscode.commands.registerCommand('go-on.runtimeStability', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('runtime.stability');
+            const stability = result?.stability ?? {};
+            const checks = stability?.checks ?? [];
+            const summary = stability?.summary ?? {};
+            const checkSummary = checks.map((check) => `${check.name}=${check.status}`).join(', ');
+            vscode.window.showInformationMessage(`runtime.stability: score=${Number(stability?.score ?? 0)}, level=${stability?.level ?? 'unknown'}, safe_restart=${Boolean(stability?.safe_restart_ready)}, health_errors=${Number(summary?.health_errors ?? 0)}, health_warnings=${Number(summary?.health_warnings ?? 0)}, config_warnings=${Number(summary?.config_warnings ?? 0)}, strict_violations=${Number(summary?.strict_violations ?? 0)}, checks=[${checkSummary}]`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`runtime.stability failed: ${error.message}`);
+        }
+    });
     let harnessStatusRpcCommand = vscode.commands.registerCommand('go-on.harnessStatus', async () => {
         if (!goOnManager.isRunning()) {
             vscode.window.showErrorMessage('Go-On is not running. Start it first.');
@@ -1734,7 +1911,7 @@ function activate(context) {
         }
     });
     // Runtime download/start is intentionally deferred until the Chat view is opened.
-    context.subscriptions.push(startCommand, stopCommand, sendRequestCommand, healthCheckCommand, healthProbesCommand, breakerStatusCommand, cacheClearCommand, vectorClearCommand, configReloadCommand, shutdownCommand, openChatCommand, closeChatCommand, openSettingsCommand, clearChatCommand, exportChatCommand, newSessionCommand, switchSessionCommand, createWorkflowCommand, runWorkflowCommand, showProcessFlowCommand, workflowExecuteRpcCommand, taskPlanRpcCommand, taskExecuteRpcCommand, learningSummaryRpcCommand, learningGuardrailRpcCommand, learningReplayRpcCommand, knowledgeDistillRpcCommand, rlAlignmentEvalRpcCommand, autotuneStatusRpcCommand, selectorStatusRpcCommand, governanceStatusRpcCommand, governancePlanGetRpcCommand, governanceAuditRecentRpcCommand, refreshStatusMonitorCommand, keyringSetCommand, keyringGetCommand, keyringDeleteCommand, keyringListCommand, applyDefaultConfigCommand, updateWorkflowMappingCommand, updateRulesCommand, autotuneGetRpcCommand, autotuneResetRpcCommand, metricsGetRpcCommand, metricsResetRpcCommand, traceMetricsRpcCommand, qualityBaselineRpcCommand, harnessStatusRpcCommand, traceGetRpcCommand, observabilityAlertsRpcCommand, securityBaselineRpcCommand, breakerResetRpcCommand, breakerRecoveryRpcCommand, maintenanceGcRpcCommand, checkpointCreateRpcCommand, checkpointListRpcCommand, conversationRollbackRpcCommand, primarySecondarySummaryRpcCommand);
+    context.subscriptions.push(startCommand, stopCommand, sendRequestCommand, healthCheckCommand, healthProbesCommand, breakerStatusCommand, cacheClearCommand, vectorClearCommand, configReloadCommand, shutdownCommand, openChatCommand, closeChatCommand, openSettingsCommand, clearChatCommand, exportChatCommand, newSessionCommand, switchSessionCommand, createWorkflowCommand, runWorkflowCommand, showProcessFlowCommand, workflowExecuteRpcCommand, taskPlanRpcCommand, taskExecuteRpcCommand, learningSummaryRpcCommand, learningGuardrailRpcCommand, learningReplayRpcCommand, knowledgeDistillRpcCommand, rlAlignmentEvalRpcCommand, hardnessStatusRpcCommand, costStatusRpcCommand, configBaselineRpcCommand, errorContractRpcCommand, buildReproRpcCommand, dataLifecycleRpcCommand, optimizationPeakRpcCommand, autotuneStatusRpcCommand, selectorStatusRpcCommand, governanceStatusRpcCommand, governancePlanGetRpcCommand, governanceAuditRecentRpcCommand, refreshStatusMonitorCommand, keyringSetCommand, keyringGetCommand, keyringDeleteCommand, keyringListCommand, applyDefaultConfigCommand, updateWorkflowMappingCommand, updateRulesCommand, autotuneGetRpcCommand, autotuneResetRpcCommand, metricsGetRpcCommand, metricsResetRpcCommand, traceMetricsRpcCommand, qualityBaselineRpcCommand, runtimeStabilityRpcCommand, harnessStatusRpcCommand, traceGetRpcCommand, observabilityAlertsRpcCommand, securityBaselineRpcCommand, breakerResetRpcCommand, breakerRecoveryRpcCommand, maintenanceGcRpcCommand, checkpointCreateRpcCommand, checkpointListRpcCommand, conversationRollbackRpcCommand, primarySecondarySummaryRpcCommand);
     // Guarantee chat visibility even when the activity bar icon is hidden by layout settings.
     setTimeout(() => {
         void vscode.commands.executeCommand('go-on.openChat');

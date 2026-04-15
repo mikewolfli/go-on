@@ -832,3 +832,18 @@ BLUE15 的实施方向应从“可上线”出发，而不是从“架构形态�
 1. “B15-X11 总体一次优化到顶”子目标完成率：100%。
 2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
 3. BLUE15 扩展清单完成率：100%（按 X1~X11 粗略计，已完成 11/11 个扩展大项：X5、X1、X2、X3、X4、X6、X7、X8、X9、X10、X11）。
+
+## 三十七、本轮实施回写（2026-04-15，续24）
+
+本轮目标：补齐 B15-P0-2 / B15-P0-1 的主链路门禁与回归证据，确保“三端能力 + 场景回放 + CI 闸门”一致闭环。
+
+已完成项（一个大项闭环）：
+1. backend 主链场景增强：`requests/runtime-stability-benchmark.ndjson` 由 4 步扩展为 5 步，固定覆盖 `initialize -> runtime.stability -> config.reload -> runtime.health -> shutdown`，补齐“配置校验”链路证据。
+2. backend 集成测试新增 `run_scenario_file_executes_runtime_stability_benchmark_requests`：验证 `runtime.stability` 返回 `stability/checks/safe_restart_ready` 关键字段，并校验上述 5 步主链顺序。
+3. CI 门禁补齐：`test_ci.sh` 新增 `6af2 BLUE15 P0-2` 步骤，强制执行 runtime stability 场景测试 + 全场景回归（`ndjson_scenario_files_all_pass`）。
+4. B15-P0-1 主链状态复核：`security.baseline` 场景、集成测试与 CI 步骤 `6ag` 保持可执行，形成与 P0-2 并列的上线收口双门禁。
+
+本轮完成率：
+1. “B15-P0-2 运行稳定性基线（主链路接入）”子目标完成率：100%。
+2. “B15-P0-1 生产化安全基线（主链路接入）”子目标完成率：100%（复核通过，保持闭环）。
+3. BLUE15 基线清单总体完成率：保持 100%（13/13，且 P0 双项主链门禁已显式固化）。

@@ -19,11 +19,11 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tracing::{info, warn};
 
-use crate::acp::helpers::conversation::stream_would_exceed_limits;
 use crate::acp::helpers::context::{
     probe_agent_runtime_readiness, request_timeout, run_with_optional_timeout,
     AgentRuntimeReadiness,
 };
+use crate::acp::helpers::conversation::stream_would_exceed_limits;
 use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
@@ -308,7 +308,12 @@ async fn filter_runtime_ready_agents(
 }
 
 fn has_flow_phase(config: &crate::config::AppConfig, phase: &str) -> bool {
-    config.flow.phases.iter().any(|candidate| candidate == phase) || config.phases.contains_key(phase)
+    config
+        .flow
+        .phases
+        .iter()
+        .any(|candidate| candidate == phase)
+        || config.phases.contains_key(phase)
 }
 
 fn infer_adaptive_phase(
@@ -931,7 +936,10 @@ async fn run_agent_collecting(
     };
 
     run_with_optional_timeout(timeout_duration, collect, |duration| {
-        anyhow::anyhow!("agent request timed out after {}s", duration.as_secs().max(1))
+        anyhow::anyhow!(
+            "agent request timed out after {}s",
+            duration.as_secs().max(1)
+        )
     })
     .await
     .inspect_err(|err| {
