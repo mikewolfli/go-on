@@ -3,9 +3,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.GoOnAdvancedEditProvider = void 0;
 const vscode = require("vscode");
 class GoOnAdvancedEditProvider {
-    constructor(manager, context) {
-        this.manager = manager;
-        this.context = context;
+    constructor(_manager, _context) {
+        this.manager = _manager;
+        this.context = _context;
         // Register code actions
         this.registerCodeActions();
         // Register commands
@@ -14,7 +14,7 @@ class GoOnAdvancedEditProvider {
     registerCodeActions() {
         // Provide code actions for refactoring
         this.context.subscriptions.push(vscode.languages.registerCodeActionsProvider(['javascript', 'typescript', 'python', 'java', 'cpp', 'c', 'go', 'rust'], {
-            provideCodeActions: (document, range, context, token) => {
+            provideCodeActions: (document, range, _context, _token) => {
                 const actions = [];
                 // Add Go-On specific code actions
                 if (range.isEmpty) {
@@ -25,6 +25,16 @@ class GoOnAdvancedEditProvider {
                 return actions;
             }
         }));
+    }
+    extractResponseText(result) {
+        if (!result || typeof result !== 'object') {
+            return undefined;
+        }
+        const candidate = result.response;
+        return typeof candidate === 'string' ? candidate : undefined;
+    }
+    getErrorMessage(error) {
+        return error instanceof Error ? error.message : String(error);
     }
     registerCommands() {
         // Register advanced editing commands
@@ -95,14 +105,15 @@ class GoOnAdvancedEditProvider {
             const result = await this.manager.sendRequest('chat', {
                 messages: [{ role: 'user', content: prompt }]
             });
-            if (!result?.response) {
+            const responseText = this.extractResponseText(result);
+            if (!responseText) {
                 vscode.window.showErrorMessage('No response from AI service');
                 return;
             }
-            await this.handleResultOutput(result.response, editor, selection, document.languageId);
+            await this.handleResultOutput(responseText, editor, selection, document.languageId);
         }
         catch (error) {
-            vscode.window.showErrorMessage(`Edit failed: ${error.message}`);
+            vscode.window.showErrorMessage(`Edit failed: ${this.getErrorMessage(error)}`);
         }
     }
     async handleResultOutput(resultText, editor, selection, language) {
@@ -190,14 +201,15 @@ class GoOnAdvancedEditProvider {
             const result = await this.manager.sendRequest('chat', {
                 messages: [{ role: 'user', content: prompt }]
             });
-            if (!result?.response) {
+            const responseText = this.extractResponseText(result);
+            if (!responseText) {
                 vscode.window.showErrorMessage('No response from AI service');
                 return;
             }
-            await this.handleResultOutput(result.response, editor, selection, document.languageId);
+            await this.handleResultOutput(responseText, editor, selection, document.languageId);
         }
         catch (error) {
-            vscode.window.showErrorMessage(`Refactoring failed: ${error.message}`);
+            vscode.window.showErrorMessage(`Refactoring failed: ${this.getErrorMessage(error)}`);
         }
     }
     buildPrompt(action, code, language, details) {

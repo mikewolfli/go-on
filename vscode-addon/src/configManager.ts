@@ -7,7 +7,6 @@
  * - Managing language settings
  */
 
-import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
@@ -63,7 +62,7 @@ export interface AgentConfig {
     secret_key_env?: string;
     model?: string;
     supports_system?: boolean;
-    [key: string]: any;
+    [key: string]: unknown;
     region?: string;
 }
 
@@ -73,7 +72,7 @@ export interface PhaseConfig {
     fallback: boolean;
     principles: string[];
     options?: {
-        [key: string]: any;
+        [key: string]: unknown;
     };
 }
 
@@ -95,7 +94,7 @@ export interface GoOnConfig {
     phases: {
         [key: string]: PhaseConfig;
     };
-    [key: string]: any;
+    [key: string]: unknown;
 }
 
 class ConfigManager {
@@ -168,7 +167,11 @@ class ConfigManager {
     private parseTOML(content: string): GoOnConfig {
         // This is a simplified TOML parser
         // For production, consider using a proper TOML library
-        const config: any = {
+        const config: {
+            [key: string]: unknown;
+            agents: Record<string, Record<string, unknown>>;
+            phases: Record<string, Record<string, unknown>>;
+        } = {
             agents: {},
             phases: {},
         };
@@ -203,20 +206,21 @@ class ConfigManager {
             const match = trimmed.match(/^([^=]+)=(.+)$/);
             if (match) {
                 const key = match[1].trim();
-                let value: any = match[2].trim();
+                const rawValue = match[2].trim();
+                let value: unknown = rawValue;
 
                 // Parse value type
-                if (value.startsWith('"') && value.endsWith('"')) {
-                    value = value.slice(1, -1);
-                } else if (value === 'true') {
+                if (rawValue.startsWith('"') && rawValue.endsWith('"')) {
+                    value = rawValue.slice(1, -1);
+                } else if (rawValue === 'true') {
                     value = true;
-                } else if (value === 'false') {
+                } else if (rawValue === 'false') {
                     value = false;
-                } else if (!isNaN(Number(value))) {
-                    value = Number(value);
-                } else if (value.startsWith('[')) {
+                } else if (!isNaN(Number(rawValue))) {
+                    value = Number(rawValue);
+                } else if (rawValue.startsWith('[')) {
                     // Simple array parsing
-                    value = JSON.parse(value.replace(/'/g, '"'));
+                    value = JSON.parse(rawValue.replace(/'/g, '"'));
                 }
 
                 const parts = currentSection.split('.');
@@ -228,13 +232,14 @@ class ConfigManager {
                     if (!config[parts[0]]) {
                         config[parts[0]] = {};
                     }
+                    const section = config[parts[0]] as Record<string, unknown>;
                     if (parts.length > 1) {
-                        if (!config[parts[0]][parts[1]]) {
-                            config[parts[0]][parts[1]] = {};
+                        if (!section[parts[1]] || typeof section[parts[1]] !== 'object') {
+                            section[parts[1]] = {};
                         }
-                        config[parts[0]][parts[1]][key] = value;
+                        (section[parts[1]] as Record<string, unknown>)[key] = value;
                     } else {
-                        config[parts[0]][key] = value;
+                        section[key] = value;
                     }
                 } else {
                     config[key] = value;
@@ -242,7 +247,7 @@ class ConfigManager {
             }
         }
 
-        return config;
+        return config as unknown as GoOnConfig;
     }
 
     /**
@@ -364,17 +369,17 @@ class ConfigManager {
     /**
      * Get configuration value by path (e.g., "cache.enabled")
      */
-    getConfigValue(path: string, defaultValue?: any): any {
+    getConfigValue(path: string, defaultValue?: unknown): unknown {
         if (!this.config) {
             return defaultValue;
         }
 
         const parts = path.split('.');
-        let value: any = this.config;
+        let value: unknown = this.config;
 
         for (const part of parts) {
-            if (value && typeof value === 'object' && part in value) {
-                value = value[part];
+            if (value && typeof value === 'object' && part in (value as Record<string, unknown>)) {
+                value = (value as Record<string, unknown>)[part];
             } else {
                 return defaultValue;
             }
@@ -386,20 +391,20 @@ class ConfigManager {
     /**
      * Set configuration value
      */
-    setConfigValue(path: string, value: any): void {
+    setConfigValue(path: string, value: unknown): void {
         if (!this.config) {
             this.createDefaultConfig();
         }
 
         const parts = path.split('.');
         const lastPart = parts.pop()!;
-        let current: any = this.config;
+        let current = this.config as Record<string, unknown>;
 
         for (const part of parts) {
-            if (!(part in current)) {
+            if (!(part in current) || typeof current[part] !== 'object' || current[part] === null) {
                 current[part] = {};
             }
-            current = current[part];
+            current = current[part] as Record<string, unknown>;
         }
 
         current[lastPart] = value;

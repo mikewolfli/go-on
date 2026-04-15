@@ -156,13 +156,13 @@ class I18nManager {
     /**
      * Get translated message
      */
-    getMessage(key: string, ...params: any[]): string {
+    getMessage(key: string, ...params: unknown[]): string {
         const keys = key.split('.');
-        let value: any = this.messages;
+        let value: unknown = this.messages;
 
         for (const k of keys) {
-            if (typeof value === 'object' && value !== null && k in value) {
-                value = value[k];
+            if (typeof value === 'object' && value !== null && k in (value as Record<string, unknown>)) {
+                value = (value as Record<string, unknown>)[k];
             } else {
                 return key; // Return key if not found
             }

@@ -490,6 +490,33 @@ fallback = false
     fs::write(path, config).expect("failed to write review timeout collision config file");
 }
 
+fn write_shutdown_drain_validation_config(path: &Path) {
+    let config = r#"default_phase = "coding"
+
+[flow]
+name = "Shutdown Drain Validation"
+phases = ["coding"]
+
+[runtime]
+maintenance_interval_seconds = 30
+health_interval_seconds = 45
+shutdown_drain_seconds = 5
+
+[agents.slow_main]
+type = "local_slow_approve"
+
+[phases.coding]
+description = "Coding"
+agents = ["slow_main"]
+fallback = true
+
+[phases.coding.options]
+request_timeout_seconds = 10
+"#;
+
+    fs::write(path, config).expect("failed to write shutdown drain validation config file");
+}
+
 fn write_cache_vector_unavailable_config(path: &Path, cache_path: &str, vector_path: &str) {
     let config = format!(
         r#"default_phase = "coding"
@@ -1581,12 +1608,49 @@ mod advanced {
     }
 
     #[test]
+    fn run_scenario_file_executes_release_readiness_drill_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/release-readiness-drill.ndjson"));
+
+        assert_eq!(results.len(), 6);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "runtime.stability");
+        assert_eq!(results[2].0["method"], "security.baseline");
+        assert_eq!(results[3].0["method"], "observability.alerts");
+        assert_eq!(results[4].0["method"], "optimization.peak");
+        assert_eq!(results[5].0["method"], "shutdown");
+
+        let alerts = results[3]
+            .1
+            .as_ref()
+            .expect("observability.alerts should succeed");
+        assert!(
+            alerts["result"]["alerts"].get("items").is_some(),
+            "observability.alerts should include items"
+        );
+
+        let peak = results[4]
+            .1
+            .as_ref()
+            .expect("optimization.peak should succeed");
+        assert!(
+            peak["result"]["peak"].get("gates").is_some(),
+            "optimization.peak should include gates"
+        );
+    }
+
+    #[test]
     fn ndjson_scenario_files_all_pass() {
         let scenarios = load_scenarios_from_dir(Path::new("requests"));
         assert_eq!(
             scenarios.len(),
-            23,
-            "expected twenty three request scenario files"
+            24,
+            "expected twenty four request scenario files"
         );
 
         for scenario in scenarios {
@@ -2561,6 +2625,45 @@ fn rpc_chat_review_timeout_collision_reports_timeout_and_gate_outcome() {
 
     let shutdown = harness.request(84, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn rpc_shutdown_waits_for_inflight_chat_completion() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_shutdown_drain_validation_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(91, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    harness.raw_request(&json!({
+        "jsonrpc": "2.0",
+        "id": 92,
+        "method": "chat",
+        "params": {
+            "messages": [{"role": "user", "content": "shutdown drain validation"}],
+            "mode": "ask"
+        }
+    }));
+
+    harness.raw_request(&json!({
+        "jsonrpc": "2.0",
+        "id": 93,
+        "method": "shutdown"
+    }));
+
+    let chat = harness.read_response_for_id(92, Duration::from_secs(12));
+    assert_eq!(chat["result"]["done"], true);
+    assert!(
+        chat["result"].get("agent").is_some() || chat["result"].get("response").is_some(),
+        "chat should complete and include agent or response payload before shutdown"
+    );
+
+    let shutdown = harness.read_response_for_id(93, Duration::from_secs(8));
+    assert_eq!(shutdown["result"]["ok"], true);
+
     harness.wait_for_exit(Duration::from_secs(8));
 }
 

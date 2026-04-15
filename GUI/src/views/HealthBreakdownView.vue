@@ -13,18 +13,18 @@
         <el-card shadow="hover">
           <template #header>
             <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-              <span>Probes</span>
+              <span>{{ t("healthBreakdown.probes") }}</span>
               <el-space>
-                <el-tag :type="liveness.type">liveness: {{ liveness.text }}</el-tag>
-                <el-tag :type="readiness.type">readiness: {{ readiness.text }}</el-tag>
+                <el-tag :type="liveness.type">{{ t("healthBreakdown.liveness") }}: {{ liveness.text }}</el-tag>
+                <el-tag :type="readiness.type">{{ t("healthBreakdown.readiness") }}: {{ readiness.text }}</el-tag>
               </el-space>
             </div>
           </template>
           <el-descriptions :columns="2" border>
-            <el-descriptions-item label="liveness ok">{{ liveness.ok }}</el-descriptions-item>
-            <el-descriptions-item label="uptime">{{ liveness.uptimeSeconds }}s</el-descriptions-item>
-            <el-descriptions-item label="readiness ok">{{ readiness.ok }}</el-descriptions-item>
-            <el-descriptions-item label="generated at">{{ readiness.generatedAt }}</el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.livenessOk')">{{ liveness.ok }}</el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.uptime')">{{ liveness.uptimeSeconds }}s</el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.readinessOk')">{{ readiness.ok }}</el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.generatedAt')">{{ readiness.generatedAt }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
 
@@ -195,7 +195,7 @@
 import { ref, reactive, computed } from "vue";
 import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
-import { invokeRuntimeRpc } from "../services/bridge";
+import { getBreakerStatus, getHealthProbes } from "../services/rpcService";
 
 const { t } = useI18n();
 const loading = ref(false);
@@ -282,8 +282,7 @@ const overallScore = computed(() => {
 async function refreshBreakdown() {
   loading.value = true;
   try {
-    const probesRaw = await invokeRuntimeRpc("health.probes", "{}");
-    const probesData = JSON.parse(probesRaw || "{}");
+    const probesData = await getHealthProbes();
     const probes = probesData?.probes || {};
 
     const livenessData = probes?.liveness || {};
@@ -316,8 +315,8 @@ async function refreshBreakdown() {
     timeoutStatus.type = timeoutStatus.text === "healthy" ? "success" : timeoutStatus.text === "warn" ? "warning" : "danger";
 
     const dependencies = Array.isArray(probes?.dependencies) ? probes.dependencies : [];
-    const cacheDep = dependencies.find((item: any) => item?.name === "cache") || {};
-    const vectorDep = dependencies.find((item: any) => item?.name === "vector") || {};
+    const cacheDep = dependencies.find((item) => item?.name === "cache") || {};
+    const vectorDep = dependencies.find((item) => item?.name === "vector") || {};
 
     const cacheEntries = Number(cacheDep?.details?.entries || 0);
     cacheStatus.type = cacheDep?.status === "healthy" ? "success" : cacheDep?.status === "warn" ? "warning" : "danger";
@@ -335,15 +334,14 @@ async function refreshBreakdown() {
     vectorStatus.lastUpdate = "just now";
 
     const circuitBreakers = Array.isArray(probes?.circuit_breakers) ? probes.circuit_breakers : [];
-    const openCount = circuitBreakers.filter((item: any) => String(item?.state || "").toLowerCase() === "open").length;
+    const openCount = circuitBreakers.filter((item) => String(item?.state || "").toLowerCase() === "open").length;
     breakerStatus.type = openCount === 0 ? "success" : "danger";
     breakerStatus.text = openCount === 0 ? "closed" : "open";
-    breakerStatus.failures = circuitBreakers.reduce((sum: number, item: any) => sum + Number(item?.failure_count || 0), 0);
+    breakerStatus.failures = circuitBreakers.reduce((sum: number, item) => sum + Number(item?.failure_count || 0), 0);
     breakerStatus.lastTrip = openCount > 0 ? "recent" : "Never";
     breakerStatus.recoveryTime = 30;
 
-    const breakerRaw = await invokeRuntimeRpc("breaker.status", "{}");
-    const breakerParsed = JSON.parse(breakerRaw || "{}");
+    const breakerParsed = await getBreakerStatus();
     const degradedServices = Array.isArray(breakerParsed?.degraded_services)
       ? breakerParsed.degraded_services
       : [];
@@ -351,7 +349,7 @@ async function refreshBreakdown() {
     const recommendedActions = Array.from(
       new Set(
         degradedServices
-          .map((item: any) => String(item?.recommended_action || ""))
+          .map((item) => String(item?.recommended_action || ""))
           .filter((item: string) => item.length > 0)
       )
     );
@@ -363,7 +361,7 @@ async function refreshBreakdown() {
 
     const limiter = probes?.rate_limiter || {};
     const buckets = Array.isArray(limiter?.buckets) ? limiter.buckets : [];
-    const usedPercents = buckets.map((item: any) => Number(item?.used_percent || 0));
+    const usedPercents = buckets.map((item) => Number(item?.used_percent || 0));
     const maxUsed = usedPercents.length > 0 ? Math.max(...usedPercents) : 0;
     rateLimiterStatus.type = maxUsed < 80 ? "success" : maxUsed < 95 ? "warning" : "danger";
     rateLimiterStatus.text = maxUsed < 80 ? t("common.normal") : t("common.limited");

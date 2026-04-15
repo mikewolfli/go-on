@@ -107,23 +107,24 @@ class ConfigManager {
             const match = trimmed.match(/^([^=]+)=(.+)$/);
             if (match) {
                 const key = match[1].trim();
-                let value = match[2].trim();
+                const rawValue = match[2].trim();
+                let value = rawValue;
                 // Parse value type
-                if (value.startsWith('"') && value.endsWith('"')) {
-                    value = value.slice(1, -1);
+                if (rawValue.startsWith('"') && rawValue.endsWith('"')) {
+                    value = rawValue.slice(1, -1);
                 }
-                else if (value === 'true') {
+                else if (rawValue === 'true') {
                     value = true;
                 }
-                else if (value === 'false') {
+                else if (rawValue === 'false') {
                     value = false;
                 }
-                else if (!isNaN(Number(value))) {
-                    value = Number(value);
+                else if (!isNaN(Number(rawValue))) {
+                    value = Number(rawValue);
                 }
-                else if (value.startsWith('[')) {
+                else if (rawValue.startsWith('[')) {
                     // Simple array parsing
-                    value = JSON.parse(value.replace(/'/g, '"'));
+                    value = JSON.parse(rawValue.replace(/'/g, '"'));
                 }
                 const parts = currentSection.split('.');
                 if (parts[0] === 'agents' && parts[1]) {
@@ -136,14 +137,15 @@ class ConfigManager {
                     if (!config[parts[0]]) {
                         config[parts[0]] = {};
                     }
+                    const section = config[parts[0]];
                     if (parts.length > 1) {
-                        if (!config[parts[0]][parts[1]]) {
-                            config[parts[0]][parts[1]] = {};
+                        if (!section[parts[1]] || typeof section[parts[1]] !== 'object') {
+                            section[parts[1]] = {};
                         }
-                        config[parts[0]][parts[1]][key] = value;
+                        section[parts[1]][key] = value;
                     }
                     else {
-                        config[parts[0]][key] = value;
+                        section[key] = value;
                     }
                 }
                 else {
@@ -297,7 +299,7 @@ class ConfigManager {
         const lastPart = parts.pop();
         let current = this.config;
         for (const part of parts) {
-            if (!(part in current)) {
+            if (!(part in current) || typeof current[part] !== 'object' || current[part] === null) {
                 current[part] = {};
             }
             current = current[part];

@@ -6,7 +6,7 @@
 
       <el-space wrap>
         <el-button @click="call('breaker.status')">breaker.status</el-button>
-        <el-button type="warning" @click="call('breaker.reset')">breaker.reset</el-button>
+        <el-button type="warning" @click="callDangerous('breaker.reset')">breaker.reset</el-button>
         <el-button type="warning" plain @click="call('breaker.recovery', { dry_run: true })">breaker.recovery</el-button>
         <el-button @click="call('config.reload')">config.reload</el-button>
         <el-button @click="call('config.baseline')">{{ t("backendOps.configBaseline") }}</el-button>
@@ -14,12 +14,12 @@
         <el-button @click="call('data.lifecycle')">{{ t("backendOps.dataLifecycle") }}</el-button>
         <el-button @click="call('error.contract')">{{ t("backendOps.errorContract") }}</el-button>
         <el-button @click="call('optimization.peak', { task: 'BLUE15 one-shot optimization peak' })">{{ t("backendOps.optimizationPeak") }}</el-button>
-        <el-button type="danger" @click="call('shutdown')">shutdown</el-button>
+        <el-button type="danger" @click="callDangerous('shutdown')">shutdown</el-button>
       </el-space>
 
       <el-space wrap>
-        <el-button @click="call('cache.clear')">cache.clear</el-button>
-        <el-button @click="call('vector.clear')">vector.clear</el-button>
+        <el-button @click="callDangerous('cache.clear')">cache.clear</el-button>
+        <el-button @click="callDangerous('vector.clear')">vector.clear</el-button>
       </el-space>
 
       <el-space wrap>
@@ -60,9 +60,10 @@
 
 <script setup lang="ts">
 import { ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { useI18n } from "vue-i18n";
 import { invokeRuntimeRpc } from "../services/bridge";
+import { getMetrics } from "../services/rpcService";
 
 const { t } = useI18n();
 const output = ref("");
@@ -96,14 +97,61 @@ async function callCustom() {
   await call(customMethod.value.trim(), customParams.value || "{}");
 }
 
+async function callDangerous(method: "shutdown" | "cache.clear" | "vector.clear" | "breaker.reset") {
+  const consequences: Record<string, string> = {
+    "shutdown": "This will stop the backend process and interrupt current requests.",
+    "cache.clear": "This will clear runtime cache data.",
+    "vector.clear": "This will clear vector storage data.",
+    "breaker.reset": "This will force-reset breaker states."
+  };
+
+  const confirmed = await ElMessageBox.confirm(
+    `${method}\n\n${consequences[method] || "This operation is irreversible."}`,
+    "Confirm dangerous operation",
+    {
+      confirmButtonText: t("common.confirm"),
+      cancelButtonText: t("common.cancel"),
+      type: "warning",
+      closeOnClickModal: false,
+      closeOnPressEscape: false,
+    }
+  ).then(() => true).catch(() => false);
+
+  if (!confirmed) {
+    ElMessage.info(t("common.cancelled"));
+    return;
+  }
+
+  if (method === "shutdown") {
+    const typed = await ElMessageBox.prompt(
+      'Type "shutdown" to confirm backend shutdown.',
+      "Final confirmation",
+      {
+        confirmButtonText: t("common.confirm"),
+        cancelButtonText: t("common.cancel"),
+        inputPattern: /^shutdown$/,
+        inputErrorMessage: 'Please type "shutdown" exactly.',
+        closeOnClickModal: false,
+        closeOnPressEscape: false,
+      }
+    ).then((result) => result.value).catch(() => "");
+
+    if (typed !== "shutdown") {
+      ElMessage.info(t("common.cancelled"));
+      return;
+    }
+  }
+
+  await call(method);
+}
+
 async function callQualityBaseline() {
   try {
     const healthRaw = await invokeRuntimeRpc("runtime.health", "{}");
-    const metricsRaw = await invokeRuntimeRpc("metrics.get", "{}");
     const traceRaw = await invokeRuntimeRpc("trace.metrics", "{}");
+    const metrics = await getMetrics();
 
     const health = parseRpcOutput(healthRaw)?.result ?? {};
-    const metrics = parseRpcOutput(metricsRaw)?.result ?? {};
     const trace = parseRpcOutput(traceRaw)?.result ?? {};
     const timeouts = trace?.timeouts ?? {};
 

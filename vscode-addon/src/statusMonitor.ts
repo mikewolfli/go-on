@@ -1,13 +1,14 @@
 import * as vscode from 'vscode';
 
 import { protocolContract } from './protocolContract';
+import { RuntimeManagerLike } from './managerTypes';
 
 export class StatusMonitor {
     private statusBarItem: vscode.StatusBarItem;
     private healthCheckTimer: NodeJS.Timeout | undefined;
-    private manager: any;
+    private manager: RuntimeManagerLike;
 
-    constructor(manager: any) {
+    constructor(manager: RuntimeManagerLike) {
         this.manager = manager;
         this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
         this.statusBarItem.command = 'go-on.openChat';
@@ -63,7 +64,7 @@ export class StatusMonitor {
         }
     }
 
-    private updateHealthStatus(health: any) {
+    private updateHealthStatus(health: unknown) {
         // Update tooltip with health information
         const healthInfo = typeof health === 'object' ? JSON.stringify(health, null, 2) : String(health);
         this.statusBarItem.tooltip = `Go-On Status: ${protocolContract.statusTerms.healthy}\nLast health check: ${new Date().toLocaleTimeString()}\n${healthInfo}\nClick to open chat`;

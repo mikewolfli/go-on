@@ -1,0 +1,33 @@
+# Release Readiness (Stage C)
+
+This document defines production SLO and pre-release drill gates for go-on.
+
+## SLO Baseline
+
+1. Availability: >= 99.9%
+2. API error ratio (5xx-equivalent): <= 0.5%
+3. P95 latency for key RPC calls: <= 2s
+4. P99 latency for key RPC calls: <= 5s
+5. Critical alerts in release drill: 0 allowed
+
+## Pre-release Drill Checklist
+
+1. Use `config.production.toml` with `production_strict=true` and `entry_auth_enabled=true`.
+2. Verify ingress TLS configuration via `deploy/nginx/go-on.conf`.
+3. Run release readiness gate:
+   - Linux/macOS: `scripts/run-release-readiness-gate.sh config.production.toml`
+   - Windows: `scripts/run-release-readiness-gate.ps1 -Config config.production.toml`
+4. Ensure all checks pass:
+   - `runtime.stability`
+   - `security.baseline`
+   - `observability.alerts`
+   - `optimization.peak`
+   - in-flight graceful shutdown drain validation
+
+## Audit Artifacts
+
+Keep the following artifacts per release candidate:
+
+1. Gate output logs
+2. Config snapshot (`config.production.toml` + env map without secrets)
+3. Commit SHA and build metadata

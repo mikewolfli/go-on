@@ -33,6 +33,7 @@ import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
 import { configureService, serviceStatus } from "../services/bridge";
 import { openDialog } from "../services/dialog";
+import { normalizeErrorMessage } from "../utils/errors";
 
 const MONITOR_ONLY_KEY = "goon.gui.monitorOnly";
 const executablePath = ref("go-on");
@@ -97,7 +98,7 @@ async function save() {
     window.dispatchEvent(new CustomEvent<boolean>("goon:monitor-only-changed", { detail: monitorOnly.value }));
     ElMessage.success(t("config.saved"));
   } catch (error) {
-    ElMessage.error(String(error));
+    ElMessage.error(normalizeErrorMessage(error));
   }
 }
 </script>

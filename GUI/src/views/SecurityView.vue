@@ -14,9 +14,9 @@
           <el-space direction="vertical" fill style="width: 100%">
             <el-space>
               <el-tag :type="governanceState === 'healthy' ? 'success' : 'warning'">
-                governance: {{ governanceState }}
+                {{ t("security.governanceLabel") }}: {{ governanceState }}
               </el-tag>
-              <el-tag type="info">rules: {{ rulesVersion }}</el-tag>
+              <el-tag type="info">{{ t("security.rulesLabel") }}: {{ rulesVersion }}</el-tag>
               <el-tag type="info">
                 {{ t("security.dynamicRules") }}: {{ dynamicRulesCount }}
               </el-tag>
@@ -24,13 +24,13 @@
                 {{ t("security.auditRecent") }}: {{ auditRecentCount }}
               </el-tag>
               <el-tag :type="strictEnabled ? 'success' : 'danger'">
-                production_strict: {{ strictEnabled ? 'on' : 'off' }}
+                {{ t("security.productionStrictLabel") }}: {{ strictEnabled ? t("security.on") : t("security.off") }}
               </el-tag>
               <el-tag :type="entryAuthEnabled ? 'success' : 'warning'">
-                entry_auth: {{ entryAuthEnabled ? 'on' : 'off' }}
+                {{ t("security.entryAuthLabel") }}: {{ entryAuthEnabled ? t("security.on") : t("security.off") }}
               </el-tag>
               <el-tag type="info">
-                entry_rate_limit: {{ entryRateLimitRpm }}/min (burst {{ entryRateLimitBurst }})
+                {{ t("security.entryRateLimitLabel") }}: {{ t("security.entryRateLimitValue", { rpm: entryRateLimitRpm, burst: entryRateLimitBurst }) }}
               </el-tag>
             </el-space>
             <el-row :gutter="16">
@@ -159,7 +159,12 @@
 import { onMounted, ref, reactive } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useI18n } from "vue-i18n";
-import { invokeRuntimeRpc } from "../services/bridge";
+import {
+  getGovernanceAuditRecent,
+  getGovernanceStatus,
+  type GovernanceAuditEvent,
+} from "../services/rpcService";
+import { normalizeErrorMessage } from "../utils/errors";
 
 const { t } = useI18n();
 
@@ -212,12 +217,11 @@ function normalizeAuditResultTag(result: string): string {
 
 async function refreshGovernanceAuditRecent(limit = 20) {
   try {
-    const resultRaw = await invokeRuntimeRpc("governance.audit.recent", JSON.stringify({ limit }));
-    const parsed = JSON.parse(resultRaw || "{}");
+    const parsed = await getGovernanceAuditRecent(limit);
     const events = Array.isArray(parsed?.audit?.events) ? parsed.audit.events : [];
     auditRecentCount.value = events.length;
 
-    auditLogs.value = events.map((event: any) => ({
+    auditLogs.value = events.map((event: GovernanceAuditEvent) => ({
       timestamp: new Date(Number(event.timestamp || 0) * 1000).toLocaleString(),
       action: String(event.action || "unknown"),
       resource: String(event.detail?.escalation_level || "governance"),
@@ -225,14 +229,13 @@ async function refreshGovernanceAuditRecent(limit = 20) {
       result: normalizeAuditResultTag(String(event.result || "warning")),
     }));
   } catch (error) {
-    ElMessage.error(`governance.audit.recent failed: ${error}`);
+    ElMessage.error(t("security.auditRecentFailed", { error: normalizeErrorMessage(error) }));
   }
 }
 
 async function refreshGovernanceStatus() {
   try {
-    const resultRaw = await invokeRuntimeRpc("governance.status", "{}");
-    const parsed = JSON.parse(resultRaw || "{}");
+    const parsed = await getGovernanceStatus();
     const governance = parsed?.governance || {};
 
     governanceState.value = String(governance.status || "unknown");
@@ -269,7 +272,7 @@ async function refreshGovernanceStatus() {
     configScore.value = Math.max(35, 95 - warningCount * 9 - strictViolationCount * 12 - (strictEnabled.value ? 0 : 8));
 
     const files = Array.isArray(governance.rules?.files) ? governance.rules.files : [];
-    sensitiveFields.value = files.map((item: any) => ({
+    sensitiveFields.value = files.map((item) => ({
       name: String(item.path || "unknown"),
       location: "RULES",
       status: "masked",
@@ -282,8 +285,8 @@ async function refreshGovernanceStatus() {
       nextRisks.push({
         id: "pua_failed",
         type: "warning",
-        title: `PUA violations: ${puaFailed}`,
-        description: "Recent PUA stage/check failures detected. Review safeguards and evidence requirements.",
+        title: t("security.riskPuaFailedTitle", { count: puaFailed }),
+        description: t("security.riskPuaFailedDesc"),
         action: true,
       });
     }
@@ -291,8 +294,8 @@ async function refreshGovernanceStatus() {
       nextRisks.push({
         id: "breaker_open",
         type: "warning",
-        title: `Open breakers: ${breakerOpen}`,
-        description: "One or more circuit breakers are open. Validate upstream reliability and fallback path.",
+        title: t("security.riskBreakerOpenTitle", { count: breakerOpen }),
+        description: t("security.riskBreakerOpenDesc"),
         action: true,
       });
     }
@@ -300,8 +303,8 @@ async function refreshGovernanceStatus() {
       nextRisks.push({
         id: "config_warn",
         type: "info",
-        title: `Config warnings: ${warningCount}`,
-        description: "Runtime configuration warnings exist. Consider strict governance baseline before production rollout.",
+        title: t("security.riskConfigWarnTitle", { count: warningCount }),
+        description: t("security.riskConfigWarnDesc"),
         action: false,
       });
     }
@@ -309,8 +312,8 @@ async function refreshGovernanceStatus() {
       nextRisks.push({
         id: "strict_disabled",
         type: "warning",
-        title: "Production strict mode is OFF",
-        description: "Enable runtime.production_strict to enforce fail-fast safety guardrails before production rollout.",
+        title: t("security.riskStrictDisabledTitle"),
+        description: t("security.riskStrictDisabledDesc"),
         action: true,
       });
     }
@@ -318,8 +321,8 @@ async function refreshGovernanceStatus() {
       nextRisks.push({
         id: "entry_auth_key_missing",
         type: "warning",
-        title: "Entry auth key not configured",
-        description: "runtime.entry_auth_enabled=true but entry API key env is missing/empty; inbound HTTP requests will be rejected.",
+        title: t("security.riskEntryAuthKeyMissingTitle"),
+        description: t("security.riskEntryAuthKeyMissingDesc"),
         action: true,
       });
     }
@@ -327,8 +330,8 @@ async function refreshGovernanceStatus() {
       nextRisks.push({
         id: "entry_auth_disabled",
         type: "info",
-        title: "Entry auth is OFF",
-        description: "For server-exposed ACP HTTP mode, enable runtime.entry_auth_enabled and configure entry API key env.",
+        title: t("security.riskEntryAuthDisabledTitle"),
+        description: t("security.riskEntryAuthDisabledDesc"),
         action: true,
       });
     }
@@ -336,8 +339,8 @@ async function refreshGovernanceStatus() {
       nextRisks.push({
         id: "strict_violation",
         type: "warning",
-        title: `Strict violations: ${strictViolationCount}`,
-        description: "Unsafe runtime configuration is present (insecure upstream, missing secrets, or missing entry auth for exposed HTTP endpoint).",
+        title: t("security.riskStrictViolationTitle", { count: strictViolationCount }),
+        description: t("security.riskStrictViolationDesc"),
         action: true,
       });
     }
@@ -345,8 +348,8 @@ async function refreshGovernanceStatus() {
       nextRisks.push({
         id: "healthy",
         type: "success",
-        title: "Governance baseline healthy",
-        description: "No recent governance risk was detected in runtime, PUA checks, breaker status, and config warnings.",
+        title: t("security.riskHealthyTitle"),
+        description: t("security.riskHealthyDesc"),
         action: false,
       });
     }
@@ -365,7 +368,7 @@ async function refreshGovernanceStatus() {
       ];
     }
   } catch (error) {
-    ElMessage.error(`governance.status failed: ${error}`);
+    ElMessage.error(t("security.governanceStatusFailed", { error: normalizeErrorMessage(error) }));
   }
 }
 
@@ -407,14 +410,14 @@ async function exportAuditLog() {
     URL.revokeObjectURL(url);
     ElMessage.success(t("security.exportSuccess"));
   } catch (err) {
-    ElMessage.error(`Error: ${err}`);
+    ElMessage.error(`Error: ${normalizeErrorMessage(err)}`);
   }
 }
 
-function convertToCSV(data: any[]): string {
+function convertToCSV(data: Array<Record<string, unknown>>): string {
   if (data.length === 0) return "";
   const headers = Object.keys(data[0]);
-  const rows = data.map((item) => headers.map((header) => `"${item[header]}"`).join(","));
+  const rows = data.map((item) => headers.map((header) => `"${String(item[header] ?? "")}"`).join(","));
   return [headers.join(","), ...rows].join("\n");
 }
 
@@ -424,6 +427,12 @@ async function saveSecurity() {
 
 onMounted(async () => {
   await refreshGovernanceStatus();
-  ElMessage.info(`Governance: ${governanceState.value} (${normalizeLevelTag(governanceState.value)}), rules=${rulesVersion.value}`);
+  ElMessage.info(
+    t("security.governanceToast", {
+      state: governanceState.value,
+      level: normalizeLevelTag(governanceState.value),
+      rules: rulesVersion.value,
+    })
+  );
 });
 </script>

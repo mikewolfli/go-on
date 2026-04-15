@@ -1,18 +1,40 @@
 import * as vscode from 'vscode';
+import { RuntimeManagerLike } from './managerTypes';
+
+interface WorkflowStep {
+    type: 'chat' | 'code' | 'delay';
+    prompt?: string;
+    delay?: number;
+}
+
+interface WorkflowData {
+    name: string;
+    steps: WorkflowStep[];
+    id?: string;
+    created?: string;
+    status?: 'created' | 'running' | 'completed' | 'failed';
+}
+
+type WorkflowStore = Record<string, WorkflowData>;
 
 export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'go-on-workflow';
     private _view?: vscode.WebviewView;
+    private readonly manager: RuntimeManagerLike;
+    private readonly context: vscode.ExtensionContext;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
-        private readonly manager: any,
-        private readonly context: vscode.ExtensionContext
-    ) {}
+        _manager: RuntimeManagerLike,
+        _context: vscode.ExtensionContext
+    ) {
+        this.manager = _manager;
+        this.context = _context;
+    }
 
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
-        context: vscode.WebviewViewResolveContext,
+        _context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken,
     ) {
         this._view = webviewView;
@@ -45,8 +67,12 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
         );
     }
 
-    private async _createWorkflow(workflowData: any) {
-        const workflows = this.context.globalState.get<Record<string, any>>('go-on-workflows', {});
+    private getErrorMessage(error: unknown): string {
+        return error instanceof Error ? error.message : String(error);
+    }
+
+    private async _createWorkflow(workflowData: WorkflowData) {
+        const workflows = this.context.globalState.get<WorkflowStore>('go-on-workflows', {});
         const workflowId = `workflow_${Date.now()}`;
         workflows[workflowId] = {
             ...workflowData,
@@ -66,7 +92,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async _runWorkflow(workflowId: string) {
-        const workflows = this.context.globalState.get<Record<string, any>>('go-on-workflows', {});
+        const workflows = this.context.globalState.get<WorkflowStore>('go-on-workflows', {});
         const workflow = workflows[workflowId];
 
 
@@ -108,7 +134,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
                         // Code execution would be handled by the chat view
                         break;
                     case 'delay':
-                        await new Promise(resolve => setTimeout(resolve, step.delay * 1000));
+                        await new Promise(resolve => setTimeout(resolve, Number(step.delay || 0) * 1000));
                         break;
                 }
 
@@ -131,24 +157,25 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
 
             vscode.window.showInformationMessage(`Workflow "${workflow.name}" completed successfully!`);
 
-        } catch (error: any) {
+        } catch (error: unknown) {
             workflow.status = 'failed';
             await this.context.globalState.update('go-on-workflows', workflows);
+            const message = this.getErrorMessage(error);
 
             this._view?.webview.postMessage({
                 type: 'workflowStatusUpdate',
                 workflowId,
                 status: 'failed',
-                error: error.message
+                error: message
             });
 
-            vscode.window.showErrorMessage(`Workflow failed: ${error.message}`);
+            vscode.window.showErrorMessage(`Workflow failed: ${message}`);
         }
     }
 
     private async _deleteWorkflow(workflowId: string) {
         try {
-            const workflows = this.context.globalState.get<Record<string, any>>('go-on-workflows', {});
+            const workflows = this.context.globalState.get<WorkflowStore>('go-on-workflows', {});
             delete workflows[workflowId];
             await this.context.globalState.update('go-on-workflows', workflows);
 

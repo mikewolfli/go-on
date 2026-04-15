@@ -1,0 +1,46 @@
+default_phase = "coding"
+model_selection_mode = "adaptive"
+
+[protocol]
+mode = "acp_http"
+
+[runtime]
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 45
+sqlite_vacuum_interval_cycles = 60
+acp_http_bind_addr = "127.0.0.1:8090"
+entry_auth_enabled = true
+entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
+entry_rate_limit_rpm = 240
+entry_rate_limit_burst = 60
+production_strict = true
+otel_enabled = true
+otel_exporter = "otlp"
+otel_service_name = "go-on"
+otel_sample_ratio = 1.0
+trace_slow_top_n = 20
+
+[cache]
+enabled = true
+path = "acp_cache.sqlite3"
+default_ttl_seconds = 3600
+max_entries = 5000
+
+[vector]
+enabled = true
+auto_mode = true
+path = "acp_vector.sqlite3"
+dimensions = 192
+min_query_chars = 80
+top_k = 2
+min_similarity = 0.82
+max_snippet_chars = 800
+max_entries = 10000
+summary_enabled = true
+summary_trigger_messages = 8
+summary_max_chars = 1200
+
+# NOTE:
+# 1) Keep backend bound to loopback and expose only through TLS ingress.
+# 2) Ensure GO_ON_ENTRY_API_KEY is present in process environment before startup.

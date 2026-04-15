@@ -3,12 +3,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.GoOnWorkflowViewProvider = void 0;
 const vscode = require("vscode");
 class GoOnWorkflowViewProvider {
-    constructor(_extensionUri, manager, context) {
+    constructor(_extensionUri, _manager, _context) {
         this._extensionUri = _extensionUri;
-        this.manager = manager;
-        this.context = context;
+        this.manager = _manager;
+        this.context = _context;
     }
-    resolveWebviewView(webviewView, context, _token) {
+    resolveWebviewView(webviewView, _context, _token) {
         this._view = webviewView;
         webviewView.webview.options = {
             enableScripts: true,
@@ -30,6 +30,9 @@ class GoOnWorkflowViewProvider {
                     break;
             }
         }, undefined, this.context.subscriptions);
+    }
+    getErrorMessage(error) {
+        return error instanceof Error ? error.message : String(error);
     }
     async _createWorkflow(workflowData) {
         const workflows = this.context.globalState.get('go-on-workflows', {});
@@ -83,7 +86,7 @@ class GoOnWorkflowViewProvider {
                         // Code execution would be handled by the chat view
                         break;
                     case 'delay':
-                        await new Promise(resolve => setTimeout(resolve, step.delay * 1000));
+                        await new Promise(resolve => setTimeout(resolve, Number(step.delay || 0) * 1000));
                         break;
                 }
                 this._view?.webview.postMessage({
@@ -105,13 +108,14 @@ class GoOnWorkflowViewProvider {
         catch (error) {
             workflow.status = 'failed';
             await this.context.globalState.update('go-on-workflows', workflows);
+            const message = this.getErrorMessage(error);
             this._view?.webview.postMessage({
                 type: 'workflowStatusUpdate',
                 workflowId,
                 status: 'failed',
-                error: error.message
+                error: message
             });
-            vscode.window.showErrorMessage(`Workflow failed: ${error.message}`);
+            vscode.window.showErrorMessage(`Workflow failed: ${message}`);
         }
     }
     async _deleteWorkflow(workflowId) {

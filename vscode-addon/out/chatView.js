@@ -4,19 +4,20 @@ exports.GoOnChatViewProvider = void 0;
 const vscode = require("vscode");
 const child_process_1 = require("child_process");
 class GoOnChatViewProvider {
-    constructor(_extensionUri, manager, context, onViewResolved) {
+    constructor(_extensionUri, _manager, _context, _onViewResolved) {
         this._extensionUri = _extensionUri;
-        this.manager = manager;
-        this.context = context;
-        this.onViewResolved = onViewResolved;
+        this._executionOutput = vscode.window.createOutputChannel('Go-On Code Execution');
         this._currentSession = 'default';
         this._sessions = new Map();
+        this.manager = _manager;
+        this.context = _context;
+        this.onViewResolved = _onViewResolved;
         this._loadSessions();
     }
     _loadSessions() {
         const storedSessions = this.context.globalState.get('go-on-chat-sessions', {});
         for (const [sessionName, messages] of Object.entries(storedSessions)) {
-            this._sessions.set(sessionName, messages);
+            this._sessions.set(sessionName, Array.isArray(messages) ? messages : []);
         }
         // Ensure default session exists
         if (!this._sessions.has('default')) {
@@ -39,7 +40,17 @@ class GoOnChatViewProvider {
         this._sessions.set(this._currentSession, messages);
         this._saveSessions();
     }
-    resolveWebviewView(webviewView, context, _token) {
+    _extractResponseText(result) {
+        if (!result || typeof result !== 'object') {
+            return undefined;
+        }
+        const candidate = result.response;
+        return typeof candidate === 'string' ? candidate : undefined;
+    }
+    _getErrorMessage(error) {
+        return error instanceof Error ? error.message : String(error);
+    }
+    resolveWebviewView(webviewView, _context, _token) {
         this._view = webviewView;
         webviewView.webview.options = {
             enableScripts: true,
@@ -76,9 +87,6 @@ class GoOnChatViewProvider {
                 case 'getSessions':
                     this._sendSessionsList();
                     break;
-                case 'getSessions':
-                    this._sendSessionsList();
-                    break;
             }
         }, undefined, this.context.subscriptions);
     }
@@ -102,10 +110,11 @@ class GoOnChatViewProvider {
             const result = await this.manager.sendRequest('chat', {
                 messages: [{ role: 'user', content: text }]
             });
+            const responseText = this._extractResponseText(result);
             // Add response to current session
             const assistantMessage = {
                 role: 'assistant',
-                content: result.response || JSON.stringify(result),
+                content: responseText || JSON.stringify(result),
                 timestamp: new Date().toISOString()
             };
             this._addMessageToCurrentSession(assistantMessage);
@@ -118,7 +127,7 @@ class GoOnChatViewProvider {
         catch (error) {
             const errorMessage = {
                 role: 'error',
-                content: `Error: ${error.message}`,
+                content: `Error: ${this._getErrorMessage(error)}`,
                 timestamp: new Date().toISOString()
             };
             this._addMessageToCurrentSession(errorMessage);
@@ -148,14 +157,28 @@ class GoOnChatViewProvider {
             return;
         try {
             let result = '';
+            const approved = await this._confirmCodeExecution(code, language);
+            if (!approved) {
+                this._executionOutput.appendLine(`[blocked] ${new Date().toISOString()} language=${language}`);
+                this._view.webview.postMessage({
+                    type: 'codeResult',
+                    result: 'Execution canceled by user.'
+                });
+                return;
+            }
             switch (language) {
                 case 'javascript':
                     try {
-                        // Use Function constructor instead of eval for better security
+                        const blockedReason = this._validateJavaScriptSnippet(code);
+                        if (blockedReason) {
+                            result = `Blocked by safety policy: ${blockedReason}`;
+                            break;
+                        }
+                        // Keep compatibility with current behavior but guard dangerous globals.
                         result = String(new Function('return (' + code + ')()')());
                     }
                     catch (e) {
-                        result = `Error: ${e.message}`;
+                        result = `Error: ${this._getErrorMessage(e)}`;
                     }
                     break;
                 case 'python':
@@ -168,6 +191,9 @@ class GoOnChatViewProvider {
                 default:
                     result = `Code execution not supported for ${language}`;
             }
+            this._executionOutput.appendLine(`[exec] ${new Date().toISOString()} language=${language}`);
+            this._executionOutput.appendLine(`[code] ${code.substring(0, 240)}`);
+            this._executionOutput.appendLine(`[result] ${result.substring(0, 240)}`);
             this._view.webview.postMessage({
                 type: 'codeResult',
                 result: result
@@ -176,9 +202,34 @@ class GoOnChatViewProvider {
         catch (error) {
             this._view.webview.postMessage({
                 type: 'codeResult',
-                result: `Execution failed: ${error.message}`
+                result: `Execution failed: ${this._getErrorMessage(error)}`
             });
+            this._executionOutput.appendLine(`[error] ${new Date().toISOString()} ${this._getErrorMessage(error)}`);
         }
+    }
+    async _confirmCodeExecution(code, language) {
+        const preview = code.trim().replace(/\s+/g, ' ').slice(0, 120);
+        const executeOption = 'Execute';
+        const cancelOption = 'Cancel';
+        const choice = await vscode.window.showWarningMessage(`Go-On is about to execute local ${language} code. Preview: ${preview || '<empty>'}`, { modal: true }, executeOption, cancelOption);
+        return choice === executeOption;
+    }
+    _validateJavaScriptSnippet(code) {
+        const dangerousPatterns = [
+            { pattern: /\brequire\s*\(/i, reason: 'require() is not allowed.' },
+            { pattern: /\bimport\s+/i, reason: 'import is not allowed.' },
+            { pattern: /\bprocess\b/i, reason: 'process access is not allowed.' },
+            { pattern: /\bglobal\b/i, reason: 'global access is not allowed.' },
+            { pattern: /\beval\s*\(/i, reason: 'eval() is not allowed.' },
+            { pattern: /\bFunction\s*\(/i, reason: 'nested Function constructor is not allowed.' },
+            { pattern: /\bchild_process\b/i, reason: 'child process modules are not allowed.' }
+        ];
+        for (const { pattern, reason } of dangerousPatterns) {
+            if (pattern.test(code)) {
+                return reason;
+            }
+        }
+        return null;
     }
     async _executePythonCode(code) {
         return new Promise((resolve) => {

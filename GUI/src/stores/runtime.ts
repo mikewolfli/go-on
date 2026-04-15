@@ -15,11 +15,14 @@ import {
     type LogChunk,
     type ServiceStatus,
 } from "../services/bridge";
+import { defaultRuntimeBaseUrl } from "../services/protocolContract";
+
+const defaultHealthEndpoint = `${defaultRuntimeBaseUrl.replace(/\/$/, "")}/health`;
 
 export const useRuntimeStore = defineStore("runtime", {
     state: () => ({
         status: { running: false } as ServiceStatus,
-        health: { ok: false, endpoint: "http://127.0.0.1:8090/health" } as HealthSnapshot,
+        health: { ok: false, endpoint: defaultHealthEndpoint } as HealthSnapshot,
         aiUsage: {
             timestamp: new Date().toISOString(),
             requestsPerMinute: 0,
@@ -45,11 +48,13 @@ export const useRuntimeStore = defineStore("runtime", {
         } as UsageHeatmap,
         statusTimer: undefined as number | undefined,
         logsTimer: undefined as number | undefined,
+        statusPollingInFlight: false,
+        logsPollingInFlight: false,
         loading: false,
         lastError: "",
         offline: false,
         lastKnownStatus: { running: false } as ServiceStatus,
-        lastKnownHealth: { ok: false, endpoint: "http://127.0.0.1:8090/health" } as HealthSnapshot,
+        lastKnownHealth: { ok: false, endpoint: defaultHealthEndpoint } as HealthSnapshot,
         lastKnownAiUsage: {
             timestamp: new Date().toISOString(),
             requestsPerMinute: 0,
@@ -89,10 +94,8 @@ export const useRuntimeStore = defineStore("runtime", {
             try {
                 this.aiUsage = await getAiUsageSnapshot();
                 this.lastKnownAiUsage = this.aiUsage;
-                this.offline = false;
             } catch (error) {
                 this.lastError = String(error);
-                this.offline = true;
                 // Restore from last known
                 this.aiUsage = this.lastKnownAiUsage;
             }
@@ -100,10 +103,8 @@ export const useRuntimeStore = defineStore("runtime", {
         async refreshLogs(lines = 200) {
             try {
                 this.logs = await getRecentLogs(undefined, lines);
-                this.offline = false;
             } catch (error) {
                 this.lastError = String(error);
-                this.offline = true;
                 // Logs are not critical for offline mode
             }
         },
@@ -155,9 +156,17 @@ export const useRuntimeStore = defineStore("runtime", {
         },
         startStatusPolling() {
             this.stopStatusPolling();
-            this.refreshAll();
-            this.statusTimer = window.setInterval(() => {
-                this.refreshAll();
+            void this.refreshAll();
+            this.statusTimer = window.setInterval(async () => {
+                if (this.statusPollingInFlight) {
+                    return;
+                }
+                this.statusPollingInFlight = true;
+                try {
+                    await this.refreshAll();
+                } finally {
+                    this.statusPollingInFlight = false;
+                }
             }, this.statusPollingMs);
         },
         stopStatusPolling() {
@@ -165,12 +174,21 @@ export const useRuntimeStore = defineStore("runtime", {
                 window.clearInterval(this.statusTimer);
                 this.statusTimer = undefined;
             }
+            this.statusPollingInFlight = false;
         },
         startLogsPolling(lines = 200) {
             this.stopLogsPolling();
-            this.refreshLogs(lines);
-            this.logsTimer = window.setInterval(() => {
-                this.refreshLogs(lines);
+            void this.refreshLogs(lines);
+            this.logsTimer = window.setInterval(async () => {
+                if (this.logsPollingInFlight) {
+                    return;
+                }
+                this.logsPollingInFlight = true;
+                try {
+                    await this.refreshLogs(lines);
+                } finally {
+                    this.logsPollingInFlight = false;
+                }
             }, this.logsPollingMs);
         },
         stopLogsPolling() {
@@ -178,6 +196,7 @@ export const useRuntimeStore = defineStore("runtime", {
                 window.clearInterval(this.logsTimer);
                 this.logsTimer = undefined;
             }
+            this.logsPollingInFlight = false;
         },
     },
 });

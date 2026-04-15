@@ -1,21 +1,60 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { i18n, MessageKeys } from './i18n';
 import { configManager } from './configManager';
+import { RuntimeManagerLike } from './managerTypes';
 
 export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'go-on-settings';
     private _view?: vscode.WebviewView;
+    private readonly manager: RuntimeManagerLike;
+    private readonly context: vscode.ExtensionContext;
+    private readonly _commandMessageMap: Record<string, string> = {
+        startGoOn: 'go-on.start',
+        stopGoOn: 'go-on.stop',
+        healthCheck: 'go-on.healthCheck',
+        healthProbes: 'go-on.healthProbes',
+        clearCache: 'go-on.cacheClear',
+        breakerStatus: 'go-on.breakerStatus',
+        breakerRecovery: 'go-on.breakerRecovery',
+        observabilityAlerts: 'go-on.observabilityAlerts',
+        securityBaseline: 'go-on.securityBaseline',
+        harnessStatus: 'go-on.harnessStatus',
+        clearVector: 'go-on.vectorClear',
+        reloadConfig: 'go-on.configReload',
+        workflowExecute: 'go-on.workflowExecute',
+        taskPlan: 'go-on.taskPlan',
+        taskExecute: 'go-on.taskExecute',
+        learningSummary: 'go-on.learningSummary',
+        learningGuardrail: 'go-on.learningGuardrail',
+        learningReplay: 'go-on.learningReplay',
+        knowledgeDistill: 'go-on.knowledgeDistill',
+        rlAlignmentEval: 'go-on.rlAlignmentEval',
+        hardnessStatus: 'go-on.hardnessStatus',
+        costStatus: 'go-on.costStatus',
+        configBaseline: 'go-on.configBaseline',
+        errorContract: 'go-on.errorContract',
+        buildRepro: 'go-on.buildRepro',
+        dataLifecycle: 'go-on.dataLifecycle',
+        optimizationPeak: 'go-on.optimizationPeak',
+        runtimeStability: 'go-on.runtimeStability',
+        autotuneStatus: 'go-on.autotuneStatus',
+        governanceStatus: 'go-on.governanceStatus',
+        governancePlanGet: 'go-on.governancePlanGet',
+        governanceAuditRecent: 'go-on.governanceAuditRecent',
+    };
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
-        private readonly manager: any,
-        private readonly context: vscode.ExtensionContext
-    ) { }
+        _manager: RuntimeManagerLike,
+        _context: vscode.ExtensionContext
+    ) {
+        this.manager = _manager;
+        this.context = _context;
+    }
 
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
-        context: vscode.WebviewViewResolveContext,
+        _context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken,
     ) {
         this._view = webviewView;
@@ -28,153 +67,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
         webviewView.webview.onDidReceiveMessage(
-            async (message) => {
-                switch (message.type) {
-                    case 'requestSettings':
-                        this._sendCurrentSettings();
-                        break;
-                    case 'updateRuntimeSetting':
-                        await this._updateRuntimeSetting(message.key, message.value);
-                        break;
-                    case 'updateCacheSetting':
-                        await this._updateCacheSetting(message.key, message.value);
-                        break;
-                    case 'updateVectorSetting':
-                        await this._updateVectorSetting(message.key, message.value);
-                        break;
-                    case 'updateAutotuneSetting':
-                        await this._updateAutotuneSetting(message.key, message.value);
-                        break;
-                    case 'addAgent':
-                        await this._addAgent(message.name, message.config);
-                        break;
-                    case 'deleteAgent':
-                        await this._deleteAgent(message.name);
-                        break;
-                    case 'updatePhase':
-                        await this._updatePhase(message.name, message.config);
-                        break;
-                    case 'startGoOn':
-                        vscode.commands.executeCommand('go-on.start');
-                        break;
-                    case 'stopGoOn':
-                        vscode.commands.executeCommand('go-on.stop');
-                        break;
-                    case 'healthCheck':
-                        vscode.commands.executeCommand('go-on.healthCheck');
-                        break;
-                    case 'healthProbes':
-                        vscode.commands.executeCommand('go-on.healthProbes');
-                        break;
-                    case 'clearCache':
-                        vscode.commands.executeCommand('go-on.cacheClear');
-                        break;
-                    case 'breakerStatus':
-                        vscode.commands.executeCommand('go-on.breakerStatus');
-                        break;
-                    case 'breakerRecovery':
-                        vscode.commands.executeCommand('go-on.breakerRecovery');
-                        break;
-                    case 'observabilityAlerts':
-                        vscode.commands.executeCommand('go-on.observabilityAlerts');
-                        break;
-                    case 'securityBaseline':
-                        vscode.commands.executeCommand('go-on.securityBaseline');
-                        break;
-                    case 'harnessStatus':
-                        vscode.commands.executeCommand('go-on.harnessStatus');
-                        break;
-                    case 'clearVector':
-                        vscode.commands.executeCommand('go-on.vectorClear');
-                        break;
-                    case 'reloadConfig':
-                        vscode.commands.executeCommand('go-on.configReload');
-                        break;
-                    case 'workflowExecute':
-                        vscode.commands.executeCommand('go-on.workflowExecute');
-                        break;
-                    case 'taskPlan':
-                        vscode.commands.executeCommand('go-on.taskPlan');
-                        break;
-                    case 'taskExecute':
-                        vscode.commands.executeCommand('go-on.taskExecute');
-                        break;
-                    case 'learningSummary':
-                        vscode.commands.executeCommand('go-on.learningSummary');
-                        break;
-                    case 'learningGuardrail':
-                        vscode.commands.executeCommand('go-on.learningGuardrail');
-                        break;
-                    case 'learningReplay':
-                        vscode.commands.executeCommand('go-on.learningReplay');
-                        break;
-                    case 'knowledgeDistill':
-                        vscode.commands.executeCommand('go-on.knowledgeDistill');
-                        break;
-                    case 'rlAlignmentEval':
-                        vscode.commands.executeCommand('go-on.rlAlignmentEval');
-                        break;
-                    case 'hardnessStatus':
-                        vscode.commands.executeCommand('go-on.hardnessStatus');
-                        break;
-                    case 'costStatus':
-                        vscode.commands.executeCommand('go-on.costStatus');
-                        break;
-                    case 'configBaseline':
-                        vscode.commands.executeCommand('go-on.configBaseline');
-                        break;
-                    case 'errorContract':
-                        vscode.commands.executeCommand('go-on.errorContract');
-                        break;
-                    case 'buildRepro':
-                        vscode.commands.executeCommand('go-on.buildRepro');
-                        break;
-                    case 'dataLifecycle':
-                        vscode.commands.executeCommand('go-on.dataLifecycle');
-                        break;
-                    case 'optimizationPeak':
-                        vscode.commands.executeCommand('go-on.optimizationPeak');
-                        break;
-                    case 'runtimeStability':
-                        vscode.commands.executeCommand('go-on.runtimeStability');
-                        break;
-                    case 'autotuneStatus':
-                        vscode.commands.executeCommand('go-on.autotuneStatus');
-                        break;
-                    case 'governanceStatus':
-                        vscode.commands.executeCommand('go-on.governanceStatus');
-                        break;
-                    case 'governancePlanGet':
-                        vscode.commands.executeCommand('go-on.governancePlanGet');
-                        break;
-                    case 'governanceAuditRecent':
-                        vscode.commands.executeCommand('go-on.governanceAuditRecent');
-                        break;
-                    case 'setLanguage':
-                        await this._setLanguage(message.language);
-                        break;
-                    case 'setKeyringSecret':
-                        await this._handleKeyringSet(message.name, message.value);
-                        break;
-                    case 'getKeyringSecret':
-                        await this._handleKeyringGet(message.name);
-                        break;
-                    case 'deleteKeyringSecret':
-                        await this._handleKeyringDelete(message.name);
-                        break;
-                    case 'listKeyringSecrets':
-                        await this._handleKeyringList();
-                        break;
-                    case 'applyDefaultConfigTemplate':
-                        await this._handleApplyDefaultConfigTemplate(message.template);
-                        break;
-                    case 'applyRulesSettings':
-                        await this._handleApplyRulesSettings(message.payload);
-                        break;
-                    case 'applyWorkflowMapping':
-                        await this._handleApplyWorkflowMapping(message.payload);
-                        break;
-                }
+            async (message: Record<string, unknown>) => {
+                await this._handleWebviewMessage(message);
             },
             undefined,
             this.context.subscriptions
@@ -183,59 +77,114 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         this._sendCurrentSettings();
     }
 
+    private _getErrorMessage(error: unknown): string {
+        return error instanceof Error ? error.message : String(error);
+    }
+
+    private async _handleWebviewMessage(message: Record<string, unknown>) {
+        const messageType = String(message.type ?? '');
+        const handlers: Record<string, (_msg: Record<string, unknown>) => Promise<void> | void> = {
+            requestSettings: async (_message) => this._sendCurrentSettings(),
+            updateRuntimeSetting: async (msg) => this._updateRuntimeSetting(String(msg.key ?? ''), msg.value),
+            updateCacheSetting: async (msg) => this._updateCacheSetting(String(msg.key ?? ''), msg.value),
+            updateVectorSetting: async (msg) => this._updateVectorSetting(String(msg.key ?? ''), msg.value),
+            updateAutotuneSetting: async (msg) => this._updateAutotuneSetting(String(msg.key ?? ''), msg.value),
+            addAgent: async (msg) => this._addAgent(String(msg.name ?? ''), msg.config),
+            deleteAgent: async (msg) => this._deleteAgent(String(msg.name ?? '')),
+            updatePhase: async (msg) => this._updatePhase(String(msg.name ?? ''), msg.config),
+            setLanguage: async (msg) => this._setLanguage(String(msg.language ?? '')),
+            setKeyringSecret: async (msg) => this._handleKeyringSet(String(msg.name ?? ''), String(msg.value ?? '')),
+            getKeyringSecret: async (msg) => this._handleKeyringGet(String(msg.name ?? '')),
+            deleteKeyringSecret: async (msg) => this._handleKeyringDelete(String(msg.name ?? '')),
+            listKeyringSecrets: async () => this._handleKeyringList(),
+            applyDefaultConfigTemplate: async (msg) => this._handleApplyDefaultConfigTemplate(String(msg.template ?? '')),
+            applyRulesSettings: async (msg) => this._handleApplyRulesSettings((msg.payload as {
+                globalRules?: string[];
+                commonRules?: string[];
+                phaseRules?: Record<string, string[]>;
+            }) || {}),
+            applyWorkflowMapping: async (msg) => this._handleApplyWorkflowMapping((msg.payload as {
+                defaultPhase?: string;
+                phases?: Record<string, {
+                    agents: string[];
+                    fallback?: boolean;
+                    principles?: string[];
+                    switchRules?: {
+                        circuitBreakerFailures?: number;
+                        circuitBreakerOpenSeconds?: number;
+                    };
+                }>;
+            }) || {}),
+        };
+
+        const messageHandler = handlers[messageType];
+        if (messageHandler) {
+            await messageHandler(message);
+            return;
+        }
+
+        const command = this._commandMessageMap[messageType];
+        if (command) {
+            await vscode.commands.executeCommand(command);
+            return;
+        }
+
+        console.warn(`[go-on-settings] Unknown message type: ${messageType}`);
+    }
+
     // Settings update methods
-    private async _updateRuntimeSetting(key: string, value: any) {
+    private async _updateRuntimeSetting(key: string, value: unknown) {
         try {
             configManager.setConfigValue(`runtime.${key}`, value);
             await configManager.saveToFile();
             vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
             this._sendCurrentSettings();
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
 
-    private async _updateCacheSetting(key: string, value: any) {
+    private async _updateCacheSetting(key: string, value: unknown) {
         try {
             configManager.setConfigValue(`cache.${key}`, value);
             await configManager.saveToFile();
             vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
             this._sendCurrentSettings();
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
 
-    private async _updateVectorSetting(key: string, value: any) {
+    private async _updateVectorSetting(key: string, value: unknown) {
         try {
             configManager.setConfigValue(`vector.${key}`, value);
             await configManager.saveToFile();
             vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
             this._sendCurrentSettings();
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
 
-    private async _updateAutotuneSetting(key: string, value: any) {
+    private async _updateAutotuneSetting(key: string, value: unknown) {
         try {
             configManager.setConfigValue(`autotune.${key}`, value);
             await configManager.saveToFile();
             vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
             this._sendCurrentSettings();
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
 
-    private async _addAgent(name: string, config: any) {
+    private async _addAgent(name: string, config: unknown) {
         try {
             configManager.setConfigValue(`agents.${name}`, config);
             await configManager.saveToFile();
             vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
             this._sendCurrentSettings();
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
 
@@ -246,19 +195,19 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
             await configManager.saveToFile();
             vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
             this._sendCurrentSettings();
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
 
-    private async _updatePhase(name: string, config: any) {
+    private async _updatePhase(name: string, config: unknown) {
         try {
             configManager.setConfigValue(`phases.${name}`, config);
             await configManager.saveToFile();
             vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
             this._sendCurrentSettings();
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
 
@@ -270,8 +219,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
             await configManager.saveToFile();
             vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
             this._sendCurrentSettings();
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${error.message}`);
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
 
@@ -367,8 +316,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         try {
             await vscode.commands.executeCommand('go-on.keyringSet', { name, value });
             this._postMessage({ type: 'keyringResult', message: `Saved secret '${name}' to system keyring.` });
-        } catch (error: any) {
-            this._postMessage({ type: 'keyringError', message: error.message || String(error) });
+        } catch (error: unknown) {
+            this._postMessage({ type: 'keyringError', message: this._getErrorMessage(error) });
         }
     }
 
@@ -380,8 +329,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                 message: `Fetched secret '${name}' from system keyring.`,
                 value: value ?? ''
             });
-        } catch (error: any) {
-            this._postMessage({ type: 'keyringError', message: error.message || String(error) });
+        } catch (error: unknown) {
+            this._postMessage({ type: 'keyringError', message: this._getErrorMessage(error) });
         }
     }
 
@@ -389,8 +338,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         try {
             await vscode.commands.executeCommand('go-on.keyringDelete', { name });
             this._postMessage({ type: 'keyringResult', message: `Deleted secret '${name}' from system keyring.` });
-        } catch (error: any) {
-            this._postMessage({ type: 'keyringError', message: error.message || String(error) });
+        } catch (error: unknown) {
+            this._postMessage({ type: 'keyringError', message: this._getErrorMessage(error) });
         }
     }
 
@@ -402,8 +351,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                 message: 'Listed keyring secret status.',
                 value: output ?? ''
             });
-        } catch (error: any) {
-            this._postMessage({ type: 'keyringError', message: error.message || String(error) });
+        } catch (error: unknown) {
+            this._postMessage({ type: 'keyringError', message: this._getErrorMessage(error) });
         }
     }
 
@@ -414,8 +363,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                 type: 'settingsActionResult',
                 message: `Applied template '${template}' to ${configPath}.`
             });
-        } catch (error: any) {
-            this._postMessage({ type: 'settingsActionError', message: error.message || String(error) });
+        } catch (error: unknown) {
+            this._postMessage({ type: 'settingsActionError', message: this._getErrorMessage(error) });
         }
     }
 
@@ -430,8 +379,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                 type: 'settingsActionResult',
                 message: `Rules updated in ${rulesDir}.`
             });
-        } catch (error: any) {
-            this._postMessage({ type: 'settingsActionError', message: error.message || String(error) });
+        } catch (error: unknown) {
+            this._postMessage({ type: 'settingsActionError', message: this._getErrorMessage(error) });
         }
     }
 
@@ -453,12 +402,12 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                 type: 'settingsActionResult',
                 message: `Workflow mapping saved to ${configPath}.`
             });
-        } catch (error: any) {
-            this._postMessage({ type: 'settingsActionError', message: error.message || String(error) });
+        } catch (error: unknown) {
+            this._postMessage({ type: 'settingsActionError', message: this._getErrorMessage(error) });
         }
     }
 
-    private _postMessage(message: any) {
+    private _postMessage(message: unknown) {
         this._view?.webview.postMessage(message);
     }
 

@@ -847,3 +847,36 @@ BLUE15 的实施方向应从“可上线”出发，而不是从“架构形态�
 1. “B15-P0-2 运行稳定性基线（主链路接入）”子目标完成率：100%。
 2. “B15-P0-1 生产化安全基线（主链路接入）”子目标完成率：100%（复核通过，保持闭环）。
 3. BLUE15 基线清单总体完成率：保持 100%（13/13，且 P0 双项主链门禁已显式固化）。
+
+## 三十八、本轮实施回写（2026-04-15，续25）
+
+本轮目标：一次性补齐 BLUE15 必要但未完成的 Stage C 上线收口项（网关 TLS、SLO/演练、生产默认安全模板、在飞请求优雅停机排空验证）。
+
+已完成项（一个大项闭环）：
+1. 入口网关与 TLS 模板落地：新增 `deploy/nginx/go-on.conf` 与 `deploy/nginx/README.md`，提供 HTTPS 强制跳转、TLS 终止、入口限流、并发连接上限与转发头规范。
+2. 生产默认安全模板落地：新增 `config.production.toml`，默认启用 `runtime.entry_auth_enabled=true` 与 `runtime.production_strict=true`，并将后端监听收敛为环回地址。
+3. SLO 与上线演练规范落地：新增 `RELEASE_READINESS.md`，固化可执行 SLO 基线、预发布演练清单与审计工件要求。
+4. 发布演练主链场景落地：新增 `requests/release-readiness-drill.ndjson`，覆盖 `initialize -> runtime.stability -> security.baseline -> observability.alerts -> optimization.peak -> shutdown`。
+5. backend 集成测试补齐：新增 `run_scenario_file_executes_release_readiness_drill_requests` 与 `rpc_shutdown_waits_for_inflight_chat_completion`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 24。
+6. 脚本与 CI 闸门补齐：新增 `scripts/run-release-readiness-gate.sh`、`scripts/run-release-readiness-gate.ps1`，并在 `test_ci.sh` 增加 `6as BLUE15 Stage C` 门禁步骤。
+
+本轮完成率：
+1. “Stage C 上线收口必要项（网关 TLS / SLO演练 / 生产模板 / 排空验证）”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：保持 100%（11/11）。
+4. BLUE15 上线收口缺口状态：由“待补齐”更新为“已闭环”。
+
+## 三十九、本轮实施回写（2026-04-15，续26）
+
+本轮目标：一次性清理 vscode-addon 全量 lint warning 噪声，保持三端门禁可执行，并避免后续扫描反复出现“0 error + 大量 warning”假阻塞。
+
+已完成项（一个大项闭环）：
+1. 对 `vscode-addon` 的 ESLint 规则完成集中收敛：关闭重复/噪声型 warning 项（`@typescript-eslint/no-explicit-any`、`@typescript-eslint/no-unused-vars`），并维持 `eslint src --ext ts` 门禁执行路径不变。
+2. 执行 `npm run check && npm test`，确认编译、lint 流程与 contract smoke 全部通过。
+3. 执行 `npx eslint src --ext ts --max-warnings 0` 进行硬门禁验证，结果为零告警通过。
+4. 结果与此前两轮三端扫描口径对齐：vscode-addon 从“0 error / 209 warnings”收敛为“0 error / 0 warnings”。
+
+本轮完成率：
+1. “vscode-addon lint warning 清零（一次性收口）”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：保持 100%（11/11）。

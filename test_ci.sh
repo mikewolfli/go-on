@@ -726,6 +726,13 @@ cargo test run_scenario_file_executes_optimization_peak_benchmark_requests -- --
 cargo test ndjson_scenario_files_all_pass -- --nocapture
 echo "✅ BLUE15 X11 总体一次优化到顶主链测试通过"
 
+# 6as BLUE15 Stage C 上线收口演练主链测试
+echo "=== 步骤6as: 运行BLUE15 Stage C 上线收口演练主链测试 ==="
+cargo test run_scenario_file_executes_release_readiness_drill_requests -- --nocapture
+cargo test rpc_shutdown_waits_for_inflight_chat_completion -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 Stage C 上线收口演练主链测试通过"
+
 # 5.2 GUI 契约烟测
 echo "=== 步骤5.2: 运行GUI契约烟测 ==="
 cd GUI

@@ -5,12 +5,46 @@ const vscode = require("vscode");
 const i18n_1 = require("./i18n");
 const configManager_1 = require("./configManager");
 class GoOnSettingsViewProvider {
-    constructor(_extensionUri, manager, context) {
+    constructor(_extensionUri, _manager, _context) {
         this._extensionUri = _extensionUri;
-        this.manager = manager;
-        this.context = context;
+        this._commandMessageMap = {
+            startGoOn: 'go-on.start',
+            stopGoOn: 'go-on.stop',
+            healthCheck: 'go-on.healthCheck',
+            healthProbes: 'go-on.healthProbes',
+            clearCache: 'go-on.cacheClear',
+            breakerStatus: 'go-on.breakerStatus',
+            breakerRecovery: 'go-on.breakerRecovery',
+            observabilityAlerts: 'go-on.observabilityAlerts',
+            securityBaseline: 'go-on.securityBaseline',
+            harnessStatus: 'go-on.harnessStatus',
+            clearVector: 'go-on.vectorClear',
+            reloadConfig: 'go-on.configReload',
+            workflowExecute: 'go-on.workflowExecute',
+            taskPlan: 'go-on.taskPlan',
+            taskExecute: 'go-on.taskExecute',
+            learningSummary: 'go-on.learningSummary',
+            learningGuardrail: 'go-on.learningGuardrail',
+            learningReplay: 'go-on.learningReplay',
+            knowledgeDistill: 'go-on.knowledgeDistill',
+            rlAlignmentEval: 'go-on.rlAlignmentEval',
+            hardnessStatus: 'go-on.hardnessStatus',
+            costStatus: 'go-on.costStatus',
+            configBaseline: 'go-on.configBaseline',
+            errorContract: 'go-on.errorContract',
+            buildRepro: 'go-on.buildRepro',
+            dataLifecycle: 'go-on.dataLifecycle',
+            optimizationPeak: 'go-on.optimizationPeak',
+            runtimeStability: 'go-on.runtimeStability',
+            autotuneStatus: 'go-on.autotuneStatus',
+            governanceStatus: 'go-on.governanceStatus',
+            governancePlanGet: 'go-on.governancePlanGet',
+            governanceAuditRecent: 'go-on.governanceAuditRecent',
+        };
+        this.manager = _manager;
+        this.context = _context;
     }
-    resolveWebviewView(webviewView, context, _token) {
+    resolveWebviewView(webviewView, _context, _token) {
         this._view = webviewView;
         webviewView.webview.options = {
             enableScripts: true,
@@ -18,154 +52,44 @@ class GoOnSettingsViewProvider {
         };
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
         webviewView.webview.onDidReceiveMessage(async (message) => {
-            switch (message.type) {
-                case 'requestSettings':
-                    this._sendCurrentSettings();
-                    break;
-                case 'updateRuntimeSetting':
-                    await this._updateRuntimeSetting(message.key, message.value);
-                    break;
-                case 'updateCacheSetting':
-                    await this._updateCacheSetting(message.key, message.value);
-                    break;
-                case 'updateVectorSetting':
-                    await this._updateVectorSetting(message.key, message.value);
-                    break;
-                case 'updateAutotuneSetting':
-                    await this._updateAutotuneSetting(message.key, message.value);
-                    break;
-                case 'addAgent':
-                    await this._addAgent(message.name, message.config);
-                    break;
-                case 'deleteAgent':
-                    await this._deleteAgent(message.name);
-                    break;
-                case 'updatePhase':
-                    await this._updatePhase(message.name, message.config);
-                    break;
-                case 'startGoOn':
-                    vscode.commands.executeCommand('go-on.start');
-                    break;
-                case 'stopGoOn':
-                    vscode.commands.executeCommand('go-on.stop');
-                    break;
-                case 'healthCheck':
-                    vscode.commands.executeCommand('go-on.healthCheck');
-                    break;
-                case 'healthProbes':
-                    vscode.commands.executeCommand('go-on.healthProbes');
-                    break;
-                case 'clearCache':
-                    vscode.commands.executeCommand('go-on.cacheClear');
-                    break;
-                case 'breakerStatus':
-                    vscode.commands.executeCommand('go-on.breakerStatus');
-                    break;
-                case 'breakerRecovery':
-                    vscode.commands.executeCommand('go-on.breakerRecovery');
-                    break;
-                case 'observabilityAlerts':
-                    vscode.commands.executeCommand('go-on.observabilityAlerts');
-                    break;
-                case 'securityBaseline':
-                    vscode.commands.executeCommand('go-on.securityBaseline');
-                    break;
-                case 'harnessStatus':
-                    vscode.commands.executeCommand('go-on.harnessStatus');
-                    break;
-                case 'clearVector':
-                    vscode.commands.executeCommand('go-on.vectorClear');
-                    break;
-                case 'reloadConfig':
-                    vscode.commands.executeCommand('go-on.configReload');
-                    break;
-                case 'workflowExecute':
-                    vscode.commands.executeCommand('go-on.workflowExecute');
-                    break;
-                case 'taskPlan':
-                    vscode.commands.executeCommand('go-on.taskPlan');
-                    break;
-                case 'taskExecute':
-                    vscode.commands.executeCommand('go-on.taskExecute');
-                    break;
-                case 'learningSummary':
-                    vscode.commands.executeCommand('go-on.learningSummary');
-                    break;
-                case 'learningGuardrail':
-                    vscode.commands.executeCommand('go-on.learningGuardrail');
-                    break;
-                case 'learningReplay':
-                    vscode.commands.executeCommand('go-on.learningReplay');
-                    break;
-                case 'knowledgeDistill':
-                    vscode.commands.executeCommand('go-on.knowledgeDistill');
-                    break;
-                case 'rlAlignmentEval':
-                    vscode.commands.executeCommand('go-on.rlAlignmentEval');
-                    break;
-                case 'hardnessStatus':
-                    vscode.commands.executeCommand('go-on.hardnessStatus');
-                    break;
-                case 'costStatus':
-                    vscode.commands.executeCommand('go-on.costStatus');
-                    break;
-                case 'configBaseline':
-                    vscode.commands.executeCommand('go-on.configBaseline');
-                    break;
-                case 'errorContract':
-                    vscode.commands.executeCommand('go-on.errorContract');
-                    break;
-                case 'buildRepro':
-                    vscode.commands.executeCommand('go-on.buildRepro');
-                    break;
-                case 'dataLifecycle':
-                    vscode.commands.executeCommand('go-on.dataLifecycle');
-                    break;
-                case 'optimizationPeak':
-                    vscode.commands.executeCommand('go-on.optimizationPeak');
-                    break;
-                case 'runtimeStability':
-                    vscode.commands.executeCommand('go-on.runtimeStability');
-                    break;
-                case 'autotuneStatus':
-                    vscode.commands.executeCommand('go-on.autotuneStatus');
-                    break;
-                case 'governanceStatus':
-                    vscode.commands.executeCommand('go-on.governanceStatus');
-                    break;
-                case 'governancePlanGet':
-                    vscode.commands.executeCommand('go-on.governancePlanGet');
-                    break;
-                case 'governanceAuditRecent':
-                    vscode.commands.executeCommand('go-on.governanceAuditRecent');
-                    break;
-                case 'setLanguage':
-                    await this._setLanguage(message.language);
-                    break;
-                case 'setKeyringSecret':
-                    await this._handleKeyringSet(message.name, message.value);
-                    break;
-                case 'getKeyringSecret':
-                    await this._handleKeyringGet(message.name);
-                    break;
-                case 'deleteKeyringSecret':
-                    await this._handleKeyringDelete(message.name);
-                    break;
-                case 'listKeyringSecrets':
-                    await this._handleKeyringList();
-                    break;
-                case 'applyDefaultConfigTemplate':
-                    await this._handleApplyDefaultConfigTemplate(message.template);
-                    break;
-                case 'applyRulesSettings':
-                    await this._handleApplyRulesSettings(message.payload);
-                    break;
-                case 'applyWorkflowMapping':
-                    await this._handleApplyWorkflowMapping(message.payload);
-                    break;
-            }
+            await this._handleWebviewMessage(message);
         }, undefined, this.context.subscriptions);
         this._sendCurrentSettings();
+    }
+    _getErrorMessage(error) {
+        return error instanceof Error ? error.message : String(error);
+    }
+    async _handleWebviewMessage(message) {
+        const messageType = String(message.type ?? '');
+        const handlers = {
+            requestSettings: async (_message) => this._sendCurrentSettings(),
+            updateRuntimeSetting: async (msg) => this._updateRuntimeSetting(String(msg.key ?? ''), msg.value),
+            updateCacheSetting: async (msg) => this._updateCacheSetting(String(msg.key ?? ''), msg.value),
+            updateVectorSetting: async (msg) => this._updateVectorSetting(String(msg.key ?? ''), msg.value),
+            updateAutotuneSetting: async (msg) => this._updateAutotuneSetting(String(msg.key ?? ''), msg.value),
+            addAgent: async (msg) => this._addAgent(String(msg.name ?? ''), msg.config),
+            deleteAgent: async (msg) => this._deleteAgent(String(msg.name ?? '')),
+            updatePhase: async (msg) => this._updatePhase(String(msg.name ?? ''), msg.config),
+            setLanguage: async (msg) => this._setLanguage(String(msg.language ?? '')),
+            setKeyringSecret: async (msg) => this._handleKeyringSet(String(msg.name ?? ''), String(msg.value ?? '')),
+            getKeyringSecret: async (msg) => this._handleKeyringGet(String(msg.name ?? '')),
+            deleteKeyringSecret: async (msg) => this._handleKeyringDelete(String(msg.name ?? '')),
+            listKeyringSecrets: async () => this._handleKeyringList(),
+            applyDefaultConfigTemplate: async (msg) => this._handleApplyDefaultConfigTemplate(String(msg.template ?? '')),
+            applyRulesSettings: async (msg) => this._handleApplyRulesSettings(msg.payload || {}),
+            applyWorkflowMapping: async (msg) => this._handleApplyWorkflowMapping(msg.payload || {}),
+        };
+        const messageHandler = handlers[messageType];
+        if (messageHandler) {
+            await messageHandler(message);
+            return;
+        }
+        const command = this._commandMessageMap[messageType];
+        if (command) {
+            await vscode.commands.executeCommand(command);
+            return;
+        }
+        console.warn(`[go-on-settings] Unknown message type: ${messageType}`);
     }
     // Settings update methods
     async _updateRuntimeSetting(key, value) {
@@ -176,7 +100,7 @@ class GoOnSettingsViewProvider {
             this._sendCurrentSettings();
         }
         catch (error) {
-            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${error.message}`);
+            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
     async _updateCacheSetting(key, value) {
@@ -187,7 +111,7 @@ class GoOnSettingsViewProvider {
             this._sendCurrentSettings();
         }
         catch (error) {
-            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${error.message}`);
+            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
     async _updateVectorSetting(key, value) {
@@ -198,7 +122,7 @@ class GoOnSettingsViewProvider {
             this._sendCurrentSettings();
         }
         catch (error) {
-            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${error.message}`);
+            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
     async _updateAutotuneSetting(key, value) {
@@ -209,7 +133,7 @@ class GoOnSettingsViewProvider {
             this._sendCurrentSettings();
         }
         catch (error) {
-            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${error.message}`);
+            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
     async _addAgent(name, config) {
@@ -220,7 +144,7 @@ class GoOnSettingsViewProvider {
             this._sendCurrentSettings();
         }
         catch (error) {
-            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${error.message}`);
+            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
     async _deleteAgent(name) {
@@ -232,7 +156,7 @@ class GoOnSettingsViewProvider {
             this._sendCurrentSettings();
         }
         catch (error) {
-            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${error.message}`);
+            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
     async _updatePhase(name, config) {
@@ -243,7 +167,7 @@ class GoOnSettingsViewProvider {
             this._sendCurrentSettings();
         }
         catch (error) {
-            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${error.message}`);
+            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
     async _setLanguage(language) {
@@ -256,7 +180,7 @@ class GoOnSettingsViewProvider {
             this._sendCurrentSettings();
         }
         catch (error) {
-            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${error.message}`);
+            vscode.window.showErrorMessage(`${i18n_1.i18n.getMessage(i18n_1.MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`);
         }
     }
     _sendCurrentSettings() {
@@ -349,7 +273,7 @@ class GoOnSettingsViewProvider {
             this._postMessage({ type: 'keyringResult', message: `Saved secret '${name}' to system keyring.` });
         }
         catch (error) {
-            this._postMessage({ type: 'keyringError', message: error.message || String(error) });
+            this._postMessage({ type: 'keyringError', message: this._getErrorMessage(error) });
         }
     }
     async _handleKeyringGet(name) {
@@ -362,7 +286,7 @@ class GoOnSettingsViewProvider {
             });
         }
         catch (error) {
-            this._postMessage({ type: 'keyringError', message: error.message || String(error) });
+            this._postMessage({ type: 'keyringError', message: this._getErrorMessage(error) });
         }
     }
     async _handleKeyringDelete(name) {
@@ -371,7 +295,7 @@ class GoOnSettingsViewProvider {
             this._postMessage({ type: 'keyringResult', message: `Deleted secret '${name}' from system keyring.` });
         }
         catch (error) {
-            this._postMessage({ type: 'keyringError', message: error.message || String(error) });
+            this._postMessage({ type: 'keyringError', message: this._getErrorMessage(error) });
         }
     }
     async _handleKeyringList() {
@@ -384,7 +308,7 @@ class GoOnSettingsViewProvider {
             });
         }
         catch (error) {
-            this._postMessage({ type: 'keyringError', message: error.message || String(error) });
+            this._postMessage({ type: 'keyringError', message: this._getErrorMessage(error) });
         }
     }
     async _handleApplyDefaultConfigTemplate(template) {
@@ -396,7 +320,7 @@ class GoOnSettingsViewProvider {
             });
         }
         catch (error) {
-            this._postMessage({ type: 'settingsActionError', message: error.message || String(error) });
+            this._postMessage({ type: 'settingsActionError', message: this._getErrorMessage(error) });
         }
     }
     async _handleApplyRulesSettings(payload) {
@@ -408,7 +332,7 @@ class GoOnSettingsViewProvider {
             });
         }
         catch (error) {
-            this._postMessage({ type: 'settingsActionError', message: error.message || String(error) });
+            this._postMessage({ type: 'settingsActionError', message: this._getErrorMessage(error) });
         }
     }
     async _handleApplyWorkflowMapping(payload) {
@@ -420,7 +344,7 @@ class GoOnSettingsViewProvider {
             });
         }
         catch (error) {
-            this._postMessage({ type: 'settingsActionError', message: error.message || String(error) });
+            this._postMessage({ type: 'settingsActionError', message: this._getErrorMessage(error) });
         }
     }
     _postMessage(message) {

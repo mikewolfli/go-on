@@ -3,12 +3,19 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.GoOnProcessFlowViewProvider = void 0;
 const vscode = require("vscode");
 class GoOnProcessFlowViewProvider {
-    constructor(_extensionUri, manager, context) {
+    constructor(_extensionUri, _manager, _context) {
         this._extensionUri = _extensionUri;
-        this.manager = manager;
-        this.context = context;
+        this.manager = _manager;
+        this.context = _context;
     }
-    resolveWebviewView(webviewView, context, _token) {
+    _extractResponseText(result) {
+        if (!result || typeof result !== 'object') {
+            return undefined;
+        }
+        const candidate = result.response;
+        return typeof candidate === 'string' ? candidate : undefined;
+    }
+    resolveWebviewView(webviewView, _context, _token) {
         this._view = webviewView;
         webviewView.webview.options = {
             enableScripts: true,
@@ -35,6 +42,9 @@ class GoOnProcessFlowViewProvider {
         }, undefined, this.context.subscriptions);
         // Load existing processes
         this._loadProcesses();
+    }
+    getErrorMessage(error) {
+        return error instanceof Error ? error.message : String(error);
     }
     async _loadProcesses() {
         const processes = this.context.globalState.get('go-on-processes', {});
@@ -103,18 +113,19 @@ class GoOnProcessFlowViewProvider {
                 });
                 // Execute stage based on type
                 switch (stage.type) {
-                    case 'chat':
+                    case 'chat': {
                         const result = await this.manager.sendRequest('chat', {
                             messages: [{ role: 'user', content: stage.prompt }]
                         });
-                        stage.result = result.response;
+                        stage.result = this._extractResponseText(result) || '';
                         break;
+                    }
                     case 'code':
                         // Code execution result would be handled
                         stage.result = 'Code execution completed';
                         break;
                     case 'delay':
-                        await new Promise(resolve => setTimeout(resolve, stage.delay * 1000));
+                        await new Promise(resolve => setTimeout(resolve, Number(stage.delay || 0) * 1000));
                         break;
                     case 'manual':
                         // Wait for manual confirmation
@@ -145,15 +156,16 @@ class GoOnProcessFlowViewProvider {
         }
         catch (error) {
             process.status = 'failed';
-            process.error = error.message;
+            const message = this.getErrorMessage(error);
+            process.error = message;
             await this.context.globalState.update('go-on-processes', processes);
             this._view?.webview.postMessage({
                 type: 'processStatusUpdate',
                 processId,
                 status: 'failed',
-                error: error.message
+                error: message
             });
-            vscode.window.showErrorMessage(`Process failed: ${error.message}`);
+            vscode.window.showErrorMessage(`Process failed: ${message}`);
         }
     }
     async _updateProcess(processId, updates) {
@@ -184,7 +196,7 @@ class GoOnProcessFlowViewProvider {
         }
         catch (error) {
             console.error('Failed to update process:', error);
-            vscode.window.showErrorMessage(`Failed to update process: ${error.message}`);
+            vscode.window.showErrorMessage(`Failed to update process: ${this.getErrorMessage(error)}`);
         }
     }
     _getHtmlForWebview(webview) {

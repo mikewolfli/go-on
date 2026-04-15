@@ -1,26 +1,42 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { spawn } from 'child_process';
+import { RuntimeManagerLike } from './managerTypes';
+
+type ChatRole = 'user' | 'assistant' | 'error';
+
+interface ChatMessage {
+    role: ChatRole;
+    content: string;
+    timestamp: string;
+}
 
 export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'go-on-chat';
     private _view?: vscode.WebviewView;
+    private readonly _executionOutput = vscode.window.createOutputChannel('Go-On Code Execution');
     private _currentSession: string = 'default';
-    private _sessions: Map<string, any[]> = new Map();
+    private _sessions: Map<string, ChatMessage[]> = new Map();
+
+    private readonly manager: RuntimeManagerLike;
+    private readonly context: vscode.ExtensionContext;
+    private readonly onViewResolved?: () => void | Promise<void>;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
-        private readonly manager: any,
-        private readonly context: vscode.ExtensionContext,
-        private readonly onViewResolved?: () => void | Promise<void>
+        _manager: RuntimeManagerLike,
+        _context: vscode.ExtensionContext,
+        _onViewResolved?: () => void | Promise<void>
     ) {
+        this.manager = _manager;
+        this.context = _context;
+        this.onViewResolved = _onViewResolved;
         this._loadSessions();
     }
 
     private _loadSessions() {
-        const storedSessions = this.context.globalState.get('go-on-chat-sessions', {});
+        const storedSessions = this.context.globalState.get<Record<string, unknown>>('go-on-chat-sessions', {});
         for (const [sessionName, messages] of Object.entries(storedSessions)) {
-            this._sessions.set(sessionName, messages as any[]);
+            this._sessions.set(sessionName, Array.isArray(messages) ? (messages as ChatMessage[]) : []);
         }
         // Ensure default session exists
         if (!this._sessions.has('default')) {
@@ -29,27 +45,39 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     private _saveSessions() {
-        const sessionsObject: { [key: string]: any[] } = {};
+        const sessionsObject: Record<string, ChatMessage[]> = {};
         for (const [sessionName, messages] of this._sessions) {
             sessionsObject[sessionName] = messages;
         }
         this.context.globalState.update('go-on-chat-sessions', sessionsObject);
     }
 
-    private _getCurrentSessionMessages(): any[] {
+    private _getCurrentSessionMessages(): ChatMessage[] {
         return this._sessions.get(this._currentSession) || [];
     }
 
-    private _addMessageToCurrentSession(message: any) {
+    private _addMessageToCurrentSession(message: ChatMessage) {
         const messages = this._getCurrentSessionMessages();
         messages.push(message);
         this._sessions.set(this._currentSession, messages);
         this._saveSessions();
     }
 
+    private _extractResponseText(result: unknown): string | undefined {
+        if (!result || typeof result !== 'object') {
+            return undefined;
+        }
+        const candidate = (result as { response?: unknown }).response;
+        return typeof candidate === 'string' ? candidate : undefined;
+    }
+
+    private _getErrorMessage(error: unknown): string {
+        return error instanceof Error ? error.message : String(error);
+    }
+
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
-        context: vscode.WebviewViewResolveContext,
+        _context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken,
     ) {
         this._view = webviewView;
@@ -93,9 +121,6 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                     case 'getSessions':
                         this._sendSessionsList();
                         break;
-                    case 'getSessions':
-                        this._sendSessionsList();
-                        break;
                 }
             },
             undefined,
@@ -112,7 +137,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                 role: 'user',
                 content: text,
                 timestamp: new Date().toISOString()
-            };
+            } as ChatMessage;
             this._addMessageToCurrentSession(userMessage);
 
             // Send message to UI
@@ -125,13 +150,14 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
             const result = await this.manager.sendRequest('chat', {
                 messages: [{ role: 'user', content: text }]
             });
+            const responseText = this._extractResponseText(result);
 
             // Add response to current session
             const assistantMessage = {
                 role: 'assistant',
-                content: result.response || JSON.stringify(result),
+                content: responseText || JSON.stringify(result),
                 timestamp: new Date().toISOString()
-            };
+            } as ChatMessage;
             this._addMessageToCurrentSession(assistantMessage);
 
             // Send response to UI
@@ -139,12 +165,12 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                 type: 'addMessage',
                 ...assistantMessage
             });
-        } catch (error: any) {
+        } catch (error: unknown) {
             const errorMessage = {
                 role: 'error',
-                content: `Error: ${error.message}`,
+                content: `Error: ${this._getErrorMessage(error)}`,
                 timestamp: new Date().toISOString()
-            };
+            } as ChatMessage;
             this._addMessageToCurrentSession(errorMessage);
 
             this._view.webview.postMessage({
@@ -154,7 +180,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    public postMessage(message: any) {
+    public postMessage(message: unknown) {
         this._view?.webview.postMessage(message);
     }
 
@@ -178,13 +204,29 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         try {
             let result = '';
 
+            const approved = await this._confirmCodeExecution(code, language);
+            if (!approved) {
+                this._executionOutput.appendLine(`[blocked] ${new Date().toISOString()} language=${language}`);
+                this._view.webview.postMessage({
+                    type: 'codeResult',
+                    result: 'Execution canceled by user.'
+                });
+                return;
+            }
+
             switch (language) {
                 case 'javascript':
                     try {
-                        // Use Function constructor instead of eval for better security
+                        const blockedReason = this._validateJavaScriptSnippet(code);
+                        if (blockedReason) {
+                            result = `Blocked by safety policy: ${blockedReason}`;
+                            break;
+                        }
+
+                        // Keep compatibility with current behavior but guard dangerous globals.
                         result = String(new Function('return (' + code + ')()')()); 
-                    } catch (e: any) {
-                        result = `Error: ${e.message}`;
+                    } catch (e: unknown) {
+                        result = `Error: ${this._getErrorMessage(e)}`;
                     }
                     break;
                 case 'python':
@@ -198,16 +240,55 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                     result = `Code execution not supported for ${language}`;
             }
 
+            this._executionOutput.appendLine(`[exec] ${new Date().toISOString()} language=${language}`);
+            this._executionOutput.appendLine(`[code] ${code.substring(0, 240)}`);
+            this._executionOutput.appendLine(`[result] ${result.substring(0, 240)}`);
+
             this._view.webview.postMessage({
                 type: 'codeResult',
                 result: result
             });
-        } catch (error: any) {
+        } catch (error: unknown) {
             this._view.webview.postMessage({
                 type: 'codeResult',
-                result: `Execution failed: ${error.message}`
+                result: `Execution failed: ${this._getErrorMessage(error)}`
             });
+            this._executionOutput.appendLine(`[error] ${new Date().toISOString()} ${this._getErrorMessage(error)}`);
         }
+    }
+
+    private async _confirmCodeExecution(code: string, language: string): Promise<boolean> {
+        const preview = code.trim().replace(/\s+/g, ' ').slice(0, 120);
+        const executeOption = 'Execute';
+        const cancelOption = 'Cancel';
+        const choice = await vscode.window.showWarningMessage(
+            `Go-On is about to execute local ${language} code. Preview: ${preview || '<empty>'}`,
+            { modal: true },
+            executeOption,
+            cancelOption
+        );
+
+        return choice === executeOption;
+    }
+
+    private _validateJavaScriptSnippet(code: string): string | null {
+        const dangerousPatterns: Array<{ pattern: RegExp; reason: string }> = [
+            { pattern: /\brequire\s*\(/i, reason: 'require() is not allowed.' },
+            { pattern: /\bimport\s+/i, reason: 'import is not allowed.' },
+            { pattern: /\bprocess\b/i, reason: 'process access is not allowed.' },
+            { pattern: /\bglobal\b/i, reason: 'global access is not allowed.' },
+            { pattern: /\beval\s*\(/i, reason: 'eval() is not allowed.' },
+            { pattern: /\bFunction\s*\(/i, reason: 'nested Function constructor is not allowed.' },
+            { pattern: /\bchild_process\b/i, reason: 'child process modules are not allowed.' }
+        ];
+
+        for (const { pattern, reason } of dangerousPatterns) {
+            if (pattern.test(code)) {
+                return reason;
+            }
+        }
+
+        return null;
     }
 
     private async _executePythonCode(code: string): Promise<string> {

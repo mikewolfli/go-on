@@ -1,10 +1,22 @@
 import * as vscode from 'vscode';
+import { RuntimeManagerLike } from './managerTypes';
+
+interface AdvancedEditArgs {
+    action?: string;
+    details?: string;
+}
 
 export class GoOnAdvancedEditProvider {
+    private readonly manager: RuntimeManagerLike;
+    private readonly context: vscode.ExtensionContext;
+
     constructor(
-        private readonly manager: any,
-        private readonly context: vscode.ExtensionContext
+        _manager: RuntimeManagerLike,
+        _context: vscode.ExtensionContext
     ) {
+        this.manager = _manager;
+        this.context = _context;
+
         // Register code actions
         this.registerCodeActions();
 
@@ -18,7 +30,7 @@ export class GoOnAdvancedEditProvider {
             vscode.languages.registerCodeActionsProvider(
                 ['javascript', 'typescript', 'python', 'java', 'cpp', 'c', 'go', 'rust'],
                 {
-                    provideCodeActions: (document, range, context, token) => {
+                    provideCodeActions: (document, range, _context, _token) => {
                         const actions: vscode.CodeAction[] = [];
 
                         // Add Go-On specific code actions
@@ -33,6 +45,18 @@ export class GoOnAdvancedEditProvider {
                 }
             )
         );
+    }
+
+    private extractResponseText(result: unknown): string | undefined {
+        if (!result || typeof result !== 'object') {
+            return undefined;
+        }
+        const candidate = (result as { response?: unknown }).response;
+        return typeof candidate === 'string' ? candidate : undefined;
+    }
+
+    private getErrorMessage(error: unknown): string {
+        return error instanceof Error ? error.message : String(error);
     }
 
     private registerCommands() {
@@ -78,7 +102,7 @@ export class GoOnAdvancedEditProvider {
         return action;
     }
 
-    private async handleAdvancedEdit(args?: any) {
+    private async handleAdvancedEdit(args?: AdvancedEditArgs) {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
             vscode.window.showErrorMessage('No active editor');
@@ -115,16 +139,17 @@ export class GoOnAdvancedEditProvider {
             const result = await this.manager.sendRequest('chat', {
                 messages: [{ role: 'user', content: prompt }]
             });
+            const responseText = this.extractResponseText(result);
 
-            if (!result?.response) {
+            if (!responseText) {
                 vscode.window.showErrorMessage('No response from AI service');
                 return;
             }
 
-            await this.handleResultOutput(result.response, editor, selection, document.languageId);
+            await this.handleResultOutput(responseText, editor, selection, document.languageId);
 
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`Edit failed: ${error.message}`);
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`Edit failed: ${this.getErrorMessage(error)}`);
         }
     }
 
@@ -171,7 +196,7 @@ export class GoOnAdvancedEditProvider {
         }
     }
 
-    private async handleRefactorCode(args?: any) {
+    private async handleRefactorCode(args?: AdvancedEditArgs) {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
             vscode.window.showErrorMessage('No active editor');
@@ -217,15 +242,16 @@ export class GoOnAdvancedEditProvider {
             const result = await this.manager.sendRequest('chat', {
                 messages: [{ role: 'user', content: prompt }]
             });
+            const responseText = this.extractResponseText(result);
 
-            if (!result?.response) {
+            if (!responseText) {
                 vscode.window.showErrorMessage('No response from AI service');
                 return;
             }
 
-            await this.handleResultOutput(result.response, editor, selection, document.languageId);
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`Refactoring failed: ${error.message}`);
+            await this.handleResultOutput(responseText, editor, selection, document.languageId);
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`Refactoring failed: ${this.getErrorMessage(error)}`);
         }
     }
 

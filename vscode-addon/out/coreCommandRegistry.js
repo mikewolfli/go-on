@@ -1,0 +1,169 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.registerCoreCommands = void 0;
+const vscode = require("vscode");
+function getErrorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+function asRecord(value) {
+    return typeof value === 'object' && value !== null ? value : {};
+}
+async function ensureRunning(deps) {
+    if (!deps.isRunning()) {
+        vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+        return false;
+    }
+    return true;
+}
+function registerCoreCommands(deps) {
+    const startCommand = vscode.commands.registerCommand('go-on.start', async () => {
+        const config = vscode.workspace.getConfiguration('go-on');
+        const configuredConfigPath = config.get('configPath', './config.toml');
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+            vscode.window.showErrorMessage('No workspace folder open.');
+            return;
+        }
+        const tryStart = async () => {
+            const runtime = await deps.ensureBinary(workspaceFolder.uri.fsPath, config, deps.context);
+            const fullConfigPath = await deps.resolveConfigPath(workspaceFolder.uri.fsPath, configuredConfigPath, runtime.runtimeDir);
+            const protocolMode = config.get('runtime.protocolMode', 'from_config');
+            await deps.start(fullConfigPath, runtime.executablePath, workspaceFolder.uri.fsPath, protocolMode);
+        };
+        try {
+            await tryStart();
+            vscode.window.showInformationMessage('Go-On proxy started.');
+        }
+        catch (error) {
+            const errorMessage = getErrorMessage(error);
+            const missingEnvVars = deps.parseMissingEnvVariableNames(errorMessage);
+            if (missingEnvVars.length > 0) {
+                try {
+                    const envValues = deps.buildPlaceholderEnvValues(missingEnvVars);
+                    deps.setRuntimeEnvOverrides(envValues);
+                    await tryStart();
+                    vscode.window.showWarningMessage('Go-On proxy started without API keys. Configure provider keys in Settings before using cloud agents.');
+                    return;
+                }
+                catch (retryError) {
+                    const retryMessage = getErrorMessage(retryError);
+                    vscode.window.showErrorMessage(`Failed to start Go-On: ${retryMessage}`);
+                    throw retryError;
+                }
+            }
+            vscode.window.showErrorMessage(`Failed to start Go-On: ${errorMessage}`);
+            throw error;
+        }
+    });
+    const stopCommand = vscode.commands.registerCommand('go-on.stop', () => {
+        deps.stop();
+        vscode.window.showInformationMessage('Go-On proxy stopped.');
+    });
+    const sendRequestCommand = vscode.commands.registerCommand('go-on.sendRequest', async () => {
+        if (!(await ensureRunning(deps))) {
+            return;
+        }
+        const message = await vscode.window.showInputBox({
+            prompt: 'Enter your message',
+            placeHolder: 'Type your chat message here...'
+        });
+        if (!message) {
+            return;
+        }
+        try {
+            const result = await deps.sendRequest('chat', {
+                messages: [{ role: 'user', content: message }]
+            });
+            vscode.window.showInformationMessage(`Response: ${JSON.stringify(result)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`Request failed: ${getErrorMessage(error)}`);
+        }
+    });
+    const healthCheckCommand = vscode.commands.registerCommand('go-on.healthCheck', async () => {
+        try {
+            const result = await deps.sendRequest('runtime.health');
+            vscode.window.showInformationMessage(`Health: ${JSON.stringify(result)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`Health check failed: ${getErrorMessage(error)}`);
+        }
+    });
+    const healthProbesCommand = vscode.commands.registerCommand('go-on.healthProbes', async () => {
+        if (!(await ensureRunning(deps))) {
+            return;
+        }
+        try {
+            const result = asRecord(await deps.sendRequest('health.probes'));
+            const probes = asRecord(result.probes);
+            const liveness = asRecord(probes.liveness);
+            const readiness = asRecord(probes.readiness);
+            const summary = asRecord(probes.summary);
+            const locks = asRecord(probes.locks);
+            const timeouts = asRecord(probes.timeouts);
+            vscode.window.showInformationMessage(`health.probes: liveness=${String(liveness.status ?? 'unknown')}, readiness=${String(readiness.status ?? 'unknown')}, lock=${String(locks.status ?? 'unknown')}, poisoned=${Number(locks.poisoned_total ?? 0)}, slow=${Number(locks.slow_wait_total ?? 0)}, timeout=${String(timeouts.status ?? 'unknown')}, agent_timeout=${Number(timeouts.agent_request_total ?? 0)}, review_timeout=${Number(timeouts.review_gate_total ?? 0)}, probe_timeout=${Number(timeouts.runtime_probe_total ?? 0)}, error=${Number(summary.error ?? 0)}, warn=${Number(summary.warn ?? 0)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`health.probes failed: ${getErrorMessage(error)}`);
+        }
+    });
+    const breakerStatusCommand = vscode.commands.registerCommand('go-on.breakerStatus', async () => {
+        try {
+            const result = await deps.sendRequest('breaker.status');
+            vscode.window.showInformationMessage(`Breaker Status: ${JSON.stringify(result)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`Breaker status check failed: ${getErrorMessage(error)}`);
+        }
+    });
+    const cacheClearCommand = vscode.commands.registerCommand('go-on.cacheClear', async () => {
+        try {
+            await deps.sendRequest('cache.clear');
+            vscode.window.showInformationMessage('Cache cleared.');
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`Cache clear failed: ${getErrorMessage(error)}`);
+        }
+    });
+    const vectorClearCommand = vscode.commands.registerCommand('go-on.vectorClear', async () => {
+        try {
+            await deps.sendRequest('vector.clear');
+            vscode.window.showInformationMessage('Vector memory cleared.');
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`Vector clear failed: ${getErrorMessage(error)}`);
+        }
+    });
+    const configReloadCommand = vscode.commands.registerCommand('go-on.configReload', async () => {
+        try {
+            await deps.sendRequest('config.reload');
+            vscode.window.showInformationMessage('Configuration reloaded.');
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`Config reload failed: ${getErrorMessage(error)}`);
+        }
+    });
+    const shutdownCommand = vscode.commands.registerCommand('go-on.shutdown', async () => {
+        try {
+            await deps.sendRequest('shutdown');
+            vscode.window.showInformationMessage('Shutdown initiated.');
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`Shutdown failed: ${getErrorMessage(error)}`);
+        }
+    });
+    return [
+        startCommand,
+        stopCommand,
+        sendRequestCommand,
+        healthCheckCommand,
+        healthProbesCommand,
+        breakerStatusCommand,
+        cacheClearCommand,
+        vectorClearCommand,
+        configReloadCommand,
+        shutdownCommand,
+    ];
+}
+exports.registerCoreCommands = registerCoreCommands;
+//# sourceMappingURL=coreCommandRegistry.js.map

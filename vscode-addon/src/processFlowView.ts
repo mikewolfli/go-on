@@ -1,18 +1,54 @@
 import * as vscode from 'vscode';
+import { RuntimeManagerLike } from './managerTypes';
+
+interface ProcessStage {
+    type: 'chat' | 'code' | 'delay' | 'manual';
+    prompt?: string;
+    delay?: number;
+    name?: string;
+    result?: string;
+    status?: 'running' | 'completed';
+    completedAt?: string;
+}
+
+interface ProcessData {
+    id?: string;
+    name: string;
+    created?: string;
+    completedAt?: string;
+    status?: 'created' | 'running' | 'completed' | 'failed';
+    error?: string;
+    stages: ProcessStage[];
+}
+
+type ProcessStore = Record<string, ProcessData>;
 
 export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'go-on-process-flow';
     private _view?: vscode.WebviewView;
+    private readonly manager: RuntimeManagerLike;
+    private readonly context: vscode.ExtensionContext;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
-        private readonly manager: any,
-        private readonly context: vscode.ExtensionContext
-    ) {}
+        _manager: RuntimeManagerLike,
+        _context: vscode.ExtensionContext
+    ) {
+        this.manager = _manager;
+        this.context = _context;
+    }
+
+    private _extractResponseText(result: unknown): string | undefined {
+        if (!result || typeof result !== 'object') {
+            return undefined;
+        }
+        const candidate = (result as { response?: unknown }).response;
+        return typeof candidate === 'string' ? candidate : undefined;
+    }
 
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
-        context: vscode.WebviewViewResolveContext,
+        _context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken,
     ) {
         this._view = webviewView;
@@ -51,21 +87,25 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
         this._loadProcesses();
     }
 
+    private getErrorMessage(error: unknown): string {
+        return error instanceof Error ? error.message : String(error);
+    }
+
     private async _loadProcesses() {
-        const processes = this.context.globalState.get<Record<string, any>>('go-on-processes', {});
+        const processes = this.context.globalState.get<ProcessStore>('go-on-processes', {});
         this._view?.webview.postMessage({
             type: 'processesLoaded',
             processes
         });
     }
 
-    private async _importProcesses(imported: Record<string, any>) {
+    private async _importProcesses(imported: Record<string, ProcessData>) {
         if (!imported || typeof imported !== 'object') {
             vscode.window.showErrorMessage('Invalid import data');
             return;
         }
 
-        const processes = this.context.globalState.get<Record<string, any>>('go-on-processes', {});
+        const processes = this.context.globalState.get<ProcessStore>('go-on-processes', {});
         Object.keys(imported).forEach((id) => {
             if (imported[id] && imported[id].id) {
                 processes[id] = imported[id];
@@ -82,8 +122,8 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
         vscode.window.showInformationMessage('Processes imported successfully');
     }
 
-    private async _createProcess(processData: any) {
-        const processes = this.context.globalState.get<Record<string, any>>('go-on-processes', {});
+    private async _createProcess(processData: ProcessData) {
+        const processes = this.context.globalState.get<ProcessStore>('go-on-processes', {});
         const processId = `process_${Date.now()}`;
 
         processes[processId] = {
@@ -106,7 +146,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async _runProcess(processId: string) {
-        const processes = this.context.globalState.get<Record<string, any>>('go-on-processes', {});
+        const processes = this.context.globalState.get<ProcessStore>('go-on-processes', {});
         const process = processes[processId];
 
 
@@ -137,18 +177,19 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
 
                 // Execute stage based on type
                 switch (stage.type) {
-                    case 'chat':
+                    case 'chat': {
                         const result = await this.manager.sendRequest('chat', {
                             messages: [{ role: 'user', content: stage.prompt }]
                         });
-                        stage.result = result.response;
+                        stage.result = this._extractResponseText(result) || '';
                         break;
+                    }
                     case 'code':
                         // Code execution result would be handled
                         stage.result = 'Code execution completed';
                         break;
                     case 'delay':
-                        await new Promise(resolve => setTimeout(resolve, stage.delay * 1000));
+                        await new Promise(resolve => setTimeout(resolve, Number(stage.delay || 0) * 1000));
                         break;
                     case 'manual':
                         // Wait for manual confirmation
@@ -185,24 +226,25 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
 
             vscode.window.showInformationMessage(`Process "${process.name}" completed successfully!`);
 
-        } catch (error: any) {
+        } catch (error: unknown) {
             process.status = 'failed';
-            process.error = error.message;
+            const message = this.getErrorMessage(error);
+            process.error = message;
             await this.context.globalState.update('go-on-processes', processes);
 
             this._view?.webview.postMessage({
                 type: 'processStatusUpdate',
                 processId,
                 status: 'failed',
-                error: error.message
+                error: message
             });
 
-            vscode.window.showErrorMessage(`Process failed: ${error.message}`);
+            vscode.window.showErrorMessage(`Process failed: ${message}`);
         }
     }
 
-    private async _updateProcess(processId: string, updates: any) {
-        const processes = this.context.globalState.get<Record<string, any>>('go-on-processes', {});
+    private async _updateProcess(processId: string, updates: Partial<ProcessData>) {
+        const processes = this.context.globalState.get<ProcessStore>('go-on-processes', {});
         
         // Validate input
         if (!processId) {
@@ -231,9 +273,9 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
                 type: 'processUpdated',
                 process: processes[processId]
             });
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error('Failed to update process:', error);
-            vscode.window.showErrorMessage(`Failed to update process: ${error.message}`);
+            vscode.window.showErrorMessage(`Failed to update process: ${this.getErrorMessage(error)}`);
         }
     }
 
