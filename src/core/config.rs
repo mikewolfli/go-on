@@ -3300,8 +3300,9 @@ mod tests {
         let config_path = dir.path().join("config.toml");
         fs::write(&config_path, "# test").expect("config marker should be written");
 
-        let err = super::validate_runtime_readiness(&config_path, &cfg)
-            .expect_err("strict mode should fail when entry auth is disabled for exposed HTTP endpoint");
+        let err = super::validate_runtime_readiness(&config_path, &cfg).expect_err(
+            "strict mode should fail when entry auth is disabled for exposed HTTP endpoint",
+        );
         assert!(
             err.to_string().contains("entry_auth_enabled=false"),
             "unexpected error: {err}"

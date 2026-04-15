@@ -5,12 +5,14 @@
 //! modular ACP implementation.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::warn;
 
 use crate::agent::Message;
 use crate::config::PhaseOptions;
@@ -44,6 +46,19 @@ pub const MAX_CONVERSATIONS_TRACKED: usize = 512;
 pub const MAX_STREAM_CHUNKS: usize = 4_096;
 /// Maximum stream characters
 pub const MAX_STREAM_CHARS: usize = 256_000;
+
+pub const ACP_LOCK_RUNTIME_CONFIG: &str = "runtime_config";
+pub const ACP_LOCK_MEMORY_CACHE: &str = "memory_cache";
+pub const ACP_LOCK_MEMORY_STORE: &str = "memory_store";
+pub const ACP_LOCK_RESPONSE_CACHE: &str = "response_cache";
+pub const ACP_LOCK_VECTOR_STORE: &str = "vector_store";
+pub const ACP_LOCK_MAINTENANCE: &str = "maintenance_tracker";
+pub const ACP_LOCK_LIFECYCLE: &str = "lifecycle_state";
+pub const ACP_LOCK_CIRCUIT_BREAKERS: &str = "circuit_breakers";
+pub const ACP_LOCK_PHASE_RATE_LIMITER: &str = "phase_rate_limiter";
+pub const ACP_LOCK_INFLIGHT_LIMITER: &str = "inflight_limiter";
+
+const ACP_LOCK_SLOW_WAIT_THRESHOLD: Duration = Duration::from_millis(5);
 
 /// Histogram buckets for latency measurements (seconds)
 pub const HISTOGRAM_BUCKETS_SECONDS: [f64; 10] = [
@@ -102,6 +117,173 @@ pub struct ConversationPruneResult {
     pub repaired_heads: usize,
 }
 
+#[derive(Debug, Default)]
+struct AcpLockCounters {
+    acquisitions: AtomicU64,
+    poisoned_total: AtomicU64,
+    recovered_total: AtomicU64,
+    slow_wait_total: AtomicU64,
+    total_wait_nanos: AtomicU64,
+    max_wait_nanos: AtomicU64,
+}
+
+impl AcpLockCounters {
+    fn record_wait(&self, wait: Duration) {
+        let wait_nanos = wait.as_nanos().min(u64::MAX as u128) as u64;
+        self.acquisitions.fetch_add(1, Ordering::Relaxed);
+        self.total_wait_nanos
+            .fetch_add(wait_nanos, Ordering::Relaxed);
+        if wait >= ACP_LOCK_SLOW_WAIT_THRESHOLD {
+            self.slow_wait_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        let mut current = self.max_wait_nanos.load(Ordering::Relaxed);
+        while wait_nanos > current {
+            match self.max_wait_nanos.compare_exchange(
+                current,
+                wait_nanos,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    fn record_poison(&self) {
+        self.poisoned_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_recovery(&self) {
+        self.recovered_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self, name: &'static str) -> AcpLockSnapshot {
+        let acquisitions = self.acquisitions.load(Ordering::Relaxed);
+        let total_wait_nanos = self.total_wait_nanos.load(Ordering::Relaxed);
+        let max_wait_nanos = self.max_wait_nanos.load(Ordering::Relaxed);
+        let avg_wait_ms = if acquisitions > 0 {
+            total_wait_nanos as f64 / acquisitions as f64 / 1_000_000.0
+        } else {
+            0.0
+        };
+
+        AcpLockSnapshot {
+            name: name.to_string(),
+            acquisitions,
+            poisoned_total: self.poisoned_total.load(Ordering::Relaxed),
+            recovered_total: self.recovered_total.load(Ordering::Relaxed),
+            slow_wait_total: self.slow_wait_total.load(Ordering::Relaxed),
+            avg_wait_ms,
+            max_wait_ms: max_wait_nanos as f64 / 1_000_000.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct AcpLockSnapshot {
+    pub name: String,
+    pub acquisitions: u64,
+    pub poisoned_total: u64,
+    pub recovered_total: u64,
+    pub slow_wait_total: u64,
+    pub avg_wait_ms: f64,
+    pub max_wait_ms: f64,
+}
+
+#[derive(Debug, Default)]
+pub struct AcpLockMonitor {
+    runtime_config: AcpLockCounters,
+    memory_cache: AcpLockCounters,
+    memory_store: AcpLockCounters,
+    response_cache: AcpLockCounters,
+    vector_store: AcpLockCounters,
+    maintenance: AcpLockCounters,
+    lifecycle: AcpLockCounters,
+    circuit_breakers: AcpLockCounters,
+    phase_rate_limiter: AcpLockCounters,
+    inflight_limiter: AcpLockCounters,
+}
+
+impl AcpLockMonitor {
+    fn counters(&self, name: &'static str) -> &AcpLockCounters {
+        match name {
+            ACP_LOCK_RUNTIME_CONFIG => &self.runtime_config,
+            ACP_LOCK_MEMORY_CACHE => &self.memory_cache,
+            ACP_LOCK_MEMORY_STORE => &self.memory_store,
+            ACP_LOCK_RESPONSE_CACHE => &self.response_cache,
+            ACP_LOCK_VECTOR_STORE => &self.vector_store,
+            ACP_LOCK_MAINTENANCE => &self.maintenance,
+            ACP_LOCK_LIFECYCLE => &self.lifecycle,
+            ACP_LOCK_CIRCUIT_BREAKERS => &self.circuit_breakers,
+            ACP_LOCK_PHASE_RATE_LIMITER => &self.phase_rate_limiter,
+            ACP_LOCK_INFLIGHT_LIMITER => &self.inflight_limiter,
+            _ => panic!("unknown ACP lock monitor component: {name}"),
+        }
+    }
+
+    pub fn snapshot(&self) -> Vec<AcpLockSnapshot> {
+        [
+            ACP_LOCK_RUNTIME_CONFIG,
+            ACP_LOCK_MEMORY_CACHE,
+            ACP_LOCK_MEMORY_STORE,
+            ACP_LOCK_RESPONSE_CACHE,
+            ACP_LOCK_VECTOR_STORE,
+            ACP_LOCK_MAINTENANCE,
+            ACP_LOCK_LIFECYCLE,
+            ACP_LOCK_CIRCUIT_BREAKERS,
+            ACP_LOCK_PHASE_RATE_LIMITER,
+            ACP_LOCK_INFLIGHT_LIMITER,
+        ]
+        .into_iter()
+        .map(|name| self.counters(name).snapshot(name))
+        .collect()
+    }
+
+    fn record_wait(&self, name: &'static str, wait: Duration) {
+        self.counters(name).record_wait(wait);
+    }
+
+    fn record_poison(&self, name: &'static str) {
+        self.counters(name).record_poison();
+    }
+
+    fn record_recovery(&self, name: &'static str) {
+        self.counters(name).record_recovery();
+    }
+}
+
+pub fn with_acp_lock<T, R, F>(
+    monitor: &AcpLockMonitor,
+    name: &'static str,
+    mutex: &StdMutex<T>,
+    operation: F,
+) -> R
+where
+    F: FnOnce(&mut T) -> R,
+{
+    let wait_started = Instant::now();
+    match mutex.lock() {
+        Ok(mut guard) => {
+            monitor.record_wait(name, wait_started.elapsed());
+            operation(&mut guard)
+        }
+        Err(poisoned) => {
+            monitor.record_wait(name, wait_started.elapsed());
+            monitor.record_poison(name);
+            monitor.record_recovery(name);
+            warn!(
+                target: "acp::locks",
+                "ACP lock '{}' was poisoned; continuing with recovered state",
+                name
+            );
+            let mut guard = poisoned.into_inner();
+            operation(&mut guard)
+        }
+    }
+}
+
 /// Metrics snapshot
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct MetricsSnapshot {
@@ -129,6 +311,10 @@ pub struct MetricsSnapshot {
     pub cpu_usage_percent: f64,
     /// Total chat requests
     pub chat_requests_total: u64,
+    /// Agent request timeout count across chat / execution paths
+    pub agent_timeout_failures_total: u64,
+    /// Local runtime probe timeout count for agent readiness checks
+    pub runtime_probe_timeout_total: u64,
     /// Vector search requests executed
     pub vector_search_total: u64,
     /// Vector hits returned across searches
@@ -1177,6 +1363,19 @@ impl RuntimeMetrics {
         }
     }
 
+    pub fn inc_agent_timeout_failure(&self) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.agent_timeout_failures_total =
+                guard.agent_timeout_failures_total.saturating_add(1);
+        }
+    }
+
+    pub fn inc_runtime_probe_timeout(&self) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.runtime_probe_timeout_total = guard.runtime_probe_timeout_total.saturating_add(1);
+        }
+    }
+
     pub fn record_vector_search(&self, hit_count: usize) {
         if let Ok(mut guard) = self.inner.lock() {
             guard.vector_search_total = guard.vector_search_total.saturating_add(1);
@@ -1239,7 +1438,12 @@ impl Default for RuntimeMetrics {
 
 #[cfg(test)]
 mod tests {
-    use super::RuntimeMetrics;
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    use super::{
+        with_acp_lock, AcpLockMonitor, PhaseRateLimiter, RuntimeMetrics,
+        ACP_LOCK_PHASE_RATE_LIMITER,
+    };
 
     #[test]
     fn runtime_metrics_records_request_latency_and_outcomes() {
@@ -1286,5 +1490,53 @@ mod tests {
         assert_eq!(snapshot.summary_read_total, 2);
         assert_eq!(snapshot.summary_hit_total, 1);
         assert_eq!(snapshot.summary_store_total, 1);
+    }
+
+    #[test]
+    fn runtime_metrics_tracks_agent_and_probe_timeouts() {
+        let metrics = RuntimeMetrics::new();
+        metrics.inc_agent_timeout_failure();
+        metrics.inc_agent_timeout_failure();
+        metrics.inc_runtime_probe_timeout();
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.agent_timeout_failures_total, 2);
+        assert_eq!(snapshot.runtime_probe_timeout_total, 1);
+    }
+
+    #[test]
+    fn acp_lock_monitor_recovers_poisoned_mutex_and_records_stats() {
+        let monitor = AcpLockMonitor::default();
+        let shared: Arc<StdMutex<PhaseRateLimiter>> =
+            Arc::new(StdMutex::new(PhaseRateLimiter::default()));
+
+        let poison_target = Arc::clone(&shared);
+        let join = std::thread::spawn(move || {
+            let _guard = poison_target.lock().expect("lock should be acquired");
+            panic!("poison the lock");
+        })
+        .join();
+        assert!(join.is_err(), "poisoning thread should panic");
+
+        let tracked_before = with_acp_lock(
+            &monitor,
+            ACP_LOCK_PHASE_RATE_LIMITER,
+            shared.as_ref(),
+            |guard: &mut PhaseRateLimiter| {
+                let _ = guard.allow("entry:test", 60, Some(5));
+                guard.tracked_phases()
+            },
+        );
+        assert_eq!(tracked_before, 1);
+
+        let snapshot = monitor
+            .snapshot()
+            .into_iter()
+            .find(|item| item.name == ACP_LOCK_PHASE_RATE_LIMITER)
+            .expect("phase rate limiter snapshot should exist");
+
+        assert_eq!(snapshot.poisoned_total, 1);
+        assert_eq!(snapshot.recovered_total, 1);
+        assert_eq!(snapshot.acquisitions, 1);
     }
 }

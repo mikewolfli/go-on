@@ -28,6 +28,58 @@
           </el-descriptions>
         </el-card>
 
+        <el-card shadow="hover">
+          <template #header>
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+              <span>{{ t("healthBreakdown.locks") }}</span>
+              <el-tag :type="lockStatus.type">{{ lockStatus.text }}</el-tag>
+            </div>
+          </template>
+          <el-descriptions :columns="2" border>
+            <el-descriptions-item :label="t('healthBreakdown.status')">
+              {{ lockStatus.text }}
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.tracked')">
+              {{ lockStatus.componentsTracked }}
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.poisoned')">
+              {{ lockStatus.poisonedTotal }}
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.recovered')">
+              {{ lockStatus.recoveredTotal }}
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.slowWaits')">
+              {{ lockStatus.slowWaitTotal }}
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.maxWait')">
+              {{ lockStatus.maxWaitMs.toFixed(2) }} ms
+            </el-descriptions-item>
+          </el-descriptions>
+        </el-card>
+
+        <el-card shadow="hover">
+          <template #header>
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+              <span>{{ t("healthBreakdown.timeouts") }}</span>
+              <el-tag :type="timeoutStatus.type">{{ timeoutStatus.text }}</el-tag>
+            </div>
+          </template>
+          <el-descriptions :columns="2" border>
+            <el-descriptions-item :label="t('healthBreakdown.agentRequestTimeouts')">
+              {{ timeoutStatus.agentRequestTotal }}
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.reviewGateTimeouts')">
+              {{ timeoutStatus.reviewGateTotal }}
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.runtimeProbeTimeouts')">
+              {{ timeoutStatus.runtimeProbeTotal }}
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.timeoutTotal')">
+              {{ timeoutStatus.total }}
+            </el-descriptions-item>
+          </el-descriptions>
+        </el-card>
+
         <!-- Cache 健康 -->
         <el-card shadow="hover">
           <template #header>
@@ -97,6 +149,12 @@
             <el-descriptions-item :label="t('healthBreakdown.recoveryTime')">
               {{ breakerStatus.recoveryTime }}s
             </el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.degradedServices')">
+              {{ breakerStatus.degradedCount }}
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('healthBreakdown.recoveryAdvice')">
+              {{ breakerStatus.recoveryAdvice }}
+            </el-descriptions-item>
           </el-descriptions>
         </el-card>
 
@@ -164,6 +222,25 @@ const cacheStatus = reactive({
   lastUpdate: "2s ago",
 });
 
+const lockStatus = reactive({
+  type: "success",
+  text: "healthy",
+  componentsTracked: 0,
+  poisonedTotal: 0,
+  recoveredTotal: 0,
+  slowWaitTotal: 0,
+  maxWaitMs: 0,
+});
+
+const timeoutStatus = reactive({
+  type: "success",
+  text: "healthy",
+  agentRequestTotal: 0,
+  reviewGateTotal: 0,
+  runtimeProbeTotal: 0,
+  total: 0,
+});
+
 const vectorStatus = reactive({
   type: "success",
   text: "Healthy",
@@ -178,6 +255,8 @@ const breakerStatus = reactive({
   failures: 0,
   lastTrip: "Never",
   recoveryTime: 30,
+  degradedCount: 0,
+  recoveryAdvice: "observe",
 });
 
 const rateLimiterStatus = reactive({
@@ -194,6 +273,8 @@ const overallScore = computed(() => {
     vectorStatus.type === "success" ? 100 : 50,
     breakerStatus.type === "success" ? 100 : 50,
     rateLimiterStatus.type === "success" ? 100 : 50,
+    lockStatus.type === "success" ? 100 : lockStatus.type === "warning" ? 70 : 40,
+    timeoutStatus.type === "success" ? 100 : timeoutStatus.type === "warning" ? 70 : 40,
   ];
   return Math.round(scores.reduce((a, b) => a + b) / scores.length);
 });
@@ -216,6 +297,23 @@ async function refreshBreakdown() {
     readiness.text = String(readinessData.status || "unknown");
     readiness.generatedAt = Number(readinessData.generated_at || 0);
     readiness.type = readiness.text === "ready" ? "success" : readiness.text === "degraded" ? "warning" : "danger";
+
+    const locks = probes?.locks || {};
+    lockStatus.text = String(locks?.status || "unknown");
+    lockStatus.componentsTracked = Number(locks?.components_tracked || 0);
+    lockStatus.poisonedTotal = Number(locks?.poisoned_total || 0);
+    lockStatus.recoveredTotal = Number(locks?.recovered_total || 0);
+    lockStatus.slowWaitTotal = Number(locks?.slow_wait_total || 0);
+    lockStatus.maxWaitMs = Number(locks?.max_wait_ms || 0);
+    lockStatus.type = lockStatus.text === "healthy" ? "success" : lockStatus.text === "warn" ? "warning" : "danger";
+
+    const timeouts = probes?.timeouts || {};
+    timeoutStatus.text = String(timeouts?.status || "unknown");
+    timeoutStatus.agentRequestTotal = Number(timeouts?.agent_request_total || 0);
+    timeoutStatus.reviewGateTotal = Number(timeouts?.review_gate_total || 0);
+    timeoutStatus.runtimeProbeTotal = Number(timeouts?.runtime_probe_total || 0);
+    timeoutStatus.total = timeoutStatus.agentRequestTotal + timeoutStatus.reviewGateTotal + timeoutStatus.runtimeProbeTotal;
+    timeoutStatus.type = timeoutStatus.text === "healthy" ? "success" : timeoutStatus.text === "warn" ? "warning" : "danger";
 
     const dependencies = Array.isArray(probes?.dependencies) ? probes.dependencies : [];
     const cacheDep = dependencies.find((item: any) => item?.name === "cache") || {};
@@ -243,6 +341,25 @@ async function refreshBreakdown() {
     breakerStatus.failures = circuitBreakers.reduce((sum: number, item: any) => sum + Number(item?.failure_count || 0), 0);
     breakerStatus.lastTrip = openCount > 0 ? "recent" : "Never";
     breakerStatus.recoveryTime = 30;
+
+    const breakerRaw = await invokeRuntimeRpc("breaker.status", "{}");
+    const breakerParsed = JSON.parse(breakerRaw || "{}");
+    const degradedServices = Array.isArray(breakerParsed?.degraded_services)
+      ? breakerParsed.degraded_services
+      : [];
+    breakerStatus.degradedCount = Number(breakerParsed?.degraded_count || degradedServices.length || 0);
+    const recommendedActions = Array.from(
+      new Set(
+        degradedServices
+          .map((item: any) => String(item?.recommended_action || ""))
+          .filter((item: string) => item.length > 0)
+      )
+    );
+    breakerStatus.recoveryAdvice = recommendedActions.length > 0 ? recommendedActions.join(", ") : "observe";
+    if (breakerStatus.type === "success" && breakerStatus.degradedCount > 0) {
+      breakerStatus.type = "warning";
+      breakerStatus.text = "degraded";
+    }
 
     const limiter = probes?.rate_limiter || {};
     const buckets = Array.isArray(limiter?.buckets) ? limiter.buckets : [];

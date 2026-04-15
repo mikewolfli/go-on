@@ -39,14 +39,29 @@
     "onCommand:go-on.taskPlan",
     "onCommand:go-on.taskExecute",
     "onCommand:go-on.learningSummary",
+    "onCommand:go-on.learningGuardrail",
+    "onCommand:go-on.learningReplay",
+    "onCommand:go-on.knowledgeDistill",
+    "onCommand:go-on.rlAlignmentEval",
+    "onCommand:go-on.hardnessStatus",
+    "onCommand:go-on.costStatus",
+    "onCommand:go-on.configBaseline",
+    "onCommand:go-on.governancePlanGet",
+    "onCommand:go-on.governanceAuditRecent",
     "onCommand:go-on.autotuneStatus",
+    "onCommand:go-on.selectorStatus",
     "onCommand:go-on.autotuneGet",
     "onCommand:go-on.autotuneReset",
     "onCommand:go-on.metricsGet",
     "onCommand:go-on.metricsReset",
     "onCommand:go-on.traceMetrics",
+    "onCommand:go-on.qualityBaseline",
+    "onCommand:go-on.harnessStatus",
     "onCommand:go-on.traceGet",
+    "onCommand:go-on.observabilityAlerts",
+    "onCommand:go-on.securityBaseline",
     "onCommand:go-on.breakerReset",
+    "onCommand:go-on.breakerRecovery",
     "onCommand:go-on.maintenanceGc",
     "onCommand:go-on.checkpointCreate",
     "onCommand:go-on.checkpointList",
@@ -179,9 +194,59 @@
         "icon": "$(graph-line)"
       },
       {
+        "command": "go-on.learningGuardrail",
+        "title": "Get Learning Guardrail (RPC)",
+        "icon": "$(pass-filled)"
+      },
+      {
+        "command": "go-on.learningReplay",
+        "title": "Get Learning Replay (RPC)",
+        "icon": "$(history)"
+      },
+      {
+        "command": "go-on.knowledgeDistill",
+        "title": "Run Knowledge Distillation (RPC)",
+        "icon": "$(library)"
+      },
+      {
+        "command": "go-on.rlAlignmentEval",
+        "title": "Run RL Alignment Offline Eval (RPC)",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "go-on.hardnessStatus",
+        "title": "Get Hardness Routing Status (RPC)",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "go-on.costStatus",
+        "title": "Get Token Cost Governance Status (RPC)",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "go-on.configBaseline",
+        "title": "Get Config Baseline Freeze Status (RPC)",
+        "icon": "$(settings)"
+      },
+      {
         "command": "go-on.autotuneStatus",
         "title": "Get Autotune Status (RPC)",
         "icon": "$(pulse)"
+      },
+      {
+        "command": "go-on.governancePlanGet",
+        "title": "Get Governance Plan (RPC)",
+        "icon": "$(book)"
+      },
+      {
+        "command": "go-on.governanceAuditRecent",
+        "title": "Get Governance Audit Recent (RPC)",
+        "icon": "$(history)"
+      },
+      {
+        "command": "go-on.selectorStatus",
+        "title": "Get Selector Status (RPC)",
+        "icon": "$(symbol-method)"
       },
       {
         "command": "go-on.autotuneGet",
@@ -209,14 +274,39 @@
         "icon": "$(flame)"
       },
       {
+        "command": "go-on.qualityBaseline",
+        "title": "Get Quality Baseline (RPC)",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "go-on.harnessStatus",
+        "title": "Get Harness Status (RPC)",
+        "icon": "$(beaker)"
+      },
+      {
         "command": "go-on.traceGet",
         "title": "Get Trace Events (RPC)",
         "icon": "$(output)"
       },
       {
+        "command": "go-on.observabilityAlerts",
+        "title": "Get Observability Alerts (RPC)",
+        "icon": "$(warning)"
+      },
+      {
+        "command": "go-on.securityBaseline",
+        "title": "Get Security Baseline (RPC)",
+        "icon": "$(shield)"
+      },
+      {
         "command": "go-on.breakerReset",
         "title": "Reset Circuit Breaker (RPC)",
         "icon": "$(debug-restart)"
+      },
+      {
+        "command": "go-on.breakerRecovery",
+        "title": "Recover Degraded Breakers (RPC)",
+        "icon": "$(debug-continue)"
       },
       {
         "command": "go-on.maintenanceGc",
@@ -473,7 +563,11 @@
         "go-on.ui.theme": {
           "type": "string",
           "default": "auto",
-          "enum": ["auto", "light", "dark"],
+          "enum": [
+            "auto",
+            "light",
+            "dark"
+          ],
           "enumDescriptions": [
             "Follow VS Code theme",
             "Light theme",

@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 use std::{fs, path::Path};
-use std::{net::TcpStream, net::ToSocketAddrs};
 
 use anyhow::Result;
 use opentelemetry::{Context as OtelContext, KeyValue};
@@ -21,6 +20,10 @@ use tokio::time::Duration;
 use tracing::{info, warn};
 
 use crate::acp::helpers::conversation::stream_would_exceed_limits;
+use crate::acp::helpers::context::{
+    probe_agent_runtime_readiness, request_timeout, run_with_optional_timeout,
+    AgentRuntimeReadiness,
+};
 use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
@@ -277,78 +280,35 @@ pub async fn should_escalate_approval_strategy(
         || phase_requires_escalation)
 }
 
-fn has_flow_phase(config: &crate::config::AppConfig, phase_name: &str) -> bool {
-    config.flow.phases.iter().any(|phase| phase == phase_name)
+async fn filter_runtime_ready_agents(
+    server: &AcpServer,
+    config: &crate::config::AppConfig,
+    agents: &mut Vec<(String, Arc<dyn crate::agent::Agent>)>,
+) -> Vec<String> {
+    let mut unavailable = Vec::new();
+    let mut retained = Vec::with_capacity(agents.len());
+
+    for (name, agent) in std::mem::take(agents) {
+        let readiness =
+            probe_agent_runtime_readiness(config, &name, Duration::from_millis(250)).await;
+        match readiness {
+            AgentRuntimeReadiness::Ready => retained.push((name, agent)),
+            AgentRuntimeReadiness::EndpointTimedOut => {
+                server.metrics.inc_runtime_probe_timeout();
+                unavailable.push(name);
+            }
+            AgentRuntimeReadiness::MissingSecret | AgentRuntimeReadiness::EndpointUnavailable => {
+                unavailable.push(name);
+            }
+        }
+    }
+
+    *agents = retained;
+    unavailable
 }
 
-fn is_agent_runtime_ready(config: &crate::config::AppConfig, agent_name: &str) -> bool {
-    let Some(agent) = config.agents.get(agent_name) else {
-        return true;
-    };
-
-    for key in [
-        agent.api_key_env.as_deref(),
-        agent.secret_key_env.as_deref(),
-    ] {
-        let Some(key_name) = key else {
-            continue;
-        };
-        if key_name.starts_with("keyring://") {
-            continue;
-        }
-        if std::env::var(key_name).is_err() {
-            return false;
-        }
-    }
-
-    let Some(url) = agent.url.as_deref() else {
-        return true;
-    };
-    let Some((host, port)) = extract_host_port(url) else {
-        return true;
-    };
-    let is_local = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
-    if !is_local {
-        return true;
-    }
-
-    let timeout = std::time::Duration::from_millis(250);
-    let addrs = format!("{}:{}", host, port)
-        .to_socket_addrs()
-        .ok()
-        .map(|iter| iter.collect::<Vec<_>>())
-        .unwrap_or_default();
-    if addrs.is_empty() {
-        return false;
-    }
-    addrs
-        .iter()
-        .any(|addr| TcpStream::connect_timeout(addr, timeout).is_ok())
-}
-
-fn extract_host_port(url: &str) -> Option<(String, u16)> {
-    let marker = "://";
-    let start = url.find(marker).map(|idx| idx + marker.len()).unwrap_or(0);
-    let rest = &url[start..];
-    let host_port = rest.split('/').next()?.trim();
-    if host_port.is_empty() {
-        return None;
-    }
-    if host_port.starts_with('[') {
-        let end = host_port.find(']')?;
-        let host = host_port[1..end].to_string();
-        let port = host_port[end + 1..]
-            .strip_prefix(':')
-            .and_then(|value| value.parse::<u16>().ok())
-            .unwrap_or(80);
-        return Some((host, port));
-    }
-    if let Some((host, port_raw)) = host_port.rsplit_once(':') {
-        if let Ok(port) = port_raw.parse::<u16>() {
-            return Some((host.to_string(), port));
-        }
-    }
-    Some((host_port.to_string(), 80))
+fn has_flow_phase(config: &crate::config::AppConfig, phase: &str) -> bool {
+    config.flow.phases.iter().any(|candidate| candidate == phase) || config.phases.contains_key(phase)
 }
 
 fn infer_adaptive_phase(
@@ -448,9 +408,8 @@ pub(crate) async fn process_chat_request(
         registry.as_ref(),
     )?;
     let original_count = resolved.agents.len();
-    resolved
-        .agents
-        .retain(|(agent_name, _)| is_agent_runtime_ready(app_config.as_ref(), agent_name));
+    let unavailable_agents =
+        filter_runtime_ready_agents(server, app_config.as_ref(), &mut resolved.agents).await;
     if resolved.agents.is_empty() {
         resolved = flow.resolve(
             requested_phase
@@ -464,6 +423,7 @@ pub(crate) async fn process_chat_request(
             phase = %resolved.phase.phase_name,
             retained = resolved.agents.len(),
             original = original_count,
+            unavailable = %unavailable_agents.join(","),
             "filtered runtime-unavailable agents before chat execution"
         );
     }
@@ -665,10 +625,7 @@ pub(crate) async fn process_chat_request(
             agent_messages.clone(),
             phase.principles.clone(),
             Some(per_attempt_options),
-            phase
-                .options
-                .as_ref()
-                .and_then(|opts| opts.request_timeout_seconds),
+            request_timeout(phase.options.as_ref()),
         )
         .await
         {
@@ -917,7 +874,7 @@ async fn run_agent_collecting(
     messages: Vec<Message>,
     principles: Option<Vec<String>>,
     options: Option<std::collections::HashMap<String, Value>>,
-    timeout_seconds: Option<u64>,
+    timeout_duration: Option<Duration>,
 ) -> Result<String> {
     let (sender, mut receiver) = mpsc::channel::<String>(2048);
     let sender = crate::agent::StreamingSender::from(sender);
@@ -973,18 +930,15 @@ async fn run_agent_collecting(
         }
     };
 
-    if let Some(seconds) = timeout_seconds {
-        let timeout = Duration::from_secs(seconds.max(1));
-        match tokio::time::timeout(timeout, collect).await {
-            Ok(result) => result,
-            Err(_) => Err(anyhow::anyhow!(
-                "agent request timed out after {}s",
-                seconds
-            )),
+    run_with_optional_timeout(timeout_duration, collect, |duration| {
+        anyhow::anyhow!("agent request timed out after {}s", duration.as_secs().max(1))
+    })
+    .await
+    .inspect_err(|err| {
+        if err.to_string().to_ascii_lowercase().contains("timed out") {
+            server.metrics.inc_agent_timeout_failure();
         }
-    } else {
-        collect.await
-    }
+    })
 }
 
 async fn emit_stream_chunk(
@@ -1657,7 +1611,7 @@ async fn generate_phase_summary_text(
         summary_prompt,
         None,
         Some(summary_options),
-        Some(timeout_seconds),
+        Some(Duration::from_secs(timeout_seconds)),
     )
     .await
     .ok()?;

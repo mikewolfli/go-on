@@ -455,3 +455,295 @@ BLUE15 的实施方向应从“可上线”出发，而不是从“架构形态�
 4. B15-X4（Hardness）可与现有 phase 策略联动，先做只读评分与观测，再逐步开启路由干预。
 5. 将 B15-X7~X10 作为“一次性优化包”集中交付：先做配置/错误契约统一，再做构建可复现与数据生命周期治理。
 6. 在以上基础稳定后，执行 B15-X11“总体一次优化到顶”冲刺，作为阶段性收口版本。
+
+## 十七、本轮实施回写（2026-04-15，续4）
+
+本轮目标：完成 B15-P1-4「并发锁模型优化与毒化恢复」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 为 ACP 热路径共享锁新增统一观测与毒化恢复：记录 `acquisitions / poisoned_total / recovered_total / slow_wait_total / avg_wait_ms / max_wait_ms`，并在锁毒化后继续以恢复态执行而不是直接降为默认值。
+2. backend 修正 `src/acp/background.rs` 背景健康循环错误使用默认 `PhaseRateLimiter` 的问题，改为复用 `AcpServer.phase_rate_limiter` 主链实例，保证限流健康与锁观测都反映真实运行态。
+3. backend `health.probes` 扩展 `locks` 摘要与 `locks` 依赖项，统一输出锁状态、毒化恢复计数、慢锁次数和最大等待时间。
+4. GUI `HealthBreakdownView` 新增锁模型卡片，实时展示锁状态、跟踪组件数、毒化恢复次数和最大等待时间。
+5. vscode-addon `go-on.healthProbes` 输出新增锁摘要（lock status / poisoned / slow waits），与后端探针语义保持一致。
+6. `test_ci.sh` 新增 6y BLUE15 P1-4 主链门禁，覆盖锁毒化恢复与锁状态聚合判断。
+
+本轮完成率：
+1. “B15-P1-4 并发锁模型优化与毒化恢复”子目标完成率：100%。
+2. BLUE15 全量清单总体完成率：约 38%（按 13 个建议项粗略计，已完成 5 个大项）。
+
+## 十八、本轮实施回写（2026-04-15，续5）
+
+本轮目标：完成 B15-P2-3「超时模型统一与线程开销收敛」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/helpers/context.rs` 收敛 ACP 共享超时能力，统一请求超时封装、评审门超时语义和异步 runtime readiness 探测，替换主路径中分散的阻塞式本地端口探测逻辑。
+2. backend 在 `src/acp/impl/agent.rs`、`src/acp/impl/chat.rs`、`src/acp/impl/request.rs` 主路径统一接入异步超时语义，减少线程派生式超时包装，并把不可用 runtime 过滤切换为异步 readiness 检查。
+3. backend 在 `src/acp/prelude.rs`、`src/acp/helpers/metrics.rs`、`src/acp/impl/request.rs` 新增 `agent_timeout_failures_total` 与 `runtime_probe_timeout_total`，并将 timeout 摘要纳入 `runtime.health`、`health.probes`、`metrics.get`、`metrics.prometheus`、`trace.metrics` 主链输出。
+4. GUI `HealthBreakdownView` 新增超时模型卡片，实时展示 agent 请求超时、review gate 超时、runtime probe 超时和超时总量，与健康探针依赖映射保持一致。
+5. vscode-addon 的 `go-on.healthProbes`、`go-on.metricsGet`、`go-on.traceMetrics` 输出新增 timeout 摘要，保证桌面侧可以直接看到主链超时分布而不是只看原始 JSON。
+6. `test_ci.sh` 新增 6z BLUE15 P2-3 主链门禁，覆盖共享超时封装、异步 runtime readiness 探测与 timeout 指标累积三个关键回归点。
+
+本轮完成率：
+1. “B15-P2-3 超时模型统一与线程开销收敛”子目标完成率：100%。
+2. BLUE15 全量清单总体完成率：约 46%（按 13 个建议项粗略计，已完成 6 个大项）。
+
+## 十九、本轮实施回写（2026-04-15，续6）
+
+本轮目标：完成 B15-P3-1「覆盖率与基准测试体系优化」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 新增 `requests/quality-benchmark.ndjson` 基准场景，固定覆盖 `initialize -> runtime.health -> metrics.get -> trace.metrics -> shutdown` 主链请求序列。
+2. backend 集成测试扩展：`run_scenario_file_executes_quality_benchmark_requests` 校验基准场景输出结构，`ndjson_scenario_files_all_pass` 同步扩展到 5 个场景文件，保证回归覆盖随场景增长自动纳管。
+3. 脚本层新增 `scripts/run-quality-gate.sh` 与 `scripts/run-quality-gate.ps1`，统一质量门禁执行入口（场景回放 + 基准回归 + 可选 tarpaulin 覆盖率门禁）。
+4. GUI `BackendOpsView` 新增 `quality.baseline` 按钮，聚合展示 `runtime.health`、`metrics.get`、`trace.metrics` 的质量基线摘要（健康态、请求质量、慢请求与超时分布）。
+5. vscode-addon 新增 `go-on.qualityBaseline` 命令（并注册 command palette），输出主链质量摘要与 `requests/*.ndjson` 场景数量，便于桌面端快速执行基线巡检。
+6. `test_ci.sh` 新增 6aa BLUE15 P3-1 门禁，覆盖基准场景回放与全场景回归，并在可用时执行 tarpaulin 覆盖率阈值检查。
+
+本轮完成率：
+1. “B15-P3-1 覆盖率与基准测试体系优化”子目标完成率：100%。
+2. BLUE15 全量清单总体完成率：约 54%（按 13 个建议项粗略计，已完成 7 个大项）。
+
+## 二十、本轮实施回写（2026-04-15，续7）
+
+本轮目标：完成 B15-P1-1「模型选择增强（探索-利用平衡）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/intelligence/adaptive_selector.rs` 将模型选择从“纯成功率贪心”升级为 UCB 探索-利用平衡评分，新增 `exploration_bias`、候选排序 `rank_candidates` 与可观测快照 `snapshot`。
+2. backend 修正 ACP 主链中模型选择排序错位问题：`src/acp/impl/request.rs` 从“按 agent 名排序但按 model 记录结果”改为“按 agent->selected model 映射排序并记录同一 model 结果”，确保学习反馈与选择策略一致。
+3. backend 新增 `selector.status` RPC，输出探索系数、观测样本量与模型评分快照，作为线上策略可观测入口。
+4. backend 新增 `requests/model-selector-benchmark.ndjson` 场景与 `run_scenario_file_executes_model_selector_benchmark_requests` 集成测试，`ndjson_scenario_files_all_pass` 场景总数同步扩展到 6。
+5. GUI `BackendOpsView` 新增 `selector.status` 入口按钮，可直接查看模型选择器状态；vscode-addon 新增 `go-on.selectorStatus` 命令并注册到 command palette，输出探索系数、样本量与 Top 模型评分摘要。
+6. `test_ci.sh` 新增 6ab BLUE15 P1-1 主链门禁，覆盖 UCB 候选排序、快照排序与 selector 场景回放三条关键回归链路。
+
+本轮完成率：
+1. “B15-P1-1 模型选择增强（探索-利用平衡）”子目标完成率：100%。
+2. BLUE15 全量清单总体完成率：约 62%（按 13 个建议项粗略计，已完成 8 个大项）。
+
+## 二十一、本轮实施回写（2026-04-15，续8）
+
+本轮目标：完成 B15-P1-2「学习数据持久化与回放」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增 `learning.replay` RPC：统一回放 `.goon/learning` 的学习记录窗口，输出 workflow/pua 事件统计，并拼接最近一次 learning bus 工件摘要。
+2. backend 新增 `requests/learning-replay-benchmark.ndjson` 回放场景，覆盖 `initialize -> learning.replay -> learning.summary -> shutdown` 主链请求序列。
+3. backend 集成测试新增 `run_scenario_file_executes_learning_replay_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 7，保证新增场景自动纳入回归。
+4. GUI `BackendOpsView` 新增 `learning.replay` 快捷入口，可直接回放最近学习记录并查看输出。
+5. vscode-addon 新增 `go-on.learningReplay` 命令并注册到 command palette，同时在 Settings 面板增加 `Learning Replay` 按钮直连后端接口，输出记录条数、事件分类和 learning bus 可用性摘要。
+6. `test_ci.sh` 新增 6ac BLUE15 P1-2 主链门禁，覆盖学习回放场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-P1-2 学习数据持久化与回放”子目标完成率：100%。
+2. BLUE15 全量清单总体完成率：约 69%（按 13 个建议项粗略计，已完成 9 个大项）。
+
+## 二十二、本轮实施回写（2026-04-15，续9）
+
+本轮目标：完成 B15-P1-3「PUA 动态规则与审计可视化」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增治理动态能力 RPC：`governance.plan.get`、`governance.plan.update`、`governance.audit.recent`，并将其接入 ACP 方法白名单与主分发链路。
+2. backend 在 `governance.status` 输出中扩展 `dynamic_rules` 与 `audit.recent` 可观测字段，形成“规则动态态 + 审计窗口”统一主链视图。
+3. backend 新增 `.goon/governance/audit.ndjson` 审计持久化读写，实现治理计划更新的审计落盘与最近事件回放。
+4. backend 新增 `requests/governance-dynamic-rules-benchmark.ndjson` 场景与 `run_scenario_file_executes_governance_dynamic_rules_benchmark_requests` 集成测试，`ndjson_scenario_files_all_pass` 场景总数同步扩展到 8。
+5. GUI `SecurityView` 接入真实治理审计链路：新增动态规则与最近审计计数展示，并通过 `governance.audit.recent` 渲染审计日志表，不再仅使用本地合成演示数据。
+6. vscode-addon 新增 `go-on.governancePlanGet` 与 `go-on.governanceAuditRecent` 命令，Settings 面板新增 `Governance Plan` / `Governance Audit` 按钮，支持治理计划摘要和审计窗口快速查询。
+7. `test_ci.sh` 新增 6ad BLUE15 P1-3 主链门禁，覆盖治理动态规则场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-P1-3 PUA 动态规则与审计可视化”子目标完成率：100%。
+2. BLUE15 全量清单总体完成率：约 77%（按 13 个建议项粗略计，已完成 10 个大项）。
+
+## 二十三、本轮实施回写（2026-04-15，续10）
+
+本轮目标：完成 B15-P2-1「故障恢复与降级（断路器）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 扩展 `breaker.status` 输出：新增 `degraded_count` 与 `degraded_services`，统一呈现 failure-prevention 降级对象、熔断状态、降级等级和恢复建议。
+2. backend 新增 `breaker.recovery` RPC（支持 `dry_run` 与按 agent 定向恢复），将 failure-prevention 恢复与 circuit-breaker reset 串为同一主链动作，并返回候选、恢复结果与剩余降级对象。
+3. backend 在 `src/optimization/failure_prevention.rs` 新增恢复能力：支持单服务/全量恢复到健康基线，并补齐 `test_recover_resets_unhealthy_service_to_healthy` 回归测试。
+4. backend 新增 `requests/breaker-recovery-benchmark.ndjson` 场景与 `run_scenario_file_executes_breaker_recovery_benchmark_requests` 集成测试，`ndjson_scenario_files_all_pass` 场景总数同步扩展到 9。
+5. GUI `BackendOpsView` 新增 `breaker.recovery` 快捷入口；`HealthBreakdownView` 接入 `breaker.status` 降级对象与恢复建议展示，实现断路器“状态 + 恢复建议”可视化闭环。
+6. vscode-addon 新增 `go-on.breakerRecovery` 命令（含可选 agent 定向恢复），并在 Settings 面板增加 `Breaker Recovery` 按钮直连后端主链接口。
+7. `test_ci.sh` 新增 6ae BLUE15 P2-1 主链门禁，覆盖恢复单测、断路器恢复场景回放与全场景回归。
+
+本轮完成率：
+1. “B15-P2-1 故障恢复与降级（断路器）”子目标完成率：100%。
+2. BLUE15 全量清单总体完成率：约 85%（按 13 个建议项粗略计，已完成 11 个大项）。
+
+## 二十四、本轮实施回写（2026-04-15，续11）
+
+本轮目标：完成 B15-P2-2「可观测性完善（追踪覆盖率与告警）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增 `observability.alerts` RPC：聚合 runtime lifecycle、timeout 指标、断路器状态、降级服务和锁健康，输出统一告警项（severity/code/message/suggestion）与分级汇总。
+2. backend 将 `observability.alerts` 接入 ACP 方法白名单与请求主分发链路，支持按 `limit` 限制告警返回量。
+3. backend 新增 `requests/observability-alerts-benchmark.ndjson` 场景（`initialize -> runtime.health -> health.probes -> observability.alerts -> shutdown`）。
+4. backend 集成测试新增 `run_scenario_file_executes_observability_alerts_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 10。
+5. GUI `BackendOpsView` 新增 `observability.alerts` 快捷调用入口，支持直接查看聚合告警 JSON。
+6. vscode-addon 新增 `go-on.observabilityAlerts` 命令，并在 Settings 面板增加 `Observability Alerts` 按钮；命令输出 critical/warn/info 摘要与首条告警代码。
+7. `test_ci.sh` 新增 6af BLUE15 P2-2 主链门禁，覆盖 observability 场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-P2-2 可观测性完善（追踪覆盖率与告警）”子目标完成率：100%。
+2. BLUE15 全量清单总体完成率：约 92%（按 13 个建议项粗略计，已完成 12 个大项）。
+
+## 二十五、本轮实施回写（2026-04-15，续12）
+
+本轮目标：完成 B15-P0-1「生产化安全基线（鉴权、限流、反向代理、TLS）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增 `security.baseline` RPC，并接入 ACP 方法白名单与主分发链路，统一输出入口暴露状态、鉴权配置状态、入口限流参数、production_strict 违规项与风险列表。
+2. backend `security.baseline` 将 `governance_config_summary` 与运行时入口配置联动，形成可直接用于上线前检查的 `level/ingress_status/risk_count/risks` 结构化结果。
+3. backend 新增 `requests/security-baseline-benchmark.ndjson` 场景（`initialize -> runtime.health -> security.baseline -> governance.status -> shutdown`）。
+4. backend 集成测试新增 `run_scenario_file_executes_security_baseline_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 11。
+5. GUI `BackendOpsView` 新增 `security.baseline` 快捷调用入口，支持直接查看安全基线主链结果。
+6. vscode-addon 新增 `go-on.securityBaseline` 命令，并在 Settings 面板增加 `Security Baseline` 按钮，命令输出 level/ingress/strict/risk_count 摘要。
+7. `test_ci.sh` 新增 6ag BLUE15 P0-1 主链门禁，覆盖安全基线场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-P0-1 生产化安全基线（鉴权、限流、反向代理、TLS）”子目标完成率：100%。
+2. BLUE15 全量清单总体完成率：100%（按 13 个建议项粗略计，已完成 13/13 个大项）。
+
+## 二十六、本轮实施回写（2026-04-15，续13）
+
+本轮目标：完成 B15-X5「Harness 评测基座与回归挑战集」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增 `harness.status` RPC，并接入 ACP 方法白名单与主分发链路，统一输出固定随机种子、场景总量、四类 suite（smoke/regression/adversarial/long_chain）分层统计、评分卡维度与运行时快照。
+2. backend 新增 `requests/harness-benchmark.ndjson` 场景（`initialize -> harness.status -> metrics.get -> shutdown`），将 Harness 状态检查纳入请求主链。
+3. backend 集成测试新增 `run_scenario_file_executes_harness_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 12，保证新场景自动纳入全量回归。
+4. GUI `BackendOpsView` 新增 `harness.status` 快捷按钮，可直接发起 Harness 基座状态查询。
+5. vscode-addon 新增 `go-on.harnessStatus` 命令，并在 Settings 面板增加 `Harness Status` 按钮，输出 suite 分层数量与固定 seed 摘要。
+6. `test_ci.sh` 新增 6ah BLUE15 X5 主链门禁，覆盖 Harness 场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-X5 Harness 评测基座与回归挑战集”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：约 9%（按 X1~X11 粗略计，已完成 1/11 个扩展大项）。
+
+## 二十七、本轮实施回写（2026-04-15，续14）
+
+本轮目标：完成 B15-X1「自学习闭环质量门禁（Learning Loop Guardrail）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增 `learning.guardrail` RPC，并接入 ACP 方法白名单与主分发链路，统一输出学习样本质量门禁状态（`pass/warn/block`）、阈值配置、质量统计与告警列表。
+2. backend 新增学习门禁核心评估逻辑：覆盖可解析性（parseable ratio）、证据完整性、结果可归因、高风险样本覆盖、相似样本去重比例、冷却窗口判定与最小样本量门禁。
+3. backend 将 `learning.summary` 主链返回扩展为内嵌 `guardrail` 摘要，保证既有学习汇总查询默认携带门禁结果，不需要额外切换接口。
+4. backend 新增 `requests/learning-loop-guardrail-benchmark.ndjson` 场景（`initialize -> learning.guardrail -> learning.summary -> shutdown`）。
+5. backend 集成测试新增 `run_scenario_file_executes_learning_loop_guardrail_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 13。
+6. GUI `BackendOpsView` 新增 `learning.guardrail` 快捷按钮，可直接发起学习闭环质量门禁检查。
+7. vscode-addon 新增 `go-on.learningGuardrail` 命令，并在 Settings 面板增加 `Learning Guardrail` 按钮，输出门禁状态、样本数、可解析率、质量率和高风险样本摘要。
+8. `test_ci.sh` 新增 6ai BLUE15 X1 主链门禁，覆盖学习门禁场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-X1 自学习闭环质量门禁（Learning Loop Guardrail）”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：约 18%（按 X1~X11 粗略计，已完成 2/11 个扩展大项：X5、X1）。
+
+## 二十八、本轮实施回写（2026-04-15，续15）
+
+本轮目标：完成 B15-X2「知识萃取分层与去噪（Knowledge Distillation Pipeline）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增 `knowledge.distill` RPC，并接入 ACP 方法白名单与请求主分发链路。
+2. backend `knowledge.distill` 输出三层结构：
+	- `evidence`：回放 `.goon/learning` 原始学习记录（workflow/pua 分类统计 + 原始记录窗口）；
+	- `summary`：回放 `spec/latest-knowledge.json` 的知识摘要窗口；
+	- `strategy`：从摘要层生成可执行规则候选（rule_id/when/then/confidence/source）。
+3. backend 新增冲突检测与知识墓碑机制：
+	- 以 `task+phase` 进行聚类，按 `confidence + generated_at` 选主结论；
+	- 将被替代结论记为 `conflicts`；
+	- 可选写入 `.goon/knowledge/tombstones.ndjson`，并支持回放最近墓碑窗口。
+4. backend 新增 `requests/knowledge-distillation-benchmark.ndjson` 场景（`initialize -> learning.replay -> knowledge.distill -> shutdown`）。
+5. backend 集成测试新增 `run_scenario_file_executes_knowledge_distillation_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 14。
+6. GUI `BackendOpsView` 新增 `knowledge.distill` 快捷按钮，并在中英文 locale 增加 `knowledgeDistill` 标签。
+7. vscode-addon 新增 `go-on.knowledgeDistill` 命令（命令面板可用），并在 Settings 面板增加 `Knowledge Distill` 按钮直连后端接口。
+8. `test_ci.sh` 新增 6aj BLUE15 X2 主链门禁，覆盖知识萃取场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-X2 知识萃取分层与去噪”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：约 27%（按 X1~X11 粗略计，已完成 3/11 个扩展大项：X5、X1、X2）。
+
+## 二十九、本轮实施回写（2026-04-15，续16）
+
+本轮目标：完成 B15-X3「强化学习奖励对齐与离线评估（RL Alignment & Offline Eval）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增 `rl.alignment.offline_eval` RPC，并接入 ACP 方法白名单与请求主分发链路。
+2. backend `rl.alignment.offline_eval` 实现多目标奖励对齐：按 `success/latency/tool_error/safety` 四维权重计算样本 reward，并支持参数化权重配置。
+3. backend 实现离线回放评估（off-policy replay）：将学习窗口拆分为 baseline/candidate 两段，评估 reward uplift 与安全惩罚回归，输出通过判定与建议运行模式。
+4. backend 增加奖励漂移检测：比较 recent 与 historical reward 均值差异，超过阈值触发 drift alert，并给出保守回退建议。
+5. backend 新增 `requests/rl-alignment-offline-eval-benchmark.ndjson` 场景（`initialize -> learning.replay -> rl.alignment.offline_eval -> shutdown`）。
+6. backend 集成测试新增 `run_scenario_file_executes_rl_alignment_offline_eval_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 15。
+7. GUI `BackendOpsView` 新增 `rl.alignment.offline_eval` 快捷按钮，并在中英文 locale 增加 `rlAlignmentEval` 标签。
+8. vscode-addon 新增 `go-on.rlAlignmentEval` 命令（命令面板可用），并在 Settings 面板增加 `RL Alignment Eval` 按钮直连后端接口。
+9. `test_ci.sh` 新增 6ak BLUE15 X3 主链门禁，覆盖 RL 离线评估场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-X3 强化学习奖励对齐与离线评估”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：约 36%（按 X1~X11 粗略计，已完成 4/11 个扩展大项：X5、X1、X2、X3）。
+
+## 三十、本轮实施回写（2026-04-15，续17）
+
+本轮目标：完成 B15-X4「Hardness 分级路由与预算编排（Difficulty-aware Routing）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 落地 `hardness.status` 主链 RPC，统一输出 hardness 四维评分（context/cross-file/tool/recovery）、等级分层（low/medium/high/extreme）与预算编排建议（timeout/parallelism/reviews/mode）。
+2. backend 在 `task.execute` 主链接入 hardness 默认编排：将 hardness 预算合并到 `adaptive.execution_defaults.hardness`，驱动并发上限、超时预算与推荐执行模式，形成“评分 -> 路由 -> 执行”闭环。
+3. backend 请求场景 `requests/hardness-routing-benchmark.ndjson` 纳入主链序列（`initialize -> hardness.status -> task.execute -> shutdown`），并在集成测试修正为可编译的稳定用例名 `run_scenario_file_executes_hardness_routing_benchmark_requests`。
+4. GUI `BackendOpsView` 已接入 `hardness.status` 按钮，支持直接发起难度路由评估；locale 同步提供 `hardnessStatus` 标签，保证界面可见与语义一致。
+5. vscode-addon 已接入 `go-on.hardnessStatus` 命令与 Settings 按钮，本轮补齐 `package.json` 激活事件与命令面板注册，保证命令可发现、可触发、可回放。
+6. `test_ci.sh` 新增 6al BLUE15 X4 主链门禁，覆盖 hardness 场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-X4 Hardness 分级路由与预算编排”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：约 45%（按 X1~X11 粗略计，已完成 5/11 个扩展大项：X5、X1、X2、X3、X4）。
+
+## 三十一、本轮实施回写（2026-04-15，续18）
+
+本轮目标：完成 B15-X6「Token 成本压缩与 Cost 治理（Token Compression & Cost Governance）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增 `cost.status` RPC，并接入 ACP 方法白名单与主分发链路，统一输出 token 预算、压缩策略、成本路由和成本遥测摘要。
+2. backend 落地成本治理核心模型：
+	- 基于 task + params + hardness 的输入/输出 token 预算分层；
+	- 根据预算与阈值触发压缩策略（rolling summary / dedupe evidence / adaptive retrieval window）；
+	- 输出模型层级偏好、降级策略与高成本模型冷却建议；
+	- 汇总运行时指标形成估算成本与风险遥测。
+3. backend 将成本治理接入 `task.execute` 主链默认编排：在 `adaptive.execution_defaults` 中新增 `cost` 概要，实现“cost.status -> task.execute”一致语义闭环。
+4. backend 新增 `requests/token-cost-governance-benchmark.ndjson` 场景（`initialize -> cost.status -> task.execute -> shutdown`）。
+5. backend 集成测试新增 `run_scenario_file_executes_token_cost_governance_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 17。
+6. GUI `BackendOpsView` 新增 `cost.status` 按钮，locale 同步新增 `backendOps.costStatus`（中英文）。
+7. vscode-addon 新增 `go-on.costStatus` 命令、Settings 面板 `Cost Status` 按钮、消息分发与 command palette 清单注册。
+8. `test_ci.sh` 新增 6am BLUE15 X6 主链门禁，覆盖成本治理场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-X6 Token 成本压缩与 Cost 治理”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：约 55%（按 X1~X11 粗略计，已完成 6/11 个扩展大项：X5、X1、X2、X3、X4、X6）。
+
+## 三十二、本轮实施回写（2026-04-15，续19）
+
+本轮目标：完成 B15-X7「配置基线收敛与一次性清理（Config Baseline Freeze）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增 `config.baseline` RPC，并接入 ACP 方法白名单与主分发链路，统一输出配置基线冻结状态。
+2. backend `config.baseline` 输出新增“最终生效视图 + 来源优先级 + 字段来源映射”：覆盖 protocol/rate-limit/strict/trace 等关键 runtime 字段。
+3. backend 新增配置来源分析与迁移提示能力：
+	- 识别 `cli_override / env / config_file / default` 优先级；
+	- 检测 legacy 配置键并输出 `old_path -> new_path` 替换建议；
+	- 输出兼容窗口与迁移后验证建议（`config.reload` / `runtime.health`）。
+4. backend 新增 `requests/config-baseline-benchmark.ndjson` 场景（`initialize -> config.baseline -> config.reload -> shutdown`）。
+5. backend 集成测试新增 `run_scenario_file_executes_config_baseline_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 18。
+6. GUI `BackendOpsView` 新增 `config.baseline` 按钮，locale 同步新增 `backendOps.configBaseline`（中英文）。
+7. vscode-addon 新增 `go-on.configBaseline` 命令，并在 Settings 面板新增 `Config Baseline` 按钮、消息分发与 command palette 清单注册。
+8. `test_ci.sh` 新增 6an BLUE15 X7 主链门禁，覆盖配置基线场景执行与全场景回归。
+9. 同轮修复跨端潜在回归：移除 GUI 与 vscode-addon 中 `cost.status` 的无效 `phase=execute` 参数，避免与主链 phase 约束冲突。
+
+本轮完成率：
+1. “B15-X7 配置基线收敛与一次性清理”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：约 64%（按 X1~X11 粗略计，已完成 7/11 个扩展大项：X5、X1、X2、X3、X4、X6、X7）。

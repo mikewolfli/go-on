@@ -19,7 +19,11 @@ use crate::memory_response_cache::MemoryResponseCache;
 use crate::vector::VectorStore;
 
 use super::prelude::{
-    CircuitBreakerRegistry, InflightLimiter, LifecycleState, MaintenanceTracker, PhaseRateLimiter,
+    with_acp_lock, AcpLockMonitor, CircuitBreakerRegistry, InflightLimiter, LifecycleState,
+    MaintenanceTracker, PhaseRateLimiter, ACP_LOCK_CIRCUIT_BREAKERS, ACP_LOCK_INFLIGHT_LIMITER,
+    ACP_LOCK_LIFECYCLE, ACP_LOCK_MAINTENANCE, ACP_LOCK_MEMORY_CACHE, ACP_LOCK_MEMORY_STORE,
+    ACP_LOCK_PHASE_RATE_LIMITER, ACP_LOCK_RESPONSE_CACHE, ACP_LOCK_RUNTIME_CONFIG,
+    ACP_LOCK_VECTOR_STORE,
 };
 
 /// Maintenance cycle result
@@ -43,6 +47,7 @@ pub struct MaintenanceCycleResult {
 /// health checks, and system monitoring.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_background_maintenance_loop(
+    lock_monitor: Arc<AcpLockMonitor>,
     runtime_config: Arc<std::sync::Mutex<RuntimeConfig>>,
     memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
     memory_store: Arc<std::sync::Mutex<MemoryStore>>,
@@ -55,10 +60,12 @@ pub async fn run_background_maintenance_loop(
     inflight_limiter: Arc<std::sync::Mutex<InflightLimiter>>,
     shutdown_notify: Arc<Notify>,
 ) {
-    let config = runtime_config
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
+    let config = with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_RUNTIME_CONFIG,
+        runtime_config.as_ref(),
+        |guard| guard.clone(),
+    );
 
     let mut maintenance_interval = interval(Duration::from_secs(
         config.maintenance_interval_seconds.max(1),
@@ -72,13 +79,17 @@ pub async fn run_background_maintenance_loop(
         tokio::select! {
             _ = shutdown_notify.notified() => break,
             _ = maintenance_interval.tick() => {
-                if let Ok(guard) = lifecycle.lock() {
-                    if guard.is_shutting_down() {
-                        break;
-                    }
+                if with_acp_lock(
+                    lock_monitor.as_ref(),
+                    ACP_LOCK_LIFECYCLE,
+                    lifecycle.as_ref(),
+                    |guard| guard.is_shutting_down(),
+                ) {
+                    break;
                 }
 
                 if let Err(err) = perform_maintenance_cycle(
+                    Arc::clone(&lock_monitor),
                     Arc::clone(&memory_cache),
                     Arc::clone(&memory_store),
                     Arc::clone(&cache),
@@ -91,13 +102,17 @@ pub async fn run_background_maintenance_loop(
                 }
             }
             _ = health_interval.tick() => {
-                if let Ok(guard) = lifecycle.lock() {
-                    if guard.is_shutting_down() {
-                        break;
-                    }
+                if with_acp_lock(
+                    lock_monitor.as_ref(),
+                    ACP_LOCK_LIFECYCLE,
+                    lifecycle.as_ref(),
+                    |guard| guard.is_shutting_down(),
+                ) {
+                    break;
                 }
 
                 if let Err(err) = perform_health_check_cycle(
+                    Arc::clone(&lock_monitor),
                     Arc::clone(&memory_cache),
                     Arc::clone(&cache),
                     Arc::clone(&vector_store),
@@ -118,6 +133,7 @@ pub async fn run_background_maintenance_loop(
 
 /// Perform maintenance cycle
 pub async fn perform_maintenance_cycle(
+    lock_monitor: Arc<AcpLockMonitor>,
     memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
     memory_store: Arc<std::sync::Mutex<MemoryStore>>,
     cache: Arc<std::sync::Mutex<Option<Arc<ResponseCache>>>>,
@@ -126,16 +142,20 @@ pub async fn perform_maintenance_cycle(
     runtime_config: Arc<std::sync::Mutex<RuntimeConfig>>,
     source: &str,
 ) -> Result<MaintenanceCycleResult> {
-    if let Ok(guard) = maintenance.lock() {
-        guard.note_started();
-    }
+    with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_MAINTENANCE,
+        maintenance.as_ref(),
+        |guard| guard.note_started(),
+    );
 
     let mut result = MaintenanceCycleResult {
-        memory_expired_removed: if let Ok(guard) = memory_cache.lock() {
-            guard.purge_expired()
-        } else {
-            0
-        },
+        memory_expired_removed: with_acp_lock(
+            lock_monitor.as_ref(),
+            ACP_LOCK_MEMORY_CACHE,
+            memory_cache.as_ref(),
+            |guard| guard.purge_expired(),
+        ),
         ..MaintenanceCycleResult::default()
     };
 
@@ -145,13 +165,25 @@ pub async fn perform_maintenance_cycle(
         source, result.memory_expired_removed
     );
 
-    if let Ok(mut guard) = memory_store.lock() {
-        guard.gc();
+    if with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_MEMORY_STORE,
+        memory_store.as_ref(),
+        |guard| {
+            guard.gc();
+            true
+        },
+    ) {
         result.memory_store_gc_ran = true;
     }
 
     // Clean SQLite cache if available
-    if let Some(cache_ref) = cache.lock().ok().and_then(|guard| guard.clone()) {
+    if let Some(cache_ref) = with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_RESPONSE_CACHE,
+        cache.as_ref(),
+        |guard| guard.clone(),
+    ) {
         match spawn_blocking(move || cache_ref.purge_expired()).await {
             Ok(Ok(removed)) => {
                 result.sqlite_expired_removed = removed;
@@ -170,20 +202,28 @@ pub async fn perform_maintenance_cycle(
     }
 
     // Vacuum caches if configured
-    let config = runtime_config
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
+    let config = with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_RUNTIME_CONFIG,
+        runtime_config.as_ref(),
+        |guard| guard.clone(),
+    );
     let vacuum_interval_cycles = config.sqlite_vacuum_interval_cycles.max(1);
-    let current_cycle = if let Ok(guard) = maintenance.lock() {
-        guard.snapshot().cycles_total
-    } else {
-        0
-    };
+    let current_cycle = with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_MAINTENANCE,
+        maintenance.as_ref(),
+        |guard| guard.snapshot().cycles_total,
+    );
     let should_vacuum = current_cycle.is_multiple_of(vacuum_interval_cycles);
 
     if should_vacuum {
-        if let Some(cache_ref) = cache.lock().ok().and_then(|guard| guard.clone()) {
+        if let Some(cache_ref) = with_acp_lock(
+            lock_monitor.as_ref(),
+            ACP_LOCK_RESPONSE_CACHE,
+            cache.as_ref(),
+            |guard| guard.clone(),
+        ) {
             match spawn_blocking(move || cache_ref.vacuum()).await {
                 Ok(Ok(_)) => {
                     result.cache_vacuumed = true;
@@ -199,7 +239,12 @@ pub async fn perform_maintenance_cycle(
         }
     }
 
-    if let Some(vector_ref) = vector_store.lock().ok().and_then(|guard| guard.clone()) {
+    if let Some(vector_ref) = with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_VECTOR_STORE,
+        vector_store.as_ref(),
+        |guard| guard.clone(),
+    ) {
         match spawn_blocking(move || vector_ref.vacuum()).await {
             Ok(Ok(_)) => {
                 result.vector_vacuumed = true;
@@ -214,20 +259,26 @@ pub async fn perform_maintenance_cycle(
         }
     }
 
-    if let Ok(guard) = maintenance.lock() {
-        guard.note_completed(
-            result.memory_expired_removed,
-            result.sqlite_expired_removed,
-            result.cache_vacuumed,
-            result.vector_vacuumed,
-        );
-    }
+    with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_MAINTENANCE,
+        maintenance.as_ref(),
+        |guard| {
+            guard.note_completed(
+                result.memory_expired_removed,
+                result.sqlite_expired_removed,
+                result.cache_vacuumed,
+                result.vector_vacuumed,
+            );
+        },
+    );
     Ok(result)
 }
 
 /// Perform health check cycle
 #[allow(clippy::too_many_arguments)]
 pub async fn perform_health_check_cycle(
+    lock_monitor: Arc<AcpLockMonitor>,
     memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
     cache: Arc<std::sync::Mutex<Option<Arc<ResponseCache>>>>,
     vector_store: Arc<std::sync::Mutex<Option<Arc<VectorStore>>>>,
@@ -237,58 +288,70 @@ pub async fn perform_health_check_cycle(
     lifecycle: Arc<std::sync::Mutex<LifecycleState>>,
     maintenance: Arc<std::sync::Mutex<MaintenanceTracker>>,
 ) -> Result<()> {
-    let memory_health = memory_cache
-        .lock()
-        .map(|cache| {
+    let memory_health = with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_MEMORY_CACHE,
+        memory_cache.as_ref(),
+        |cache| {
             cache.active_entries();
             true
-        })
-        .unwrap_or(false);
+        },
+    );
 
-    let sqlite_health = cache
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone())
-        .map(|cache| cache.entry_count().is_ok())
-        .unwrap_or(true);
+    let sqlite_health = with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_RESPONSE_CACHE,
+        cache.as_ref(),
+        |guard| guard.clone(),
+    )
+    .map(|cache| cache.entry_count().is_ok())
+    .unwrap_or(true);
 
-    let vector_health = vector_store
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone())
-        .map(|store| store.memory_entry_count().is_ok() && store.summary_entry_count().is_ok())
-        .unwrap_or(true);
+    let vector_health = with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_VECTOR_STORE,
+        vector_store.as_ref(),
+        |guard| guard.clone(),
+    )
+    .map(|store| store.memory_entry_count().is_ok() && store.summary_entry_count().is_ok())
+    .unwrap_or(true);
 
     // Check circuit breakers
-    let circuit_breaker_health = if let Ok(guard) = circuit_breakers.lock() {
-        guard.is_healthy()
-    } else {
-        false
-    };
+    let circuit_breaker_health = with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_CIRCUIT_BREAKERS,
+        circuit_breakers.as_ref(),
+        |guard| guard.is_healthy(),
+    );
     if !circuit_breaker_health {
         warn!("circuit breaker health check failed");
     }
 
     // Check rate limiters
-    let rate_limiter_health = if let Ok(phase_guard) = phase_rate_limiter.lock() {
-        if let Ok(inflight_guard) = inflight_limiter.lock() {
-            phase_guard.is_healthy() && inflight_guard.is_healthy()
-        } else {
-            false
-        }
-    } else {
-        false
-    };
+    let phase_healthy = with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_PHASE_RATE_LIMITER,
+        phase_rate_limiter.as_ref(),
+        |guard| guard.is_healthy(),
+    );
+    let inflight_healthy = with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_INFLIGHT_LIMITER,
+        inflight_limiter.as_ref(),
+        |guard| guard.is_healthy(),
+    );
+    let rate_limiter_health = phase_healthy && inflight_healthy;
     if !rate_limiter_health {
         warn!("rate limiter health check failed");
     }
 
     // Check lifecycle
-    let lifecycle_health = if let Ok(guard) = lifecycle.lock() {
-        guard.is_healthy()
-    } else {
-        false
-    };
+    let lifecycle_health = with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_LIFECYCLE,
+        lifecycle.as_ref(),
+        |guard| guard.is_healthy(),
+    );
     if !lifecycle_health {
         warn!("lifecycle health check failed");
     }
@@ -302,21 +365,29 @@ pub async fn perform_health_check_cycle(
         && lifecycle_health;
 
     // Update health status in lifecycle state.
-    if let Ok(mut guard) = lifecycle.lock() {
-        if overall_health {
-            guard.mark_healthy();
-            info!("Health check passed");
-        } else {
-            guard.mark_unhealthy();
-            warn!("Health check failed");
-        }
-        guard.update_health_check();
-    }
+    with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_LIFECYCLE,
+        lifecycle.as_ref(),
+        |guard| {
+            if overall_health {
+                guard.mark_healthy();
+                info!("Health check passed");
+            } else {
+                guard.mark_unhealthy();
+                warn!("Health check failed");
+            }
+            guard.update_health_check();
+        },
+    );
 
     // Update maintenance tracker
-    if let Ok(guard) = maintenance.lock() {
-        guard.record_health_check(overall_health);
-    }
+    with_acp_lock(
+        lock_monitor.as_ref(),
+        ACP_LOCK_MAINTENANCE,
+        maintenance.as_ref(),
+        |guard| guard.record_health_check(overall_health),
+    );
 
     Ok(())
 }
@@ -326,6 +397,7 @@ pub async fn start_background_tasks(
     server: &super::server::AcpServer,
     shutdown_notify: Arc<Notify>,
 ) -> Result<()> {
+    let lock_monitor = Arc::clone(&server.lock_monitor);
     let runtime_config = Arc::new(std::sync::Mutex::new(server.runtime_config.clone()));
     let memory_cache = Arc::clone(&server.memory_response_cache);
     let memory_store = Arc::clone(&server.memory_store);
@@ -337,13 +409,12 @@ pub async fn start_background_tasks(
     let lifecycle = Arc::clone(&server.lifecycle_state);
     let circuit_breakers = Arc::clone(&server.circuit_breakers);
 
-    // Note: These components need to be added to AcpServer struct
-    // For now, we'll create default instances
-    let phase_rate_limiter = Arc::new(std::sync::Mutex::new(PhaseRateLimiter::default()));
+    let phase_rate_limiter = Arc::clone(&server.phase_rate_limiter);
     let inflight_limiter = Arc::clone(&server.inflight_limiter);
 
     tokio::spawn(async move {
         run_background_maintenance_loop(
+            lock_monitor,
             runtime_config,
             memory_cache,
             memory_store,
@@ -371,6 +442,7 @@ pub async fn stop_background_tasks(shutdown_notify: Arc<Notify>) {
 pub async fn run_maintenance_cycle(
     server: &super::server::AcpServer,
 ) -> Result<MaintenanceCycleResult> {
+    let lock_monitor = Arc::clone(&server.lock_monitor);
     let runtime_config = Arc::new(std::sync::Mutex::new(server.runtime_config.clone()));
     let memory_cache = Arc::clone(&server.memory_response_cache);
     let memory_store = Arc::clone(&server.memory_store);
@@ -381,6 +453,7 @@ pub async fn run_maintenance_cycle(
     let maintenance = Arc::clone(&server.maintenance_tracker);
 
     perform_maintenance_cycle(
+        lock_monitor,
         memory_cache,
         memory_store,
         cache,
@@ -394,6 +467,7 @@ pub async fn run_maintenance_cycle(
 
 /// Run a single health check on demand
 pub async fn run_health_check(server: &super::server::AcpServer) -> Result<()> {
+    let lock_monitor = Arc::clone(&server.lock_monitor);
     let memory_cache = Arc::clone(&server.memory_response_cache);
 
     let cache = Arc::new(std::sync::Mutex::new(server.response_cache.clone()));
@@ -403,11 +477,11 @@ pub async fn run_health_check(server: &super::server::AcpServer) -> Result<()> {
     let lifecycle = Arc::clone(&server.lifecycle_state);
     let maintenance = Arc::clone(&server.maintenance_tracker);
 
-    // Note: These components need to be added to AcpServer struct
-    let phase_rate_limiter = Arc::new(std::sync::Mutex::new(PhaseRateLimiter::default()));
+    let phase_rate_limiter = Arc::clone(&server.phase_rate_limiter);
     let inflight_limiter = Arc::clone(&server.inflight_limiter);
 
     perform_health_check_cycle(
+        lock_monitor,
         memory_cache,
         cache,
         vector_store,

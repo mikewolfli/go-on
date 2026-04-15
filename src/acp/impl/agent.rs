@@ -15,6 +15,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::info;
 
+use crate::acp::helpers::context::{review_timeout, run_with_optional_timeout};
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
 use crate::config::PhaseOptions;
@@ -155,10 +156,7 @@ pub async fn run_dual_review_gate(
             ));
         }
 
-        let reviewer_timeout = phase_options
-            .and_then(|opts| opts.review_timeout_seconds)
-            .or_else(|| phase_options.and_then(|opts| opts.request_timeout_seconds))
-            .map(Duration::from_secs);
+        let reviewer_timeout = review_timeout(phase_options);
         let reviewer_deadline = reviewer_timeout.map(|limit| Instant::now() + limit);
 
         // Run reviews in parallel
@@ -355,9 +353,9 @@ async fn run_single_review(
             .await
     });
 
-    let response = if let Some(deadline) = deadline {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let collect_fut = async move {
+    let response = run_with_optional_timeout(
+        deadline.map(|value| value.saturating_duration_since(Instant::now())),
+        async move {
             let mut resp = String::new();
             while let Some(token) = receiver.recv().await {
                 resp.push_str(&token);
@@ -367,28 +365,10 @@ async fn run_single_review(
                 Ok(Err(err)) => Err(err.into()),
                 Err(join_err) => Err(anyhow::anyhow!("reviewer task panicked: {join_err}")),
             }
-        };
-        match tokio::time::timeout(remaining, collect_fut).await {
-            Ok(Ok(resp)) => resp,
-            Ok(Err(err)) => return Err(err),
-            Err(_elapsed) => {
-                return Err(anyhow::anyhow!(
-                    "{}",
-                    tf("error.review_timeout", &[("reviewer", reviewer)])
-                ));
-            }
-        }
-    } else {
-        let mut resp = String::new();
-        while let Some(token) = receiver.recv().await {
-            resp.push_str(&token);
-        }
-        match task.await {
-            Ok(Ok(())) => resp,
-            Ok(Err(err)) => return Err(err.into()),
-            Err(join_err) => return Err(anyhow::anyhow!("reviewer task panicked: {join_err}")),
-        }
-    };
+        },
+        |_| anyhow::anyhow!("{}", tf("error.review_timeout", &[("reviewer", reviewer)])),
+    )
+    .await?;
 
     // Parse reviewer response: APPROVE unless the response contains REJECT or DENIED
     let upper = response.to_ascii_uppercase();

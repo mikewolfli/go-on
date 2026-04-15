@@ -16,3 +16,4 @@ BINARY="${3:-./target/debug/go-on}"
 
 cat "$TEMPLATE" | "$BINARY" --config "$CONFIG"
 
+

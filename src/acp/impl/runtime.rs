@@ -5,8 +5,8 @@
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
-use std::path::Path;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -106,9 +106,9 @@ pub fn new_acp_server(
 
             // Create a minimal server with just the essential components
             use crate::acp::prelude::{
-                CircuitBreakerRegistry, ConversationState, InflightLimiter, LifecycleState,
-                MaintenanceTracker, OnlineControllerState, PhaseRateLimiter, ReviewTimeoutPolicy,
-                RuntimeMetrics,
+                AcpLockMonitor, CircuitBreakerRegistry, ConversationState, InflightLimiter,
+                LifecycleState, MaintenanceTracker, OnlineControllerState, PhaseRateLimiter,
+                ReviewTimeoutPolicy, RuntimeMetrics,
             };
 
             let mut failure_prevention_state = FailurePrevention::new();
@@ -128,6 +128,7 @@ pub fn new_acp_server(
                 config_path: config_path.clone(),
                 runtime_config: runtime_config.clone(),
                 metrics: Arc::new(RuntimeMetrics::new()),
+                lock_monitor: Arc::new(AcpLockMonitor::default()),
                 online_controller: Arc::new(StdMutex::new(OnlineControllerState::default())),
                 circuit_breakers: Arc::new(StdMutex::new(CircuitBreakerRegistry::new())),
                 maintenance_tracker: Arc::new(StdMutex::new(MaintenanceTracker::new())),
@@ -1876,7 +1877,16 @@ async fn handle_http_connection(
         .next()
         .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing path"))?;
 
-    if apply_entry_guards(socket, server.as_ref(), header_part, method, path, peer_addr).await? {
+    if apply_entry_guards(
+        socket,
+        server.as_ref(),
+        header_part,
+        method,
+        path,
+        peer_addr,
+    )
+    .await?
+    {
         return Ok(());
     }
 

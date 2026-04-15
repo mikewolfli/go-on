@@ -9,6 +9,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn now_epoch_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Health status of a service
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HealthStatus {
@@ -275,10 +282,67 @@ impl FailurePrevention {
         self.health_monitors.values().cloned().collect()
     }
 
+    /// Recover one or all degraded services back to healthy baseline.
+    pub fn recover(&mut self, service_name: Option<&str>) -> Vec<String> {
+        if let Some(name) = service_name {
+            if self.recover_service(name) {
+                return vec![name.to_string()];
+            }
+            return Vec::new();
+        }
+
+        let service_names = self
+            .health_monitors
+            .keys()
+            .cloned()
+            .collect::<Vec<String>>();
+        let mut recovered = Vec::new();
+        for name in service_names {
+            if self.recover_service(&name) {
+                recovered.push(name);
+            }
+        }
+        recovered.sort();
+        recovered
+    }
+
     fn ensure_service_registered(&mut self, name: &str) {
         if !self.health_monitors.contains_key(name) {
             self.register_service(name);
         }
+    }
+
+    fn recover_service(&mut self, name: &str) -> bool {
+        let Some(health) = self.health_monitors.get(name) else {
+            return false;
+        };
+
+        let already_healthy = matches!(health.status, HealthStatus::Healthy)
+            && self
+                .circuit_breakers
+                .get(name)
+                .copied()
+                .unwrap_or(CircuitBreakerState::Closed)
+                == CircuitBreakerState::Closed
+            && self.failure_counts.get(name).copied().unwrap_or(0) == 0;
+        if already_healthy {
+            return false;
+        }
+
+        self.failure_counts.insert(name.to_string(), 0);
+        self.circuit_breakers
+            .insert(name.to_string(), CircuitBreakerState::Closed);
+        self.total_requests.insert(name.to_string(), 0);
+        self.successful_requests.insert(name.to_string(), 0);
+
+        if let Some(health) = self.health_monitors.get_mut(name) {
+            health.status = HealthStatus::Healthy;
+            health.success_rate = 1.0;
+            health.error_rate = 0.0;
+            health.last_check_timestamp = now_epoch_seconds();
+        }
+
+        true
     }
 
     fn update_health_from_counters(&mut self, name: &str, latency_ms: Option<f64>) {
@@ -308,10 +372,7 @@ impl FailurePrevention {
             }
             health.success_rate = success_rate;
             health.error_rate = error_rate.max(failure_count / self.max_failure_threshold as f64);
-            health.last_check_timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+            health.last_check_timestamp = now_epoch_seconds();
             health.status = if health.error_rate > self.anomaly_thresholds.error_rate_threshold {
                 HealthStatus::Unhealthy
             } else if health.success_rate < self.anomaly_thresholds.success_rate_threshold {
@@ -397,5 +458,29 @@ mod tests {
             .unwrap();
         assert!(health.error_rate > 0.1);
         assert!(matches!(health.status, HealthStatus::Unhealthy));
+    }
+
+    #[test]
+    fn test_recover_resets_unhealthy_service_to_healthy() {
+        let mut prevention = FailurePrevention::new();
+        prevention.register_service("api");
+        for _ in 0..5 {
+            prevention.record_failure("api");
+        }
+
+        let recovered = prevention.recover(Some("api"));
+        assert_eq!(recovered, vec!["api".to_string()]);
+        assert_eq!(
+            prevention.get_circuit_state("api"),
+            CircuitBreakerState::Closed
+        );
+
+        let health = prevention
+            .get_health_report()
+            .into_iter()
+            .find(|item| item.service_name == "api")
+            .expect("api health should exist");
+        assert!(matches!(health.status, HealthStatus::Healthy));
+        assert!((health.error_rate - 0.0).abs() < f64::EPSILON);
     }
 }

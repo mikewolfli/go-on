@@ -225,6 +225,10 @@
         vscode.postMessage({ type: 'breakerStatus' });
     });
 
+    document.getElementById('breakerRecovery').addEventListener('click', () => {
+        vscode.postMessage({ type: 'breakerRecovery' });
+    });
+
     document.getElementById('clearCache').addEventListener('click', () => {
         vscode.postMessage({ type: 'clearCache' });
     });
@@ -253,12 +257,60 @@
         vscode.postMessage({ type: 'learningSummary' });
     });
 
+    document.getElementById('learningGuardrail').addEventListener('click', () => {
+        vscode.postMessage({ type: 'learningGuardrail' });
+    });
+
+    document.getElementById('learningReplay').addEventListener('click', () => {
+        vscode.postMessage({ type: 'learningReplay' });
+    });
+
+    document.getElementById('knowledgeDistill').addEventListener('click', () => {
+        vscode.postMessage({ type: 'knowledgeDistill' });
+    });
+
+    document.getElementById('rlAlignmentEval').addEventListener('click', () => {
+        vscode.postMessage({ type: 'rlAlignmentEval' });
+    });
+
+    document.getElementById('hardnessStatus').addEventListener('click', () => {
+        vscode.postMessage({ type: 'hardnessStatus' });
+    });
+
+    document.getElementById('costStatus').addEventListener('click', () => {
+        vscode.postMessage({ type: 'costStatus' });
+    });
+
+    document.getElementById('configBaseline').addEventListener('click', () => {
+        vscode.postMessage({ type: 'configBaseline' });
+    });
+
     document.getElementById('autotuneStatus').addEventListener('click', () => {
         vscode.postMessage({ type: 'autotuneStatus' });
     });
 
+    document.getElementById('governancePlanGet').addEventListener('click', () => {
+        vscode.postMessage({ type: 'governancePlanGet' });
+    });
+
+    document.getElementById('governanceAuditRecent').addEventListener('click', () => {
+        vscode.postMessage({ type: 'governanceAuditRecent' });
+    });
+
     document.getElementById('healthProbes').addEventListener('click', () => {
         vscode.postMessage({ type: 'healthProbes' });
+    });
+
+    document.getElementById('observabilityAlerts').addEventListener('click', () => {
+        vscode.postMessage({ type: 'observabilityAlerts' });
+    });
+
+    document.getElementById('securityBaseline').addEventListener('click', () => {
+        vscode.postMessage({ type: 'securityBaseline' });
+    });
+
+    document.getElementById('harnessStatus').addEventListener('click', () => {
+        vscode.postMessage({ type: 'harnessStatus' });
     });
 
     document.getElementById('governanceStatus').addEventListener('click', () => {

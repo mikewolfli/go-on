@@ -47,20 +47,29 @@ fn is_acp_request(method: &str) -> bool {
             | "health"
             | "runtime.health"
             | "health.probes"
+            | "observability.alerts"
+            | "security.baseline"
+            | "harness.status"
             | "breaker.status"
             | "breaker.reset"
+            | "breaker.recovery"
             | "cache.clear"
             | "vector.clear"
             | "maintenance.gc"
+               | "error.contract"
             | "action.check"
             | "conversation.checkpoint.create"
             | "conversation.checkpoint.list"
             | "conversation.rollback"
             | "conversation.checkpoint.prune"
             | "config.reload"
+            | "config.baseline"
             | "autotune.get"
             | "autotune.status"
             | "autotune.reset"
+            | "selector.status"
+            | "hardness.status"
+            | "cost.status"
             | "workflow.confirm"
             | "workflow.clarify"
             | "workflow.research"
@@ -70,6 +79,13 @@ fn is_acp_request(method: &str) -> bool {
             | "task.plan"
             | "task.execute"
             | "learning.summary"
+            | "learning.replay"
+            | "learning.guardrail"
+            | "knowledge.distill"
+            | "rl.alignment.offline_eval"
+                | "governance.plan.get"
+                | "governance.plan.update"
+                | "governance.audit.recent"
             | "phase.policy.replay"
             | "primary_secondary.summary"
             | "governance.status"
@@ -90,7 +106,7 @@ fn is_acp_request(method: &str) -> bool {
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::net::{TcpStream, ToSocketAddrs};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Instant, UNIX_EPOCH};
@@ -99,7 +115,7 @@ use anyhow::Result;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -107,13 +123,18 @@ use tokio::time::Duration;
 use tracing::{debug, info};
 
 use crate::acp::background::run_maintenance_cycle;
+use crate::acp::helpers::context::{
+    probe_agent_runtime_readiness, run_with_optional_timeout, AgentRuntimeReadiness,
+};
 use crate::acp::helpers::metrics::{
     build_prometheus_metrics, CircuitBreakerSnapshot as PrometheusCircuitBreakerSnapshot,
     LifecycleSnapshot as PrometheusLifecycleSnapshot,
     MaintenanceSnapshot as PrometheusMaintenanceSnapshot,
     MetricsSnapshot as PrometheusMetricsSnapshot, RuntimeGaugeSnapshot,
 };
-use crate::acp::prelude::enforce_checkpoint_capacity;
+use crate::acp::prelude::{
+    enforce_checkpoint_capacity, with_acp_lock, AcpLockSnapshot, ACP_LOCK_PHASE_RATE_LIMITER,
+};
 use crate::acp::r#impl::storage::cache_clear;
 use crate::acp::server::AcpServer;
 use crate::agent::{AgentAuditLog, AgentTaskEnvelope, Message};
@@ -137,21 +158,20 @@ use crate::i18n::runtime::{t, tf};
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPromotionReport, MemoryStore};
 use crate::orchestration::task_router::TaskRouter;
 use crate::pua::{
-    DynamicQualityCompass, PuaExecutionReport, PuaFeedbackCollector, PuaRuleEngine, TaskContext,
-    TaskType,
+    load_learning_records, DynamicQualityCompass, LearningRecord, PuaExecutionReport,
+    PuaFeedbackCollector, PuaRuleEngine, PuaStageRequirement, TaskContext, TaskType,
 };
 use crate::reinforcement::{
-    build_runtime_healthcheck_report,
-    build_task_plan, build_workflow_generated_artifact, persist_clarification_session_artifact,
-    persist_consultation_artifact, persist_execution_decision,
-    persist_primary_secondary_failover_artifact, persist_primary_secondary_policy_artifact,
-    persist_requirement_contract, persist_task_execution_summary, persist_task_plan,
-    persist_workflow_generated, persist_workflow_learning_event, persist_workflow_research,
+    build_runtime_healthcheck_report, build_task_plan, build_workflow_generated_artifact,
+    persist_clarification_session_artifact, persist_consultation_artifact,
+    persist_execution_decision, persist_primary_secondary_failover_artifact,
+    persist_primary_secondary_policy_artifact, persist_requirement_contract,
+    persist_task_execution_summary, persist_task_plan, persist_workflow_generated,
+    persist_workflow_learning_event, persist_workflow_research,
     recommend_agent_order_from_execution_history, recommend_failure_strategy_from_learning,
     recommend_parallelism_from_learning, recommend_predicted_success_rate_from_learning,
     recommend_work_grade_from_learning, run_action_check, ActionCheckKind, ArtifactLedger,
-    CheckStatus,
-    ClarificationSessionArtifact, ConsultationArtifact, ExecutionAssignmentRecord,
+    CheckStatus, ClarificationSessionArtifact, ConsultationArtifact, ExecutionAssignmentRecord,
     ExecutionDecisionArtifact, ExecutionDecisionCandidate, KnowledgeBusArtifact,
     ParallelPhaseDecisionRecord, PrimaryFailoverReportItem, PrimarySecondaryFailoverArtifact,
     PrimarySecondaryPolicyArtifact, RequirementContractArtifact, TaskExecutionMetrics,
@@ -375,6 +395,421 @@ fn infer_risk_score(method: &str, task_type: &TaskType) -> f64 {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Default)]
+struct HardnessDimensions {
+    context_scale: f64,
+    cross_file_span: f64,
+    tool_dependency: f64,
+    recovery_complexity: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Default)]
+struct HardnessBudgetProfile {
+    timeout_seconds: u64,
+    parallelism_cap: usize,
+    required_reviews: usize,
+    recommended_mode: String,
+}
+
+#[derive(Clone, Debug, Serialize, Default)]
+struct HardnessProfile {
+    score: f64,
+    normalized: f64,
+    level: String,
+    dimensions: HardnessDimensions,
+    budget: HardnessBudgetProfile,
+    reasons: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Default)]
+struct TokenBudgetProfile {
+    phase: String,
+    hardness_level: String,
+    input_tokens_estimate: u64,
+    output_tokens_budget: u64,
+    total_tokens_budget: u64,
+    budget_class: String,
+}
+
+#[derive(Clone, Debug, Serialize, Default)]
+struct TokenCompressionProfile {
+    enabled: bool,
+    triggered: bool,
+    reason: String,
+    strategy: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Default)]
+struct CostRoutingProfile {
+    preferred_model_tier: String,
+    high_cost_model_allowed: bool,
+    cooldown_seconds: u64,
+    degrade_strategies: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Default)]
+struct CostTelemetryProfile {
+    estimated_unit_cost: f64,
+    estimated_total_cost: f64,
+    total_requests: u64,
+    failed_requests: u64,
+    agent_timeout_failures_total: u64,
+    review_gate_timeout_total: u64,
+    runtime_probe_timeout_total: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Default)]
+struct TokenCostGovernanceProfile {
+    policy_version: String,
+    hardness: HardnessProfile,
+    budget: TokenBudgetProfile,
+    compression: TokenCompressionProfile,
+    routing: CostRoutingProfile,
+    telemetry: CostTelemetryProfile,
+}
+
+fn clamp01(value: f64) -> f64 {
+    value.clamp(0.0, 1.0)
+}
+
+fn scale_to_unit(value: f64, max: f64) -> f64 {
+    if max <= 0.0 {
+        return 0.0;
+    }
+    clamp01(value / max)
+}
+
+fn mode_rank(mode: &str) -> u8 {
+    match mode.to_ascii_lowercase().as_str() {
+        "ask" => 0,
+        "edit" => 1,
+        "agent" => 2,
+        "safeguard" => 3,
+        "full_auto" | "full-auto" | "auto" => 4,
+        _ => 2,
+    }
+}
+
+fn stricter_execution_mode(primary: &str, fallback: &str) -> String {
+    if mode_rank(primary) >= mode_rank(fallback) {
+        primary.to_string()
+    } else {
+        fallback.to_string()
+    }
+}
+
+fn hardness_level_from_score(score: f64) -> &'static str {
+    if score >= 76.0 {
+        "extreme"
+    } else if score >= 56.0 {
+        "high"
+    } else if score >= 31.0 {
+        "medium"
+    } else {
+        "low"
+    }
+}
+
+fn hardness_budget_for_level(level: &str) -> HardnessBudgetProfile {
+    match level {
+        "extreme" => HardnessBudgetProfile {
+            timeout_seconds: 210,
+            parallelism_cap: 1,
+            required_reviews: 2,
+            recommended_mode: "safeguard".to_string(),
+        },
+        "high" => HardnessBudgetProfile {
+            timeout_seconds: 150,
+            parallelism_cap: 2,
+            required_reviews: 2,
+            recommended_mode: "safeguard".to_string(),
+        },
+        "medium" => HardnessBudgetProfile {
+            timeout_seconds: 90,
+            parallelism_cap: 3,
+            required_reviews: 1,
+            recommended_mode: "agent".to_string(),
+        },
+        _ => HardnessBudgetProfile {
+            timeout_seconds: 45,
+            parallelism_cap: 4,
+            required_reviews: 1,
+            recommended_mode: "edit".to_string(),
+        },
+    }
+}
+
+fn hardness_to_complexity(normalized: f64) -> u8 {
+    if normalized >= 0.85 {
+        5
+    } else if normalized >= 0.65 {
+        4
+    } else if normalized >= 0.45 {
+        3
+    } else if normalized >= 0.25 {
+        2
+    } else {
+        1
+    }
+}
+
+fn summarize_hardness(task: &str, params: &Value) -> HardnessProfile {
+    let task_chars = task.chars().count() as f64;
+    let payload_size = serde_json::to_string(params)
+        .map(|raw| raw.len() as f64)
+        .unwrap_or(0.0);
+    let context_scale =
+        scale_to_unit(task_chars, 1200.0) * 0.6 + scale_to_unit(payload_size, 6000.0) * 0.4;
+
+    let changed_files = params
+        .get("changed_files")
+        .and_then(Value::as_array)
+        .map(|items| items.len())
+        .or_else(|| {
+            params
+                .get("files")
+                .and_then(Value::as_array)
+                .map(|items| items.len())
+        })
+        .unwrap_or(0) as f64;
+    let cross_file_span = scale_to_unit(changed_files, 12.0);
+
+    let tool_dependencies = params
+        .get("tool_dependencies")
+        .and_then(Value::as_array)
+        .map(|items| items.len())
+        .unwrap_or(0) as f64;
+    let requested_tool_loop = params
+        .get("lazy_tool_loop")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let tool_dependency = clamp01(
+        scale_to_unit(tool_dependencies, 8.0)
+            + if requested_tool_loop { 0.15 } else { 0.0 }
+            + if task.to_ascii_lowercase().contains("tool") {
+                0.1
+            } else {
+                0.0
+            },
+    );
+
+    let retry_count = params
+        .get("retry_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as f64;
+    let failover_required = params
+        .get("requires_failover")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let dual_review_required = params
+        .get("dual_review_required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let recovery_complexity = clamp01(
+        scale_to_unit(retry_count, 4.0)
+            + if failover_required { 0.25 } else { 0.0 }
+            + if dual_review_required { 0.2 } else { 0.0 },
+    );
+
+    let normalized = clamp01(
+        context_scale * 0.35
+            + cross_file_span * 0.25
+            + tool_dependency * 0.2
+            + recovery_complexity * 0.2,
+    );
+    let score = normalized * 100.0;
+    let level = hardness_level_from_score(score).to_string();
+    let budget = hardness_budget_for_level(&level);
+
+    let mut reasons = Vec::new();
+    if context_scale >= 0.5 {
+        reasons.push("large_context_or_payload".to_string());
+    }
+    if cross_file_span >= 0.5 {
+        reasons.push("cross_file_span_high".to_string());
+    }
+    if tool_dependency >= 0.5 {
+        reasons.push("tool_dependency_high".to_string());
+    }
+    if recovery_complexity >= 0.5 {
+        reasons.push("recovery_complexity_high".to_string());
+    }
+    if reasons.is_empty() {
+        reasons.push("baseline".to_string());
+    }
+
+    HardnessProfile {
+        score,
+        normalized,
+        level,
+        dimensions: HardnessDimensions {
+            context_scale,
+            cross_file_span,
+            tool_dependency,
+            recovery_complexity,
+        },
+        budget,
+        reasons,
+    }
+}
+
+fn estimate_tokens_from_text(raw: &str) -> u64 {
+    if raw.trim().is_empty() {
+        return 0;
+    }
+    ((raw.chars().count() as f64) / 3.8).ceil() as u64
+}
+
+fn resolve_cost_tier(level: &str, compression_triggered: bool) -> (&'static str, f64, f64) {
+    if compression_triggered {
+        return ("economy", 0.0008, 0.0014);
+    }
+    match level {
+        "extreme" => ("high", 0.0024, 0.0048),
+        "high" => ("standard", 0.0015, 0.003),
+        "medium" => ("standard", 0.0012, 0.0022),
+        _ => ("economy", 0.0008, 0.0014),
+    }
+}
+
+fn summarize_token_cost_governance(
+    task: &str,
+    params: &Value,
+    hardness: HardnessProfile,
+    metrics: &crate::acp::prelude::MetricsSnapshot,
+) -> TokenCostGovernanceProfile {
+    let payload_raw = serde_json::to_string(params).unwrap_or_else(|_| "{}".to_string());
+    let task_tokens = estimate_tokens_from_text(task);
+    let payload_tokens = estimate_tokens_from_text(payload_raw.as_str());
+
+    let retrieval_fragments = params
+        .get("retrieval_fragments")
+        .or_else(|| params.get("evidence_fragments"))
+        .or_else(|| params.get("chunks"))
+        .and_then(Value::as_array)
+        .map(|items| items.len() as u64)
+        .unwrap_or(0);
+    let input_tokens_estimate = task_tokens
+        .saturating_add(payload_tokens)
+        .saturating_add(retrieval_fragments.saturating_mul(120));
+
+    let phase = params
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("execute")
+        .to_string();
+
+    let phase_bonus = if matches!(phase.as_str(), "plan" | "research" | "consult") {
+        300
+    } else {
+        0
+    };
+    let base_output_budget = match hardness.level.as_str() {
+        "extreme" => 3400,
+        "high" => 2500,
+        "medium" => 1600,
+        _ => 900,
+    } + phase_bonus;
+
+    let explicit_output_budget = params
+        .get("max_output_tokens")
+        .or_else(|| params.get("output_token_budget"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(8000);
+    let output_tokens_budget = if explicit_output_budget > 0 {
+        explicit_output_budget.max(base_output_budget as u64 / 2)
+    } else {
+        base_output_budget as u64
+    };
+    let total_tokens_budget = input_tokens_estimate.saturating_add(output_tokens_budget);
+    let budget_class = if total_tokens_budget >= 5200 {
+        "critical"
+    } else if total_tokens_budget >= 3600 {
+        "high"
+    } else if total_tokens_budget >= 2000 {
+        "medium"
+    } else {
+        "low"
+    }
+    .to_string();
+
+    let force_compress = params
+        .get("force_compress")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let compression_triggered = force_compress
+        || input_tokens_estimate > output_tokens_budget.saturating_mul(2)
+        || total_tokens_budget > 4000;
+    let compression_reason = if force_compress {
+        "forced_by_request"
+    } else if input_tokens_estimate > output_tokens_budget.saturating_mul(2) {
+        "input_over_output_budget"
+    } else if total_tokens_budget > 4000 {
+        "total_budget_exceeds_threshold"
+    } else {
+        "within_budget"
+    }
+    .to_string();
+
+    let (tier, input_rate, output_rate) =
+        resolve_cost_tier(hardness.level.as_str(), compression_triggered);
+    let high_cost_model_allowed =
+        matches!(hardness.level.as_str(), "high" | "extreme") && !compression_triggered;
+    let cooldown_seconds = match hardness.level.as_str() {
+        "extreme" => 180,
+        "high" => 120,
+        "medium" => 60,
+        _ => 30,
+    };
+
+    let estimated_unit_cost = (input_tokens_estimate as f64 / 1000.0) * input_rate
+        + (output_tokens_budget as f64 / 1000.0) * output_rate;
+    let estimated_total_cost = estimated_unit_cost.max(0.0);
+
+    TokenCostGovernanceProfile {
+        policy_version: "x6-token-cost-v1".to_string(),
+        hardness: hardness.clone(),
+        budget: TokenBudgetProfile {
+            phase,
+            hardness_level: hardness.level.clone(),
+            input_tokens_estimate,
+            output_tokens_budget,
+            total_tokens_budget,
+            budget_class,
+        },
+        compression: TokenCompressionProfile {
+            enabled: true,
+            triggered: compression_triggered,
+            reason: compression_reason,
+            strategy: vec![
+                "rolling_summary".to_string(),
+                "dedupe_evidence".to_string(),
+                "adaptive_retrieval_window".to_string(),
+            ],
+        },
+        routing: CostRoutingProfile {
+            preferred_model_tier: tier.to_string(),
+            high_cost_model_allowed,
+            cooldown_seconds,
+            degrade_strategies: vec![
+                "trim_context_first".to_string(),
+                "downgrade_model_tier".to_string(),
+                "limit_tool_roundtrips".to_string(),
+            ],
+        },
+        telemetry: CostTelemetryProfile {
+            estimated_unit_cost,
+            estimated_total_cost,
+            total_requests: metrics.total_requests,
+            failed_requests: metrics.failed_requests,
+            agent_timeout_failures_total: metrics.agent_timeout_failures_total,
+            review_gate_timeout_total: metrics.review_gate_timeout_total,
+            runtime_probe_timeout_total: metrics.runtime_probe_timeout_total,
+        },
+    }
+}
+
 fn classify_request_error_kind(error: &anyhow::Error) -> &'static str {
     let message = error.to_string().to_ascii_lowercase();
     if message.contains("pua") {
@@ -387,6 +822,106 @@ fn classify_request_error_kind(error: &anyhow::Error) -> &'static str {
         return "SandboxBlocked";
     }
     "GeneralError"
+}
+
+fn infer_error_contract_kind(code: i64, message: &str, explicit: Option<&str>) -> String {
+    if let Some(kind) = explicit {
+        if !kind.trim().is_empty() {
+            return kind.to_string();
+        }
+    }
+
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("pua") {
+        return "PuaViolation".to_string();
+    }
+    if lower.contains("budget denied") || lower.contains("budget exceeded") {
+        return "BudgetExceeded".to_string();
+    }
+    if lower.contains("hardening policy denied") || lower.contains("sandbox") {
+        return "SandboxBlocked".to_string();
+    }
+    if code == -32601 {
+        return "MethodNotFound".to_string();
+    }
+    if code == -32602 {
+        return "InvalidParams".to_string();
+    }
+    if code == -32003 {
+        return "AuthRequired".to_string();
+    }
+    if code == -32029 || lower.contains("rate limited") || lower.contains("too many requests") {
+        return "RateLimited".to_string();
+    }
+    if lower.contains("timeout") {
+        return "UpstreamTimeout".to_string();
+    }
+    if code == -32603 {
+        return "InternalError".to_string();
+    }
+    "GeneralError".to_string()
+}
+
+fn build_retry_policy_for_kind(kind: &str) -> Value {
+    let normalized = kind.to_ascii_lowercase();
+    if matches!(normalized.as_str(), "ratelimited" | "upstreamtimeout") {
+        json!({
+            "retryable": true,
+            "strategy": "exponential_backoff",
+            "base_delay_ms": 500,
+            "max_delay_ms": 10_000,
+            "max_retries": 3
+        })
+    } else {
+        json!({
+            "retryable": false,
+            "strategy": "none",
+            "base_delay_ms": 0,
+            "max_delay_ms": 0,
+            "max_retries": 0
+        })
+    }
+}
+
+fn with_error_contract_data(code: i64, message: &str, data: Option<Value>) -> Option<Value> {
+    let mut normalized = serde_json::Map::new();
+    let mut explicit_kind: Option<String> = None;
+
+    if let Some(data_value) = data {
+        match data_value {
+            Value::Object(existing) => {
+                explicit_kind = existing
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                normalized.extend(existing);
+            }
+            other => {
+                normalized.insert("raw_data".to_string(), other);
+            }
+        }
+    }
+
+    let kind = infer_error_contract_kind(code, message, explicit_kind.as_deref());
+    if !normalized.contains_key("kind") {
+        normalized.insert("kind".to_string(), Value::String(kind.clone()));
+    }
+    if !normalized.contains_key("contract_version") {
+        normalized.insert(
+            "contract_version".to_string(),
+            Value::String("x8-error-contract-v1".to_string()),
+        );
+    }
+    if !normalized.contains_key("code_class") {
+        normalized.insert(
+            "code_class".to_string(),
+            Value::String(format!("jsonrpc:{}", code)),
+        );
+    }
+    if !normalized.contains_key("retry") {
+        normalized.insert("retry".to_string(), build_retry_policy_for_kind(&kind));
+    }
+    Some(Value::Object(normalized))
 }
 
 fn attach_request_dispatch_context(error: anyhow::Error, method: &str) -> anyhow::Error {
@@ -636,9 +1171,22 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         "shutdown" => handle_shutdown(server, request_id).await,
         "health" | "runtime.health" => handle_health(server, request_id).await,
         "health.probes" => handle_health_probes(server, request_id).await,
+        "observability.alerts" => {
+            handle_observability_alerts(server, request.params.unwrap_or_default(), request_id)
+                .await
+        }
+        "security.baseline" => {
+            handle_security_baseline(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "harness.status" => {
+            handle_harness_status(server, request.params.unwrap_or_default(), request_id).await
+        }
         "breaker.status" => handle_breaker_status(server, request_id).await,
         "breaker.reset" => {
             handle_breaker_reset(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "breaker.recovery" => {
+            handle_breaker_recovery(server, request.params.unwrap_or_default(), request_id).await
         }
         "cache.clear" => handle_cache_clear(server, request_id).await,
         "vector.clear" => handle_vector_clear(server, request_id).await,
@@ -675,10 +1223,21 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             .await
         }
         "config.reload" => handle_config_reload(server, request_id).await,
+        "config.baseline" => {
+            handle_config_baseline(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "error.contract" => handle_error_contract(server, request_id).await,
         "autotune.get" => handle_autotune_get(server, request_id).await,
         "autotune.status" => handle_autotune_status(server, request_id).await,
         "autotune.reset" => {
             handle_autotune_reset(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "selector.status" => handle_selector_status(server, request_id).await,
+        "hardness.status" => {
+            handle_hardness_status(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "cost.status" => {
+            handle_cost_status(server, request.params.unwrap_or_default(), request_id).await
         }
         "workflow.confirm" => {
             handle_workflow_confirm(
@@ -749,8 +1308,30 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         "learning.summary" => {
             handle_learning_summary(server, request.params.unwrap_or_default(), request_id).await
         }
+        "learning.replay" => {
+            handle_learning_replay(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "learning.guardrail" => {
+            handle_learning_guardrail(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "knowledge.distill" => {
+            handle_knowledge_distill(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "rl.alignment.offline_eval" => {
+            handle_rl_alignment_offline_eval(server, request.params.unwrap_or_default(), request_id)
+                .await
+        }
         "governance.status" => {
             handle_governance_status(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "governance.plan.get" => handle_governance_plan_get(server, request_id).await,
+        "governance.plan.update" => {
+            handle_governance_plan_update(server, request.params.unwrap_or_default(), request_id)
+                .await
+        }
+        "governance.audit.recent" => {
+            handle_governance_audit_recent(server, request.params.unwrap_or_default(), request_id)
+                .await
         }
         "phase.policy.replay" => {
             handle_phase_policy_replay(server, request.params.unwrap_or_default(), request_id).await
@@ -1084,7 +1665,8 @@ async fn handle_metrics_prometheus(server: &AcpServer, request_id: Option<Value>
             summary_hit_total: metrics.summary_hit_total,
             summary_store_total: metrics.summary_store_total,
             agent_failures_total: metrics.failed_requests,
-            agent_timeout_failures_total: 0,
+            agent_timeout_failures_total: metrics.agent_timeout_failures_total,
+            runtime_probe_timeout_total: metrics.runtime_probe_timeout_total,
             agent_panic_failures_total: 0,
             agent_other_failures_total: 0,
             review_gate_total: metrics.review_gate_total,
@@ -1255,6 +1837,11 @@ async fn handle_health(server: &AcpServer, request_id: Option<Value>) -> Result<
                 "degraded": metrics.review_gate_degraded_total,
                 "invalid_response": metrics.review_gate_invalid_response_total,
             },
+            "timeouts": {
+                "agent_request_total": metrics.agent_timeout_failures_total,
+                "review_gate_total": metrics.review_gate_timeout_total,
+                "runtime_probe_total": metrics.runtime_probe_timeout_total,
+            },
             "timestamp": status.timestamp,
         }),
     )
@@ -1272,6 +1859,7 @@ fn check_status_label(value: CheckStatus) -> &'static str {
 
 async fn handle_health_probes(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     let status = server.get_status();
+    let metrics = server.metrics.snapshot();
 
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
@@ -1328,10 +1916,11 @@ async fn handle_health_probes(server: &AcpServer, request_id: Option<Value>) -> 
         })
         .collect::<Vec<_>>();
 
-    let rate_limiter_buckets = server
-        .phase_rate_limiter
-        .lock()
-        .map(|guard| {
+    let rate_limiter_buckets = with_acp_lock(
+        server.lock_monitor.as_ref(),
+        ACP_LOCK_PHASE_RATE_LIMITER,
+        server.phase_rate_limiter.as_ref(),
+        |guard| {
             guard
                 .snapshot()
                 .into_iter()
@@ -1344,10 +1933,21 @@ async fn handle_health_probes(server: &AcpServer, request_id: Option<Value>) -> 
                     })
                 })
                 .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        },
+    );
 
-    let dependencies = report
+    let lock_components = server.lock_monitor.snapshot();
+    let lock_summary = summarize_lock_health(&lock_components);
+    let timeout_status = if metrics.agent_timeout_failures_total > 0
+        || metrics.review_gate_timeout_total > 0
+        || metrics.runtime_probe_timeout_total > 0
+    {
+        "warn"
+    } else {
+        "healthy"
+    };
+
+    let mut dependencies = report
         .components
         .iter()
         .map(|item| {
@@ -1359,6 +1959,36 @@ async fn handle_health_probes(server: &AcpServer, request_id: Option<Value>) -> 
             })
         })
         .collect::<Vec<_>>();
+    dependencies.push(json!({
+        "name": "locks",
+        "status": lock_summary.status,
+        "message": format!(
+            "poisoned={}, recovered={}, slow_waits={}",
+            lock_summary.poisoned_total, lock_summary.recovered_total, lock_summary.slow_wait_total
+        ),
+        "details": {
+            "poisoned_total": lock_summary.poisoned_total,
+            "recovered_total": lock_summary.recovered_total,
+            "slow_wait_total": lock_summary.slow_wait_total,
+            "max_wait_ms": lock_summary.max_wait_ms,
+            "components_tracked": lock_summary.components_tracked,
+        }
+    }));
+    dependencies.push(json!({
+        "name": "timeouts",
+        "status": timeout_status,
+        "message": format!(
+            "agent={}, review_gate={}, runtime_probe={}",
+            metrics.agent_timeout_failures_total,
+            metrics.review_gate_timeout_total,
+            metrics.runtime_probe_timeout_total,
+        ),
+        "details": {
+            "agent_request_total": metrics.agent_timeout_failures_total,
+            "review_gate_total": metrics.review_gate_timeout_total,
+            "runtime_probe_total": metrics.runtime_probe_timeout_total,
+        }
+    }));
 
     send_result(
         server,
@@ -1390,6 +2020,21 @@ async fn handle_health_probes(server: &AcpServer, request_id: Option<Value>) -> 
                     "tracked": rate_limiter_buckets.len(),
                     "buckets": rate_limiter_buckets,
                 },
+                "locks": {
+                    "status": lock_summary.status,
+                    "poisoned_total": lock_summary.poisoned_total,
+                    "recovered_total": lock_summary.recovered_total,
+                    "slow_wait_total": lock_summary.slow_wait_total,
+                    "max_wait_ms": lock_summary.max_wait_ms,
+                    "components_tracked": lock_summary.components_tracked,
+                    "components": lock_components,
+                },
+                "timeouts": {
+                    "status": timeout_status,
+                    "agent_request_total": metrics.agent_timeout_failures_total,
+                    "review_gate_total": metrics.review_gate_timeout_total,
+                    "runtime_probe_total": metrics.runtime_probe_timeout_total,
+                },
                 "timestamp": status.timestamp,
             }
         }),
@@ -1415,15 +2060,17 @@ async fn handle_governance_status(
         .extract_learning_data(200)
         .unwrap_or_default();
     let recent_failed = pua_learning.iter().filter(|record| !record.passed).count();
+    let governance_audit = load_governance_audit_events(20).unwrap_or_default();
 
     let rules = governance_rule_fingerprint(server.config_path.as_deref());
     let config_summary = governance_config_summary(server.config_path.as_deref());
 
-    let entry_rate_snapshot = server
-        .phase_rate_limiter
-        .lock()
-        .map(|guard| guard.snapshot())
-        .unwrap_or_default();
+    let entry_rate_snapshot = with_acp_lock(
+        server.lock_monitor.as_ref(),
+        ACP_LOCK_PHASE_RATE_LIMITER,
+        server.phase_rate_limiter.as_ref(),
+        |guard| guard.snapshot(),
+    );
     let entry_sources_tracked = entry_rate_snapshot
         .keys()
         .filter(|name| name.starts_with("entry:"))
@@ -1465,6 +2112,16 @@ async fn handle_governance_status(
                     "review_gate_rejected_total": runtime_snapshot.review_gate_rejected_total,
                     "breaker_open_count": breaker_open_count,
                 },
+                "dynamic_rules": {
+                    "runtime_mutable": true,
+                    "red_line_count": pua_plan.red_lines.len(),
+                    "stage_requirement_count": pua_plan.stage_requirements.len(),
+                    "quality_compass_count": pua_plan.quality_compass.len(),
+                },
+                "audit": {
+                    "recent_total": governance_audit.len(),
+                    "recent": governance_audit,
+                },
                 "config": config_summary,
                 "entry_guard": {
                     "auth_enabled": server.runtime_config.entry_auth_enabled,
@@ -1482,6 +2139,227 @@ async fn handle_governance_status(
         }),
     )
     .await
+}
+
+const GOVERNANCE_AUDIT_DIR: &str = ".goon/governance";
+const GOVERNANCE_AUDIT_FILE: &str = "audit.ndjson";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GovernanceAuditEvent {
+    timestamp: u64,
+    action: String,
+    actor: String,
+    result: String,
+    detail: Value,
+}
+
+fn append_governance_audit_event(event: &GovernanceAuditEvent) -> Result<()> {
+    let dir = Path::new(GOVERNANCE_AUDIT_DIR);
+    fs::create_dir_all(dir)?;
+    let path = dir.join(GOVERNANCE_AUDIT_FILE);
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    let line = serde_json::to_string(event)?;
+    use std::io::Write;
+    writeln!(file, "{}", line)?;
+    Ok(())
+}
+
+fn load_governance_audit_events(limit: usize) -> Result<Vec<GovernanceAuditEvent>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let path = Path::new(GOVERNANCE_AUDIT_DIR).join(GOVERNANCE_AUDIT_FILE);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(path)?;
+    let mut events = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let event: GovernanceAuditEvent = serde_json::from_str(trimmed)?;
+        events.push(event);
+    }
+
+    if events.len() > limit {
+        Ok(events.split_off(events.len() - limit))
+    } else {
+        Ok(events)
+    }
+}
+
+async fn handle_governance_plan_get(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    let plan = server
+        .pua_enforcement_plan
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "plan": plan,
+        }),
+    )
+    .await
+}
+
+async fn handle_governance_plan_update(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let mut plan = server
+        .pua_enforcement_plan
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+
+    if let Some(level) = params.get("escalation_level").and_then(Value::as_str) {
+        plan.escalation_level = level.to_string();
+    }
+    if let Some(items) = params.get("red_lines").and_then(Value::as_array) {
+        plan.red_lines = items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect();
+    }
+    if let Some(items) = params.get("quality_compass").and_then(Value::as_array) {
+        plan.quality_compass = items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect();
+    }
+    if let Some(items) = params.get("mandatory_safeguards").and_then(Value::as_array) {
+        plan.mandatory_safeguards = items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect();
+    }
+    if let Some(items) = params.get("mandatory_evidence").and_then(Value::as_array) {
+        plan.mandatory_evidence = items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect();
+    }
+    if let Some(stage_requirements) = params.get("stage_requirements") {
+        plan.stage_requirements =
+            serde_json::from_value::<Vec<PuaStageRequirement>>(stage_requirements.clone())?;
+    }
+
+    if let Ok(mut guard) = server.pua_enforcement_plan.lock() {
+        *guard = plan.clone();
+    }
+
+    let event = GovernanceAuditEvent {
+        timestamp: crate::acp::prelude::now_ts().max(0) as u64,
+        action: "governance.plan.update".to_string(),
+        actor: "rpc".to_string(),
+        result: "success".to_string(),
+        detail: json!({
+            "escalation_level": plan.escalation_level,
+            "red_line_count": plan.red_lines.len(),
+            "stage_requirement_count": plan.stage_requirements.len(),
+            "mandatory_safeguards_count": plan.mandatory_safeguards.len(),
+            "mandatory_evidence_count": plan.mandatory_evidence.len(),
+        }),
+    };
+    let _ = append_governance_audit_event(&event);
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "plan": plan,
+        }),
+    )
+    .await
+}
+
+async fn handle_governance_audit_recent(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let limit = params
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(20)
+        .clamp(1, 200);
+    let events = load_governance_audit_events(limit).unwrap_or_default();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "audit": {
+                "limit": limit,
+                "events": events,
+            }
+        }),
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LockHealthSummary {
+    status: &'static str,
+    poisoned_total: u64,
+    recovered_total: u64,
+    slow_wait_total: u64,
+    max_wait_ms: f64,
+    components_tracked: usize,
+}
+
+fn summarize_lock_health(components: &[AcpLockSnapshot]) -> LockHealthSummary {
+    let poisoned_total = components
+        .iter()
+        .map(|item| item.poisoned_total)
+        .sum::<u64>();
+    let recovered_total = components
+        .iter()
+        .map(|item| item.recovered_total)
+        .sum::<u64>();
+    let slow_wait_total = components
+        .iter()
+        .map(|item| item.slow_wait_total)
+        .sum::<u64>();
+    let max_wait_ms = components
+        .iter()
+        .map(|item| item.max_wait_ms)
+        .fold(0.0_f64, f64::max);
+    let status = if poisoned_total > 0 {
+        "warn"
+    } else if slow_wait_total > 0 || max_wait_ms >= 5.0 {
+        "warn"
+    } else {
+        "healthy"
+    };
+
+    LockHealthSummary {
+        status,
+        poisoned_total,
+        recovered_total,
+        slow_wait_total,
+        max_wait_ms,
+        components_tracked: components.len(),
+    }
 }
 
 fn governance_rule_fingerprint(config_path: Option<&str>) -> Value {
@@ -1649,6 +2527,149 @@ fn governance_config_summary(config_path: Option<&str>) -> Value {
     })
 }
 
+fn normalize_protocol_mode_for_baseline(raw: &str) -> String {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "adaptive" | "auto" => "auto".to_string(),
+        "acp" | "acp_stdio" | "acp_http" => "acp".to_string(),
+        "mcp" | "mcp_stdio" | "mcp_http" => "mcp".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn load_config_document(config_path: &Path) -> std::result::Result<toml::Value, String> {
+    let raw =
+        fs::read_to_string(config_path).map_err(|err| format!("failed_to_read_config:{}", err))?;
+    raw.parse::<toml::Value>()
+        .map_err(|err| format!("failed_to_parse_toml:{}", err))
+}
+
+fn extract_runtime_explicit_keys(document: &toml::Value) -> HashSet<String> {
+    document
+        .get("runtime")
+        .and_then(toml::Value::as_table)
+        .map(|table| table.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn extract_protocol_mode_from_protocol_table(document: &toml::Value) -> Option<String> {
+    document
+        .get("protocol")
+        .and_then(toml::Value::as_table)
+        .and_then(|table| table.get("mode"))
+        .and_then(toml::Value::as_str)
+        .map(|value| value.to_string())
+}
+
+fn extract_runtime_protocol_mode_legacy(document: &toml::Value) -> Option<String> {
+    document
+        .get("runtime")
+        .and_then(toml::Value::as_table)
+        .and_then(|table| table.get("protocol_mode"))
+        .and_then(toml::Value::as_str)
+        .map(|value| value.to_string())
+}
+
+fn detect_legacy_config_keys(document: &toml::Value) -> Vec<Value> {
+    let mut items = Vec::new();
+    let mut seen = HashSet::new();
+
+    let mut push_item = |old_path: &str, new_path: &str, reason: &str| {
+        if seen.insert(old_path.to_string()) {
+            items.push(json!({
+                "old_path": old_path,
+                "new_path": new_path,
+                "reason": reason,
+            }));
+        }
+    };
+
+    if let Some(runtime) = document.get("runtime").and_then(toml::Value::as_table) {
+        for (old_key, new_key, reason) in [
+            (
+                "auth_enabled",
+                "runtime.entry_auth_enabled",
+                "legacy auth switch renamed",
+            ),
+            (
+                "auth_api_key_env",
+                "runtime.entry_auth_api_key_env",
+                "legacy env key renamed",
+            ),
+            (
+                "rate_limit_rpm",
+                "runtime.entry_rate_limit_rpm",
+                "legacy rate limit key renamed",
+            ),
+            (
+                "rate_limit_burst",
+                "runtime.entry_rate_limit_burst",
+                "legacy burst key renamed",
+            ),
+            (
+                "http_bind_addr",
+                "runtime.acp_http_bind_addr",
+                "legacy bind key renamed",
+            ),
+            (
+                "strict_mode",
+                "runtime.production_strict",
+                "legacy strict key renamed",
+            ),
+            (
+                "protocol_mode",
+                "protocol.mode",
+                "protocol mode moved from runtime to protocol table",
+            ),
+        ] {
+            if runtime.contains_key(old_key) {
+                push_item(&format!("runtime.{}", old_key), new_key, reason);
+            }
+        }
+    }
+
+    if document
+        .as_table()
+        .map(|table| table.contains_key("protocol_mode"))
+        .unwrap_or(false)
+    {
+        push_item(
+            "protocol_mode",
+            "protocol.mode",
+            "root-level protocol mode is deprecated",
+        );
+    }
+
+    items
+}
+
+fn runtime_field_source(explicit_runtime_keys: &HashSet<String>, field: &str) -> &'static str {
+    if explicit_runtime_keys.contains(field) {
+        "config_file"
+    } else {
+        "default"
+    }
+}
+
+fn resolve_protocol_source(
+    server_protocol_mode: Option<&str>,
+    protocol_mode_from_file: Option<&str>,
+) -> &'static str {
+    match (server_protocol_mode, protocol_mode_from_file) {
+        (Some(server_mode), Some(file_mode)) => {
+            let normalized_server = normalize_protocol_mode_for_baseline(server_mode);
+            let normalized_file = normalize_protocol_mode_for_baseline(file_mode);
+            if normalized_server != normalized_file {
+                "cli_override"
+            } else {
+                "config_file"
+            }
+        }
+        (Some(_), None) => "default",
+        (None, Some(_)) => "config_file",
+        (None, None) => "default",
+    }
+}
+
 async fn handle_breaker_status(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     let breakers = server
         .circuit_breakers
@@ -1659,13 +2680,411 @@ async fn handle_breaker_status(server: &AcpServer, request_id: Option<Value>) ->
         .iter()
         .filter(|item| item.state.eq_ignore_ascii_case("open"))
         .count();
+    let degraded_services = collect_degraded_services(server);
     send_result(
         server,
         request_id,
         json!({
             "ok": true,
             "open_count": open_count,
+            "degraded_count": degraded_services.len(),
+            "degraded_services": degraded_services,
             "breakers": breakers,
+        }),
+    )
+    .await
+}
+
+async fn handle_observability_alerts(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let max_alerts = params
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(20)
+        .clamp(1, 200);
+
+    let status = server.get_status();
+    let metrics = server.metrics.snapshot();
+    let lock_components = server.lock_monitor.snapshot();
+    let lock_summary = summarize_lock_health(&lock_components);
+    let degraded_services = collect_degraded_services(server);
+    let open_breakers = status
+        .circuit_breakers
+        .iter()
+        .filter(|item| item.state.eq_ignore_ascii_case("open"))
+        .count();
+
+    let mut alerts = Vec::new();
+    if !status.lifecycle.is_healthy {
+        alerts.push(json!({
+            "severity": "critical",
+            "code": "runtime.unhealthy",
+            "message": "Runtime lifecycle is unhealthy",
+            "value": {
+                "uptime_seconds": status.lifecycle.uptime_seconds,
+                "shutdown_requested": status.lifecycle.shutdown_requested,
+            },
+            "suggestion": "Inspect runtime.health and recent trace events before accepting new traffic",
+        }));
+    }
+
+    if open_breakers > 0 {
+        alerts.push(json!({
+            "severity": "critical",
+            "code": "breaker.open",
+            "message": format!("{} circuit breakers are open", open_breakers),
+            "value": {"open_count": open_breakers},
+            "suggestion": "Use breaker.status and breaker.recovery to restore degraded services",
+        }));
+    }
+
+    if !degraded_services.is_empty() {
+        alerts.push(json!({
+            "severity": "warn",
+            "code": "service.degraded",
+            "message": format!("{} services are degraded", degraded_services.len()),
+            "value": {
+                "degraded_count": degraded_services.len(),
+                "services": degraded_services,
+            },
+            "suggestion": "Fallback to secondary agents and run breaker.recovery after stabilizing dependencies",
+        }));
+    }
+
+    let timeout_total = metrics.agent_timeout_failures_total
+        + metrics.review_gate_timeout_total
+        + metrics.runtime_probe_timeout_total;
+    if timeout_total > 0 {
+        alerts.push(json!({
+            "severity": "warn",
+            "code": "timeout.spike",
+            "message": "Timeout counters are above baseline",
+            "value": {
+                "total": timeout_total,
+                "agent_request_total": metrics.agent_timeout_failures_total,
+                "review_gate_total": metrics.review_gate_timeout_total,
+                "runtime_probe_total": metrics.runtime_probe_timeout_total,
+            },
+            "suggestion": "Check trace.metrics slow paths and tune request_timeout_seconds for affected phases",
+        }));
+    }
+
+    if lock_summary.status == "warn" {
+        alerts.push(json!({
+            "severity": "warn",
+            "code": "lock.contention",
+            "message": "Lock monitor detected contention or poison recovery",
+            "value": {
+                "poisoned_total": lock_summary.poisoned_total,
+                "recovered_total": lock_summary.recovered_total,
+                "slow_wait_total": lock_summary.slow_wait_total,
+                "max_wait_ms": lock_summary.max_wait_ms,
+                "components_tracked": lock_summary.components_tracked,
+            },
+            "suggestion": "Review lock-heavy code paths and consider reducing critical section duration",
+        }));
+    }
+
+    if alerts.is_empty() {
+        alerts.push(json!({
+            "severity": "info",
+            "code": "baseline.ok",
+            "message": "No active runtime alerts",
+            "value": {
+                "total_requests": metrics.total_requests,
+                "successful_requests": metrics.successful_requests,
+            },
+            "suggestion": "Continue periodic quality.baseline and trace.metrics checks",
+        }));
+    }
+
+    if alerts.len() > max_alerts {
+        alerts.truncate(max_alerts);
+    }
+
+    let counts = alerts
+        .iter()
+        .fold((0usize, 0usize, 0usize), |mut acc, alert| {
+            match alert
+                .get("severity")
+                .and_then(Value::as_str)
+                .unwrap_or("info")
+            {
+                "critical" => acc.0 += 1,
+                "warn" | "warning" => acc.1 += 1,
+                _ => acc.2 += 1,
+            }
+            acc
+        });
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "alerts": {
+                "critical": counts.0,
+                "warn": counts.1,
+                "info": counts.2,
+                "total": alerts.len(),
+                "items": alerts,
+            },
+        }),
+    )
+    .await
+}
+
+async fn handle_security_baseline(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let config_summary = governance_config_summary(server.config_path.as_deref());
+    let entry_auth_enabled = config_summary
+        .get("entry_auth_enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let entry_auth_key_configured = config_summary
+        .get("entry_auth_key_configured")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let strict_enabled = config_summary
+        .get("production_strict")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let strict_violations = config_summary
+        .get("strict_violations")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let exposed_http = server.runtime_config.acp_http_bind_addr.is_some();
+    let ingress_status = if !exposed_http {
+        "local-only"
+    } else if entry_auth_enabled && entry_auth_key_configured {
+        "hardened"
+    } else {
+        "risk"
+    };
+
+    let mut risk_items = Vec::new();
+    if exposed_http && !entry_auth_enabled {
+        risk_items.push(json!({
+            "severity": "critical",
+            "code": "entry_auth.disabled",
+            "message": "runtime.acp_http_bind_addr is configured but entry auth is disabled",
+            "suggestion": "Set runtime.entry_auth_enabled=true and configure entry auth key",
+        }));
+    }
+    if entry_auth_enabled && !entry_auth_key_configured {
+        risk_items.push(json!({
+            "severity": "critical",
+            "code": "entry_auth.key_missing",
+            "message": "Entry auth is enabled but auth key env is missing",
+            "suggestion": "Set runtime.entry_auth_api_key_env in process environment",
+        }));
+    }
+    if !strict_enabled {
+        risk_items.push(json!({
+            "severity": "warn",
+            "code": "production_strict.disabled",
+            "message": "runtime.production_strict is disabled",
+            "suggestion": "Enable runtime.production_strict=true to fail fast on unsafe config",
+        }));
+    }
+    if !strict_violations.is_empty() {
+        risk_items.push(json!({
+            "severity": if strict_enabled { "critical" } else { "warn" },
+            "code": "production_strict.violations",
+            "message": format!("{} strict violation(s) detected", strict_violations.len()),
+            "violations": strict_violations,
+            "suggestion": "Fix strict violations and re-run runtime.health / security.baseline",
+        }));
+    }
+
+    let level = if risk_items
+        .iter()
+        .any(|item| item.get("severity").and_then(Value::as_str) == Some("critical"))
+    {
+        "critical"
+    } else if risk_items
+        .iter()
+        .any(|item| item.get("severity").and_then(Value::as_str) == Some("warn"))
+    {
+        "warn"
+    } else {
+        "ok"
+    };
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "baseline": {
+                "level": level,
+                "ingress_status": ingress_status,
+                "exposed_http": exposed_http,
+                "entry_auth": {
+                    "enabled": entry_auth_enabled,
+                    "key_env": server.runtime_config.entry_auth_api_key_env,
+                    "key_configured": entry_auth_key_configured,
+                },
+                "rate_limit": {
+                    "rpm": server.runtime_config.entry_rate_limit_rpm,
+                    "burst": server.runtime_config.entry_rate_limit_burst,
+                },
+                "production_strict": {
+                    "enabled": strict_enabled,
+                    "violation_count": strict_violations.len(),
+                    "violations": strict_violations,
+                },
+                "risk_count": risk_items.len(),
+                "risks": risk_items,
+            },
+        }),
+    )
+    .await
+}
+
+fn classify_harness_suite(name: &str) -> &'static str {
+    let lowered = name.to_ascii_lowercase();
+    if lowered.contains("adversarial") || lowered.contains("fault") || lowered.contains("chaos") {
+        "adversarial"
+    } else if lowered.contains("long-chain") || lowered.contains("long_chain") {
+        "long_chain"
+    } else if lowered.contains("smoke")
+        || lowered.contains("runtime-health")
+        || lowered.contains("quality-benchmark")
+    {
+        "smoke"
+    } else {
+        "regression"
+    }
+}
+
+async fn handle_harness_status(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let fixed_seed = params
+        .get("seed")
+        .and_then(Value::as_u64)
+        .unwrap_or(20260415);
+
+    let mut smoke = Vec::new();
+    let mut regression = Vec::new();
+    let mut adversarial = Vec::new();
+    let mut long_chain = Vec::new();
+    let mut warnings = Vec::new();
+
+    let requests_root = Path::new("requests");
+    match fs::read_dir(requests_root) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let is_ndjson = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("ndjson"))
+                    .unwrap_or(false);
+                if !is_ndjson {
+                    continue;
+                }
+                let Some(name) = path
+                    .file_name()
+                    .and_then(|item| item.to_str())
+                    .map(|item| item.to_string())
+                else {
+                    continue;
+                };
+
+                match classify_harness_suite(&name) {
+                    "smoke" => smoke.push(name),
+                    "adversarial" => adversarial.push(name),
+                    "long_chain" => long_chain.push(name),
+                    _ => regression.push(name),
+                }
+            }
+            smoke.sort();
+            regression.sort();
+            adversarial.sort();
+            long_chain.sort();
+        }
+        Err(err) => {
+            warnings.push(format!("failed to read requests directory: {err}"));
+        }
+    }
+
+    let scenario_total = smoke.len() + regression.len() + adversarial.len() + long_chain.len();
+    let metrics = server.metrics.snapshot();
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "harness": {
+                "fixed_seed": fixed_seed,
+                "scenario_total": scenario_total,
+                "suites": {
+                    "smoke": {
+                        "count": smoke.len(),
+                        "files": smoke,
+                    },
+                    "regression": {
+                        "count": regression.len(),
+                        "files": regression,
+                    },
+                    "adversarial": {
+                        "count": adversarial.len(),
+                        "files": adversarial,
+                    },
+                    "long_chain": {
+                        "count": long_chain.len(),
+                        "files": long_chain,
+                    },
+                },
+                "scorecard": [
+                    {
+                        "dimension": "correctness",
+                        "target": "all scenarios pass without rpc error",
+                        "status": "tracked",
+                    },
+                    {
+                        "dimension": "stability",
+                        "target": "runtime.health remains healthy across suites",
+                        "status": "tracked",
+                    },
+                    {
+                        "dimension": "latency",
+                        "target": "p95 bounded by phase timeout budget",
+                        "status": "tracked",
+                    },
+                    {
+                        "dimension": "cost",
+                        "target": "timeout spikes remain within baseline",
+                        "status": "tracked",
+                    },
+                    {
+                        "dimension": "safety",
+                        "target": "security.baseline level stays warn/ok before deploy",
+                        "status": "tracked",
+                    }
+                ],
+                "runtime_snapshot": {
+                    "total_requests": metrics.total_requests,
+                    "failed_requests": metrics.failed_requests,
+                    "agent_timeout_failures_total": metrics.agent_timeout_failures_total,
+                    "review_gate_timeout_total": metrics.review_gate_timeout_total,
+                    "runtime_probe_timeout_total": metrics.runtime_probe_timeout_total,
+                },
+                "warnings": warnings,
+            },
         }),
     )
     .await
@@ -1699,6 +3118,154 @@ async fn handle_breaker_reset(
             "removed": reset_count,
             "target": target,
             "breakers": breakers,
+        }),
+    )
+    .await
+}
+
+fn health_status_label(status: crate::failure_prevention::HealthStatus) -> &'static str {
+    match status {
+        crate::failure_prevention::HealthStatus::Healthy => "healthy",
+        crate::failure_prevention::HealthStatus::Degraded => "degraded",
+        crate::failure_prevention::HealthStatus::Unhealthy => "unhealthy",
+    }
+}
+
+fn circuit_state_label(state: crate::failure_prevention::CircuitBreakerState) -> &'static str {
+    match state {
+        crate::failure_prevention::CircuitBreakerState::Closed => "closed",
+        crate::failure_prevention::CircuitBreakerState::Open => "open",
+        crate::failure_prevention::CircuitBreakerState::HalfOpen => "half-open",
+    }
+}
+
+fn degradation_level_label(level: crate::failure_prevention::DegradationLevel) -> &'static str {
+    match level {
+        crate::failure_prevention::DegradationLevel::None => "none",
+        crate::failure_prevention::DegradationLevel::Minimal => "minimal",
+        crate::failure_prevention::DegradationLevel::Moderate => "moderate",
+        crate::failure_prevention::DegradationLevel::Significant => "significant",
+        crate::failure_prevention::DegradationLevel::Critical => "critical",
+    }
+}
+
+fn recovery_action(
+    status: crate::failure_prevention::HealthStatus,
+    level: crate::failure_prevention::DegradationLevel,
+) -> &'static str {
+    if matches!(status, crate::failure_prevention::HealthStatus::Unhealthy)
+        || matches!(level, crate::failure_prevention::DegradationLevel::Critical)
+    {
+        "reset_breaker_and_fallback"
+    } else if matches!(status, crate::failure_prevention::HealthStatus::Degraded)
+        || matches!(
+            level,
+            crate::failure_prevention::DegradationLevel::Significant
+        )
+    {
+        "degrade_to_secondary_agent"
+    } else {
+        "observe"
+    }
+}
+
+fn collect_degraded_services(server: &AcpServer) -> Vec<Value> {
+    server
+        .failure_prevention
+        .lock()
+        .map(|fp| {
+            let mut services = fp.get_health_report();
+            services.sort_by(|a, b| a.service_name.cmp(&b.service_name));
+            services
+                .into_iter()
+                .filter_map(|health| {
+                    let circuit = fp.get_circuit_state(&health.service_name);
+                    let level = fp.get_degradation_strategy(&health.service_name);
+                    let should_recover = !matches!(
+                        health.status,
+                        crate::failure_prevention::HealthStatus::Healthy
+                    ) || !matches!(
+                        circuit,
+                        crate::failure_prevention::CircuitBreakerState::Closed
+                    ) || fp.should_degrade(&health.service_name);
+                    if !should_recover {
+                        return None;
+                    }
+
+                    Some(json!({
+                        "service": health.service_name,
+                        "health_status": health_status_label(health.status),
+                        "circuit_state": circuit_state_label(circuit),
+                        "degradation_level": degradation_level_label(level),
+                        "success_rate": health.success_rate,
+                        "error_rate": health.error_rate,
+                        "avg_latency_ms": health.avg_latency_ms,
+                        "recommended_action": recovery_action(health.status, level),
+                    }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+async fn handle_breaker_recovery(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let target = params
+        .get("agent")
+        .or_else(|| params.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let dry_run = params
+        .get("dry_run")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let degraded_before = collect_degraded_services(server);
+    let candidates = degraded_before
+        .iter()
+        .filter_map(|item| {
+            item.get("service")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .filter(|service| target.map(|t| t == service).unwrap_or(true))
+        .collect::<Vec<_>>();
+
+    let (recovered_services, breaker_reset_count) = if dry_run {
+        (Vec::new(), 0)
+    } else {
+        let recovered_services = server
+            .failure_prevention
+            .lock()
+            .map(|mut fp| fp.recover(target))
+            .unwrap_or_default();
+        let breaker_reset_count = server
+            .circuit_breakers
+            .lock()
+            .map(|guard| guard.reset(target))
+            .unwrap_or(0);
+        (recovered_services, breaker_reset_count)
+    };
+    let degraded_after = collect_degraded_services(server);
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "dry_run": dry_run,
+            "target": target,
+            "candidates": candidates,
+            "candidate_count": candidates.len(),
+            "recovered_services": recovered_services,
+            "recovered_count": recovered_services.len(),
+            "breaker_reset_count": breaker_reset_count,
+            "remaining_degraded_count": degraded_after.len(),
+            "remaining_degraded_services": degraded_after,
         }),
     )
     .await
@@ -2049,6 +3616,126 @@ async fn handle_config_reload(server: &AcpServer, request_id: Option<Value>) -> 
     .await
 }
 
+async fn handle_config_baseline(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let config_summary = governance_config_summary(server.config_path.as_deref());
+
+    let config_path = server
+        .config_path
+        .clone()
+        .unwrap_or_else(|| "config.toml".to_string());
+    let config_path_buf = PathBuf::from(&config_path);
+
+    let mut document_warnings = Vec::new();
+    let mut explicit_runtime_keys = HashSet::new();
+    let mut protocol_mode_from_protocol_table = None::<String>;
+    let mut protocol_mode_from_runtime_legacy = None::<String>;
+    let mut legacy_mappings = Vec::new();
+
+    match load_config_document(&config_path_buf) {
+        Ok(document) => {
+            explicit_runtime_keys = extract_runtime_explicit_keys(&document);
+            protocol_mode_from_protocol_table =
+                extract_protocol_mode_from_protocol_table(&document);
+            protocol_mode_from_runtime_legacy = extract_runtime_protocol_mode_legacy(&document);
+            legacy_mappings = detect_legacy_config_keys(&document);
+        }
+        Err(err) => {
+            document_warnings.push(err);
+        }
+    }
+
+    let mut explicit_runtime_fields = explicit_runtime_keys.iter().cloned().collect::<Vec<_>>();
+    explicit_runtime_fields.sort();
+
+    let protocol_mode_from_file = protocol_mode_from_protocol_table
+        .clone()
+        .or(protocol_mode_from_runtime_legacy.clone());
+    let protocol_source = resolve_protocol_source(
+        server.runtime_config.protocol_mode.as_deref(),
+        protocol_mode_from_file.as_deref(),
+    );
+    let entry_auth_key_env = server.runtime_config.entry_auth_api_key_env.clone();
+    let entry_auth_key_configured = std::env::var(&entry_auth_key_env)
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "baseline": {
+                "status": if legacy_mappings.is_empty() { "frozen" } else { "migration_required" },
+                "source_precedence": ["cli_override", "env", "config_file", "default"],
+                "effective": {
+                    "protocol_mode": server.runtime_config.protocol_mode.clone().unwrap_or_else(|| "auto".to_string()),
+                    "maintenance_interval_seconds": server.runtime_config.maintenance_interval_seconds,
+                    "health_interval_seconds": server.runtime_config.health_interval_seconds,
+                    "shutdown_drain_seconds": server.runtime_config.shutdown_drain_seconds,
+                    "acp_http_bind_addr": server.runtime_config.acp_http_bind_addr.clone(),
+                    "entry_auth_enabled": server.runtime_config.entry_auth_enabled,
+                    "entry_auth_api_key_env": entry_auth_key_env,
+                    "entry_auth_key_configured": entry_auth_key_configured,
+                    "entry_rate_limit_rpm": server.runtime_config.entry_rate_limit_rpm,
+                    "entry_rate_limit_burst": server.runtime_config.entry_rate_limit_burst,
+                    "production_strict": server.runtime_config.production_strict,
+                    "sqlite_vacuum_interval_cycles": server.runtime_config.sqlite_vacuum_interval_cycles,
+                    "trace_slow_top_n": server.runtime_config.trace_slow_top_n,
+                },
+                "sources": {
+                    "protocol_mode": protocol_source,
+                    "maintenance_interval_seconds": runtime_field_source(&explicit_runtime_keys, "maintenance_interval_seconds"),
+                    "health_interval_seconds": runtime_field_source(&explicit_runtime_keys, "health_interval_seconds"),
+                    "shutdown_drain_seconds": runtime_field_source(&explicit_runtime_keys, "shutdown_drain_seconds"),
+                    "acp_http_bind_addr": runtime_field_source(&explicit_runtime_keys, "acp_http_bind_addr"),
+                    "entry_auth_enabled": runtime_field_source(&explicit_runtime_keys, "entry_auth_enabled"),
+                    "entry_auth_api_key_env": runtime_field_source(&explicit_runtime_keys, "entry_auth_api_key_env"),
+                    "entry_auth_key_configured": "env",
+                    "entry_rate_limit_rpm": runtime_field_source(&explicit_runtime_keys, "entry_rate_limit_rpm"),
+                    "entry_rate_limit_burst": runtime_field_source(&explicit_runtime_keys, "entry_rate_limit_burst"),
+                    "production_strict": runtime_field_source(&explicit_runtime_keys, "production_strict"),
+                    "sqlite_vacuum_interval_cycles": runtime_field_source(&explicit_runtime_keys, "sqlite_vacuum_interval_cycles"),
+                    "trace_slow_top_n": runtime_field_source(&explicit_runtime_keys, "trace_slow_top_n"),
+                },
+                "config": config_summary,
+                "migration": {
+                    "legacy_key_count": legacy_mappings.len(),
+                    "legacy_keys": legacy_mappings,
+                    "compatibility_window": "v0.6.x",
+                    "replacement_map": [
+                        {"from": "runtime.auth_enabled", "to": "runtime.entry_auth_enabled"},
+                        {"from": "runtime.auth_api_key_env", "to": "runtime.entry_auth_api_key_env"},
+                        {"from": "runtime.rate_limit_rpm", "to": "runtime.entry_rate_limit_rpm"},
+                        {"from": "runtime.rate_limit_burst", "to": "runtime.entry_rate_limit_burst"},
+                        {"from": "runtime.http_bind_addr", "to": "runtime.acp_http_bind_addr"},
+                        {"from": "runtime.strict_mode", "to": "runtime.production_strict"},
+                        {"from": "runtime.protocol_mode", "to": "protocol.mode"}
+                    ],
+                    "next_actions": [
+                        "Replace deprecated keys with replacement_map equivalents",
+                        "Keep only one protocol source: prefer [protocol].mode",
+                        "Run config.reload and runtime.health after migration"
+                    ]
+                },
+                "file": {
+                    "path": config_path,
+                    "runtime_explicit_field_count": explicit_runtime_fields.len(),
+                    "runtime_explicit_fields": explicit_runtime_fields,
+                    "protocol_mode_from_protocol_table": protocol_mode_from_protocol_table,
+                    "protocol_mode_from_runtime_legacy": protocol_mode_from_runtime_legacy,
+                    "warnings": document_warnings,
+                }
+            }
+        }),
+    )
+    .await
+}
+
 /// Handle autotune status request
 async fn handle_autotune_status(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     let autotune_state = if let Some(autotune) = server.autotune.as_ref() {
@@ -2085,6 +3772,139 @@ async fn handle_autotune_get(server: &AcpServer, request_id: Option<Value>) -> R
 
     let state = autotune.lock().await;
     send_result(server, request_id, state.snapshot()).await
+}
+
+async fn handle_selector_status(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    let snapshot = server
+        .adaptive_model_selector
+        .lock()
+        .map(|selector| selector.snapshot())
+        .unwrap_or_default();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "selector": snapshot,
+        }),
+    )
+    .await
+}
+
+async fn handle_hardness_status(
+    _server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let task = params
+        .get("task")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("objective").and_then(Value::as_str))
+        .unwrap_or("");
+    let hardness = summarize_hardness(task, &params);
+
+    send_result(
+        _server,
+        request_id,
+        json!({
+            "ok": true,
+            "hardness": hardness,
+            "routing": {
+                "mode": hardness.budget.recommended_mode,
+                "parallelism_cap": hardness.budget.parallelism_cap,
+                "timeout_seconds": hardness.budget.timeout_seconds,
+                "required_reviews": hardness.budget.required_reviews,
+            },
+        }),
+    )
+    .await
+}
+
+async fn handle_error_contract(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    send_result(
+        server,
+        request_id,
+        json!({
+            "contract": {
+                "version": "x8-error-contract-v1",
+                "kinds": [
+                    {
+                        "kind": "InvalidParams",
+                        "codes": [-32602],
+                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                    },
+                    {
+                        "kind": "MethodNotFound",
+                        "codes": [-32601],
+                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                    },
+                    {
+                        "kind": "AuthRequired",
+                        "codes": [-32003],
+                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                    },
+                    {
+                        "kind": "RateLimited",
+                        "codes": [-32029],
+                        "retry": {"retryable": true, "strategy": "exponential_backoff", "base_delay_ms": 500, "max_delay_ms": 10000, "max_retries": 3}
+                    },
+                    {
+                        "kind": "UpstreamTimeout",
+                        "codes": [-32603],
+                        "retry": {"retryable": true, "strategy": "exponential_backoff", "base_delay_ms": 500, "max_delay_ms": 10000, "max_retries": 3}
+                    },
+                    {
+                        "kind": "PuaViolation",
+                        "codes": [-32603],
+                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                    },
+                    {
+                        "kind": "BudgetExceeded",
+                        "codes": [-32603],
+                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                    },
+                    {
+                        "kind": "SandboxBlocked",
+                        "codes": [-32603],
+                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                    },
+                    {
+                        "kind": "InternalError",
+                        "codes": [-32603],
+                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                    }
+                ],
+                "compatibility": {
+                    "request_error_context_prefix": "acp.handle_request.dispatch"
+                }
+            }
+        }),
+    )
+    .await
+}
+
+async fn handle_cost_status(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let task = params
+        .get("task")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("objective").and_then(Value::as_str))
+        .unwrap_or("");
+    let hardness = summarize_hardness(task, &params);
+    let cost = summarize_token_cost_governance(task, &params, hardness, &server.metrics.snapshot());
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "cost": cost,
+        }),
+    )
+    .await
 }
 
 /// Handle autotune reset request
@@ -2552,7 +4372,7 @@ async fn handle_workflow_execute(
     let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
     let workflow_artifact_path = persist_workflow_generated(&ledger, &workflow)?;
 
-    let execution_context = build_execution_context(server, &params)?;
+    let execution_context = build_execution_context(server, &params).await?;
     let mut execution_records = plan.planned_subtasks.clone();
     let execution_report = execute_runtime_subtasks(
         task.as_str(),
@@ -2911,7 +4731,7 @@ async fn handle_task_execute(
     let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
     let workflow_path = persist_workflow_generated(&ledger, &workflow)?;
 
-    let execution_context = build_execution_context(server, &params)?;
+    let execution_context = build_execution_context(server, &params).await?;
     let mut records = plan.planned_subtasks.clone();
     let execution_report =
         execute_runtime_subtasks(task, &workflow, &mut records, &execution_context).await;
@@ -3030,6 +4850,7 @@ async fn handle_task_execute(
 #[derive(Clone)]
 struct RuntimeExecutionContext {
     task_timeout_seconds: Option<u64>,
+    task_parallelism_cap: usize,
     principles: Option<Vec<String>>,
     base_options: HashMap<String, Value>,
     app_config: Arc<AppConfig>,
@@ -3040,6 +4861,7 @@ struct RuntimeExecutionContext {
     adaptive_selector: Arc<StdMutex<crate::adaptive_selector::AdaptiveModelSelector>>,
     online_controller: Arc<StdMutex<crate::acp::prelude::OnlineControllerState>>,
     failure_prevention: Arc<StdMutex<crate::failure_prevention::FailurePrevention>>,
+    metrics: Arc<crate::acp::prelude::RuntimeMetrics>,
     memory_store: Arc<StdMutex<MemoryStore>>,
     lazy_policy: LazyLoadPolicy,
     adaptive_defaults: AdaptiveExecutionDefaults,
@@ -3056,6 +4878,8 @@ struct AdaptiveExecutionDefaults {
     applied_mode: String,
     mode_from_learning: bool,
     filtered_unavailable_agents: Vec<String>,
+    hardness: HardnessProfile,
+    cost: TokenCostGovernanceProfile,
 }
 
 #[derive(Clone, Serialize)]
@@ -3130,7 +4954,10 @@ struct MemoryPolicyExecutionArtifact {
     sample_observations: Vec<String>,
 }
 
-fn build_execution_context(server: &AcpServer, params: &Value) -> Result<RuntimeExecutionContext> {
+async fn build_execution_context(
+    server: &AcpServer,
+    params: &Value,
+) -> Result<RuntimeExecutionContext> {
     let flow = server
         .flow_manager
         .as_ref()
@@ -3162,23 +4989,52 @@ fn build_execution_context(server: &AcpServer, params: &Value) -> Result<Runtime
         .and_then(Value::as_str)
         .unwrap_or(default_failure_strategy.as_str())
         .to_ascii_lowercase();
+    let task_hint = params
+        .get("task")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("objective").and_then(Value::as_str))
+        .unwrap_or_default();
+    let hardness = summarize_hardness(task_hint, params);
+    let cost = summarize_token_cost_governance(
+        task_hint,
+        params,
+        hardness.clone(),
+        &server.metrics.snapshot(),
+    );
+
     let complexity = params
         .get("complexity")
         .and_then(Value::as_u64)
         .map(|value| value as u8)
-        .unwrap_or(3);
+        .unwrap_or_else(|| hardness_to_complexity(hardness.normalized));
     let default_mode = recommend_work_grade_from_learning(&ledger, "agent");
     let pinned_mode = params.get("mode").and_then(Value::as_str);
+    let blended_default_mode = stricter_execution_mode(
+        default_mode.as_str(),
+        hardness.budget.recommended_mode.as_str(),
+    );
     let mode = params
         .get("mode")
         .and_then(Value::as_str)
-        .unwrap_or(default_mode.as_str())
+        .unwrap_or(blended_default_mode.as_str())
         .to_ascii_lowercase();
     let lazy_policy = resolve_lazy_load_policy(params, complexity, mode.as_str());
 
+    let phase_timeout = resolved
+        .phase
+        .options
+        .as_ref()
+        .and_then(|options| options.request_timeout_seconds);
+    let timeout_seconds = Some(
+        phase_timeout
+            .unwrap_or(hardness.budget.timeout_seconds)
+            .max(hardness.budget.timeout_seconds),
+    );
+
     let app_config = flow.config();
     let mut candidates = resolved.agents.clone();
-    let unavailable_agents = filter_unavailable_agents(app_config.as_ref(), &mut candidates);
+    let unavailable_agents =
+        filter_unavailable_agents(server, app_config.as_ref(), &mut candidates).await;
     if candidates.is_empty() {
         candidates = resolved.agents;
     }
@@ -3194,11 +5050,8 @@ fn build_execution_context(server: &AcpServer, params: &Value) -> Result<Runtime
         .collect::<Vec<_>>();
 
     Ok(RuntimeExecutionContext {
-        task_timeout_seconds: resolved
-            .phase
-            .options
-            .as_ref()
-            .and_then(|options| options.request_timeout_seconds),
+        task_timeout_seconds: timeout_seconds,
+        task_parallelism_cap: hardness.budget.parallelism_cap.max(1),
         principles: resolved.phase.principles.clone(),
         base_options,
         app_config: app_config.clone(),
@@ -3209,102 +5062,46 @@ fn build_execution_context(server: &AcpServer, params: &Value) -> Result<Runtime
         adaptive_selector: server.adaptive_model_selector.clone(),
         online_controller: server.online_controller.clone(),
         failure_prevention: server.failure_prevention.clone(),
+        metrics: server.metrics.clone(),
         memory_store: server.memory_store.clone(),
         lazy_policy,
         adaptive_defaults: AdaptiveExecutionDefaults {
             recommended_failure_strategy: default_failure_strategy,
             applied_failure_strategy: failure_strategy.clone(),
             failure_strategy_from_learning: pinned_failure_strategy.is_none(),
-            recommended_mode: default_mode,
+            recommended_mode: blended_default_mode,
             applied_mode: mode.clone(),
             mode_from_learning: pinned_mode.is_none(),
             filtered_unavailable_agents: unavailable_agents,
+            hardness,
+            cost,
         },
         artifact_ledger: ledger,
         vector_store: server.vector_store.clone(),
     })
 }
 
-fn filter_unavailable_agents(
+async fn filter_unavailable_agents(
+    server: &AcpServer,
     config: &AppConfig,
     candidates: &mut Vec<(String, Arc<dyn crate::agent::Agent>)>,
 ) -> Vec<String> {
     let mut unavailable = Vec::new();
-    candidates.retain(|(name, _)| {
-        let ready = is_agent_runtime_ready(config, name);
-        if !ready {
-            unavailable.push(name.clone());
+    let mut retained = Vec::with_capacity(candidates.len());
+    for (name, agent) in std::mem::take(candidates) {
+        match probe_agent_runtime_readiness(config, &name, Duration::from_millis(250)).await {
+            AgentRuntimeReadiness::Ready => retained.push((name, agent)),
+            AgentRuntimeReadiness::EndpointTimedOut => {
+                server.metrics.inc_runtime_probe_timeout();
+                unavailable.push(name);
+            }
+            AgentRuntimeReadiness::MissingSecret | AgentRuntimeReadiness::EndpointUnavailable => {
+                unavailable.push(name);
+            }
         }
-        ready
-    });
+    }
+    *candidates = retained;
     unavailable
-}
-
-fn is_agent_runtime_ready(config: &AppConfig, agent_name: &str) -> bool {
-    let Some(agent) = config.agents.get(agent_name) else {
-        return true;
-    };
-    for key in [
-        agent.api_key_env.as_deref(),
-        agent.secret_key_env.as_deref(),
-    ] {
-        let Some(key_name) = key else {
-            continue;
-        };
-        if key_name.starts_with("keyring://") {
-            continue;
-        }
-        if std::env::var(key_name).is_err() {
-            return false;
-        }
-    }
-    let Some(url) = agent.url.as_deref() else {
-        return true;
-    };
-    let Some((host, port)) = extract_host_port(url) else {
-        return true;
-    };
-    let is_local = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
-    if !is_local {
-        return true;
-    }
-    let timeout = std::time::Duration::from_millis(250);
-    let addrs = format!("{}:{}", host, port)
-        .to_socket_addrs()
-        .ok()
-        .map(|iter| iter.collect::<Vec<_>>())
-        .unwrap_or_default();
-    if addrs.is_empty() {
-        return false;
-    }
-    addrs
-        .iter()
-        .any(|addr| TcpStream::connect_timeout(addr, timeout).is_ok())
-}
-
-fn extract_host_port(url: &str) -> Option<(String, u16)> {
-    let marker = "://";
-    let start = url.find(marker).map(|idx| idx + marker.len()).unwrap_or(0);
-    let rest = &url[start..];
-    let host_port = rest.split('/').next()?.trim();
-    if host_port.is_empty() {
-        return None;
-    }
-    if host_port.starts_with('[') {
-        let end = host_port.find(']')?;
-        let host = host_port[1..end].to_string();
-        let port = host_port[end + 1..]
-            .strip_prefix(':')
-            .and_then(|value| value.parse::<u16>().ok())
-            .unwrap_or(80);
-        return Some((host, port));
-    }
-    if let Some((host, port_raw)) = host_port.rsplit_once(':') {
-        if let Ok(port) = port_raw.parse::<u16>() {
-            return Some((host.to_string(), port));
-        }
-    }
-    Some((host_port.to_string(), 80))
 }
 
 fn resolve_lazy_load_policy(params: &Value, complexity: u8, mode: &str) -> LazyLoadPolicy {
@@ -3419,6 +5216,8 @@ async fn execute_runtime_subtasks(
     records: &mut [crate::reinforcement::PlannedSubtaskRecord],
     context: &RuntimeExecutionContext,
 ) -> RuntimeExecutionReport {
+    let execution_order =
+        rebalance_execution_order(&workflow.execution_order, context.task_parallelism_cap);
     let mut id_to_index = HashMap::new();
     for (index, record) in records.iter().enumerate() {
         id_to_index.insert(record.id.clone(), index);
@@ -3436,7 +5235,7 @@ async fn execute_runtime_subtasks(
     let mut memory_snapshots = Vec::new();
     let fail_fast = context.failure_strategy.eq_ignore_ascii_case("fail_fast");
 
-    for (phase_idx, phase) in workflow.execution_order.iter().enumerate() {
+    for (phase_idx, phase) in execution_order.iter().enumerate() {
         let phase_started = Instant::now();
         let mut join_set: JoinSet<SubtaskRunResult> = JoinSet::new();
         let mut scheduled = 0_usize;
@@ -3632,15 +5431,13 @@ async fn execute_runtime_subtasks(
         .filter(|record| record.outcome.as_deref() == Some("skipped"))
         .count();
 
-    let total_phases = workflow.execution_order.len().max(1);
-    let parallel_phases = workflow
-        .execution_order
+    let total_phases = execution_order.len().max(1);
+    let parallel_phases = execution_order
         .iter()
         .filter(|phase| phase.len() > 1)
         .count();
     let parallel_utilization = parallel_phases as f64 / total_phases as f64;
-    let subtask_parallelism = workflow
-        .execution_order
+    let subtask_parallelism = execution_order
         .iter()
         .map(Vec::len)
         .max()
@@ -3829,16 +5626,40 @@ async fn execute_single_subtask(
 
     let mut first_failure_reason: Option<String> = None;
 
-    // Sort candidates by adaptive model selector: best-known model first
+    // Pre-compute selected model per agent for consistent ranking and execution.
     let phase_name = format!("phase-{}", phase_index + 1);
     let agent_names: Vec<String> = context.candidates.iter().map(|(n, _)| n.clone()).collect();
+    let mut selected_models_by_agent: HashMap<String, Option<String>> = HashMap::new();
+    let ranking_inputs = context
+        .candidates
+        .iter()
+        .map(|(agent_name, agent)| {
+            let selection = FlowModelSelector::select_model_for_agent(
+                agent.as_ref(),
+                context.app_config.as_ref(),
+                Some(&subtask_description),
+            );
+            let selected_model = selection
+                .selected_model
+                .as_ref()
+                .map(|model| model.id.clone());
+            selected_models_by_agent.insert(agent_name.clone(), selected_model.clone());
+            (agent_name.clone(), selected_model)
+        })
+        .collect::<Vec<_>>();
+
+    // Sort candidates by adaptive selector score at model granularity (exploration-exploitation).
     if let Ok(sel) = context.adaptive_selector.lock() {
-        if let Some(best) = sel.get_best_model(&agent_names) {
-            if let Some(pos) = context.candidates.iter().position(|(n, _)| n == &best) {
-                if pos > 0 {
-                    context.candidates.swap(0, pos);
-                }
-            }
+        let ranked_agents = sel.rank_candidates(&ranking_inputs);
+        if !ranked_agents.is_empty() {
+            let order = ranked_agents
+                .into_iter()
+                .enumerate()
+                .map(|(idx, name)| (name, idx))
+                .collect::<HashMap<_, _>>();
+            context
+                .candidates
+                .sort_by_key(|(name, _)| order.get(name).copied().unwrap_or(usize::MAX));
         }
     }
     // Skip agents that FailurePrevention marks as severely degraded (only if alternatives exist)
@@ -3865,17 +5686,8 @@ async fn execute_single_subtask(
     }
 
     for (idx, (agent_name, agent)) in context.candidates.iter().enumerate() {
-        let selection = FlowModelSelector::select_model_for_agent(
-            agent.as_ref(),
-            context.app_config.as_ref(),
-            Some(&subtask_description),
-        );
-
         let mut options = context.base_options.clone();
-        let selected_model = selection
-            .selected_model
-            .as_ref()
-            .map(|model| model.id.clone());
+        let selected_model = selected_models_by_agent.get(agent_name).cloned().flatten();
         if let Some(model_id) = selected_model.clone() {
             options.insert("model".to_string(), Value::String(model_id));
         }
@@ -3893,6 +5705,12 @@ async fn execute_single_subtask(
             context.task_timeout_seconds,
         )
         .await;
+
+        if let Err(err) = &run_result {
+            if err.to_string().to_ascii_lowercase().contains("timed out") {
+                context.metrics.inc_agent_timeout_failure();
+            }
+        }
 
         if let (Ok(mut selector), Some(model_id)) =
             (context.adaptive_selector.lock(), selected_model.clone())
@@ -4378,18 +6196,17 @@ async fn run_agent_chat_collecting(
         }
     };
 
-    if let Some(seconds) = timeout_seconds {
-        let timeout = Duration::from_secs(seconds.max(1));
-        match tokio::time::timeout(timeout, collect).await {
-            Ok(result) => result,
-            Err(_) => Err(anyhow::anyhow!(
+    run_with_optional_timeout(
+        timeout_seconds.map(|value| Duration::from_secs(value.max(1))),
+        collect,
+        |duration| {
+            anyhow::anyhow!(
                 "agent request timed out after {}s",
-                seconds
-            )),
-        }
-    } else {
-        collect.await
-    }
+                duration.as_secs().max(1)
+            )
+        },
+    )
+    .await
 }
 
 async fn handle_learning_summary(
@@ -4405,6 +6222,7 @@ async fn handle_learning_summary(
         .map(|v| v as usize)
         .unwrap_or(20)
         .max(1);
+    let guardrail = summarize_learning_guardrail(window, &params)?;
     let knowledge_bus =
         read_latest_artifact::<KnowledgeBusArtifact>(&ledger, "spec", "latest-knowledge.json");
     let Some(bus) = read_latest_artifact::<WorkflowLearningBusArtifact>(
@@ -4418,6 +6236,7 @@ async fn handle_learning_summary(
             json!({
                 "ok": true,
                 "summary": {"sampled_events": 0, "totals": {}, "averages": {}, "rates": {}},
+                "guardrail": guardrail,
                 "knowledge": knowledge_bus.as_ref().map(|bus| json!({
                     "total_events": bus.total_events,
                     "sampled_events": bus.events.len().min(window),
@@ -4489,6 +6308,7 @@ async fn handle_learning_summary(
                     "gates_pass_rate": gates_pass_rate,
                 }
             },
+            "guardrail": guardrail,
                 "knowledge": knowledge_bus.as_ref().map(|bus| json!({
                     "total_events": bus.total_events,
                     "sampled_events": bus.events.len().min(window),
@@ -4496,6 +6316,1019 @@ async fn handle_learning_summary(
                     "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
                 })).unwrap_or_else(|| json!({"total_events": 0, "sampled_events": 0, "recent": []})),
             "events": events,
+        }),
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LearningGuardrailConfig {
+    window: usize,
+    min_samples: usize,
+    dedup_similarity_threshold: f64,
+    high_risk_threshold: f64,
+    min_parseable_ratio: f64,
+    min_quality_ratio: f64,
+    cooldown_seconds: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct LearningGuardrailStats {
+    records_total: usize,
+    parseable_records: usize,
+    parse_errors: usize,
+    evidence_complete: usize,
+    attributable: usize,
+    high_risk_records: usize,
+    high_risk_complete: usize,
+    duplicate_records: usize,
+    weighted_total: f64,
+    weighted_pass: f64,
+    last_high_risk_incomplete_at: i64,
+}
+
+fn parse_learning_guardrail_config(window: usize, params: &Value) -> LearningGuardrailConfig {
+    LearningGuardrailConfig {
+        window,
+        min_samples: params
+            .get("min_samples")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or(8)
+            .max(1),
+        dedup_similarity_threshold: params
+            .get("dedup_similarity_threshold")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.92)
+            .clamp(0.75, 0.99),
+        high_risk_threshold: params
+            .get("high_risk_threshold")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.7)
+            .clamp(0.3, 0.99),
+        min_parseable_ratio: params
+            .get("min_parseable_ratio")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.95)
+            .clamp(0.5, 1.0),
+        min_quality_ratio: params
+            .get("min_quality_ratio")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.75)
+            .clamp(0.4, 1.0),
+        cooldown_seconds: params
+            .get("cooldown_seconds")
+            .and_then(Value::as_i64)
+            .unwrap_or(300)
+            .max(0),
+    }
+}
+
+fn extract_record_signature(record: &LearningRecord) -> String {
+    match record {
+        LearningRecord::Workflow(payload) => {
+            let task = payload
+                .get("task")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let executor = payload
+                .get("executor")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            format!("{}::{}", task.trim().to_ascii_lowercase(), executor)
+        }
+        LearningRecord::Pua(payload) => {
+            let status = if payload.passed { "pass" } else { "fail" };
+            format!(
+                "{}::{}::{}",
+                payload.stage.trim().to_ascii_lowercase(),
+                status,
+                payload.escalation_level
+            )
+        }
+    }
+}
+
+fn signature_similarity(left: &str, right: &str) -> f64 {
+    if left.is_empty() && right.is_empty() {
+        return 1.0;
+    }
+
+    let lhs = left
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|item| !item.is_empty())
+        .collect::<HashSet<_>>();
+    let rhs = right
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|item| !item.is_empty())
+        .collect::<HashSet<_>>();
+
+    if lhs.is_empty() || rhs.is_empty() {
+        return if left == right { 1.0 } else { 0.0 };
+    }
+
+    let overlap = lhs.intersection(&rhs).count() as f64;
+    overlap / (lhs.len().max(rhs.len()) as f64)
+}
+
+fn scan_learning_records_with_parseability(
+    window: usize,
+) -> Result<(Vec<LearningRecord>, usize, usize)> {
+    let storage_dir = Path::new(".goon").join("learning");
+    let records_path = storage_dir.join(crate::pua::LEARNING_RECORDS_FILE);
+    if !records_path.exists() {
+        return Ok((Vec::new(), 0, 0));
+    }
+
+    let content = fs::read_to_string(&records_path)?;
+    let mut parsed = Vec::new();
+    let mut parse_errors = 0usize;
+    let mut total_lines = 0usize;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        total_lines = total_lines.saturating_add(1);
+        match serde_json::from_str::<LearningRecord>(trimmed) {
+            Ok(record) => parsed.push(record),
+            Err(_) => parse_errors = parse_errors.saturating_add(1),
+        }
+    }
+
+    if parsed.len() > window {
+        let split_at = parsed.len() - window;
+        parsed = parsed.split_off(split_at);
+    }
+
+    Ok((parsed, total_lines, parse_errors))
+}
+
+fn summarize_learning_guardrail(window: usize, params: &Value) -> Result<Value> {
+    let cfg = parse_learning_guardrail_config(window, params);
+    let (records, total_lines, parse_errors) = scan_learning_records_with_parseability(cfg.window)?;
+
+    let mut stats = LearningGuardrailStats {
+        records_total: records.len(),
+        parseable_records: records.len(),
+        parse_errors,
+        ..LearningGuardrailStats::default()
+    };
+    let mut signatures: Vec<String> = Vec::new();
+
+    for record in &records {
+        let signature = extract_record_signature(record);
+        let duplicate = signatures.iter().any(|existing| {
+            signature_similarity(existing, &signature) >= cfg.dedup_similarity_threshold
+        });
+        if duplicate {
+            stats.duplicate_records = stats.duplicate_records.saturating_add(1);
+        }
+
+        let (evidence_complete, attributable, high_risk, generated_at) = match record {
+            LearningRecord::Workflow(payload) => {
+                let task_ok = payload
+                    .get("task")
+                    .and_then(Value::as_str)
+                    .map(|item| !item.trim().is_empty())
+                    .unwrap_or(false);
+                let executor_ok = payload
+                    .get("executor")
+                    .and_then(Value::as_str)
+                    .map(|item| !item.trim().is_empty())
+                    .unwrap_or(false);
+                let source_ok = payload
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .map(|item| !item.trim().is_empty())
+                    .unwrap_or(false);
+                let complexity_ok = payload.get("complexity").and_then(Value::as_u64).is_some();
+                let totals_ok = payload
+                    .get("subtasks_total")
+                    .and_then(Value::as_u64)
+                    .is_some();
+                let risk_score = payload
+                    .get("risk_score")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                let failed = payload
+                    .get("subtasks_failed")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    > 0;
+                let gates_ok = payload
+                    .get("gates_ok")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                let generated_at = payload
+                    .get("generated_at")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                (
+                    task_ok && executor_ok && source_ok && complexity_ok && totals_ok,
+                    task_ok && executor_ok,
+                    risk_score >= cfg.high_risk_threshold || failed || !gates_ok,
+                    generated_at,
+                )
+            }
+            LearningRecord::Pua(payload) => {
+                let stage_ok = !payload.stage.trim().is_empty();
+                let checks_ok = !payload
+                    .missing_checks
+                    .iter()
+                    .any(|item| item.trim().is_empty());
+                (
+                    stage_ok && checks_ok,
+                    stage_ok,
+                    !payload.passed || payload.escalation_level >= 2,
+                    0,
+                )
+            }
+        };
+
+        if evidence_complete {
+            stats.evidence_complete = stats.evidence_complete.saturating_add(1);
+        }
+        if attributable {
+            stats.attributable = stats.attributable.saturating_add(1);
+        }
+        if high_risk {
+            stats.high_risk_records = stats.high_risk_records.saturating_add(1);
+            if evidence_complete && attributable {
+                stats.high_risk_complete = stats.high_risk_complete.saturating_add(1);
+            }
+            if !(evidence_complete && attributable)
+                && generated_at > stats.last_high_risk_incomplete_at
+            {
+                stats.last_high_risk_incomplete_at = generated_at;
+            }
+        }
+
+        let weight = if high_risk { 2.0 } else { 1.0 };
+        stats.weighted_total += weight;
+        if evidence_complete && attributable && !duplicate {
+            stats.weighted_pass += weight;
+        }
+
+        signatures.push(signature);
+    }
+
+    let parseable_ratio = if total_lines == 0 {
+        1.0
+    } else {
+        stats.parseable_records as f64 / total_lines as f64
+    };
+    let quality_ratio = if stats.weighted_total <= f64::EPSILON {
+        1.0
+    } else {
+        stats.weighted_pass / stats.weighted_total
+    };
+    let high_risk_coverage = if stats.high_risk_records == 0 {
+        1.0
+    } else {
+        stats.high_risk_complete as f64 / stats.high_risk_records as f64
+    };
+    let dedup_ratio = if stats.records_total == 0 {
+        0.0
+    } else {
+        stats.duplicate_records as f64 / stats.records_total as f64
+    };
+
+    let sample_ready = stats.records_total >= cfg.min_samples;
+    let now_ts = crate::acp::prelude::now_ts();
+    let cooldown_active = stats.last_high_risk_incomplete_at > 0
+        && (now_ts - stats.last_high_risk_incomplete_at) <= cfg.cooldown_seconds;
+
+    let mut warnings = Vec::new();
+    if !sample_ready {
+        warnings.push(format!(
+            "learning sample volume below threshold: {}/{}",
+            stats.records_total, cfg.min_samples
+        ));
+    }
+    if parseable_ratio < cfg.min_parseable_ratio {
+        warnings.push(format!(
+            "learning parseability below threshold: {:.2}% < {:.2}%",
+            parseable_ratio * 100.0,
+            cfg.min_parseable_ratio * 100.0
+        ));
+    }
+    if quality_ratio < cfg.min_quality_ratio {
+        warnings.push(format!(
+            "learning quality gate below threshold: {:.2}% < {:.2}%",
+            quality_ratio * 100.0,
+            cfg.min_quality_ratio * 100.0
+        ));
+    }
+    if cooldown_active {
+        warnings.push(
+            "learning cooldown active due to recent high-risk incomplete evidence".to_string(),
+        );
+    }
+
+    let status = if !warnings.is_empty() {
+        if !sample_ready
+            || parseable_ratio < cfg.min_parseable_ratio
+            || quality_ratio < cfg.min_quality_ratio
+        {
+            "block"
+        } else {
+            "warn"
+        }
+    } else {
+        "pass"
+    };
+
+    Ok(json!({
+        "status": status,
+        "window": cfg.window,
+        "sample_ready": sample_ready,
+        "cooldown_active": cooldown_active,
+        "thresholds": {
+            "min_samples": cfg.min_samples,
+            "dedup_similarity_threshold": cfg.dedup_similarity_threshold,
+            "high_risk_threshold": cfg.high_risk_threshold,
+            "min_parseable_ratio": cfg.min_parseable_ratio,
+            "min_quality_ratio": cfg.min_quality_ratio,
+            "cooldown_seconds": cfg.cooldown_seconds,
+        },
+        "stats": {
+            "records_total": stats.records_total,
+            "parseable_records": stats.parseable_records,
+            "parse_errors": stats.parse_errors,
+            "evidence_complete": stats.evidence_complete,
+            "attributable": stats.attributable,
+            "high_risk_records": stats.high_risk_records,
+            "high_risk_complete": stats.high_risk_complete,
+            "duplicate_records": stats.duplicate_records,
+            "parseable_ratio": parseable_ratio,
+            "quality_ratio": quality_ratio,
+            "high_risk_coverage": high_risk_coverage,
+            "dedup_ratio": dedup_ratio,
+        },
+        "warnings": warnings,
+    }))
+}
+
+async fn handle_learning_guardrail(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let window = params
+        .get("limit")
+        .or_else(|| params.get("window"))
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(50)
+        .max(1);
+    let guardrail = summarize_learning_guardrail(window, &params)?;
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "guardrail": guardrail,
+        }),
+    )
+    .await
+}
+
+async fn handle_learning_replay(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let ledger = clone_artifact_ledger(server);
+    let window = params
+        .get("limit")
+        .or_else(|| params.get("window"))
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(20)
+        .max(1);
+
+    let storage_dir = Path::new(".goon").join("learning");
+    let records = load_learning_records(&storage_dir, window).unwrap_or_default();
+    let workflow_count = records
+        .iter()
+        .filter(|record| matches!(record, LearningRecord::Workflow(_)))
+        .count();
+    let pua_count = records
+        .iter()
+        .filter(|record| matches!(record, LearningRecord::Pua(_)))
+        .count();
+    let learning_bus = read_latest_artifact::<WorkflowLearningBusArtifact>(
+        &ledger,
+        "spec",
+        "latest-learning.json",
+    );
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "replay": {
+                "source": storage_dir.display().to_string(),
+                "window": window,
+                "records_total": records.len(),
+                "workflow_records": workflow_count,
+                "pua_records": pua_count,
+                "records": records,
+                "learning_bus": learning_bus.as_ref().map(|bus| json!({
+                    "generated_at": bus.generated_at,
+                    "total_events": bus.total_events,
+                    "sampled_events": bus.events.len().min(window),
+                    "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
+                })).unwrap_or_else(|| json!({
+                    "generated_at": 0,
+                    "total_events": 0,
+                    "sampled_events": 0,
+                    "recent": []
+                }))
+            }
+        }),
+    )
+    .await
+}
+
+const KNOWLEDGE_TOMBSTONE_FILE: &str = "tombstones.ndjson";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct KnowledgeTombstoneEntry {
+    timestamp: i64,
+    key: String,
+    reason: String,
+    replaced_by: Option<String>,
+    superseded: Value,
+}
+
+fn knowledge_storage_dir() -> PathBuf {
+    Path::new(".goon").join("knowledge")
+}
+
+fn knowledge_tombstone_path() -> PathBuf {
+    knowledge_storage_dir().join(KNOWLEDGE_TOMBSTONE_FILE)
+}
+
+fn load_knowledge_tombstones(limit: usize) -> Vec<KnowledgeTombstoneEntry> {
+    let path = knowledge_tombstone_path();
+    let Ok(raw) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+
+    let mut items = raw
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            serde_json::from_str::<KnowledgeTombstoneEntry>(trimmed).ok()
+        })
+        .collect::<Vec<_>>();
+
+    if items.len() > limit {
+        let split_at = items.len() - limit;
+        items = items.split_off(split_at);
+    }
+    items
+}
+
+fn append_knowledge_tombstones(entries: &[KnowledgeTombstoneEntry]) -> Result<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    let dir = knowledge_storage_dir();
+    fs::create_dir_all(&dir)?;
+    let path = knowledge_tombstone_path();
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+
+    for entry in entries {
+        let encoded = serde_json::to_string(entry)?;
+        file.write_all(encoded.as_bytes())?;
+        file.write_all(b"\n")?;
+    }
+
+    Ok(())
+}
+
+fn detect_knowledge_conflicts(
+    events: &[crate::reinforcement::KnowledgeInsightArtifact],
+    apply_tombstone: bool,
+) -> (Vec<Value>, Vec<KnowledgeTombstoneEntry>) {
+    let mut grouped: HashMap<String, Vec<&crate::reinforcement::KnowledgeInsightArtifact>> =
+        HashMap::new();
+
+    for event in events {
+        let key = format!(
+            "{}::{}",
+            event.task.trim().to_ascii_lowercase(),
+            event.phase.trim().to_ascii_lowercase()
+        );
+        grouped.entry(key).or_default().push(event);
+    }
+
+    let mut conflicts = Vec::new();
+    let mut tombstones = Vec::new();
+
+    for (key, mut items) in grouped {
+        if items.len() < 2 {
+            continue;
+        }
+        items.sort_by(|left, right| {
+            right
+                .confidence
+                .partial_cmp(&left.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| right.generated_at.cmp(&left.generated_at))
+        });
+
+        let primary = items[0];
+        let conflicting = items
+            .iter()
+            .skip(1)
+            .filter(|item| {
+                item.agent != primary.agent
+                    || item.response_excerpt != primary.response_excerpt
+                    || (primary.confidence - item.confidence).abs() > f64::EPSILON
+            })
+            .copied()
+            .collect::<Vec<_>>();
+
+        if conflicting.is_empty() {
+            continue;
+        }
+
+        conflicts.push(json!({
+            "key": key,
+            "primary": {
+                "agent": primary.agent,
+                "confidence": primary.confidence,
+                "source": primary.source,
+                "generated_at": primary.generated_at,
+            },
+            "conflicting": conflicting.iter().map(|item| json!({
+                "agent": item.agent,
+                "confidence": item.confidence,
+                "source": item.source,
+                "generated_at": item.generated_at,
+            })).collect::<Vec<_>>(),
+        }));
+
+        if apply_tombstone {
+            for item in conflicting {
+                tombstones.push(KnowledgeTombstoneEntry {
+                    timestamp: crate::acp::prelude::now_ts(),
+                    key: key.clone(),
+                    reason: "knowledge_conflict_superseded".to_string(),
+                    replaced_by: Some(primary.agent.clone()),
+                    superseded: json!({
+                        "task": item.task,
+                        "phase": item.phase,
+                        "agent": item.agent,
+                        "source": item.source,
+                        "confidence": item.confidence,
+                        "generated_at": item.generated_at,
+                        "response_excerpt": item.response_excerpt,
+                    }),
+                });
+            }
+        }
+    }
+
+    conflicts.sort_by(|left, right| {
+        left.get("key")
+            .and_then(Value::as_str)
+            .cmp(&right.get("key").and_then(Value::as_str))
+    });
+
+    (conflicts, tombstones)
+}
+
+async fn handle_knowledge_distill(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let ledger = clone_artifact_ledger(server);
+    let window = params
+        .get("limit")
+        .or_else(|| params.get("window"))
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(20)
+        .max(1);
+    let strategy_limit = params
+        .get("strategy_limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(12)
+        .clamp(1, 64);
+    let tombstone_limit = params
+        .get("tombstone_limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(20)
+        .clamp(1, 200);
+    let apply_tombstone = params
+        .get("apply_tombstone")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
+    let learning_dir = Path::new(".goon").join("learning");
+    let evidence_records = load_learning_records(&learning_dir, window).unwrap_or_default();
+    let workflow_records = evidence_records
+        .iter()
+        .filter(|record| matches!(record, LearningRecord::Workflow(_)))
+        .count();
+    let pua_records = evidence_records
+        .iter()
+        .filter(|record| matches!(record, LearningRecord::Pua(_)))
+        .count();
+
+    let knowledge_bus =
+        read_latest_artifact::<KnowledgeBusArtifact>(&ledger, "spec", "latest-knowledge.json");
+    let summary_events = knowledge_bus
+        .as_ref()
+        .map(|bus| {
+            bus.events
+                .iter()
+                .rev()
+                .take(window)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let (conflicts, new_tombstones) = detect_knowledge_conflicts(&summary_events, apply_tombstone);
+    if apply_tombstone {
+        append_knowledge_tombstones(&new_tombstones)?;
+    }
+    let tombstones = load_knowledge_tombstones(tombstone_limit);
+
+    let mut strategy_rules = Vec::new();
+    for event in summary_events.iter().take(strategy_limit) {
+        let then_action = event
+            .reusable_insights
+            .first()
+            .cloned()
+            .or_else(|| {
+                event.verification_steps.first().map(|step| {
+                    format!(
+                        "Prioritize verification step '{}' for phase '{}'",
+                        step, event.phase
+                    )
+                })
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "Use '{}' insights as baseline strategy for task '{}'",
+                    event.agent, event.task
+                )
+            });
+
+        strategy_rules.push(json!({
+            "rule_id": format!("k-rule-{}", strategy_rules.len() + 1),
+            "when": {
+                "task": event.task,
+                "phase": event.phase,
+                "agent": event.agent,
+            },
+            "then": then_action,
+            "confidence": event.confidence,
+            "source": event.source,
+        }));
+    }
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "distillation": {
+                "window": window,
+                "layers": {
+                    "evidence": {
+                        "source": learning_dir.display().to_string(),
+                        "records_total": evidence_records.len(),
+                        "workflow_records": workflow_records,
+                        "pua_records": pua_records,
+                        "records": evidence_records.into_iter().map(|record| serde_json::to_value(record).unwrap_or_else(|_| json!({}))).collect::<Vec<_>>()
+                    },
+                    "summary": {
+                        "source": "spec/latest-knowledge.json",
+                        "total_events": knowledge_bus.as_ref().map(|bus| bus.total_events).unwrap_or(0),
+                        "sampled_events": summary_events.len(),
+                        "latest_generated_at": knowledge_bus.as_ref().map(|bus| bus.generated_at).unwrap_or(0),
+                        "recent": summary_events,
+                    },
+                    "strategy": {
+                        "rules_total": strategy_rules.len(),
+                        "rules": strategy_rules,
+                    },
+                    "conflicts": {
+                        "count": conflicts.len(),
+                        "items": conflicts,
+                    },
+                    "tombstones": {
+                        "added_count": new_tombstones.len(),
+                        "stored_count": tombstones.len(),
+                        "items": tombstones,
+                    }
+                }
+            }
+        }),
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RlOfflineEvalSample {
+    timestamp: i64,
+    success: bool,
+    latency_cost: f64,
+    tool_error_rate: f64,
+    safety_penalty: f64,
+    reward: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RlRewardWeights {
+    success: f64,
+    latency: f64,
+    tool_error: f64,
+    safety: f64,
+}
+
+fn parse_rl_reward_weights(params: &Value) -> RlRewardWeights {
+    RlRewardWeights {
+        success: params
+            .get("success_weight")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.55)
+            .clamp(0.0, 2.0),
+        latency: params
+            .get("latency_weight")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.2)
+            .clamp(0.0, 2.0),
+        tool_error: params
+            .get("tool_error_weight")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.15)
+            .clamp(0.0, 2.0),
+        safety: params
+            .get("safety_weight")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.1)
+            .clamp(0.0, 2.0),
+    }
+}
+
+fn mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<f64>() / values.len() as f64
+    }
+}
+
+fn collect_rl_offline_eval_samples(
+    window: usize,
+    weights: RlRewardWeights,
+) -> Vec<RlOfflineEvalSample> {
+    let learning_dir = Path::new(".goon").join("learning");
+    let records = load_learning_records(&learning_dir, window).unwrap_or_default();
+
+    records
+        .into_iter()
+        .filter_map(|record| match record {
+            LearningRecord::Workflow(payload) => {
+                let subtasks_total = payload
+                    .get("subtasks_total")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1)
+                    .max(1);
+                let subtasks_failed = payload
+                    .get("subtasks_failed")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    .min(subtasks_total);
+                let success = subtasks_failed == 0;
+
+                let explicit_duration_ms = payload
+                    .get("duration_ms")
+                    .or_else(|| payload.get("total_duration_ms"))
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0)
+                    .max(0.0);
+                let latency_cost = if explicit_duration_ms <= f64::EPSILON {
+                    0.0
+                } else {
+                    (explicit_duration_ms / 5000.0).clamp(0.0, 1.0)
+                };
+
+                let tool_error_rate =
+                    (subtasks_failed as f64 / subtasks_total as f64).clamp(0.0, 1.0);
+                let gates_ok = payload
+                    .get("gates_ok")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                let safety_penalty = if gates_ok { 0.0 } else { 1.0 };
+
+                let reward = (weights.success * if success { 1.0 } else { 0.0 }
+                    - weights.latency * latency_cost
+                    - weights.tool_error * tool_error_rate
+                    - weights.safety * safety_penalty)
+                    .clamp(-1.0, 1.0);
+
+                Some(RlOfflineEvalSample {
+                    timestamp: payload
+                        .get("generated_at")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0),
+                    success,
+                    latency_cost,
+                    tool_error_rate,
+                    safety_penalty,
+                    reward,
+                })
+            }
+            LearningRecord::Pua(_) => None,
+        })
+        .collect()
+}
+
+async fn handle_rl_alignment_offline_eval(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let window = params
+        .get("limit")
+        .or_else(|| params.get("window"))
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(120)
+        .clamp(20, 2000);
+    let pass_threshold = params
+        .get("pass_threshold")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.05)
+        .clamp(0.0, 0.5);
+    let drift_threshold = params
+        .get("drift_threshold")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.12)
+        .clamp(0.01, 0.6);
+
+    let weights = parse_rl_reward_weights(&params);
+    let mut samples = collect_rl_offline_eval_samples(window, weights);
+    samples.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+
+    let (baseline_slice, candidate_slice) = if samples.len() < 2 {
+        (&samples[..], &samples[..])
+    } else {
+        let split_index = ((samples.len() as f64) * 0.7).floor() as usize;
+        let split_index = split_index.clamp(1, samples.len() - 1);
+        samples.split_at(split_index)
+    };
+
+    let baseline_rewards = baseline_slice
+        .iter()
+        .map(|item| item.reward)
+        .collect::<Vec<_>>();
+    let candidate_rewards = candidate_slice
+        .iter()
+        .map(|item| item.reward)
+        .collect::<Vec<_>>();
+    let baseline_mean = mean(&baseline_rewards);
+    let candidate_mean = mean(&candidate_rewards);
+    let improvement = candidate_mean - baseline_mean;
+
+    let baseline_safety = mean(
+        &baseline_slice
+            .iter()
+            .map(|item| item.safety_penalty)
+            .collect::<Vec<_>>(),
+    );
+    let candidate_safety = mean(
+        &candidate_slice
+            .iter()
+            .map(|item| item.safety_penalty)
+            .collect::<Vec<_>>(),
+    );
+
+    let recent_window = samples.len().min(20).max(1);
+    let recent_rewards = samples
+        .iter()
+        .rev()
+        .take(recent_window)
+        .map(|item| item.reward)
+        .collect::<Vec<_>>();
+    let historical_rewards = if samples.len() > recent_window {
+        samples
+            .iter()
+            .take(samples.len() - recent_window)
+            .map(|item| item.reward)
+            .collect::<Vec<_>>()
+    } else {
+        baseline_rewards.clone()
+    };
+    let recent_mean = mean(&recent_rewards);
+    let historical_mean = mean(&historical_rewards);
+    let reward_drift = (recent_mean - historical_mean).abs();
+    let drift_alert = reward_drift > drift_threshold;
+
+    let enough_samples = samples.len() >= 20;
+    let safe_to_promote = candidate_safety <= (baseline_safety + 0.05);
+    let pass = enough_samples && improvement >= pass_threshold && safe_to_promote;
+    let recommended_mode = if pass && !drift_alert {
+        "adaptive"
+    } else {
+        "conservative"
+    };
+
+    let warnings = {
+        let mut items = Vec::new();
+        if !enough_samples {
+            items.push(format!(
+                "offline replay sample size below threshold: {} < 20",
+                samples.len()
+            ));
+        }
+        if improvement < pass_threshold {
+            items.push(format!(
+                "candidate reward uplift below threshold: {:.4} < {:.4}",
+                improvement, pass_threshold
+            ));
+        }
+        if !safe_to_promote {
+            items.push(format!(
+                "candidate safety penalty regressed: {:.4} > {:.4}",
+                candidate_safety,
+                baseline_safety + 0.05
+            ));
+        }
+        if drift_alert {
+            items.push(format!(
+                "reward drift exceeds threshold: {:.4} > {:.4}",
+                reward_drift, drift_threshold
+            ));
+        }
+        items
+    };
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "offline_eval": {
+                "window": window,
+                "samples_total": samples.len(),
+                "weights": {
+                    "success": weights.success,
+                    "latency": weights.latency,
+                    "tool_error": weights.tool_error,
+                    "safety": weights.safety,
+                },
+                "baseline": {
+                    "samples": baseline_slice.len(),
+                    "mean_reward": baseline_mean,
+                    "mean_safety_penalty": baseline_safety,
+                },
+                "candidate": {
+                    "samples": candidate_slice.len(),
+                    "mean_reward": candidate_mean,
+                    "mean_safety_penalty": candidate_safety,
+                },
+                "comparison": {
+                    "reward_uplift": improvement,
+                    "pass_threshold": pass_threshold,
+                    "passes": pass,
+                },
+                "drift": {
+                    "recent_mean": recent_mean,
+                    "historical_mean": historical_mean,
+                    "absolute_diff": reward_drift,
+                    "threshold": drift_threshold,
+                    "alert": drift_alert,
+                },
+                "decision": {
+                    "recommended_mode": recommended_mode,
+                    "fallback_triggered": !pass || drift_alert,
+                },
+                "warnings": warnings,
+            }
         }),
     )
     .await
@@ -4871,12 +7704,18 @@ fn trace_metrics_snapshot(server: &AcpServer) -> Value {
         .lock()
         .map(|guard| guard.sampling_rate())
         .unwrap_or(0.0);
+    let metrics = server.metrics.snapshot();
     json!({
         "sampling_rate": sampling_rate,
         "buffered_events": events.len(),
         "slow_requests_top_n": requests,
         "phase_latency": by_phase,
         "pua_stage_counts": by_pua_stage,
+        "timeouts": {
+            "agent_request_total": metrics.agent_timeout_failures_total,
+            "review_gate_total": metrics.review_gate_timeout_total,
+            "runtime_probe_total": metrics.runtime_probe_timeout_total,
+        },
     })
 }
 
@@ -5345,6 +8184,7 @@ async fn send_error(
         Some(encoded) => Some(inject_pua_report_into_error_data(data, encoded)),
         None => data,
     };
+    let data = with_error_contract_data(code, &message, data);
     crate::acp::r#impl::io::send_error(server, id, code, message, data).await
 }
 
@@ -5434,10 +8274,14 @@ fn record_trace_event(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{json, Value};
+
     use super::{
         classify_request_error_kind, collect_vector_context_snippets, infer_workflow_parallelism,
-        rebalance_execution_order, session_id_for_task,
+        rebalance_execution_order, session_id_for_task, summarize_lock_health,
+        with_error_contract_data,
     };
+    use crate::acp::prelude::AcpLockSnapshot;
     use crate::vector::VectorStore;
 
     #[test]
@@ -5550,5 +8394,59 @@ mod tests {
     fn classify_request_error_kind_detects_sandbox_blocked() {
         let error = anyhow::anyhow!("hardening policy denied tool 'shell': sandbox strict");
         assert_eq!(classify_request_error_kind(&error), "SandboxBlocked");
+    }
+
+    #[test]
+    fn with_error_contract_data_infers_retryable_rate_limit() {
+        let data = with_error_contract_data(-32029, "rate limited", None)
+            .expect("error contract data should be present");
+        assert_eq!(data["kind"], Value::String("RateLimited".to_string()));
+        assert_eq!(data["retry"]["retryable"], Value::Bool(true));
+        assert_eq!(data["retry"]["max_retries"], Value::Number(3.into()));
+    }
+
+    #[test]
+    fn with_error_contract_data_preserves_explicit_kind_and_detail() {
+        let data = with_error_contract_data(
+            -32603,
+            "generic failure",
+            Some(json!({"kind": "PuaViolation", "detail": "acp.handle_request.dispatch"})),
+        )
+        .expect("error contract data should be present");
+        assert_eq!(data["kind"], Value::String("PuaViolation".to_string()));
+        assert_eq!(
+            data["detail"],
+            Value::String("acp.handle_request.dispatch".to_string())
+        );
+        assert_eq!(data["retry"]["retryable"], Value::Bool(false));
+    }
+
+    #[test]
+    fn summarize_lock_health_marks_poisoned_components_warn() {
+        let summary = summarize_lock_health(&[
+            AcpLockSnapshot {
+                name: "phase_rate_limiter".to_string(),
+                acquisitions: 4,
+                poisoned_total: 1,
+                recovered_total: 1,
+                slow_wait_total: 0,
+                avg_wait_ms: 0.4,
+                max_wait_ms: 1.2,
+            },
+            AcpLockSnapshot {
+                name: "lifecycle_state".to_string(),
+                acquisitions: 8,
+                poisoned_total: 0,
+                recovered_total: 0,
+                slow_wait_total: 0,
+                avg_wait_ms: 0.2,
+                max_wait_ms: 0.5,
+            },
+        ]);
+
+        assert_eq!(summary.status, "warn");
+        assert_eq!(summary.poisoned_total, 1);
+        assert_eq!(summary.recovered_total, 1);
+        assert_eq!(summary.components_tracked, 2);
     }
 }

@@ -17,6 +17,12 @@
                 governance: {{ governanceState }}
               </el-tag>
               <el-tag type="info">rules: {{ rulesVersion }}</el-tag>
+              <el-tag type="info">
+                {{ t("security.dynamicRules") }}: {{ dynamicRulesCount }}
+              </el-tag>
+              <el-tag type="info">
+                {{ t("security.auditRecent") }}: {{ auditRecentCount }}
+              </el-tag>
               <el-tag :type="strictEnabled ? 'success' : 'danger'">
                 production_strict: {{ strictEnabled ? 'on' : 'off' }}
               </el-tag>
@@ -171,6 +177,8 @@ const entryAuthEnabled = ref(false);
 const entryAuthKeyConfigured = ref(false);
 const entryRateLimitRpm = ref(0);
 const entryRateLimitBurst = ref(0);
+const dynamicRulesCount = ref(0);
+const auditRecentCount = ref(0);
 
 const sensitiveFields = ref<Array<{ name: string; location: string; status: string; value: string; actual_length: number }>>([]);
 
@@ -197,6 +205,30 @@ function normalizeLevelTag(level: string): "success" | "warning" {
   return level.toLowerCase() === "healthy" ? "success" : "warning";
 }
 
+function normalizeAuditResultTag(result: string): string {
+  const lower = String(result || "").toLowerCase();
+  return lower === "success" || lower === "ok" ? "success" : "danger";
+}
+
+async function refreshGovernanceAuditRecent(limit = 20) {
+  try {
+    const resultRaw = await invokeRuntimeRpc("governance.audit.recent", JSON.stringify({ limit }));
+    const parsed = JSON.parse(resultRaw || "{}");
+    const events = Array.isArray(parsed?.audit?.events) ? parsed.audit.events : [];
+    auditRecentCount.value = events.length;
+
+    auditLogs.value = events.map((event: any) => ({
+      timestamp: new Date(Number(event.timestamp || 0) * 1000).toLocaleString(),
+      action: String(event.action || "unknown"),
+      resource: String(event.detail?.escalation_level || "governance"),
+      user: String(event.actor || "system"),
+      result: normalizeAuditResultTag(String(event.result || "warning")),
+    }));
+  } catch (error) {
+    ElMessage.error(`governance.audit.recent failed: ${error}`);
+  }
+}
+
 async function refreshGovernanceStatus() {
   try {
     const resultRaw = await invokeRuntimeRpc("governance.status", "{}");
@@ -210,6 +242,10 @@ async function refreshGovernanceStatus() {
     entryAuthKeyConfigured.value = governance.config?.entry_auth_key_configured === true;
     entryRateLimitRpm.value = Number(governance.config?.entry_rate_limit_rpm || 0);
     entryRateLimitBurst.value = Number(governance.config?.entry_rate_limit_burst || 0);
+    dynamicRulesCount.value =
+      Number(governance.dynamic_rules?.red_line_count || 0) +
+      Number(governance.dynamic_rules?.stage_requirement_count || 0) +
+      Number(governance.dynamic_rules?.quality_compass_count || 0);
 
     const puaFailed = Number(governance.violations?.pua_recent_failed || 0);
     const breakerOpen = Number(governance.violations?.breaker_open_count || 0);
@@ -316,29 +352,18 @@ async function refreshGovernanceStatus() {
     }
     risks.splice(0, risks.length, ...nextRisks);
 
-    auditLogs.value = [
-      {
-        timestamp: new Date().toLocaleString(),
-        action: "governance.status",
-        resource: rulesVersion.value,
-        user: "system",
-        result: runtimeHealthy ? "success" : "warning",
-      },
-      {
-        timestamp: new Date().toLocaleString(),
-        action: "pua.summary",
-        resource: `failed=${puaFailed}`,
-        user: "system",
-        result: puaFailed === 0 ? "success" : "warning",
-      },
-      {
-        timestamp: new Date().toLocaleString(),
-        action: "config.warnings",
-        resource: `count=${warningCount}`,
-        user: "system",
-        result: warningCount === 0 ? "success" : "warning",
-      },
-    ];
+    await refreshGovernanceAuditRecent(20);
+    if (auditLogs.value.length === 0) {
+      auditLogs.value = [
+        {
+          timestamp: new Date().toLocaleString(),
+          action: "governance.status",
+          resource: rulesVersion.value,
+          user: "system",
+          result: runtimeHealthy ? "success" : "danger",
+        },
+      ];
+    }
   } catch (error) {
     ElMessage.error(`governance.status failed: ${error}`);
   }
@@ -347,6 +372,7 @@ async function refreshGovernanceStatus() {
 async function auditSensitiveFields() {
   ElMessage.info(t("security.auditRunning"));
   await refreshGovernanceStatus();
+  await refreshGovernanceAuditRecent(50);
   ElMessage.success(t("security.auditComplete"));
 }
 

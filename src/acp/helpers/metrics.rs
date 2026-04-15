@@ -179,6 +179,8 @@ pub struct MetricsSnapshot {
     pub agent_failures_total: u64,
     /// Agent timeout failures total
     pub agent_timeout_failures_total: u64,
+    /// Local runtime probe timeout total
+    pub runtime_probe_timeout_total: u64,
     /// Agent panic failures total
     pub agent_panic_failures_total: u64,
     /// Agent other failures total
@@ -313,6 +315,13 @@ pub fn build_prometheus_metrics(
         "counter",
         "Total cache hits served",
         snapshot.cache_hit_total,
+    );
+    push_scalar_metric(
+        &mut lines,
+        "acp_runtime_probe_timeout_total",
+        "counter",
+        "Total local runtime probe timeouts during agent readiness checks",
+        snapshot.runtime_probe_timeout_total,
     );
     push_scalar_metric(
         &mut lines,

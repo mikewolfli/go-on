@@ -190,6 +190,13 @@ echo "=== 步骤5ac: 运行ACP Prelude Metrics Unit Suite主链测试 ==="
 cargo test acp::prelude::tests:: -- --nocapture
 echo "✅ ACP Prelude Metrics Unit Suite主链测试通过"
 
+# 5ac-1 ACP Timeout Model Unit Suite主链测试
+echo "=== 步骤5ac-1: 运行ACP Timeout Model Unit Suite主链测试 ==="
+cargo test run_with_optional_timeout_returns_timeout_error -- --nocapture
+cargo test probe_agent_runtime_readiness_accepts_async_local_listener -- --nocapture
+cargo test runtime_metrics_tracks_agent_and_probe_timeouts -- --nocapture
+echo "✅ ACP Timeout Model Unit Suite主链测试通过"
+
 # 5ad Orchestration Skill Registry Unit Suite主链测试
 echo "=== 步骤5ad: 运行Orchestration Skill Registry Unit Suite主链测试 ==="
 cargo test orchestration::skill::tests:: -- --nocapture
@@ -584,6 +591,110 @@ cargo test classify_request_error_kind_detects_pua_violation -- --nocapture
 cargo test classify_request_error_kind_detects_budget_exceeded -- --nocapture
 cargo test classify_request_error_kind_detects_sandbox_blocked -- --nocapture
 echo "✅ BLUE14 AGENT4 tf!/anyhow 错误统一溯源主链测试通过"
+
+# 6y BLUE15 P1-4 并发锁模型与毒化恢复主链测试
+echo "=== 步骤6y: 运行BLUE15 P1-4 并发锁模型与毒化恢复主链测试 ==="
+cargo test acp_lock_monitor_recovers_poisoned_mutex_and_records_stats -- --nocapture
+cargo test summarize_lock_health_marks_poisoned_components_warn -- --nocapture
+echo "✅ BLUE15 P1-4 并发锁模型与毒化恢复主链测试通过"
+
+# 6z BLUE15 P2-3 超时模型统一与线程开销收敛主链测试
+echo "=== 步骤6z: 运行BLUE15 P2-3 超时模型统一与线程开销收敛主链测试 ==="
+cargo test run_with_optional_timeout_returns_timeout_error -- --nocapture
+cargo test probe_agent_runtime_readiness_accepts_async_local_listener -- --nocapture
+cargo test runtime_metrics_tracks_agent_and_probe_timeouts -- --nocapture
+echo "✅ BLUE15 P2-3 超时模型统一与线程开销收敛主链测试通过"
+
+# 6aa BLUE15 P3-1 覆盖率与基准测试体系优化主链测试
+echo "=== 步骤6aa: 运行BLUE15 P3-1 覆盖率与基准测试体系优化主链测试 ==="
+cargo test run_scenario_file_executes_quality_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+if cargo --list | grep -q "^    tarpaulin$"; then
+    cargo tarpaulin --out Stdout --fail-under 70
+else
+    echo "cargo-tarpaulin 未安装，跳过可选覆盖率门禁"
+fi
+echo "✅ BLUE15 P3-1 覆盖率与基准测试体系优化主链测试通过"
+
+# 6ab BLUE15 P1-1 模型选择增强（探索-利用平衡）主链测试
+echo "=== 步骤6ab: 运行BLUE15 P1-1 模型选择增强（探索-利用平衡）主链测试 ==="
+cargo test test_rank_candidates_uses_model_level_ucb_scores -- --nocapture
+cargo test test_snapshot_contains_sorted_ucb_scores -- --nocapture
+cargo test run_scenario_file_executes_model_selector_benchmark_requests -- --nocapture
+echo "✅ BLUE15 P1-1 模型选择增强（探索-利用平衡）主链测试通过"
+
+# 6ac BLUE15 P1-2 学习数据持久化与回放主链测试
+echo "=== 步骤6ac: 运行BLUE15 P1-2 学习数据持久化与回放主链测试 ==="
+cargo test run_scenario_file_executes_learning_replay_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 P1-2 学习数据持久化与回放主链测试通过"
+
+# 6ad BLUE15 P1-3 PUA 动态规则与审计可视化主链测试
+echo "=== 步骤6ad: 运行BLUE15 P1-3 PUA 动态规则与审计可视化主链测试 ==="
+cargo test run_scenario_file_executes_governance_dynamic_rules_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 P1-3 PUA 动态规则与审计可视化主链测试通过"
+
+# 6ae BLUE15 P2-1 故障恢复与降级（断路器）主链测试
+echo "=== 步骤6ae: 运行BLUE15 P2-1 故障恢复与降级（断路器）主链测试 ==="
+cargo test optimization::failure_prevention::tests::test_recover_resets_unhealthy_service_to_healthy -- --nocapture
+cargo test run_scenario_file_executes_breaker_recovery_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 P2-1 故障恢复与降级（断路器）主链测试通过"
+
+# 6af BLUE15 P2-2 可观测性完善（追踪覆盖率与告警）主链测试
+echo "=== 步骤6af: 运行BLUE15 P2-2 可观测性完善（追踪覆盖率与告警）主链测试 ==="
+cargo test run_scenario_file_executes_observability_alerts_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 P2-2 可观测性完善（追踪覆盖率与告警）主链测试通过"
+
+# 6ag BLUE15 P0-1 生产化安全基线（鉴权、限流、反向代理、TLS）主链测试
+echo "=== 步骤6ag: 运行BLUE15 P0-1 生产化安全基线（鉴权、限流、反向代理、TLS）主链测试 ==="
+cargo test run_scenario_file_executes_security_baseline_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 P0-1 生产化安全基线（鉴权、限流、反向代理、TLS）主链测试通过"
+
+# 6ah BLUE15 X5 Harness 评测基座与回归挑战集主链测试
+echo "=== 步骤6ah: 运行BLUE15 X5 Harness 评测基座与回归挑战集主链测试 ==="
+cargo test run_scenario_file_executes_harness_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 X5 Harness 评测基座与回归挑战集主链测试通过"
+
+# 6ai BLUE15 X1 自学习闭环质量门禁主链测试
+echo "=== 步骤6ai: 运行BLUE15 X1 自学习闭环质量门禁主链测试 ==="
+cargo test run_scenario_file_executes_learning_loop_guardrail_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 X1 自学习闭环质量门禁主链测试通过"
+
+# 6aj BLUE15 X2 知识萃取分层与去噪主链测试
+echo "=== 步骤6aj: 运行BLUE15 X2 知识萃取分层与去噪主链测试 ==="
+cargo test run_scenario_file_executes_knowledge_distillation_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 X2 知识萃取分层与去噪主链测试通过"
+
+# 6ak BLUE15 X3 强化学习奖励对齐与离线评估主链测试
+echo "=== 步骤6ak: 运行BLUE15 X3 强化学习奖励对齐与离线评估主链测试 ==="
+cargo test run_scenario_file_executes_rl_alignment_offline_eval_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 X3 强化学习奖励对齐与离线评估主链测试通过"
+
+# 6al BLUE15 X4 Hardness 分级路由与预算编排主链测试
+echo "=== 步骤6al: 运行BLUE15 X4 Hardness 分级路由与预算编排主链测试 ==="
+cargo test run_scenario_file_executes_hardness_routing_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 X4 Hardness 分级路由与预算编排主链测试通过"
+
+# 6am BLUE15 X6 Token 成本压缩与 Cost 治理主链测试
+echo "=== 步骤6am: 运行BLUE15 X6 Token 成本压缩与 Cost 治理主链测试 ==="
+cargo test run_scenario_file_executes_token_cost_governance_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 X6 Token 成本压缩与 Cost 治理主链测试通过"
+
+# 6an BLUE15 X7 配置基线收敛与一次性清理主链测试
+echo "=== 步骤6an: 运行BLUE15 X7 配置基线收敛与一次性清理主链测试 ==="
+cargo test run_scenario_file_executes_config_baseline_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 X7 配置基线收敛与一次性清理主链测试通过"
 
 # 5.2 GUI 契约烟测
 echo "=== 步骤5.2: 运行GUI契约烟测 ==="

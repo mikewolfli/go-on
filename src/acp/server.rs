@@ -27,8 +27,9 @@ use crate::reinforcement::ArtifactLedger;
 use crate::vector::VectorStore;
 
 use super::prelude::{
-    CircuitBreakerRegistry, ConversationState, InflightLimiter, LifecycleState, MaintenanceTracker,
-    OnlineControllerState, PhaseRateLimiter, ReviewTimeoutPolicy,
+    with_acp_lock, AcpLockMonitor, CircuitBreakerRegistry, ConversationState, InflightLimiter,
+    LifecycleState, MaintenanceTracker, OnlineControllerState, PhaseRateLimiter,
+    ReviewTimeoutPolicy, ACP_LOCK_CIRCUIT_BREAKERS, ACP_LOCK_LIFECYCLE, ACP_LOCK_MAINTENANCE,
 };
 
 /// Main ACP server structure
@@ -58,6 +59,8 @@ pub struct AcpServer {
     pub config_path: Option<String>,
     /// Runtime metrics collection
     pub metrics: Arc<RuntimeMetrics>,
+    /// ACP lock monitoring and poison recovery telemetry
+    pub lock_monitor: Arc<AcpLockMonitor>,
     /// Online controller for adaptive strategy from live outcomes
     pub online_controller: Arc<StdMutex<OnlineControllerState>>,
     /// Circuit breaker registry for failure prevention
@@ -136,7 +139,7 @@ impl AcpServer {
 
     /// Get server status
     pub fn get_status(&self) -> crate::acp::prelude::ServerStatus {
-        use crate::acp::prelude::{LifecycleSnapshot, MetricsSnapshot, ServerStatus};
+        use crate::acp::prelude::{MetricsSnapshot, ServerStatus};
 
         let mut total_requests = self.metrics.total_requests();
         let mut successful_requests = self.metrics.successful_requests();
@@ -159,11 +162,12 @@ impl AcpServer {
             avg_request_duration_ms,
             active_requests: self.metrics.active_requests(),
             cache_hit_rate: 0.0,
-            circuit_breaker_open_count: self
-                .circuit_breakers
-                .lock()
-                .map(|guard| guard.open_count())
-                .unwrap_or(0),
+            circuit_breaker_open_count: with_acp_lock(
+                self.lock_monitor.as_ref(),
+                ACP_LOCK_CIRCUIT_BREAKERS,
+                self.circuit_breakers.as_ref(),
+                |guard| guard.open_count(),
+            ),
             memory_usage_bytes: 0,
             cpu_usage_percent: 0.0,
             ..MetricsSnapshot::default()
@@ -184,23 +188,26 @@ impl AcpServer {
         metrics.review_gate_invalid_response_total =
             runtime_snapshot.review_gate_invalid_response_total;
 
-        let lifecycle = self
-            .lifecycle_state
-            .lock()
-            .map(|guard| guard.snapshot())
-            .unwrap_or_else(|_| LifecycleSnapshot::default());
+        let lifecycle = with_acp_lock(
+            self.lock_monitor.as_ref(),
+            ACP_LOCK_LIFECYCLE,
+            self.lifecycle_state.as_ref(),
+            |guard| guard.snapshot(),
+        );
 
-        let circuit_breakers = self
-            .circuit_breakers
-            .lock()
-            .map(|guard| guard.snapshots())
-            .unwrap_or_default();
+        let circuit_breakers = with_acp_lock(
+            self.lock_monitor.as_ref(),
+            ACP_LOCK_CIRCUIT_BREAKERS,
+            self.circuit_breakers.as_ref(),
+            |guard| guard.snapshots(),
+        );
 
-        let maintenance = self
-            .maintenance_tracker
-            .lock()
-            .map(|guard| guard.snapshot())
-            .unwrap_or_default();
+        let maintenance = with_acp_lock(
+            self.lock_monitor.as_ref(),
+            ACP_LOCK_MAINTENANCE,
+            self.maintenance_tracker.as_ref(),
+            |guard| guard.snapshot(),
+        );
 
         ServerStatus {
             metrics,
@@ -213,25 +220,32 @@ impl AcpServer {
 
     /// Check if server is healthy
     pub fn is_healthy(&self) -> bool {
-        self.lifecycle_state
-            .lock()
-            .map(|guard| guard.is_healthy())
-            .unwrap_or(false)
+        with_acp_lock(
+            self.lock_monitor.as_ref(),
+            ACP_LOCK_LIFECYCLE,
+            self.lifecycle_state.as_ref(),
+            |guard| guard.is_healthy(),
+        )
     }
 
     /// Check if shutdown has been requested
     pub fn shutdown_requested(&self) -> bool {
-        self.lifecycle_state
-            .lock()
-            .map(|guard| guard.shutdown_requested())
-            .unwrap_or(false)
+        with_acp_lock(
+            self.lock_monitor.as_ref(),
+            ACP_LOCK_LIFECYCLE,
+            self.lifecycle_state.as_ref(),
+            |guard| guard.shutdown_requested(),
+        )
     }
 
     /// Begin shutdown process
     pub fn begin_shutdown(&self) {
-        if let Ok(mut guard) = self.lifecycle_state.lock() {
-            guard.begin_shutdown();
-        }
+        with_acp_lock(
+            self.lock_monitor.as_ref(),
+            ACP_LOCK_LIFECYCLE,
+            self.lifecycle_state.as_ref(),
+            |guard| guard.begin_shutdown(),
+        );
     }
 
     /// Get maintenance tracker reference
@@ -356,6 +370,7 @@ impl ServerBuilder {
         };
 
         let metrics = Arc::new(RuntimeMetrics::default());
+        let lock_monitor = Arc::new(AcpLockMonitor::default());
         let online_controller = Arc::new(StdMutex::new(OnlineControllerState::default()));
         let circuit_breakers = Arc::new(StdMutex::new(CircuitBreakerRegistry::default()));
         let maintenance_tracker = Arc::new(StdMutex::new(MaintenanceTracker::new()));
@@ -418,6 +433,7 @@ impl ServerBuilder {
             runtime_config: RuntimeConfig::default(),
             config_path: self.config_path,
             metrics,
+            lock_monitor,
             online_controller,
             circuit_breakers,
             maintenance_tracker,

@@ -61,6 +61,18 @@ class GoOnSettingsViewProvider {
                 case 'breakerStatus':
                     vscode.commands.executeCommand('go-on.breakerStatus');
                     break;
+                case 'breakerRecovery':
+                    vscode.commands.executeCommand('go-on.breakerRecovery');
+                    break;
+                case 'observabilityAlerts':
+                    vscode.commands.executeCommand('go-on.observabilityAlerts');
+                    break;
+                case 'securityBaseline':
+                    vscode.commands.executeCommand('go-on.securityBaseline');
+                    break;
+                case 'harnessStatus':
+                    vscode.commands.executeCommand('go-on.harnessStatus');
+                    break;
                 case 'clearVector':
                     vscode.commands.executeCommand('go-on.vectorClear');
                     break;
@@ -79,11 +91,29 @@ class GoOnSettingsViewProvider {
                 case 'learningSummary':
                     vscode.commands.executeCommand('go-on.learningSummary');
                     break;
+                case 'learningGuardrail':
+                    vscode.commands.executeCommand('go-on.learningGuardrail');
+                    break;
+                case 'learningReplay':
+                    vscode.commands.executeCommand('go-on.learningReplay');
+                    break;
+                case 'knowledgeDistill':
+                    vscode.commands.executeCommand('go-on.knowledgeDistill');
+                    break;
+                case 'rlAlignmentEval':
+                    vscode.commands.executeCommand('go-on.rlAlignmentEval');
+                    break;
                 case 'autotuneStatus':
                     vscode.commands.executeCommand('go-on.autotuneStatus');
                     break;
                 case 'governanceStatus':
                     vscode.commands.executeCommand('go-on.governanceStatus');
+                    break;
+                case 'governancePlanGet':
+                    vscode.commands.executeCommand('go-on.governancePlanGet');
+                    break;
+                case 'governanceAuditRecent':
+                    vscode.commands.executeCommand('go-on.governanceAuditRecent');
                     break;
                 case 'setLanguage':
                     await this._setLanguage(message.language);
@@ -644,7 +674,11 @@ class GoOnSettingsViewProvider {
                         <button class="action-button" id="stopGoOn">Stop Go-On</button>
                         <button class="action-button" id="healthCheck">Health Check</button>
                         <button class="action-button" id="healthProbes">Health Probes</button>
+                        <button class="action-button" id="observabilityAlerts">Observability Alerts</button>
+                        <button class="action-button" id="securityBaseline">Security Baseline</button>
+                        <button class="action-button" id="harnessStatus">Harness Status</button>
                         <button class="action-button" id="breakerStatus">Breaker Status</button>
+                        <button class="action-button" id="breakerRecovery">Breaker Recovery</button>
                         <button class="action-button danger" id="clearCache">Clear Cache</button>
                         <button class="action-button danger" id="clearVector">Clear Vector</button>
                         <button class="action-button" id="reloadConfig">Reload Config</button>
@@ -652,8 +686,14 @@ class GoOnSettingsViewProvider {
                         <button class="action-button" id="taskPlan">Task Plan</button>
                         <button class="action-button" id="taskExecute">Task Execute</button>
                         <button class="action-button" id="learningSummary">Learning Summary</button>
+                        <button class="action-button" id="learningGuardrail">Learning Guardrail</button>
+                        <button class="action-button" id="learningReplay">Learning Replay</button>
+                        <button class="action-button" id="knowledgeDistill">Knowledge Distill</button>
+                        <button class="action-button" id="rlAlignmentEval">RL Alignment Eval</button>
                         <button class="action-button" id="autotuneStatus">Autotune Status</button>
                         <button class="action-button" id="governanceStatus">Governance Status</button>
+                        <button class="action-button" id="governancePlanGet">Governance Plan</button>
+                        <button class="action-button" id="governanceAuditRecent">Governance Audit</button>
                     </div>
 
                     <div style="margin-top: 20px; padding: 10px; background: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--vscode-textBlockQuote-border);">

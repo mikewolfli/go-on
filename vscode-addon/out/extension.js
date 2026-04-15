@@ -956,7 +956,9 @@ function activate(context) {
             const liveness = probes?.liveness?.status ?? 'unknown';
             const readiness = probes?.readiness?.status ?? 'unknown';
             const summary = probes?.summary ?? {};
-            vscode.window.showInformationMessage(`health.probes: liveness=${liveness}, readiness=${readiness}, error=${Number(summary.error ?? 0)}, warn=${Number(summary.warn ?? 0)}`);
+            const locks = probes?.locks ?? {};
+            const timeouts = probes?.timeouts ?? {};
+            vscode.window.showInformationMessage(`health.probes: liveness=${liveness}, readiness=${readiness}, lock=${String(locks.status ?? 'unknown')}, poisoned=${Number(locks.poisoned_total ?? 0)}, slow=${Number(locks.slow_wait_total ?? 0)}, timeout=${String(timeouts.status ?? 'unknown')}, agent_timeout=${Number(timeouts.agent_request_total ?? 0)}, review_timeout=${Number(timeouts.review_gate_total ?? 0)}, probe_timeout=${Number(timeouts.runtime_probe_total ?? 0)}, error=${Number(summary.error ?? 0)}, warn=${Number(summary.warn ?? 0)}`);
         }
         catch (error) {
             vscode.window.showErrorMessage(`health.probes failed: ${error.message}`);
@@ -1155,6 +1157,81 @@ function activate(context) {
             vscode.window.showErrorMessage(`learning.summary failed: ${error.message}`);
         }
     });
+    let learningGuardrailRpcCommand = vscode.commands.registerCommand('go-on.learningGuardrail', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('learning.guardrail', { limit: 50 });
+            const guardrail = result?.guardrail ?? {};
+            const stats = guardrail?.stats ?? {};
+            const warnings = Array.isArray(guardrail?.warnings) ? guardrail.warnings.length : 0;
+            vscode.window.showInformationMessage(`learning.guardrail: status=${String(guardrail?.status ?? 'unknown')}, samples=${Number(stats?.records_total ?? 0)}, parseable=${(Number(stats?.parseable_ratio ?? 0) * 100).toFixed(1)}%, quality=${(Number(stats?.quality_ratio ?? 0) * 100).toFixed(1)}%, high_risk=${Number(stats?.high_risk_records ?? 0)}, warnings=${warnings}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`learning.guardrail failed: ${error.message}`);
+        }
+    });
+    let learningReplayRpcCommand = vscode.commands.registerCommand('go-on.learningReplay', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('learning.replay', { limit: 20 });
+            const replay = result?.replay ?? {};
+            const records = Array.isArray(replay?.records) ? replay.records.length : 0;
+            const workflow = Number(replay?.workflow_events ?? 0);
+            const pua = Number(replay?.pua_events ?? 0);
+            const hasBus = replay?.latest_learning_bus ? 'yes' : 'no';
+            vscode.window.showInformationMessage(`learning.replay: records=${records}, workflow=${workflow}, pua=${pua}, latest_bus=${hasBus}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`learning.replay failed: ${error.message}`);
+        }
+    });
+    let knowledgeDistillRpcCommand = vscode.commands.registerCommand('go-on.knowledgeDistill', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('knowledge.distill', {
+                limit: 20,
+                strategy_limit: 8,
+                apply_tombstone: true,
+            });
+            const distillation = result?.distillation ?? {};
+            const layers = distillation?.layers ?? {};
+            const evidence = layers?.evidence ?? {};
+            const summary = layers?.summary ?? {};
+            const strategy = layers?.strategy ?? {};
+            const conflicts = layers?.conflicts ?? {};
+            const tombstones = layers?.tombstones ?? {};
+            vscode.window.showInformationMessage(`knowledge.distill: evidence=${Number(evidence?.records_total ?? 0)}, summary=${Number(summary?.sampled_events ?? 0)}, strategy=${Number(strategy?.rules_total ?? 0)}, conflicts=${Number(conflicts?.count ?? 0)}, tombstones_added=${Number(tombstones?.added_count ?? 0)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`knowledge.distill failed: ${error.message}`);
+        }
+    });
+    let rlAlignmentEvalRpcCommand = vscode.commands.registerCommand('go-on.rlAlignmentEval', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('rl.alignment.offline_eval', { window: 120 });
+            const offlineEval = result?.offline_eval ?? {};
+            const decision = offlineEval?.decision ?? {};
+            const comparison = offlineEval?.comparison ?? {};
+            const drift = offlineEval?.drift ?? {};
+            vscode.window.showInformationMessage(`rl.alignment.offline_eval: samples=${Number(offlineEval?.samples_total ?? 0)}, uplift=${Number(comparison?.reward_uplift ?? 0).toFixed(4)}, pass=${Boolean(comparison?.passes)}, drift=${Number(drift?.absolute_diff ?? 0).toFixed(4)}, alert=${Boolean(drift?.alert)}, mode=${String(decision?.recommended_mode ?? 'conservative')}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`rl.alignment.offline_eval failed: ${error.message}`);
+        }
+    });
     let autotuneStatusRpcCommand = vscode.commands.registerCommand('go-on.autotuneStatus', async () => {
         if (!goOnManager.isRunning()) {
             vscode.window.showErrorMessage('Go-On is not running. Start it first.');
@@ -1166,6 +1243,24 @@ function activate(context) {
         }
         catch (error) {
             vscode.window.showErrorMessage(`autotune.status failed: ${error.message}`);
+        }
+    });
+    let selectorStatusRpcCommand = vscode.commands.registerCommand('go-on.selectorStatus', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('selector.status');
+            const mode = result?.mode ?? 'unknown';
+            const selector = result?.selector ?? {};
+            const topModel = Array.isArray(selector?.models) && selector.models.length > 0
+                ? selector.models[0]
+                : null;
+            vscode.window.showInformationMessage(`selector.status: mode=${mode}, exploration_bias=${Number(selector?.exploration_bias ?? 0).toFixed(2)}, tracked_models=${Number(selector?.tracked_models ?? 0)}, total_observations=${Number(selector?.total_observations ?? 0)}, top_model=${String(topModel?.model_id ?? '-')}, top_score=${Number(topModel?.ucb_score ?? 0).toFixed(3)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`selector.status failed: ${error.message}`);
         }
     });
     let governanceStatusRpcCommand = vscode.commands.registerCommand('go-on.governanceStatus', async () => {
@@ -1185,6 +1280,49 @@ function activate(context) {
         }
         catch (error) {
             vscode.window.showErrorMessage(`governance.status failed: ${error.message}`);
+        }
+    });
+    let governancePlanGetRpcCommand = vscode.commands.registerCommand('go-on.governancePlanGet', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('governance.plan.get');
+            const plan = result?.plan ?? {};
+            const escalationLevel = String(plan?.escalation_level ?? 'L1');
+            const redLines = Array.isArray(plan?.red_lines) ? plan.red_lines.length : 0;
+            const stageReq = Array.isArray(plan?.stage_requirements) ? plan.stage_requirements.length : 0;
+            const safeguards = Array.isArray(plan?.mandatory_safeguards) ? plan.mandatory_safeguards.length : 0;
+            vscode.window.showInformationMessage(`governance.plan.get: escalation=${escalationLevel}, red_lines=${redLines}, stage_requirements=${stageReq}, safeguards=${safeguards}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`governance.plan.get failed: ${error.message}`);
+        }
+    });
+    let governanceAuditRecentRpcCommand = vscode.commands.registerCommand('go-on.governanceAuditRecent', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        const limitText = await vscode.window.showInputBox({
+            prompt: 'Limit for governance.audit.recent',
+            placeHolder: '20',
+            value: '20'
+        });
+        if (limitText === undefined) {
+            return;
+        }
+        const limit = Number.parseInt(limitText, 10);
+        const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 200) : 20;
+        try {
+            const result = await goOnManager.sendRequest('governance.audit.recent', { limit: safeLimit });
+            const events = Array.isArray(result?.audit?.events) ? result.audit.events : [];
+            const latestAction = events.length > 0 ? String(events[events.length - 1]?.action ?? '-') : '-';
+            vscode.window.showInformationMessage(`governance.audit.recent: events=${events.length}, latest_action=${latestAction}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`governance.audit.recent failed: ${error.message}`);
         }
     });
     // New session command
@@ -1298,7 +1436,8 @@ function activate(context) {
         }
         try {
             const result = await goOnManager.sendRequest('metrics.get');
-            vscode.window.showInformationMessage(`metrics: ${JSON.stringify(result)}`);
+            const metrics = result;
+            vscode.window.showInformationMessage(`metrics: chat=${Number(metrics?.chat_requests_total ?? 0)}, failed=${Number(metrics?.failed_requests ?? 0)}, agent_timeout=${Number(metrics?.agent_timeout_failures_total ?? 0)}, review_timeout=${Number(metrics?.review_gate_timeout_total ?? 0)}, probe_timeout=${Number(metrics?.runtime_probe_timeout_total ?? 0)}`);
         }
         catch (error) {
             vscode.window.showErrorMessage(`metrics.get failed: ${error.message}`);
@@ -1330,10 +1469,56 @@ function activate(context) {
         }
         try {
             const result = await goOnManager.sendRequest('trace.metrics');
-            vscode.window.showInformationMessage(`trace.metrics: ${JSON.stringify(result)}`);
+            const trace = result;
+            const timeouts = trace?.timeouts ?? {};
+            vscode.window.showInformationMessage(`trace.metrics: buffered=${Number(trace?.buffered_events ?? 0)}, slow_top_n=${Array.isArray(trace?.slow_requests_top_n) ? trace.slow_requests_top_n.length : 0}, agent_timeout=${Number(timeouts?.agent_request_total ?? 0)}, review_timeout=${Number(timeouts?.review_gate_total ?? 0)}, probe_timeout=${Number(timeouts?.runtime_probe_total ?? 0)}`);
         }
         catch (error) {
             vscode.window.showErrorMessage(`trace.metrics failed: ${error.message}`);
+        }
+    });
+    let qualityBaselineRpcCommand = vscode.commands.registerCommand('go-on.qualityBaseline', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const healthResult = await goOnManager.sendRequest('runtime.health');
+            const metricsResult = await goOnManager.sendRequest('metrics.get');
+            const traceResult = await goOnManager.sendRequest('trace.metrics');
+            const lifecycle = healthResult?.lifecycle ?? {};
+            const metrics = metricsResult;
+            const trace = traceResult;
+            const timeouts = trace?.timeouts ?? {};
+            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            let scenarioCount = 0;
+            if (workspaceRoot) {
+                const requestsDir = path.join(workspaceRoot, 'requests');
+                if (fs.existsSync(requestsDir)) {
+                    scenarioCount = fs
+                        .readdirSync(requestsDir)
+                        .filter((name) => name.toLowerCase().endsWith('.ndjson')).length;
+                }
+            }
+            vscode.window.showInformationMessage(`quality.baseline: healthy=${Boolean(lifecycle?.is_healthy)}, total=${Number(metrics?.total_requests ?? 0)}, success=${Number(metrics?.successful_requests ?? 0)}, failed=${Number(metrics?.failed_requests ?? 0)}, avg_ms=${Number(metrics?.avg_request_duration_ms ?? 0).toFixed(1)}, buffered=${Number(trace?.buffered_events ?? 0)}, scenarios=${scenarioCount}, agent_timeout=${Number(timeouts?.agent_request_total ?? 0)}, review_timeout=${Number(timeouts?.review_gate_total ?? 0)}, probe_timeout=${Number(timeouts?.runtime_probe_total ?? 0)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`quality.baseline failed: ${error.message}`);
+        }
+    });
+    let harnessStatusRpcCommand = vscode.commands.registerCommand('go-on.harnessStatus', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('harness.status', { seed: 20260415 });
+            const harness = result?.harness ?? {};
+            const suites = harness?.suites ?? {};
+            vscode.window.showInformationMessage(`harness.status: total=${Number(harness?.scenario_total ?? 0)}, smoke=${Number(suites?.smoke?.count ?? 0)}, regression=${Number(suites?.regression?.count ?? 0)}, adversarial=${Number(suites?.adversarial?.count ?? 0)}, long_chain=${Number(suites?.long_chain?.count ?? 0)}, seed=${Number(harness?.fixed_seed ?? 0)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`harness.status failed: ${error.message}`);
         }
     });
     // trace.get — fetch recent trace events
@@ -1348,6 +1533,46 @@ function activate(context) {
         }
         catch (error) {
             vscode.window.showErrorMessage(`trace.get failed: ${error.message}`);
+        }
+    });
+    // observability.alerts — aggregated runtime alerts
+    let observabilityAlertsRpcCommand = vscode.commands.registerCommand('go-on.observabilityAlerts', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('observability.alerts', { limit: 20 });
+            const alerts = result?.alerts ?? {};
+            const critical = Number(alerts?.critical ?? 0);
+            const warn = Number(alerts?.warn ?? 0);
+            const info = Number(alerts?.info ?? 0);
+            const topCode = Array.isArray(alerts?.items) && alerts.items.length > 0
+                ? String(alerts.items[0]?.code ?? '-')
+                : '-';
+            vscode.window.showInformationMessage(`observability.alerts: critical=${critical}, warn=${warn}, info=${info}, top=${topCode}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`observability.alerts failed: ${error.message}`);
+        }
+    });
+    // security.baseline — production security readiness summary
+    let securityBaselineRpcCommand = vscode.commands.registerCommand('go-on.securityBaseline', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('security.baseline', {});
+            const baseline = result?.baseline ?? {};
+            const level = String(baseline?.level ?? 'unknown');
+            const ingress = String(baseline?.ingress_status ?? 'unknown');
+            const riskCount = Number(baseline?.risk_count ?? 0);
+            const strict = Boolean(baseline?.production_strict?.enabled ?? false);
+            vscode.window.showInformationMessage(`security.baseline: level=${level}, ingress=${ingress}, strict=${strict}, risks=${riskCount}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`security.baseline failed: ${error.message}`);
         }
     });
     // breaker.reset — reset circuit breaker for a specific agent
@@ -1369,6 +1594,30 @@ function activate(context) {
         }
         catch (error) {
             vscode.window.showErrorMessage(`breaker.reset failed: ${error.message}`);
+        }
+    });
+    // breaker.recovery — recover degraded services from failure prevention and circuit breakers
+    let breakerRecoveryRpcCommand = vscode.commands.registerCommand('go-on.breakerRecovery', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        const target = await vscode.window.showInputBox({
+            prompt: 'Optional agent name to recover (leave empty for all degraded services)',
+            placeHolder: 'e.g. copilot, deepseek, gemini'
+        });
+        if (target === undefined) {
+            return;
+        }
+        try {
+            const params = target.trim().length > 0 ? { agent: target.trim() } : {};
+            const result = await goOnManager.sendRequest('breaker.recovery', params);
+            const recoveredCount = Number(result?.recovered_count ?? 0);
+            const remaining = Number(result?.remaining_degraded_count ?? 0);
+            vscode.window.showInformationMessage(`breaker.recovery: recovered=${recoveredCount}, remaining_degraded=${remaining}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`breaker.recovery failed: ${error.message}`);
         }
     });
     // maintenance.gc — trigger in-process garbage collection
@@ -1485,7 +1734,7 @@ function activate(context) {
         }
     });
     // Runtime download/start is intentionally deferred until the Chat view is opened.
-    context.subscriptions.push(startCommand, stopCommand, sendRequestCommand, healthCheckCommand, healthProbesCommand, breakerStatusCommand, cacheClearCommand, vectorClearCommand, configReloadCommand, shutdownCommand, openChatCommand, closeChatCommand, openSettingsCommand, clearChatCommand, exportChatCommand, newSessionCommand, switchSessionCommand, createWorkflowCommand, runWorkflowCommand, showProcessFlowCommand, workflowExecuteRpcCommand, taskPlanRpcCommand, taskExecuteRpcCommand, learningSummaryRpcCommand, autotuneStatusRpcCommand, governanceStatusRpcCommand, refreshStatusMonitorCommand, keyringSetCommand, keyringGetCommand, keyringDeleteCommand, keyringListCommand, applyDefaultConfigCommand, updateWorkflowMappingCommand, updateRulesCommand, autotuneGetRpcCommand, autotuneResetRpcCommand, metricsGetRpcCommand, metricsResetRpcCommand, traceMetricsRpcCommand, traceGetRpcCommand, breakerResetRpcCommand, maintenanceGcRpcCommand, checkpointCreateRpcCommand, checkpointListRpcCommand, conversationRollbackRpcCommand, primarySecondarySummaryRpcCommand);
+    context.subscriptions.push(startCommand, stopCommand, sendRequestCommand, healthCheckCommand, healthProbesCommand, breakerStatusCommand, cacheClearCommand, vectorClearCommand, configReloadCommand, shutdownCommand, openChatCommand, closeChatCommand, openSettingsCommand, clearChatCommand, exportChatCommand, newSessionCommand, switchSessionCommand, createWorkflowCommand, runWorkflowCommand, showProcessFlowCommand, workflowExecuteRpcCommand, taskPlanRpcCommand, taskExecuteRpcCommand, learningSummaryRpcCommand, learningGuardrailRpcCommand, learningReplayRpcCommand, knowledgeDistillRpcCommand, rlAlignmentEvalRpcCommand, autotuneStatusRpcCommand, selectorStatusRpcCommand, governanceStatusRpcCommand, governancePlanGetRpcCommand, governanceAuditRecentRpcCommand, refreshStatusMonitorCommand, keyringSetCommand, keyringGetCommand, keyringDeleteCommand, keyringListCommand, applyDefaultConfigCommand, updateWorkflowMappingCommand, updateRulesCommand, autotuneGetRpcCommand, autotuneResetRpcCommand, metricsGetRpcCommand, metricsResetRpcCommand, traceMetricsRpcCommand, qualityBaselineRpcCommand, harnessStatusRpcCommand, traceGetRpcCommand, observabilityAlertsRpcCommand, securityBaselineRpcCommand, breakerResetRpcCommand, breakerRecoveryRpcCommand, maintenanceGcRpcCommand, checkpointCreateRpcCommand, checkpointListRpcCommand, conversationRollbackRpcCommand, primarySecondarySummaryRpcCommand);
     // Guarantee chat visibility even when the activity bar icon is hidden by layout settings.
     setTimeout(() => {
         void vscode.commands.executeCommand('go-on.openChat');

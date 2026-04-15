@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"client":{"name":"hardness-routing-benchmark","version":"1.0.0"},"capabilities":{},"protocolVersion":"2025-03-26"}}
+{"jsonrpc":"2.0","id":2,"method":"hardness.status","params":{"task":"Refactor execution path across multiple files with tool-assisted validation and rollback strategy","changed_files":["src/acp/impl/request.rs","vscode-addon/src/extension.ts","GUI/src/views/BackendOpsView.vue"],"tool_dependencies":["search_files","read_file","write_file"],"retry_count":2,"requires_failover":true,"dual_review_required":true}}
+{"jsonrpc":"2.0","id":3,"method":"task.execute","params":{"task":"Apply hardness-aware orchestration update for integration path","requirement_confirmed":true,"changed_files":["src/acp/impl/request.rs","tests/acp_runtime_rpc_integration.rs"],"tool_dependencies":["search_files","read_file"],"retry_count":1,"requires_failover":false}}
+{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}

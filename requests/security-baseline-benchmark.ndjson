@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"client":{"name":"security-baseline-benchmark","version":"1.0.0"},"capabilities":{},"protocolVersion":"2025-03-26"}}
+{"jsonrpc":"2.0","id":2,"method":"runtime.health","params":{}}
+{"jsonrpc":"2.0","id":3,"method":"security.baseline","params":{}}
+{"jsonrpc":"2.0","id":4,"method":"governance.status","params":{}}
+{"jsonrpc":"2.0","id":5,"method":"shutdown","params":{}}
