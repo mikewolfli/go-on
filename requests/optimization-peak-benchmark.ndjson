@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"client":"blue15-x11-optimization-peak","version":"1.0.0"}}
+{"jsonrpc":"2.0","id":2,"method":"optimization.peak","params":{"task":"BLUE15 one-shot optimization peak","freeze_mode":"strict"}}
+{"jsonrpc":"2.0","id":3,"method":"governance.status","params":{}}
+{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}

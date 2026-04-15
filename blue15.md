@@ -747,3 +747,88 @@ BLUE15 的实施方向应从“可上线”出发，而不是从“架构形态�
 1. “B15-X7 配置基线收敛与一次性清理”子目标完成率：100%。
 2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
 3. BLUE15 扩展清单完成率：约 64%（按 X1~X11 粗略计，已完成 7/11 个扩展大项：X5、X1、X2、X3、X4、X6、X7）。
+
+## 三十三、本轮实施回写（2026-04-15，续20）
+
+本轮目标：完成 B15-X8「错误码、重试语义与客户端契约统一（Error Contract Unification）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 将 `error.contract` 接入 ACP 方法白名单与主分发链路，并提供统一契约结构：`version + kinds + retry policy + compatibility`。
+2. backend 统一错误输出契约：通过 `send_error` 的数据增强逻辑补齐 `kind`、`retry`、`version` 等字段，确保参数错误/限流/上游错误/内部错误等类别语义稳定。
+3. backend 新增 `requests/error-contract-benchmark.ndjson` 场景（`initialize -> error.contract -> runtime.health -> shutdown`），覆盖契约查询与运行态主链联动。
+4. backend 集成测试新增 `run_scenario_file_executes_error_contract_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 19。
+5. GUI `BackendOpsView` 新增 `error.contract` 按钮，locale 同步新增 `backendOps.errorContract`（中英文），实现前端主链可见。
+6. vscode-addon 新增 `go-on.errorContract` 命令，并在 Settings 面板新增 `Error Contract` 按钮、消息分发与 command palette 清单注册。
+7. `test_ci.sh` 新增 6ao BLUE15 X8 主链门禁，覆盖错误契约场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-X8 错误码、重试语义与客户端契约统一”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：约 73%（按 X1~X11 粗略计，已完成 8/11 个扩展大项：X5、X1、X2、X3、X4、X6、X7、X8）。
+
+## 三十四、本轮实施回写（2026-04-15，续21）
+
+本轮目标：完成 B15-X9「依赖与构建可复现优化（Reproducible Build Pack）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增 `build.repro` RPC，并接入 ACP 方法白名单与主分发链路，统一输出可复现构建包摘要。
+2. backend `build.repro` 输出补齐构建可复现元数据：
+	- 锁文件与清单清册（`Cargo.lock`、`GUI/package-lock.json`、`vscode-addon/package-lock.json`、各端 `package.json` / `Cargo.toml`）；
+	- 版本/提交/构建参数（`package_version`、`git_commit`、`rustflags`、`cargo_build_target`、`cargo_profile`）；
+	- 发布产物校验清单（binary/frontend/addon 产物存在性 + `fnv1a64` 指纹）；
+	- 缺失必需项统计与状态判定（`reproducible_ready` / `reproducible_incomplete`）。
+3. backend 新增 `requests/build-repro-benchmark.ndjson` 场景（`initialize -> build.repro -> runtime.health -> shutdown`），覆盖可复现包查询与运行态主链联动。
+4. backend 集成测试新增 `run_scenario_file_executes_build_repro_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 20。
+5. GUI `BackendOpsView` 新增 `build.repro` 按钮，locale 同步新增 `backendOps.buildRepro`（中英文）。
+6. vscode-addon 新增 `go-on.buildRepro` 命令，并在 Settings 面板新增 `Build Repro` 按钮、消息分发与 command palette 清单注册。
+7. `test_ci.sh` 新增 6ap BLUE15 X9 主链门禁，覆盖构建可复现场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-X9 依赖与构建可复现优化”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：约 82%（按 X1~X11 粗略计，已完成 9/11 个扩展大项：X5、X1、X2、X3、X4、X6、X7、X8、X9）。
+
+## 三十五、本轮实施回写（2026-04-15，续22）
+
+本轮目标：完成 B15-X10「数据生命周期与存储治理（Data Lifecycle Governance）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增 `data.lifecycle` RPC，并接入 ACP 方法白名单与主分发链路。
+2. backend `data.lifecycle` 输出统一生命周期治理视图：
+	- `policy`：cache/vector/ledger 保留策略、清理频率、归档规则；
+	- `storage`：cache/vector/ledger 容量统计（字节、文件数、目录数、不可读项）与水位阈值（warn/critical）；
+	- `cleanup`：支持 `execute_gc` 参数触发一次维护周期并回传清理结果；
+	- `audit`：维护快照、回放序列与后续动作建议，满足可观测/可审计/可回放。
+3. backend 新增 `requests/data-lifecycle-benchmark.ndjson` 场景（`initialize -> data.lifecycle -> runtime.health -> shutdown`），覆盖生命周期治理与运行态主链联动。
+4. backend 集成测试新增 `run_scenario_file_executes_data_lifecycle_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 21。
+5. GUI `BackendOpsView` 新增 `data.lifecycle` 按钮，locale 同步新增 `backendOps.dataLifecycle`（中英文）。
+6. vscode-addon 新增 `go-on.dataLifecycle` 命令，并在 Settings 面板新增 `Data Lifecycle` 按钮、消息分发与 command palette 清单注册。
+7. `test_ci.sh` 新增 6aq BLUE15 X10 主链门禁，覆盖数据生命周期场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-X10 数据生命周期与存储治理”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：约 91%（按 X1~X11 粗略计，已完成 10/11 个扩展大项：X5、X1、X2、X3、X4、X6、X7、X8、X9、X10）。
+
+## 三十六、本轮实施回写（2026-04-15，续23）
+
+本轮目标：完成 B15-X11「总体一次优化到顶（One-Shot Optimization Peak）」并接入三端主链。
+
+已完成项（一个大项闭环）：
+1. backend 在 `src/acp/impl/request.rs` 新增 `optimization.peak` RPC，并接入 ACP 方法白名单与主分发链路。
+2. backend `optimization.peak` 输出联合峰值治理视图：
+	- `gates`：quality / cost / stability / security / reproducibility / governance 六维门禁；
+	- `overall_pass`：联合阈值是否通过；
+	- `frozen_scope`：X1~X10 冻结范围快照；
+	- `summary`：请求失败率、评审拒绝率、超时计数、breaker 与运行时健康摘要。
+3. backend 将 hardness 与 cost 治理结果接入 `optimization.peak` 输出，形成 X4/X6 与 X11 的一致语义闭环。
+4. backend 新增 `requests/optimization-peak-benchmark.ndjson` 场景（`initialize -> optimization.peak -> governance.status -> shutdown`）。
+5. backend 集成测试新增 `run_scenario_file_executes_optimization_peak_benchmark_requests`，并将 `ndjson_scenario_files_all_pass` 场景总数扩展到 22。
+6. GUI `BackendOpsView` 新增 `optimization.peak` 按钮，locale 同步新增 `backendOps.optimizationPeak`（中英文）。
+7. vscode-addon 新增 `go-on.optimizationPeak` 命令，并在 Settings 面板新增 `Optimization Peak` 按钮、消息分发与 command palette 清单注册。
+8. `test_ci.sh` 新增 6ar BLUE15 X11 主链门禁，覆盖优化峰值场景执行与全场景回归。
+
+本轮完成率：
+1. “B15-X11 总体一次优化到顶”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：100%（按 X1~X11 粗略计，已完成 11/11 个扩展大项：X5、X1、X2、X3、X4、X6、X7、X8、X9、X10、X11）。

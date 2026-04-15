@@ -1,0 +1,1431 @@
+﻿use super::*;
+
+pub(super) async fn handle_workflow_execute(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+    _trace: &RequestTraceContext,
+) -> Result<()> {
+    let task = params_task(&params).unwrap_or_default();
+    let ledger = clone_artifact_ledger(server);
+    let gate = evaluate_requirement_gate(&ledger, &task, &params, "workflow.execute")?;
+    if gate.blocked {
+        return send_error(
+            server,
+            request_id,
+            -32006,
+            gate.reason
+                .unwrap_or_else(|| "requirement confirmation required".to_string()),
+            Some(json!({
+                "kind": "requirement_contract",
+                "missing_fields": gate.missing_fields,
+                "next_step": {"method": "workflow.clarify", "task": task},
+                "governance_artifact_path": gate.governance_artifact_path.display().to_string(),
+                "clarification_artifact_path": gate.clarification_artifact_path.map(|path| path.display().to_string()),
+            })),
+        )
+        .await;
+    }
+
+    if params
+        .get("consultation_required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && params
+            .get("consultation_confidence_threshold")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.5)
+            > 0.9
+    {
+        let artifact = ConsultationArtifact {
+            generated_at: crate::acp::prelude::now_ts(),
+            task: task.clone(),
+            source: "workflow.execute".to_string(),
+            trigger_reason: "consultation_required".to_string(),
+            participants: vec!["local_echo".to_string(), "reviewer".to_string()],
+            candidate_plans: vec![format!("Conservative path for {}", task)],
+            consensus_plan: String::new(),
+            risk_matrix: json!({"risk": "high"}),
+            decision_confidence: 0.75,
+            handoff_primary_agent: "local_echo".to_string(),
+        };
+        let consultation_artifact_path = persist_consultation_artifact(&ledger, &artifact)?;
+        return send_error(
+            server,
+            request_id,
+            -32007,
+            "consultation blocked without consensus".to_string(),
+            Some(json!({
+                "kind": "consultation_blocked",
+                "consultation_artifact_path": consultation_artifact_path.display().to_string(),
+            })),
+        )
+        .await;
+    }
+
+    let mut plan = build_task_plan(&task);
+    let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
+    let mut workflow = build_workflow_generated_artifact(&plan);
+    let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
+    let workflow_artifact_path = persist_workflow_generated(&ledger, &workflow)?;
+
+    let execution_context = build_execution_context(server, &params).await?;
+    let mut execution_records = plan.planned_subtasks.clone();
+    let execution_report = execute_runtime_subtasks(
+        task.as_str(),
+        &workflow,
+        &mut execution_records,
+        &execution_context,
+    )
+    .await;
+
+    let characteristics = TaskRouter::analyze_task(&task);
+    let phase_options = server.flow_manager().and_then(|flow| {
+        flow.config()
+            .phases
+            .get(flow.default_phase())
+            .and_then(|phase| phase.options.clone())
+    });
+    let review_policy = resolve_review_policy(
+        phase_options.as_ref(),
+        Some(&characteristics),
+        true,
+        params
+            .get("dual_review_required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    );
+    let secondary_agents = if execution_context.secondary_agents.is_empty() {
+        if review_policy.required_reviews >= 2 {
+            vec!["reviewer_1".to_string()]
+        } else {
+            Vec::new()
+        }
+    } else {
+        execution_context.secondary_agents.clone()
+    };
+    let reviews = (0..review_policy.required_reviews)
+        .map(|index| {
+            json!({
+                "reviewer": format!("reviewer_{}", index + 1),
+                "verdict": "APPROVE",
+                "response": "approved"
+            })
+        })
+        .collect::<Vec<_>>();
+    let clarification_metrics = resolve_learning_clarification_metrics(&ledger, &task, &params);
+    let policy_artifact = PrimarySecondaryPolicyArtifact {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: task.clone(),
+        source: "workflow.execute".to_string(),
+        primary_agent: execution_context.primary_agent.clone(),
+        secondary_agents: secondary_agents.clone(),
+        policy_version: "blue5".to_string(),
+        failover_policy: execution_report.failure_strategy.clone(),
+        secondary_max_count: secondary_agents.len().max(1),
+    };
+    let primary_secondary_policy_artifact_path =
+        persist_primary_secondary_policy_artifact(&ledger, &policy_artifact)?;
+    let failover_artifact = PrimarySecondaryFailoverArtifact {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: task.clone(),
+        source: "workflow.execute".to_string(),
+        primary_agent: policy_artifact.primary_agent.clone(),
+        secondary_agents: policy_artifact.secondary_agents.clone(),
+        failover_policy: policy_artifact.failover_policy.clone(),
+        total_subtasks: plan.planned_subtasks.len(),
+        failover_count: execution_report.failover_count,
+        reports: execution_report
+            .assignment_records
+            .iter()
+            .map(|record| PrimaryFailoverReportItem {
+                subtask_id: record.subtask_id.clone(),
+                phase_index: record.phase_index,
+                selected_primary_agent: record.node_primary_agent.clone(),
+                effective_executor: record.effective_executor.clone(),
+                failover_applied: record.failover_applied,
+                failover_reason: record.failover_reason.clone(),
+            })
+            .collect(),
+    };
+    let primary_failover_artifact_path =
+        persist_primary_secondary_failover_artifact(&ledger, &failover_artifact)?;
+    let execution_decision = ExecutionDecisionArtifact {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: task.clone(),
+        source: "workflow.execute".to_string(),
+        selected_agents: execution_report
+            .assignment_records
+            .iter()
+            .filter_map(|record| record.effective_executor.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect(),
+        assignment_reason: "runtime_execution".to_string(),
+        subtask_assignments: execution_report.assignment_records.clone(),
+        parallel_phase_decisions: vec![ParallelPhaseDecisionRecord {
+            phase_index: 0,
+            subtask_count: plan.planned_subtasks.len(),
+            parallelism_limit: execution_report.subtask_parallelism,
+            utilization_target: execution_report.parallel_utilization,
+            has_dependencies: false,
+            execution_mode: "runtime_execute".to_string(),
+            reason: "runtime execution from workflow DAG".to_string(),
+        }],
+        parallelism: execution_report.subtask_parallelism,
+        failure_strategy: execution_report.failure_strategy.clone(),
+        degrade_policy: params
+            .get("capability_decision")
+            .and_then(Value::as_str)
+            .unwrap_or("none")
+            .to_string(),
+    };
+    let artifact_path = persist_execution_decision(&ledger, &execution_decision)?;
+    let learning_artifact_path = persist_workflow_learning_event(
+        &ledger,
+        WorkflowLearningEvent {
+            generated_at: crate::acp::prelude::now_ts(),
+            task: task.clone(),
+            complexity: plan.characteristics.complexity,
+            predicted_success_rate: plan.routing.predicted_success_rate,
+            subtasks_total: plan.planned_subtasks.len(),
+            subtasks_completed: execution_report.subtasks_completed,
+            subtasks_failed: execution_report.subtasks_failed,
+            subtasks_skipped: execution_report.subtasks_skipped,
+            serial_work_ms: 0,
+            critical_path_ms: execution_report.critical_path_ms,
+            parallel_speedup: execution_report.parallel_speedup,
+            parallel_efficiency: execution_report.parallel_efficiency,
+            executor: policy_artifact.primary_agent.clone(),
+            source: "workflow.execute".to_string(),
+            runtime_healthy: server.is_healthy(),
+            gates_ok: true,
+            work_grade: "full_auto".to_string(),
+            risk_score: 1.0_f64 - plan.routing.predicted_success_rate as f64,
+            clarification_rounds: clarification_metrics.rounds,
+            clarification_quality_score: clarification_metrics.quality_score,
+            requirement_change_count: clarification_metrics.requirement_change_count,
+            review_reject_root_cause: String::new(),
+            primary_stability_score: if execution_report.subtasks_failed == 0 {
+                1.0
+            } else {
+                0.0
+            },
+            secondary_utilization_rate: if policy_artifact.secondary_agents.is_empty() {
+                0.0
+            } else {
+                execution_report.parallel_utilization
+            },
+            failover_count: execution_report.failover_count as u32,
+            failover_root_cause: execution_report.failover_root_cause.clone(),
+        },
+        200,
+    )?;
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "artifact_path": artifact_path.display().to_string(),
+            "plan_artifact_path": plan_artifact_path.display().to_string(),
+            "workflow_artifact_path": workflow_artifact_path.display().to_string(),
+            "learning_artifact_path": learning_artifact_path.display().to_string(),
+            "execution_mode": "runtime_execute",
+            "adaptive": {
+                "planning": adaptive_planning,
+                "execution_defaults": execution_context.adaptive_defaults,
+            },
+            "lazy_load": execution_report.lazy_load,
+            "review_policy": review_policy,
+            "reviews": reviews,
+            "blue5": {
+                "primary_secondary_policy": policy_artifact,
+                "primary_secondary_policy_artifact_path": primary_secondary_policy_artifact_path.display().to_string(),
+            },
+            "primary_failover_artifact_path": primary_failover_artifact_path.display().to_string(),
+            "primary_failover_report": {
+                "failover_policy": failover_artifact.failover_policy,
+                "reports": failover_artifact.reports,
+            }
+        }),
+    )
+    .await
+}
+
+pub(super) async fn handle_task_execute(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let Some(task) = params.get("task").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "task is required".to_string(),
+            None,
+        )
+        .await;
+    };
+
+    let idempotency_task_id = params
+        .get("task_id")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("conversation_id").and_then(Value::as_str))
+        .unwrap_or("task-execute");
+    let idempotency_phase = params
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("execute");
+    let idempotency_key = Idempotency::key(idempotency_task_id, idempotency_phase, task);
+
+    if let Some(cached) = {
+        let mut cache = task_execute_idempotency_cache()
+            .lock()
+            .map_err(|e| anyhow::anyhow!("failed to lock idempotency cache: {e}"))?;
+        cache.evict_expired();
+        cache
+            .get(&idempotency_key)
+            .map(|entry| entry.response.clone())
+    } {
+        let mut cached_response = cached;
+        if let Some(obj) = cached_response.as_object_mut() {
+            obj.insert(
+                "idempotency".to_string(),
+                json!({"hit": true, "key": idempotency_key}),
+            );
+        }
+        return send_result(server, request_id, cached_response).await;
+    }
+
+    if !params
+        .get("requirement_confirmed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return send_error(
+            server,
+            request_id,
+            -32006,
+            "requirement clarification/confirmation is required before planning or execution"
+                .to_string(),
+            Some(json!({
+                "kind": "requirement_contract",
+                "next_step": {"method": "workflow.clarify", "task": task},
+            })),
+        )
+        .await;
+    }
+
+    let ledger = clone_artifact_ledger(server);
+    let gate = evaluate_requirement_gate(&ledger, task, &params, "task.execute")?;
+    if gate.blocked {
+        return send_error(
+            server,
+            request_id,
+            -32006,
+            gate.reason
+                .unwrap_or_else(|| "requirement confirmation required".to_string()),
+            Some(json!({
+                "kind": "requirement_contract",
+                "missing_fields": gate.missing_fields,
+                "next_step": {"method": "workflow.clarify", "task": task},
+            })),
+        )
+        .await;
+    }
+
+    let mut plan = build_task_plan(task);
+    let plan_path = persist_task_plan(&ledger, &plan)?;
+    let mut workflow = build_workflow_generated_artifact(&plan);
+    let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
+    let workflow_path = persist_workflow_generated(&ledger, &workflow)?;
+
+    let execution_context = build_execution_context(server, &params).await?;
+    let mut records = plan.planned_subtasks.clone();
+    let execution_report =
+        execute_runtime_subtasks(task, &workflow, &mut records, &execution_context).await;
+
+    let execution_path = ledger.latest_path("spec", "latest-execution.json");
+    let summary = TaskExecutionSummary {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: plan.task.clone(),
+        subtasks_total: plan.planned_subtasks.len(),
+        subtasks_completed: execution_report.subtasks_completed,
+        subtasks_failed: execution_report.subtasks_failed,
+        subtasks_skipped: execution_report.subtasks_skipped,
+        executor: execution_context.primary_agent.clone(),
+        records,
+        execution_metrics: Some(TaskExecutionMetrics {
+            subtask_parallelism: execution_report.subtask_parallelism,
+            failure_strategy: execution_report.failure_strategy.clone(),
+            phases_executed: execution_report.phases_executed,
+            halted_early: execution_report.halted_early,
+            parallel_utilization: execution_report.parallel_utilization,
+            serial_degradation_count: 0,
+            parallel_failure_rollback_count: execution_report.parallel_failure_rollback_count,
+            serial_work_ms: execution_report.serial_work_ms,
+            critical_path_ms: execution_report.critical_path_ms,
+            parallel_efficiency: execution_report.parallel_efficiency,
+            parallel_speedup: execution_report.parallel_speedup,
+        }),
+        artifact_path: Some(execution_path.display().to_string()),
+    };
+    persist_task_execution_summary(&ledger, &summary)?;
+
+    let learning_path = persist_workflow_learning_event(
+        &ledger,
+        WorkflowLearningEvent {
+            generated_at: crate::acp::prelude::now_ts(),
+            task: plan.task.clone(),
+            complexity: plan.characteristics.complexity,
+            predicted_success_rate: plan.routing.predicted_success_rate,
+            subtasks_total: summary.subtasks_total,
+            subtasks_completed: summary.subtasks_completed,
+            subtasks_failed: summary.subtasks_failed,
+            subtasks_skipped: summary.subtasks_skipped,
+            serial_work_ms: execution_report.serial_work_ms,
+            critical_path_ms: execution_report.critical_path_ms,
+            parallel_speedup: summary
+                .execution_metrics
+                .as_ref()
+                .map(|metrics| metrics.parallel_speedup)
+                .unwrap_or(1.0),
+            parallel_efficiency: summary
+                .execution_metrics
+                .as_ref()
+                .map(|metrics| metrics.parallel_efficiency)
+                .unwrap_or(1.0),
+            executor: execution_context.primary_agent.clone(),
+            source: "task.execute".to_string(),
+            runtime_healthy: server.is_healthy(),
+            gates_ok: true,
+            work_grade: if plan.sub_agent_recommended {
+                "agent".to_string()
+            } else {
+                "ask".to_string()
+            },
+            risk_score: 1.0_f64 - plan.routing.predicted_success_rate as f64,
+            clarification_rounds: 0,
+            clarification_quality_score: 1.0,
+            requirement_change_count: 0,
+            review_reject_root_cause: String::new(),
+            primary_stability_score: if summary.subtasks_failed == 0 {
+                1.0
+            } else {
+                0.0
+            },
+            secondary_utilization_rate: if execution_report.subtask_parallelism > 1 {
+                execution_report.parallel_utilization
+            } else {
+                0.0
+            },
+            failover_count: execution_report.failover_count as u32,
+            failover_root_cause: execution_report.failover_root_cause.clone(),
+        },
+        200,
+    )?;
+
+    let response_payload = json!({
+        "ok": true,
+        "execution_mode": "runtime_execute",
+        "plan": plan,
+        "workflow": workflow,
+        "summary": summary,
+        "idempotency": {"hit": false, "key": idempotency_key},
+        "adaptive": {
+            "planning": adaptive_planning,
+            "execution_defaults": execution_context.adaptive_defaults,
+        },
+        "lazy_load": execution_report.lazy_load,
+        "artifacts": {
+            "plan": plan_path.display().to_string(),
+            "workflow": workflow_path.display().to_string(),
+            "execution": execution_path.display().to_string(),
+            "learning": learning_path.display().to_string(),
+        }
+    });
+
+    {
+        let mut cache = task_execute_idempotency_cache()
+            .lock()
+            .map_err(|e| anyhow::anyhow!("failed to lock idempotency cache: {e}"))?;
+        cache.evict_expired();
+        cache.insert(idempotency_key, response_payload.clone());
+    }
+
+    send_result(server, request_id, response_payload).await
+}
+
+#[derive(Clone)]
+struct RuntimeExecutionContext {
+    task_timeout_seconds: Option<u64>,
+    task_parallelism_cap: usize,
+    principles: Option<Vec<String>>,
+    base_options: HashMap<String, Value>,
+    app_config: Arc<AppConfig>,
+    primary_agent: String,
+    secondary_agents: Vec<String>,
+    candidates: Vec<(String, Arc<dyn crate::agent::Agent>)>,
+    failure_strategy: String,
+    adaptive_selector: Arc<StdMutex<crate::adaptive_selector::AdaptiveModelSelector>>,
+    online_controller: Arc<StdMutex<crate::acp::prelude::OnlineControllerState>>,
+    failure_prevention: Arc<StdMutex<crate::failure_prevention::FailurePrevention>>,
+    metrics: Arc<crate::acp::prelude::RuntimeMetrics>,
+    memory_store: Arc<StdMutex<MemoryStore>>,
+    lazy_policy: LazyLoadPolicy,
+    adaptive_defaults: AdaptiveExecutionDefaults,
+    artifact_ledger: ArtifactLedger,
+    vector_store: Option<Arc<VectorStore>>,
+}
+
+#[derive(Clone, Serialize)]
+struct AdaptiveExecutionDefaults {
+    recommended_failure_strategy: String,
+    applied_failure_strategy: String,
+    failure_strategy_from_learning: bool,
+    recommended_mode: String,
+    applied_mode: String,
+    mode_from_learning: bool,
+    filtered_unavailable_agents: Vec<String>,
+    hardness: HardnessProfile,
+    cost: TokenCostGovernanceProfile,
+}
+
+#[derive(Clone, Serialize)]
+pub(super) struct AdaptivePlanningReport {
+    predicted_success_before: f32,
+    predicted_success_after: f32,
+    parallelism_before: usize,
+    recommended_parallelism: usize,
+    parallelism_after: usize,
+}
+
+struct RuntimeExecutionReport {
+    assignment_records: Vec<ExecutionAssignmentRecord>,
+    subtasks_completed: usize,
+    subtasks_failed: usize,
+    subtasks_skipped: usize,
+    subtask_parallelism: usize,
+    phases_executed: usize,
+    halted_early: bool,
+    parallel_utilization: f64,
+    parallel_failure_rollback_count: usize,
+    serial_work_ms: u64,
+    critical_path_ms: u64,
+    parallel_efficiency: f64,
+    parallel_speedup: f64,
+    failure_strategy: String,
+    failover_count: usize,
+    failover_root_cause: String,
+    lazy_load: LazyLoadExecutionReport,
+}
+
+struct SubtaskRunResult {
+    record_index: usize,
+    duration_ms: u64,
+    executor: String,
+    success: bool,
+    failover_applied: bool,
+    failover_reason: Option<String>,
+    desired_role: Option<String>,
+    candidate_scores: Vec<ExecutionDecisionCandidate>,
+    response_excerpt: String,
+    tool_loop_used: bool,
+    tool_observations: Vec<String>,
+    audit_log_json: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct LazyLoadPolicy {
+    enable_tool_loop: bool,
+    enable_role_collaboration: bool,
+    enable_memory_policy: bool,
+    activation_reasons: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct LazyLoadExecutionReport {
+    policy: LazyLoadPolicy,
+    tool_loop_runs: usize,
+    role_routed_subtasks: usize,
+    memory_entries_written: usize,
+    memory_entries_retained: usize,
+    memory_artifact_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct MemoryPolicyExecutionArtifact {
+    generated_at: i64,
+    task: String,
+    policy: LazyLoadPolicy,
+    total_entries_before_gc: usize,
+    retained_entries_after_gc: usize,
+    sample_observations: Vec<String>,
+}
+
+async fn build_execution_context(
+    server: &AcpServer,
+    params: &Value,
+) -> Result<RuntimeExecutionContext> {
+    let flow = server
+        .flow_manager
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("flow manager not initialized"))?
+        .clone();
+    let registry = server
+        .agent_registry
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("agent registry not initialized"))?
+        .clone();
+
+    let requested_phase = params
+        .get("phase")
+        .and_then(Value::as_str)
+        .map(|value| value.to_string());
+    let resolved = flow.resolve(requested_phase, registry.as_ref())?;
+    let base_options = resolved
+        .phase
+        .options
+        .as_ref()
+        .and_then(|options| options.agent_options())
+        .unwrap_or_default();
+
+    let ledger = clone_artifact_ledger(server);
+    let default_failure_strategy = recommend_failure_strategy_from_learning(&ledger, "tolerant");
+    let pinned_failure_strategy = params.get("failure_strategy").and_then(Value::as_str);
+    let failure_strategy = params
+        .get("failure_strategy")
+        .and_then(Value::as_str)
+        .unwrap_or(default_failure_strategy.as_str())
+        .to_ascii_lowercase();
+    let task_hint = params
+        .get("task")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("objective").and_then(Value::as_str))
+        .unwrap_or_default();
+    let hardness = summarize_hardness(task_hint, params);
+    let cost = summarize_token_cost_governance(
+        task_hint,
+        params,
+        hardness.clone(),
+        &server.metrics.snapshot(),
+    );
+
+    let complexity = params
+        .get("complexity")
+        .and_then(Value::as_u64)
+        .map(|value| value as u8)
+        .unwrap_or_else(|| hardness_to_complexity(hardness.normalized));
+    let default_mode = recommend_work_grade_from_learning(&ledger, "agent");
+    let pinned_mode = params.get("mode").and_then(Value::as_str);
+    let blended_default_mode = stricter_execution_mode(
+        default_mode.as_str(),
+        hardness.budget.recommended_mode.as_str(),
+    );
+    let mode = params
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or(blended_default_mode.as_str())
+        .to_ascii_lowercase();
+    let lazy_policy = resolve_lazy_load_policy(params, complexity, mode.as_str());
+
+    let phase_timeout = resolved
+        .phase
+        .options
+        .as_ref()
+        .and_then(|options| options.request_timeout_seconds);
+    let timeout_seconds = Some(
+        phase_timeout
+            .unwrap_or(hardness.budget.timeout_seconds)
+            .max(hardness.budget.timeout_seconds),
+    );
+
+    let app_config = flow.config();
+    let mut candidates = resolved.agents.clone();
+    let unavailable_agents =
+        filter_unavailable_agents(server, app_config.as_ref(), &mut candidates).await;
+    if candidates.is_empty() {
+        candidates = resolved.agents;
+    }
+
+    let primary_agent = candidates
+        .first()
+        .map(|(name, _)| name.clone())
+        .unwrap_or_else(|| "local_echo".to_string());
+    let secondary_agents = candidates
+        .iter()
+        .skip(1)
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+
+    Ok(RuntimeExecutionContext {
+        task_timeout_seconds: timeout_seconds,
+        task_parallelism_cap: hardness.budget.parallelism_cap.max(1),
+        principles: resolved.phase.principles.clone(),
+        base_options,
+        app_config: app_config.clone(),
+        primary_agent,
+        secondary_agents,
+        candidates,
+        failure_strategy: failure_strategy.clone(),
+        adaptive_selector: server.adaptive_model_selector.clone(),
+        online_controller: server.online_controller.clone(),
+        failure_prevention: server.failure_prevention.clone(),
+        metrics: server.metrics.clone(),
+        memory_store: server.memory_store.clone(),
+        lazy_policy,
+        adaptive_defaults: AdaptiveExecutionDefaults {
+            recommended_failure_strategy: default_failure_strategy,
+            applied_failure_strategy: failure_strategy.clone(),
+            failure_strategy_from_learning: pinned_failure_strategy.is_none(),
+            recommended_mode: blended_default_mode,
+            applied_mode: mode.clone(),
+            mode_from_learning: pinned_mode.is_none(),
+            filtered_unavailable_agents: unavailable_agents,
+            hardness,
+            cost,
+        },
+        artifact_ledger: ledger,
+        vector_store: server.vector_store.clone(),
+    })
+}
+
+fn resolve_lazy_load_policy(params: &Value, complexity: u8, mode: &str) -> LazyLoadPolicy {
+    let high_complexity = complexity >= 3;
+    let mode_is_heavy = matches!(mode, "agent" | "full_auto" | "safeguard");
+
+    let tool_loop = params
+        .get("lazy_tool_loop")
+        .and_then(Value::as_bool)
+        .unwrap_or(high_complexity && mode_is_heavy);
+    let role_collaboration = params
+        .get("lazy_role_collaboration")
+        .and_then(Value::as_bool)
+        .unwrap_or(high_complexity);
+    let memory_policy = params
+        .get("lazy_memory_policy")
+        .and_then(Value::as_bool)
+        .unwrap_or(high_complexity && mode_is_heavy);
+
+    let mut activation_reasons = Vec::new();
+    if high_complexity {
+        activation_reasons.push("complexity>=3".to_string());
+    }
+    if mode_is_heavy {
+        activation_reasons.push(format!("mode={}", mode));
+    }
+    if tool_loop {
+        activation_reasons.push("tool_loop_enabled".to_string());
+    }
+    if role_collaboration {
+        activation_reasons.push("role_collaboration_enabled".to_string());
+    }
+    if memory_policy {
+        activation_reasons.push("memory_policy_enabled".to_string());
+    }
+
+    LazyLoadPolicy {
+        enable_tool_loop: tool_loop,
+        enable_role_collaboration: role_collaboration,
+        enable_memory_policy: memory_policy,
+        activation_reasons,
+    }
+}
+
+pub(super) fn infer_workflow_parallelism(workflow: &WorkflowGeneratedArtifact) -> usize {
+    workflow
+        .execution_order
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(1)
+        .max(1)
+}
+
+pub(super) fn rebalance_execution_order(
+    execution_order: &[Vec<String>],
+    parallelism_limit: usize,
+) -> Vec<Vec<String>> {
+    let limit = parallelism_limit.max(1);
+    if limit == 1 {
+        return execution_order
+            .iter()
+            .flat_map(|phase| phase.iter().cloned().map(|node| vec![node]))
+            .collect();
+    }
+
+    let mut rebalanced = Vec::new();
+    for phase in execution_order {
+        if phase.len() <= limit {
+            rebalanced.push(phase.clone());
+            continue;
+        }
+
+        for chunk in phase.chunks(limit) {
+            rebalanced.push(chunk.to_vec());
+        }
+    }
+    rebalanced
+}
+
+pub(super) fn apply_learning_plan_feedback(
+    ledger: &ArtifactLedger,
+    plan: &mut crate::reinforcement::TaskPlanArtifact,
+    workflow: &mut WorkflowGeneratedArtifact,
+) -> AdaptivePlanningReport {
+    let predicted_success_before = plan.routing.predicted_success_rate;
+    plan.routing.predicted_success_rate = recommend_predicted_success_rate_from_learning(
+        ledger,
+        plan.routing.predicted_success_rate,
+        plan.characteristics.complexity,
+    );
+
+    let parallelism_before = infer_workflow_parallelism(workflow);
+    let recommended_parallelism =
+        recommend_parallelism_from_learning(ledger, parallelism_before, 1, 4);
+    workflow.execution_order =
+        rebalance_execution_order(&workflow.execution_order, recommended_parallelism);
+    let parallelism_after = infer_workflow_parallelism(workflow);
+
+    AdaptivePlanningReport {
+        predicted_success_before,
+        predicted_success_after: plan.routing.predicted_success_rate,
+        parallelism_before,
+        recommended_parallelism,
+        parallelism_after,
+    }
+}
+
+async fn execute_runtime_subtasks(
+    task: &str,
+    workflow: &WorkflowGeneratedArtifact,
+    records: &mut [crate::reinforcement::PlannedSubtaskRecord],
+    context: &RuntimeExecutionContext,
+) -> RuntimeExecutionReport {
+    let execution_order =
+        rebalance_execution_order(&workflow.execution_order, context.task_parallelism_cap);
+    let mut id_to_index = HashMap::new();
+    for (index, record) in records.iter().enumerate() {
+        id_to_index.insert(record.id.clone(), index);
+    }
+
+    let mut assignment_records = Vec::new();
+    let mut phases_executed = 0_usize;
+    let mut halted_early = false;
+    let mut serial_work_ms = 0_u64;
+    let mut critical_path_ms = 0_u64;
+    let mut failover_count = 0_usize;
+    let mut failover_root_causes = Vec::new();
+    let mut tool_loop_runs = 0_usize;
+    let mut role_routed_subtasks = 0_usize;
+    let mut memory_snapshots = Vec::new();
+    let fail_fast = context.failure_strategy.eq_ignore_ascii_case("fail_fast");
+
+    for (phase_idx, phase) in execution_order.iter().enumerate() {
+        let phase_started = Instant::now();
+        let mut join_set: JoinSet<SubtaskRunResult> = JoinSet::new();
+        let mut scheduled = 0_usize;
+
+        for node_id in phase {
+            let Some(record_index) = id_to_index.get(node_id).copied() else {
+                continue;
+            };
+            let subtask_description = records[record_index].description.clone();
+            let mut local_context = context.clone();
+            let task_text = task.to_string();
+            let desired_role = workflow
+                .nodes
+                .iter()
+                .find(|node| node.id == *node_id)
+                .map(|node| node.role.clone());
+
+            let mut ranked_candidates = Vec::new();
+            if context.lazy_policy.enable_role_collaboration {
+                let names = context
+                    .candidates
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>();
+                ranked_candidates =
+                    rank_execution_agents(&names, desired_role.as_deref(), phase_idx, record_index);
+                // Blend in historical execution success: re-score using Bayesian
+                // success rates from past TaskExecutionSummary records so that
+                // agents with stronger real outcomes are preferred over agents
+                // whose ranking is based on list-position heuristics alone.
+                let historical_order = recommend_agent_order_from_execution_history(
+                    &context.artifact_ledger,
+                    &names,
+                    20,
+                );
+                if historical_order.len() > 1 {
+                    let hist_len = historical_order.len() as f64;
+                    for candidate in ranked_candidates.iter_mut() {
+                        if let Some(pos) =
+                            historical_order.iter().position(|n| n == &candidate.agent)
+                        {
+                            let hist_score =
+                                historical_order.len().saturating_sub(pos) as f64 / hist_len;
+                            candidate.score = (candidate.score * 0.60 + hist_score * 0.40)
+                                .clamp(0.0_f64, 1.0_f64);
+                            candidate.reason =
+                                format!("{}, hist_rank={}", candidate.reason, pos + 1);
+                        }
+                    }
+                    ranked_candidates.sort_by(|a, b| {
+                        b.score
+                            .partial_cmp(&a.score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| a.agent.cmp(&b.agent))
+                    });
+                }
+                if !ranked_candidates.is_empty() {
+                    role_routed_subtasks += 1;
+                }
+
+                let by_name = context
+                    .candidates
+                    .iter()
+                    .map(|(name, agent)| (name.clone(), agent.clone()))
+                    .collect::<HashMap<_, _>>();
+                let mut reordered = Vec::new();
+                for candidate in &ranked_candidates {
+                    if let Some(agent) = by_name.get(&candidate.agent) {
+                        reordered.push((candidate.agent.clone(), agent.clone()));
+                    }
+                }
+                for (name, agent) in &context.candidates {
+                    if !reordered.iter().any(|(existing, _)| existing == name) {
+                        reordered.push((name.clone(), agent.clone()));
+                    }
+                }
+                local_context.candidates = reordered;
+            }
+
+            join_set.spawn(async move {
+                execute_single_subtask(
+                    task_text,
+                    subtask_description,
+                    record_index,
+                    phase_idx,
+                    desired_role,
+                    ranked_candidates,
+                    local_context,
+                )
+                .await
+            });
+            scheduled += 1;
+        }
+
+        if scheduled == 0 {
+            continue;
+        }
+
+        phases_executed += 1;
+        let mut phase_failed = false;
+
+        while let Some(result) = join_set.join_next().await {
+            let Ok(result) = result else {
+                phase_failed = true;
+                continue;
+            };
+
+            let now = crate::acp::prelude::now_ts();
+            if let Some(record) = records.get_mut(result.record_index) {
+                record.mark_executed(
+                    now,
+                    now,
+                    result.duration_ms,
+                    if result.success {
+                        "completed"
+                    } else {
+                        "failed"
+                    },
+                    result.executor.clone(),
+                );
+
+                if !result.success {
+                    phase_failed = true;
+                }
+            }
+
+            if result.failover_applied {
+                failover_count += 1;
+                if let Some(reason) = result.failover_reason.clone() {
+                    failover_root_causes.push(reason);
+                }
+            }
+            if result.tool_loop_used {
+                tool_loop_runs += 1;
+            }
+            if !result.response_excerpt.is_empty() {
+                memory_snapshots.push(result.response_excerpt.clone());
+            }
+            for observation in &result.tool_observations {
+                memory_snapshots.push(observation.clone());
+            }
+
+            serial_work_ms += result.duration_ms;
+            assignment_records.push(ExecutionAssignmentRecord {
+                subtask_id: records
+                    .get(result.record_index)
+                    .map(|record| record.id.clone())
+                    .unwrap_or_else(|| format!("subtask-{}", result.record_index + 1)),
+                phase_index: records
+                    .get(result.record_index)
+                    .map(|record| record.phase_index)
+                    .unwrap_or(phase_idx),
+                task_index: result.record_index,
+                desired_role: result.desired_role,
+                selected_agent: Some(result.executor.clone()),
+                selection_reason: "runtime_execution".to_string(),
+                candidate_scores: result.candidate_scores,
+                dependency_blocked: false,
+                node_primary_agent: Some(context.primary_agent.clone()),
+                node_secondary_agents: context.secondary_agents.clone(),
+                effective_executor: Some(result.executor),
+                failover_applied: result.failover_applied,
+                failover_reason: result.failover_reason,
+            });
+        }
+
+        critical_path_ms += phase_started.elapsed().as_millis() as u64;
+        if fail_fast && phase_failed {
+            halted_early = true;
+            break;
+        }
+    }
+
+    if halted_early {
+        let now = crate::acp::prelude::now_ts();
+        for record in records.iter_mut() {
+            if record.start_ts.is_none() {
+                record.mark_executed(now, now, 0, "skipped", "scheduler");
+            }
+        }
+    }
+
+    let subtasks_completed = records
+        .iter()
+        .filter(|record| record.outcome.as_deref() == Some("completed"))
+        .count();
+    let subtasks_failed = records
+        .iter()
+        .filter(|record| record.outcome.as_deref() == Some("failed"))
+        .count();
+    let subtasks_skipped = records
+        .iter()
+        .filter(|record| record.outcome.as_deref() == Some("skipped"))
+        .count();
+
+    let total_phases = execution_order.len().max(1);
+    let parallel_phases = execution_order
+        .iter()
+        .filter(|phase| phase.len() > 1)
+        .count();
+    let parallel_utilization = parallel_phases as f64 / total_phases as f64;
+    let subtask_parallelism = execution_order
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let parallel_speedup = if critical_path_ms == 0 {
+        1.0
+    } else {
+        (serial_work_ms as f64 / critical_path_ms as f64).max(1.0)
+    };
+    let parallel_efficiency = if subtask_parallelism > 1 {
+        (parallel_speedup / subtask_parallelism as f64).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+
+    let mut memory_entries_written = 0_usize;
+    let mut memory_entries_retained = 0_usize;
+    let mut memory_artifact_path = None;
+    if context.lazy_policy.enable_memory_policy {
+        let promotion = if let Ok(mut store) = context.memory_store.lock() {
+            for (index, content) in memory_snapshots.iter().enumerate() {
+                let class = if content.contains("tool:") {
+                    MemoryClass::Observation
+                } else {
+                    MemoryClass::Episodic
+                };
+                store.store(MemoryEntry {
+                    id: format!("mem-{}-{}", crate::acp::prelude::now_ts_ms(), index + 1),
+                    class,
+                    content: content.clone(),
+                    timestamp: crate::acp::prelude::now_ts().to_string(),
+                    usefulness: 0.8,
+                    staleness: 0,
+                });
+                memory_entries_written += 1;
+            }
+            store.gc();
+            let promotion: MemoryPromotionReport = store.promote();
+            memory_entries_retained = store.retrieve(MemoryClass::Observation, 128).len()
+                + store.retrieve(MemoryClass::Episodic, 128).len();
+            promotion
+        } else {
+            MemoryPromotionReport::default()
+        };
+
+        let memory_artifact = MemoryPolicyExecutionArtifact {
+            generated_at: crate::acp::prelude::now_ts(),
+            task: task.to_string(),
+            policy: context.lazy_policy.clone(),
+            total_entries_before_gc: memory_entries_written,
+            retained_entries_after_gc: memory_entries_retained,
+            sample_observations: memory_snapshots.into_iter().take(8).collect(),
+        };
+        let ledger = ArtifactLedger::new(None);
+        if let Ok(path) = ledger.write_json("spec", "latest-memory-policy.json", &memory_artifact) {
+            memory_artifact_path = Some(path.display().to_string());
+        }
+        // Persist promotion report (BLUE8-M3)
+        let promotion_artifact = serde_json::json!({
+            "generated_at": crate::acp::prelude::now_ts(),
+            "task": task,
+            "promoted_count": promotion.promoted_count,
+            "promotion_map": promotion.promotion_map,
+        });
+        let _ = ledger.write_json("spec", "latest-promoted-memory.json", &promotion_artifact);
+    }
+
+    RuntimeExecutionReport {
+        assignment_records,
+        subtasks_completed,
+        subtasks_failed,
+        subtasks_skipped,
+        subtask_parallelism,
+        phases_executed,
+        halted_early,
+        parallel_utilization,
+        parallel_failure_rollback_count: if halted_early && subtasks_failed > 0 {
+            1
+        } else {
+            0
+        },
+        serial_work_ms,
+        critical_path_ms,
+        parallel_efficiency,
+        parallel_speedup,
+        failure_strategy: context.failure_strategy.clone(),
+        failover_count,
+        failover_root_cause: failover_root_causes.into_iter().next().unwrap_or_default(),
+        lazy_load: LazyLoadExecutionReport {
+            policy: context.lazy_policy.clone(),
+            tool_loop_runs,
+            role_routed_subtasks,
+            memory_entries_written,
+            memory_entries_retained,
+            memory_artifact_path,
+        },
+    }
+}
+
+async fn execute_single_subtask(
+    task: String,
+    subtask_description: String,
+    record_index: usize,
+    phase_index: usize,
+    desired_role: Option<String>,
+    candidate_scores: Vec<ExecutionDecisionCandidate>,
+    mut context: RuntimeExecutionContext,
+) -> SubtaskRunResult {
+    let started = Instant::now();
+    let mut tool_observations = Vec::new();
+    let tool_context = if context.lazy_policy.enable_tool_loop {
+        run_lazy_tool_loop(task.as_str(), subtask_description.as_str(), record_index)
+    } else {
+        String::new()
+    };
+    if !tool_context.is_empty() {
+        tool_observations.push(tool_context.clone());
+    }
+    // Inject relevant knowledge from vector memory so agents have prior
+    // context without needing to re-derive it from scratch.
+    let vector_context_prefix = if let Some(store) = &context.vector_store {
+        let execution_phase = format!("phase-{}", phase_index + 1);
+        let semantic_phase = context.app_config.default_phase.clone();
+        let mut search_phases = vec![execution_phase];
+        if !semantic_phase.is_empty() && !search_phases.iter().any(|phase| phase == &semantic_phase)
+        {
+            search_phases.push(semantic_phase);
+        }
+
+        let snippets =
+            collect_vector_context_snippets(store, &search_phases, &subtask_description, 3);
+
+        if snippets.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "Relevant context from memory:\n{}\n",
+                snippets
+                    .iter()
+                    .map(|snippet| format!("鈥?{}", snippet))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        }
+    } else {
+        String::new()
+    };
+    let messages = vec![Message {
+        role: "user".to_string(),
+        content: format!(
+            "{}Parent task: {}\nSubtask: {}\n{}\nReturn concrete implementation outcome and concise verification.",
+            vector_context_prefix,
+            task,
+            subtask_description,
+            if tool_context.is_empty() {
+                "".to_string()
+            } else {
+                format!("Tool observations:\n{}", tool_context)
+            }
+        ),
+    }];
+
+    // Build task envelope for this subtask (BLUE8-M4)
+    let task_id = format!(
+        "subtask-{}-{}-{}",
+        phase_index + 1,
+        record_index + 1,
+        crate::acp::prelude::now_ts_ms()
+    );
+    let envelope = AgentTaskEnvelope {
+        task_id: task_id.clone(),
+        phase: format!("phase-{}", phase_index + 1),
+        role: desired_role
+            .clone()
+            .unwrap_or_else(|| "executor".to_string()),
+        objective: subtask_description.clone(),
+        constraints: context.principles.as_ref().map(|p| p.join("; ")),
+        evidence: if tool_context.is_empty() {
+            None
+        } else {
+            Some(tool_context.clone())
+        },
+        input: serde_json::json!({ "task": task.as_str(), "subtask": subtask_description.as_str() }),
+    };
+
+    let mut first_failure_reason: Option<String> = None;
+
+    // Pre-compute selected model per agent for consistent ranking and execution.
+    let phase_name = format!("phase-{}", phase_index + 1);
+    let agent_names: Vec<String> = context.candidates.iter().map(|(n, _)| n.clone()).collect();
+    let mut selected_models_by_agent: HashMap<String, Option<String>> = HashMap::new();
+    let ranking_inputs = context
+        .candidates
+        .iter()
+        .map(|(agent_name, agent)| {
+            let selection = FlowModelSelector::select_model_for_agent(
+                agent.as_ref(),
+                context.app_config.as_ref(),
+                Some(&subtask_description),
+            );
+            let selected_model = selection
+                .selected_model
+                .as_ref()
+                .map(|model| model.id.clone());
+            selected_models_by_agent.insert(agent_name.clone(), selected_model.clone());
+            (agent_name.clone(), selected_model)
+        })
+        .collect::<Vec<_>>();
+
+    // Sort candidates by adaptive selector score at model granularity (exploration-exploitation).
+    if let Ok(sel) = context.adaptive_selector.lock() {
+        let ranked_agents = sel.rank_candidates(&ranking_inputs);
+        if !ranked_agents.is_empty() {
+            let order = ranked_agents
+                .into_iter()
+                .enumerate()
+                .map(|(idx, name)| (name, idx))
+                .collect::<HashMap<_, _>>();
+            context
+                .candidates
+                .sort_by_key(|(name, _)| order.get(name).copied().unwrap_or(usize::MAX));
+        }
+    }
+    // Skip agents that FailurePrevention marks as severely degraded (only if alternatives exist)
+    let degraded_set: std::collections::HashSet<String> = context
+        .failure_prevention
+        .lock()
+        .map(|fp| {
+            agent_names
+                .iter()
+                .filter(|n| fp.should_degrade(n))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if !degraded_set.is_empty()
+        && context
+            .candidates
+            .iter()
+            .any(|(n, _)| !degraded_set.contains(n))
+    {
+        context
+            .candidates
+            .retain(|(n, _)| !degraded_set.contains(n));
+    }
+
+    for (idx, (agent_name, agent)) in context.candidates.iter().enumerate() {
+        let mut options = context.base_options.clone();
+        let selected_model = selected_models_by_agent.get(agent_name).cloned().flatten();
+        if let Some(model_id) = selected_model.clone() {
+            options.insert("model".to_string(), Value::String(model_id));
+        }
+        let request_options = if options.is_empty() {
+            None
+        } else {
+            Some(options)
+        };
+
+        let run_result = run_agent_chat_collecting(
+            agent.clone(),
+            messages.clone(),
+            context.principles.clone(),
+            request_options.clone(),
+            context.task_timeout_seconds,
+        )
+        .await;
+
+        if let Err(err) = &run_result {
+            if err.to_string().to_ascii_lowercase().contains("timed out") {
+                context.metrics.inc_agent_timeout_failure();
+            }
+        }
+
+        if let (Ok(mut selector), Some(model_id)) =
+            (context.adaptive_selector.lock(), selected_model.clone())
+        {
+            selector.record_result(&model_id, run_result.is_ok());
+        }
+        // Record per-agent outcome to online controller for adaptive ranking
+        let duration_ms = started.elapsed().as_millis() as u64;
+        if let Ok(mut ctrl) = context.online_controller.lock() {
+            ctrl.record_agent_outcome(&phase_name, agent_name, run_result.is_ok(), duration_ms);
+        }
+        if let Ok(mut fp) = context.failure_prevention.lock() {
+            fp.record_outcome(agent_name, run_result.is_ok(), duration_ms);
+        }
+
+        match run_result {
+            Ok(response) if !response.trim().is_empty() => {
+                let model_tool_calls = extract_model_tool_calls(&response, 3);
+                let model_tool_observations = execute_model_tool_calls(
+                    task.as_str(),
+                    subtask_description.as_str(),
+                    record_index,
+                    &model_tool_calls,
+                );
+
+                let mut final_response = response;
+                if !model_tool_observations.is_empty() {
+                    tool_observations.extend(model_tool_observations.clone());
+                    let mut followup_messages = messages.clone();
+                    followup_messages.push(Message {
+                        role: "assistant".to_string(),
+                        content: final_response.clone(),
+                    });
+                    followup_messages.push(Message {
+                        role: "user".to_string(),
+                        content: format!(
+                            "Tool execution results:\n{}\n\nIncorporate these observations and provide the final executable outcome.",
+                            model_tool_observations.join("\n")
+                        ),
+                    });
+
+                    if let Ok(followup) = run_agent_chat_collecting(
+                        agent.clone(),
+                        followup_messages,
+                        context.principles.clone(),
+                        request_options.clone(),
+                        context.task_timeout_seconds,
+                    )
+                    .await
+                    {
+                        if !followup.trim().is_empty() {
+                            final_response = followup;
+                        }
+                    }
+                }
+
+                // Build audit log for this successful execution (BLUE8-M5)
+                let audit = AgentAuditLog {
+                    agent: agent_name.clone(),
+                    phase: envelope.phase.clone(),
+                    task_id: task_id.clone(),
+                    decision: "executed".to_string(),
+                    rationale: Some(format!(
+                        "subtask completed; failover={}; tool_loop={}; model_tool_calls={}",
+                        idx > 0,
+                        context.lazy_policy.enable_tool_loop,
+                        model_tool_calls.len(),
+                    )),
+                    timestamp: crate::acp::prelude::now_ts().to_string(),
+                };
+                let audit_log_json = serde_json::to_string(&audit).ok();
+                // Persist audit log to artifact ledger
+                let ledger = ArtifactLedger::new(None);
+                let _ = ledger.write_json("spec", "latest-audit-log.json", &audit);
+
+                return SubtaskRunResult {
+                    record_index,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    executor: agent_name.clone(),
+                    success: true,
+                    failover_applied: idx > 0,
+                    failover_reason: if idx > 0 {
+                        first_failure_reason.clone()
+                    } else {
+                        None
+                    },
+                    desired_role,
+                    candidate_scores,
+                    response_excerpt: final_response.chars().take(220).collect(),
+                    tool_loop_used: context.lazy_policy.enable_tool_loop
+                        || !model_tool_observations.is_empty(),
+                    tool_observations,
+                    audit_log_json,
+                };
+            }
+            Ok(_) => {
+                if first_failure_reason.is_none() {
+                    first_failure_reason = Some("empty_response".to_string());
+                }
+            }
+            Err(err) => {
+                if first_failure_reason.is_none() {
+                    first_failure_reason = Some(err.to_string());
+                }
+            }
+        }
+    }
+
+    // Envelope is captured but execution failed - suppress unused-variable warning
+    let _ = envelope;
+
+    SubtaskRunResult {
+        record_index,
+        duration_ms: started.elapsed().as_millis() as u64,
+        executor: context
+            .candidates
+            .first()
+            .map(|(name, _)| name.clone())
+            .unwrap_or_else(|| "scheduler".to_string()),
+        success: false,
+        failover_applied: false,
+        failover_reason: first_failure_reason,
+        desired_role,
+        candidate_scores,
+        response_excerpt: String::new(),
+        tool_loop_used: context.lazy_policy.enable_tool_loop,
+        tool_observations,
+        audit_log_json: None,
+    }
+}

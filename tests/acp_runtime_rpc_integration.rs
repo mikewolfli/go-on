@@ -1388,12 +1388,168 @@ mod advanced {
     }
 
     #[test]
+    fn run_scenario_file_executes_error_contract_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/error-contract-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "error.contract");
+        assert_eq!(results[2].0["method"], "runtime.health");
+        assert_eq!(results[3].0["method"], "shutdown");
+
+        let contract = results[1]
+            .1
+            .as_ref()
+            .expect("error.contract should succeed");
+        assert!(
+            contract["result"].get("contract").is_some(),
+            "error.contract should return contract payload"
+        );
+        assert!(
+            contract["result"]["contract"].get("kinds").is_some(),
+            "error.contract should include contract kinds"
+        );
+        assert!(
+            contract["result"]["contract"].get("version").is_some(),
+            "error.contract should include contract version"
+        );
+
+        let health = results[2]
+            .1
+            .as_ref()
+            .expect("runtime.health should succeed");
+        assert!(
+            health["result"].get("lifecycle").is_some(),
+            "runtime.health should include lifecycle payload"
+        );
+    }
+
+    #[test]
+    fn run_scenario_file_executes_build_repro_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results = harness.run_scenario_file(Path::new("requests/build-repro-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "build.repro");
+        assert_eq!(results[2].0["method"], "runtime.health");
+        assert_eq!(results[3].0["method"], "shutdown");
+
+        let build_repro = results[1].1.as_ref().expect("build.repro should succeed");
+        assert!(
+            build_repro["result"].get("build").is_some(),
+            "build.repro should return build payload"
+        );
+        assert!(
+            build_repro["result"]["build"]
+                .get("dependency_locks")
+                .is_some(),
+            "build.repro should include dependency lock metadata"
+        );
+        assert!(
+            build_repro["result"]["build"]
+                .get("release_manifest")
+                .is_some(),
+            "build.repro should include release manifest metadata"
+        );
+    }
+
+    #[test]
+    fn run_scenario_file_executes_data_lifecycle_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/data-lifecycle-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "data.lifecycle");
+        assert_eq!(results[2].0["method"], "runtime.health");
+        assert_eq!(results[3].0["method"], "shutdown");
+
+        let lifecycle = results[1]
+            .1
+            .as_ref()
+            .expect("data.lifecycle should succeed");
+        assert!(
+            lifecycle["result"].get("lifecycle").is_some(),
+            "data.lifecycle should return lifecycle payload"
+        );
+        assert!(
+            lifecycle["result"]["lifecycle"].get("policy").is_some(),
+            "data.lifecycle should include lifecycle policy"
+        );
+        assert!(
+            lifecycle["result"]["lifecycle"]["storage"]
+                .get("waterline")
+                .is_some(),
+            "data.lifecycle should include storage waterline summary"
+        );
+    }
+
+    #[test]
+    fn run_scenario_file_executes_optimization_peak_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/optimization-peak-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "optimization.peak");
+        assert_eq!(results[2].0["method"], "governance.status");
+        assert_eq!(results[3].0["method"], "shutdown");
+
+        let peak = results[1]
+            .1
+            .as_ref()
+            .expect("optimization.peak should succeed");
+        assert!(
+            peak["result"].get("peak").is_some(),
+            "optimization.peak should return peak payload"
+        );
+        assert!(
+            peak["result"]["peak"].get("gates").is_some(),
+            "optimization.peak should include gate matrix"
+        );
+        assert!(
+            peak["result"]["peak"].get("overall_pass").is_some(),
+            "optimization.peak should include overall pass flag"
+        );
+
+        let governance = results[2]
+            .1
+            .as_ref()
+            .expect("governance.status should succeed");
+        assert!(
+            governance["result"].get("governance").is_some(),
+            "governance.status should return governance payload"
+        );
+    }
+
+    #[test]
     fn ndjson_scenario_files_all_pass() {
         let scenarios = load_scenarios_from_dir(Path::new("requests"));
         assert_eq!(
             scenarios.len(),
-            18,
-            "expected eighteen request scenario files"
+            22,
+            "expected twenty two request scenario files"
         );
 
         for scenario in scenarios {

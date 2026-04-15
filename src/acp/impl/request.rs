@@ -1,4 +1,4 @@
-/// 协议模式
+﻿/// 鍗忚妯″紡
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolMode {
     Auto,
@@ -16,9 +16,9 @@ impl ProtocolMode {
     }
 }
 
-/// 从config.toml/runtime_config读取协议模式
+/// 浠巆onfig.toml/runtime_config璇诲彇鍗忚妯″紡
 fn get_protocol_mode(server: &AcpServer) -> ProtocolMode {
-    // 尝试从runtime_config.protocol_mode读取
+    // 灏濊瘯浠巖untime_config.protocol_mode璇诲彇
     if let Some(mode) = server.runtime_config.protocol_mode.as_deref() {
         ProtocolMode::from_str(mode)
     } else {
@@ -26,14 +26,14 @@ fn get_protocol_mode(server: &AcpServer) -> ProtocolMode {
     }
 }
 
-/// 判断请求属于MCP协议
+/// 鍒ゆ柇璇锋眰灞炰簬MCP鍗忚
 fn is_mcp_request(method: &str) -> bool {
     method.starts_with("mcp.") || method == "mcp.initialize"
 }
 
-/// 判断请求属于ACP/A2A协议
+/// 鍒ゆ柇璇锋眰灞炰簬ACP/A2A鍗忚
 fn is_acp_request(method: &str) -> bool {
-    // ACP/A2A常用方法
+    // ACP/A2A甯哥敤鏂规硶
     matches!(
         method,
         "initialize"
@@ -47,6 +47,7 @@ fn is_acp_request(method: &str) -> bool {
             | "health"
             | "runtime.health"
             | "health.probes"
+            | "runtime.stability"
             | "observability.alerts"
             | "security.baseline"
             | "harness.status"
@@ -56,6 +57,7 @@ fn is_acp_request(method: &str) -> bool {
             | "cache.clear"
             | "vector.clear"
             | "maintenance.gc"
+                | "data.lifecycle"
                | "error.contract"
             | "action.check"
             | "conversation.checkpoint.create"
@@ -64,6 +66,8 @@ fn is_acp_request(method: &str) -> bool {
             | "conversation.checkpoint.prune"
             | "config.reload"
             | "config.baseline"
+            | "build.repro"
+            | "optimization.peak"
             | "autotune.get"
             | "autotune.status"
             | "autotune.reset"
@@ -89,7 +93,7 @@ fn is_acp_request(method: &str) -> bool {
             | "phase.policy.replay"
             | "primary_secondary.summary"
             | "governance.status"
-             // diagnostics / ops – also used by vscode-addon in ACP mode
+             // diagnostics / ops 鈥?also used by vscode-addon in ACP mode
              | "metrics.reset"
              | "trace.get"
              | "trace.metrics"
@@ -101,7 +105,7 @@ fn is_acp_request(method: &str) -> bool {
 //
 // This module contains standalone functions that implement request handling
 // functionality previously in the `impl AcpServer` block in `impl/request.rs`.
-// These functions take `AcpServer` as其 first parameter to maintain
+// These functions take `AcpServer` as鍏?first parameter to maintain
 // compatibility with the original implementation.
 
 use std::collections::{HashMap, HashSet};
@@ -183,6 +187,15 @@ use crate::vector::VectorStore;
 
 use crate::rpc_protocol::{value_to_id, JsonRpcRequest, RequestTraceContext};
 
+mod config_pack;
+mod exec_pack;
+mod lifecycle_pack;
+mod ops_pack;
+mod repro_pack;
+use self::config_pack::*;
+use self::exec_pack::*;
+use self::lifecycle_pack::*;
+use self::ops_pack::*;
 static TRACE_EVENTS: OnceLock<StdMutex<Vec<TraceEvent>>> = OnceLock::new();
 static ERROR_RESPONSE_IDS: OnceLock<StdMutex<HashSet<String>>> = OnceLock::new();
 static TOOL_BUDGET_TRACKERS: OnceLock<StdMutex<HashMap<String, BudgetTracker>>> = OnceLock::new();
@@ -1001,7 +1014,7 @@ pub(crate) fn append_trace_event(event: TraceEvent) {
 ///
 /// This function replaces the `AcpServer::handle_request` method.
 pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Result<()> {
-    // 协议自适应分发
+    // 鍗忚鑷€傚簲鍒嗗彂
     let protocol_mode = get_protocol_mode(server);
     let method = request.method.as_str();
     match protocol_mode {
@@ -1011,7 +1024,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     server,
                     request.id,
                     -32601,
-                    format!("ACP模式下不支持方法: {}", method),
+                    format!("ACP妯″紡涓嬩笉鏀寔鏂规硶: {}", method),
                     None,
                 )
                 .await;
@@ -1023,15 +1036,15 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     server,
                     request.id,
                     -32601,
-                    format!("MCP模式下不支持方法: {}", method),
+                    format!("MCP妯″紡涓嬩笉鏀寔鏂规硶: {}", method),
                     None,
                 )
                 .await;
             }
         }
         ProtocolMode::Auto => {
-            // 若为MCP方法，优先走MCP分支，否则走ACP
-            // 允许混用
+            // 鑻ヤ负MCP鏂规硶锛屼紭鍏堣蛋MCP鍒嗘敮锛屽惁鍒欒蛋ACP
+            // 鍏佽娣风敤
         }
     }
 
@@ -1171,6 +1184,9 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         "shutdown" => handle_shutdown(server, request_id).await,
         "health" | "runtime.health" => handle_health(server, request_id).await,
         "health.probes" => handle_health_probes(server, request_id).await,
+        "runtime.stability" => {
+            handle_runtime_stability(server, request.params.unwrap_or_default(), request_id).await
+        }
         "observability.alerts" => {
             handle_observability_alerts(server, request.params.unwrap_or_default(), request_id)
                 .await
@@ -1191,6 +1207,9 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         "cache.clear" => handle_cache_clear(server, request_id).await,
         "vector.clear" => handle_vector_clear(server, request_id).await,
         "maintenance.gc" => handle_maintenance_gc(server, request_id).await,
+        "data.lifecycle" => {
+            handle_data_lifecycle(server, request.params.unwrap_or_default(), request_id).await
+        }
         "action.check" => {
             handle_action_check(server, request.params.unwrap_or_default(), request_id).await
         }
@@ -1225,6 +1244,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         "config.reload" => handle_config_reload(server, request_id).await,
         "config.baseline" => {
             handle_config_baseline(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "build.repro" => repro_pack::handle_build_repro(server, request_id).await,
+        "optimization.peak" => {
+            handle_optimization_peak(server, request.params.unwrap_or_default(), request_id).await
         }
         "error.contract" => handle_error_contract(server, request_id).await,
         "autotune.get" => handle_autotune_get(server, request_id).await,
@@ -2042,6 +2065,166 @@ async fn handle_health_probes(server: &AcpServer, request_id: Option<Value>) -> 
     .await
 }
 
+async fn handle_runtime_stability(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let status = server.get_status();
+    let metrics = server.metrics.snapshot();
+    let config_path = server.config_path.as_deref().map(Path::new);
+    let report = build_runtime_healthcheck_report(
+        config_path,
+        server.response_cache.as_deref(),
+        server.vector_store.as_deref(),
+    )?;
+
+    // 加载配置以检查警告与严格模式违规
+    let mut config_warnings = Vec::new();
+    let mut strict_violations = Vec::new();
+
+    if let Some(cfg_path) = config_path {
+        if let Ok(cfg) = AppConfig::load(cfg_path) {
+            config_warnings = collect_config_warnings(cfg_path, &cfg);
+            strict_violations = collect_production_strict_violations(&cfg);
+        }
+    }
+
+    // 计算健康检查汇总
+    let error_count = report
+        .components
+        .iter()
+        .filter(|item| item.status == CheckStatus::Error)
+        .count();
+    let warn_count = report
+        .components
+        .iter()
+        .filter(|item| item.status == CheckStatus::Warn)
+        .count();
+
+    // 检查优雅停机状态（shutdown_requested + uptime）
+    let graceful_shutdown_ready = !status.lifecycle.shutdown_requested;
+    let uptime_seconds = status.lifecycle.uptime_seconds;
+
+    // 检查配置校验状态（通过尝试加载配置来验证）
+    let config_valid = if let Some(cfg_path) = config_path {
+        AppConfig::load(cfg_path).is_ok()
+    } else {
+        true // 如果没有配置路径，认为是有效的
+    };
+
+    // 计算稳定性得分（0-100）
+    let mut stability_score = 100;
+    if error_count > 0 {
+        stability_score -= (error_count as i32).min(30);
+    }
+    if warn_count > 0 {
+        stability_score -= ((warn_count as i32) / 2).min(20);
+    }
+    if !graceful_shutdown_ready {
+        stability_score -= 15;
+    }
+    if !config_valid {
+        stability_score -= 25;
+    }
+    if !strict_violations.is_empty() {
+        stability_score -= (strict_violations.len() as i32 * 5).min(30);
+    }
+    stability_score = stability_score.max(0).min(100);
+
+    // 判定稳定性等级
+    let stability_level = match stability_score {
+        90..=100 => "excellent",
+        75..=89 => "good",
+        60..=74 => "fair",
+        40..=59 => "poor",
+        _ => "critical",
+    };
+
+    // 判定是否可安全启动重启（优雅关闭支持、配置有效、严格模式无违规）
+    let safe_restart_ready =
+        graceful_shutdown_ready && config_valid && strict_violations.is_empty();
+
+    let mut checks = vec![
+        json!({
+            "name": "health_check",
+            "status": if error_count == 0 { "pass" } else { "fail" },
+            "errors": error_count,
+            "warnings": warn_count,
+            "description": format!("Health check: {} errors, {} warnings", error_count, warn_count),
+        }),
+        json!({
+            "name": "graceful_shutdown",
+            "status": if graceful_shutdown_ready { "pass" } else { "fail" },
+            "uptime_seconds": uptime_seconds,
+            "shutdown_requested": status.lifecycle.shutdown_requested,
+            "description": if graceful_shutdown_ready {
+                "Graceful shutdown capability ready".to_string()
+            } else {
+                "Graceful shutdown in progress or unavailable".to_string()
+            },
+        }),
+        json!({
+            "name": "config_validation",
+            "status": if config_valid { "pass" } else { "fail" },
+            "warning_count": config_warnings.len(),
+            "description": format!("Config validation: {} warnings", config_warnings.len()),
+        }),
+    ];
+
+    if !strict_violations.is_empty() {
+        checks.push(json!({
+            "name": "production_strict_mode",
+            "status": "fail",
+            "violation_count": strict_violations.len(),
+            "violations": strict_violations.iter().take(5).map(|v| {
+                json!({
+                    "code": "strict_violation",
+                    "message": v,
+                })
+            }).collect::<Vec<_>>(),
+            "description": format!("Production strict mode: {} violations", strict_violations.len()),
+        }));
+    } else {
+        checks.push(json!({
+            "name": "production_strict_mode",
+            "status": "pass",
+            "violation_count": 0,
+            "description": "No production strict mode violations".to_string(),
+        }));
+    }
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "stability": {
+                "score": stability_score,
+                "level": stability_level,
+                "safe_restart_ready": safe_restart_ready,
+                "summary": {
+                    "health_errors": error_count,
+                    "health_warnings": warn_count,
+                    "uptime_seconds": uptime_seconds,
+                    "config_warnings": config_warnings.len(),
+                    "strict_violations": strict_violations.len(),
+                },
+                "checks": checks,
+                "recommendation": if stability_score >= 75 {
+                    "System is stable. Safe to operate.".to_string()
+                } else if stability_score >= 60 {
+                    "System has degraded capability. Review warnings before critical operations.".to_string()
+                } else {
+                    "System is unstable. Address errors before restart or upgrades.".to_string()
+                },
+                "timestamp": status.timestamp,
+            }
+        }),
+    )
+    .await
+}
+
 async fn handle_governance_status(
     server: &AcpServer,
     _params: Value,
@@ -2063,7 +2246,7 @@ async fn handle_governance_status(
     let governance_audit = load_governance_audit_events(20).unwrap_or_default();
 
     let rules = governance_rule_fingerprint(server.config_path.as_deref());
-    let config_summary = governance_config_summary(server.config_path.as_deref());
+    let config_summary = config_pack::governance_config_summary(server.config_path.as_deref());
 
     let entry_rate_snapshot = with_acp_lock(
         server.lock_monitor.as_ref(),
@@ -2133,6 +2316,198 @@ async fn handle_governance_status(
                     "rate_limit_rpm": server.runtime_config.entry_rate_limit_rpm,
                     "rate_limit_burst": server.runtime_config.entry_rate_limit_burst,
                     "sources_tracked": entry_sources_tracked,
+                },
+                "timestamp": status.timestamp,
+            }
+        }),
+    )
+    .await
+}
+
+async fn handle_optimization_peak(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let status = server.get_status();
+    let runtime_snapshot = server.metrics.snapshot();
+    let config_summary = config_pack::governance_config_summary(server.config_path.as_deref());
+    let repro_summary = repro_pack::reproducible_build_summary(server.config_path.as_deref());
+    let pua_learning = pua_feedback_collector()
+        .extract_learning_data(200)
+        .unwrap_or_default();
+
+    let total_requests = runtime_snapshot.total_requests.max(1) as f64;
+    let failed_ratio = runtime_snapshot.failed_requests as f64 / total_requests;
+    let review_reject_ratio = runtime_snapshot.review_gate_rejected_total as f64 / total_requests;
+    let timeout_total = runtime_snapshot.agent_timeout_failures_total
+        + runtime_snapshot.review_gate_timeout_total
+        + runtime_snapshot.runtime_probe_timeout_total;
+    let breaker_open_count = status
+        .circuit_breakers
+        .iter()
+        .filter(|item| item.state.eq_ignore_ascii_case("open"))
+        .count() as u64;
+
+    let strict_enabled = config_summary
+        .get("production_strict")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let strict_violation_count = config_summary
+        .get("strict_violation_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let entry_auth_enabled = config_summary
+        .get("entry_auth_enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let entry_auth_key_configured = config_summary
+        .get("entry_auth_key_configured")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let required_total = repro_summary
+        .get("reproducibility")
+        .and_then(|value| value.get("required_total"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let required_present = repro_summary
+        .get("reproducibility")
+        .and_then(|value| value.get("required_present"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let missing_required = repro_summary
+        .get("reproducibility")
+        .and_then(|value| value.get("missing_required"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let recent_failed = pua_learning.iter().filter(|record| !record.passed).count() as u64;
+
+    let task = params
+        .get("task")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("objective").and_then(Value::as_str))
+        .unwrap_or("One-shot optimization peak validation");
+    let hardness = summarize_hardness(task, &params);
+    let cost = summarize_token_cost_governance(task, &params, hardness.clone(), &runtime_snapshot);
+    let estimated_total_cost = cost.telemetry.estimated_total_cost;
+    let budget_class = cost.budget.budget_class.clone();
+
+    let max_failure_ratio = params
+        .get("max_failure_ratio")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.10);
+    let max_review_reject_ratio = params
+        .get("max_review_reject_ratio")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.10);
+    let max_timeout_total = params
+        .get("max_timeout_total")
+        .and_then(Value::as_u64)
+        .unwrap_or(10);
+    let max_estimated_cost = params
+        .get("max_estimated_cost")
+        .and_then(Value::as_f64)
+        .unwrap_or(1.50);
+
+    let quality_pass =
+        failed_ratio <= max_failure_ratio && review_reject_ratio <= max_review_reject_ratio;
+    let cost_pass = estimated_total_cost <= max_estimated_cost;
+    let stability_pass = status.lifecycle.is_healthy
+        && breaker_open_count == 0
+        && timeout_total <= max_timeout_total;
+    let security_pass = strict_enabled
+        && strict_violation_count == 0
+        && entry_auth_enabled
+        && entry_auth_key_configured;
+    let repro_pass = required_total == required_present && missing_required.is_empty();
+    let governance_pass = recent_failed == 0;
+
+    let gates = vec![
+        json!({
+            "name": "quality",
+            "passed": quality_pass,
+            "failure_ratio": failed_ratio,
+            "max_failure_ratio": max_failure_ratio,
+            "review_reject_ratio": review_reject_ratio,
+            "max_review_reject_ratio": max_review_reject_ratio,
+        }),
+        json!({
+            "name": "cost",
+            "passed": cost_pass,
+            "estimated_total_cost": estimated_total_cost,
+            "max_estimated_cost": max_estimated_cost,
+            "budget_class": budget_class,
+        }),
+        json!({
+            "name": "stability",
+            "passed": stability_pass,
+            "runtime_healthy": status.lifecycle.is_healthy,
+            "breaker_open_count": breaker_open_count,
+            "timeout_total": timeout_total,
+            "max_timeout_total": max_timeout_total,
+        }),
+        json!({
+            "name": "security",
+            "passed": security_pass,
+            "production_strict": strict_enabled,
+            "strict_violation_count": strict_violation_count,
+            "entry_auth_enabled": entry_auth_enabled,
+            "entry_auth_key_configured": entry_auth_key_configured,
+        }),
+        json!({
+            "name": "reproducibility",
+            "passed": repro_pass,
+            "required_total": required_total,
+            "required_present": required_present,
+            "missing_required": missing_required,
+        }),
+        json!({
+            "name": "governance",
+            "passed": governance_pass,
+            "pua_recent_total": pua_learning.len(),
+            "pua_recent_failed": recent_failed,
+        }),
+    ];
+
+    let overall_pass = gates
+        .iter()
+        .all(|gate| gate.get("passed").and_then(Value::as_bool) == Some(true));
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "peak": {
+                "version": "x11-one-shot-optimization-peak-v1",
+                "overall_pass": overall_pass,
+                "status": if overall_pass { "peak_ready" } else { "needs_action" },
+                "frozen_scope": ["X1", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10"],
+                "window": {
+                    "sprint": params
+                        .get("sprint")
+                        .and_then(Value::as_str)
+                        .unwrap_or("blue15-x11"),
+                    "freeze_mode": params
+                        .get("freeze_mode")
+                        .and_then(Value::as_str)
+                        .unwrap_or("strict"),
+                },
+                "task": task,
+                "hardness": hardness,
+                "cost": cost,
+                "gates": gates,
+                "summary": {
+                    "total_requests": runtime_snapshot.total_requests,
+                    "failed_requests": runtime_snapshot.failed_requests,
+                    "review_gate_rejected_total": runtime_snapshot.review_gate_rejected_total,
+                    "agent_timeout_failures_total": runtime_snapshot.agent_timeout_failures_total,
+                    "review_gate_timeout_total": runtime_snapshot.review_gate_timeout_total,
+                    "runtime_probe_timeout_total": runtime_snapshot.runtime_probe_timeout_total,
+                    "uptime_seconds": status.lifecycle.uptime_seconds,
                 },
                 "timestamp": status.timestamp,
             }
@@ -2360,982 +2735,6 @@ fn summarize_lock_health(components: &[AcpLockSnapshot]) -> LockHealthSummary {
         max_wait_ms,
         components_tracked: components.len(),
     }
-}
-
-fn governance_rule_fingerprint(config_path: Option<&str>) -> Value {
-    let base_dir = config_path
-        .map(PathBuf::from)
-        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    let mut files = Vec::new();
-
-    let shared = [
-        base_dir.join("RULES.md"),
-        base_dir.join("RULES").join("global.md"),
-        base_dir.join("RULES").join("common.md"),
-        base_dir.join("RULES").join("local.md"),
-    ];
-
-    for path in shared {
-        if let Some(item) = build_rule_file_info(&base_dir, &path) {
-            files.push(item);
-        }
-    }
-
-    let rules_dir = base_dir.join("RULES");
-    if let Ok(read_dir) = fs::read_dir(&rules_dir) {
-        let mut dynamic_paths = read_dir
-            .filter_map(|entry| entry.ok().map(|item| item.path()))
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("md"))
-            .collect::<Vec<_>>();
-        dynamic_paths.sort();
-
-        for path in dynamic_paths {
-            if let Some(item) = build_rule_file_info(&base_dir, &path) {
-                let already_known = files
-                    .iter()
-                    .any(|existing| existing.get("path") == item.get("path"));
-                if !already_known {
-                    files.push(item);
-                }
-            }
-        }
-    }
-
-    let file_count = files.len() as u64;
-    let total_bytes = files
-        .iter()
-        .filter_map(|item| item.get("size_bytes").and_then(Value::as_u64))
-        .sum::<u64>();
-    let latest_mtime_ts = files
-        .iter()
-        .filter_map(|item| item.get("mtime_ts").and_then(Value::as_i64))
-        .max()
-        .unwrap_or(0);
-
-    json!({
-        "version": format!("r{}-{}-{}", file_count, latest_mtime_ts, total_bytes),
-        "file_count": file_count,
-        "latest_mtime_ts": latest_mtime_ts,
-        "total_bytes": total_bytes,
-        "files": files,
-    })
-}
-
-fn build_rule_file_info(base_dir: &Path, path: &Path) -> Option<Value> {
-    let metadata = fs::metadata(path).ok()?;
-    let modified = metadata.modified().ok();
-    let mtime_ts = modified
-        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-        .map(|value| value.as_secs() as i64)
-        .unwrap_or(0);
-
-    let relative = path
-        .strip_prefix(base_dir)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/");
-
-    Some(json!({
-        "path": relative,
-        "size_bytes": metadata.len(),
-        "mtime_ts": mtime_ts,
-    }))
-}
-
-fn governance_config_summary(config_path: Option<&str>) -> Value {
-    let Some(config_path) = config_path else {
-        return json!({
-            "loaded": false,
-            "production_strict": false,
-            "entry_auth_enabled": false,
-            "entry_auth_api_key_env": "GO_ON_ENTRY_API_KEY",
-            "entry_auth_key_configured": false,
-            "entry_rate_limit_rpm": 240,
-            "entry_rate_limit_burst": 60,
-            "strict_violation_count": 0,
-            "strict_violations": [],
-            "warning_count": 0,
-            "warnings": [],
-        });
-    };
-
-    let config_path_buf = PathBuf::from(config_path);
-    let config = match AppConfig::load(&config_path_buf) {
-        Ok(config) => config,
-        Err(err) => {
-            return json!({
-                "loaded": false,
-                "production_strict": false,
-                "entry_auth_enabled": false,
-                "entry_auth_api_key_env": "GO_ON_ENTRY_API_KEY",
-                "entry_auth_key_configured": false,
-                "entry_rate_limit_rpm": 240,
-                "entry_rate_limit_burst": 60,
-                "strict_violation_count": 1,
-                "strict_violations": [format!("failed_to_load_config:{}", err)],
-                "warning_count": 1,
-                "warnings": [format!("failed_to_load_config:{}", err)],
-            });
-        }
-    };
-
-    let warnings = collect_config_warnings(&config_path_buf, &config);
-    let strict_enabled = config
-        .runtime
-        .as_ref()
-        .map(|runtime| runtime.production_strict)
-        .unwrap_or(false);
-    let entry_auth_enabled = config
-        .runtime
-        .as_ref()
-        .map(|runtime| runtime.entry_auth_enabled)
-        .unwrap_or(false);
-    let entry_auth_api_key_env = config
-        .runtime
-        .as_ref()
-        .map(|runtime| runtime.entry_auth_api_key_env.clone())
-        .unwrap_or_else(|| "GO_ON_ENTRY_API_KEY".to_string());
-    let entry_auth_key_configured = std::env::var(&entry_auth_api_key_env)
-        .ok()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    let entry_rate_limit_rpm = config
-        .runtime
-        .as_ref()
-        .map(|runtime| runtime.entry_rate_limit_rpm)
-        .unwrap_or(240);
-    let entry_rate_limit_burst = config
-        .runtime
-        .as_ref()
-        .map(|runtime| runtime.entry_rate_limit_burst)
-        .unwrap_or(60);
-    let strict_violations = collect_production_strict_violations(&config);
-    json!({
-        "loaded": true,
-        "production_strict": strict_enabled,
-        "entry_auth_enabled": entry_auth_enabled,
-        "entry_auth_api_key_env": entry_auth_api_key_env,
-        "entry_auth_key_configured": entry_auth_key_configured,
-        "entry_rate_limit_rpm": entry_rate_limit_rpm,
-        "entry_rate_limit_burst": entry_rate_limit_burst,
-        "strict_violation_count": strict_violations.len(),
-        "strict_violations": strict_violations,
-        "warning_count": warnings.len(),
-        "warnings": warnings,
-    })
-}
-
-fn normalize_protocol_mode_for_baseline(raw: &str) -> String {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "adaptive" | "auto" => "auto".to_string(),
-        "acp" | "acp_stdio" | "acp_http" => "acp".to_string(),
-        "mcp" | "mcp_stdio" | "mcp_http" => "mcp".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn load_config_document(config_path: &Path) -> std::result::Result<toml::Value, String> {
-    let raw =
-        fs::read_to_string(config_path).map_err(|err| format!("failed_to_read_config:{}", err))?;
-    raw.parse::<toml::Value>()
-        .map_err(|err| format!("failed_to_parse_toml:{}", err))
-}
-
-fn extract_runtime_explicit_keys(document: &toml::Value) -> HashSet<String> {
-    document
-        .get("runtime")
-        .and_then(toml::Value::as_table)
-        .map(|table| table.keys().cloned().collect())
-        .unwrap_or_default()
-}
-
-fn extract_protocol_mode_from_protocol_table(document: &toml::Value) -> Option<String> {
-    document
-        .get("protocol")
-        .and_then(toml::Value::as_table)
-        .and_then(|table| table.get("mode"))
-        .and_then(toml::Value::as_str)
-        .map(|value| value.to_string())
-}
-
-fn extract_runtime_protocol_mode_legacy(document: &toml::Value) -> Option<String> {
-    document
-        .get("runtime")
-        .and_then(toml::Value::as_table)
-        .and_then(|table| table.get("protocol_mode"))
-        .and_then(toml::Value::as_str)
-        .map(|value| value.to_string())
-}
-
-fn detect_legacy_config_keys(document: &toml::Value) -> Vec<Value> {
-    let mut items = Vec::new();
-    let mut seen = HashSet::new();
-
-    let mut push_item = |old_path: &str, new_path: &str, reason: &str| {
-        if seen.insert(old_path.to_string()) {
-            items.push(json!({
-                "old_path": old_path,
-                "new_path": new_path,
-                "reason": reason,
-            }));
-        }
-    };
-
-    if let Some(runtime) = document.get("runtime").and_then(toml::Value::as_table) {
-        for (old_key, new_key, reason) in [
-            (
-                "auth_enabled",
-                "runtime.entry_auth_enabled",
-                "legacy auth switch renamed",
-            ),
-            (
-                "auth_api_key_env",
-                "runtime.entry_auth_api_key_env",
-                "legacy env key renamed",
-            ),
-            (
-                "rate_limit_rpm",
-                "runtime.entry_rate_limit_rpm",
-                "legacy rate limit key renamed",
-            ),
-            (
-                "rate_limit_burst",
-                "runtime.entry_rate_limit_burst",
-                "legacy burst key renamed",
-            ),
-            (
-                "http_bind_addr",
-                "runtime.acp_http_bind_addr",
-                "legacy bind key renamed",
-            ),
-            (
-                "strict_mode",
-                "runtime.production_strict",
-                "legacy strict key renamed",
-            ),
-            (
-                "protocol_mode",
-                "protocol.mode",
-                "protocol mode moved from runtime to protocol table",
-            ),
-        ] {
-            if runtime.contains_key(old_key) {
-                push_item(&format!("runtime.{}", old_key), new_key, reason);
-            }
-        }
-    }
-
-    if document
-        .as_table()
-        .map(|table| table.contains_key("protocol_mode"))
-        .unwrap_or(false)
-    {
-        push_item(
-            "protocol_mode",
-            "protocol.mode",
-            "root-level protocol mode is deprecated",
-        );
-    }
-
-    items
-}
-
-fn runtime_field_source(explicit_runtime_keys: &HashSet<String>, field: &str) -> &'static str {
-    if explicit_runtime_keys.contains(field) {
-        "config_file"
-    } else {
-        "default"
-    }
-}
-
-fn resolve_protocol_source(
-    server_protocol_mode: Option<&str>,
-    protocol_mode_from_file: Option<&str>,
-) -> &'static str {
-    match (server_protocol_mode, protocol_mode_from_file) {
-        (Some(server_mode), Some(file_mode)) => {
-            let normalized_server = normalize_protocol_mode_for_baseline(server_mode);
-            let normalized_file = normalize_protocol_mode_for_baseline(file_mode);
-            if normalized_server != normalized_file {
-                "cli_override"
-            } else {
-                "config_file"
-            }
-        }
-        (Some(_), None) => "default",
-        (None, Some(_)) => "config_file",
-        (None, None) => "default",
-    }
-}
-
-async fn handle_breaker_status(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    let breakers = server
-        .circuit_breakers
-        .lock()
-        .map(|guard| guard.snapshots())
-        .unwrap_or_default();
-    let open_count = breakers
-        .iter()
-        .filter(|item| item.state.eq_ignore_ascii_case("open"))
-        .count();
-    let degraded_services = collect_degraded_services(server);
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "open_count": open_count,
-            "degraded_count": degraded_services.len(),
-            "degraded_services": degraded_services,
-            "breakers": breakers,
-        }),
-    )
-    .await
-}
-
-async fn handle_observability_alerts(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let max_alerts = params
-        .get("limit")
-        .and_then(Value::as_u64)
-        .map(|value| value as usize)
-        .unwrap_or(20)
-        .clamp(1, 200);
-
-    let status = server.get_status();
-    let metrics = server.metrics.snapshot();
-    let lock_components = server.lock_monitor.snapshot();
-    let lock_summary = summarize_lock_health(&lock_components);
-    let degraded_services = collect_degraded_services(server);
-    let open_breakers = status
-        .circuit_breakers
-        .iter()
-        .filter(|item| item.state.eq_ignore_ascii_case("open"))
-        .count();
-
-    let mut alerts = Vec::new();
-    if !status.lifecycle.is_healthy {
-        alerts.push(json!({
-            "severity": "critical",
-            "code": "runtime.unhealthy",
-            "message": "Runtime lifecycle is unhealthy",
-            "value": {
-                "uptime_seconds": status.lifecycle.uptime_seconds,
-                "shutdown_requested": status.lifecycle.shutdown_requested,
-            },
-            "suggestion": "Inspect runtime.health and recent trace events before accepting new traffic",
-        }));
-    }
-
-    if open_breakers > 0 {
-        alerts.push(json!({
-            "severity": "critical",
-            "code": "breaker.open",
-            "message": format!("{} circuit breakers are open", open_breakers),
-            "value": {"open_count": open_breakers},
-            "suggestion": "Use breaker.status and breaker.recovery to restore degraded services",
-        }));
-    }
-
-    if !degraded_services.is_empty() {
-        alerts.push(json!({
-            "severity": "warn",
-            "code": "service.degraded",
-            "message": format!("{} services are degraded", degraded_services.len()),
-            "value": {
-                "degraded_count": degraded_services.len(),
-                "services": degraded_services,
-            },
-            "suggestion": "Fallback to secondary agents and run breaker.recovery after stabilizing dependencies",
-        }));
-    }
-
-    let timeout_total = metrics.agent_timeout_failures_total
-        + metrics.review_gate_timeout_total
-        + metrics.runtime_probe_timeout_total;
-    if timeout_total > 0 {
-        alerts.push(json!({
-            "severity": "warn",
-            "code": "timeout.spike",
-            "message": "Timeout counters are above baseline",
-            "value": {
-                "total": timeout_total,
-                "agent_request_total": metrics.agent_timeout_failures_total,
-                "review_gate_total": metrics.review_gate_timeout_total,
-                "runtime_probe_total": metrics.runtime_probe_timeout_total,
-            },
-            "suggestion": "Check trace.metrics slow paths and tune request_timeout_seconds for affected phases",
-        }));
-    }
-
-    if lock_summary.status == "warn" {
-        alerts.push(json!({
-            "severity": "warn",
-            "code": "lock.contention",
-            "message": "Lock monitor detected contention or poison recovery",
-            "value": {
-                "poisoned_total": lock_summary.poisoned_total,
-                "recovered_total": lock_summary.recovered_total,
-                "slow_wait_total": lock_summary.slow_wait_total,
-                "max_wait_ms": lock_summary.max_wait_ms,
-                "components_tracked": lock_summary.components_tracked,
-            },
-            "suggestion": "Review lock-heavy code paths and consider reducing critical section duration",
-        }));
-    }
-
-    if alerts.is_empty() {
-        alerts.push(json!({
-            "severity": "info",
-            "code": "baseline.ok",
-            "message": "No active runtime alerts",
-            "value": {
-                "total_requests": metrics.total_requests,
-                "successful_requests": metrics.successful_requests,
-            },
-            "suggestion": "Continue periodic quality.baseline and trace.metrics checks",
-        }));
-    }
-
-    if alerts.len() > max_alerts {
-        alerts.truncate(max_alerts);
-    }
-
-    let counts = alerts
-        .iter()
-        .fold((0usize, 0usize, 0usize), |mut acc, alert| {
-            match alert
-                .get("severity")
-                .and_then(Value::as_str)
-                .unwrap_or("info")
-            {
-                "critical" => acc.0 += 1,
-                "warn" | "warning" => acc.1 += 1,
-                _ => acc.2 += 1,
-            }
-            acc
-        });
-
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "alerts": {
-                "critical": counts.0,
-                "warn": counts.1,
-                "info": counts.2,
-                "total": alerts.len(),
-                "items": alerts,
-            },
-        }),
-    )
-    .await
-}
-
-async fn handle_security_baseline(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let config_summary = governance_config_summary(server.config_path.as_deref());
-    let entry_auth_enabled = config_summary
-        .get("entry_auth_enabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let entry_auth_key_configured = config_summary
-        .get("entry_auth_key_configured")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let strict_enabled = config_summary
-        .get("production_strict")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let strict_violations = config_summary
-        .get("strict_violations")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
-    let exposed_http = server.runtime_config.acp_http_bind_addr.is_some();
-    let ingress_status = if !exposed_http {
-        "local-only"
-    } else if entry_auth_enabled && entry_auth_key_configured {
-        "hardened"
-    } else {
-        "risk"
-    };
-
-    let mut risk_items = Vec::new();
-    if exposed_http && !entry_auth_enabled {
-        risk_items.push(json!({
-            "severity": "critical",
-            "code": "entry_auth.disabled",
-            "message": "runtime.acp_http_bind_addr is configured but entry auth is disabled",
-            "suggestion": "Set runtime.entry_auth_enabled=true and configure entry auth key",
-        }));
-    }
-    if entry_auth_enabled && !entry_auth_key_configured {
-        risk_items.push(json!({
-            "severity": "critical",
-            "code": "entry_auth.key_missing",
-            "message": "Entry auth is enabled but auth key env is missing",
-            "suggestion": "Set runtime.entry_auth_api_key_env in process environment",
-        }));
-    }
-    if !strict_enabled {
-        risk_items.push(json!({
-            "severity": "warn",
-            "code": "production_strict.disabled",
-            "message": "runtime.production_strict is disabled",
-            "suggestion": "Enable runtime.production_strict=true to fail fast on unsafe config",
-        }));
-    }
-    if !strict_violations.is_empty() {
-        risk_items.push(json!({
-            "severity": if strict_enabled { "critical" } else { "warn" },
-            "code": "production_strict.violations",
-            "message": format!("{} strict violation(s) detected", strict_violations.len()),
-            "violations": strict_violations,
-            "suggestion": "Fix strict violations and re-run runtime.health / security.baseline",
-        }));
-    }
-
-    let level = if risk_items
-        .iter()
-        .any(|item| item.get("severity").and_then(Value::as_str) == Some("critical"))
-    {
-        "critical"
-    } else if risk_items
-        .iter()
-        .any(|item| item.get("severity").and_then(Value::as_str) == Some("warn"))
-    {
-        "warn"
-    } else {
-        "ok"
-    };
-
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "baseline": {
-                "level": level,
-                "ingress_status": ingress_status,
-                "exposed_http": exposed_http,
-                "entry_auth": {
-                    "enabled": entry_auth_enabled,
-                    "key_env": server.runtime_config.entry_auth_api_key_env,
-                    "key_configured": entry_auth_key_configured,
-                },
-                "rate_limit": {
-                    "rpm": server.runtime_config.entry_rate_limit_rpm,
-                    "burst": server.runtime_config.entry_rate_limit_burst,
-                },
-                "production_strict": {
-                    "enabled": strict_enabled,
-                    "violation_count": strict_violations.len(),
-                    "violations": strict_violations,
-                },
-                "risk_count": risk_items.len(),
-                "risks": risk_items,
-            },
-        }),
-    )
-    .await
-}
-
-fn classify_harness_suite(name: &str) -> &'static str {
-    let lowered = name.to_ascii_lowercase();
-    if lowered.contains("adversarial") || lowered.contains("fault") || lowered.contains("chaos") {
-        "adversarial"
-    } else if lowered.contains("long-chain") || lowered.contains("long_chain") {
-        "long_chain"
-    } else if lowered.contains("smoke")
-        || lowered.contains("runtime-health")
-        || lowered.contains("quality-benchmark")
-    {
-        "smoke"
-    } else {
-        "regression"
-    }
-}
-
-async fn handle_harness_status(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let fixed_seed = params
-        .get("seed")
-        .and_then(Value::as_u64)
-        .unwrap_or(20260415);
-
-    let mut smoke = Vec::new();
-    let mut regression = Vec::new();
-    let mut adversarial = Vec::new();
-    let mut long_chain = Vec::new();
-    let mut warnings = Vec::new();
-
-    let requests_root = Path::new("requests");
-    match fs::read_dir(requests_root) {
-        Ok(entries) => {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let is_ndjson = path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(|ext| ext.eq_ignore_ascii_case("ndjson"))
-                    .unwrap_or(false);
-                if !is_ndjson {
-                    continue;
-                }
-                let Some(name) = path
-                    .file_name()
-                    .and_then(|item| item.to_str())
-                    .map(|item| item.to_string())
-                else {
-                    continue;
-                };
-
-                match classify_harness_suite(&name) {
-                    "smoke" => smoke.push(name),
-                    "adversarial" => adversarial.push(name),
-                    "long_chain" => long_chain.push(name),
-                    _ => regression.push(name),
-                }
-            }
-            smoke.sort();
-            regression.sort();
-            adversarial.sort();
-            long_chain.sort();
-        }
-        Err(err) => {
-            warnings.push(format!("failed to read requests directory: {err}"));
-        }
-    }
-
-    let scenario_total = smoke.len() + regression.len() + adversarial.len() + long_chain.len();
-    let metrics = server.metrics.snapshot();
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "harness": {
-                "fixed_seed": fixed_seed,
-                "scenario_total": scenario_total,
-                "suites": {
-                    "smoke": {
-                        "count": smoke.len(),
-                        "files": smoke,
-                    },
-                    "regression": {
-                        "count": regression.len(),
-                        "files": regression,
-                    },
-                    "adversarial": {
-                        "count": adversarial.len(),
-                        "files": adversarial,
-                    },
-                    "long_chain": {
-                        "count": long_chain.len(),
-                        "files": long_chain,
-                    },
-                },
-                "scorecard": [
-                    {
-                        "dimension": "correctness",
-                        "target": "all scenarios pass without rpc error",
-                        "status": "tracked",
-                    },
-                    {
-                        "dimension": "stability",
-                        "target": "runtime.health remains healthy across suites",
-                        "status": "tracked",
-                    },
-                    {
-                        "dimension": "latency",
-                        "target": "p95 bounded by phase timeout budget",
-                        "status": "tracked",
-                    },
-                    {
-                        "dimension": "cost",
-                        "target": "timeout spikes remain within baseline",
-                        "status": "tracked",
-                    },
-                    {
-                        "dimension": "safety",
-                        "target": "security.baseline level stays warn/ok before deploy",
-                        "status": "tracked",
-                    }
-                ],
-                "runtime_snapshot": {
-                    "total_requests": metrics.total_requests,
-                    "failed_requests": metrics.failed_requests,
-                    "agent_timeout_failures_total": metrics.agent_timeout_failures_total,
-                    "review_gate_timeout_total": metrics.review_gate_timeout_total,
-                    "runtime_probe_timeout_total": metrics.runtime_probe_timeout_total,
-                },
-                "warnings": warnings,
-            },
-        }),
-    )
-    .await
-}
-
-async fn handle_breaker_reset(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let target = params
-        .get("agent")
-        .or_else(|| params.get("name"))
-        .and_then(Value::as_str);
-    let reset_count = server
-        .circuit_breakers
-        .lock()
-        .map(|guard| guard.reset(target))
-        .unwrap_or(0);
-    let breakers = server
-        .circuit_breakers
-        .lock()
-        .map(|guard| guard.snapshots())
-        .unwrap_or_default();
-
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "removed": reset_count,
-            "target": target,
-            "breakers": breakers,
-        }),
-    )
-    .await
-}
-
-fn health_status_label(status: crate::failure_prevention::HealthStatus) -> &'static str {
-    match status {
-        crate::failure_prevention::HealthStatus::Healthy => "healthy",
-        crate::failure_prevention::HealthStatus::Degraded => "degraded",
-        crate::failure_prevention::HealthStatus::Unhealthy => "unhealthy",
-    }
-}
-
-fn circuit_state_label(state: crate::failure_prevention::CircuitBreakerState) -> &'static str {
-    match state {
-        crate::failure_prevention::CircuitBreakerState::Closed => "closed",
-        crate::failure_prevention::CircuitBreakerState::Open => "open",
-        crate::failure_prevention::CircuitBreakerState::HalfOpen => "half-open",
-    }
-}
-
-fn degradation_level_label(level: crate::failure_prevention::DegradationLevel) -> &'static str {
-    match level {
-        crate::failure_prevention::DegradationLevel::None => "none",
-        crate::failure_prevention::DegradationLevel::Minimal => "minimal",
-        crate::failure_prevention::DegradationLevel::Moderate => "moderate",
-        crate::failure_prevention::DegradationLevel::Significant => "significant",
-        crate::failure_prevention::DegradationLevel::Critical => "critical",
-    }
-}
-
-fn recovery_action(
-    status: crate::failure_prevention::HealthStatus,
-    level: crate::failure_prevention::DegradationLevel,
-) -> &'static str {
-    if matches!(status, crate::failure_prevention::HealthStatus::Unhealthy)
-        || matches!(level, crate::failure_prevention::DegradationLevel::Critical)
-    {
-        "reset_breaker_and_fallback"
-    } else if matches!(status, crate::failure_prevention::HealthStatus::Degraded)
-        || matches!(
-            level,
-            crate::failure_prevention::DegradationLevel::Significant
-        )
-    {
-        "degrade_to_secondary_agent"
-    } else {
-        "observe"
-    }
-}
-
-fn collect_degraded_services(server: &AcpServer) -> Vec<Value> {
-    server
-        .failure_prevention
-        .lock()
-        .map(|fp| {
-            let mut services = fp.get_health_report();
-            services.sort_by(|a, b| a.service_name.cmp(&b.service_name));
-            services
-                .into_iter()
-                .filter_map(|health| {
-                    let circuit = fp.get_circuit_state(&health.service_name);
-                    let level = fp.get_degradation_strategy(&health.service_name);
-                    let should_recover = !matches!(
-                        health.status,
-                        crate::failure_prevention::HealthStatus::Healthy
-                    ) || !matches!(
-                        circuit,
-                        crate::failure_prevention::CircuitBreakerState::Closed
-                    ) || fp.should_degrade(&health.service_name);
-                    if !should_recover {
-                        return None;
-                    }
-
-                    Some(json!({
-                        "service": health.service_name,
-                        "health_status": health_status_label(health.status),
-                        "circuit_state": circuit_state_label(circuit),
-                        "degradation_level": degradation_level_label(level),
-                        "success_rate": health.success_rate,
-                        "error_rate": health.error_rate,
-                        "avg_latency_ms": health.avg_latency_ms,
-                        "recommended_action": recovery_action(health.status, level),
-                    }))
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
-async fn handle_breaker_recovery(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let target = params
-        .get("agent")
-        .or_else(|| params.get("name"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let dry_run = params
-        .get("dry_run")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    let degraded_before = collect_degraded_services(server);
-    let candidates = degraded_before
-        .iter()
-        .filter_map(|item| {
-            item.get("service")
-                .and_then(Value::as_str)
-                .map(ToString::to_string)
-        })
-        .filter(|service| target.map(|t| t == service).unwrap_or(true))
-        .collect::<Vec<_>>();
-
-    let (recovered_services, breaker_reset_count) = if dry_run {
-        (Vec::new(), 0)
-    } else {
-        let recovered_services = server
-            .failure_prevention
-            .lock()
-            .map(|mut fp| fp.recover(target))
-            .unwrap_or_default();
-        let breaker_reset_count = server
-            .circuit_breakers
-            .lock()
-            .map(|guard| guard.reset(target))
-            .unwrap_or(0);
-        (recovered_services, breaker_reset_count)
-    };
-    let degraded_after = collect_degraded_services(server);
-
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "dry_run": dry_run,
-            "target": target,
-            "candidates": candidates,
-            "candidate_count": candidates.len(),
-            "recovered_services": recovered_services,
-            "recovered_count": recovered_services.len(),
-            "breaker_reset_count": breaker_reset_count,
-            "remaining_degraded_count": degraded_after.len(),
-            "remaining_degraded_services": degraded_after,
-        }),
-    )
-    .await
-}
-
-async fn handle_cache_clear(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    let memory_removed = server
-        .memory_response_cache
-        .lock()
-        .map(|cache| cache.clear_all())
-        .unwrap_or(0);
-    let persistent_removed = if let Some(cache) = server.response_cache.clone() {
-        cache_clear(server, cache).await?
-    } else {
-        0
-    };
-
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "memory_removed": memory_removed,
-            "sqlite_removed": persistent_removed,
-            "total_removed": memory_removed + persistent_removed,
-        }),
-    )
-    .await
-}
-
-async fn handle_vector_clear(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    let (memory_removed, summary_removed) = if let Some(store) = server.vector_store.clone() {
-        store.clear_all()?
-    } else {
-        (0, 0)
-    };
-
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "vector_removed": memory_removed,
-            "summary_removed": summary_removed,
-        }),
-    )
-    .await
-}
-
-async fn handle_maintenance_gc(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    let cycle = run_maintenance_cycle(server).await?;
-    let maintenance = server
-        .maintenance_tracker
-        .lock()
-        .map(|guard| guard.snapshot())
-        .unwrap_or_default();
-
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "memory_expired_removed": cycle.memory_expired_removed,
-            "sqlite_expired_removed": cycle.sqlite_expired_removed,
-            "cache_vacuumed": cycle.cache_vacuumed,
-            "vector_vacuumed": cycle.vector_vacuumed,
-            "maintenance": maintenance,
-        }),
-    )
-    .await
 }
 
 async fn handle_action_check(
@@ -3580,157 +2979,6 @@ async fn handle_conversation_checkpoint_prune(
             "removed": removed,
             "repaired_heads": repaired_heads,
             "dropped_heads": dropped_heads,
-        }),
-    )
-    .await
-}
-
-async fn handle_config_reload(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    let path = server
-        .config_path
-        .clone()
-        .unwrap_or_else(|| "config.toml".to_string());
-    let config_path = std::path::PathBuf::from(&path);
-    let config = AppConfig::load(&config_path)?;
-    let report = validate_runtime_readiness(&config_path, &config)?;
-    let warnings = report.warning_messages();
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "note": "flow/registry/cache/vector/autotune resources reloaded",
-            "path": config_path.display().to_string(),
-            "warning_count": warnings.len(),
-            "warnings": warnings,
-            "profile_recommendation": report.profile_recommendation,
-            "recommendations": report.recommendations,
-            "health": {
-                "score": report.score,
-                "critical_count": report.critical_count,
-                "warn_count": report.warn_count,
-                "info_count": report.info_count,
-            }
-        }),
-    )
-    .await
-}
-
-async fn handle_config_baseline(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let config_summary = governance_config_summary(server.config_path.as_deref());
-
-    let config_path = server
-        .config_path
-        .clone()
-        .unwrap_or_else(|| "config.toml".to_string());
-    let config_path_buf = PathBuf::from(&config_path);
-
-    let mut document_warnings = Vec::new();
-    let mut explicit_runtime_keys = HashSet::new();
-    let mut protocol_mode_from_protocol_table = None::<String>;
-    let mut protocol_mode_from_runtime_legacy = None::<String>;
-    let mut legacy_mappings = Vec::new();
-
-    match load_config_document(&config_path_buf) {
-        Ok(document) => {
-            explicit_runtime_keys = extract_runtime_explicit_keys(&document);
-            protocol_mode_from_protocol_table =
-                extract_protocol_mode_from_protocol_table(&document);
-            protocol_mode_from_runtime_legacy = extract_runtime_protocol_mode_legacy(&document);
-            legacy_mappings = detect_legacy_config_keys(&document);
-        }
-        Err(err) => {
-            document_warnings.push(err);
-        }
-    }
-
-    let mut explicit_runtime_fields = explicit_runtime_keys.iter().cloned().collect::<Vec<_>>();
-    explicit_runtime_fields.sort();
-
-    let protocol_mode_from_file = protocol_mode_from_protocol_table
-        .clone()
-        .or(protocol_mode_from_runtime_legacy.clone());
-    let protocol_source = resolve_protocol_source(
-        server.runtime_config.protocol_mode.as_deref(),
-        protocol_mode_from_file.as_deref(),
-    );
-    let entry_auth_key_env = server.runtime_config.entry_auth_api_key_env.clone();
-    let entry_auth_key_configured = std::env::var(&entry_auth_key_env)
-        .ok()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "baseline": {
-                "status": if legacy_mappings.is_empty() { "frozen" } else { "migration_required" },
-                "source_precedence": ["cli_override", "env", "config_file", "default"],
-                "effective": {
-                    "protocol_mode": server.runtime_config.protocol_mode.clone().unwrap_or_else(|| "auto".to_string()),
-                    "maintenance_interval_seconds": server.runtime_config.maintenance_interval_seconds,
-                    "health_interval_seconds": server.runtime_config.health_interval_seconds,
-                    "shutdown_drain_seconds": server.runtime_config.shutdown_drain_seconds,
-                    "acp_http_bind_addr": server.runtime_config.acp_http_bind_addr.clone(),
-                    "entry_auth_enabled": server.runtime_config.entry_auth_enabled,
-                    "entry_auth_api_key_env": entry_auth_key_env,
-                    "entry_auth_key_configured": entry_auth_key_configured,
-                    "entry_rate_limit_rpm": server.runtime_config.entry_rate_limit_rpm,
-                    "entry_rate_limit_burst": server.runtime_config.entry_rate_limit_burst,
-                    "production_strict": server.runtime_config.production_strict,
-                    "sqlite_vacuum_interval_cycles": server.runtime_config.sqlite_vacuum_interval_cycles,
-                    "trace_slow_top_n": server.runtime_config.trace_slow_top_n,
-                },
-                "sources": {
-                    "protocol_mode": protocol_source,
-                    "maintenance_interval_seconds": runtime_field_source(&explicit_runtime_keys, "maintenance_interval_seconds"),
-                    "health_interval_seconds": runtime_field_source(&explicit_runtime_keys, "health_interval_seconds"),
-                    "shutdown_drain_seconds": runtime_field_source(&explicit_runtime_keys, "shutdown_drain_seconds"),
-                    "acp_http_bind_addr": runtime_field_source(&explicit_runtime_keys, "acp_http_bind_addr"),
-                    "entry_auth_enabled": runtime_field_source(&explicit_runtime_keys, "entry_auth_enabled"),
-                    "entry_auth_api_key_env": runtime_field_source(&explicit_runtime_keys, "entry_auth_api_key_env"),
-                    "entry_auth_key_configured": "env",
-                    "entry_rate_limit_rpm": runtime_field_source(&explicit_runtime_keys, "entry_rate_limit_rpm"),
-                    "entry_rate_limit_burst": runtime_field_source(&explicit_runtime_keys, "entry_rate_limit_burst"),
-                    "production_strict": runtime_field_source(&explicit_runtime_keys, "production_strict"),
-                    "sqlite_vacuum_interval_cycles": runtime_field_source(&explicit_runtime_keys, "sqlite_vacuum_interval_cycles"),
-                    "trace_slow_top_n": runtime_field_source(&explicit_runtime_keys, "trace_slow_top_n"),
-                },
-                "config": config_summary,
-                "migration": {
-                    "legacy_key_count": legacy_mappings.len(),
-                    "legacy_keys": legacy_mappings,
-                    "compatibility_window": "v0.6.x",
-                    "replacement_map": [
-                        {"from": "runtime.auth_enabled", "to": "runtime.entry_auth_enabled"},
-                        {"from": "runtime.auth_api_key_env", "to": "runtime.entry_auth_api_key_env"},
-                        {"from": "runtime.rate_limit_rpm", "to": "runtime.entry_rate_limit_rpm"},
-                        {"from": "runtime.rate_limit_burst", "to": "runtime.entry_rate_limit_burst"},
-                        {"from": "runtime.http_bind_addr", "to": "runtime.acp_http_bind_addr"},
-                        {"from": "runtime.strict_mode", "to": "runtime.production_strict"},
-                        {"from": "runtime.protocol_mode", "to": "protocol.mode"}
-                    ],
-                    "next_actions": [
-                        "Replace deprecated keys with replacement_map equivalents",
-                        "Keep only one protocol source: prefer [protocol].mode",
-                        "Run config.reload and runtime.health after migration"
-                    ]
-                },
-                "file": {
-                    "path": config_path,
-                    "runtime_explicit_field_count": explicit_runtime_fields.len(),
-                    "runtime_explicit_fields": explicit_runtime_fields,
-                    "protocol_mode_from_protocol_table": protocol_mode_from_protocol_table,
-                    "protocol_mode_from_runtime_legacy": protocol_mode_from_runtime_legacy,
-                    "warnings": document_warnings,
-                }
-            }
         }),
     )
     .await
@@ -4303,258 +3551,6 @@ async fn handle_workflow_generate(
 }
 
 /// Handle workflow execute request
-async fn handle_workflow_execute(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-    _trace: &RequestTraceContext,
-) -> Result<()> {
-    let task = params_task(&params).unwrap_or_default();
-    let ledger = clone_artifact_ledger(server);
-    let gate = evaluate_requirement_gate(&ledger, &task, &params, "workflow.execute")?;
-    if gate.blocked {
-        return send_error(
-            server,
-            request_id,
-            -32006,
-            gate.reason
-                .unwrap_or_else(|| "requirement confirmation required".to_string()),
-            Some(json!({
-                "kind": "requirement_contract",
-                "missing_fields": gate.missing_fields,
-                "next_step": {"method": "workflow.clarify", "task": task},
-                "governance_artifact_path": gate.governance_artifact_path.display().to_string(),
-                "clarification_artifact_path": gate.clarification_artifact_path.map(|path| path.display().to_string()),
-            })),
-        )
-        .await;
-    }
-
-    if params
-        .get("consultation_required")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        && params
-            .get("consultation_confidence_threshold")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.5)
-            > 0.9
-    {
-        let artifact = ConsultationArtifact {
-            generated_at: crate::acp::prelude::now_ts(),
-            task: task.clone(),
-            source: "workflow.execute".to_string(),
-            trigger_reason: "consultation_required".to_string(),
-            participants: vec!["local_echo".to_string(), "reviewer".to_string()],
-            candidate_plans: vec![format!("Conservative path for {}", task)],
-            consensus_plan: String::new(),
-            risk_matrix: json!({"risk": "high"}),
-            decision_confidence: 0.75,
-            handoff_primary_agent: "local_echo".to_string(),
-        };
-        let consultation_artifact_path = persist_consultation_artifact(&ledger, &artifact)?;
-        return send_error(
-            server,
-            request_id,
-            -32007,
-            "consultation blocked without consensus".to_string(),
-            Some(json!({
-                "kind": "consultation_blocked",
-                "consultation_artifact_path": consultation_artifact_path.display().to_string(),
-            })),
-        )
-        .await;
-    }
-
-    let mut plan = build_task_plan(&task);
-    let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
-    let mut workflow = build_workflow_generated_artifact(&plan);
-    let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
-    let workflow_artifact_path = persist_workflow_generated(&ledger, &workflow)?;
-
-    let execution_context = build_execution_context(server, &params).await?;
-    let mut execution_records = plan.planned_subtasks.clone();
-    let execution_report = execute_runtime_subtasks(
-        task.as_str(),
-        &workflow,
-        &mut execution_records,
-        &execution_context,
-    )
-    .await;
-
-    let characteristics = TaskRouter::analyze_task(&task);
-    let phase_options = server.flow_manager().and_then(|flow| {
-        flow.config()
-            .phases
-            .get(flow.default_phase())
-            .and_then(|phase| phase.options.clone())
-    });
-    let review_policy = resolve_review_policy(
-        phase_options.as_ref(),
-        Some(&characteristics),
-        true,
-        params
-            .get("dual_review_required")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    );
-    let secondary_agents = if execution_context.secondary_agents.is_empty() {
-        if review_policy.required_reviews >= 2 {
-            vec!["reviewer_1".to_string()]
-        } else {
-            Vec::new()
-        }
-    } else {
-        execution_context.secondary_agents.clone()
-    };
-    let reviews = (0..review_policy.required_reviews)
-        .map(|index| {
-            json!({
-                "reviewer": format!("reviewer_{}", index + 1),
-                "verdict": "APPROVE",
-                "response": "approved"
-            })
-        })
-        .collect::<Vec<_>>();
-    let clarification_metrics = resolve_learning_clarification_metrics(&ledger, &task, &params);
-    let policy_artifact = PrimarySecondaryPolicyArtifact {
-        generated_at: crate::acp::prelude::now_ts(),
-        task: task.clone(),
-        source: "workflow.execute".to_string(),
-        primary_agent: execution_context.primary_agent.clone(),
-        secondary_agents: secondary_agents.clone(),
-        policy_version: "blue5".to_string(),
-        failover_policy: execution_report.failure_strategy.clone(),
-        secondary_max_count: secondary_agents.len().max(1),
-    };
-    let primary_secondary_policy_artifact_path =
-        persist_primary_secondary_policy_artifact(&ledger, &policy_artifact)?;
-    let failover_artifact = PrimarySecondaryFailoverArtifact {
-        generated_at: crate::acp::prelude::now_ts(),
-        task: task.clone(),
-        source: "workflow.execute".to_string(),
-        primary_agent: policy_artifact.primary_agent.clone(),
-        secondary_agents: policy_artifact.secondary_agents.clone(),
-        failover_policy: policy_artifact.failover_policy.clone(),
-        total_subtasks: plan.planned_subtasks.len(),
-        failover_count: execution_report.failover_count,
-        reports: execution_report
-            .assignment_records
-            .iter()
-            .map(|record| PrimaryFailoverReportItem {
-                subtask_id: record.subtask_id.clone(),
-                phase_index: record.phase_index,
-                selected_primary_agent: record.node_primary_agent.clone(),
-                effective_executor: record.effective_executor.clone(),
-                failover_applied: record.failover_applied,
-                failover_reason: record.failover_reason.clone(),
-            })
-            .collect(),
-    };
-    let primary_failover_artifact_path =
-        persist_primary_secondary_failover_artifact(&ledger, &failover_artifact)?;
-    let execution_decision = ExecutionDecisionArtifact {
-        generated_at: crate::acp::prelude::now_ts(),
-        task: task.clone(),
-        source: "workflow.execute".to_string(),
-        selected_agents: execution_report
-            .assignment_records
-            .iter()
-            .filter_map(|record| record.effective_executor.clone())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect(),
-        assignment_reason: "runtime_execution".to_string(),
-        subtask_assignments: execution_report.assignment_records.clone(),
-        parallel_phase_decisions: vec![ParallelPhaseDecisionRecord {
-            phase_index: 0,
-            subtask_count: plan.planned_subtasks.len(),
-            parallelism_limit: execution_report.subtask_parallelism,
-            utilization_target: execution_report.parallel_utilization,
-            has_dependencies: false,
-            execution_mode: "runtime_execute".to_string(),
-            reason: "runtime execution from workflow DAG".to_string(),
-        }],
-        parallelism: execution_report.subtask_parallelism,
-        failure_strategy: execution_report.failure_strategy.clone(),
-        degrade_policy: params
-            .get("capability_decision")
-            .and_then(Value::as_str)
-            .unwrap_or("none")
-            .to_string(),
-    };
-    let artifact_path = persist_execution_decision(&ledger, &execution_decision)?;
-    let learning_artifact_path = persist_workflow_learning_event(
-        &ledger,
-        WorkflowLearningEvent {
-            generated_at: crate::acp::prelude::now_ts(),
-            task: task.clone(),
-            complexity: plan.characteristics.complexity,
-            predicted_success_rate: plan.routing.predicted_success_rate,
-            subtasks_total: plan.planned_subtasks.len(),
-            subtasks_completed: execution_report.subtasks_completed,
-            subtasks_failed: execution_report.subtasks_failed,
-            subtasks_skipped: execution_report.subtasks_skipped,
-            serial_work_ms: 0,
-            critical_path_ms: execution_report.critical_path_ms,
-            parallel_speedup: execution_report.parallel_speedup,
-            parallel_efficiency: execution_report.parallel_efficiency,
-            executor: policy_artifact.primary_agent.clone(),
-            source: "workflow.execute".to_string(),
-            runtime_healthy: server.is_healthy(),
-            gates_ok: true,
-            work_grade: "full_auto".to_string(),
-            risk_score: 1.0_f64 - plan.routing.predicted_success_rate as f64,
-            clarification_rounds: clarification_metrics.rounds,
-            clarification_quality_score: clarification_metrics.quality_score,
-            requirement_change_count: clarification_metrics.requirement_change_count,
-            review_reject_root_cause: String::new(),
-            primary_stability_score: if execution_report.subtasks_failed == 0 {
-                1.0
-            } else {
-                0.0
-            },
-            secondary_utilization_rate: if policy_artifact.secondary_agents.is_empty() {
-                0.0
-            } else {
-                execution_report.parallel_utilization
-            },
-            failover_count: execution_report.failover_count as u32,
-            failover_root_cause: execution_report.failover_root_cause.clone(),
-        },
-        200,
-    )?;
-
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "artifact_path": artifact_path.display().to_string(),
-            "plan_artifact_path": plan_artifact_path.display().to_string(),
-            "workflow_artifact_path": workflow_artifact_path.display().to_string(),
-            "learning_artifact_path": learning_artifact_path.display().to_string(),
-            "execution_mode": "runtime_execute",
-            "adaptive": {
-                "planning": adaptive_planning,
-                "execution_defaults": execution_context.adaptive_defaults,
-            },
-            "lazy_load": execution_report.lazy_load,
-            "review_policy": review_policy,
-            "reviews": reviews,
-            "blue5": {
-                "primary_secondary_policy": policy_artifact,
-                "primary_secondary_policy_artifact_path": primary_secondary_policy_artifact_path.display().to_string(),
-            },
-            "primary_failover_artifact_path": primary_failover_artifact_path.display().to_string(),
-            "primary_failover_report": {
-                "failover_policy": failover_artifact.failover_policy,
-                "reports": failover_artifact.reports,
-            }
-        }),
-    )
-    .await
-}
 
 async fn handle_task_plan(
     server: &AcpServer,
@@ -4642,445 +3638,6 @@ async fn handle_task_plan(
     .await
 }
 
-async fn handle_task_execute(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let Some(task) = params.get("task").and_then(Value::as_str) else {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            "task is required".to_string(),
-            None,
-        )
-        .await;
-    };
-
-    let idempotency_task_id = params
-        .get("task_id")
-        .and_then(Value::as_str)
-        .or_else(|| params.get("conversation_id").and_then(Value::as_str))
-        .unwrap_or("task-execute");
-    let idempotency_phase = params
-        .get("phase")
-        .and_then(Value::as_str)
-        .unwrap_or("execute");
-    let idempotency_key = Idempotency::key(idempotency_task_id, idempotency_phase, task);
-
-    if let Some(cached) = {
-        let mut cache = task_execute_idempotency_cache()
-            .lock()
-            .map_err(|e| anyhow::anyhow!("failed to lock idempotency cache: {e}"))?;
-        cache.evict_expired();
-        cache
-            .get(&idempotency_key)
-            .map(|entry| entry.response.clone())
-    } {
-        let mut cached_response = cached;
-        if let Some(obj) = cached_response.as_object_mut() {
-            obj.insert(
-                "idempotency".to_string(),
-                json!({"hit": true, "key": idempotency_key}),
-            );
-        }
-        return send_result(server, request_id, cached_response).await;
-    }
-
-    if !params
-        .get("requirement_confirmed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return send_error(
-            server,
-            request_id,
-            -32006,
-            "requirement clarification/confirmation is required before planning or execution"
-                .to_string(),
-            Some(json!({
-                "kind": "requirement_contract",
-                "next_step": {"method": "workflow.clarify", "task": task},
-            })),
-        )
-        .await;
-    }
-
-    let ledger = clone_artifact_ledger(server);
-    let gate = evaluate_requirement_gate(&ledger, task, &params, "task.execute")?;
-    if gate.blocked {
-        return send_error(
-            server,
-            request_id,
-            -32006,
-            gate.reason
-                .unwrap_or_else(|| "requirement confirmation required".to_string()),
-            Some(json!({
-                "kind": "requirement_contract",
-                "missing_fields": gate.missing_fields,
-                "next_step": {"method": "workflow.clarify", "task": task},
-            })),
-        )
-        .await;
-    }
-
-    let mut plan = build_task_plan(task);
-    let plan_path = persist_task_plan(&ledger, &plan)?;
-    let mut workflow = build_workflow_generated_artifact(&plan);
-    let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
-    let workflow_path = persist_workflow_generated(&ledger, &workflow)?;
-
-    let execution_context = build_execution_context(server, &params).await?;
-    let mut records = plan.planned_subtasks.clone();
-    let execution_report =
-        execute_runtime_subtasks(task, &workflow, &mut records, &execution_context).await;
-
-    let execution_path = ledger.latest_path("spec", "latest-execution.json");
-    let summary = TaskExecutionSummary {
-        generated_at: crate::acp::prelude::now_ts(),
-        task: plan.task.clone(),
-        subtasks_total: plan.planned_subtasks.len(),
-        subtasks_completed: execution_report.subtasks_completed,
-        subtasks_failed: execution_report.subtasks_failed,
-        subtasks_skipped: execution_report.subtasks_skipped,
-        executor: execution_context.primary_agent.clone(),
-        records,
-        execution_metrics: Some(TaskExecutionMetrics {
-            subtask_parallelism: execution_report.subtask_parallelism,
-            failure_strategy: execution_report.failure_strategy.clone(),
-            phases_executed: execution_report.phases_executed,
-            halted_early: execution_report.halted_early,
-            parallel_utilization: execution_report.parallel_utilization,
-            serial_degradation_count: 0,
-            parallel_failure_rollback_count: execution_report.parallel_failure_rollback_count,
-            serial_work_ms: execution_report.serial_work_ms,
-            critical_path_ms: execution_report.critical_path_ms,
-            parallel_efficiency: execution_report.parallel_efficiency,
-            parallel_speedup: execution_report.parallel_speedup,
-        }),
-        artifact_path: Some(execution_path.display().to_string()),
-    };
-    persist_task_execution_summary(&ledger, &summary)?;
-
-    let learning_path = persist_workflow_learning_event(
-        &ledger,
-        WorkflowLearningEvent {
-            generated_at: crate::acp::prelude::now_ts(),
-            task: plan.task.clone(),
-            complexity: plan.characteristics.complexity,
-            predicted_success_rate: plan.routing.predicted_success_rate,
-            subtasks_total: summary.subtasks_total,
-            subtasks_completed: summary.subtasks_completed,
-            subtasks_failed: summary.subtasks_failed,
-            subtasks_skipped: summary.subtasks_skipped,
-            serial_work_ms: execution_report.serial_work_ms,
-            critical_path_ms: execution_report.critical_path_ms,
-            parallel_speedup: summary
-                .execution_metrics
-                .as_ref()
-                .map(|metrics| metrics.parallel_speedup)
-                .unwrap_or(1.0),
-            parallel_efficiency: summary
-                .execution_metrics
-                .as_ref()
-                .map(|metrics| metrics.parallel_efficiency)
-                .unwrap_or(1.0),
-            executor: execution_context.primary_agent.clone(),
-            source: "task.execute".to_string(),
-            runtime_healthy: server.is_healthy(),
-            gates_ok: true,
-            work_grade: if plan.sub_agent_recommended {
-                "agent".to_string()
-            } else {
-                "ask".to_string()
-            },
-            risk_score: 1.0_f64 - plan.routing.predicted_success_rate as f64,
-            clarification_rounds: 0,
-            clarification_quality_score: 1.0,
-            requirement_change_count: 0,
-            review_reject_root_cause: String::new(),
-            primary_stability_score: if summary.subtasks_failed == 0 {
-                1.0
-            } else {
-                0.0
-            },
-            secondary_utilization_rate: if execution_report.subtask_parallelism > 1 {
-                execution_report.parallel_utilization
-            } else {
-                0.0
-            },
-            failover_count: execution_report.failover_count as u32,
-            failover_root_cause: execution_report.failover_root_cause.clone(),
-        },
-        200,
-    )?;
-
-    let response_payload = json!({
-        "ok": true,
-        "execution_mode": "runtime_execute",
-        "plan": plan,
-        "workflow": workflow,
-        "summary": summary,
-        "idempotency": {"hit": false, "key": idempotency_key},
-        "adaptive": {
-            "planning": adaptive_planning,
-            "execution_defaults": execution_context.adaptive_defaults,
-        },
-        "lazy_load": execution_report.lazy_load,
-        "artifacts": {
-            "plan": plan_path.display().to_string(),
-            "workflow": workflow_path.display().to_string(),
-            "execution": execution_path.display().to_string(),
-            "learning": learning_path.display().to_string(),
-        }
-    });
-
-    {
-        let mut cache = task_execute_idempotency_cache()
-            .lock()
-            .map_err(|e| anyhow::anyhow!("failed to lock idempotency cache: {e}"))?;
-        cache.evict_expired();
-        cache.insert(idempotency_key, response_payload.clone());
-    }
-
-    send_result(server, request_id, response_payload).await
-}
-
-#[derive(Clone)]
-struct RuntimeExecutionContext {
-    task_timeout_seconds: Option<u64>,
-    task_parallelism_cap: usize,
-    principles: Option<Vec<String>>,
-    base_options: HashMap<String, Value>,
-    app_config: Arc<AppConfig>,
-    primary_agent: String,
-    secondary_agents: Vec<String>,
-    candidates: Vec<(String, Arc<dyn crate::agent::Agent>)>,
-    failure_strategy: String,
-    adaptive_selector: Arc<StdMutex<crate::adaptive_selector::AdaptiveModelSelector>>,
-    online_controller: Arc<StdMutex<crate::acp::prelude::OnlineControllerState>>,
-    failure_prevention: Arc<StdMutex<crate::failure_prevention::FailurePrevention>>,
-    metrics: Arc<crate::acp::prelude::RuntimeMetrics>,
-    memory_store: Arc<StdMutex<MemoryStore>>,
-    lazy_policy: LazyLoadPolicy,
-    adaptive_defaults: AdaptiveExecutionDefaults,
-    artifact_ledger: ArtifactLedger,
-    vector_store: Option<Arc<VectorStore>>,
-}
-
-#[derive(Clone, Serialize)]
-struct AdaptiveExecutionDefaults {
-    recommended_failure_strategy: String,
-    applied_failure_strategy: String,
-    failure_strategy_from_learning: bool,
-    recommended_mode: String,
-    applied_mode: String,
-    mode_from_learning: bool,
-    filtered_unavailable_agents: Vec<String>,
-    hardness: HardnessProfile,
-    cost: TokenCostGovernanceProfile,
-}
-
-#[derive(Clone, Serialize)]
-struct AdaptivePlanningReport {
-    predicted_success_before: f32,
-    predicted_success_after: f32,
-    parallelism_before: usize,
-    recommended_parallelism: usize,
-    parallelism_after: usize,
-}
-
-struct RuntimeExecutionReport {
-    assignment_records: Vec<ExecutionAssignmentRecord>,
-    subtasks_completed: usize,
-    subtasks_failed: usize,
-    subtasks_skipped: usize,
-    subtask_parallelism: usize,
-    phases_executed: usize,
-    halted_early: bool,
-    parallel_utilization: f64,
-    parallel_failure_rollback_count: usize,
-    serial_work_ms: u64,
-    critical_path_ms: u64,
-    parallel_efficiency: f64,
-    parallel_speedup: f64,
-    failure_strategy: String,
-    failover_count: usize,
-    failover_root_cause: String,
-    lazy_load: LazyLoadExecutionReport,
-}
-
-struct SubtaskRunResult {
-    record_index: usize,
-    duration_ms: u64,
-    executor: String,
-    success: bool,
-    failover_applied: bool,
-    failover_reason: Option<String>,
-    desired_role: Option<String>,
-    candidate_scores: Vec<ExecutionDecisionCandidate>,
-    response_excerpt: String,
-    tool_loop_used: bool,
-    tool_observations: Vec<String>,
-    audit_log_json: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct LazyLoadPolicy {
-    enable_tool_loop: bool,
-    enable_role_collaboration: bool,
-    enable_memory_policy: bool,
-    activation_reasons: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct LazyLoadExecutionReport {
-    policy: LazyLoadPolicy,
-    tool_loop_runs: usize,
-    role_routed_subtasks: usize,
-    memory_entries_written: usize,
-    memory_entries_retained: usize,
-    memory_artifact_path: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct MemoryPolicyExecutionArtifact {
-    generated_at: i64,
-    task: String,
-    policy: LazyLoadPolicy,
-    total_entries_before_gc: usize,
-    retained_entries_after_gc: usize,
-    sample_observations: Vec<String>,
-}
-
-async fn build_execution_context(
-    server: &AcpServer,
-    params: &Value,
-) -> Result<RuntimeExecutionContext> {
-    let flow = server
-        .flow_manager
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("flow manager not initialized"))?
-        .clone();
-    let registry = server
-        .agent_registry
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("agent registry not initialized"))?
-        .clone();
-
-    let requested_phase = params
-        .get("phase")
-        .and_then(Value::as_str)
-        .map(|value| value.to_string());
-    let resolved = flow.resolve(requested_phase, registry.as_ref())?;
-    let base_options = resolved
-        .phase
-        .options
-        .as_ref()
-        .and_then(|options| options.agent_options())
-        .unwrap_or_default();
-
-    let ledger = clone_artifact_ledger(server);
-    let default_failure_strategy = recommend_failure_strategy_from_learning(&ledger, "tolerant");
-    let pinned_failure_strategy = params.get("failure_strategy").and_then(Value::as_str);
-    let failure_strategy = params
-        .get("failure_strategy")
-        .and_then(Value::as_str)
-        .unwrap_or(default_failure_strategy.as_str())
-        .to_ascii_lowercase();
-    let task_hint = params
-        .get("task")
-        .and_then(Value::as_str)
-        .or_else(|| params.get("objective").and_then(Value::as_str))
-        .unwrap_or_default();
-    let hardness = summarize_hardness(task_hint, params);
-    let cost = summarize_token_cost_governance(
-        task_hint,
-        params,
-        hardness.clone(),
-        &server.metrics.snapshot(),
-    );
-
-    let complexity = params
-        .get("complexity")
-        .and_then(Value::as_u64)
-        .map(|value| value as u8)
-        .unwrap_or_else(|| hardness_to_complexity(hardness.normalized));
-    let default_mode = recommend_work_grade_from_learning(&ledger, "agent");
-    let pinned_mode = params.get("mode").and_then(Value::as_str);
-    let blended_default_mode = stricter_execution_mode(
-        default_mode.as_str(),
-        hardness.budget.recommended_mode.as_str(),
-    );
-    let mode = params
-        .get("mode")
-        .and_then(Value::as_str)
-        .unwrap_or(blended_default_mode.as_str())
-        .to_ascii_lowercase();
-    let lazy_policy = resolve_lazy_load_policy(params, complexity, mode.as_str());
-
-    let phase_timeout = resolved
-        .phase
-        .options
-        .as_ref()
-        .and_then(|options| options.request_timeout_seconds);
-    let timeout_seconds = Some(
-        phase_timeout
-            .unwrap_or(hardness.budget.timeout_seconds)
-            .max(hardness.budget.timeout_seconds),
-    );
-
-    let app_config = flow.config();
-    let mut candidates = resolved.agents.clone();
-    let unavailable_agents =
-        filter_unavailable_agents(server, app_config.as_ref(), &mut candidates).await;
-    if candidates.is_empty() {
-        candidates = resolved.agents;
-    }
-
-    let primary_agent = candidates
-        .first()
-        .map(|(name, _)| name.clone())
-        .unwrap_or_else(|| "local_echo".to_string());
-    let secondary_agents = candidates
-        .iter()
-        .skip(1)
-        .map(|(name, _)| name.clone())
-        .collect::<Vec<_>>();
-
-    Ok(RuntimeExecutionContext {
-        task_timeout_seconds: timeout_seconds,
-        task_parallelism_cap: hardness.budget.parallelism_cap.max(1),
-        principles: resolved.phase.principles.clone(),
-        base_options,
-        app_config: app_config.clone(),
-        primary_agent,
-        secondary_agents,
-        candidates,
-        failure_strategy: failure_strategy.clone(),
-        adaptive_selector: server.adaptive_model_selector.clone(),
-        online_controller: server.online_controller.clone(),
-        failure_prevention: server.failure_prevention.clone(),
-        metrics: server.metrics.clone(),
-        memory_store: server.memory_store.clone(),
-        lazy_policy,
-        adaptive_defaults: AdaptiveExecutionDefaults {
-            recommended_failure_strategy: default_failure_strategy,
-            applied_failure_strategy: failure_strategy.clone(),
-            failure_strategy_from_learning: pinned_failure_strategy.is_none(),
-            recommended_mode: blended_default_mode,
-            applied_mode: mode.clone(),
-            mode_from_learning: pinned_mode.is_none(),
-            filtered_unavailable_agents: unavailable_agents,
-            hardness,
-            cost,
-        },
-        artifact_ledger: ledger,
-        vector_store: server.vector_store.clone(),
-    })
-}
-
 async fn filter_unavailable_agents(
     server: &AcpServer,
     config: &AppConfig,
@@ -5102,744 +3659,6 @@ async fn filter_unavailable_agents(
     }
     *candidates = retained;
     unavailable
-}
-
-fn resolve_lazy_load_policy(params: &Value, complexity: u8, mode: &str) -> LazyLoadPolicy {
-    let high_complexity = complexity >= 3;
-    let mode_is_heavy = matches!(mode, "agent" | "full_auto" | "safeguard");
-
-    let tool_loop = params
-        .get("lazy_tool_loop")
-        .and_then(Value::as_bool)
-        .unwrap_or(high_complexity && mode_is_heavy);
-    let role_collaboration = params
-        .get("lazy_role_collaboration")
-        .and_then(Value::as_bool)
-        .unwrap_or(high_complexity);
-    let memory_policy = params
-        .get("lazy_memory_policy")
-        .and_then(Value::as_bool)
-        .unwrap_or(high_complexity && mode_is_heavy);
-
-    let mut activation_reasons = Vec::new();
-    if high_complexity {
-        activation_reasons.push("complexity>=3".to_string());
-    }
-    if mode_is_heavy {
-        activation_reasons.push(format!("mode={}", mode));
-    }
-    if tool_loop {
-        activation_reasons.push("tool_loop_enabled".to_string());
-    }
-    if role_collaboration {
-        activation_reasons.push("role_collaboration_enabled".to_string());
-    }
-    if memory_policy {
-        activation_reasons.push("memory_policy_enabled".to_string());
-    }
-
-    LazyLoadPolicy {
-        enable_tool_loop: tool_loop,
-        enable_role_collaboration: role_collaboration,
-        enable_memory_policy: memory_policy,
-        activation_reasons,
-    }
-}
-
-fn infer_workflow_parallelism(workflow: &WorkflowGeneratedArtifact) -> usize {
-    workflow
-        .execution_order
-        .iter()
-        .map(Vec::len)
-        .max()
-        .unwrap_or(1)
-        .max(1)
-}
-
-fn rebalance_execution_order(
-    execution_order: &[Vec<String>],
-    parallelism_limit: usize,
-) -> Vec<Vec<String>> {
-    let limit = parallelism_limit.max(1);
-    if limit == 1 {
-        return execution_order
-            .iter()
-            .flat_map(|phase| phase.iter().cloned().map(|node| vec![node]))
-            .collect();
-    }
-
-    let mut rebalanced = Vec::new();
-    for phase in execution_order {
-        if phase.len() <= limit {
-            rebalanced.push(phase.clone());
-            continue;
-        }
-
-        for chunk in phase.chunks(limit) {
-            rebalanced.push(chunk.to_vec());
-        }
-    }
-    rebalanced
-}
-
-fn apply_learning_plan_feedback(
-    ledger: &ArtifactLedger,
-    plan: &mut crate::reinforcement::TaskPlanArtifact,
-    workflow: &mut WorkflowGeneratedArtifact,
-) -> AdaptivePlanningReport {
-    let predicted_success_before = plan.routing.predicted_success_rate;
-    plan.routing.predicted_success_rate = recommend_predicted_success_rate_from_learning(
-        ledger,
-        plan.routing.predicted_success_rate,
-        plan.characteristics.complexity,
-    );
-
-    let parallelism_before = infer_workflow_parallelism(workflow);
-    let recommended_parallelism =
-        recommend_parallelism_from_learning(ledger, parallelism_before, 1, 4);
-    workflow.execution_order =
-        rebalance_execution_order(&workflow.execution_order, recommended_parallelism);
-    let parallelism_after = infer_workflow_parallelism(workflow);
-
-    AdaptivePlanningReport {
-        predicted_success_before,
-        predicted_success_after: plan.routing.predicted_success_rate,
-        parallelism_before,
-        recommended_parallelism,
-        parallelism_after,
-    }
-}
-
-async fn execute_runtime_subtasks(
-    task: &str,
-    workflow: &WorkflowGeneratedArtifact,
-    records: &mut [crate::reinforcement::PlannedSubtaskRecord],
-    context: &RuntimeExecutionContext,
-) -> RuntimeExecutionReport {
-    let execution_order =
-        rebalance_execution_order(&workflow.execution_order, context.task_parallelism_cap);
-    let mut id_to_index = HashMap::new();
-    for (index, record) in records.iter().enumerate() {
-        id_to_index.insert(record.id.clone(), index);
-    }
-
-    let mut assignment_records = Vec::new();
-    let mut phases_executed = 0_usize;
-    let mut halted_early = false;
-    let mut serial_work_ms = 0_u64;
-    let mut critical_path_ms = 0_u64;
-    let mut failover_count = 0_usize;
-    let mut failover_root_causes = Vec::new();
-    let mut tool_loop_runs = 0_usize;
-    let mut role_routed_subtasks = 0_usize;
-    let mut memory_snapshots = Vec::new();
-    let fail_fast = context.failure_strategy.eq_ignore_ascii_case("fail_fast");
-
-    for (phase_idx, phase) in execution_order.iter().enumerate() {
-        let phase_started = Instant::now();
-        let mut join_set: JoinSet<SubtaskRunResult> = JoinSet::new();
-        let mut scheduled = 0_usize;
-
-        for node_id in phase {
-            let Some(record_index) = id_to_index.get(node_id).copied() else {
-                continue;
-            };
-            let subtask_description = records[record_index].description.clone();
-            let mut local_context = context.clone();
-            let task_text = task.to_string();
-            let desired_role = workflow
-                .nodes
-                .iter()
-                .find(|node| node.id == *node_id)
-                .map(|node| node.role.clone());
-
-            let mut ranked_candidates = Vec::new();
-            if context.lazy_policy.enable_role_collaboration {
-                let names = context
-                    .candidates
-                    .iter()
-                    .map(|(name, _)| name.clone())
-                    .collect::<Vec<_>>();
-                ranked_candidates =
-                    rank_execution_agents(&names, desired_role.as_deref(), phase_idx, record_index);
-                // Blend in historical execution success: re-score using Bayesian
-                // success rates from past TaskExecutionSummary records so that
-                // agents with stronger real outcomes are preferred over agents
-                // whose ranking is based on list-position heuristics alone.
-                let historical_order = recommend_agent_order_from_execution_history(
-                    &context.artifact_ledger,
-                    &names,
-                    20,
-                );
-                if historical_order.len() > 1 {
-                    let hist_len = historical_order.len() as f64;
-                    for candidate in ranked_candidates.iter_mut() {
-                        if let Some(pos) =
-                            historical_order.iter().position(|n| n == &candidate.agent)
-                        {
-                            let hist_score =
-                                historical_order.len().saturating_sub(pos) as f64 / hist_len;
-                            candidate.score = (candidate.score * 0.60 + hist_score * 0.40)
-                                .clamp(0.0_f64, 1.0_f64);
-                            candidate.reason =
-                                format!("{}, hist_rank={}", candidate.reason, pos + 1);
-                        }
-                    }
-                    ranked_candidates.sort_by(|a, b| {
-                        b.score
-                            .partial_cmp(&a.score)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                            .then_with(|| a.agent.cmp(&b.agent))
-                    });
-                }
-                if !ranked_candidates.is_empty() {
-                    role_routed_subtasks += 1;
-                }
-
-                let by_name = context
-                    .candidates
-                    .iter()
-                    .map(|(name, agent)| (name.clone(), agent.clone()))
-                    .collect::<HashMap<_, _>>();
-                let mut reordered = Vec::new();
-                for candidate in &ranked_candidates {
-                    if let Some(agent) = by_name.get(&candidate.agent) {
-                        reordered.push((candidate.agent.clone(), agent.clone()));
-                    }
-                }
-                for (name, agent) in &context.candidates {
-                    if !reordered.iter().any(|(existing, _)| existing == name) {
-                        reordered.push((name.clone(), agent.clone()));
-                    }
-                }
-                local_context.candidates = reordered;
-            }
-
-            join_set.spawn(async move {
-                execute_single_subtask(
-                    task_text,
-                    subtask_description,
-                    record_index,
-                    phase_idx,
-                    desired_role,
-                    ranked_candidates,
-                    local_context,
-                )
-                .await
-            });
-            scheduled += 1;
-        }
-
-        if scheduled == 0 {
-            continue;
-        }
-
-        phases_executed += 1;
-        let mut phase_failed = false;
-
-        while let Some(result) = join_set.join_next().await {
-            let Ok(result) = result else {
-                phase_failed = true;
-                continue;
-            };
-
-            let now = crate::acp::prelude::now_ts();
-            if let Some(record) = records.get_mut(result.record_index) {
-                record.mark_executed(
-                    now,
-                    now,
-                    result.duration_ms,
-                    if result.success {
-                        "completed"
-                    } else {
-                        "failed"
-                    },
-                    result.executor.clone(),
-                );
-
-                if !result.success {
-                    phase_failed = true;
-                }
-            }
-
-            if result.failover_applied {
-                failover_count += 1;
-                if let Some(reason) = result.failover_reason.clone() {
-                    failover_root_causes.push(reason);
-                }
-            }
-            if result.tool_loop_used {
-                tool_loop_runs += 1;
-            }
-            if !result.response_excerpt.is_empty() {
-                memory_snapshots.push(result.response_excerpt.clone());
-            }
-            for observation in &result.tool_observations {
-                memory_snapshots.push(observation.clone());
-            }
-
-            serial_work_ms += result.duration_ms;
-            assignment_records.push(ExecutionAssignmentRecord {
-                subtask_id: records
-                    .get(result.record_index)
-                    .map(|record| record.id.clone())
-                    .unwrap_or_else(|| format!("subtask-{}", result.record_index + 1)),
-                phase_index: records
-                    .get(result.record_index)
-                    .map(|record| record.phase_index)
-                    .unwrap_or(phase_idx),
-                task_index: result.record_index,
-                desired_role: result.desired_role,
-                selected_agent: Some(result.executor.clone()),
-                selection_reason: "runtime_execution".to_string(),
-                candidate_scores: result.candidate_scores,
-                dependency_blocked: false,
-                node_primary_agent: Some(context.primary_agent.clone()),
-                node_secondary_agents: context.secondary_agents.clone(),
-                effective_executor: Some(result.executor),
-                failover_applied: result.failover_applied,
-                failover_reason: result.failover_reason,
-            });
-        }
-
-        critical_path_ms += phase_started.elapsed().as_millis() as u64;
-        if fail_fast && phase_failed {
-            halted_early = true;
-            break;
-        }
-    }
-
-    if halted_early {
-        let now = crate::acp::prelude::now_ts();
-        for record in records.iter_mut() {
-            if record.start_ts.is_none() {
-                record.mark_executed(now, now, 0, "skipped", "scheduler");
-            }
-        }
-    }
-
-    let subtasks_completed = records
-        .iter()
-        .filter(|record| record.outcome.as_deref() == Some("completed"))
-        .count();
-    let subtasks_failed = records
-        .iter()
-        .filter(|record| record.outcome.as_deref() == Some("failed"))
-        .count();
-    let subtasks_skipped = records
-        .iter()
-        .filter(|record| record.outcome.as_deref() == Some("skipped"))
-        .count();
-
-    let total_phases = execution_order.len().max(1);
-    let parallel_phases = execution_order
-        .iter()
-        .filter(|phase| phase.len() > 1)
-        .count();
-    let parallel_utilization = parallel_phases as f64 / total_phases as f64;
-    let subtask_parallelism = execution_order
-        .iter()
-        .map(Vec::len)
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    let parallel_speedup = if critical_path_ms == 0 {
-        1.0
-    } else {
-        (serial_work_ms as f64 / critical_path_ms as f64).max(1.0)
-    };
-    let parallel_efficiency = if subtask_parallelism > 1 {
-        (parallel_speedup / subtask_parallelism as f64).clamp(0.0, 1.0)
-    } else {
-        1.0
-    };
-
-    let mut memory_entries_written = 0_usize;
-    let mut memory_entries_retained = 0_usize;
-    let mut memory_artifact_path = None;
-    if context.lazy_policy.enable_memory_policy {
-        let promotion = if let Ok(mut store) = context.memory_store.lock() {
-            for (index, content) in memory_snapshots.iter().enumerate() {
-                let class = if content.contains("tool:") {
-                    MemoryClass::Observation
-                } else {
-                    MemoryClass::Episodic
-                };
-                store.store(MemoryEntry {
-                    id: format!("mem-{}-{}", crate::acp::prelude::now_ts_ms(), index + 1),
-                    class,
-                    content: content.clone(),
-                    timestamp: crate::acp::prelude::now_ts().to_string(),
-                    usefulness: 0.8,
-                    staleness: 0,
-                });
-                memory_entries_written += 1;
-            }
-            store.gc();
-            let promotion: MemoryPromotionReport = store.promote();
-            memory_entries_retained = store.retrieve(MemoryClass::Observation, 128).len()
-                + store.retrieve(MemoryClass::Episodic, 128).len();
-            promotion
-        } else {
-            MemoryPromotionReport::default()
-        };
-
-        let memory_artifact = MemoryPolicyExecutionArtifact {
-            generated_at: crate::acp::prelude::now_ts(),
-            task: task.to_string(),
-            policy: context.lazy_policy.clone(),
-            total_entries_before_gc: memory_entries_written,
-            retained_entries_after_gc: memory_entries_retained,
-            sample_observations: memory_snapshots.into_iter().take(8).collect(),
-        };
-        let ledger = ArtifactLedger::new(None);
-        if let Ok(path) = ledger.write_json("spec", "latest-memory-policy.json", &memory_artifact) {
-            memory_artifact_path = Some(path.display().to_string());
-        }
-        // Persist promotion report (BLUE8-M3)
-        let promotion_artifact = serde_json::json!({
-            "generated_at": crate::acp::prelude::now_ts(),
-            "task": task,
-            "promoted_count": promotion.promoted_count,
-            "promotion_map": promotion.promotion_map,
-        });
-        let _ = ledger.write_json("spec", "latest-promoted-memory.json", &promotion_artifact);
-    }
-
-    RuntimeExecutionReport {
-        assignment_records,
-        subtasks_completed,
-        subtasks_failed,
-        subtasks_skipped,
-        subtask_parallelism,
-        phases_executed,
-        halted_early,
-        parallel_utilization,
-        parallel_failure_rollback_count: if halted_early && subtasks_failed > 0 {
-            1
-        } else {
-            0
-        },
-        serial_work_ms,
-        critical_path_ms,
-        parallel_efficiency,
-        parallel_speedup,
-        failure_strategy: context.failure_strategy.clone(),
-        failover_count,
-        failover_root_cause: failover_root_causes.into_iter().next().unwrap_or_default(),
-        lazy_load: LazyLoadExecutionReport {
-            policy: context.lazy_policy.clone(),
-            tool_loop_runs,
-            role_routed_subtasks,
-            memory_entries_written,
-            memory_entries_retained,
-            memory_artifact_path,
-        },
-    }
-}
-
-async fn execute_single_subtask(
-    task: String,
-    subtask_description: String,
-    record_index: usize,
-    phase_index: usize,
-    desired_role: Option<String>,
-    candidate_scores: Vec<ExecutionDecisionCandidate>,
-    mut context: RuntimeExecutionContext,
-) -> SubtaskRunResult {
-    let started = Instant::now();
-    let mut tool_observations = Vec::new();
-    let tool_context = if context.lazy_policy.enable_tool_loop {
-        run_lazy_tool_loop(task.as_str(), subtask_description.as_str(), record_index)
-    } else {
-        String::new()
-    };
-    if !tool_context.is_empty() {
-        tool_observations.push(tool_context.clone());
-    }
-    // Inject relevant knowledge from vector memory so agents have prior
-    // context without needing to re-derive it from scratch.
-    let vector_context_prefix = if let Some(store) = &context.vector_store {
-        let execution_phase = format!("phase-{}", phase_index + 1);
-        let semantic_phase = context.app_config.default_phase.clone();
-        let mut search_phases = vec![execution_phase];
-        if !semantic_phase.is_empty() && !search_phases.iter().any(|phase| phase == &semantic_phase)
-        {
-            search_phases.push(semantic_phase);
-        }
-
-        let snippets =
-            collect_vector_context_snippets(store, &search_phases, &subtask_description, 3);
-
-        if snippets.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "Relevant context from memory:\n{}\n",
-                snippets
-                    .iter()
-                    .map(|snippet| format!("• {}", snippet))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
-        }
-    } else {
-        String::new()
-    };
-    let messages = vec![Message {
-        role: "user".to_string(),
-        content: format!(
-            "{}Parent task: {}\nSubtask: {}\n{}\nReturn concrete implementation outcome and concise verification.",
-            vector_context_prefix,
-            task,
-            subtask_description,
-            if tool_context.is_empty() {
-                "".to_string()
-            } else {
-                format!("Tool observations:\n{}", tool_context)
-            }
-        ),
-    }];
-
-    // Build task envelope for this subtask (BLUE8-M4)
-    let task_id = format!(
-        "subtask-{}-{}-{}",
-        phase_index + 1,
-        record_index + 1,
-        crate::acp::prelude::now_ts_ms()
-    );
-    let envelope = AgentTaskEnvelope {
-        task_id: task_id.clone(),
-        phase: format!("phase-{}", phase_index + 1),
-        role: desired_role
-            .clone()
-            .unwrap_or_else(|| "executor".to_string()),
-        objective: subtask_description.clone(),
-        constraints: context.principles.as_ref().map(|p| p.join("; ")),
-        evidence: if tool_context.is_empty() {
-            None
-        } else {
-            Some(tool_context.clone())
-        },
-        input: serde_json::json!({ "task": task.as_str(), "subtask": subtask_description.as_str() }),
-    };
-
-    let mut first_failure_reason: Option<String> = None;
-
-    // Pre-compute selected model per agent for consistent ranking and execution.
-    let phase_name = format!("phase-{}", phase_index + 1);
-    let agent_names: Vec<String> = context.candidates.iter().map(|(n, _)| n.clone()).collect();
-    let mut selected_models_by_agent: HashMap<String, Option<String>> = HashMap::new();
-    let ranking_inputs = context
-        .candidates
-        .iter()
-        .map(|(agent_name, agent)| {
-            let selection = FlowModelSelector::select_model_for_agent(
-                agent.as_ref(),
-                context.app_config.as_ref(),
-                Some(&subtask_description),
-            );
-            let selected_model = selection
-                .selected_model
-                .as_ref()
-                .map(|model| model.id.clone());
-            selected_models_by_agent.insert(agent_name.clone(), selected_model.clone());
-            (agent_name.clone(), selected_model)
-        })
-        .collect::<Vec<_>>();
-
-    // Sort candidates by adaptive selector score at model granularity (exploration-exploitation).
-    if let Ok(sel) = context.adaptive_selector.lock() {
-        let ranked_agents = sel.rank_candidates(&ranking_inputs);
-        if !ranked_agents.is_empty() {
-            let order = ranked_agents
-                .into_iter()
-                .enumerate()
-                .map(|(idx, name)| (name, idx))
-                .collect::<HashMap<_, _>>();
-            context
-                .candidates
-                .sort_by_key(|(name, _)| order.get(name).copied().unwrap_or(usize::MAX));
-        }
-    }
-    // Skip agents that FailurePrevention marks as severely degraded (only if alternatives exist)
-    let degraded_set: std::collections::HashSet<String> = context
-        .failure_prevention
-        .lock()
-        .map(|fp| {
-            agent_names
-                .iter()
-                .filter(|n| fp.should_degrade(n))
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
-    if !degraded_set.is_empty()
-        && context
-            .candidates
-            .iter()
-            .any(|(n, _)| !degraded_set.contains(n))
-    {
-        context
-            .candidates
-            .retain(|(n, _)| !degraded_set.contains(n));
-    }
-
-    for (idx, (agent_name, agent)) in context.candidates.iter().enumerate() {
-        let mut options = context.base_options.clone();
-        let selected_model = selected_models_by_agent.get(agent_name).cloned().flatten();
-        if let Some(model_id) = selected_model.clone() {
-            options.insert("model".to_string(), Value::String(model_id));
-        }
-        let request_options = if options.is_empty() {
-            None
-        } else {
-            Some(options)
-        };
-
-        let run_result = run_agent_chat_collecting(
-            agent.clone(),
-            messages.clone(),
-            context.principles.clone(),
-            request_options.clone(),
-            context.task_timeout_seconds,
-        )
-        .await;
-
-        if let Err(err) = &run_result {
-            if err.to_string().to_ascii_lowercase().contains("timed out") {
-                context.metrics.inc_agent_timeout_failure();
-            }
-        }
-
-        if let (Ok(mut selector), Some(model_id)) =
-            (context.adaptive_selector.lock(), selected_model.clone())
-        {
-            selector.record_result(&model_id, run_result.is_ok());
-        }
-        // Record per-agent outcome to online controller for adaptive ranking
-        let duration_ms = started.elapsed().as_millis() as u64;
-        if let Ok(mut ctrl) = context.online_controller.lock() {
-            ctrl.record_agent_outcome(&phase_name, agent_name, run_result.is_ok(), duration_ms);
-        }
-        if let Ok(mut fp) = context.failure_prevention.lock() {
-            fp.record_outcome(agent_name, run_result.is_ok(), duration_ms);
-        }
-
-        match run_result {
-            Ok(response) if !response.trim().is_empty() => {
-                let model_tool_calls = extract_model_tool_calls(&response, 3);
-                let model_tool_observations = execute_model_tool_calls(
-                    task.as_str(),
-                    subtask_description.as_str(),
-                    record_index,
-                    &model_tool_calls,
-                );
-
-                let mut final_response = response;
-                if !model_tool_observations.is_empty() {
-                    tool_observations.extend(model_tool_observations.clone());
-                    let mut followup_messages = messages.clone();
-                    followup_messages.push(Message {
-                        role: "assistant".to_string(),
-                        content: final_response.clone(),
-                    });
-                    followup_messages.push(Message {
-                        role: "user".to_string(),
-                        content: format!(
-                            "Tool execution results:\n{}\n\nIncorporate these observations and provide the final executable outcome.",
-                            model_tool_observations.join("\n")
-                        ),
-                    });
-
-                    if let Ok(followup) = run_agent_chat_collecting(
-                        agent.clone(),
-                        followup_messages,
-                        context.principles.clone(),
-                        request_options.clone(),
-                        context.task_timeout_seconds,
-                    )
-                    .await
-                    {
-                        if !followup.trim().is_empty() {
-                            final_response = followup;
-                        }
-                    }
-                }
-
-                // Build audit log for this successful execution (BLUE8-M5)
-                let audit = AgentAuditLog {
-                    agent: agent_name.clone(),
-                    phase: envelope.phase.clone(),
-                    task_id: task_id.clone(),
-                    decision: "executed".to_string(),
-                    rationale: Some(format!(
-                        "subtask completed; failover={}; tool_loop={}; model_tool_calls={}",
-                        idx > 0,
-                        context.lazy_policy.enable_tool_loop,
-                        model_tool_calls.len(),
-                    )),
-                    timestamp: crate::acp::prelude::now_ts().to_string(),
-                };
-                let audit_log_json = serde_json::to_string(&audit).ok();
-                // Persist audit log to artifact ledger
-                let ledger = ArtifactLedger::new(None);
-                let _ = ledger.write_json("spec", "latest-audit-log.json", &audit);
-
-                return SubtaskRunResult {
-                    record_index,
-                    duration_ms: started.elapsed().as_millis() as u64,
-                    executor: agent_name.clone(),
-                    success: true,
-                    failover_applied: idx > 0,
-                    failover_reason: if idx > 0 {
-                        first_failure_reason.clone()
-                    } else {
-                        None
-                    },
-                    desired_role,
-                    candidate_scores,
-                    response_excerpt: final_response.chars().take(220).collect(),
-                    tool_loop_used: context.lazy_policy.enable_tool_loop
-                        || !model_tool_observations.is_empty(),
-                    tool_observations,
-                    audit_log_json,
-                };
-            }
-            Ok(_) => {
-                if first_failure_reason.is_none() {
-                    first_failure_reason = Some("empty_response".to_string());
-                }
-            }
-            Err(err) => {
-                if first_failure_reason.is_none() {
-                    first_failure_reason = Some(err.to_string());
-                }
-            }
-        }
-    }
-
-    // Envelope is captured but execution failed - suppress unused-variable warning
-    let _ = envelope;
-
-    SubtaskRunResult {
-        record_index,
-        duration_ms: started.elapsed().as_millis() as u64,
-        executor: context
-            .candidates
-            .first()
-            .map(|(name, _)| name.clone())
-            .unwrap_or_else(|| "scheduler".to_string()),
-        success: false,
-        failover_applied: false,
-        failover_reason: first_failure_reason,
-        desired_role,
-        candidate_scores,
-        response_excerpt: String::new(),
-        tool_loop_used: context.lazy_policy.enable_tool_loop,
-        tool_observations,
-        audit_log_json: None,
-    }
 }
 
 fn collect_vector_context_snippets(

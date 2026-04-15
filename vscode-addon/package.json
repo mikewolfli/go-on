@@ -46,6 +46,11 @@
     "onCommand:go-on.hardnessStatus",
     "onCommand:go-on.costStatus",
     "onCommand:go-on.configBaseline",
+    "onCommand:go-on.errorContract",
+    "onCommand:go-on.buildRepro",
+    "onCommand:go-on.dataLifecycle",
+    "onCommand:go-on.optimizationPeak",
+    "onCommand:go-on.runtimeStability",
     "onCommand:go-on.governancePlanGet",
     "onCommand:go-on.governanceAuditRecent",
     "onCommand:go-on.autotuneStatus",
@@ -227,6 +232,31 @@
         "command": "go-on.configBaseline",
         "title": "Get Config Baseline Freeze Status (RPC)",
         "icon": "$(settings)"
+      },
+      {
+        "command": "go-on.errorContract",
+        "title": "Get Error Contract (RPC)",
+        "icon": "$(warning)"
+      },
+      {
+        "command": "go-on.buildRepro",
+        "title": "Get Reproducible Build Pack (RPC)",
+        "icon": "$(package)"
+      },
+      {
+        "command": "go-on.dataLifecycle",
+        "title": "Get Data Lifecycle Governance (RPC)",
+        "icon": "$(database)"
+      },
+      {
+        "command": "go-on.optimizationPeak",
+        "title": "Get One-Shot Optimization Peak (RPC)",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "go-on.runtimeStability",
+        "title": "Check Runtime Stability Baseline (RPC)",
+        "icon": "$(heart)"
       },
       {
         "command": "go-on.autotuneStatus",

@@ -123,6 +123,21 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                     case 'configBaseline':
                         vscode.commands.executeCommand('go-on.configBaseline');
                         break;
+                    case 'errorContract':
+                        vscode.commands.executeCommand('go-on.errorContract');
+                        break;
+                    case 'buildRepro':
+                        vscode.commands.executeCommand('go-on.buildRepro');
+                        break;
+                    case 'dataLifecycle':
+                        vscode.commands.executeCommand('go-on.dataLifecycle');
+                        break;
+                    case 'optimizationPeak':
+                        vscode.commands.executeCommand('go-on.optimizationPeak');
+                        break;
+                    case 'runtimeStability':
+                        vscode.commands.executeCommand('go-on.runtimeStability');
+                        break;
                     case 'autotuneStatus':
                         vscode.commands.executeCommand('go-on.autotuneStatus');
                         break;
@@ -740,6 +755,11 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                         <button class="action-button" id="hardnessStatus">Hardness Status</button>
                         <button class="action-button" id="costStatus">Cost Status</button>
                         <button class="action-button" id="configBaseline">Config Baseline</button>
+                        <button class="action-button" id="errorContract">Error Contract</button>
+                        <button class="action-button" id="buildRepro">Build Repro</button>
+                        <button class="action-button" id="dataLifecycle">Data Lifecycle</button>
+                        <button class="action-button" id="optimizationPeak">Optimization Peak</button>
+                        <button class="action-button" id="runtimeStability">Runtime Stability</button>
                         <button class="action-button" id="autotuneStatus">Autotune Status</button>
                         <button class="action-button" id="governanceStatus">Governance Status</button>
                         <button class="action-button" id="governancePlanGet">Governance Plan</button>

@@ -1642,6 +1642,99 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    let errorContractRpcCommand = vscode.commands.registerCommand('go-on.errorContract', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+
+        try {
+            const result = await goOnManager.sendRequest('error.contract');
+            const contract = (result as any)?.contract ?? {};
+            const version = String(contract?.version ?? 'unknown');
+            const kinds = Array.isArray(contract?.kinds) ? contract.kinds : [];
+            const retryableKinds = kinds.filter((item: any) => item?.retry?.retryable === true).length;
+            vscode.window.showInformationMessage(
+                `error.contract: version=${version}, kinds=${kinds.length}, retryable_kinds=${retryableKinds}`
+            );
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`error.contract failed: ${error.message}`);
+        }
+    });
+
+    let buildReproRpcCommand = vscode.commands.registerCommand('go-on.buildRepro', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+
+        try {
+            const result = await goOnManager.sendRequest('build.repro');
+            const build = (result as any)?.build ?? {};
+            const repro = build?.reproducibility ?? {};
+            const requiredPresent = Number(repro?.required_present ?? 0);
+            const requiredTotal = Number(repro?.required_total ?? 0);
+            const status = String(build?.status ?? 'unknown');
+            const commit = String(build?.build?.git_commit_short ?? '-');
+            const releaseItems = Array.isArray(build?.release_manifest?.items)
+                ? build.release_manifest.items.length
+                : 0;
+            vscode.window.showInformationMessage(
+                `build.repro: status=${status}, required=${requiredPresent}/${requiredTotal}, commit=${commit}, release_items=${releaseItems}`
+            );
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`build.repro failed: ${error.message}`);
+        }
+    });
+
+    let dataLifecycleRpcCommand = vscode.commands.registerCommand('go-on.dataLifecycle', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+
+        try {
+            const result = await goOnManager.sendRequest('data.lifecycle', { execute_gc: false });
+            const lifecycle = (result as any)?.lifecycle ?? {};
+            const storage = lifecycle?.storage ?? {};
+            const waterline = storage?.waterline ?? {};
+            const status = String(waterline?.status ?? 'unknown');
+            const totalBytes = Number(storage?.total_bytes ?? 0);
+            const targetCount = Array.isArray(storage?.targets) ? storage.targets.length : 0;
+            const alerts = Array.isArray(waterline?.alerts) ? waterline.alerts.length : 0;
+            vscode.window.showInformationMessage(
+                `data.lifecycle: status=${status}, total_bytes=${totalBytes}, targets=${targetCount}, alerts=${alerts}`
+            );
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`data.lifecycle failed: ${error.message}`);
+        }
+    });
+
+    let optimizationPeakRpcCommand = vscode.commands.registerCommand('go-on.optimizationPeak', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+
+        try {
+            const result = await goOnManager.sendRequest('optimization.peak', {
+                task: 'BLUE15 one-shot optimization peak',
+                freeze_mode: 'strict'
+            });
+            const peak = (result as any)?.peak ?? {};
+            const overallPass = peak?.overall_pass === true;
+            const gates = Array.isArray(peak?.gates) ? peak.gates : [];
+            const passed = gates.filter((item: any) => item?.passed === true).length;
+            const status = String(peak?.status ?? 'unknown');
+            const version = String(peak?.version ?? '-');
+            vscode.window.showInformationMessage(
+                `optimization.peak: status=${status}, overall_pass=${overallPass}, gates=${passed}/${gates.length}, version=${version}`
+            );
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`optimization.peak failed: ${error.message}`);
+        }
+    });
+
     let autotuneStatusRpcCommand = vscode.commands.registerCommand('go-on.autotuneStatus', async () => {
         if (!goOnManager.isRunning()) {
             vscode.window.showErrorMessage('Go-On is not running. Start it first.');
@@ -1968,6 +2061,28 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    // runtime.stability — check runtime stability baseline
+    let runtimeStabilityRpcCommand = vscode.commands.registerCommand('go-on.runtimeStability', async () => {
+        if (!goOnManager.isRunning()) {
+            vscode.window.showErrorMessage('Go-On is not running. Start it first.');
+            return;
+        }
+        try {
+            const result = await goOnManager.sendRequest('runtime.stability');
+            const stability = (result as any)?.stability ?? {};
+            const checks = stability?.checks ?? [];
+            const summary = stability?.summary ?? {};
+
+            const checkSummary = checks.map((check: any) => `${check.name}=${check.status}`).join(', ');
+
+            vscode.window.showInformationMessage(
+                `runtime.stability: score=${Number(stability?.score ?? 0)}, level=${stability?.level ?? 'unknown'}, safe_restart=${Boolean(stability?.safe_restart_ready)}, health_errors=${Number(summary?.health_errors ?? 0)}, health_warnings=${Number(summary?.health_warnings ?? 0)}, config_warnings=${Number(summary?.config_warnings ?? 0)}, strict_violations=${Number(summary?.strict_violations ?? 0)}, checks=[${checkSummary}]`
+            );
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`runtime.stability failed: ${error.message}`);
+        }
+    });
+
     let harnessStatusRpcCommand = vscode.commands.registerCommand('go-on.harnessStatus', async () => {
         if (!goOnManager.isRunning()) {
             vscode.window.showErrorMessage('Go-On is not running. Start it first.');
@@ -2235,6 +2350,10 @@ export function activate(context: vscode.ExtensionContext) {
         hardnessStatusRpcCommand,
         costStatusRpcCommand,
         configBaselineRpcCommand,
+        errorContractRpcCommand,
+        buildReproRpcCommand,
+        dataLifecycleRpcCommand,
+        optimizationPeakRpcCommand,
         autotuneStatusRpcCommand,
         selectorStatusRpcCommand,
         governanceStatusRpcCommand,
@@ -2254,6 +2373,7 @@ export function activate(context: vscode.ExtensionContext) {
         metricsResetRpcCommand,
         traceMetricsRpcCommand,
         qualityBaselineRpcCommand,
+        runtimeStabilityRpcCommand,
         harnessStatusRpcCommand,
         traceGetRpcCommand,
         observabilityAlertsRpcCommand,

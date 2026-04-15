@@ -696,6 +696,30 @@ cargo test run_scenario_file_executes_config_baseline_benchmark_requests -- --no
 cargo test ndjson_scenario_files_all_pass -- --nocapture
 echo "✅ BLUE15 X7 配置基线收敛与一次性清理主链测试通过"
 
+# 6ao BLUE15 X8 错误码、重试语义与客户端契约统一主链测试
+echo "=== 步骤6ao: 运行BLUE15 X8 错误码、重试语义与客户端契约统一主链测试 ==="
+cargo test run_scenario_file_executes_error_contract_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 X8 错误码、重试语义与客户端契约统一主链测试通过"
+
+# 6ap BLUE15 X9 依赖与构建可复现优化主链测试
+echo "=== 步骤6ap: 运行BLUE15 X9 依赖与构建可复现优化主链测试 ==="
+cargo test run_scenario_file_executes_build_repro_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 X9 依赖与构建可复现优化主链测试通过"
+
+# 6aq BLUE15 X10 数据生命周期与存储治理主链测试
+echo "=== 步骤6aq: 运行BLUE15 X10 数据生命周期与存储治理主链测试 ==="
+cargo test run_scenario_file_executes_data_lifecycle_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 X10 数据生命周期与存储治理主链测试通过"
+
+# 6ar BLUE15 X11 总体一次优化到顶主链测试
+echo "=== 步骤6ar: 运行BLUE15 X11 总体一次优化到顶主链测试 ==="
+cargo test run_scenario_file_executes_optimization_peak_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 X11 总体一次优化到顶主链测试通过"
+
 # 5.2 GUI 契约烟测
 echo "=== 步骤5.2: 运行GUI契约烟测 ==="
 cd GUI

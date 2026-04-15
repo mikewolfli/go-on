@@ -285,6 +285,26 @@
         vscode.postMessage({ type: 'configBaseline' });
     });
 
+    document.getElementById('errorContract').addEventListener('click', () => {
+        vscode.postMessage({ type: 'errorContract' });
+    });
+
+    document.getElementById('buildRepro').addEventListener('click', () => {
+        vscode.postMessage({ type: 'buildRepro' });
+    });
+
+    document.getElementById('dataLifecycle').addEventListener('click', () => {
+        vscode.postMessage({ type: 'dataLifecycle' });
+    });
+
+    document.getElementById('optimizationPeak').addEventListener('click', () => {
+        vscode.postMessage({ type: 'optimizationPeak' });
+    });
+
+    document.getElementById('runtimeStability').addEventListener('click', () => {
+        vscode.postMessage({ type: 'runtimeStability' });
+    });
+
     document.getElementById('autotuneStatus').addEventListener('click', () => {
         vscode.postMessage({ type: 'autotuneStatus' });
     });
