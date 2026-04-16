@@ -4,8 +4,6 @@
 //! TaskGraph provides DAG-based task orchestration that will be integrated into
 //! the execution engine once persistence and traversal logic is implemented.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 

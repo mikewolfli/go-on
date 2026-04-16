@@ -254,20 +254,24 @@ async function updateRulesMarkdownFiles(context, payload) {
 }
 let goOnManager;
 let statusProvider;
+let goOnOutput;
 function activate(context) {
-    console.info('Go-On extension is now active!');
+    goOnOutput = vscode.window.createOutputChannel('Go-On');
+    context.subscriptions.push(goOnOutput);
+    goOnOutput.appendLine('Go-On extension activated');
     // Initialize i18n system
     const currentLanguage = i18n_1.i18n.getCurrentLanguage();
-    console.info(`Go-On UI Language: ${currentLanguage}`);
+    goOnOutput.appendLine(`UI Language: ${currentLanguage}`);
     // Initialize config manager
     const config = vscode.workspace.getConfiguration('go-on');
     const configPath = config.get('configPath', './config.toml');
     configManager_1.configManager.initialize(configPath).catch(err => {
-        console.warn('Failed to initialize config manager:', err);
+        goOnOutput.appendLine(`warn: config manager init failed: ${err}`);
     });
     // Sync VS Code language to app configuration
     syncLanguageToApp(currentLanguage);
     goOnManager = new runtimeManager_1.GoOnManager();
+    goOnManager.setOutputChannel(goOnOutput);
     statusProvider = new runtimeManager_1.GoOnStatusProvider(goOnManager);
     const runtimeBootstrapDeps = {
         ensureBinary: runtimeBinaryService_1.ensureGoOnBinary,
@@ -398,10 +402,10 @@ async function syncLanguageToApp(language) {
         // Store language preference in app settings
         await config.update('language', language, vscode.ConfigurationTarget.Global);
         // Log successful sync
-        console.info(`Language synchronized: VS Code ${language} -> App ${language}`);
+        goOnOutput.appendLine(`Language synchronized: VS Code ${language} -> App ${language}`);
     }
     catch (error) {
-        console.warn('Failed to sync language:', error);
+        goOnOutput.appendLine(`warn: language sync failed: ${error}`);
     }
 }
 //# sourceMappingURL=extension.js.map

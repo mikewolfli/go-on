@@ -105,3 +105,94 @@ Prefer stdio when:
 - If the addon can spawn the executable but reports provider not ready, the issue is configuration or credentials, not transport.
 - If HTTP mode is selected and `/health` is unreachable, the backend was not started with `--acp-http-bind`.
 - If forcing `mcp_http`, make sure the consuming feature really expects the `/v1` surface rather than ACP semantics.
+
+## Available commands
+
+The addon registers the following commands in the VS Code command palette:
+
+**Lifecycle**
+
+| Command | Description |
+|---|---|
+| `go-on.start` | Start the Go-On backend process |
+| `go-on.stop` | Stop the running backend process |
+| `go-on.shutdown` | Gracefully shut down the backend |
+| `go-on.healthCheck` | Check runtime health |
+| `go-on.healthProbes` | View all health probe details |
+
+**Runtime diagnostics**
+
+| Command | Description |
+|---|---|
+| `go-on.runtimeSelfModel` | Get the unified self-model view: health, drift summary, constraints, and suggested actions |
+| `go-on.runtimeStability` | Get runtime stability snapshot |
+| `go-on.providerStatus` | Get provider readiness, degradation status, and agent dependency snapshot |
+| `go-on.metricsGet` | Get current runtime metrics |
+| `go-on.metricsReset` | Reset runtime metrics |
+| `go-on.traceMetrics` | Get trace-level metrics |
+| `go-on.traceGet` | Get trace entries |
+| `go-on.observabilityAlerts` | View observability alerts |
+| `go-on.releaseReadiness` | Check release readiness gate |
+
+**Governance & quality**
+
+| Command | Description |
+|---|---|
+| `go-on.governanceStatus` | Get governance status |
+| `go-on.governancePlanGet` | Get active governance plan |
+| `go-on.governanceAuditRecent` | View recent audit entries |
+| `go-on.qualityBaseline` | Get quality baseline snapshot |
+| `go-on.securityBaseline` | Get security baseline |
+| `go-on.rlAlignmentEval` | Run RL alignment offline evaluation |
+| `go-on.hardnessStatus` | Get task hardness status |
+| `go-on.costStatus` | Get cost optimization status |
+| `go-on.autotuneStatus` | Get autotune status |
+| `go-on.autotuneGet` | Get autotune parameters |
+| `go-on.autotuneReset` | Reset autotune parameters |
+| `go-on.selectorStatus` | Get model selector status |
+
+**Workflow & tasks**
+
+| Command | Description |
+|---|---|
+| `go-on.workflowExecute` | Execute the current workflow |
+| `go-on.taskPlan` | Plan a task |
+| `go-on.taskExecute` | Execute a planned task |
+| `go-on.harnessStatus` | Get test harness status |
+| `go-on.primarySecondarySummary` | Get primary/secondary agent summary |
+
+**Learning & optimization**
+
+| Command | Description |
+|---|---|
+| `go-on.learningSummary` | Get learning loop summary |
+| `go-on.learningGuardrail` | Get learning guardrail status |
+| `go-on.learningReplay` | Replay learning data |
+| `go-on.knowledgeDistill` | Run knowledge distillation |
+| `go-on.optimizationPeak` | Get optimization peak status |
+| `go-on.buildRepro` | Run build reproducibility check |
+
+**Config & maintenance**
+
+| Command | Description |
+|---|---|
+| `go-on.configReload` | Reload the runtime config |
+| `go-on.configBaseline` | Get config baseline snapshot |
+| `go-on.lockStatus` | Get lock status |
+| `go-on.breakerStatus` | Get circuit breaker status |
+| `go-on.breakerReset` | Reset circuit breaker |
+| `go-on.breakerRecovery` | Run circuit breaker recovery |
+| `go-on.cacheClear` | Clear the ACP cache |
+| `go-on.vectorClear` | Clear the vector store |
+| `go-on.dataLifecycle` | Get data lifecycle status |
+| `go-on.errorContract` | Get error contract summary |
+| `go-on.checkpointCreate` | Create a runtime checkpoint |
+| `go-on.checkpointList` | List available checkpoints |
+| `go-on.conversationRollback` | Roll back to a checkpoint |
+| `go-on.maintenanceGc` | Run garbage collection |
+| `go-on.actionCheck` | Check action safety |
+| `go-on.debugPanelGet` | Get debug panel data |
+
+## Process output channel
+
+All Go-On process output (stdout, stderr, exit codes, process errors) is written to the **"Go-On"** Output Channel in VS Code. Open it from **View → Output**, then select **Go-On** from the dropdown. This is the primary diagnostic surface for startup failures and runtime errors.

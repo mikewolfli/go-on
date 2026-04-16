@@ -3,8 +3,6 @@
 //! This module extends the flow manager with automatic model selection capabilities,
 //! enabling the system to choose optimal models based on task characteristics.
 
-#![allow(dead_code)]
-
 use crate::agent::{Agent, ModelInfo};
 use crate::config::AppConfig;
 use crate::flow::ResolvedRouting;

@@ -49,8 +49,6 @@
 //!
 //! Each layer has clear responsibilities and well-defined interfaces.
 
-#![allow(dead_code)]
-
 mod acp;
 mod agents;
 mod core;
@@ -862,6 +860,7 @@ fn print_completeness_report(config: &crate::config::AppConfig, report: &Runtime
     }
 }
 
+#[allow(dead_code)]
 fn provider_ready_counts(report: &RuntimeHealthcheckReport) -> Option<(u64, u64)> {
     let component = report
         .components

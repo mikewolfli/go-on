@@ -1,10 +1,10 @@
 # BLUE16 正式版 — vscode-addon 与 GUI 结构优化建议
 
-更新时间：2026-04-16
+更新时间：2026-04-16（最终收口）
 
 本文为 BLUE16 正式版，基于对 vscode-addon 与 GUI 源码的全量结构评审（2026-04-15），针对发现的高风险安全缺陷、跨平台兼容问题与架构债务，给出可执行的优化建议。
 
-## 进度回写（2026-04-16）
+## 进度回写（2026-04-16 最终收口）
 
 - 总体完成率：`100%`（13 项中已完成 13 项）
 - vscode-addon 完成率：`100%`（6 项中已完成 6 项）
@@ -70,12 +70,12 @@
 |---|---|---|---|---|
 | B16-B1 | ✅ 已完成 | ACP Self-Model 主链路接入 | 必须 | 已新增 `runtime.self_model`，统一聚合 `health.probes`、`runtime.stability`、`rl.alignment.offline_eval` |
 | B16-B2 | ✅ 已完成 | Drift Guard 最小版闭环 | 必须 | 漂移摘要、fallback 决策、建议动作已并入 `runtime.self_model` 主结果 |
-| B16-B3 | 待推进 | `dead_code` 抑制清理 | 建议 | `agents/agent.rs`、`core/context.rs` 存在文件级 `allow(dead_code)`，需逐步压缩 |
+| B16-B3 | ✅ 已完成 | `dead_code` 抑制清理 | 建议 | 已审计全项目 `allow(dead_code)` 用法：移除 27 个文件级 `#![allow(dead_code)]`，替换为模块声明级 `#[allow(dead_code)]`（acp/*、governance/review_controls、governance/runtime_controls、orchestration/roles 等脚手架模块）及条目级 `#[allow(dead_code)]`（mcp/schema、mcp/tools、memory/memory_response_cache、optimization/failure_prevention 等具体条目）；`cargo check`、`cargo check --tests`、`cargo clippy --all -- -D warnings` 全部 0 警告通过。 |
 | B16-B4 | ✅ 已完成（本轮） | Provider 载荷/解析基线主链路化 | 建议 | 已新增 `provider.status` 主链路 RPC，三端可见 provider readiness/降级状态并纳入回归场景与契约基线 |
 
 推荐执行顺序：
 
-1. 继续推进 B16-B3（`dead_code` 抑制清理）作为下一轮收口重点。
+1. B16-B3 已全部完成，无待推进项。全部 BLUE16 条目收口。
 2. 后续所有 GUI / addon 运行态诊断入口优先复用 `runtime.self_model` 与 `provider.status`，避免重新分叉到多条状态拼装链路。
 
 后端阶段验收门禁：
@@ -107,6 +107,93 @@
 3. `cargo test` 全量通过（含 `acp_runtime_rpc_integration` 57 项）。
 4. `GUI npm run build` 与 `GUI npm run test:contract` 通过。
 5. `vscode-addon npm run check` 通过。
+
+### 最终深度扫描与收口（2026-04-16 最终）
+
+在所有 BLUE16 条目 100% 完成后，本轮执行最终隐患扫描与闭环修复：
+
+**扫描范围：** `partial_cmp` 全仓扫描（20+ 处）、`.unwrap()` 调用扫描（28 处）、`eprintln!` 泄漏、`todo!`/`unimplemented!` 残留、集成测试回归。
+
+**发现并修复的问题：**
+
+1. **浮点排序 panic 风险（已修复）：** `src/optimization/cost_optimizer.rs:347` — `min_by` 内 `.partial_cmp(&b.cost_per_1k_tokens).unwrap()` 在 `cost_per_1k_tokens` 为 NaN 时会 panic。已改为 `.unwrap_or(std::cmp::Ordering::Equal)`。其余 20+ 处 `partial_cmp` 均已确认使用 `.unwrap_or(...)` 或 `match` 安全分支，无残留风险。
+
+2. **RPC 响应格式不一致导致集成测试失败（已修复）：** 深度扫描中发现 `acp_runtime_rpc_integration` 共 **71 项**（原 57 项，后续迭代新增），其中 3 项失败：
+   - `autotune.status` 响应缺少 `autotune` 外层键 → 测试 `autotune.status should return autotune payload` 断言失败
+   - `autotune.get` 在 autotune 未启用时返回 `-32603` 错误 → `ndjson_scenario_files_all_pass` 场景失败
+   - `metrics.get` 返回裸 metrics 快照，缺少 `metrics`/`ok` 外层键 → 测试 `metrics.get should return metrics or ok` 断言失败
+
+   **修复方案（向后兼容）：**
+   - `handle_autotune_status`：保留原有 `state` 顶层字段（旧消费者兼容），同时新增 `autotune` 外层包装（新消费者兼容）
+   - `handle_autotune_get`：autotune 未启用时从返回错误改为返回 `{enabled: false, autotune: null, params: null}`；启用时在原有平铺字段基础上新增 `autotune` 与 `params` 包装键
+   - `handle_metrics_get`：保留原有平铺字段（旧消费者兼容），新增 `ok: true` 与 `metrics` 外层包装键（新消费者兼容）
+
+3. **集成测试总量已增长至 71 项：** 门禁数字已同步更新，当前 `ndjson_scenario_files_all_pass` 期望文件数 = 39。
+
+**最终门禁验收结果：**
+
+| 门禁项 | 结果 |
+|---|---|
+| `cargo check` | ✅ Exit 0，0 warnings |
+| `cargo check --tests` | ✅ Exit 0，0 warnings |
+| `cargo clippy --all -- -D warnings` | ✅ Exit 0，0 warnings |
+| `cargo test --test acp_runtime_rpc_integration` | ✅ **71 passed; 0 failed** |
+| `vscode-addon npm run check` | ✅ 0 warnings / 0 errors |
+| `GUI npm run build` | ✅ 构建成功 |
+
+### vscode-addon 可观测性收口（2026-04-17）
+
+在三端基础门禁均为绿色之后，本轮对 vscode-addon 执行一次可观测性专项收口，核心问题：**Go-On 进程输出（stderr/stdout/exit）全部打入 `console.error/info`，用户无法从 VS Code Output 面板看到任何运行时日志，导致启动失败时排查盲点。**
+
+**扫描发现：** vscode-addon 全源文件共存在 18 处 `console.*` 调用，分布于 8 个文件。
+
+**修复清单：**
+
+1. **`runtimeManager.ts`** — 新增 `private _outputChannel?: vscode.OutputChannel` + `setOutputChannel()` 方法；将进程 stdout、stderr、exit code、process error 全部从 `console.info/error` 改为 `this._outputChannel?.appendLine()`，用户可在 VS Code Output 面板 "Go-On" 频道看到完整运行日志。
+
+2. **`extension.ts`** — 在 `activate()` 中创建 `vscode.window.createOutputChannel('Go-On')` 并注册到 `context.subscriptions`；将其赋值给模块级 `goOnOutput` 变量，随即调用 `goOnManager.setOutputChannel(goOnOutput)` 完成绑定；原 `console.info/warn` 激活日志改为写入 OutputChannel，`syncLanguageToApp` 同步。
+
+3. **`statusMonitor.ts`** — 移除冗余 `console.warn`/`console.error`（UI 侧已有 `showWarningMessage` 覆盖）。
+
+4. **`chatView.ts`** — `onViewResolved` 错误由 `console.warn` 改为 `vscode.window.showWarningMessage`，用户可见。
+
+5. **`configManager.ts`** — 两处 `console.error`（目录创建失败/配置加载失败）删除；fallback 路径已在代码逻辑中静默处理，不需要重复日志输出。
+
+6. **`processFlowView.ts`** — 4 处 `console.error` 全部删除（每处紧跟着 `showErrorMessage`，不存在信息丢失）。同时修复了预存在的语法缺陷：`_handleWebviewMessage` 方法末尾缺少闭合 `}` 导致 TS1128。
+
+7. **`workflowView.ts`** — 1 处冗余 `console.error` 删除（紧跟 `showErrorMessage`）。
+
+8. **`.eslintrc.json`** — 新增 `"no-console": "error"` 规则，防止后续回归。
+
+**最终验收（本轮）：**
+
+| 门禁项 | 结果 |
+|---|---|
+| `vscode-addon npm run check` (TypeScript + ESLint) | ✅ 0 errors / 0 warnings |
+| `no-console` ESLint 规则 | ✅ 已启用，全源码 0 violations |
+| `GUI npm run build` | ✅ 构建成功 |
+| `cargo test` 全量 | ✅ 334 passed; 0 failed |
+
+### DOC 文档补全（2026-04-17）
+
+在三端代码全绿后，执行一次文档体检，发现 DOC 文档与实际实现之间存在大量脱节：`runtime.self_model`、`provider.status`、44 条 RPC 命令（含 B16-B1/B4 新增方法）、新增 "Go-On" Output Channel 均未出现在任何文档中。
+
+**补全内容：**
+
+1. `DOC/src/en/vscode-addon.md` — 新增"Available commands"章节（按 Lifecycle / Runtime diagnostics / Governance / Workflow / Learning / Config 六类分表，共 44 条命令含简短描述）；新增"Process output channel"章节（说明 Go-On Output Channel 的作用与打开方式）。
+
+2. `DOC/src/zh-CN/vscode-addon.md` — 同步补全中文版，同样六类分表 + 进程输出通道说明。
+
+**最终验收（DOC 轮）：**
+
+| 门禁项 | 结果 |
+|---|---|
+| `cargo clippy --all -- -D warnings` | ✅ Exit 0 |
+| `cargo test` 全量 | ✅ 334 passed; 0 failed |
+| `vscode-addon npm run check` | ✅ 0 errors / 0 warnings |
+| `GUI npm run build` | ✅ 成功 |
+| DOC 文档包含全部 44 条命令 | ✅ 已写入 EN + ZH-CN |
+| DOC 文档包含 Output Channel 说明 | ✅ 已写入 EN + ZH-CN |
 
 ## 一、执行结论
 

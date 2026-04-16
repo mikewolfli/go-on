@@ -103,3 +103,94 @@ OpenAI 兼容探测路径是：
 - 插件能拉起可执行文件，但提示 provider not ready，问题多半在配置或凭证，不在传输层。
 - 选了 HTTP 模式但 `/health` 不通，说明后端并未用 `--acp-http-bind` 启动。
 - 强制 `mcp_http` 时，要确认当前消费该能力的插件路径确实需要 `/v1` 语义，而不是 ACP 语义。
+
+## 可用命令
+
+插件在 VS Code 命令面板中注册了以下命令：
+
+**进程生命周期**
+
+| 命令 | 说明 |
+|---|---|
+| `go-on.start` | 启动 Go-On 后端进程 |
+| `go-on.stop` | 停止运行中的后端进程 |
+| `go-on.shutdown` | 优雅关闭后端 |
+| `go-on.healthCheck` | 运行时健康检查 |
+| `go-on.healthProbes` | 查看所有健康探针详情 |
+
+**运行时诊断**
+
+| 命令 | 说明 |
+|---|---|
+| `go-on.runtimeSelfModel` | 获取统一自画像视图：运行健康、漂移摘要、约束画像与建议动作 |
+| `go-on.runtimeStability` | 获取运行时稳定性快照 |
+| `go-on.providerStatus` | 获取 Provider 就绪状态、降级摘要与 Agent 依赖快照 |
+| `go-on.metricsGet` | 获取当前运行时指标 |
+| `go-on.metricsReset` | 重置运行时指标 |
+| `go-on.traceMetrics` | 获取 Trace 级指标 |
+| `go-on.traceGet` | 获取 Trace 条目 |
+| `go-on.observabilityAlerts` | 查看可观测性告警 |
+| `go-on.releaseReadiness` | 检查发布就绪门禁 |
+
+**治理与质量**
+
+| 命令 | 说明 |
+|---|---|
+| `go-on.governanceStatus` | 获取治理状态 |
+| `go-on.governancePlanGet` | 获取当前治理计划 |
+| `go-on.governanceAuditRecent` | 查看最近审计条目 |
+| `go-on.qualityBaseline` | 获取质量基线快照 |
+| `go-on.securityBaseline` | 获取安全基线 |
+| `go-on.rlAlignmentEval` | 运行 RL 对齐离线评估 |
+| `go-on.hardnessStatus` | 获取任务难度状态 |
+| `go-on.costStatus` | 获取成本优化状态 |
+| `go-on.autotuneStatus` | 获取自动调参状态 |
+| `go-on.autotuneGet` | 获取自动调参参数 |
+| `go-on.autotuneReset` | 重置自动调参参数 |
+| `go-on.selectorStatus` | 获取模型选择器状态 |
+
+**工作流与任务**
+
+| 命令 | 说明 |
+|---|---|
+| `go-on.workflowExecute` | 执行当前工作流 |
+| `go-on.taskPlan` | 规划任务 |
+| `go-on.taskExecute` | 执行已规划任务 |
+| `go-on.harnessStatus` | 获取测试套件状态 |
+| `go-on.primarySecondarySummary` | 获取主从 Agent 摘要 |
+
+**学习与优化**
+
+| 命令 | 说明 |
+|---|---|
+| `go-on.learningSummary` | 获取学习循环摘要 |
+| `go-on.learningGuardrail` | 获取学习防护状态 |
+| `go-on.learningReplay` | 重放学习数据 |
+| `go-on.knowledgeDistill` | 运行知识蒸馏 |
+| `go-on.optimizationPeak` | 获取优化峰值状态 |
+| `go-on.buildRepro` | 运行构建可复现性检查 |
+
+**配置与运维**
+
+| 命令 | 说明 |
+|---|---|
+| `go-on.configReload` | 重载运行时配置 |
+| `go-on.configBaseline` | 获取配置基线快照 |
+| `go-on.lockStatus` | 获取锁状态 |
+| `go-on.breakerStatus` | 获取熔断器状态 |
+| `go-on.breakerReset` | 重置熔断器 |
+| `go-on.breakerRecovery` | 运行熔断器恢复 |
+| `go-on.cacheClear` | 清空 ACP 缓存 |
+| `go-on.vectorClear` | 清空向量存储 |
+| `go-on.dataLifecycle` | 获取数据生命周期状态 |
+| `go-on.errorContract` | 获取错误契约摘要 |
+| `go-on.checkpointCreate` | 创建运行时检查点 |
+| `go-on.checkpointList` | 列出可用检查点 |
+| `go-on.conversationRollback` | 回滚到某个检查点 |
+| `go-on.maintenanceGc` | 运行垃圾回收 |
+| `go-on.actionCheck` | 检查动作安全性 |
+| `go-on.debugPanelGet` | 获取调试面板数据 |
+
+## 进程输出通道
+
+所有 Go-On 进程输出（stdout、stderr、退出码、进程错误）均写入 VS Code 的 **"Go-On"** 输出通道。通过 **查看 → 输出** 打开，再从下拉菜单中选择 **Go-On** 即可查看。这是启动失败和运行时错误排查的首选入口。

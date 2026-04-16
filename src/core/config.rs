@@ -132,9 +132,11 @@ fn default_detail_level() -> String {
 fn default_learning_speed() -> String {
     "adaptive".to_string()
 }
+#[allow(dead_code)]
 fn default_evaluate_interval() -> u32 {
     20
 }
+#[allow(dead_code)]
 fn default_min_query_chars_step() -> u32 {
     20
 }

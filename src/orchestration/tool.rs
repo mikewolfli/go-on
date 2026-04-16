@@ -4,8 +4,6 @@
 //! Tool trait, registry, and implementations will be connected to the execution flow
 //! once orchestration logic integrates them.
 
-#![allow(dead_code)]
-
 use anyhow::Result;
 use glob::Pattern;
 use serde::{Deserialize, Serialize};

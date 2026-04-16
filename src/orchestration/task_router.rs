@@ -7,8 +7,6 @@
 //! Phase 10 enhancement: Takes the existing role definitions and makes them
 //! automatically-selected based on task characteristics.
 
-#![allow(dead_code)]
-
 use crate::pua::{build_enforcement_plan, PuaEnforcementPlan};
 use crate::roles::{AgentRole, RoleSpecification, RoleSpecifications};
 use serde::{Deserialize, Serialize};

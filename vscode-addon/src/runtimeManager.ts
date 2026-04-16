@@ -37,6 +37,12 @@ export class GoOnManager {
     private runtimeEnvOverrides: Record<string, string> = {};
     private providerReadyCache?: { checkedAt: number; ready: boolean };
     private lastWizardPromptAt = 0;
+    private _outputChannel?: vscode.OutputChannel;
+
+    /** Connect a VS Code OutputChannel so Go-On process output is visible to users. */
+    setOutputChannel(channel: vscode.OutputChannel): void {
+        this._outputChannel = channel;
+    }
 
     private classifyRpcErrorKind(message: string, data?: unknown): string {
         const details = asRecord(data);
@@ -103,7 +109,7 @@ export class GoOnManager {
 
             this.process.stdout?.on('data', (data: Buffer) => {
                 const output = data.toString();
-                console.info(`Go-On stdout: ${output}`);
+                this._outputChannel?.appendLine(output.trimEnd());
 
                 try {
                     const lines = output.trim().split('\n');
@@ -140,11 +146,11 @@ export class GoOnManager {
                 if (stderrBuffer.length > 4000) {
                     stderrBuffer = stderrBuffer.slice(-4000);
                 }
-                console.error(`Go-On stderr: ${text}`);
+                this._outputChannel?.appendLine('[stderr] ' + text.trimEnd());
             });
 
             this.process.on('close', (code: number) => {
-                console.info(`Go-On process exited with code ${code}`);
+                this._outputChannel?.appendLine(`[exit] code ${code}`);
                 const failedBeforeStartup = !resolved;
                 this.process = null;
                 this.updateStatus();
@@ -161,7 +167,7 @@ export class GoOnManager {
             });
 
             this.process.on('error', (error) => {
-                console.error(`Go-On process error: ${error}`);
+                this._outputChannel?.appendLine(`[error] ${error}`);
                 this.process = null;
                 reject(error);
             });

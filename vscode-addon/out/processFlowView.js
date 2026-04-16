@@ -172,17 +172,14 @@ class GoOnProcessFlowViewProvider {
         const processes = this.context.globalState.get('go-on-processes', {});
         // Validate input
         if (!processId) {
-            console.error('Process ID is required');
             vscode.window.showErrorMessage('Invalid process: ID is required');
             return;
         }
         if (!processes[processId]) {
-            console.error('Process not found:', processId);
             vscode.window.showErrorMessage('Process not found');
             return;
         }
         if (updates && typeof updates === 'object' && updates.stages && !Array.isArray(updates.stages)) {
-            console.error('Invalid stages format: must be array');
             vscode.window.showErrorMessage('Invalid stages format: must be array');
             return;
         }
@@ -195,7 +192,6 @@ class GoOnProcessFlowViewProvider {
             });
         }
         catch (error) {
-            console.error('Failed to update process:', error);
             vscode.window.showErrorMessage(`Failed to update process: ${this.getErrorMessage(error)}`);
         }
     }

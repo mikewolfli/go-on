@@ -3,8 +3,6 @@
 //! Implements speculative execution, streaming, network optimization,
 //! and cache-first strategies to improve execution speed by 60-70%.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::Duration;

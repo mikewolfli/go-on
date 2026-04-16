@@ -1628,12 +1628,14 @@ async fn handle_metrics(server: &AcpServer, request_id: Option<Value>) -> Result
 }
 
 async fn handle_metrics_get(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    send_result(
-        server,
-        request_id,
-        serde_json::to_value(server.metrics.snapshot())?,
-    )
-    .await
+    let snapshot = serde_json::to_value(server.metrics.snapshot())?;
+    // Keep flat fields for backward compat AND add wrapper keys for new consumers
+    let mut result = snapshot.clone();
+    if let Value::Object(ref mut map) = result {
+        map.insert("ok".to_string(), json!(true));
+        map.insert("metrics".to_string(), snapshot);
+    }
+    send_result(server, request_id, result).await
 }
 
 async fn handle_metrics_prometheus(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
@@ -3229,13 +3231,22 @@ async fn handle_autotune_status(server: &AcpServer, request_id: Option<Value>) -
     };
 
     let autotune_config = server.autotune_config.as_ref().cloned();
+    let enabled = autotune_config
+        .as_ref()
+        .map(|cfg| cfg.enabled)
+        .unwrap_or(false);
 
     send_result(
         server,
         request_id,
+        // Keep "state" (backward compat) AND add "autotune" wrapper (new consumers)
         json!({
-            "enabled": autotune_config.as_ref().map(|cfg| cfg.enabled).unwrap_or(false),
+            "enabled": enabled,
             "state": autotune_state,
+            "autotune": {
+                "enabled": enabled,
+                "state": autotune_state,
+            },
         }),
     )
     .await
@@ -3243,18 +3254,28 @@ async fn handle_autotune_status(server: &AcpServer, request_id: Option<Value>) -
 
 async fn handle_autotune_get(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     let Some(autotune) = server.autotune.as_ref() else {
-        return send_error(
+        return send_result(
             server,
             request_id,
-            -32603,
-            "autotune is not enabled".to_string(),
-            None,
+            json!({
+                "enabled": false,
+                "autotune": null,
+                "params": null,
+            }),
         )
         .await;
     };
 
     let state = autotune.lock().await;
-    send_result(server, request_id, state.snapshot()).await
+    let snap = state.snapshot();
+    // Keep flat fields for backward compat AND add wrapper keys for new consumers
+    let mut result = snap.clone();
+    if let Value::Object(ref mut map) = result {
+        map.insert("enabled".to_string(), json!(true));
+        map.insert("autotune".to_string(), snap.clone());
+        map.insert("params".to_string(), snap);
+    }
+    send_result(server, request_id, result).await
 }
 
 async fn handle_selector_status(server: &AcpServer, request_id: Option<Value>) -> Result<()> {

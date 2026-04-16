@@ -1,9 +1,7 @@
-//! Phase 5: Role-Specialized Multi-Agent Collaboration
+﻿//! Phase 5: Role-Specialized Multi-Agent Collaboration
 //! These structures are intentional framework definitions for Phase 0-9 architecture.
 //! Agent roles and handoff contracts define multi-agent delegation patterns,
 //! to be integrated into the agent orchestrator once role routing is implemented.
-
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +15,7 @@ pub enum AgentRole {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct RoleSpecification {
     pub role: AgentRole,
     pub tier: String, // "primary", "fallback"
@@ -27,6 +26,7 @@ pub struct RoleSpecification {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct HandoffContract {
     pub from_role: AgentRole,
     pub to_role: AgentRole,
@@ -38,6 +38,7 @@ pub struct HandoffContract {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct HandoffContext {
     pub contract: HandoffContract,
     pub project_state: serde_json::Value,
@@ -46,6 +47,7 @@ pub struct HandoffContext {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct RoleOutput {
     pub role: AgentRole,
     pub success: bool,
@@ -55,7 +57,9 @@ pub struct RoleOutput {
     pub artifacts: Vec<String>,
 }
 
+#[allow(dead_code)]
 pub struct RoleSpecifications;
+#[allow(dead_code)]
 impl RoleSpecifications {
     pub fn planner() -> RoleSpecification {
         RoleSpecification {

@@ -79,6 +79,7 @@ impl SkillRuntimeStats {
 }
 
 impl SkillRegistry {
+    #[allow(dead_code)]
     pub fn register(&mut self, skill: Arc<dyn Skill>) {
         let name = skill.name().to_string();
         self.skills.insert(name.clone(), skill);
@@ -125,6 +126,7 @@ impl SkillRegistry {
         self.stats.get(name).map(SkillRuntimeStats::score)
     }
 
+    #[allow(dead_code)]
     pub fn best_match(&self, requested: &str) -> Option<String> {
         self.best_match_with_input(requested, &Value::Null)
     }

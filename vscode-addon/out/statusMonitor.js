@@ -35,10 +35,8 @@ class StatusMonitor {
                 }
                 catch (error) {
                     consecutiveFailures++;
-                    console.warn(`${protocolContract_1.protocolContract.statusTerms.healthCheckFailed} (${consecutiveFailures}/${maxFailures}):`, error);
                     this.statusBarItem.tooltip = `Go-On Status: ${protocolContract_1.protocolContract.statusTerms.healthCheckFailed} (${consecutiveFailures}/${maxFailures})\nClick to open chat`;
                     if (consecutiveFailures >= maxFailures) {
-                        console.error('Max health check failures reached, stopping monitoring');
                         this.stopHealthMonitoring();
                         vscode.window.showWarningMessage('Go-On: Health checks failed. Please restart the extension.');
                     }

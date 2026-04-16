@@ -13,10 +13,15 @@
 //! - `tests` - Test utilities
 
 // Core modules
+#[allow(dead_code)]
 pub mod background;
+#[allow(dead_code)]
 pub mod helpers;
+#[allow(dead_code)]
 pub mod r#impl;
+#[allow(dead_code)]
 pub mod prelude;
+#[allow(dead_code)]
 pub mod server;
 
 // Re-export for convenience

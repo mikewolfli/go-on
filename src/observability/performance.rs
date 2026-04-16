@@ -3,8 +3,6 @@
 //! This module provides performance optimization tools including caching strategies,
 //! memory management, and performance profiling.
 
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

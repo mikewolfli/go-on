@@ -247,7 +247,6 @@ class GoOnSettingsViewProvider {
             await vscode.commands.executeCommand(command);
             return;
         }
-        console.warn(`[go-on-settings] Unknown message type: ${messageType}`);
     }
     async _handleGenericSettingUpdate(key, value) {
         if (!key.startsWith('go-on.')) {

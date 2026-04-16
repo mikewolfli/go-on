@@ -1,7 +1,5 @@
 //! MCP (Model Context Protocol) compatibility layer.
 
-#![allow(dead_code)]
-
 use std::sync::Arc;
 
 use crate::agent::AgentRegistry;

@@ -61,7 +61,7 @@ class GoOnChatViewProvider {
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
         if (this.onViewResolved) {
             Promise.resolve(this.onViewResolved()).catch((error) => {
-                console.warn('Failed to initialize Go-On runtime after chat view opened:', error);
+                void vscode.window.showWarningMessage(`Go-On: Failed to initialize runtime: ${error instanceof Error ? error.message : String(error)}`);
             });
         }
         webviewView.webview.onDidReceiveMessage(async (message) => {

@@ -3,8 +3,6 @@
 //! Provides a JSON-RPC 2.0 server that communicates over stdin/stdout,
 //! implementing the Model Context Protocol specification.
 
-#![allow(dead_code)]
-
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -180,28 +178,28 @@ async fn handle_http_connection(
 
     let request_text = String::from_utf8_lossy(&buffer[..bytes_read]);
     let header_end = request_text.find("\r\n\r\n").ok_or_else(|| {
-        warn!("MCP HTTP: invalid request — missing header terminator");
+        warn!("MCP HTTP: invalid request �?missing header terminator");
         anyhow::anyhow!("invalid HTTP request: missing header terminator")
     })?;
 
     let (header_part, body_initial_part) = request_text.split_at(header_end + 4);
     let mut lines = header_part.lines();
     let request_line = lines.next().ok_or_else(|| {
-        warn!("MCP HTTP: invalid request — missing request line");
+        warn!("MCP HTTP: invalid request �?missing request line");
         anyhow::anyhow!("invalid HTTP request: missing request line")
     })?;
 
     let mut request_line_parts = request_line.split_whitespace();
     let method = request_line_parts.next().ok_or_else(|| {
         warn!(
-            "MCP HTTP: invalid request — missing method in request line: {}",
+            "MCP HTTP: invalid request �?missing method in request line: {}",
             request_line
         );
         anyhow::anyhow!("invalid HTTP request: missing method")
     })?;
     let path = request_line_parts.next().ok_or_else(|| {
         warn!(
-            "MCP HTTP: invalid request — missing path in request line: {}",
+            "MCP HTTP: invalid request �?missing path in request line: {}",
             request_line
         );
         anyhow::anyhow!("invalid HTTP request: missing path")

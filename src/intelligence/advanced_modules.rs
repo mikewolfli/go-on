@@ -1,7 +1,5 @@
 //! Advanced enhancement modules: Parameter Tuner, Resource Allocator, Diagnostics, Learning
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -341,7 +339,7 @@ impl WorkflowDiagnostics {
             efficiency_score,
         }
     }
-    // dead_code 检查：本模块所有结构体/方法均有测试覆盖或主流程调用，若后续移除请同步清理。
+    // dead_code 检查：本模块所有结构体/方法均有测试覆盖或主流程调用，若后续移除请同步清理�?
 
     /// Generate optimization recommendations
     pub fn recommend_optimizations(diagnostics: &ExecutionDiagnostics) -> Vec<String> {

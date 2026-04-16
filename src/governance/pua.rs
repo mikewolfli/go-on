@@ -1,6 +1,4 @@
-//! PUA enforcement model shared across routing, execution, verification, and review.
-
-#![allow(dead_code)]
+﻿//! PUA enforcement model shared across routing, execution, verification, and review.
 
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -615,6 +613,7 @@ pub fn merge_phase_principles(
     }
 }
 
+#[allow(dead_code)]
 pub fn mode_execution_report(mode: &str, high_risk: bool) -> PuaExecutionReport {
     let mut missing_checks = vec![
         "build_proof".to_string(),
@@ -642,6 +641,7 @@ pub fn mode_execution_report(mode: &str, high_risk: bool) -> PuaExecutionReport 
     }
 }
 
+#[allow(dead_code)]
 pub fn tool_execution_report(tool_name: &str, verification: Option<&str>) -> PuaExecutionReport {
     let mut completed_checks = vec!["tool_audit_recorded".to_string()];
     let mut missing_checks = vec!["proof_linked_to_task".to_string()];
@@ -663,6 +663,7 @@ pub fn tool_execution_report(tool_name: &str, verification: Option<&str>) -> Pua
     }
 }
 
+#[allow(dead_code)]
 pub fn review_gate_prompt() -> String {
     "Act as a strict execution approval gate. Reply with APPROVE or REJECT on the first line only. After the first line, evaluate the request against the PUA red lines and quality compass: build/test/runtime proof, fact-based reasoning, exhaustive attempts, pattern scan, root cause clarity, and quality improvement. Reject if any required proof is missing.".to_string()
 }
@@ -695,6 +696,7 @@ fn parse_escalation_level(level: &str) -> u8 {
     trimmed.parse::<u8>().unwrap_or(0)
 }
 
+#[allow(dead_code)]
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

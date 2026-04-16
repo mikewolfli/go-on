@@ -68,8 +68,6 @@
 //! - **Datadog**: Metrics and traces can be sent to Datadog
 //! - **New Relic**: Metrics and traces can be sent to New Relic
 
-#![allow(dead_code)]
-
 use tracing::{debug, error, info, trace, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};

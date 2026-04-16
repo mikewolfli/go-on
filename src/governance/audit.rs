@@ -4,8 +4,6 @@
 //! AuditLog provides circular buffering of agent decisions for compliance and debugging,
 //! to be integrated into all agent execution points.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 

@@ -348,8 +348,6 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
             await vscode.commands.executeCommand(command);
             return;
         }
-
-        console.warn(`[go-on-settings] Unknown message type: ${messageType}`);
     }
 
     private async _handleGenericSettingUpdate(key: string, value: unknown) {

@@ -4,8 +4,6 @@
 //! ExecutionGraph provides branching and conditional execution that will be
 //! traversed by the orchestrator once node completion callbacks are wired.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 

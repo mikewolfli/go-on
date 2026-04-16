@@ -4,8 +4,6 @@
 //! subtasks with identified dependencies, parallel execution opportunities,
 //! and optimal execution order.
 
-#![allow(dead_code)]
-
 use crate::task_router::{TaskCharacteristics, TaskType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

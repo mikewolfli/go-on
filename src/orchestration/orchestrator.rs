@@ -6,8 +6,6 @@
 //!
 //! Phase 10+: Model selection integration for automatic model discovery and selection.
 
-#![allow(dead_code)]
-
 use crate::agent::{AgentTaskEnvelope, ModelInfo};
 #[allow(unused_imports)]
 use crate::mode::{

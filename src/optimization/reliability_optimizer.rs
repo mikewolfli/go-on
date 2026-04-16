@@ -4,8 +4,6 @@
 //! real-time verification, and knowledge graph integration to improve
 //! success rate by 35-50%.
 
-#![allow(dead_code)]
-
 use crate::quality_models::QualityVerdict;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

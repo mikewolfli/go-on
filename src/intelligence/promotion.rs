@@ -5,8 +5,6 @@
 //! `MemoryStore::promote()` directly; plugin wiring can be added behind this
 //! interface without changing call sites again.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

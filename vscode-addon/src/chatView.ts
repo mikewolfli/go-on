@@ -93,7 +93,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
 
         if (this.onViewResolved) {
             Promise.resolve(this.onViewResolved()).catch((error) => {
-                console.warn('Failed to initialize Go-On runtime after chat view opened:', error);
+                void vscode.window.showWarningMessage(`Go-On: Failed to initialize runtime: ${error instanceof Error ? error.message : String(error)}`);
             });
         }
 
@@ -224,7 +224,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                         }
 
                         // Keep compatibility with current behavior but guard dangerous globals.
-                        result = String(new Function('return (' + code + ')()')()); 
+                        result = String(new Function('return (' + code + ')()')());
                     } catch (e: unknown) {
                         result = `Error: ${this._getErrorMessage(e)}`;
                     }

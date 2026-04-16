@@ -4,8 +4,6 @@
 //! SystemContext manages memory, audit, and policy layers that will be injected
 //! into mode runtimes and agent orchestration once integration is implemented.
 
-#![allow(dead_code)]
-
 use crate::audit::AuditLog;
 use crate::memory::memory::{MemoryPolicy, MemoryStore};
 use anyhow::Result;

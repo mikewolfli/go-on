@@ -3,6 +3,7 @@ pub mod flow_with_models;
 pub mod graph;
 pub mod mode;
 pub mod orchestrator;
+#[allow(dead_code)]
 pub mod roles;
 pub mod skill;
 pub mod task_decomposer;

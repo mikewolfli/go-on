@@ -8,6 +8,10 @@ function asRecord(value) {
     return typeof value === 'object' && value !== null ? value : {};
 }
 class GoOnManager {
+    /** Connect a VS Code OutputChannel so Go-On process output is visible to users. */
+    setOutputChannel(channel) {
+        this._outputChannel = channel;
+    }
     classifyRpcErrorKind(message, data) {
         const details = asRecord(data);
         const explicit = typeof details.kind === 'string' ? details.kind : undefined;
@@ -67,7 +71,7 @@ class GoOnManager {
             }, 10000);
             this.process.stdout?.on('data', (data) => {
                 const output = data.toString();
-                console.info(`Go-On stdout: ${output}`);
+                this._outputChannel?.appendLine(output.trimEnd());
                 try {
                     const lines = output.trim().split('\n');
                     for (const line of lines) {
@@ -103,10 +107,10 @@ class GoOnManager {
                 if (stderrBuffer.length > 4000) {
                     stderrBuffer = stderrBuffer.slice(-4000);
                 }
-                console.error(`Go-On stderr: ${text}`);
+                this._outputChannel?.appendLine('[stderr] ' + text.trimEnd());
             });
             this.process.on('close', (code) => {
-                console.info(`Go-On process exited with code ${code}`);
+                this._outputChannel?.appendLine(`[exit] code ${code}`);
                 const failedBeforeStartup = !resolved;
                 this.process = null;
                 this.updateStatus();
@@ -120,7 +124,7 @@ class GoOnManager {
                 }
             });
             this.process.on('error', (error) => {
-                console.error(`Go-On process error: ${error}`);
+                this._outputChannel?.appendLine(`[error] ${error}`);
                 this.process = null;
                 reject(error);
             });

@@ -3,8 +3,6 @@
 //! Implements multi-tier model selection, prompt compression, batch processing,
 //! and cost cap protection to reduce execution costs by 55-65%.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -346,7 +344,7 @@ impl CostOptimizer {
                 .min_by(|a, b| {
                     a.cost_per_1k_tokens
                         .partial_cmp(&b.cost_per_1k_tokens)
-                        .unwrap()
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|p| p.model_name.clone());
             (false, fallback)

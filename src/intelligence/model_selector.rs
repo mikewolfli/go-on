@@ -3,8 +3,6 @@
 //! This module provides model selection strategies and automatic mode policies
 //! for choosing models based on task requirements, complexity, and cost/performance tradeoffs.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 /// Strategy for automatic model selection

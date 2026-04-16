@@ -3,8 +3,6 @@
 //! Structured verification and deterministic checks will be integrated into the
 //! review gate once verification signal aggregation logic is implemented.
 
-#![allow(dead_code)]
-
 use crate::agent::AgentAuditLog;
 use crate::pua::{quality_compass, PuaExecutionReport};
 use crate::quality_models::{QualitySignal, QualitySignalType, QualityVerdict};

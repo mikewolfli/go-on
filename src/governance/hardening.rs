@@ -3,8 +3,6 @@
 //! Budget enforcement, quotas, and policies will be applied by the execution engine
 //! once resource tracking and policy enforcement hooks are implemented.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;

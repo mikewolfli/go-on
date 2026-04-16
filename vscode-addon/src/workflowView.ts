@@ -186,7 +186,6 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
 
             vscode.window.showInformationMessage('Workflow deleted successfully!');
         } catch (error) {
-            console.error('Failed to delete workflow:', error);
             vscode.window.showErrorMessage(`Failed to delete workflow: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }

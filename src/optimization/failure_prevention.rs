@@ -3,8 +3,6 @@
 //! Implements anomaly detection, advanced circuit breaker, health monitoring,
 //! and graceful degradation to reduce failure rate by 60-70%.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -81,6 +79,7 @@ pub struct FailurePrevention {
     successful_requests: HashMap<String, u64>,
     anomaly_thresholds: AnomalyThresholds,
     max_failure_threshold: u32,
+    #[allow(dead_code)]
     open_duration_ms: u32,
 }
 

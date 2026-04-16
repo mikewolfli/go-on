@@ -139,8 +139,7 @@ class ConfigManager {
 
         try {
             await fs.mkdir(configDir, { recursive: true });
-        } catch (error) {
-            console.error('Failed to create config directory:', error);
+        } catch {
             // Return fallback path if directory creation fails
             return path.join(homeDir, 'config.toml');
         }
@@ -155,8 +154,7 @@ class ConfigManager {
         try {
             const content = await fs.readFile(filePath, 'utf-8');
             this.config = this.parseTOML(content);
-        } catch (error) {
-            console.error('Failed to load config:', error);
+        } catch {
             this.createDefaultConfig();
         }
     }

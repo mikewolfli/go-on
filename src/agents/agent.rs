@@ -6,8 +6,6 @@
 //! They define task contracts, audit schemas, and agent interfaces that will be wired
 //! into the execution flow once orchestration logic is implemented.
 
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
