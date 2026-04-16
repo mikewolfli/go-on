@@ -159,7 +159,11 @@
     "latency": "Latency",
     "health": "Health",
     "ok": "OK",
-    "notOk": "NOT OK"
+    "notOk": "NOT OK",
+    "backToMain": "Switch To Main Window",
+    "openFullInCurrent": "Open Full View Here",
+    "refresh": "Refresh",
+    "statusbar": "Core Status"
   },
   "toast": {
     "serviceStarted": "Service started",

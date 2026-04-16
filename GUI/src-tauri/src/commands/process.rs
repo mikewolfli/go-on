@@ -91,10 +91,16 @@ fn start_service_impl(state: &AppState) -> Result<ServiceStatus> {
     };
 
     if !exe_path.exists() {
-        return Err(anyhow!("startup_error:file_missing:{}", exe_path.to_string_lossy()));
+        return Err(anyhow!(
+            "startup_error:file_missing:{}",
+            exe_path.to_string_lossy()
+        ));
     }
     if !exe_path.is_file() {
-        return Err(anyhow!("startup_error:not_a_file:{}", exe_path.to_string_lossy()));
+        return Err(anyhow!(
+            "startup_error:not_a_file:{}",
+            exe_path.to_string_lossy()
+        ));
     }
 
     let stdout_log = OpenOptions::new()
@@ -264,11 +270,14 @@ pub fn run_cli_command(state: State<'_, AppState>, command: String) -> Result<St
 
 #[tauri::command]
 pub fn show_mini_console(app: AppHandle) -> Result<(), String> {
-    let window = app
+    let mini = app
         .get_webview_window("mini")
         .ok_or_else(|| "mini window not found".to_string())?;
-    window.show().map_err(|e| e.to_string())?;
-    window.set_focus().map_err(|e| e.to_string())?;
+    mini.show().map_err(|e| e.to_string())?;
+    mini.set_focus().map_err(|e| e.to_string())?;
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
     Ok(())
 }
 
@@ -278,6 +287,32 @@ pub fn hide_mini_console(app: AppHandle) -> Result<(), String> {
         .get_webview_window("mini")
         .ok_or_else(|| "mini window not found".to_string())?;
     window.hide().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn switch_to_main_window(app: AppHandle) -> Result<(), String> {
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    main.show().map_err(|e| e.to_string())?;
+    main.set_focus().map_err(|e| e.to_string())?;
+    if let Some(mini) = app.get_webview_window("mini") {
+        let _ = mini.hide();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn switch_to_mini_window(app: AppHandle) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini window not found".to_string())?;
+    mini.show().map_err(|e| e.to_string())?;
+    mini.set_focus().map_err(|e| e.to_string())?;
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
     Ok(())
 }
 

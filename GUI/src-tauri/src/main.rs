@@ -148,6 +148,8 @@ fn main() {
             commands::process::run_cli_command,
             commands::process::show_mini_console,
             commands::process::hide_mini_console,
+            commands::process::switch_to_main_window,
+            commands::process::switch_to_mini_window,
             commands::health::check_health,
             commands::integrations::get_editor_integration_status,
             commands::runtime_ops::invoke_runtime_rpc,

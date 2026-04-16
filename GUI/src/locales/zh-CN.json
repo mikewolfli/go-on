@@ -159,7 +159,11 @@
     "latency": "时延",
     "health": "健康",
     "ok": "正常",
-    "notOk": "异常"
+    "notOk": "异常",
+    "backToMain": "切回主窗口",
+    "openFullInCurrent": "在当前窗口打开主界面",
+    "refresh": "刷新",
+    "statusbar": "核心状态"
   },
   "toast": {
     "serviceStarted": "服务已启动",

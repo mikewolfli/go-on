@@ -204,3 +204,11 @@ export async function showMiniConsole() {
 export async function hideMiniConsole() {
     return invoke<void>("hide_mini_console");
 }
+
+export async function switchToMainWindow() {
+    return invoke<void>("switch_to_main_window");
+}
+
+export async function switchToMiniWindow() {
+    return invoke<void>("switch_to_mini_window");
+}

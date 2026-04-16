@@ -1,52 +1,57 @@
 <template>
-  <OfflineIndicator />
-  <QuickNavigator />
-  <div v-if="monitorOnly" class="monitor-only-banner">
-    ⚠️ {{ t("app.monitorOnlyBanner") }}
-    <router-link to="/config" class="monitor-only-config-link">{{ t("app.monitorOnlyConfigLink") }}</router-link>
-  </div>
-  <el-container :style="monitorOnly ? 'height: calc(100vh - 36px)' : 'height: 100vh'">
-    <el-aside width="220px" style="border-right: 1px solid #e5e7eb; padding: 12px;">
-      <h3>{{ t("app.name") }}</h3>
-      <el-menu :default-active="activePath" router>
-        <el-menu-item index="/dashboard">{{ t("menu.dashboard") }}</el-menu-item>
-        <el-menu-item index="/monitor">{{ t("menu.monitor") }}</el-menu-item>
-        <el-menu-item index="/ai-usage">{{ t("menu.aiUsage") }}</el-menu-item>
-        <el-menu-item index="/health-breakdown">{{ t("menu.healthBreakdown") }}</el-menu-item>
-        <el-menu-item index="/logs">{{ t("menu.logs") }}</el-menu-item>
-        <el-menu-item index="/setup">{{ t("menu.setup") }}</el-menu-item>
-        <el-menu-item index="/config">{{ t("menu.config") }}</el-menu-item>
-        <el-menu-item index="/providers">{{ t("menu.providers") }}</el-menu-item>
-        <el-menu-item index="/backend-ops">{{ t("menu.backendOps") }}</el-menu-item>
-        <el-menu-item index="/autotune">{{ t("menu.autoTune") }}</el-menu-item>
-        <el-menu-item index="/workflow">{{ t("menu.workflow") }}</el-menu-item>
-        <el-menu-item index="/security">{{ t("menu.security") }}</el-menu-item>
-      </el-menu>
-    </el-aside>
-    <el-container>
-      <el-header style="display:flex;align-items:center;gap:8px;border-bottom:1px solid #e5e7eb;">
-        <el-tag :type="runtime.status.running ? 'success' : 'danger'">
-          {{ runtime.status.running ? t("app.serviceRunning") : t("app.serviceStopped") }}
-        </el-tag>
-        <el-button size="small" type="primary" @click="onStart">{{ t("app.start") }}</el-button>
-        <el-button size="small" @click="onStop">{{ t("app.stop") }}</el-button>
-        <el-button size="small" type="warning" @click="onRestart">{{ t("app.restart") }}</el-button>
-        <el-divider direction="vertical" />
-        <el-button size="small" @click="showMiniConsole">{{ t("app.miniConsole") }}</el-button>
-        <el-button size="small" @click="runtime.refreshAll">{{ t("app.refresh") }}</el-button>
-        <el-button size="small" @click="toggleTheme" :title="t('app.toggleTheme')">
-          {{ themeMode === 'light' ? '🌙' : '☀️' }}
-        </el-button>
-        <el-select :model-value="locale" size="small" style="width: 120px" @change="onLocaleChange">
-          <el-option label="English" value="en-US" />
-          <el-option label="简体中文" value="zh-CN" />
-        </el-select>
-      </el-header>
-      <el-main>
-        <router-view />
-      </el-main>
+  <template v-if="isMiniRoute">
+    <router-view />
+  </template>
+  <template v-else>
+    <OfflineIndicator />
+    <QuickNavigator />
+    <div v-if="monitorOnly" class="monitor-only-banner">
+      ⚠️ {{ t("app.monitorOnlyBanner") }}
+      <router-link to="/config" class="monitor-only-config-link">{{ t("app.monitorOnlyConfigLink") }}</router-link>
+    </div>
+    <el-container :style="monitorOnly ? 'height: calc(100vh - 36px)' : 'height: 100vh'">
+      <el-aside width="220px" style="border-right: 1px solid #e5e7eb; padding: 12px;">
+        <h3>{{ t("app.name") }}</h3>
+        <el-menu :default-active="activePath" router>
+          <el-menu-item index="/dashboard">{{ t("menu.dashboard") }}</el-menu-item>
+          <el-menu-item index="/monitor">{{ t("menu.monitor") }}</el-menu-item>
+          <el-menu-item index="/ai-usage">{{ t("menu.aiUsage") }}</el-menu-item>
+          <el-menu-item index="/health-breakdown">{{ t("menu.healthBreakdown") }}</el-menu-item>
+          <el-menu-item index="/logs">{{ t("menu.logs") }}</el-menu-item>
+          <el-menu-item index="/setup">{{ t("menu.setup") }}</el-menu-item>
+          <el-menu-item index="/config">{{ t("menu.config") }}</el-menu-item>
+          <el-menu-item index="/providers">{{ t("menu.providers") }}</el-menu-item>
+          <el-menu-item index="/backend-ops">{{ t("menu.backendOps") }}</el-menu-item>
+          <el-menu-item index="/autotune">{{ t("menu.autoTune") }}</el-menu-item>
+          <el-menu-item index="/workflow">{{ t("menu.workflow") }}</el-menu-item>
+          <el-menu-item index="/security">{{ t("menu.security") }}</el-menu-item>
+        </el-menu>
+      </el-aside>
+      <el-container>
+        <el-header style="display:flex;align-items:center;gap:8px;border-bottom:1px solid #e5e7eb;">
+          <el-tag :type="runtime.status.running ? 'success' : 'danger'">
+            {{ runtime.status.running ? t("app.serviceRunning") : t("app.serviceStopped") }}
+          </el-tag>
+          <el-button size="small" type="primary" @click="onStart">{{ t("app.start") }}</el-button>
+          <el-button size="small" @click="onStop">{{ t("app.stop") }}</el-button>
+          <el-button size="small" type="warning" @click="onRestart">{{ t("app.restart") }}</el-button>
+          <el-divider direction="vertical" />
+          <el-button size="small" @click="onSwitchToMiniWindow">{{ t("app.miniConsole") }}</el-button>
+          <el-button size="small" @click="runtime.refreshAll">{{ t("app.refresh") }}</el-button>
+          <el-button size="small" @click="toggleTheme" :title="t('app.toggleTheme')">
+            {{ themeMode === 'light' ? '🌙' : '☀️' }}
+          </el-button>
+          <el-select :model-value="locale" size="small" style="width: 120px" @change="onLocaleChange">
+            <el-option label="English" value="en-US" />
+            <el-option label="简体中文" value="zh-CN" />
+          </el-select>
+        </el-header>
+        <el-main>
+          <router-view />
+        </el-main>
+      </el-container>
     </el-container>
-  </el-container>
+  </template>
 </template>
 
 <script setup lang="ts">
@@ -58,7 +63,7 @@ import {
   backendExecutableExists,
   stopService,
   restartService,
-  showMiniConsole,
+  switchToMiniWindow,
 } from "./services/bridge";
 import {
   bootstrapBackend,
@@ -76,6 +81,7 @@ import QuickNavigator from "./components/QuickNavigator.vue";
 const runtime = useRuntimeStore();
 const route = useRoute();
 const activePath = computed(() => route.path);
+const isMiniRoute = computed(() => route.path === "/mini");
 const { t } = useI18n();
 const locale = ref(getLocale());
 const themeMode = currentTheme;
@@ -106,6 +112,15 @@ function onLocaleChange(value: string) {
 
 function toggleTheme() {
   toggleThemeFunc();
+}
+
+async function onSwitchToMiniWindow() {
+  try {
+    await switchToMiniWindow();
+  } catch {
+    // In browser preview fallback to in-window mini route.
+    window.location.hash = "#/mini";
+  }
 }
 
 async function onStart() {
