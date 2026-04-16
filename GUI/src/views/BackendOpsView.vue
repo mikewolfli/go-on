@@ -30,6 +30,9 @@
         <el-button type="success" plain @click="call('rl.alignment.offline_eval', { window: 120 })">{{ t("backendOps.rlAlignmentEval") }}</el-button>
         <el-button type="success" plain @click="call('hardness.status', { task: 'Assess request routing difficulty', changed_files: ['src/acp/impl/request.rs'], tool_dependencies: ['search_files', 'read_file'] })">{{ t("backendOps.hardnessStatus") }}</el-button>
         <el-button type="success" plain @click="call('cost.status', { task: 'Optimize token budget and model cost routing', changed_files: ['src/acp/impl/request.rs', 'vscode-addon/src/extension.ts'], tool_dependencies: ['search_files', 'read_file', 'write_file'], max_output_tokens: 1800 })">{{ t("backendOps.costStatus") }}</el-button>
+        <el-button type="success" plain @click="call('provider.status')">{{ t("backendOps.providerStatus") }}</el-button>
+        <el-button type="success" plain @click="call('lock.status', { top_n: 5 })">{{ t("backendOps.lockStatus") }}</el-button>
+        <el-button type="success" plain @click="call('release.readiness')">{{ t("backendOps.releaseReadiness") }}</el-button>
         <el-button type="primary" @click="call('selector.status')">{{ t("backendOps.selectorStatus") }}</el-button>
         <el-button type="primary" plain @click="call('learning.replay', { limit: 20 })">{{ t("backendOps.learningReplay") }}</el-button>
         <el-button @click="call('metrics.get')">metrics.get</el-button>
@@ -40,6 +43,7 @@
         <el-button @click="call('trace.get')">trace.get</el-button>
         <el-button @click="call('trace.metrics')">trace.metrics</el-button>
         <el-button type="danger" plain @click="call('security.baseline')">security.baseline</el-button>
+        <el-button type="warning" @click="call('runtime.self_model', { window: 120 })">{{ t("backendOps.runtimeSelfModel") }}</el-button>
         <el-button type="warning" plain @click="call('runtime.stability')">{{ t("backendOps.runtimeStability") }}</el-button>
         <el-button type="warning" plain @click="call('observability.alerts', { limit: 20 })">observability.alerts</el-button>
         <el-button @click="call('debug_panel.get')">debug_panel.get</el-button>

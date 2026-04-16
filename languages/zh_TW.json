@@ -4,19 +4,16 @@
     "app.name": "go-on",
     "app.version": "第10階段",
     "app.description": "智慧代理協調協議(ACP)代理",
-
     "mode.ask": "提問",
     "mode.edit": "編輯",
     "mode.agent": "代理",
     "mode.safeguard": "安全衛士",
     "mode.full_auto": "完全自動",
-
     "role.planner": "規劃者",
     "role.researcher": "研究員",
     "role.coder": "編碼者",
     "role.tester": "測試員",
     "role.reviewer": "審閱者",
-
     "task_type.bug_fix": "錯誤修復",
     "task_type.feature": "功能實現",
     "task_type.refactoring": "代碼重構",
@@ -26,7 +23,6 @@
     "task_type.optimization": "效能最佳化",
     "task_type.review": "代碼審查",
     "task_type.unknown": "未知類型",
-
     "error.no_suitable_model": "未找到適合該任務的模型",
     "error.task_failed": "任務執行失敗",
     "error.timeout": "執行逾時",
@@ -72,23 +68,19 @@
     "error.parse_error_with_detail": "解析錯誤: {error}",
     "error.all_agents_failed": "所有候選代理都失敗了",
     "error.http_connection": "來自 {address} 的 HTTP 連接錯誤: {error}",
-
     "warning.failed_persist_checkpoint": "持久化檢查點摘要失敗: {error}",
     "warning.failed_save_autotune": "儲存自動調優狀態失敗: {error}",
     "warning.review_timeout_continue": "審閱代理已超時；在降級策略下繼續執行",
     "warning.failed_persist_autotune": "持久化自動調優狀態失敗: {error}",
-
     "info.mcp_server_listening": "MCP HTTP 伺服器正在監聽 {address}",
     "info.mcp_server_operational": "MCP HTTP 伺服器已就緒。準備接受請求。",
     "info.mcp_protocol_version": "MCP 協定版本: {version}",
     "info.shutdown_requested": "關閉請求已收到；等待進行中的工作完成",
     "info.shutdown_sequence": "標準輸入已關閉或收到關閉請求",
     "info.runtime_controller_snapshot": "運行時控制器快照已捕獲",
-
     "success.task_completed": "任務成功完成",
     "success.model_selected": "模型已選擇",
     "success.language_loaded": "語言已載入",
-
     "info.analyzing_task": "正在分析任務...",
     "info.selecting_model": "正在選擇模型...",
     "info.decomposing_task": "正在分解任務...",
@@ -99,57 +91,46 @@
     "info.secret_stored": "已儲存金鑰 '{name}'",
     "info.secret_deleted": "已刪除金鑰 '{name}'",
     "info.resources_reloaded": "流程/註冊表/快取/向量/自動調優資源已重新載入",
-
     "warning.degraded_mode": "由於資源限制，以降級模式運行",
     "warning.model_unreliable": "所選模型的成功率較低",
     "warning.high_risk_task": "任務涉及高風險操作",
     "warning.invalid_value": "無效值。允許的值: {allowed}",
-
     "review.request_prompt": "請審閱以上內容，如果同意請回覆 APPROVE，如果不同意請回覆 REJECT 並說明原因。",
-
     "router.task_complexity": "任務複雜度",
     "router.required_roles": "所需角色",
     "router.estimated_success_rate": "預計成功率",
     "router.estimated_duration": "預計耗時",
     "router.risk_factors": "風險因素",
     "router.recommended_safeguards": "建議的保障措施",
-
     "selector.model": "模型",
     "selector.cost": "成本",
     "selector.latency": "延遲",
     "selector.success_rate": "成功率",
     "selector.strategy": "選擇策略",
-
     "decomposer.subtasks": "子任務",
     "decomposer.dependencies": "依賴關係",
     "decomposer.execution_phases": "執行階段",
     "decomposer.parallelizable": "可並行化",
-
     "optimizer.critical_path": "關鍵路徑",
     "optimizer.bottleneck": "瓶頸",
     "optimizer.optimization_potential": "最佳化潛力",
     "optimizer.parallelism_factor": "並行度",
-
     "resource.token_budget": "令牌預算",
     "resource.time_budget": "時間預算",
     "resource.cost_budget": "成本預算",
     "resource.utilization": "資源利用率",
-
     "diagnostic.execution_timeline": "執行時間線",
     "diagnostic.performance_summary": "效能摘要",
     "diagnostic.optimization_suggestions": "最佳化建議",
     "diagnostic.decision_chain": "決策鏈",
-
     "learner.experience_updated": "經驗已更新",
     "learner.pattern_recognized": "識別到模式",
     "learner.strategy_improved": "策略已改進",
-
     "settings.language": "語言",
     "settings.auto_update": "自動更新",
     "settings.log_level": "紀錄等級",
     "settings.timeout": "逾時(秒)",
     "settings.max_retries": "最大重試次數",
-
     "report.title": "配置驗證報告",
     "report.config": "配置",
     "report.valid": "是否有效",
@@ -174,7 +155,6 @@
     "severity.critical": "嚴重",
     "severity.error": "錯誤",
     "severity.warning": "警告",
-
     "validation.msg.no_agents_configured": "未設定任何代理",
     "validation.msg.no_phases_configured": "未設定任何階段",
     "validation.msg.enable_cache": "建議啟用快取以提升效能",
@@ -187,17 +167,15 @@
     "validation.msg.agent_empty_type": "代理 '{name}' 的 agent_type 為空",
     "validation.msg.agent_url_invalid": "代理 '{name}' 的 URL 不是以 http:// 或 https:// 開頭",
     "validation.msg.agent_model_missing": "代理 '{name}' 未指定模型",
-    "validation.msg.phase_no_agents": "階段 '{name}' 未設定任何代理",
+    "validation.msg.phase_no_agents": "階段 '{name}' 未設定任何代理（自動映射：執行時將使用全部已註冊代理）",
     "validation.msg.phase_empty_principles": "階段 '{name}' 的 principles 為空",
     "validation.msg.phase_missing_agent_ref": "階段 '{phase}' 引用了不存在的代理 '{agent}'",
     "validation.msg.agent_http_insecure": "代理 '{name}' 使用了 HTTP 而非 HTTPS",
-
     "validation.suggestion.add_agent_config": "至少新增一個代理設定",
     "validation.suggestion.add_phase_config": "至少新增一個階段設定",
     "validation.suggestion.set_valid_agent_type": "將 agent_type 設定為有效的代理類型",
     "validation.suggestion.add_agent_to_phase": "為該階段至少新增一個代理",
     "validation.suggestion.add_or_remove_agent": "新增代理 '{agent}' 或移除該引用",
-
     "cli.about": "ACP 代理，支援流程、階段和多代理路由",
     "cli.config": "設定檔案路徑",
     "cli.phase": "要執行的階段",
@@ -213,7 +191,6 @@
     "cli.healthcheck": "產生執行時健康檢查報告並儲存到 .goon/ 目錄",
     "cli.action_check": "對 .goon/ 工件執行操作檢查（all/spec/qa/retest/final）",
     "cli.plan_task": "為複雜任務建構並儲存受控的任務計劃工件",
-
     "setup.title": "=== go-on 設定 ===",
     "setup.target_config": "目標設定: {path}",
     "setup.prompt_overwrite": "設定已存在。是否覆蓋？",
@@ -231,7 +208,6 @@
     "setup.prompt_with_default": "{prompt} [{default}]: ",
     "setup.invalid_value": "無效值。允許的值: {allowed}",
     "setup.prompt": "{prompt}: ",
-
     "setup.profile_simple": "簡單",
     "setup.profile_complex": "複雜",
     "setup.secret_mode_env": "環境變數",
@@ -239,14 +215,12 @@
     "setup.secret_action_set": "設定",
     "setup.secret_action_get": "取得",
     "setup.secret_action_delete": "刪除",
-
     "setup.deepseek_api_key": "DeepSeek API 金鑰",
     "setup.wenxin_api_key": "文心 API 金鑰",
     "setup.wenxin_secret_key": "文心金鑰",
     "setup.anthropic_api_key": "Anthropic API 金鑰",
     "setup.doubao_api_key": "豆包 API 金鑰",
     "setup.openai_compatible_api_key": "OpenAI 相容 API 金鑰",
-
     "status.title": "=== go-on 狀態 ===",
     "status.config_path": "設定檔: {path}",
     "status.overall": "整體執行時就緒狀態: {status}",
@@ -260,7 +234,6 @@
     "status.recommended_item": "- [{level}] {message}",
     "status.secret_line": "    {label}: 透過 {secret_ref} 配置 {count} 項 -> {fingerprints}",
     "status.done": "狀態檢查完成。",
-
     "setup.onboarding_intro": "歡迎設定，還差 2 步就能開始。",
     "setup.onboarding_option_1": "推薦：1) 快速設定（推薦值 + 最少輸入，約 30 秒）",
     "setup.onboarding_option_2": "      2) 進階設定（展開所有細項）",
@@ -269,16 +242,13 @@
     "setup.onboarding_done_next": "設定完成。下一步：go-on --check --config config.toml",
     "setup.onboarding_skipped": "已略過 AI 供應商設定。待完成：AI 供應商",
     "setup.onboarding_next": "下一步：go-on --check --config config.toml",
-
     "consultation.lead_prompt": "任務: {task}\n\n觸發原因: {trigger}\n\n作為諮詢負責人，請提供一個簡潔的可執行計劃和主要風險。",
     "consultation.reviewer_alternative_prompt": "任務: {task}\n\n作為 {role}，請提供一個替代計劃和關鍵權衡。",
     "consultation.reviewer_consensus_prompt": "任務: {task}\n\n候選計劃:\n{plans}\n\n作為諮詢審閱者，請輸出一個共識可執行計劃和前 3 個風險。",
-
     "blue5.reason.requirement_clarification": "需求澄清需要多 AI 協同討論",
     "blue5.reason.clarification_rounds_exceeded": "澄清輪次超過閾值，建議進行諮詢",
     "blue5.reason.task_complexity": "任務複雜度/模組跨度建議多 AI 編排",
     "blue5.reason.auto_consultation_gate": "blue5 自動諮詢門已觸發",
-
     "ui.legacy_health_score": "傳統健康評分: {score}/100 (警告: {critical} 個嚴重, {warn} 個警告, {info} 個資訊)",
     "ui.plan_number": "計劃 {number}: {plan}"
   }

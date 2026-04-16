@@ -1,0 +1,395 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>后端 CLI - go-on Documentation</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">go-on Documentation</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://example.invalid/go-on" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="后端-cli"><a class="header" href="#后端-cli">后端 CLI</a></h1>
+<p>后端可执行文件是当前系统的权威控制面，负责运行时启动、setup、健康检查、任务规划以及协议模式选择。</p>
+<h2 id="调用方式"><a class="header" href="#调用方式">调用方式</a></h2>
+<p>生产或打包后的二进制：</p>
+<pre><code class="language-bash">go-on --config config.toml
+</code></pre>
+<p>开发阶段：</p>
+<pre><code class="language-bash">cargo run -- --config config.toml
+</code></pre>
+<p>当前帮助入口形式为：</p>
+<pre><code class="language-text">Usage: go-on.exe [OPTIONS]
+</code></pre>
+<p>这里没有子命令，全部通过参数控制。</p>
+<h2 id="基础运行参数"><a class="header" href="#基础运行参数">基础运行参数</a></h2>
+<h3 id="--config-config"><a class="header" href="#--config-config"><code>--config &lt;CONFIG&gt;</code></a></h3>
+<p>指定配置文件路径。如果不传，后端会从可执行文件所在目录解析 <code>config.toml</code>。</p>
+<h3 id="--phase-phase"><a class="header" href="#--phase-phase"><code>--phase &lt;PHASE&gt;</code></a></h3>
+<p>指定运行阶段。适合你的配置里定义了多个 phase，并且希望固定选中某一个入口时使用。</p>
+<h3 id="--verbose"><a class="header" href="#--verbose"><code>--verbose</code></a></h3>
+<p>开启详细日志。排查启动、配置、传输层、Provider 就绪问题时应优先开启。</p>
+<h2 id="校验与就绪检查"><a class="header" href="#校验与就绪检查">校验与就绪检查</a></h2>
+<h3 id="--validate-config-或---doctor"><a class="header" href="#--validate-config-或---doctor"><code>--validate-config</code> 或 <code>--doctor</code></a></h3>
+<p>校验配置后退出。这是排查问题前最便宜、最直接的一步。</p>
+<pre><code class="language-bash">go-on --config config.toml --validate-config
+</code></pre>
+<h3 id="--status-或---check"><a class="header" href="#--status-或---check"><code>--status</code> 或 <code>--check</code></a></h3>
+<p>打印已配置 Provider 和运行时就绪状态。</p>
+<p>适合在 setup 之后、手改 <code>config.toml</code> 之后、接编辑器之前执行。</p>
+<pre><code class="language-bash">go-on --status
+</code></pre>
+<h3 id="--healthcheck"><a class="header" href="#--healthcheck"><code>--healthcheck</code></a></h3>
+<p>生成运行时健康报告并持久化到 <code>.goon/</code>。适合需要留档或后续排查时使用。</p>
+<h2 id="setup-与推荐配置"><a class="header" href="#setup-与推荐配置">setup 与推荐配置</a></h2>
+<h3 id="--setup-或---init"><a class="header" href="#--setup-或---init"><code>--setup</code> 或 <code>--init</code></a></h3>
+<p>运行交互式设置向导。</p>
+<h3 id="--setup-profile-setup_profile"><a class="header" href="#--setup-profile-setup_profile"><code>--setup-profile &lt;SETUP_PROFILE&gt;</code></a></h3>
+<p>当前接受值只有：</p>
+<ul>
+<li><code>adaptive</code></li>
+</ul>
+<h3 id="--setup-level-setup_level"><a class="header" href="#--setup-level-setup_level"><code>--setup-level &lt;SETUP_LEVEL&gt;</code></a></h3>
+<p>接受值：</p>
+<ul>
+<li><code>quick</code></li>
+<li><code>standard</code></li>
+<li><code>custom</code></li>
+</ul>
+<p>实际建议：</p>
+<ul>
+<li><code>quick</code>：最短路径，跳过额外 agent 提示。</li>
+<li><code>standard</code>：默认推荐。</li>
+<li><code>custom</code>：适合想手动控制更多细节的场景。</li>
+</ul>
+<h3 id="--setup-secrets-setup_secrets"><a class="header" href="#--setup-secrets-setup_secrets"><code>--setup-secrets &lt;SETUP_SECRETS&gt;</code></a></h3>
+<p>接受值：</p>
+<ul>
+<li><code>env</code></li>
+<li><code>keyring</code></li>
+<li><code>auto</code></li>
+</ul>
+<p>实现上 <code>autodetect</code> 也会被接受。</p>
+<h3 id="--apply-recommended"><a class="header" href="#--apply-recommended"><code>--apply-recommended</code></a></h3>
+<p>把 Provider 能力推荐应用到当前 <code>config.toml</code> 后退出。适合补齐 Provider 或调整模型组合之后使用。</p>
+<h3 id="--force"><a class="header" href="#--force"><code>--force</code></a></h3>
+<p>即使目标文件已存在也强制 setup。只有在你明确要覆盖当前配置时才应使用。</p>
+<h2 id="本地模型注册"><a class="header" href="#本地模型注册">本地模型注册</a></h2>
+<h3 id="--add-local-model-或---add-model"><a class="header" href="#--add-local-model-或---add-model"><code>--add-local-model</code> 或 <code>--add-model</code></a></h3>
+<p>向配置里新增或更新本地模型 agent 条目。</p>
+<p>通常要和下面的 <code>--local-model-*</code> 参数一起使用。</p>
+<h3 id="--local-model-name-name"><a class="header" href="#--local-model-name-name"><code>--local-model-name &lt;NAME&gt;</code></a></h3>
+<p>本地 agent 的逻辑名称。</p>
+<h3 id="--local-model-url-url"><a class="header" href="#--local-model-url-url"><code>--local-model-url &lt;URL&gt;</code></a></h3>
+<p>本地模型服务地址。</p>
+<h3 id="--local-model-type-type"><a class="header" href="#--local-model-type-type"><code>--local-model-type &lt;TYPE&gt;</code></a></h3>
+<p>Provider 类型，默认意图是 <code>openai</code>。</p>
+<h3 id="--local-model-model-model_id"><a class="header" href="#--local-model-model-model_id"><code>--local-model-model &lt;MODEL_ID&gt;</code></a></h3>
+<p>配置中写入的模型 ID。</p>
+<h3 id="--local-model-api-key-env-env_name"><a class="header" href="#--local-model-api-key-env-env_name"><code>--local-model-api-key-env &lt;ENV_NAME&gt;</code></a></h3>
+<p>可选的 API Key 环境变量名。</p>
+<h3 id="--local-model-secret-key-env-env_name"><a class="header" href="#--local-model-secret-key-env-env_name"><code>--local-model-secret-key-env &lt;ENV_NAME&gt;</code></a></h3>
+<p>可选的 secret key 环境变量名。</p>
+<h3 id="--local-model-register-only"><a class="header" href="#--local-model-register-only"><code>--local-model-register-only</code></a></h3>
+<p>只把模型注册到 <code>[agents]</code>，不自动挂接到 phase agent 列表。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --add-local-model \
+  --local-model-name ollama-local \
+  --local-model-url http://127.0.0.1:11434/v1 \
+  --local-model-type openai \
+  --local-model-model qwen2.5-coder \
+  --local-model-register-only
+</code></pre>
+<h2 id="secret-管理"><a class="header" href="#secret-管理">Secret 管理</a></h2>
+<h3 id="--secret-action"><a class="header" href="#--secret-action"><code>--secret &lt;ACTION&gt;</code></a></h3>
+<p>接受动作：</p>
+<ul>
+<li><code>set</code></li>
+<li><code>get</code></li>
+<li><code>delete</code></li>
+<li><code>list</code></li>
+</ul>
+<h3 id="--secret-name-secret_name"><a class="header" href="#--secret-name-secret_name"><code>--secret-name &lt;SECRET_NAME&gt;</code></a></h3>
+<p>逻辑 secret 名称。</p>
+<h3 id="--secret-value-secret_value"><a class="header" href="#--secret-value-secret_value"><code>--secret-value &lt;SECRET_VALUE&gt;</code></a></h3>
+<p>与 <code>set</code> 配合使用的值。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --secret list
+go-on --secret set --secret-name openai --secret-value YOUR_KEY
+go-on --secret get --secret-name openai
+go-on --secret delete --secret-name openai
+</code></pre>
+<h2 id="计划与制品检查"><a class="header" href="#计划与制品检查">计划与制品检查</a></h2>
+<h3 id="--action-check-action_check"><a class="header" href="#--action-check-action_check"><code>--action-check &lt;ACTION_CHECK&gt;</code></a></h3>
+<p>对 <code>.goon/</code> 下的制品执行检查。帮助文本给出的取值为：</p>
+<ul>
+<li><code>all</code></li>
+<li><code>spec</code></li>
+<li><code>qa</code></li>
+<li><code>retest</code></li>
+<li><code>final</code></li>
+</ul>
+<h3 id="--plan-task-plan_task"><a class="header" href="#--plan-task-plan_task"><code>--plan-task &lt;PLAN_TASK&gt;</code></a></h3>
+<p>为复杂任务构建并持久化受控计划制品。</p>
+<h2 id="传输模式选择"><a class="header" href="#传输模式选择">传输模式选择</a></h2>
+<h3 id="--protocol-mode-mode"><a class="header" href="#--protocol-mode-mode"><code>--protocol-mode &lt;MODE&gt;</code></a></h3>
+<p>接受值：</p>
+<ul>
+<li><code>adaptive</code></li>
+<li><code>acp_stdio</code></li>
+<li><code>acp_http</code></li>
+<li><code>mcp_stdio</code></li>
+<li><code>mcp_http</code></li>
+</ul>
+<p>使用建议：</p>
+<ul>
+<li><code>adaptive</code>：默认最稳，适合多前端共享。</li>
+<li><code>acp_stdio</code>：适合编辑器直接拉起子进程。</li>
+<li><code>acp_http</code>：适合 ACP 客户端连接共享 HTTP 后端。</li>
+<li><code>mcp_stdio</code>：只在客户端明确要求 MCP stdio 时使用。</li>
+<li><code>mcp_http</code>：适合需要 OpenAI 兼容 <code>/v1</code> HTTP 面的客户端。</li>
+</ul>
+<h3 id="--acp-http-bind-addr"><a class="header" href="#--acp-http-bind-addr"><code>--acp-http-bind &lt;ADDR&gt;</code></a></h3>
+<p>绑定 HTTP 监听，并暴露：</p>
+<ul>
+<li><code>/health</code></li>
+<li><code>/chat</code></li>
+<li><code>/chat/stream</code></li>
+</ul>
+<p>当前实现里，同一个运行时也会同时暴露 Zed 和探测逻辑常用的 <code>/v1</code> 兼容端点。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+</code></pre>
+<h2 id="常用命令组合"><a class="header" href="#常用命令组合">常用命令组合</a></h2>
+<p>最常见 setup：</p>
+<pre><code class="language-bash">go-on --setup --setup-level standard --setup-secrets auto
+</code></pre>
+<p>先校验再检查就绪：</p>
+<pre><code class="language-bash">go-on --config config.toml --validate-config
+go-on --config config.toml --status
+</code></pre>
+<p>启动共享本地 HTTP 运行时：</p>
+<pre><code class="language-bash">go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+</code></pre>
+<p>为编辑器拉起式场景运行 ACP stdio：</p>
+<pre><code class="language-bash">go-on --config config.toml --protocol-mode acp_stdio --verbose
+</code></pre>
+<h2 id="运维建议"><a class="header" href="#运维建议">运维建议</a></h2>
+<ul>
+<li>遇到问题先跑 <code>--validate-config</code>，不要先怀疑传输层。</li>
+<li>打开 GUI 或编辑器前先跑一次 <code>--status</code>。</li>
+<li>除非客户端契约明确要求 ACP-only 或 MCP-only，否则优先用 <code>adaptive</code>。</li>
+<li>接本地 OpenAI 兼容模型时，优先用 <code>--add-local-model</code>，不要直接手改配置。</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../zh-CN/overview.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../zh-CN/setup-wizard.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../zh-CN/overview.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../zh-CN/setup-wizard.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

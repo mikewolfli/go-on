@@ -38,6 +38,76 @@
 
 本轮门禁复验：`vscode-addon npm run check` 通过（0 warnings / 0 errors）；`GUI npm run build && npm run test:contract` 通过。
 
+### 后端闭环增强批次（2026-04-16）
+
+在前述 addon / GUI 工作完成后，本轮补充对 Rust 后端 ACP 主链路执行一次稳定性扫描与闭环增强设计，目标是不停留在代码体检，而是把可观测性、风险识别与治理反馈真正接入请求主路径。
+
+本批次进度回写：
+
+- 后端闭环增强完成率：`75%`（4 项中已完成 3 项）
+- 三端主链路闭环状态：`已完成`（Rust ACP / GUI / vscode-addon 已统一接入 `runtime.self_model`）
+
+后端问题清单：
+
+1. 主链路观测信号分散：当前 `health`、`health.probes`、`runtime.stability`、`rl.alignment.offline_eval` 各自返回局部状态，但缺少统一的 ACP 主链路聚合出口，调用方必须自行拼装健康、配置、锁、漂移和建议动作，闭环不完整。
+2. 漂移信号未进入日常运行入口：离线评估逻辑已能计算 `reward drift` 与 fallback 建议，但仍停留在专用方法中，尚未纳入常驻运行态自检结果，导致漂移风险不能跟随健康查询一起暴露。
+3. `dead_code` 抑制范围过大：`agents/agent.rs`、`core/context.rs`、`main.rs`、`protocol/mcp_server.rs` 以及多个 orchestration / governance 模块仍存在文件级或大范围 `allow(dead_code)`，这会掩盖真实僵尸代码、接口漂移与演化残留。
+4. 结构化日志仍未完全统一：虽然 `protocol/mcp_server.rs` 的裸 stderr 已收口，但 `main.rs` 中仍存在 `eprintln!` 路径，CLI fatal / config warning 输出尚未完全纳入统一日志语义。
+5. 浮点排序一致性问题未完全清零：本轮已修复 `speed_optimizer`、`reliability_optimizer`、`cost_optimizer` 三处直接 `partial_cmp(...).unwrap()`；但仓内仍存在多处基于 `partial_cmp` 的排序逻辑，需要继续审查是否存在 NaN 分支不稳定、回退策略不一致或潜在 panic 风险。
+6. Provider 覆盖率不均衡：部分关键 agent 已具备 payload / strict-mode 测试，但 provider 总体覆盖仍不平衡，载荷构造、响应解析、fallback 路径、严格模式注入等回归点尚未形成统一测试基线。
+7. 自画像能力缺口：ACP 当前能分别返回 metrics、health probes、governance 与 stability，但尚无统一 `self-model` 视图输出系统能力画像、风险画像、约束画像与建议动作，难以支持 GUI / addon / external client 的单端接入。
+
+已完成修复：
+
+1. 排序健壮性收敛：`speed_optimizer.rs`、`reliability_optimizer.rs`、`cost_optimizer.rs` 中的 `partial_cmp(...).unwrap()` 已改为 `total_cmp(...)`，消除 NaN 边缘值导致的 panic 风险。
+2. 内部不变量语义收敛：`acp/prelude.rs` 中用于不可能分支的 `panic!` 已替换为 `unreachable!`。
+3. 日志主链路收敛：`protocol/mcp_server.rs` 中裸 `eprintln!` 已改为 `warn!`，统一进入结构化日志链路。
+4. 门禁复验完成：`cargo clippy --all -- -D warnings` 通过；`cargo test` 通过（318 tests passed）。
+
+新增待落地增强项：
+
+| ID | 状态 | 建议项 | 是否需要 | 说明 |
+|---|---|---|---|---|
+| B16-B1 | ✅ 已完成 | ACP Self-Model 主链路接入 | 必须 | 已新增 `runtime.self_model`，统一聚合 `health.probes`、`runtime.stability`、`rl.alignment.offline_eval` |
+| B16-B2 | ✅ 已完成 | Drift Guard 最小版闭环 | 必须 | 漂移摘要、fallback 决策、建议动作已并入 `runtime.self_model` 主结果 |
+| B16-B3 | 待推进 | `dead_code` 抑制清理 | 建议 | `agents/agent.rs`、`core/context.rs` 存在文件级 `allow(dead_code)`，需逐步压缩 |
+| B16-B4 | ✅ 已完成（本轮） | Provider 载荷/解析基线主链路化 | 建议 | 已新增 `provider.status` 主链路 RPC，三端可见 provider readiness/降级状态并纳入回归场景与契约基线 |
+
+推荐执行顺序：
+
+1. 继续推进 B16-B3（`dead_code` 抑制清理）作为下一轮收口重点。
+2. 后续所有 GUI / addon 运行态诊断入口优先复用 `runtime.self_model` 与 `provider.status`，避免重新分叉到多条状态拼装链路。
+
+后端阶段验收门禁：
+
+1. 新增主链路方法已可通过 ACP 请求直接调用，不是孤立工具函数。
+2. 返回结果已包含：运行健康、关键约束、漂移摘要、建议动作。
+3. 已补充 `requests/runtime-self-model-benchmark.ndjson` 与 `acp_runtime_rpc_integration` 集成测试。
+4. `cargo clippy --all -- -D warnings`、`cargo test --test acp_runtime_rpc_integration runtime_self_model -- --nocapture`、`GUI npm run build`、`GUI npm run test:contract`、`vscode-addon npm run check` 全部通过。
+
+本轮实际交付：
+
+1. Rust 后端：新增 `runtime.self_model` ACP 方法，复用既有 `health.probes`、`runtime.stability` 与离线评估逻辑，形成统一自画像返回结构。
+2. GUI：`BackendOpsView` 新增 `runtime.self_model` 入口，`HealthBreakdownView` 改为优先读取 `runtime.self_model`，不再自行拼接多条状态链路。
+3. vscode-addon：新增 `go-on.runtimeSelfModel` 命令并接入 RPC 主链路。
+4. 协议契约：`contracts/editor-capability-matrix.json` 已回写 `runtime.self_model` 为 GUI / addon 公共检查面。
+
+本轮新增交付（B16-B4）：
+
+1. backend：新增 `provider.status` RPC 并接入 ACP 方法白名单与主分发链路，统一输出 provider 就绪/降级摘要、配置侧 agent 依赖快照与 registry 模型目录。
+2. GUI：`SecurityView` 接入 `provider.status`，新增 provider 就绪标签与降级风险项，并将 provider 降级计入治理评分惩罚。
+3. vscode-addon：新增 `go-on.providerStatus` 命令，直连 `provider.status` 并输出主摘要。
+4. 回归：新增 `requests/provider-status-benchmark.ndjson` 与 `acp_runtime_rpc_integration` 用例，场景总数门禁同步更新。
+5. 契约：`contracts/editor-capability-matrix.json` 增加 `rpcProviderStatusCheckedInMainChain` 以及 GUI/addon 对 `provider.status` 的检查面声明。
+
+本轮门禁复验：
+
+1. `cargo clippy --all -- -D warnings` 通过。
+2. `cargo test --test acp_runtime_rpc_integration provider_status -- --nocapture` 通过。
+3. `cargo test` 全量通过（含 `acp_runtime_rpc_integration` 57 项）。
+4. `GUI npm run build` 与 `GUI npm run test:contract` 通过。
+5. `vscode-addon npm run check` 通过。
+
 ## 一、执行结论
 
 1. vscode-addon 当前主功能链路可用，但存在两项高风险安全缺陷需要优先修复，不应等待架构重构完成后再处理。

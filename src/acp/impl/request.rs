@@ -47,6 +47,10 @@ fn is_acp_request(method: &str) -> bool {
             | "health"
             | "runtime.health"
             | "health.probes"
+            | "lock.status"
+            | "runtime.self_model"
+            | "provider.status"
+            | "release.readiness"
             | "runtime.stability"
             | "observability.alerts"
             | "security.baseline"
@@ -1184,6 +1188,18 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         "shutdown" => handle_shutdown(server, request_id).await,
         "health" | "runtime.health" => handle_health(server, request_id).await,
         "health.probes" => handle_health_probes(server, request_id).await,
+        "lock.status" => {
+            handle_lock_status(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "runtime.self_model" => {
+            handle_runtime_self_model(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "provider.status" => {
+            handle_provider_status(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "release.readiness" => {
+            handle_release_readiness(server, request.params.unwrap_or_default(), request_id).await
+        }
         "runtime.stability" => {
             handle_runtime_stability(server, request.params.unwrap_or_default(), request_id).await
         }
@@ -1880,7 +1896,7 @@ fn check_status_label(value: CheckStatus) -> &'static str {
     }
 }
 
-async fn handle_health_probes(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
     let metrics = server.metrics.snapshot();
 
@@ -2013,63 +2029,58 @@ async fn handle_health_probes(server: &AcpServer, request_id: Option<Value>) -> 
         }
     }));
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "probes": {
-                "liveness": {
-                    "status": liveness_status,
-                    "ok": liveness_ok,
-                    "shutting_down": status.lifecycle.shutdown_requested,
-                    "uptime_seconds": status.lifecycle.uptime_seconds,
-                },
-                "readiness": {
-                    "status": readiness_status,
-                    "ok": error_count == 0,
-                    "overall_status": check_status_label(report.overall_status),
-                    "generated_at": report.generated_at,
-                },
-                "summary": {
-                    "healthy": healthy_count,
-                    "warn": warn_count,
-                    "error": error_count,
-                    "skipped": skipped_count,
-                },
-                "dependencies": dependencies,
-                "circuit_breakers": circuit_breakers,
-                "rate_limiter": {
-                    "tracked": rate_limiter_buckets.len(),
-                    "buckets": rate_limiter_buckets,
-                },
-                "locks": {
-                    "status": lock_summary.status,
-                    "poisoned_total": lock_summary.poisoned_total,
-                    "recovered_total": lock_summary.recovered_total,
-                    "slow_wait_total": lock_summary.slow_wait_total,
-                    "max_wait_ms": lock_summary.max_wait_ms,
-                    "components_tracked": lock_summary.components_tracked,
-                    "components": lock_components,
-                },
-                "timeouts": {
-                    "status": timeout_status,
-                    "agent_request_total": metrics.agent_timeout_failures_total,
-                    "review_gate_total": metrics.review_gate_timeout_total,
-                    "runtime_probe_total": metrics.runtime_probe_timeout_total,
-                },
-                "timestamp": status.timestamp,
-            }
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "probes": {
+            "liveness": {
+                "status": liveness_status,
+                "ok": liveness_ok,
+                "shutting_down": status.lifecycle.shutdown_requested,
+                "uptime_seconds": status.lifecycle.uptime_seconds,
+            },
+            "readiness": {
+                "status": readiness_status,
+                "ok": error_count == 0,
+                "overall_status": check_status_label(report.overall_status),
+                "generated_at": report.generated_at,
+            },
+            "summary": {
+                "healthy": healthy_count,
+                "warn": warn_count,
+                "error": error_count,
+                "skipped": skipped_count,
+            },
+            "dependencies": dependencies,
+            "circuit_breakers": circuit_breakers,
+            "rate_limiter": {
+                "tracked": rate_limiter_buckets.len(),
+                "buckets": rate_limiter_buckets,
+            },
+            "locks": {
+                "status": lock_summary.status,
+                "poisoned_total": lock_summary.poisoned_total,
+                "recovered_total": lock_summary.recovered_total,
+                "slow_wait_total": lock_summary.slow_wait_total,
+                "max_wait_ms": lock_summary.max_wait_ms,
+                "components_tracked": lock_summary.components_tracked,
+                "components": lock_components,
+            },
+            "timeouts": {
+                "status": timeout_status,
+                "agent_request_total": metrics.agent_timeout_failures_total,
+                "review_gate_total": metrics.review_gate_timeout_total,
+                "runtime_probe_total": metrics.runtime_probe_timeout_total,
+            },
+            "timestamp": status.timestamp,
+        }
+    }))
 }
 
-async fn handle_runtime_stability(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+async fn handle_health_probes(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    send_result(server, request_id, build_health_probes_payload(server)?).await
+}
+
+fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
     let _metrics = server.metrics.snapshot();
     let config_path = server.config_path.as_deref().map(Path::new);
@@ -2130,7 +2141,7 @@ async fn handle_runtime_stability(
     if !strict_violations.is_empty() {
         stability_score -= (strict_violations.len() as i32 * 5).min(30);
     }
-    stability_score = stability_score.max(0).min(100);
+    stability_score = stability_score.clamp(0, 100);
 
     // 判定稳定性等级
     let stability_level = match stability_score {
@@ -2194,35 +2205,261 @@ async fn handle_runtime_stability(
         }));
     }
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "stability": {
-                "score": stability_score,
-                "level": stability_level,
+    Ok(json!({
+        "ok": true,
+        "stability": {
+            "score": stability_score,
+            "level": stability_level,
+            "safe_restart_ready": safe_restart_ready,
+            "summary": {
+                "health_errors": error_count,
+                "health_warnings": warn_count,
+                "uptime_seconds": uptime_seconds,
+                "config_warnings": config_warnings.len(),
+                "strict_violations": strict_violations.len(),
+            },
+            "checks": checks,
+            "recommendation": if stability_score >= 75 {
+                "System is stable. Safe to operate.".to_string()
+            } else if stability_score >= 60 {
+                "System has degraded capability. Review warnings before critical operations.".to_string()
+            } else {
+                "System is unstable. Address errors before restart or upgrades.".to_string()
+            },
+            "timestamp": status.timestamp,
+        }
+    }))
+}
+
+async fn handle_runtime_stability(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_result(server, request_id, build_runtime_stability_payload(server)?).await
+}
+
+async fn handle_runtime_self_model(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let payload = build_runtime_self_model_payload(server, &params)?;
+    send_result(server, request_id, payload).await
+}
+
+fn build_runtime_self_model_payload(server: &AcpServer, params: &Value) -> Result<Value> {
+    let probes_payload = build_health_probes_payload(server)?;
+    let stability_payload = build_runtime_stability_payload(server)?;
+    let offline_eval_payload = build_rl_alignment_offline_eval_payload(params);
+
+    let probes = probes_payload
+        .get("probes")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let stability = stability_payload
+        .get("stability")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let offline_eval = offline_eval_payload
+        .get("offline_eval")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    let readiness_status = probes
+        .get("readiness")
+        .and_then(|value| value.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let safe_restart_ready = stability
+        .get("safe_restart_ready")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let stability_level = stability
+        .get("level")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let recommended_mode = offline_eval
+        .get("decision")
+        .and_then(|value| value.get("recommended_mode"))
+        .and_then(Value::as_str)
+        .unwrap_or("conservative");
+    let fallback_triggered = offline_eval
+        .get("decision")
+        .and_then(|value| value.get("fallback_triggered"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let drift_alert = offline_eval
+        .get("drift")
+        .and_then(|value| value.get("alert"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let summary = stability
+        .get("summary")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let warnings = offline_eval
+        .get("warnings")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+
+    let mut recommendations = Vec::new();
+    if readiness_status != "ready" {
+        recommendations.push(
+            "Review runtime dependencies, probes, and breaker state before serving critical traffic."
+                .to_string(),
+        );
+    }
+    if !safe_restart_ready {
+        recommendations.push(
+            "Avoid restart or rollout until config validation and strict-mode constraints are green."
+                .to_string(),
+        );
+    }
+    if drift_alert || fallback_triggered {
+        recommendations.push(
+            "Keep runtime in conservative mode until reward drift and safety regressions recover."
+                .to_string(),
+        );
+    }
+    if recommendations.is_empty() {
+        recommendations.push(
+            "System is operating within the expected envelope; continue normal runtime supervision."
+                .to_string(),
+        );
+    }
+
+    let timestamp = probes
+        .get("timestamp")
+        .cloned()
+        .or_else(|| stability.get("timestamp").cloned())
+        .unwrap_or_else(|| json!(0));
+
+    Ok(json!({
+        "ok": true,
+        "self_model": {
+            "health": probes,
+            "stability": stability,
+            "drift": offline_eval.get("drift").cloned().unwrap_or_else(|| json!({})),
+            "decision": {
+                "recommended_mode": recommended_mode,
+                "fallback_triggered": fallback_triggered,
+                "readiness_status": readiness_status,
+                "stability_level": stability_level,
                 "safe_restart_ready": safe_restart_ready,
-                "summary": {
-                    "health_errors": error_count,
-                    "health_warnings": warn_count,
-                    "uptime_seconds": uptime_seconds,
-                    "config_warnings": config_warnings.len(),
-                    "strict_violations": strict_violations.len(),
-                },
-                "checks": checks,
-                "recommendation": if stability_score >= 75 {
-                    "System is stable. Safe to operate.".to_string()
-                } else if stability_score >= 60 {
-                    "System has degraded capability. Review warnings before critical operations.".to_string()
+            },
+            "constraints": {
+                "shutdown_requested": probes
+                    .get("liveness")
+                    .and_then(|value| value.get("shutting_down"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                "health_errors": summary.get("health_errors").cloned().unwrap_or_else(|| json!(0)),
+                "health_warnings": summary.get("health_warnings").cloned().unwrap_or_else(|| json!(0)),
+                "config_warnings": summary.get("config_warnings").cloned().unwrap_or_else(|| json!(0)),
+                "strict_violations": summary.get("strict_violations").cloned().unwrap_or_else(|| json!(0)),
+            },
+            "warnings": warnings,
+            "recommendations": recommendations,
+            "source_methods": ["health.probes", "runtime.stability", "rl.alignment.offline_eval"],
+            "timestamp": timestamp,
+        }
+    }))
+}
+
+fn build_provider_status_payload(server: &AcpServer) -> Result<Value> {
+    let status = server.get_status();
+    let config_path = server.config_path.as_deref().map(Path::new);
+    let report = build_runtime_healthcheck_report(
+        config_path,
+        server.response_cache.as_deref(),
+        server.vector_store.as_deref(),
+    )?;
+
+    let provider_component = report
+        .components
+        .iter()
+        .find(|item| item.name == "provider_dependencies");
+
+    let provider_status = provider_component
+        .map(|item| check_status_label(item.status))
+        .unwrap_or("skipped");
+    let provider_message = provider_component
+        .map(|item| item.message.clone())
+        .unwrap_or_else(|| "provider dependency snapshot unavailable".to_string());
+    let provider_details = provider_component
+        .map(|item| item.details.clone())
+        .unwrap_or_else(|| json!({}));
+
+    let ready = provider_details
+        .get("ready")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let degraded = provider_details
+        .get("degraded")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let total = provider_details
+        .get("total")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    let configured_agents = provider_details
+        .get("agents")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let registry_catalog = server
+        .agent_registry()
+        .map(|registry| {
+            registry
+                .models()
+                .into_iter()
+                .map(|(name, default_model, available_models)| {
+                    json!({
+                        "agent": name,
+                        "default_model": default_model.as_ref().map(|item| item.id.clone()),
+                        "available_models": available_models.len(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let configured_total = configured_agents.len() as u64;
+    let catalog_total = registry_catalog.len() as u64;
+
+    Ok(json!({
+        "ok": true,
+        "provider_status": {
+            "status": provider_status,
+            "message": provider_message,
+            "summary": {
+                "ready": ready,
+                "degraded": degraded,
+                "configured": total.max(configured_total),
+                "registry": catalog_total,
+                "coverage_percent": if total > 0 {
+                    ((ready as f64 / total as f64) * 100.0).round()
                 } else {
-                    "System is unstable. Address errors before restart or upgrades.".to_string()
+                    0.0
                 },
-                "timestamp": status.timestamp,
-            }
-        }),
-    )
-    .await
+            },
+            "configured_agents": configured_agents,
+            "registry_catalog": registry_catalog,
+            "timestamp": status.timestamp,
+        }
+    }))
+}
+
+async fn handle_provider_status(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_result(server, request_id, build_provider_status_payload(server)?).await
 }
 
 async fn handle_governance_status(
@@ -2719,9 +2956,7 @@ fn summarize_lock_health(components: &[AcpLockSnapshot]) -> LockHealthSummary {
         .iter()
         .map(|item| item.max_wait_ms)
         .fold(0.0_f64, f64::max);
-    let status = if poisoned_total > 0 {
-        "warn"
-    } else if slow_wait_total > 0 || max_wait_ms >= 5.0 {
+    let status = if poisoned_total > 0 || slow_wait_total > 0 || max_wait_ms >= 5.0 {
         "warn"
     } else {
         "healthy"
@@ -3551,7 +3786,6 @@ async fn handle_workflow_generate(
 }
 
 /// Handle workflow execute request
-
 async fn handle_task_plan(
     server: &AcpServer,
     params: Value,
@@ -4986,11 +5220,7 @@ fn collect_rl_offline_eval_samples(
         .collect()
 }
 
-async fn handle_rl_alignment_offline_eval(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+fn build_rl_alignment_offline_eval_payload(params: &Value) -> Value {
     let window = params
         .get("limit")
         .or_else(|| params.get("window"))
@@ -5009,7 +5239,7 @@ async fn handle_rl_alignment_offline_eval(
         .unwrap_or(0.12)
         .clamp(0.01, 0.6);
 
-    let weights = parse_rl_reward_weights(&params);
+    let weights = parse_rl_reward_weights(params);
     let mut samples = collect_rl_offline_eval_samples(window, weights);
     samples.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
 
@@ -5046,7 +5276,7 @@ async fn handle_rl_alignment_offline_eval(
             .collect::<Vec<_>>(),
     );
 
-    let recent_window = samples.len().min(20).max(1);
+    let recent_window = samples.len().clamp(1, 20);
     let recent_rewards = samples
         .iter()
         .rev()
@@ -5106,49 +5336,57 @@ async fn handle_rl_alignment_offline_eval(
         items
     };
 
+    json!({
+        "ok": true,
+        "offline_eval": {
+            "window": window,
+            "samples_total": samples.len(),
+            "weights": {
+                "success": weights.success,
+                "latency": weights.latency,
+                "tool_error": weights.tool_error,
+                "safety": weights.safety,
+            },
+            "baseline": {
+                "samples": baseline_slice.len(),
+                "mean_reward": baseline_mean,
+                "mean_safety_penalty": baseline_safety,
+            },
+            "candidate": {
+                "samples": candidate_slice.len(),
+                "mean_reward": candidate_mean,
+                "mean_safety_penalty": candidate_safety,
+            },
+            "comparison": {
+                "reward_uplift": improvement,
+                "pass_threshold": pass_threshold,
+                "passes": pass,
+            },
+            "drift": {
+                "recent_mean": recent_mean,
+                "historical_mean": historical_mean,
+                "absolute_diff": reward_drift,
+                "threshold": drift_threshold,
+                "alert": drift_alert,
+            },
+            "decision": {
+                "recommended_mode": recommended_mode,
+                "fallback_triggered": !pass || drift_alert,
+            },
+            "warnings": warnings,
+        }
+    })
+}
+
+async fn handle_rl_alignment_offline_eval(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
     send_result(
         server,
         request_id,
-        json!({
-            "ok": true,
-            "offline_eval": {
-                "window": window,
-                "samples_total": samples.len(),
-                "weights": {
-                    "success": weights.success,
-                    "latency": weights.latency,
-                    "tool_error": weights.tool_error,
-                    "safety": weights.safety,
-                },
-                "baseline": {
-                    "samples": baseline_slice.len(),
-                    "mean_reward": baseline_mean,
-                    "mean_safety_penalty": baseline_safety,
-                },
-                "candidate": {
-                    "samples": candidate_slice.len(),
-                    "mean_reward": candidate_mean,
-                    "mean_safety_penalty": candidate_safety,
-                },
-                "comparison": {
-                    "reward_uplift": improvement,
-                    "pass_threshold": pass_threshold,
-                    "passes": pass,
-                },
-                "drift": {
-                    "recent_mean": recent_mean,
-                    "historical_mean": historical_mean,
-                    "absolute_diff": reward_drift,
-                    "threshold": drift_threshold,
-                    "alert": drift_alert,
-                },
-                "decision": {
-                    "recommended_mode": recommended_mode,
-                    "fallback_triggered": !pass || drift_alert,
-                },
-                "warnings": warnings,
-            }
-        }),
+        build_rl_alignment_offline_eval_payload(&params),
     )
     .await
 }

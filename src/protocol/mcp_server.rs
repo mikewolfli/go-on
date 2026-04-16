@@ -72,7 +72,7 @@ impl McpStdioServer {
                             stdout.flush().await?;
                         }
                         Err(e) => {
-                            eprintln!(
+                            warn!(
                                 "{}",
                                 tf("error.handling_request", &[("error", &format!("{}", e))])
                             );

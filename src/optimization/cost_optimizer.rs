@@ -225,11 +225,7 @@ impl CostOptimizer {
                     true
                 }
             })
-            .max_by(|a, b| {
-                a.reliability_score
-                    .partial_cmp(&b.reliability_score)
-                    .unwrap()
-            })
+            .max_by(|a, b| a.reliability_score.total_cmp(&b.reliability_score))
             .map(|p| p.model_name.clone())
     }
 

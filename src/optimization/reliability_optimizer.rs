@@ -128,8 +128,7 @@ impl ReliabilityOptimizer {
         let mut strategies = self.strategies.clone();
         strategies.sort_by(|a, b| {
             b.estimated_success_rate
-                .partial_cmp(&a.estimated_success_rate)
-                .unwrap()
+                .total_cmp(&a.estimated_success_rate)
         });
         strategies
     }
@@ -152,8 +151,7 @@ impl ReliabilityOptimizer {
 
         strategies.sort_by(|a, b| {
             b.estimated_success_rate
-                .partial_cmp(&a.estimated_success_rate)
-                .unwrap()
+                .total_cmp(&a.estimated_success_rate)
         });
         strategies
     }

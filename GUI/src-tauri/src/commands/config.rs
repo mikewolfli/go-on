@@ -7,8 +7,69 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
+use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 use crate::state::AppState;
+
+#[derive(Debug, serde::Deserialize, Clone)]
+struct ProviderCatalogFile {
+    providers: Vec<ProviderCatalogSpec>,
+}
+
+#[derive(Debug, serde::Deserialize, Clone)]
+struct ProviderCatalogSpec {
+    name: String,
+    #[serde(rename = "type")]
+    agent_type: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    chat_path: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    api_key_env: Option<String>,
+    #[serde(default)]
+    secret_key_env: Option<String>,
+    #[serde(default)]
+    anthropic_version: Option<String>,
+    #[serde(default)]
+    max_tokens: Option<u32>,
+    #[serde(default)]
+    supports_system: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCatalogEntry {
+    pub name: String,
+    pub agent_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_key_env: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_system: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configured_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configured_env_var: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSelectionSaveResult {
+    pub provider: String,
+    pub model: String,
+    pub config_path: String,
+    pub note: String,
+}
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -89,7 +150,11 @@ fn token_result_found(source: String, token: String, note: String) -> CopilotTok
     }
 }
 
-fn token_result_pending(source: String, session: &DeviceFlowSession, note: String) -> CopilotTokenResult {
+fn token_result_pending(
+    source: String,
+    session: &DeviceFlowSession,
+    note: String,
+) -> CopilotTokenResult {
     let now = now_secs();
     CopilotTokenResult {
         found: false,
@@ -109,8 +174,11 @@ fn start_device_flow() -> Result<DeviceFlowSession, String> {
     let response = client
         .post(GITHUB_DEVICE_CODE_URL)
         .header("Accept", "application/json")
-        .header("User-Agent", "go-on-gui/0.5.3")
-        .form(&[("client_id", GITHUB_OAUTH_CLIENT_ID), ("scope", "read:user")])
+        .header("User-Agent", "go-on-gui/0.6.1")
+        .form(&[
+            ("client_id", GITHUB_OAUTH_CLIENT_ID),
+            ("scope", "read:user"),
+        ])
         .send()
         .map_err(|e| format!("failed to request GitHub device code: {e}"))?;
 
@@ -133,12 +201,14 @@ fn start_device_flow() -> Result<DeviceFlowSession, String> {
     })
 }
 
-fn poll_device_flow_access_token(session: &DeviceFlowSession) -> Result<GithubAccessTokenResponse, String> {
+fn poll_device_flow_access_token(
+    session: &DeviceFlowSession,
+) -> Result<GithubAccessTokenResponse, String> {
     let client = reqwest::blocking::Client::new();
     let response = client
         .post(GITHUB_DEVICE_TOKEN_URL)
         .header("Accept", "application/json")
-        .header("User-Agent", "go-on-gui/0.5.3")
+        .header("User-Agent", "go-on-gui/0.6.1")
         .form(&[
             ("client_id", GITHUB_OAUTH_CLIENT_ID),
             ("device_code", session.device_code.as_str()),
@@ -176,6 +246,15 @@ fn config_file_path(working_dir: &str) -> PathBuf {
 
 fn config_template_path(working_dir: &str) -> PathBuf {
     PathBuf::from(working_dir).join("config.toml.autopilot-adaptive")
+}
+
+fn provider_catalog_path(working_dir: &str) -> Option<PathBuf> {
+    let candidates = [
+        PathBuf::from(working_dir).join("providers.toml"),
+        std::env::current_dir().ok()?.join("providers.toml"),
+    ];
+
+    candidates.into_iter().find(|path| path.exists())
 }
 
 fn resolve_executable_path(executable_path: &str, working_dir: &str) -> PathBuf {
@@ -223,40 +302,51 @@ fn validate_executable_identity(path: &Path) -> Result<(), String> {
     Err("identity probe failed".to_string())
 }
 
+fn discover_backend_executable_in_directory(base_dir: &Path, default_exe: &str) -> Option<PathBuf> {
+    let candidate_dirs = [
+        base_dir.to_path_buf(),
+        base_dir.join("bin"),
+        base_dir.join("exec"),
+        base_dir.join("backend"),
+    ];
+
+    for dir in candidate_dirs {
+        let candidate = dir.join(default_exe);
+        if candidate.exists()
+            && candidate.is_file()
+            && is_expected_backend_filename(&candidate)
+            && validate_executable_identity(&candidate).is_ok()
+        {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
 fn discover_backend_executable(default_exe: &str) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
+    let mut roots: Vec<PathBuf> = Vec::new();
 
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(parent) = current_exe.parent() {
-            candidates.push(parent.join(default_exe));
+            roots.push(parent.to_path_buf());
         }
     }
 
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join(default_exe));
+        roots.push(cwd);
     }
 
-    if cfg!(target_os = "windows") {
-        if let Ok(output) = Command::new("where").arg(default_exe).output() {
-            if output.status.success() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                if let Some(first) = text.lines().find(|line| !line.trim().is_empty()) {
-                    candidates.push(PathBuf::from(first.trim()));
-                }
-            }
-        }
-    } else if let Ok(output) = Command::new("which").arg(default_exe).output() {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            if let Some(first) = text.lines().find(|line| !line.trim().is_empty()) {
-                candidates.push(PathBuf::from(first.trim()));
-            }
+    roots.sort();
+    roots.dedup();
+
+    for root in roots {
+        if let Some(found) = discover_backend_executable_in_directory(&root, default_exe) {
+            return Some(found);
         }
     }
 
-    candidates.into_iter().find(|p| {
-        p.exists() && p.is_file() && is_expected_backend_filename(p) && validate_executable_identity(p).is_ok()
-    })
+    None
 }
 
 fn load_env_file(path: &PathBuf) -> HashMap<String, String> {
@@ -303,6 +393,270 @@ fn infer_env_var(provider: &str) -> String {
         .replace('-', "_")
         .replace(' ', "_");
     format!("{normalized}_API_KEY")
+}
+
+fn fallback_provider_catalog() -> Vec<ProviderCatalogSpec> {
+    vec![
+        ProviderCatalogSpec {
+            name: "anthropic".to_string(),
+            agent_type: "claude".to_string(),
+            url: Some("https://api.anthropic.com".to_string()),
+            chat_path: None,
+            model: Some("claude-3-7-sonnet-latest".to_string()),
+            api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: Some("2023-06-01".to_string()),
+            max_tokens: Some(4096),
+            supports_system: Some(true),
+        },
+        ProviderCatalogSpec {
+            name: "copilot".to_string(),
+            agent_type: "copilot".to_string(),
+            url: Some("http://127.0.0.1:8080".to_string()),
+            chat_path: None,
+            model: Some("copilot".to_string()),
+            api_key_env: Some("GITHUB_COPILOT_TOKEN".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            max_tokens: None,
+            supports_system: Some(true),
+        },
+        ProviderCatalogSpec {
+            name: "gemini".to_string(),
+            agent_type: "gemini".to_string(),
+            url: Some("https://generativelanguage.googleapis.com/v1beta/openai".to_string()),
+            chat_path: Some("/chat/completions".to_string()),
+            model: Some("gemini-2.0-flash".to_string()),
+            api_key_env: Some("GEMINI_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            max_tokens: None,
+            supports_system: Some(true),
+        },
+        ProviderCatalogSpec {
+            name: "openai".to_string(),
+            agent_type: "openai".to_string(),
+            url: Some("https://api.openai.com/v1".to_string()),
+            chat_path: None,
+            model: Some("gpt-4o-mini".to_string()),
+            api_key_env: Some("OPENAI_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            max_tokens: None,
+            supports_system: Some(true),
+        },
+    ]
+}
+
+fn load_provider_catalog(working_dir: &str) -> Vec<ProviderCatalogSpec> {
+    let Some(path) = provider_catalog_path(working_dir) else {
+        return fallback_provider_catalog();
+    };
+
+    let Ok(content) = fs::read_to_string(path) else {
+        return fallback_provider_catalog();
+    };
+
+    toml::from_str::<ProviderCatalogFile>(&content)
+        .map(|catalog| catalog.providers)
+        .unwrap_or_else(|_| fallback_provider_catalog())
+}
+
+fn load_toml_document(path: &Path) -> Result<DocumentMut, String> {
+    if !path.exists() {
+        return Ok(DocumentMut::new());
+    }
+
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    if content.trim().is_empty() {
+        return Ok(DocumentMut::new());
+    }
+
+    content
+        .parse::<DocumentMut>()
+        .map_err(|e| format!("failed to parse TOML {}: {e}", path.to_string_lossy()))
+}
+
+fn read_configured_agent_settings(
+    config_path: &Path,
+) -> HashMap<String, (Option<String>, Option<String>)> {
+    let Ok(doc) = load_toml_document(config_path) else {
+        return HashMap::new();
+    };
+
+    let mut result = HashMap::new();
+    let Some(agents) = doc["agents"].as_table_like() else {
+        return result;
+    };
+
+    for (name, item) in agents.iter() {
+        let Some(table) = item.as_table_like() else {
+            continue;
+        };
+        let model = table
+            .get("model")
+            .and_then(|item| item.as_str())
+            .map(|value| value.to_string());
+        let env_var = table
+            .get("api_key_env")
+            .and_then(|item| item.as_str())
+            .or_else(|| table.get("secret_key_env").and_then(|item| item.as_str()))
+            .map(|value| value.to_string());
+        result.insert(name.to_string(), (model, env_var));
+    }
+
+    result
+}
+
+fn ensure_table(item: &mut Item) -> &mut Table {
+    if !item.is_table() {
+        *item = Item::Table(Table::new());
+    }
+    item.as_table_mut().expect("table just created")
+}
+
+fn set_string(table: &mut Table, key: &str, value_opt: Option<&str>) {
+    if let Some(value_text) = value_opt {
+        table[key] = value(value_text);
+    } else {
+        table.remove(key);
+    }
+}
+
+fn set_bool(table: &mut Table, key: &str, value_opt: Option<bool>) {
+    if let Some(value_bool) = value_opt {
+        table[key] = value(value_bool);
+    } else {
+        table.remove(key);
+    }
+}
+
+fn set_integer(table: &mut Table, key: &str, value_opt: Option<u32>) {
+    if let Some(value_int) = value_opt {
+        table[key] = value(i64::from(value_int));
+    } else {
+        table.remove(key);
+    }
+}
+
+#[tauri::command]
+pub fn list_provider_catalog(
+    state: State<'_, AppState>,
+) -> Result<Vec<ProviderCatalogEntry>, String> {
+    let inner = state
+        .0
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let working_dir = inner.config.working_dir.clone();
+    drop(inner);
+
+    let providers = load_provider_catalog(&working_dir);
+    let configured = read_configured_agent_settings(&config_file_path(&working_dir));
+
+    let mut entries = providers
+        .into_iter()
+        .map(|spec| {
+            let configured_settings = configured.get(&spec.name).cloned().unwrap_or((None, None));
+            ProviderCatalogEntry {
+                name: spec.name,
+                agent_type: spec.agent_type,
+                default_model: spec.model,
+                api_key_env: spec.api_key_env,
+                secret_key_env: spec.secret_key_env,
+                url: spec.url,
+                chat_path: spec.chat_path,
+                supports_system: spec.supports_system,
+                configured_model: configured_settings.0,
+                configured_env_var: configured_settings.1,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(entries)
+}
+
+#[tauri::command]
+pub fn save_provider_selection(
+    state: State<'_, AppState>,
+    provider: String,
+    model: String,
+    env_var: Option<String>,
+) -> Result<ProviderSelectionSaveResult, String> {
+    let provider_name = provider.trim().to_string();
+    if provider_name.is_empty() {
+        return Err("provider is empty".to_string());
+    }
+
+    let model_name = if model.trim().is_empty() {
+        "auto".to_string()
+    } else {
+        model.trim().to_string()
+    };
+
+    let inner = state
+        .0
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let working_dir = inner.config.working_dir.clone();
+    drop(inner);
+
+    let providers = load_provider_catalog(&working_dir);
+    let spec = providers
+        .into_iter()
+        .find(|entry| entry.name == provider_name)
+        .ok_or_else(|| format!("unknown provider: {provider_name}"))?;
+
+    let config_path = config_file_path(&working_dir);
+    let mut doc = load_toml_document(&config_path)?;
+    let agents = ensure_table(&mut doc["agents"]);
+    let agent = ensure_table(&mut agents[&provider_name]);
+
+    set_string(agent, "type", Some(spec.agent_type.as_str()));
+    set_string(agent, "url", spec.url.as_deref());
+    set_string(agent, "chat_path", spec.chat_path.as_deref());
+    set_string(
+        agent,
+        "api_key_env",
+        env_var
+            .as_deref()
+            .filter(|value_text| !value_text.trim().is_empty())
+            .or(spec.api_key_env.as_deref()),
+    );
+    set_string(agent, "secret_key_env", spec.secret_key_env.as_deref());
+    set_string(
+        agent,
+        "anthropic_version",
+        spec.anthropic_version.as_deref(),
+    );
+    set_string(agent, "model", Some(model_name.as_str()));
+    set_integer(agent, "max_tokens", spec.max_tokens);
+    set_bool(agent, "supports_system", spec.supports_system);
+
+    if let Some(default_phase) = doc["default_phase"]
+        .as_str()
+        .map(|value_text| value_text.to_string())
+    {
+        if let Some(phases) = doc["phases"].as_table_mut() {
+            if let Some(phase_item) = phases.get_mut(&default_phase) {
+                if phase_item.is_table() {
+                    let phase_table = phase_item.as_table_mut().expect("checked table");
+                    let mut agents = Array::default();
+                    agents.push(provider_name.as_str());
+                    phase_table["agents"] = value(agents);
+                }
+            }
+        }
+    }
+
+    fs::write(&config_path, doc.to_string()).map_err(|e| e.to_string())?;
+
+    Ok(ProviderSelectionSaveResult {
+        provider: provider_name.clone(),
+        model: model_name.clone(),
+        config_path: config_path.to_string_lossy().to_string(),
+        note: format!("saved provider {provider_name} with model {model_name} and updated default phase routing"),
+    })
 }
 
 #[tauri::command]
@@ -363,6 +717,60 @@ pub fn configure_service_by_executable(
 }
 
 #[tauri::command]
+pub fn configure_service_by_directory(
+    state: State<'_, AppState>,
+    directory_path: String,
+) -> Result<(), String> {
+    let trimmed = directory_path.trim();
+    if trimmed.is_empty() {
+        return Err("directory path is empty".to_string());
+    }
+
+    let dir = PathBuf::from(trimmed);
+    if !dir.exists() {
+        return Err(format!("directory not found: {}", dir.to_string_lossy()));
+    }
+    if !dir.is_dir() {
+        return Err(format!("not a directory: {}", dir.to_string_lossy()));
+    }
+
+    let default_exe = if cfg!(target_os = "windows") {
+        "go-on.exe"
+    } else {
+        "go-on"
+    };
+
+    let Some(found_exe) = discover_backend_executable_in_directory(&dir, default_exe) else {
+        return Err(
+            "go-on executable not found under selected directory (checked root/bin/exec/backend)"
+                .to_string(),
+        );
+    };
+
+    let working_dir = found_exe
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_string_lossy()
+        .to_string();
+
+    let mut inner = state
+        .0
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+
+    inner.config.executable_path = found_exe.to_string_lossy().to_string();
+    inner.config.working_dir = working_dir.clone();
+    inner.config.log_path = PathBuf::from(&working_dir)
+        .join("go-on.log")
+        .to_string_lossy()
+        .to_string();
+
+    let env_path = env_file_path(&working_dir);
+    inner.config.extra_env = load_env_file(&env_path);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn backend_executable_exists(state: State<'_, AppState>) -> Result<bool, String> {
     let inner = state
         .0
@@ -374,7 +782,8 @@ pub fn backend_executable_exists(state: State<'_, AppState>) -> Result<bool, Str
         return Ok(false);
     }
 
-    let resolved = resolve_executable_path(&inner.config.executable_path, &inner.config.working_dir);
+    let resolved =
+        resolve_executable_path(&inner.config.executable_path, &inner.config.working_dir);
     if !resolved.exists() || !resolved.is_file() {
         return Ok(false);
     }
@@ -387,7 +796,9 @@ pub fn backend_executable_exists(state: State<'_, AppState>) -> Result<bool, Str
 }
 
 #[tauri::command]
-pub fn auto_configure_backend_path(state: State<'_, AppState>) -> Result<AutoConfigureResult, String> {
+pub fn auto_configure_backend_path(
+    state: State<'_, AppState>,
+) -> Result<AutoConfigureResult, String> {
     let default_exe = if cfg!(target_os = "windows") {
         "go-on.exe"
     } else {
@@ -572,7 +983,9 @@ pub fn fetch_github_copilot_token() -> Result<CopilotTokenResult, String> {
                 ));
             }
 
-            let err = poll.error.unwrap_or_else(|| "authorization_pending".to_string());
+            let err = poll
+                .error
+                .unwrap_or_else(|| "authorization_pending".to_string());
             let desc = poll.error_description.unwrap_or_default();
 
             if err == "slow_down" {
@@ -602,9 +1015,7 @@ pub fn fetch_github_copilot_token() -> Result<CopilotTokenResult, String> {
                 existing,
                 format!(
                     "verification pending: open {} and enter code {}. Then click import again. {}",
-                    existing.verification_uri,
-                    existing.user_code,
-                    desc
+                    existing.verification_uri, existing.user_code, desc
                 )
                 .trim()
                 .to_string(),

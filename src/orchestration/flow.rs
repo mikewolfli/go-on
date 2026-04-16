@@ -136,31 +136,45 @@ impl FlowManager {
         let resolved_phase = build_phase(&self.config.flow.name, &phase_name, phase_cfg);
         let mut resolved_agents: Vec<(String, Arc<dyn Agent>)> = Vec::new();
 
-        // If fallback is disabled, only the first configured agent can be used.
-        // If fallback is enabled, iterate in order and keep all currently available agents.
-        for (idx, agent_name) in resolved_phase.agent_names.iter().enumerate() {
-            if let Some(agent) = registry.get(agent_name) {
-                resolved_agents.push((agent_name.clone(), agent));
-            } else if idx == 0 && !resolved_phase.fallback {
-                return Err(ProxyError::AgentNotFound(agent_name.clone()).into());
+        if resolved_phase.agent_names.is_empty() {
+            // Path B: no agents configured — auto-map by using all registered agents.
+            // Fallback is always enabled in this path.
+            for agent_name in registry.names() {
+                if let Some(agent) = registry.get(&agent_name) {
+                    resolved_agents.push((agent_name, agent));
+                }
+            }
+            if resolved_agents.is_empty() {
+                return Err(ProxyError::AgentNotFound("(auto)".to_string()).into());
+            }
+        } else {
+            // Path A: explicit agent list configured — deterministic path.
+            // If fallback is disabled, only the first configured agent can be used.
+            // If fallback is enabled, iterate in order and keep all currently available agents.
+            for (idx, agent_name) in resolved_phase.agent_names.iter().enumerate() {
+                if let Some(agent) = registry.get(agent_name) {
+                    resolved_agents.push((agent_name.clone(), agent));
+                } else if idx == 0 && !resolved_phase.fallback {
+                    return Err(ProxyError::AgentNotFound(agent_name.clone()).into());
+                }
+
+                if !resolved_phase.fallback {
+                    break;
+                }
+            }
+
+            if resolved_agents.is_empty() {
+                let first = resolved_phase
+                    .agent_names
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                return Err(ProxyError::AgentNotFound(first).into());
             }
 
             if !resolved_phase.fallback {
-                break;
+                resolved_agents.truncate(1);
             }
-        }
-
-        if resolved_agents.is_empty() {
-            let first = resolved_phase
-                .agent_names
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "unknown".to_string());
-            return Err(ProxyError::AgentNotFound(first).into());
-        }
-
-        if !resolved_phase.fallback {
-            resolved_agents.truncate(1);
         }
 
         Ok(ResolvedRouting {
@@ -405,5 +419,38 @@ mod tests {
         assert!(resolved.phase.fallback);
         assert_eq!(resolved.agents.len(), 1);
         assert_eq!(resolved.agents[0].0, "copilot");
+    }
+
+    #[test]
+    fn resolve_empty_agents_auto_maps_all_registry_agents() {
+        // Path B: phase with no configured agents should resolve to all registered agents.
+        let mut config = build_test_config(Some(true));
+        config
+            .phases
+            .get_mut("coding")
+            .expect("coding phase must exist")
+            .agents = vec![];
+
+        let config = Arc::new(config);
+        let registry = AgentRegistry::from_config(Arc::clone(&config), reqwest::Client::new())
+            .expect("registry should build");
+        let flow = FlowManager::new(Arc::clone(&config), None);
+
+        let resolved = flow
+            .resolve(None, &registry)
+            .expect("empty-agents phase should auto-map");
+
+        // All agents registered in the config must appear in the resolved list.
+        let resolved_names: Vec<&str> = resolved.agents.iter().map(|(n, _)| n.as_str()).collect();
+        for name in config.agents.keys() {
+            assert!(
+                resolved_names.contains(&name.as_str()),
+                "auto-map should include agent '{name}'"
+            );
+        }
+        assert!(
+            !resolved.agents.is_empty(),
+            "auto-map must not return empty agent list"
+        );
     }
 }

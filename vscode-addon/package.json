@@ -2,7 +2,7 @@
   "name": "go-on-vscode",
   "displayName": "Go-On VS Code Extension",
   "description": "VS Code extension for the Go-On Rust ACP proxy",
-  "version": "0.5.3",
+  "version": "0.6.1",
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -50,6 +50,9 @@
     "onCommand:go-on.buildRepro",
     "onCommand:go-on.dataLifecycle",
     "onCommand:go-on.optimizationPeak",
+    "onCommand:go-on.runtimeSelfModel",
+    "onCommand:go-on.providerStatus",
+    "onCommand:go-on.releaseReadiness",
     "onCommand:go-on.runtimeStability",
     "onCommand:go-on.governancePlanGet",
     "onCommand:go-on.governanceAuditRecent",
@@ -252,6 +255,21 @@
         "command": "go-on.optimizationPeak",
         "title": "Get One-Shot Optimization Peak (RPC)",
         "icon": "$(rocket)"
+      },
+      {
+        "command": "go-on.runtimeSelfModel",
+        "title": "Get Runtime Self-Model (RPC)",
+        "icon": "$(hubot)"
+      },
+      {
+        "command": "go-on.providerStatus",
+        "title": "Get Provider Status Baseline (RPC)",
+        "icon": "$(server)"
+      },
+      {
+        "command": "go-on.releaseReadiness",
+        "title": "Get Release Readiness Gate (RPC)",
+        "icon": "$(checklist)"
       },
       {
         "command": "go-on.runtimeStability",

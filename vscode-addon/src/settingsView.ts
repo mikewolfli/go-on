@@ -1,7 +1,209 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import { i18n, MessageKeys } from './i18n';
 import { configManager } from './configManager';
 import { RuntimeManagerLike } from './managerTypes';
+
+interface ProviderCatalogSpec {
+    name: string;
+    type: string;
+    model?: string;
+    api_key_env?: string;
+    secret_key_env?: string;
+    url?: string;
+    chat_path?: string;
+    anthropic_version?: string;
+    max_tokens?: number;
+    supports_system?: boolean;
+}
+
+interface ProviderCatalogEntry {
+    name: string;
+    agentType: string;
+    defaultModel?: string;
+    apiKeyEnv?: string;
+    secretKeyEnv?: string;
+    url?: string;
+    chatPath?: string;
+    supportsSystem?: boolean;
+    configuredModel?: string;
+    configuredEnvVar?: string;
+}
+
+interface ProviderConfigSnapshot {
+    model?: string;
+    envVar?: string;
+}
+
+function escapeRegex(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function inferEnvVar(providerName: string): string {
+    return `${providerName.trim().toUpperCase().replace(/[-\s]+/g, '_')}_API_KEY`;
+}
+
+function parseSimpleTomlValue(raw: string): unknown {
+    const value = raw.trim();
+    if (value.startsWith('"') && value.endsWith('"')) {
+        return value.slice(1, -1);
+    }
+    if (value === 'true') {
+        return true;
+    }
+    if (value === 'false') {
+        return false;
+    }
+    const maybeNumber = Number(value);
+    if (!Number.isNaN(maybeNumber)) {
+        return maybeNumber;
+    }
+    return value;
+}
+
+function parseProviderCatalog(content: string): ProviderCatalogSpec[] {
+    const providers: ProviderCatalogSpec[] = [];
+    let current: Record<string, unknown> | null = null;
+
+    for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) {
+            continue;
+        }
+
+        if (trimmed === '[[providers]]') {
+            if (current) {
+                const candidate = current as Partial<ProviderCatalogSpec>;
+                if (candidate.name && candidate.type) {
+                    providers.push(candidate as ProviderCatalogSpec);
+                }
+            }
+            current = {};
+            continue;
+        }
+
+        if (!current) {
+            continue;
+        }
+
+        const match = trimmed.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
+        if (!match) {
+            continue;
+        }
+        const key = match[1];
+        current[key] = parseSimpleTomlValue(match[2]);
+    }
+
+    if (current) {
+        const candidate = current as Partial<ProviderCatalogSpec>;
+        if (candidate.name && candidate.type) {
+            providers.push(candidate as ProviderCatalogSpec);
+        }
+    }
+
+    return providers;
+}
+
+function parseConfiguredAgents(content: string): Map<string, ProviderConfigSnapshot> {
+    const result = new Map<string, ProviderConfigSnapshot>();
+    const sectionRegex = /^\[agents\.([^\]]+)\]([\s\S]*?)(?=^\[[^\]]+\]|$)/gm;
+
+    for (const match of content.matchAll(sectionRegex)) {
+        const name = String(match[1] || '').trim();
+        const section = String(match[2] || '');
+        const model = section.match(/^model\s*=\s*"([^"]*)"\s*$/m)?.[1];
+        const apiKeyEnv = section.match(/^api_key_env\s*=\s*"([^"]*)"\s*$/m)?.[1];
+        const secretKeyEnv = section.match(/^secret_key_env\s*=\s*"([^"]*)"\s*$/m)?.[1];
+
+        result.set(name, {
+            model,
+            envVar: apiKeyEnv || secretKeyEnv,
+        });
+    }
+
+    return result;
+}
+
+function formatTomlValue(value: unknown): string {
+    if (typeof value === 'string') {
+        return `"${value.replace(/"/g, '\\"')}"`;
+    }
+    if (typeof value === 'boolean' || typeof value === 'number') {
+        return String(value);
+    }
+    return `"${String(value)}"`;
+}
+
+function upsertSectionLine(section: string, key: string, value: unknown): string {
+    const keyRegex = new RegExp(`^${escapeRegex(key)}\\s*=.*$`, 'm');
+    const line = `${key} = ${formatTomlValue(value)}`;
+    if (keyRegex.test(section)) {
+        return section.replace(keyRegex, line);
+    }
+    const lines = section.split('\n');
+    lines.splice(1, 0, line);
+    return lines.join('\n');
+}
+
+function removeSectionLine(section: string, key: string): string {
+    const keyRegex = new RegExp(`^${escapeRegex(key)}\\s*=.*(?:\\r?\\n)?`, 'm');
+    return section.replace(keyRegex, '');
+}
+
+function upsertAgentSection(
+    content: string,
+    providerName: string,
+    fields: Record<string, unknown>
+): string {
+    const header = `[agents.${providerName}]`;
+    const sectionRegex = new RegExp(`^${escapeRegex(header)}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, 'm');
+
+    const applyFields = (section: string) => {
+        let updated = section;
+        for (const [key, value] of Object.entries(fields)) {
+            if (value === undefined || value === null || value === '') {
+                updated = removeSectionLine(updated, key);
+            } else {
+                updated = upsertSectionLine(updated, key, value);
+            }
+        }
+        return updated;
+    };
+
+    if (sectionRegex.test(content)) {
+        return content.replace(sectionRegex, (section) => applyFields(section));
+    }
+
+    let section = `${header}\n`;
+    for (const [key, value] of Object.entries(fields)) {
+        if (value !== undefined && value !== null && value !== '') {
+            section += `${key} = ${formatTomlValue(value)}\n`;
+        }
+    }
+
+    return `${content.trimEnd()}\n\n${section}`;
+}
+
+function upsertPhaseAgents(content: string, phase: string, agents: string[]): string {
+    const header = `[phases.${phase}]`;
+    const sectionRegex = new RegExp(`^${escapeRegex(header)}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, 'm');
+    const agentsLine = `agents = [${agents.map((agent) => `"${agent}"`).join(', ')}]`;
+
+    if (sectionRegex.test(content)) {
+        return content.replace(sectionRegex, (section) => {
+            const agentsRegex = /^agents\s*=\s*\[[^\]]*\]\s*$/m;
+            if (agentsRegex.test(section)) {
+                return section.replace(agentsRegex, agentsLine);
+            }
+            const lines = section.split('\n');
+            lines.splice(1, 0, agentsLine);
+            return lines.join('\n');
+        });
+    }
+
+    return `${content.trimEnd()}\n\n${header}\ndescription = "${phase} phase"\n${agentsLine}\nfallback = true\n`;
+}
 
 export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'go-on-settings';
@@ -36,6 +238,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         buildRepro: 'go-on.buildRepro',
         dataLifecycle: 'go-on.dataLifecycle',
         optimizationPeak: 'go-on.optimizationPeak',
+        releaseReadiness: 'go-on.releaseReadiness',
         runtimeStability: 'go-on.runtimeStability',
         autotuneStatus: 'go-on.autotuneStatus',
         governanceStatus: 'go-on.governanceStatus',
@@ -68,7 +271,14 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
 
         webviewView.webview.onDidReceiveMessage(
             async (message: Record<string, unknown>) => {
-                await this._handleWebviewMessage(message);
+                try {
+                    await this._handleWebviewMessage(message);
+                } catch (error: unknown) {
+                    this._postMessage({
+                        type: 'settingsActionError',
+                        message: this._getErrorMessage(error),
+                    });
+                }
             },
             undefined,
             this.context.subscriptions
@@ -85,10 +295,17 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         const messageType = String(message.type ?? '');
         const handlers: Record<string, (_msg: Record<string, unknown>) => Promise<void> | void> = {
             requestSettings: async (_message) => this._sendCurrentSettings(),
+            updateSetting: async (msg) => this._handleGenericSettingUpdate(String(msg.key ?? ''), msg.value),
             updateRuntimeSetting: async (msg) => this._updateRuntimeSetting(String(msg.key ?? ''), msg.value),
             updateCacheSetting: async (msg) => this._updateCacheSetting(String(msg.key ?? ''), msg.value),
             updateVectorSetting: async (msg) => this._updateVectorSetting(String(msg.key ?? ''), msg.value),
             updateAutotuneSetting: async (msg) => this._updateAutotuneSetting(String(msg.key ?? ''), msg.value),
+            requestProviderModels: async (msg) => this._sendProviderModels(String(msg.provider ?? '')),
+            saveProviderSelection: async (msg) => this._saveProviderSelection(
+                String(msg.provider ?? ''),
+                String(msg.model ?? 'auto'),
+                msg.envVar ? String(msg.envVar) : undefined,
+            ),
             addAgent: async (msg) => this._addAgent(String(msg.name ?? ''), msg.config),
             deleteAgent: async (msg) => this._deleteAgent(String(msg.name ?? '')),
             updatePhase: async (msg) => this._updatePhase(String(msg.name ?? ''), msg.config),
@@ -130,6 +347,241 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         }
 
         console.warn(`[go-on-settings] Unknown message type: ${messageType}`);
+    }
+
+    private async _handleGenericSettingUpdate(key: string, value: unknown) {
+        if (!key.startsWith('go-on.')) {
+            return;
+        }
+
+        const goOnConfig = vscode.workspace.getConfiguration('go-on');
+        const relativeKey = key.replace(/^go-on\./, '');
+        await goOnConfig.update(relativeKey, value, vscode.ConfigurationTarget.Workspace);
+
+        if (relativeKey.startsWith('runtime.')) {
+            await this._updateRuntimeSetting(relativeKey.replace(/^runtime\./, ''), value);
+            return;
+        }
+        if (relativeKey.startsWith('cache.')) {
+            await this._updateCacheSetting(relativeKey.replace(/^cache\./, ''), value);
+            return;
+        }
+        if (relativeKey.startsWith('vector.')) {
+            await this._updateVectorSetting(relativeKey.replace(/^vector\./, ''), value);
+            return;
+        }
+        if (relativeKey.startsWith('autotune.')) {
+            await this._updateAutotuneSetting(relativeKey.replace(/^autotune\./, ''), value);
+            return;
+        }
+
+        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.successfullySaved));
+    }
+
+    private _workspaceRoot(): string {
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!root) {
+            throw new Error('No workspace folder open.');
+        }
+        return root;
+    }
+
+    private _resolveConfigPath(): string {
+        const root = this._workspaceRoot();
+        const configured = vscode.workspace.getConfiguration('go-on').get<string>('configPath', './config.toml') || './config.toml';
+        return path.isAbsolute(configured) ? configured : path.resolve(root, configured);
+    }
+
+    private async _loadProviderCatalog(): Promise<ProviderCatalogSpec[]> {
+        const root = this._workspaceRoot();
+        const candidates = [
+            path.join(root, 'providers.toml'),
+            path.resolve(root, '..', 'providers.toml'),
+        ];
+
+        for (const filePath of candidates) {
+            try {
+                const content = await fs.readFile(filePath, 'utf8');
+                const parsed = parseProviderCatalog(content);
+                if (parsed.length > 0) {
+                    return parsed;
+                }
+            } catch {
+                // Try next candidate.
+            }
+        }
+
+        return [];
+    }
+
+    private async _loadConfiguredAgentMap(): Promise<Map<string, ProviderConfigSnapshot>> {
+        try {
+            const configPath = this._resolveConfigPath();
+            const content = await fs.readFile(configPath, 'utf8');
+            return parseConfiguredAgents(content);
+        } catch {
+            return new Map();
+        }
+    }
+
+    private _modelIdFromRuntime(value: unknown): string | undefined {
+        if (typeof value === 'string' && value.trim()) {
+            return value.trim();
+        }
+        if (typeof value !== 'object' || value === null) {
+            return undefined;
+        }
+        const record = value as Record<string, unknown>;
+        const candidates = [record.id, record.model_id, record.modelId, record.name];
+        for (const candidate of candidates) {
+            if (typeof candidate === 'string' && candidate.trim()) {
+                return candidate.trim();
+            }
+        }
+        return undefined;
+    }
+
+    private async _resolveProviderModels(providerName: string, spec?: ProviderCatalogEntry): Promise<string[]> {
+        const modelSet = new Set<string>();
+        modelSet.add('auto');
+        if (spec?.defaultModel) {
+            modelSet.add(spec.defaultModel);
+        }
+
+        if (this.manager.isRunning()) {
+            try {
+                const response = await this.manager.sendRequest('models/list', {});
+                const payload = (typeof response === 'object' && response !== null ? response : {}) as Record<string, unknown>;
+                const groups = Array.isArray(payload.models) ? payload.models : [];
+                const matched = groups.find((group) => {
+                    const record = typeof group === 'object' && group !== null ? group as Record<string, unknown> : {};
+                    return record.agent === providerName;
+                });
+
+                if (matched && typeof matched === 'object') {
+                    const record = matched as Record<string, unknown>;
+                    const defaultModel = this._modelIdFromRuntime(record.default_model);
+                    if (defaultModel) {
+                        modelSet.add(defaultModel);
+                    }
+                    const runtimeModels = Array.isArray(record.models) ? record.models : [];
+                    for (const runtimeModel of runtimeModels) {
+                        const modelId = this._modelIdFromRuntime(runtimeModel);
+                        if (modelId) {
+                            modelSet.add(modelId);
+                        }
+                    }
+                }
+            } catch {
+                // Keep catalog-only models when runtime endpoint is unavailable.
+            }
+        }
+
+        return Array.from(modelSet.values());
+    }
+
+    private async _buildProviderSettingsPayload() {
+        const catalog = await this._loadProviderCatalog();
+        const configured = await this._loadConfiguredAgentMap();
+        const providers: ProviderCatalogEntry[] = catalog
+            .map((spec) => {
+                const configuredValue = configured.get(spec.name);
+                return {
+                    name: spec.name,
+                    agentType: spec.type,
+                    defaultModel: spec.model,
+                    apiKeyEnv: spec.api_key_env,
+                    secretKeyEnv: spec.secret_key_env,
+                    url: spec.url,
+                    chatPath: spec.chat_path,
+                    supportsSystem: spec.supports_system,
+                    configuredModel: configuredValue?.model,
+                    configuredEnvVar: configuredValue?.envVar,
+                };
+            })
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        const selectedProvider = providers.find((item) => item.configuredModel || item.configuredEnvVar)?.name
+            || providers[0]?.name
+            || 'copilot';
+        const selectedSpec = providers.find((item) => item.name === selectedProvider);
+        const selectedModel = selectedSpec?.configuredModel || selectedSpec?.defaultModel || 'auto';
+        const selectedEnvVar = selectedSpec?.configuredEnvVar || selectedSpec?.apiKeyEnv || inferEnvVar(selectedProvider);
+        const modelOptions = await this._resolveProviderModels(selectedProvider, selectedSpec);
+
+        return {
+            providers,
+            selectedProvider,
+            selectedModel,
+            selectedEnvVar,
+            modelOptions,
+        };
+    }
+
+    private async _sendProviderModels(providerName: string) {
+        if (!providerName.trim()) {
+            return;
+        }
+
+        const payload = await this._buildProviderSettingsPayload();
+        const selectedSpec = payload.providers.find((item) => item.name === providerName);
+        const modelOptions = await this._resolveProviderModels(providerName, selectedSpec);
+
+        this._postMessage({
+            type: 'providerModelsData',
+            provider: providerName,
+            modelOptions,
+            selectedModel: selectedSpec?.configuredModel || selectedSpec?.defaultModel || 'auto',
+            selectedEnvVar: selectedSpec?.configuredEnvVar || selectedSpec?.apiKeyEnv || inferEnvVar(providerName),
+        });
+    }
+
+    private async _saveProviderSelection(providerName: string, modelName: string, envVar?: string) {
+        const provider = providerName.trim();
+        if (!provider) {
+            throw new Error('Provider cannot be empty.');
+        }
+
+        const catalog = await this._loadProviderCatalog();
+        const matched = catalog.find((item) => item.name === provider);
+        if (!matched) {
+            throw new Error(`Unknown provider: ${provider}`);
+        }
+
+        const normalizedModel = modelName.trim() || 'auto';
+        const normalizedEnvVar = (envVar || '').trim() || matched.api_key_env || inferEnvVar(provider);
+
+        const configPath = this._resolveConfigPath();
+        let content = '';
+        try {
+            content = await fs.readFile(configPath, 'utf8');
+        } catch {
+            content = '';
+        }
+
+        content = upsertAgentSection(content, provider, {
+            type: matched.type,
+            url: matched.url,
+            chat_path: matched.chat_path,
+            api_key_env: normalizedEnvVar,
+            secret_key_env: matched.secret_key_env,
+            anthropic_version: matched.anthropic_version,
+            model: normalizedModel,
+            max_tokens: matched.max_tokens,
+            supports_system: matched.supports_system,
+        });
+
+        const defaultPhase = content.match(/^default_phase\s*=\s*"([^"]+)"\s*$/m)?.[1];
+        if (defaultPhase) {
+            content = upsertPhaseAgents(content, defaultPhase, [provider]);
+        }
+
+        await fs.writeFile(configPath, `${content.trimEnd()}\n`, 'utf8');
+        this._postMessage({
+            type: 'settingsActionResult',
+            message: `Saved provider=${provider}, model=${normalizedModel} to ${configPath}`,
+        });
+        await this._sendCurrentSettings();
     }
 
     // Settings update methods
@@ -224,11 +676,30 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private _sendCurrentSettings() {
+    private async _sendCurrentSettings() {
         if (!this._view) return;
 
         const config = configManager.getConfig();
         const vsCodeConfig = vscode.workspace.getConfiguration('go-on');
+        let providerSettings: {
+            providers: ProviderCatalogEntry[];
+            selectedProvider: string;
+            selectedModel: string;
+            selectedEnvVar: string;
+            modelOptions: string[];
+        } = {
+            providers: [],
+            selectedProvider: 'copilot',
+            selectedModel: 'auto',
+            selectedEnvVar: inferEnvVar('copilot'),
+            modelOptions: ['auto'],
+        };
+
+        try {
+            providerSettings = await this._buildProviderSettingsPayload();
+        } catch {
+            // Keep fallback provider payload if catalog/config discovery fails.
+        }
 
         const settings = {
             language: i18n.getCurrentLanguage(),
@@ -242,6 +713,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
             executablePath: vsCodeConfig.get('executablePath'),
             autoStart: vsCodeConfig.get('autoStart'),
             isRunning: this.manager.isRunning?.() || false,
+            providerSettings,
         };
 
         this._view.webview.postMessage({
@@ -611,6 +1083,25 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                     </div>
 
                     <div class="setting-group">
+                        <h3>🤖 Provider Model Routing</h3>
+                        <div class="setting-item">
+                            <label for="providerSelect">Provider:</label>
+                            <select id="providerSelect"></select>
+                        </div>
+                        <div class="setting-item">
+                            <label for="providerModelSelect">Model:</label>
+                            <select id="providerModelSelect"></select>
+                        </div>
+                        <div class="setting-item">
+                            <label for="providerEnvVar">API Key Env Var:</label>
+                            <input type="text" id="providerEnvVar" placeholder="Optional, inferred when empty">
+                        </div>
+                        <div class="action-buttons">
+                            <button class="action-button" id="applyProviderSelection">Apply Provider/Model To config.toml</button>
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
                         <h3>💬 Chat Settings</h3>
                         <div class="setting-item">
                             <label for="maxHistory">Max Chat History:</label>
@@ -708,6 +1199,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                         <button class="action-button" id="buildRepro">Build Repro</button>
                         <button class="action-button" id="dataLifecycle">Data Lifecycle</button>
                         <button class="action-button" id="optimizationPeak">Optimization Peak</button>
+                        <button class="action-button" id="releaseReadiness">Release Readiness</button>
                         <button class="action-button" id="runtimeStability">Runtime Stability</button>
                         <button class="action-button" id="autotuneStatus">Autotune Status</button>
                         <button class="action-button" id="governanceStatus">Governance Status</button>

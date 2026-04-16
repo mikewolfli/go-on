@@ -2,175 +2,155 @@
 
 简体中文 | [English](README.md)
 
-go-on 是一个基于 Rust 的 ACP 运行时（包含 MCP 适配层能力），重点面向智能体编排、运行时安全与可扩展工作流执行。
+go-on 是一个基于 Rust 的 ACP/MCP 运行时，聚焦智能体编排、治理能力与生产安全落地。
 
-- 核心运行时版本：0.5.3
-- 默认编译配置：`local-acp-sqlite`
-- 可选配置特性：`server-mcp-postgres`（当前为能力预留）
+## 版本
 
+- 后端 Runtime：0.6.1
+- GUI 桌面端：0.6.1
+- VS Code 插件：0.6.1
+- 默认特性：`local-acp-sqlite`
+- 可选特性预留：`server-mcp-postgres`
 
-## 当前源码结构
+## 当前仓库结构
 
-所有主要实现代码均位于 `src/` 目录下：
+顶层关键目录：
 
-- `src/acp`：ACP 服务器、请求分发、聊天/审查/运行时/后台维护
-- `src/agents`：模型供应商适配器与统一代理接口
-- `src/core`：配置、初始化、校验、上下文与错误模型
-- `src/governance`：运行治理、审查控制、策略约束
-- `src/i18n`：多语言运行时与热更新监听
-- `src/intelligence`：选择器、验证、强化学习、评测模块
-- `src/mcp`：MCP 适配辅助模块
-- `src/memory`：缓存、向量与记忆存储
-- `src/observability`：遥测、性能、观测模块
-- `src/optimization`：成本/速度/可靠性/故障预防/工作流优化
-- `src/orchestration`：流程、模式、任务图、路由、工具编排
-- `src/protocol`：协议服务与 JSON-RPC 支持
+- `src/`：后端 Runtime 主实现
+- `GUI/`：Tauri + Vue 桌面控制台
+- `vscode-addon/`：VS Code 扩展
+- `requests/`：NDJSON 场景基准与回放输入
+- `scripts/`：质量门禁与发布门禁脚本
+- `deploy/nginx/`：入口网关与 TLS 反向代理模板
+- `tests/`、`test_i18n/`：集成测试与 i18n 测试
+- `languages/`：运行时多语言资源
+- `RULES/`：治理与编码规则集
 
-其他目录：
+后端 `src/` 模块：
 
-- `test_i18n/`：i18n 集成测试
-- `tests/`：集成与场景测试
+- `acp`：ACP 服务、请求路由、workflow/task/chat 主链
+- `agents`：模型供应商适配与统一契约
+- `core`：配置、初始化、就绪性检查、错误模型
+- `governance`：策略/规则治理与审计支持
+- `intelligence`：选择器、强化学习、质量模型
+- `optimization`：成本/速度/可靠性/故障预防
+- `orchestration`：流程、模式、路由、工具编排
+- `observability`：指标/追踪/性能观测
+- `memory`：缓存与向量存储
+- `protocol`：协议服务与 JSON-RPC 支撑
+- `mcp`、`i18n`：MCP 适配辅助与语言运行时
 
-项目根目录下无 core、agents 等同名目录，所有实现均在 src 下。
+## 协议模式
 
-## 已实现 RPC 能力面
+`[protocol].mode` 支持 5 种：
 
-ACP 请求分发中已实现的主要方法包括：
+- `adaptive`（推荐默认）
+- `acp_stdio`
+- `acp_http`
+- `mcp_stdio`
+- `mcp_http`
 
-- 核心：`initialize`、`chat`、`phase`、`shutdown`、`runtime.health`
-- MCP 适配：`mcp.initialize`、`mcp.tools.list`、`mcp.tools.call`
-- 指标追踪：`metrics.get`、`metrics.prometheus`、`trace.get`、`trace.metrics`、`debug_panel.get`
-- 运行控制：`breaker.status`、`breaker.reset`、`cache.clear`、`vector.clear`、`maintenance.gc`、`config.reload`
-- 工作流任务：`workflow.confirm`、`workflow.clarify`、`workflow.research`、`workflow.consult`、`workflow.generate`、`workflow.execute`、`task.plan`、`task.execute`
-- 学习与调参：`learning.summary`、`autotune.get`、`autotune.status`、`autotune.reset`、`action.check`
-- 会话操作：checkpoint 创建/列表/清理与 rollback
+示例：
 
-## 构建与校验
+```toml
+[protocol]
+mode = "adaptive"
+```
+
+## 快速开始
+
+### 1）构建与测试
 
 ```bash
 cargo build
-cargo check
-cargo clippy -- -D warnings
-cargo test
+cargo check --all-targets
+cargo test --all-targets
 ```
 
-## 初始化与检查
-
-首次启动现在更像安装向导：
-
-- 如果 `config.toml` 缺少 AI 设置、内容为空，或没有可运行的 agent，go-on 会直接进入引导，不再先报配置错误。
-- 空白 `config.toml` 会自动补齐一份“可运行但不含 AI 凭据”的默认配置。
-- `runtime`、`cache`、`vector`、`autotune`、`flow`、`phases` 会自动生成，AI 提供商留待后续选择。
-
-推荐命令：
+### 2）首次初始化
 
 ```bash
-# 推荐的首次初始化入口
 cargo run -- --init --config config.toml
-
-# 检查当前可运行状态与配置完整度
 cargo run -- --check --config config.toml
-
-# 仅校验配置，不启动服务
-cargo run -- --doctor --config config.toml
 ```
 
-初始化模式：
+可选初始化级别：
 
 ```bash
-# Quick：推荐值 + 最少输入
 cargo run -- --init --setup-level quick --config config.toml
-
-# Custom：展开全部配置项
-cargo run -- --init --setup-level custom --config config.toml
-
-# 可选中间预设
 cargo run -- --init --setup-level standard --config config.toml
+cargo run -- --init --setup-level custom --config config.toml
 ```
 
-初始化过程中可以：
+### 3）启动 Runtime
 
-- 选择一个或多个模型提供商
-- 选择密钥模式（`env`、`keyring`、`auto`）
-- 暂时跳过 AI，仅保留基础可用配置
-- 在流程里直接看到“推荐值 + 用途说明”
+- Linux/macOS：`./start-go-on.sh`
+- Windows：`start-go-on.bat`
 
-提供商来源：
+默认健康检查地址：
 
-- 初始化向导从 `providers.toml` 读取 provider 能力。
-- 新增 provider 只需在 `providers.toml` 追加一个 `[[providers]]` 条目。
-- 初始化和检查都会读取 `providers.toml` 中的推荐参数字段：
-	- `recommended_default_phase`
-	- `recommended_request_timeout_seconds`
-	- `recommended_review_timeout_seconds`
-	- `recommended_planning_request_timeout_seconds`
-	- `recommended_coding_request_timeout_seconds`
-	- `recommended_review_request_timeout_seconds`
-	- `recommended_delivery_request_timeout_seconds`
-	- `recommended_cache_enabled`
-	- `recommended_vector_enabled`
-	- `recommended_phase_max_inflight`
-	- `recommended_global_max_inflight`
+- `http://127.0.0.1:8090/health`
 
-一键将当前配置对齐到推荐值：
+## 生产基线
 
-```bash
-cargo run -- --apply-recommended --config config.toml
-```
+生产模板：
 
-检查输出现在包括：
+- `config.production.toml`
 
-- 整体运行时就绪状态
-- 每个 agent 的 ready 状态、端点状态和缺失密钥
-- 配置完整度评分（0-100）
-- 缺失项和推荐调整项
-- 若跳过了 AI 配置，会明确显示“待完成：AI 提供商”
+当前默认包含：
 
-新增本地模型接口：
+- 默认环回地址监听
+- 入口鉴权与入口限流配置
+- 严格模式 fail-fast（`runtime.production_strict = true`）
+- OTEL 相关运行时配置
 
-```bash
-cargo run -- --add-model \
-	--local-model-name local_llm \
-	--local-model-url http://127.0.0.1:11434/v1 \
-	--local-model-type openai \
-	--local-model-model qwen2.5-coder \
-	--config config.toml
+入口网关与 TLS 模板：
 
-# 只注册到 [agents]，不自动接入 phases
-cargo run -- --add-model \
-	--local-model-name local_shadow \
-	--local-model-url http://127.0.0.1:11434/v1 \
-	--local-model-register-only \
-	--config config.toml
-```
+- `deploy/nginx/go-on.conf`
+- `deploy/nginx/README.md`
 
-## 配置文件（当前）
+发布就绪清单：
 
-- 唯一模板：`config.toml.autopilot-adaptive`
-- 运行时生效配置：`config.toml`
+- `RELEASE_READINESS.md`
 
-提供商凭据可使用环境变量名，或使用 `keyring://go-on/openai_compatible_api_key` 这类 keyring 引用。
+## 场景与门禁工具
 
-如需将本地配置重置为最新模板：
+`requests/` 已包含 runtime health、governance、cost、harness、security、release drill 等主链场景。
 
-```bash
-cp config.toml.autopilot-adaptive config.toml
-cargo run -- --doctor --config config.toml
-```
+门禁脚本：
 
-## VS Code 插件
+- `scripts/run-quality-gate.sh`
+- `scripts/run-quality-gate.ps1`
+- `scripts/run-release-readiness-gate.sh`
+- `scripts/run-release-readiness-gate.ps1`
+- `test_ci.sh`
 
-- 插件文档： [vscode-addon/README.md](vscode-addon/README.md)
-- 当前同步版本：0.4.7
+## 三端协同组件
 
-## 路线图
+- GUI 文档：`GUI/README.md`
+- VS Code 插件文档：`vscode-addon/README.md`
 
-- [FUTURE2](FUTURE2.MD)
-- [FUTURE3](FUTURE3.MD)
-- [FUTURE4](FUTURE4.MD)
-- [FUTURE5](FUTURE5.MD)
-- [FUTURE6](FUTURE6.MD)
+二者已对齐后端 RPC 能力、治理状态与健康探针语义。
+
+## 常用 RPC 能力分组
+
+当前主链代表方法：
+
+- 核心运行：`initialize`、`shutdown`、`runtime.health`、`runtime.stability`、`config.reload`
+- 安全治理：`governance.status`、`governance.plan.get`、`governance.plan.update`、`governance.audit.recent`、`security.baseline`
+- 可观测：`metrics.get`、`metrics.prometheus`、`trace.get`、`trace.metrics`、`observability.alerts`、`health.probes`
+- 稳定性：`breaker.status`、`breaker.reset`、`breaker.recovery`、`maintenance.gc`
+- 工作流任务：`workflow.execute`、`task.plan`、`task.execute`
+- 学习与智能：`learning.summary`、`learning.replay`、`learning.guardrail`、`selector.status`、`knowledge.distill`、`rl.alignment.offline_eval`、`hardness.status`
+- 优化与治理：`cost.status`、`config.baseline`、`error.contract`、`build.repro`、`data.lifecycle`、`harness.status`、`optimization.peak`、`quality.baseline`
+
+## 相关文档
+
+- `blue15.md`（实施进展总账）
+- `README-PUA-UNIVERSAL.md`
+- `MCP_LAYER.md`
+- `GO-ON_PUA_IMPLEMENTATION.md`
 
 ## 许可证
 
-遵循仓库许可策略。
+本项目按 MIT 或 BSD 许可（可任选其一）。

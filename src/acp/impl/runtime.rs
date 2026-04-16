@@ -2160,6 +2160,7 @@ fn entry_guard_exempt_path(path: &str) -> bool {
     matches!(path, "/" | "/health")
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn write_entry_rejection(
     socket: &mut TcpStream,
     status: u16,
@@ -2258,21 +2259,17 @@ async fn apply_entry_guards(
 
     let key = format!("entry:{}", source);
     let rpm_limit = server.runtime_config.entry_rate_limit_rpm.max(1);
-    let burst = Some(server.runtime_config.entry_rate_limit_burst.max(1));
+    let burst = server.runtime_config.entry_rate_limit_burst.max(1);
     let allowed = server
         .phase_rate_limiter
         .lock()
-        .map(|guard| guard.allow(&key, rpm_limit, burst))
+        .map(|guard| guard.allow(&key, rpm_limit, Some(burst)))
         .unwrap_or(true);
 
     if !allowed {
         warn!(
             "entry rate limit rejected {} {} from {} (rpm={}, burst={})",
-            method,
-            path,
-            source,
-            rpm_limit,
-            burst.unwrap_or(rpm_limit)
+            method, path, source, rpm_limit, burst
         );
         write_entry_rejection(
             socket,

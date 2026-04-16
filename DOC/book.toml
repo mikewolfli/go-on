@@ -1,0 +1,15 @@
+[book]
+title = "go-on Documentation"
+authors = ["GitHub Copilot"]
+language = "en"
+multilingual = false
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://example.invalid/go-on"
+site-url = "/"

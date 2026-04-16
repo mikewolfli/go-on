@@ -1215,6 +1215,89 @@ mod advanced {
     }
 
     #[test]
+    fn run_scenario_file_executes_runtime_self_model_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/runtime-self-model-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0["method"], "initialize");
+
+        assert_eq!(results[1].0["method"], "runtime.self_model");
+        assert_eq!(results[2].0["method"], "shutdown");
+
+        let self_model = results[1]
+            .1
+            .as_ref()
+            .expect("runtime.self_model should succeed");
+        assert!(
+            self_model["result"].get("self_model").is_some(),
+            "runtime.self_model should return self_model payload"
+        );
+        assert!(
+            self_model["result"]["self_model"].get("health").is_some(),
+            "runtime.self_model should include health summary"
+        );
+        assert!(
+            self_model["result"]["self_model"]
+                .get("stability")
+                .is_some(),
+            "runtime.self_model should include stability summary"
+        );
+        assert!(
+            self_model["result"]["self_model"].get("drift").is_some(),
+            "runtime.self_model should include drift summary"
+        );
+        assert!(
+            self_model["result"]["self_model"]
+                .get("recommendations")
+                .is_some(),
+            "runtime.self_model should include recommendations"
+        );
+    }
+
+    #[test]
+    fn run_scenario_file_executes_provider_status_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/provider-status-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "provider.status");
+        assert_eq!(results[2].0["method"], "shutdown");
+
+        let provider = results[1]
+            .1
+            .as_ref()
+            .expect("provider.status should succeed");
+        assert!(
+            provider["result"].get("provider_status").is_some(),
+            "provider.status should return provider_status payload"
+        );
+        assert!(
+            provider["result"]["provider_status"]
+                .get("summary")
+                .is_some(),
+            "provider.status should include summary"
+        );
+        assert!(
+            provider["result"]["provider_status"]
+                .get("configured_agents")
+                .is_some(),
+            "provider.status should include configured agent snapshot"
+        );
+    }
+
+    #[test]
     fn run_scenario_file_executes_security_baseline_benchmark_requests() {
         let temp = tempdir().expect("failed to create temp dir");
         let config_path = temp.path().join("config.toml");
@@ -1608,6 +1691,41 @@ mod advanced {
     }
 
     #[test]
+    fn run_scenario_file_executes_release_readiness_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/release-readiness-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "release.readiness");
+        assert_eq!(results[2].0["method"], "shutdown");
+
+        let readiness = results[1]
+            .1
+            .as_ref()
+            .expect("release.readiness should succeed");
+        assert!(
+            readiness["result"].get("readiness").is_some(),
+            "release.readiness should return readiness payload"
+        );
+        assert!(
+            readiness["result"]["readiness"].get("gates").is_some(),
+            "release.readiness should include gate matrix"
+        );
+        assert!(
+            readiness["result"]["readiness"]
+                .get("overall_pass")
+                .is_some(),
+            "release.readiness should include overall gate result"
+        );
+    }
+
+    #[test]
     fn run_scenario_file_executes_release_readiness_drill_requests() {
         let temp = tempdir().expect("failed to create temp dir");
         let config_path = temp.path().join("config.toml");
@@ -1634,6 +1752,35 @@ mod advanced {
             "observability.alerts should include items"
         );
 
+        #[test]
+        fn run_scenario_file_executes_lock_status_benchmark_requests() {
+            let temp = tempdir().expect("failed to create temp dir");
+            let config_path = temp.path().join("config.toml");
+            write_test_config(&config_path, 60, 120, 5);
+
+            let mut harness = AdvancedRpcHarness::new(&config_path);
+            let results =
+                harness.run_scenario_file(Path::new("requests/lock-status-benchmark.ndjson"));
+
+            assert_eq!(results.len(), 5);
+            assert_eq!(results[0].0["method"], "initialize");
+            assert_eq!(results[1].0["method"], "health.probes");
+            assert_eq!(results[2].0["method"], "lock.status");
+            assert_eq!(results[3].0["method"], "observability.alerts");
+            assert_eq!(results[4].0["method"], "shutdown");
+
+            let lock_status = results[2].1.as_ref().expect("lock.status should succeed");
+            assert!(
+                lock_status["result"]["locks"]
+                    .get("contention_top")
+                    .is_some(),
+                "lock.status should expose contention_top"
+            );
+            assert!(
+                lock_status["result"]["locks"].get("components").is_some(),
+                "lock.status should expose full component snapshots"
+            );
+        }
         let peak = results[4]
             .1
             .as_ref()
@@ -1649,8 +1796,8 @@ mod advanced {
         let scenarios = load_scenarios_from_dir(Path::new("requests"));
         assert_eq!(
             scenarios.len(),
-            24,
-            "expected twenty four request scenario files"
+            28,
+            "expected twenty eight request scenario files"
         );
 
         for scenario in scenarios {

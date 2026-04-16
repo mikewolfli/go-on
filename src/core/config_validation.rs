@@ -599,13 +599,17 @@ impl ConfigValidator {
 
     /// Validate individual phase
     fn validate_phase(&self, name: &str, phase: &PhaseConfig, result: &mut ValidationResult) {
-        // Check agents
+        // Check agents.
+        // An empty agents list is intentional: the runtime uses Path B (auto-map), which
+        // resolves agents dynamically from the full registry at request time.
+        // Downgrade to Warning so --validate-config does not block startup.
         if phase.agents.is_empty() {
-            result.errors.push(ValidationError {
+            // Empty agents list is intentional: the runtime uses Path B (auto-map), which
+            // resolves agents dynamically from the full registry at request time.
+            // Message kept compatible with i18n key "validation.msg.phase_no_agents".
+            result.warnings.push(ValidationWarning {
                 message: format!("Phase '{}' has no agents", name),
-                severity: ErrorSeverity::Critical,
                 section: format!("phases.{}", name),
-                suggestion: Some("Add at least one agent to the phase".to_string()),
             });
         }
 

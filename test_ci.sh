@@ -733,6 +733,18 @@ cargo test rpc_shutdown_waits_for_inflight_chat_completion -- --nocapture
 cargo test ndjson_scenario_files_all_pass -- --nocapture
 echo "✅ BLUE15 Stage C 上线收口演练主链测试通过"
 
+# 6at BLUE15 Stage C 发布就绪判定主链测试
+echo "=== 步骤6at: 运行BLUE15 Stage C 发布就绪判定主链测试 ==="
+cargo test run_scenario_file_executes_release_readiness_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 Stage C 发布就绪判定主链测试通过"
+
+# 6au BLUE15 P1-4 锁状态主链可观测测试
+echo "=== 步骤6au: 运行BLUE15 P1-4 锁状态主链可观测测试 ==="
+cargo test run_scenario_file_executes_lock_status_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ BLUE15 P1-4 锁状态主链可观测测试通过"
+
 # 5.2 GUI 契约烟测
 echo "=== 步骤5.2: 运行GUI契约烟测 ==="
 cd GUI

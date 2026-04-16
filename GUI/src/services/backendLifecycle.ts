@@ -3,7 +3,7 @@ import {
   autoConfigureBackendPath,
   backendExecutableExists,
   checkHealth,
-  configureServiceByExecutable,
+  configureServiceByDirectory,
   serviceStatus,
   startService,
 } from "./bridge";
@@ -67,6 +67,13 @@ export async function startBackendWithChecks() {
 }
 
 export async function ensureBackendAndStart() {
+  const localAuto = await autoConfigureBackendPath();
+  if (localAuto.linked) {
+    await startBackendWithChecks();
+    ElMessage.success("已在本地目录自动探测并关联后台。");
+    return;
+  }
+
   for (let attempt = 1; attempt <= MAX_BACKEND_CONFIGURE_ATTEMPTS; attempt++) {
     const exists = await backendExecutableExists();
     if (exists) {
@@ -75,10 +82,10 @@ export async function ensureBackendAndStart() {
     }
 
     await ElMessageBox.alert(
-      `未找到后台程序 go-on，请选择后台可执行文件。\n尝试 ${attempt}/${MAX_BACKEND_CONFIGURE_ATTEMPTS}`,
+      `未找到后台程序 go-on，请选择包含 go-on 的目录（将自动查找 root/bin/exec/backend）。\n尝试 ${attempt}/${MAX_BACKEND_CONFIGURE_ATTEMPTS}`,
       "配置后台路径",
       {
-        confirmButtonText: "选择文件",
+        confirmButtonText: "选择目录",
         closeOnClickModal: false,
         closeOnPressEscape: false,
       },
@@ -86,16 +93,12 @@ export async function ensureBackendAndStart() {
 
     const picked = await openDialog({
       multiple: false,
-      directory: false,
-      title: "选择 go-on 后台可执行文件",
-      filters: [
-        { name: "Executable", extensions: ["exe", "bin", ""] },
-        { name: "All Files", extensions: ["*"] },
-      ],
+      directory: true,
+      title: "选择包含 go-on 的目录",
     });
 
     if (!picked) {
-      ElMessage.warning(`未选择文件（${attempt}/${MAX_BACKEND_CONFIGURE_ATTEMPTS}），请重试。`);
+      ElMessage.warning(`未选择目录（${attempt}/${MAX_BACKEND_CONFIGURE_ATTEMPTS}），请重试。`);
       continue;
     }
 
@@ -106,9 +109,9 @@ export async function ensureBackendAndStart() {
     }
 
     try {
-      await configureServiceByExecutable(String(inputPath));
+      await configureServiceByDirectory(String(inputPath));
     } catch (error) {
-      ElMessage.error(`配置后台路径失败：${normalizeErrorMessage(error)}`);
+      ElMessage.error(`目录解析后台失败：${normalizeErrorMessage(error)}`);
       continue;
     }
 

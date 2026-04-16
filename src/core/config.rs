@@ -2194,26 +2194,33 @@ pub fn validate_runtime_readiness(
 
         let total_agents = config.agents.len();
         let ready_agents = total_agents.saturating_sub(missing_by_agent.len());
-        if ready_agents == 0 {
-            let missing = missing_env_vars(config);
-            anyhow::bail!(
-                "missing required environment variables for configured agents: {}",
-                missing.join(", ")
-            );
-        }
-
         let blocked = missing_by_agent
             .iter()
             .map(|(agent, vars)| format!("{}({})", agent, vars.join(",")))
             .collect::<Vec<_>>()
             .join("; ");
-        warn!(
-            "runtime readiness degraded: {} of {} agents are env-ready; unavailable agents: {}",
-            ready_agents, total_agents, blocked
-        );
+        if ready_agents == 0 {
+            warn!(
+                "runtime readiness degraded: 0 of {} agents are env-ready; startup continues in non-strict mode; unavailable agents: {}",
+                total_agents,
+                blocked
+            );
+        } else {
+            warn!(
+                "runtime readiness degraded: {} of {} agents are env-ready; unavailable agents: {}",
+                ready_agents, total_agents, blocked
+            );
+        }
     }
 
-    validate_external_secret_refs(config)?;
+    if strict_enabled {
+        validate_external_secret_refs(config)?;
+    } else if let Err(err) = validate_external_secret_refs(config) {
+        warn!(
+            "runtime readiness degraded: external secret validation failed in non-strict mode; startup continues: {}",
+            err
+        );
+    }
 
     if strict_enabled {
         let strict_violations = collect_production_strict_violations(config);
@@ -3228,7 +3235,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_readiness_fails_when_all_agents_are_env_blocked() {
+    fn runtime_readiness_allows_degraded_when_all_agents_are_env_blocked() {
         let mut cfg = valid_config();
         cfg.agents.remove("copilot");
         cfg.phases
@@ -3247,13 +3254,8 @@ mod tests {
         let config_path = dir.path().join("config.toml");
         fs::write(&config_path, "# test").expect("config marker should be written");
 
-        let err = super::validate_runtime_readiness(&config_path, &cfg)
-            .expect_err("runtime readiness should fail when zero agents are env-ready");
-        assert!(
-            err.to_string()
-                .contains("missing required environment variables for configured agents"),
-            "unexpected error: {err}"
-        );
+        super::validate_runtime_readiness(&config_path, &cfg)
+            .expect("runtime readiness should allow degraded startup in non-strict mode");
     }
 
     #[test]

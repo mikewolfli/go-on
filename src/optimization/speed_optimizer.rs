@@ -109,7 +109,7 @@ impl SpeedOptimizer {
             .iter()
             .map(|d| d.as_millis() as f64)
             .collect();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_by(|a, b| a.total_cmp(b));
 
         let avg = sorted.iter().sum::<f64>() / sorted.len() as f64;
         let p95_idx = (sorted.len() as f64 * 0.95) as usize;

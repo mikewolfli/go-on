@@ -47,6 +47,39 @@ export interface GovernanceAuditRecentResult {
   };
 }
 
+export interface ProviderStatusResult {
+  provider_status?: {
+    status?: string;
+    message?: string;
+    summary?: {
+      ready?: number;
+      degraded?: number;
+      configured?: number;
+      registry?: number;
+      coverage_percent?: number;
+    };
+    configured_agents?: Array<{
+      agent?: string;
+      ready?: boolean;
+      endpoint_status?: string;
+      missing_envs?: string[];
+    }>;
+  };
+}
+
+export interface ReleaseReadinessResult {
+  readiness?: {
+    version?: string;
+    status?: string;
+    overall_pass?: boolean;
+    blocked_gate_count?: number;
+    gates?: Array<{
+      name?: string;
+      passed?: boolean;
+    }>;
+  };
+}
+
 export interface HealthProbesResult {
   probes?: {
     liveness?: { ok?: boolean; status?: string; uptime_seconds?: number };
@@ -78,6 +111,33 @@ export interface HealthProbesResult {
     rate_limiter?: {
       buckets?: Array<{ used_percent?: number }>;
     };
+  };
+}
+
+export interface RuntimeSelfModelResult {
+  self_model?: {
+    health?: HealthProbesResult["probes"];
+    stability?: {
+      score?: number;
+      level?: string;
+      safe_restart_ready?: boolean;
+      summary?: {
+        health_errors?: number;
+        health_warnings?: number;
+        config_warnings?: number;
+        strict_violations?: number;
+      };
+    };
+    drift?: {
+      alert?: boolean;
+      absolute_diff?: number;
+      threshold?: number;
+    };
+    decision?: {
+      recommended_mode?: string;
+      fallback_triggered?: boolean;
+    };
+    recommendations?: string[];
   };
 }
 
@@ -127,8 +187,20 @@ export async function getGovernanceAuditRecent(limit = 20): Promise<GovernanceAu
   return callRpcJson<GovernanceAuditRecentResult>("governance.audit.recent", { limit });
 }
 
+export async function getProviderStatus(): Promise<ProviderStatusResult> {
+  return callRpcJson<ProviderStatusResult>("provider.status", {});
+}
+
+export async function getReleaseReadiness(): Promise<ReleaseReadinessResult> {
+  return callRpcJson<ReleaseReadinessResult>("release.readiness", {});
+}
+
 export async function getHealthProbes(): Promise<HealthProbesResult> {
   return callRpcJson<HealthProbesResult>("health.probes", {});
+}
+
+export async function getRuntimeSelfModel(params: Record<string, unknown> = {}): Promise<RuntimeSelfModelResult> {
+  return callRpcJson<RuntimeSelfModelResult>("runtime.self_model", params);
 }
 
 export async function getBreakerStatus(): Promise<BreakerStatusResult> {

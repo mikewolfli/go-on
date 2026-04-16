@@ -1,11 +1,15 @@
 {
-  "version": "2026-04-14-blue13-r4.28",
+  "version": "2026-04-16-blue15-stagec-r1",
   "runtime": {
     "baseUrl": "http://127.0.0.1:8090",
     "healthPath": "/health"
   },
   "protocol": {
-    "supportedModes": ["acp", "mcp", "auto"],
+    "supportedModes": [
+      "acp",
+      "mcp",
+      "auto"
+    ],
     "defaultMode": "auto",
     "autoModeSupportsAcpAndMcp": true,
     "acpInitializeProtocol": "acp",
@@ -45,6 +49,9 @@
     "rpcConfirmClarificationRoundsCheckedInMainChain": true,
     "rpcAutotuneResetDefaultStateCheckedInMainChain": true,
     "rpcWorkflowAutoConsultationConsensusGateCheckedInMainChain": true,
+    "rpcRuntimeSelfModelCheckedInMainChain": true,
+    "rpcProviderStatusCheckedInMainChain": true,
+    "rpcReleaseReadinessCheckedInMainChain": true,
     "acpCoreUnitSuiteCheckedInMainChain": true,
     "i18nModuleSuiteCheckedInMainChain": true,
     "coreConfigUnitSuiteCheckedInMainChain": true,
@@ -120,14 +127,21 @@
     "setupWizardOpened": "Setup wizard opened.",
     "setupWizardPrompt": "No runtime-ready AI provider is configured. Opening Go-On setup wizard now.",
     "runtimeProbePassed": "runtime.health semantic probe passed",
-    "requestErrorKinds": ["PuaViolation", "BudgetExceeded", "SandboxBlocked"],
+    "requestErrorKinds": [
+      "PuaViolation",
+      "BudgetExceeded",
+      "SandboxBlocked"
+    ],
     "requestErrorContextPrefix": "acp.handle_request.dispatch"
   },
   "surfaces": {
     "gui": {
       "checks": [
         "health",
-        "models"
+        "models",
+        "runtime.self_model",
+        "provider.status",
+        "release.readiness"
       ],
       "supports": {
         "openAiCompat": true,
@@ -136,7 +150,10 @@
     },
     "vscodeAddon": {
       "checks": [
-        "runtime.health"
+        "runtime.health",
+        "runtime.self_model",
+        "provider.status",
+        "release.readiness"
       ],
       "supports": {
         "openAiCompat": true,
@@ -158,7 +175,12 @@
     "responseIdHasTimestampAndSequence": true,
     "responseStoreTracksCompleted": true,
     "responseStoreTracksFailed": true,
-    "responseStatusLifecycle": ["queued", "in_progress", "completed", "failed"],
+    "responseStatusLifecycle": [
+      "queued",
+      "in_progress",
+      "completed",
+      "failed"
+    ],
     "responseStatusHistoryField": "status_history",
     "responseHistoryIncludesTransitions": true,
     "toolCallInitiationSupport": true,
@@ -168,25 +190,41 @@
     "previousResponseIdMustBeNonEmptyString": true,
     "toolResultRequiresMatchingToolCallId": true,
     "toolResultOutputItemSupport": true,
-    "failureCodeClasses": ["timeout", "rate_limit", "tool_error", "upstream_error"],
+    "failureCodeClasses": [
+      "timeout",
+      "rate_limit",
+      "tool_error",
+      "upstream_error"
+    ],
     "toolLoopMissingResultUsesToolError": true,
     "noPendingToolCallUsesToolError": true,
     "upstreamTimeoutMapped": true,
     "upstreamRateLimitMapped": true,
     "retrievalNotFoundUsesResponsesErrorShape": true,
     "streamSupport": true,
-    "streamEvents": ["response.created", "response.output_text.delta", "response.completed", "response.failed"],
+    "streamEvents": [
+      "response.created",
+      "response.output_text.delta",
+      "response.completed",
+      "response.failed"
+    ],
     "streamTerminatesWithDone": true,
     "requestBodyMustBeObject": true,
     "modelMustBeNonEmptyString": true,
     "modelMustBeString": true,
-    "acceptedInputTypes": ["string", "array"],
+    "acceptedInputTypes": [
+      "string",
+      "array"
+    ],
     "inputMustProduceMessages": true,
     "inputMustIncludeUserMessage": true,
     "maxOutputTokensMin": 1,
     "maxOutputTokensMustBeInteger": true,
     "temperatureMustBeNumber": true,
-    "temperatureRange": [0, 2],
+    "temperatureRange": [
+      0,
+      2
+    ],
     "metadataMustBeObject": true,
     "reasoningMustBeObject": true,
     "toolsMustBeArray": true,
@@ -198,8 +236,15 @@
     "toolsFunctionParametersTypeMustBeObject": true,
     "toolsFunctionParametersPropertiesMustBeObject": true,
     "toolsFunctionParametersRequiredMustBeStringArray": true,
-    "toolChoiceAllowedTypes": ["string", "object"],
-    "toolChoiceStringValues": ["auto", "none", "required"],
+    "toolChoiceAllowedTypes": [
+      "string",
+      "object"
+    ],
+    "toolChoiceStringValues": [
+      "auto",
+      "none",
+      "required"
+    ],
     "toolChoiceRequiredNeedsTools": true,
     "toolChoiceObjectMustUseFunctionType": true,
     "toolChoiceObjectRequiresFunctionName": true,
@@ -207,13 +252,34 @@
     "toolChoiceObjectMustReferenceDeclaredTool": true,
     "emptyBodyUsesResponsesErrorShape": true,
     "invalidJsonUsesResponsesErrorShape": true,
-    "requiredFields": ["model", "input"],
+    "requiredFields": [
+      "model",
+      "input"
+    ],
     "outputObjectType": "response",
     "errorHasCodeField": true,
     "goldenCasesImplemented": true,
-    "responseRequiredFields": ["id", "object", "created_at", "model", "status", "output", "usage", "error", "incomplete_details"],
-    "errorRequiredFields": ["code", "type", "message"],
-    "streamEventOrder": ["response.created", "response.output_text.delta", "response.completed"],
+    "responseRequiredFields": [
+      "id",
+      "object",
+      "created_at",
+      "model",
+      "status",
+      "output",
+      "usage",
+      "error",
+      "incomplete_details"
+    ],
+    "errorRequiredFields": [
+      "code",
+      "type",
+      "message"
+    ],
+    "streamEventOrder": [
+      "response.created",
+      "response.output_text.delta",
+      "response.completed"
+    ],
     "rootCapabilitiesPath": "/",
     "rootCapabilitiesAdvertisesResponsesEndpoints": true,
     "deleteResponseMethodReturns405": true,

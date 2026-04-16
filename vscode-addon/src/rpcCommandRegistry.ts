@@ -615,7 +615,7 @@ export function registerRpcCommands(deps: RpcCommandRegistryDeps): vscode.Dispos
             const checkSummary = checks
                 .map((check) => {
                     const checkEntry = asRecord(check);
-                    return `${String(checkEntry.name ?? '-') }=${String(checkEntry.status ?? '-')}`;
+                    return `${String(checkEntry.name ?? '-')}=${String(checkEntry.status ?? '-')}`;
                 })
                 .join(', ');
 
@@ -624,6 +624,60 @@ export function registerRpcCommands(deps: RpcCommandRegistryDeps): vscode.Dispos
             );
         } catch (error: unknown) {
             vscode.window.showErrorMessage(`runtime.stability failed: ${getErrorMessage(error)}`);
+        }
+    });
+
+    const runtimeSelfModelRpcCommand = vscode.commands.registerCommand('go-on.runtimeSelfModel', async () => {
+        if (!ensureRunning(deps)) {
+            return;
+        }
+        try {
+            const result = asRecord(await deps.sendRequest('runtime.self_model', { window: 120 }));
+            const selfModel = asRecord(result.self_model);
+            const health = asRecord(selfModel.health);
+            const readiness = asRecord(health.readiness);
+            const stability = asRecord(selfModel.stability);
+            const drift = asRecord(selfModel.drift);
+            const decision = asRecord(selfModel.decision);
+            const recommendations = asArray(selfModel.recommendations);
+
+            vscode.window.showInformationMessage(
+                `runtime.self_model: readiness=${String(readiness.status ?? 'unknown')}, stability=${String(stability.level ?? 'unknown')}, safe_restart=${Boolean(stability.safe_restart_ready)}, mode=${String(decision.recommended_mode ?? 'unknown')}, drift_alert=${Boolean(drift.alert)}, drift_diff=${Number(drift.absolute_diff ?? 0).toFixed(4)}, recommendations=${recommendations.length}`
+            );
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`runtime.self_model failed: ${getErrorMessage(error)}`);
+        }
+    });
+
+    const providerStatusRpcCommand = vscode.commands.registerCommand('go-on.providerStatus', async () => {
+        if (!ensureRunning(deps)) {
+            return;
+        }
+        try {
+            const result = asRecord(await deps.sendRequest('provider.status', {}));
+            const providerStatus = asRecord(result.provider_status);
+            const summary = asRecord(providerStatus.summary);
+            vscode.window.showInformationMessage(
+                `provider.status: status=${String(providerStatus.status ?? 'unknown')}, ready=${Number(summary.ready ?? 0)}, degraded=${Number(summary.degraded ?? 0)}, configured=${Number(summary.configured ?? 0)}, coverage=${Number(summary.coverage_percent ?? 0)}%`
+            );
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`provider.status failed: ${getErrorMessage(error)}`);
+        }
+    });
+
+    const releaseReadinessRpcCommand = vscode.commands.registerCommand('go-on.releaseReadiness', async () => {
+        if (!ensureRunning(deps)) {
+            return;
+        }
+        try {
+            const result = asRecord(await deps.sendRequest('release.readiness', {}));
+            const readiness = asRecord(result.readiness);
+            const summary = asRecord(readiness.summary);
+            vscode.window.showInformationMessage(
+                `release.readiness: status=${String(readiness.status ?? 'unknown')}, overall=${Boolean(readiness.overall_pass)}, blocked=${Number(readiness.blocked_gate_count ?? 0)}, open_breakers=${Number(summary.open_breakers ?? 0)}, degraded_services=${Number(summary.degraded_services ?? 0)}`
+            );
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`release.readiness failed: ${getErrorMessage(error)}`);
         }
     });
 
@@ -871,6 +925,9 @@ export function registerRpcCommands(deps: RpcCommandRegistryDeps): vscode.Dispos
         metricsResetRpcCommand,
         traceMetricsRpcCommand,
         qualityBaselineRpcCommand,
+        runtimeSelfModelRpcCommand,
+        providerStatusRpcCommand,
+        releaseReadinessRpcCommand,
         runtimeStabilityRpcCommand,
         harnessStatusRpcCommand,
         traceGetRpcCommand,

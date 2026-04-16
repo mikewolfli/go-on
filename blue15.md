@@ -880,3 +880,30 @@ BLUE15 的实施方向应从“可上线”出发，而不是从“架构形态�
 1. “vscode-addon lint warning 清零（一次性收口）”子目标完成率：100%。
 2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
 3. BLUE15 扩展清单完成率：保持 100%（11/11）。
+
+## 四十、本轮实施回写（2026-04-16，续27）
+
+本轮目标：在 BLUE15 Stage C 上线收口基础上，补齐“发布就绪判定”主链 RPC，形成 backend + GUI + vscode-addon + contract + 场景 + CI 的单轮闭环能力。
+
+已完成项（一个大项闭环）：
+1. backend 新增 `release.readiness` 主链 RPC：接入 ACP 方法白名单与分发，统一聚合 `runtime.stability`、`security.baseline`、`provider.status`、`build.repro`、`observability` 关键信号，输出 `gates/overall_pass/blocked_gate_count/recommendations`。
+2. backend 运维能力收敛：在 `ops_pack` 中抽出 `security.baseline` 统一 payload 构造，避免 Stage C 门禁语义在多个 RPC 里漂移。
+3. GUI 主链接入：
+	- `rpcService` 新增 `getReleaseReadiness()`；
+	- `BackendOpsView` 新增 `release.readiness` 直接操作入口；
+	- `SecurityView` 将 `release.readiness` 状态与阻塞门禁数接入评分与风险告警。
+4. vscode-addon 主链接入：
+	- 新增 `go-on.releaseReadiness` 命令（RPC 调用与摘要提示）；
+	- `package.json` 增加 activation event 与 command palette 注册；
+	- Settings 面板新增 `Release Readiness` 按钮。
+5. 契约与场景门禁接入：
+	- `contracts/editor-capability-matrix.json` 增加 `rpcReleaseReadinessCheckedInMainChain`，并将 `release.readiness` 纳入 GUI/addon checks；
+	- 新增 `requests/release-readiness-benchmark.ndjson`；
+	- 集成测试新增 `run_scenario_file_executes_release_readiness_benchmark_requests`，`ndjson_scenario_files_all_pass` 场景总数更新为 27；
+	- `test_ci.sh` 新增 `6at BLUE15 Stage C 发布就绪判定主链测试`。
+
+本轮完成率：
+1. “BLUE15 Stage C 发布就绪判定主链能力（release.readiness）”子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：保持 100%（11/11）。
+4. BLUE15 Stage C 收口状态：保持闭环，并新增可执行发布门禁聚合能力。

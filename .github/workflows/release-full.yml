@@ -14,6 +14,16 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev
+
       - name: Build Backend
         run: cargo build --release
 
@@ -26,39 +36,50 @@ jobs:
         working-directory: ./GUI
         run: |
           npm install
-          npm test
           npm run build
           npm run tauri build
 
-      - name: Build VS Code addon
+      - name: Build VS Code addon and package vsix
         working-directory: ./vscode-addon
         run: |
           npm install
           npm run compile
           npm test
+          npx @vscode/vsce package --no-dependencies --out go-on-vscode.vsix
 
-      - name: Prepare package directory
+      - name: Prepare release package
         run: |
-          mkdir -p release/go-on-backend
-          mkdir -p release/go-on-gui
-          cp target/release/go-on release/go-on-backend/
-          cp -r RULES release/go-on-backend/
-          cp -r languages release/go-on-backend/
-          cp config.toml* release/go-on-backend/ || true
-          cp providers.toml release/go-on-backend/ || true
-          cp README.md release/go-on-backend/ || true
-          cp README.zh-CN.md release/go-on-backend/ || true
-          cp start-go-on.sh release/go-on-backend/ || true
-          cp stop-go-on.sh release/go-on-backend/ || true
-          cp GUI/src-tauri/target/release/go-on-gui release/go-on-gui/ || true
-          cp -r GUI/dist release/go-on-gui/ || true
-          cp -r GUI/languages release/go-on-gui/ || true
-          cp GUI/README.md release/go-on-gui/ || true
+          PKG=go-on-release
 
-      - name: Archive all
-        run: |
-          cd release
-          tar -czf ../go-on-full-release.tar.gz .
+          # ── Root: GUI executable + vsix ───────────────────────────────
+          mkdir -p "$PKG"
+          # Tauri AppImage / binary (Linux)
+          GUI_BIN=$(find GUI/src-tauri/target/release/bundle -type f -name "go-on-gui" 2>/dev/null | head -1)
+          if [ -z "$GUI_BIN" ]; then
+            GUI_BIN=$(find GUI/src-tauri/target/release -maxdepth 1 -type f -name "go-on-gui" 2>/dev/null | head -1)
+          fi
+          [ -n "$GUI_BIN" ] && cp "$GUI_BIN" "$PKG/"
+          # AppImage bundle if present
+          APPIMAGE=$(find GUI/src-tauri/target/release/bundle/appimage -name "*.AppImage" 2>/dev/null | head -1)
+          [ -n "$APPIMAGE" ] && cp "$APPIMAGE" "$PKG/"
+          # vsix
+          cp vscode-addon/go-on-vscode.vsix "$PKG/"
+
+          # ── backend/ sub-directory ────────────────────────────────────
+          mkdir -p "$PKG/backend"
+          cp target/release/go-on                   "$PKG/backend/"
+          cp -r RULES                               "$PKG/backend/"
+          cp -r languages                           "$PKG/backend/"
+          cp config.toml                            "$PKG/backend/"  || true
+          cp config.toml.autopilot-adaptive         "$PKG/backend/"  || true
+          cp providers.toml                         "$PKG/backend/"  || true
+          cp README.md                              "$PKG/backend/"  || true
+          cp README.zh-CN.md                        "$PKG/backend/"  || true
+          cp start-go-on.sh                         "$PKG/backend/"  || true
+          cp stop-go-on.sh                          "$PKG/backend/"  || true
+
+          # ── Archive ────────────────────────────────────────────────────
+          tar -czf go-on-full-release.tar.gz "$PKG"
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2

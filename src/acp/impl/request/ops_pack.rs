@@ -171,11 +171,74 @@ pub(super) async fn handle_observability_alerts(
     .await
 }
 
+pub(super) async fn handle_lock_status(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let top_n = params
+        .get("top_n")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(3)
+        .clamp(1, 20);
+
+    let mut components = server.lock_monitor.snapshot();
+    let summary = summarize_lock_health(&components);
+
+    components.sort_by(|left, right| {
+        right
+            .max_wait_ms
+            .partial_cmp(&left.max_wait_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let contention_top = components
+        .iter()
+        .take(top_n)
+        .map(|item| {
+            json!({
+                "name": item.name,
+                "acquisitions": item.acquisitions,
+                "slow_wait_total": item.slow_wait_total,
+                "poisoned_total": item.poisoned_total,
+                "recovered_total": item.recovered_total,
+                "avg_wait_ms": item.avg_wait_ms,
+                "max_wait_ms": item.max_wait_ms,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "locks": {
+                "status": summary.status,
+                "components_tracked": summary.components_tracked,
+                "poisoned_total": summary.poisoned_total,
+                "recovered_total": summary.recovered_total,
+                "slow_wait_total": summary.slow_wait_total,
+                "max_wait_ms": summary.max_wait_ms,
+                "top_n": top_n,
+                "contention_top": contention_top,
+                "components": components,
+            },
+        }),
+    )
+    .await
+}
+
 pub(super) async fn handle_security_baseline(
     server: &AcpServer,
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
+    send_result(server, request_id, build_security_baseline_payload(server)).await
+}
+
+fn build_security_baseline_payload(server: &AcpServer) -> Value {
     let config_summary =
         super::config_pack::governance_config_summary(server.config_path.as_deref());
     let entry_auth_enabled = config_summary
@@ -254,31 +317,245 @@ pub(super) async fn handle_security_baseline(
         "ok"
     };
 
+    json!({
+        "ok": true,
+        "baseline": {
+            "level": level,
+            "ingress_status": ingress_status,
+            "exposed_http": exposed_http,
+            "entry_auth": {
+                "enabled": entry_auth_enabled,
+                "key_env": server.runtime_config.entry_auth_api_key_env,
+                "key_configured": entry_auth_key_configured,
+            },
+            "rate_limit": {
+                "rpm": server.runtime_config.entry_rate_limit_rpm,
+                "burst": server.runtime_config.entry_rate_limit_burst,
+            },
+            "production_strict": {
+                "enabled": strict_enabled,
+                "violation_count": strict_violations.len(),
+                "violations": strict_violations,
+            },
+            "risk_count": risk_items.len(),
+            "risks": risk_items,
+        },
+    })
+}
+
+pub(super) async fn handle_release_readiness(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let status = server.get_status();
+    let metrics = server.metrics.snapshot();
+
+    let stability_payload = super::build_runtime_stability_payload(server)?;
+    let provider_payload = super::build_provider_status_payload(server)?;
+    let security_payload = build_security_baseline_payload(server);
+    let reproducibility =
+        super::repro_pack::reproducible_build_summary(server.config_path.as_deref());
+
+    let lock_components = server.lock_monitor.snapshot();
+    let lock_summary = summarize_lock_health(&lock_components);
+    let degraded_services = collect_degraded_services(server);
+    let open_breakers = status
+        .circuit_breakers
+        .iter()
+        .filter(|item| item.state.eq_ignore_ascii_case("open"))
+        .count() as u64;
+
+    let stability = stability_payload
+        .get("stability")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let provider_status = provider_payload
+        .get("provider_status")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let baseline = security_payload
+        .get("baseline")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    let stability_level = stability
+        .get("level")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let stability_score = stability.get("score").and_then(Value::as_i64).unwrap_or(0);
+    let safe_restart_ready = stability
+        .get("safe_restart_ready")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let security_level = baseline
+        .get("level")
+        .and_then(Value::as_str)
+        .unwrap_or("critical");
+    let ingress_status = baseline
+        .get("ingress_status")
+        .and_then(Value::as_str)
+        .unwrap_or("risk");
+
+    let provider_gate_status = provider_status
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("error");
+    let provider_summary = provider_status
+        .get("summary")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let provider_ready = provider_summary
+        .get("ready")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let provider_degraded = provider_summary
+        .get("degraded")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    let required_total = reproducibility
+        .get("reproducibility")
+        .and_then(|value| value.get("required_total"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let required_present = reproducibility
+        .get("reproducibility")
+        .and_then(|value| value.get("required_present"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let missing_required = reproducibility
+        .get("reproducibility")
+        .and_then(|value| value.get("missing_required"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let stability_gate = safe_restart_ready
+        && stability_score >= 75
+        && matches!(stability_level, "excellent" | "good");
+    let security_gate = matches!(security_level, "ok" | "warn") && ingress_status != "risk";
+    let provider_gate =
+        provider_gate_status != "error" && provider_ready > 0 && provider_degraded == 0;
+    let reproducibility_gate = required_total == required_present && missing_required.is_empty();
+    let observability_gate = status.lifecycle.is_healthy
+        && open_breakers == 0
+        && degraded_services.is_empty()
+        && lock_summary.status != "warn";
+
+    let gates = vec![
+        json!({
+            "name": "stability",
+            "passed": stability_gate,
+            "score": stability_score,
+            "level": stability_level,
+            "safe_restart_ready": safe_restart_ready,
+        }),
+        json!({
+            "name": "security",
+            "passed": security_gate,
+            "level": security_level,
+            "ingress_status": ingress_status,
+            "risk_count": baseline
+                .get("risk_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        }),
+        json!({
+            "name": "provider",
+            "passed": provider_gate,
+            "status": provider_gate_status,
+            "ready": provider_ready,
+            "degraded": provider_degraded,
+        }),
+        json!({
+            "name": "reproducibility",
+            "passed": reproducibility_gate,
+            "required_total": required_total,
+            "required_present": required_present,
+            "missing_required": missing_required,
+        }),
+        json!({
+            "name": "observability",
+            "passed": observability_gate,
+            "runtime_healthy": status.lifecycle.is_healthy,
+            "open_breakers": open_breakers,
+            "degraded_services": degraded_services.len(),
+            "lock_status": lock_summary.status,
+        }),
+    ];
+
+    let blocked_gates = gates
+        .iter()
+        .filter(|gate| gate.get("passed").and_then(Value::as_bool) == Some(false))
+        .count() as u64;
+
+    let mut recommendations = Vec::new();
+    if !stability_gate {
+        recommendations.push(
+            "Run runtime.stability and resolve strict/config violations before release."
+                .to_string(),
+        );
+    }
+    if !security_gate {
+        recommendations.push(
+            "Harden ingress with entry auth and clear critical security.baseline risks."
+                .to_string(),
+        );
+    }
+    if !provider_gate {
+        recommendations.push(
+            "Ensure at least one provider is runtime-ready and no configured providers are degraded."
+                .to_string(),
+        );
+    }
+    if !reproducibility_gate {
+        recommendations.push(
+            "Complete reproducibility pack requirements before promotion to production."
+                .to_string(),
+        );
+    }
+    if !observability_gate {
+        recommendations.push(
+            "Clear degraded services/open breakers and stabilize lock contention before release."
+                .to_string(),
+        );
+    }
+    if recommendations.is_empty() {
+        recommendations.push(
+            "Release gates are green. Proceed with Stage C rollout and monitor drill dashboards."
+                .to_string(),
+        );
+    }
+
     send_result(
         server,
         request_id,
         json!({
             "ok": true,
-            "baseline": {
-                "level": level,
-                "ingress_status": ingress_status,
-                "exposed_http": exposed_http,
-                "entry_auth": {
-                    "enabled": entry_auth_enabled,
-                    "key_env": server.runtime_config.entry_auth_api_key_env,
-                    "key_configured": entry_auth_key_configured,
+            "readiness": {
+                "version": "blue15-stagec-release-readiness-v1",
+                "overall_pass": blocked_gates == 0,
+                "status": if blocked_gates == 0 { "ready" } else { "blocked" },
+                "blocked_gate_count": blocked_gates,
+                "gates": gates,
+                "summary": {
+                    "uptime_seconds": status.lifecycle.uptime_seconds,
+                    "total_requests": metrics.total_requests,
+                    "failed_requests": metrics.failed_requests,
+                    "open_breakers": open_breakers,
+                    "degraded_services": degraded_services.len(),
+                    "lock_slow_wait_total": lock_summary.slow_wait_total,
                 },
-                "rate_limit": {
-                    "rpm": server.runtime_config.entry_rate_limit_rpm,
-                    "burst": server.runtime_config.entry_rate_limit_burst,
-                },
-                "production_strict": {
-                    "enabled": strict_enabled,
-                    "violation_count": strict_violations.len(),
-                    "violations": strict_violations,
-                },
-                "risk_count": risk_items.len(),
-                "risks": risk_items,
+                "sources": [
+                    "runtime.stability",
+                    "security.baseline",
+                    "provider.status",
+                    "build.repro",
+                    "observability.alerts"
+                ],
+                "recommendations": recommendations,
+                "timestamp": status.timestamp,
             },
         }),
     )

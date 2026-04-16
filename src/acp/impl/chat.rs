@@ -444,7 +444,13 @@ pub(crate) async fn process_chat_request(
     let phase = resolved.phase.clone();
     reorder_chat_agents_by_runtime_score(server, &phase.phase_name, &mut resolved.agents);
 
-    let configured_primary_agent = phase.agent_names.first().cloned();
+    // Path A: explicit config list → use first configured name.
+    // Path B: auto-map (empty config list) → fall back to first runtime-resolved agent name.
+    let configured_primary_agent = phase
+        .agent_names
+        .first()
+        .cloned()
+        .or_else(|| resolved.agents.first().map(|(name, _)| name.clone()));
     let preferred_agent_from_request = params
         .options
         .as_ref()

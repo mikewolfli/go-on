@@ -219,7 +219,7 @@ impl AcpLockMonitor {
             ACP_LOCK_CIRCUIT_BREAKERS => &self.circuit_breakers,
             ACP_LOCK_PHASE_RATE_LIMITER => &self.phase_rate_limiter,
             ACP_LOCK_INFLIGHT_LIMITER => &self.inflight_limiter,
-            _ => panic!("unknown ACP lock monitor component: {name}"),
+            _ => unreachable!("unknown ACP lock monitor component: {name}"),
         }
     }
 

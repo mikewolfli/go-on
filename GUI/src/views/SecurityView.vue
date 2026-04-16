@@ -32,6 +32,12 @@
               <el-tag type="info">
                 {{ t("security.entryRateLimitLabel") }}: {{ t("security.entryRateLimitValue", { rpm: entryRateLimitRpm, burst: entryRateLimitBurst }) }}
               </el-tag>
+              <el-tag :type="providerDegradedCount > 0 ? 'warning' : 'success'">
+                {{ t("security.providerReadyLabel") }}: {{ providerReadyCount }}/{{ providerConfiguredCount }}
+              </el-tag>
+              <el-tag :type="releaseBlockedGateCount > 0 ? 'warning' : 'success'">
+                {{ t("security.releaseReadinessLabel") }}: {{ releaseReadinessStatus }}
+              </el-tag>
             </el-space>
             <el-row :gutter="16">
               <el-col :span="6">
@@ -162,6 +168,8 @@ import { useI18n } from "vue-i18n";
 import {
   getGovernanceAuditRecent,
   getGovernanceStatus,
+  getProviderStatus,
+  getReleaseReadiness,
   type GovernanceAuditEvent,
 } from "../services/rpcService";
 import { normalizeErrorMessage } from "../utils/errors";
@@ -182,6 +190,11 @@ const entryAuthEnabled = ref(false);
 const entryAuthKeyConfigured = ref(false);
 const entryRateLimitRpm = ref(0);
 const entryRateLimitBurst = ref(0);
+const providerReadyCount = ref(0);
+const providerDegradedCount = ref(0);
+const providerConfiguredCount = ref(0);
+const releaseReadinessStatus = ref("unknown");
+const releaseBlockedGateCount = ref(0);
 const dynamicRulesCount = ref(0);
 const auditRecentCount = ref(0);
 
@@ -256,12 +269,36 @@ async function refreshGovernanceStatus() {
     const strictViolationCount = Number(governance.config?.strict_violation_count || 0);
     const runtimeHealthy = governance.runtime?.is_healthy === true;
 
+    try {
+      const providerParsed = await getProviderStatus();
+      const providerSummary = providerParsed?.provider_status?.summary || {};
+      providerReadyCount.value = Number(providerSummary.ready || 0);
+      providerDegradedCount.value = Number(providerSummary.degraded || 0);
+      providerConfiguredCount.value = Number(providerSummary.configured || 0);
+    } catch {
+      providerReadyCount.value = 0;
+      providerDegradedCount.value = 0;
+      providerConfiguredCount.value = 0;
+    }
+
+    try {
+      const releaseReadiness = await getReleaseReadiness();
+      const readiness = releaseReadiness?.readiness || {};
+      releaseReadinessStatus.value = String(readiness.status || "unknown");
+      releaseBlockedGateCount.value = Number(readiness.blocked_gate_count || 0);
+    } catch {
+      releaseReadinessStatus.value = "unknown";
+      releaseBlockedGateCount.value = 1;
+    }
+
     const governancePenalty = Math.min(
       45,
       puaFailed * 8 +
         breakerOpen * 10 +
         warningCount * 4 +
         strictViolationCount * 12 +
+        providerDegradedCount.value * 6 +
+        releaseBlockedGateCount.value * 8 +
         (strictEnabled.value ? 0 : 6) +
         (entryAuthEnabled.value ? 0 : 8) +
         (entryAuthKeyConfigured.value || !entryAuthEnabled.value ? 0 : 10),
@@ -332,6 +369,24 @@ async function refreshGovernanceStatus() {
         type: "info",
         title: t("security.riskEntryAuthDisabledTitle"),
         description: t("security.riskEntryAuthDisabledDesc"),
+        action: true,
+      });
+    }
+    if (providerDegradedCount.value > 0) {
+      nextRisks.push({
+        id: "provider_degraded",
+        type: "warning",
+        title: t("security.riskProviderDegradedTitle", { count: providerDegradedCount.value }),
+        description: t("security.riskProviderDegradedDesc"),
+        action: true,
+      });
+    }
+    if (releaseBlockedGateCount.value > 0) {
+      nextRisks.push({
+        id: "release_blocked",
+        type: "warning",
+        title: t("security.riskReleaseBlockedTitle", { count: releaseBlockedGateCount.value }),
+        description: t("security.riskReleaseBlockedDesc"),
         action: true,
       });
     }

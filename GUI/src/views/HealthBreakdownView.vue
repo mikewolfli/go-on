@@ -195,7 +195,7 @@
 import { ref, reactive, computed } from "vue";
 import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
-import { getBreakerStatus, getHealthProbes } from "../services/rpcService";
+import { getBreakerStatus, getRuntimeSelfModel } from "../services/rpcService";
 
 const { t } = useI18n();
 const loading = ref(false);
@@ -282,8 +282,9 @@ const overallScore = computed(() => {
 async function refreshBreakdown() {
   loading.value = true;
   try {
-    const probesData = await getHealthProbes();
-    const probes = probesData?.probes || {};
+    const selfModelData = await getRuntimeSelfModel({ window: 120 });
+    const selfModel = selfModelData?.self_model || {};
+    const probes = selfModel?.health || {};
 
     const livenessData = probes?.liveness || {};
     liveness.ok = livenessData.ok === true;
@@ -368,6 +369,10 @@ async function refreshBreakdown() {
     rateLimiterStatus.currentRate = Math.round(maxUsed);
     rateLimiterStatus.limit = 100;
     rateLimiterStatus.rejectedCount = 0;
+
+    if (Array.isArray(selfModel?.recommendations) && selfModel.recommendations.length > 0) {
+      breakerStatus.recoveryAdvice = selfModel.recommendations[0] || breakerStatus.recoveryAdvice;
+    }
 
     ElMessage.success(t("common.refreshed"));
   } catch (err) {

@@ -1,6 +1,10 @@
 // Settings functionality
 (function () {
     const vscode = acquireVsCodeApi();
+    const providerState = {
+        providers: [],
+        modelOptions: [],
+    };
 
     // Load settings when received
     window.addEventListener('message', event => {
@@ -8,6 +12,15 @@
 
         if (message.type === 'loadSettings') {
             loadSettings(message.settings);
+        } else if (message.type === 'settingsData') {
+            loadSettingsData(message.data || {});
+        } else if (message.type === 'providerModelsData') {
+            updateProviderModels(
+                message.provider,
+                Array.isArray(message.modelOptions) ? message.modelOptions : [],
+                message.selectedModel || 'auto',
+                message.selectedEnvVar || ''
+            );
         } else if (message.type === 'keyringResult') {
             renderKeyringOutput(message.message, message.value || '');
         } else if (message.type === 'keyringError') {
@@ -33,6 +46,126 @@
                 }
             }
         });
+    }
+
+    function loadSettingsData(data) {
+        if (!data || typeof data !== 'object') {
+            return;
+        }
+
+        const simpleFieldMap = {
+            configPath: data.configPath,
+            executablePath: data.executablePath,
+            autoStart: data.autoStart,
+        };
+
+        Object.entries(simpleFieldMap).forEach(([id, value]) => {
+            const element = document.getElementById(id);
+            if (!element || value === undefined || value === null) {
+                return;
+            }
+            if (element.type === 'checkbox') {
+                element.checked = Boolean(value);
+            } else {
+                element.value = String(value);
+            }
+        });
+
+        const providerSettings = data.providerSettings || {};
+        providerState.providers = Array.isArray(providerSettings.providers)
+            ? providerSettings.providers
+            : [];
+        providerState.modelOptions = Array.isArray(providerSettings.modelOptions)
+            ? providerSettings.modelOptions
+            : [];
+
+        populateProviderSelect(
+            providerState.providers,
+            providerSettings.selectedProvider || ''
+        );
+        populateModelSelect(
+            providerState.modelOptions,
+            providerSettings.selectedModel || 'auto'
+        );
+
+        const envInput = document.getElementById('providerEnvVar');
+        if (envInput && providerSettings.selectedEnvVar) {
+            envInput.value = String(providerSettings.selectedEnvVar);
+        }
+    }
+
+    function populateProviderSelect(providers, selectedProvider) {
+        const select = document.getElementById('providerSelect');
+        if (!select) {
+            return;
+        }
+
+        select.innerHTML = '';
+        providers.forEach((provider) => {
+            const option = document.createElement('option');
+            option.value = provider.name;
+            option.textContent = provider.name;
+            select.appendChild(option);
+        });
+
+        if (selectedProvider && providers.some((provider) => provider.name === selectedProvider)) {
+            select.value = selectedProvider;
+        } else if (providers.length > 0) {
+            select.value = providers[0].name;
+        }
+    }
+
+    function populateModelSelect(modelOptions, selectedModel) {
+        const select = document.getElementById('providerModelSelect');
+        if (!select) {
+            return;
+        }
+
+        const unique = [];
+        const seen = new Set();
+        modelOptions.forEach((item) => {
+            const value = String(item || '').trim();
+            if (!value || seen.has(value)) {
+                return;
+            }
+            seen.add(value);
+            unique.push(value);
+        });
+        if (!seen.has('auto')) {
+            unique.unshift('auto');
+        }
+
+        select.innerHTML = '';
+        unique.forEach((model) => {
+            const option = document.createElement('option');
+            option.value = model;
+            option.textContent = model === 'auto' ? 'AUTO' : model;
+            select.appendChild(option);
+        });
+
+        if (selectedModel && unique.includes(selectedModel)) {
+            select.value = selectedModel;
+        } else {
+            select.value = 'auto';
+        }
+    }
+
+    function inferProviderEnvVar(provider) {
+        return `${String(provider || '').trim().toUpperCase().replace(/[-\s]+/g, '_')}_API_KEY`;
+    }
+
+    function updateProviderModels(provider, modelOptions, selectedModel, selectedEnvVar) {
+        populateModelSelect(modelOptions, selectedModel);
+
+        const envInput = document.getElementById('providerEnvVar');
+        if (envInput) {
+            if (selectedEnvVar) {
+                envInput.value = selectedEnvVar;
+            } else {
+                const providerEntry = providerState.providers.find((item) => item.name === provider);
+                envInput.value = providerEntry?.configuredEnvVar || providerEntry?.apiKeyEnv || inferProviderEnvVar(provider);
+            }
+        }
     }
 
     function updateSetting(key, value) {
@@ -205,6 +338,33 @@
                     defaultPhase,
                     phases
                 }
+            });
+        });
+    }
+
+    const providerSelect = document.getElementById('providerSelect');
+    if (providerSelect) {
+        providerSelect.addEventListener('change', () => {
+            const provider = providerSelect.value;
+            vscode.postMessage({ type: 'requestProviderModels', provider });
+        });
+    }
+
+    const applyProviderSelectionButton = document.getElementById('applyProviderSelection');
+    if (applyProviderSelectionButton) {
+        applyProviderSelectionButton.addEventListener('click', () => {
+            const provider = document.getElementById('providerSelect')?.value || '';
+            const model = document.getElementById('providerModelSelect')?.value || 'auto';
+            const envVar = document.getElementById('providerEnvVar')?.value || '';
+            if (!provider) {
+                renderSettingsActionOutput('Error: Please choose a provider first.');
+                return;
+            }
+            vscode.postMessage({
+                type: 'saveProviderSelection',
+                provider,
+                model,
+                envVar,
             });
         });
     }

@@ -132,6 +132,7 @@ pub async fn run_background_maintenance_loop(
 }
 
 /// Perform maintenance cycle
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_maintenance_cycle(
     lock_monitor: Arc<AcpLockMonitor>,
     memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,

@@ -110,12 +110,36 @@ export interface AutoConfigureResult {
     reason: string;
 }
 
+export interface ProviderCatalogEntry {
+    name: string;
+    agentType: string;
+    defaultModel?: string;
+    apiKeyEnv?: string;
+    secretKeyEnv?: string;
+    url?: string;
+    chatPath?: string;
+    supportsSystem?: boolean;
+    configuredModel?: string;
+    configuredEnvVar?: string;
+}
+
+export interface ProviderSelectionSaveResult {
+    provider: string;
+    model: string;
+    configPath: string;
+    note: string;
+}
+
 export async function configureService(executablePath: string, workingDir: string) {
     return invoke<void>("configure_service", { executablePath, workingDir });
 }
 
 export async function configureServiceByExecutable(executablePath: string) {
     return invoke<void>("configure_service_by_executable", { executablePath });
+}
+
+export async function configureServiceByDirectory(directoryPath: string) {
+    return invoke<void>("configure_service_by_directory", { directoryPath });
 }
 
 export async function backendExecutableExists() {
@@ -140,6 +164,14 @@ export async function setProviderApiKey(provider: string, apiKey: string, envVar
 
 export async function clearProviderApiKey(provider: string, envVar?: string) {
     return invoke<string>("clear_provider_api_key", { provider, envVar });
+}
+
+export async function listProviderCatalog() {
+    return invoke<ProviderCatalogEntry[]>("list_provider_catalog");
+}
+
+export async function saveProviderSelection(provider: string, model: string, envVar?: string) {
+    return invoke<ProviderSelectionSaveResult>("save_provider_selection", { provider, model, envVar });
 }
 
 export async function fetchGithubCopilotToken() {

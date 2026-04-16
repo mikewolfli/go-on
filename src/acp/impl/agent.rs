@@ -120,6 +120,15 @@ pub async fn run_dual_review_gate(
             .and_then(|options| options.full_auto_review_agents.clone())
             .unwrap_or_else(|| review_routing.phase.agent_names.clone());
 
+        // Path B: agent_names is empty (auto-map). Fall back to runtime-resolved agents.
+        if reviewer_names.is_empty() {
+            reviewer_names = review_routing
+                .agents
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect();
+        }
+
         let review_phase_name = review_routing.phase.phase_name.clone();
         let _original_reviewer_order = reviewer_names.clone();
         let mut reviewer_scores: Vec<(String, f64)> = Vec::new();
