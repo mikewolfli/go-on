@@ -279,7 +279,9 @@ impl AcpServer {
 
     pub fn register_skill(&self, skill: Arc<dyn crate::orchestration::skill::Skill>) {
         if let Ok(mut registry) = self.skill_registry.lock() {
-            registry.register(skill);
+            if let Err(err) = registry.register(skill) {
+                tracing::warn!("skill registration failed: {err}");
+            }
         }
     }
 }

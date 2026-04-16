@@ -104,6 +104,33 @@ Current baseline includes:
 - strict production fail-fast (`runtime.production_strict = true`)
 - OTEL-related runtime settings
 
+### API Key Setup (production mode)
+
+When running with `config.production.toml`, entry authentication is enabled by default.
+Set the following environment variable **before** starting the server:
+
+```bash
+# Linux / macOS
+export GO_ON_ENTRY_API_KEY="your-secret-key-here"
+./start-go-on.sh
+```
+
+```powershell
+# Windows
+$env:GO_ON_ENTRY_API_KEY = "your-secret-key-here"
+.\start-go-on.bat
+```
+
+All RPC requests must include the key in the `Authorization` header:
+
+```
+Authorization: Bearer your-secret-key-here
+```
+
+If this variable is missing or empty the server will reject all requests with error code `-32003` (`AuthRequired`).
+
+> **Security**: Never commit secret values to version control. Use environment variables, a secrets manager, or a keyring-backed injector.
+
 Ingress and TLS templates:
 
 - `deploy/nginx/go-on.conf`

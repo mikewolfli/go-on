@@ -812,6 +812,10 @@ pub struct RuntimeConfig {
     /// Number of slow requests to keep in top-N trace metrics
     #[serde(default = "default_runtime_trace_slow_top_n")]
     pub trace_slow_top_n: usize,
+    /// Enable builtin skills (e.g. `builtin.echo`) at server startup.
+    /// Default is `true` for development; set to `false` in production (`config.production.toml`).
+    #[serde(default = "default_runtime_skills_enabled")]
+    pub skills_enabled: bool,
 }
 
 impl Default for RuntimeConfig {
@@ -836,6 +840,7 @@ impl Default for RuntimeConfig {
             otel_service_name: default_runtime_otel_service_name(),
             otel_sample_ratio: default_runtime_otel_sample_ratio(),
             trace_slow_top_n: default_runtime_trace_slow_top_n(),
+            skills_enabled: default_runtime_skills_enabled(),
         }
     }
 }
@@ -882,6 +887,10 @@ fn default_runtime_otel_sample_ratio() -> f64 {
 
 fn default_runtime_trace_slow_top_n() -> usize {
     20
+}
+
+fn default_runtime_skills_enabled() -> bool {
+    true
 }
 
 #[allow(dead_code)]
@@ -2881,6 +2890,7 @@ mod tests {
             otel_service_name: "go-on".to_string(),
             otel_sample_ratio: 1.0,
             trace_slow_top_n: 20,
+            skills_enabled: true,
         });
 
         let err = cfg
@@ -3416,6 +3426,7 @@ mod tests {
             otel_service_name: "go-on".to_string(),
             otel_sample_ratio: 1.0,
             trace_slow_top_n: 20,
+            skills_enabled: true,
         });
 
         let report = super::build_config_health_report(&config_path, &cfg);

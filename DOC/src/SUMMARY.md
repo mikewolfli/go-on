@@ -10,6 +10,7 @@
 - [Zed Integration](en/zed.md)
 - [VS Code Addon](en/vscode-addon.md)
 - [GUI Console](en/gui.md)
+- [Skills Extension](en/skills.md)
 
 # 中文
 
@@ -19,3 +20,4 @@
 - [Zed 接入](zh-CN/zed.md)
 - [VS Code 插件](zh-CN/vscode-addon.md)
 - [GUI 控制台](zh-CN/gui.md)
+- [Skills 扩展](zh-CN/skills.md)

@@ -104,6 +104,33 @@ cargo run -- --init --setup-level custom --config config.toml
 - 严格模式 fail-fast（`runtime.production_strict = true`）
 - OTEL 相关运行时配置
 
+### API 密鑰配置（生产模式）
+
+使用 `config.production.toml` 启动时，入口鉴权默认已开启。
+启动前必须设置以下环境变量：
+
+```bash
+# Linux / macOS
+export GO_ON_ENTRY_API_KEY="your-secret-key-here"
+./start-go-on.sh
+```
+
+```powershell
+# Windows PowerShell
+$env:GO_ON_ENTRY_API_KEY = "your-secret-key-here"
+.\start-go-on.bat
+```
+
+所有 RPC 请求需在 `Authorization` 头中携带密鑰：
+
+```
+Authorization: Bearer your-secret-key-here
+```
+
+若该变量缺失或为空，服务将以错误码 `-32003`（`AuthRequired`）拒绝所有请求。
+
+> **安全提示**：绝不要将密鑰写入任何配置文件或提交到版本控制。请使用环境变量、密鑰管理器或 keyring 注入方式。
+
 入口网关与 TLS 模板：
 
 - `deploy/nginx/go-on.conf`

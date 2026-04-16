@@ -98,6 +98,10 @@ pub fn new_acp_server(
             server.runtime_config = runtime_config;
             server.verbose = _verbose;
 
+            if server.runtime_config.skills_enabled {
+                server.register_skill(Arc::new(crate::orchestration::skill::EchoSkill));
+            }
+
             server
         }
         Err(err) => {

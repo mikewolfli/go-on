@@ -79,15 +79,55 @@ impl SkillRuntimeStats {
 }
 
 impl SkillRegistry {
-    #[allow(dead_code)]
-    pub fn register(&mut self, skill: Arc<dyn Skill>) {
+    /// Register a skill, returning an error if the name is invalid or already registered.
+    ///
+    /// Name rules:
+    /// - 1–64 characters
+    /// - Only ASCII: lowercase letters, digits, `.`, `_`, `-`
+    /// - Must be unique (duplicates are rejected)
+    pub fn register(&mut self, skill: Arc<dyn Skill>) -> Result<()> {
         let name = skill.name().to_string();
+        if name.is_empty() || name.len() > 64 {
+            anyhow::bail!(
+                "skill name '{}' length {} is outside [1, 64]",
+                name,
+                name.len()
+            );
+        }
+        if !name.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-'
+        }) {
+            anyhow::bail!(
+                "skill name '{}' contains invalid characters (allowed: a-z 0-9 . _ -)",
+                name
+            );
+        }
+        if self.skills.contains_key(&name) {
+            anyhow::bail!("skill '{}' is already registered", name);
+        }
+        match skill.input_schema() {
+            serde_json::Value::Object(_) => {}
+            other => anyhow::bail!(
+                "skill '{}' input_schema must be a JSON object, got: {}",
+                name,
+                other
+            ),
+        }
         self.skills.insert(name.clone(), skill);
         self.stats.entry(name).or_default();
+        Ok(())
     }
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn Skill>> {
         self.skills.get(name).cloned()
+    }
+
+    pub fn unregister(&mut self, name: &str) -> bool {
+        let removed = self.skills.remove(name).is_some();
+        if removed {
+            self.stats.remove(name);
+        }
+        removed
     }
 
     pub fn list(&self) -> Vec<SkillDescriptor> {
@@ -281,6 +321,29 @@ fn cosine_similarity(left: &[f64], right: &[f64]) -> f64 {
     (dot / (left_norm * right_norm)).clamp(0.0, 1.0)
 }
 
+/// Built-in echo skill.
+///
+/// Returns the input value unchanged. Useful for smoke-testing the skill
+/// pipeline and as a reference implementation.
+///
+/// Registered as `"builtin.echo"` when `runtime.skills_enabled = true`.
+pub struct EchoSkill;
+
+#[async_trait]
+impl Skill for EchoSkill {
+    fn name(&self) -> &str {
+        "builtin.echo"
+    }
+
+    fn description(&self) -> &str {
+        "Returns the input value unchanged (builtin smoke-test skill)"
+    }
+
+    async fn execute(&self, input: &Value) -> Result<Value> {
+        Ok(input.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,7 +368,7 @@ mod tests {
     #[tokio::test]
     async fn registry_lists_and_executes_skills() {
         let mut registry = SkillRegistry::default();
-        registry.register(Arc::new(EchoSkill));
+        registry.register(Arc::new(EchoSkill)).unwrap();
 
         let listed = registry.list();
         assert_eq!(listed.len(), 1);
@@ -314,5 +377,102 @@ mod tests {
         let skill = registry.get("echo_skill").unwrap();
         let result = skill.execute(&json!({"value": 1})).await.unwrap();
         assert_eq!(result["value"], 1);
+    }
+
+    #[test]
+    fn register_rejects_empty_name() {
+        struct BadSkill;
+        #[async_trait]
+        impl Skill for BadSkill {
+            fn name(&self) -> &str {
+                ""
+            }
+            async fn execute(&self, input: &Value) -> Result<Value> {
+                Ok(input.clone())
+            }
+        }
+        let mut registry = SkillRegistry::default();
+        assert!(registry.register(Arc::new(BadSkill)).is_err());
+    }
+
+    #[test]
+    fn register_rejects_name_too_long() {
+        let long_name = "a".repeat(65);
+        struct LongSkill(String);
+        #[async_trait]
+        impl Skill for LongSkill {
+            fn name(&self) -> &str {
+                &self.0
+            }
+            async fn execute(&self, input: &Value) -> Result<Value> {
+                Ok(input.clone())
+            }
+        }
+        let mut registry = SkillRegistry::default();
+        assert!(registry.register(Arc::new(LongSkill(long_name))).is_err());
+    }
+
+    #[test]
+    fn register_rejects_invalid_chars() {
+        struct BadCharsSkill;
+        #[async_trait]
+        impl Skill for BadCharsSkill {
+            fn name(&self) -> &str {
+                "Bad Skill!"
+            }
+            async fn execute(&self, input: &Value) -> Result<Value> {
+                Ok(input.clone())
+            }
+        }
+        let mut registry = SkillRegistry::default();
+        assert!(registry.register(Arc::new(BadCharsSkill)).is_err());
+    }
+
+    #[test]
+    fn register_rejects_duplicate() {
+        let mut registry = SkillRegistry::default();
+        registry.register(Arc::new(EchoSkill)).unwrap();
+        let err = registry.register(Arc::new(EchoSkill)).unwrap_err();
+        assert!(err.to_string().contains("already registered"));
+    }
+
+    #[test]
+    fn register_rejects_non_object_schema() {
+        struct BadSchemaSkill;
+        #[async_trait]
+        impl Skill for BadSchemaSkill {
+            fn name(&self) -> &str {
+                "bad-schema"
+            }
+            fn input_schema(&self) -> Value {
+                json!("not-an-object")
+            }
+            async fn execute(&self, input: &Value) -> Result<Value> {
+                Ok(input.clone())
+            }
+        }
+        let mut registry = SkillRegistry::default();
+        assert!(registry.register(Arc::new(BadSchemaSkill)).is_err());
+    }
+
+    #[tokio::test]
+    async fn builtin_echo_skill_roundtrips() {
+        let skill = super::EchoSkill;
+        assert_eq!(skill.name(), "builtin.echo");
+        let input = json!({"key": "value", "num": 42});
+        let output: Value = skill.execute(&input).await.unwrap();
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn unregister_removes_skill_and_stats() {
+        let mut registry = SkillRegistry::default();
+        registry.register(Arc::new(EchoSkill)).unwrap();
+        registry.record_outcome("echo_skill", true, Duration::from_millis(12));
+
+        assert!(registry.unregister("echo_skill"));
+        assert!(registry.get("echo_skill").is_none());
+        assert!(registry.score_of("echo_skill").is_none());
+        assert!(!registry.unregister("echo_skill"));
     }
 }

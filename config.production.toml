@@ -1,3 +1,12 @@
+# ============================================================
+# TEMPLATE FILE — DO NOT COMMIT SECRETS
+# This file is a configuration template for production use.
+# The value of GO_ON_ENTRY_API_KEY must be set as an
+# environment variable and must NEVER be stored in this file
+# or committed to version control.
+# For local overrides, create config.local.toml (gitignored).
+# ============================================================
+
 default_phase = "coding"
 model_selection_mode = "adaptive"
 
@@ -20,6 +29,9 @@ otel_exporter = "otlp"
 otel_service_name = "go-on"
 otel_sample_ratio = 1.0
 trace_slow_top_n = 20
+# Skills extension: set to true to enable builtin skills (e.g. builtin.echo).
+# Keep false in production to minimize the exposed tool surface.
+skills_enabled = false
 
 [cache]
 enabled = true
@@ -44,3 +56,4 @@ summary_max_chars = 1200
 # NOTE:
 # 1) Keep backend bound to loopback and expose only through TLS ingress.
 # 2) Ensure GO_ON_ENTRY_API_KEY is present in process environment before startup.
+# 3) Never store secret key values in this file — use the environment variable only.
