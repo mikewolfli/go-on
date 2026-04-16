@@ -907,3 +907,73 @@ BLUE15 的实施方向应从“可上线”出发，而不是从“架构形态�
 2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
 3. BLUE15 扩展清单完成率：保持 100%（11/11）。
 4. BLUE15 Stage C 收口状态：保持闭环，并新增可执行发布门禁聚合能力。
+## 四十一、本轮实施回写（2026-04-17，续28）
+
+本轮目标：在 B15-P1-4「并发锁模型优化与毒化恢复」基础上，新增独立 lock.status RPC 端点，完成 backend + GUI + vscode-addon + 契约 + 场景 + CI 六端闭环。
+
+已完成项（一个大项闭环）：
+1. backend 新增 lock.status 专用 RPC：在 ops_pack.rs 实现 handle_lock_status()，按 max_wait_ms 排序返回 top-N 争用组件与全量锁摘要；在 equest.rs 补全路由白名单与分发。
+2. 场景文件新增 equests/lock-status-benchmark.ndjson（第28个场景文件），含 5 步：initialize → health.probes → lock.status{top_n:5} → observability.alerts → shutdown。
+3. 集成测试新增 un_scenario_file_executes_lock_status_benchmark_requests()，断言 5 条结果及 contention_top/components 字段；
+djson_scenario_files_all_pass() 场景总数更新至 28。
+4. CI 新增步骤 6au BLUE15 P1-4 锁状态主链可观测测试。
+5. GUI 新增 lock.status 按钮（BackendOpsView.vue）；en-US.json/zh-CN.json 补充 lockStatus 翻译键。
+6. vscode-addon coreCommandRegistry.ts 新增 go-on.lockStatus 命令，格式化输出 status/tracked/poisoned/recovered/slow_waits/max_wait_ms/top 摘要。
+7. vscode-addon settingsView.ts 补充 lockStatus: 'go-on.lockStatus' 到 _commandMessageMap，HTML 面板新增 Lock Status 按钮。
+8. vscode-addon media/settings.js 新增 lockStatus click handler。
+9. scode-addon/package.json 新增 onCommand:go-on.lockStatus activation event 与命令注册。
+10. contracts/editor-capability-matrix.json 新增 pcLockStatusCheckedInMainChain: true。
+
+本轮完成率：
+1. "B15-P1-4 lock.status 专用 RPC 三端闭环"子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：保持 100%（11/11）。
+4. BLUE15 Stage C 收口状态：持续闭环，lock.status 可观测能力就绪。
+
+## 四十二、本轮实施回写（2026-04-16，续29）
+
+本轮目标：集中收口所有已在后端路由白名单注册但缺乏场景文件、集成测试和 CI 闸门的遗漏 RPC 主链覆盖，同时修复前轮 lock_status 集成测试嵌套错误（结构修正），完成 Stage C 全量 RPC 测试闭环。
+
+本轮同时解答"Stage C 能否一次收口"：经核查，Stage C 六项工作（网关TLS、鉴权策略、监听地址、优雅停机、SLO+演练、三层防线）已全部闭环（见三十八节）；本轮补齐的是 CI 全量场景覆盖缺口，属于测试门禁层面的收口。
+
+已完成项（一个大项闭环）：
+
+1. 修复集成测试结构缺陷：将前轮嵌套在 un_scenario_file_executes_release_readiness_drill_requests 函数体内的 un_scenario_file_executes_lock_status_benchmark_requests 测试提取为独立顶层测试，同时删除悬空的 let peak = results[4]... 残留代码，使测试文件结构合法。
+
+2. 新增场景文件 6 个（总量 28 → 34）：
+   - equests/autotune-benchmark.ndjson：initialize → autotune.status → autotune.get → runtime.health → shutdown（覆盖 autotune 三接口）
+   - equests/maintenance-gc-benchmark.ndjson：initialize → health.probes → maintenance.gc → runtime.health → shutdown
+   - equests/conversation-checkpoint-benchmark.ndjson：initialize → conversation.checkpoint.create → conversation.checkpoint.list → conversation.rollback → shutdown
+   - equests/primary-secondary-summary-benchmark.ndjson：initialize → primary_secondary.summary → shutdown
+   - equests/metrics-trace-benchmark.ndjson：initialize → metrics.get → trace.get → metrics.reset → shutdown
+   - equests/phase-policy-replay-benchmark.ndjson：initialize → phase.policy.replay → shutdown
+
+3. 新增集成测试 6 个（每个场景对应独立测试函数）：
+   - un_scenario_file_executes_autotune_benchmark_requests
+   - un_scenario_file_executes_maintenance_gc_benchmark_requests
+   - un_scenario_file_executes_conversation_checkpoint_benchmark_requests
+   - un_scenario_file_executes_primary_secondary_summary_benchmark_requests
+   - un_scenario_file_executes_metrics_trace_benchmark_requests
+   - un_scenario_file_executes_phase_policy_replay_benchmark_requests
+   - 
+djson_scenario_files_all_pass 场景总数更新至 34。
+
+4. CI 新增步骤 6av 全量遗漏RPC场景覆盖集中收口，串行执行全部 6 个新增场景测试 + 
+djson_scenario_files_all_pass 全量回归。
+
+5. 完成后 cargo check --tests 零 warning 零 error 通过。
+
+现存覆盖状态（RPC → 场景 → 集成测试 → CI）：
+- autotune.status / autotune.get / autotune.reset：✅ autotune-benchmark + 6av
+- maintenance.gc：✅ maintenance-gc-benchmark + 6av
+- conversation.checkpoint.create / .list / rollback：✅ conversation-checkpoint-benchmark + 6av
+- primary_secondary.summary：✅ primary-secondary-summary-benchmark + 6av
+- metrics.get / trace.get / metrics.reset：✅ metrics-trace-benchmark + 6av
+- phase.policy.replay：✅ phase-policy-replay-benchmark + 6av
+- 全量 ndjson 场景总计：34 个，统一由 ndjson_scenario_files_all_pass 纳管
+
+本轮完成率：
+1. "全量遗漏 RPC 场景覆盖集中收口"子目标完成率：100%。
+2. BLUE15 基线清单总体完成率：保持 100%（13/13）。
+3. BLUE15 扩展清单完成率：保持 100%（11/11）。
+4. Stage C 收口状态：六项上线收口工作已闭环（见三十八节）；全量 RPC 测试覆盖缺口已本轮收口（34 个场景文件，CI 6av 闸门）。

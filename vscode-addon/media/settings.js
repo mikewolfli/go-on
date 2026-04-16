@@ -481,6 +481,10 @@
         vscode.postMessage({ type: 'healthProbes' });
     });
 
+    document.getElementById('lockStatus').addEventListener('click', () => {
+        vscode.postMessage({ type: 'lockStatus' });
+    });
+
     document.getElementById('observabilityAlerts').addEventListener('click', () => {
         vscode.postMessage({ type: 'observabilityAlerts' });
     });

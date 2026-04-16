@@ -84,7 +84,8 @@
     "genericAgentSuiteCheckedInMainChain": true,
     "acpPreludeMetricsSuiteCheckedInMainChain": true,
     "orchestrationSkillRegistrySuiteCheckedInMainChain": true,
-    "rustAllTargetsFullGateCheckedInMainChain": true
+    "rustAllTargetsFullGateCheckedInMainChain": true,
+    "rpcLockStatusCheckedInMainChain": true
   },
   "openai": {
     "modelsPath": "/v1/models",

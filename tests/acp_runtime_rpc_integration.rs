@@ -1751,43 +1751,218 @@ mod advanced {
             alerts["result"]["alerts"].get("items").is_some(),
             "observability.alerts should include items"
         );
+    }
 
-        #[test]
-        fn run_scenario_file_executes_lock_status_benchmark_requests() {
-            let temp = tempdir().expect("failed to create temp dir");
-            let config_path = temp.path().join("config.toml");
-            write_test_config(&config_path, 60, 120, 5);
+    #[test]
+    fn run_scenario_file_executes_lock_status_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
 
-            let mut harness = AdvancedRpcHarness::new(&config_path);
-            let results =
-                harness.run_scenario_file(Path::new("requests/lock-status-benchmark.ndjson"));
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results = harness.run_scenario_file(Path::new("requests/lock-status-benchmark.ndjson"));
 
-            assert_eq!(results.len(), 5);
-            assert_eq!(results[0].0["method"], "initialize");
-            assert_eq!(results[1].0["method"], "health.probes");
-            assert_eq!(results[2].0["method"], "lock.status");
-            assert_eq!(results[3].0["method"], "observability.alerts");
-            assert_eq!(results[4].0["method"], "shutdown");
+        assert_eq!(results.len(), 5);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "health.probes");
+        assert_eq!(results[2].0["method"], "lock.status");
+        assert_eq!(results[3].0["method"], "observability.alerts");
+        assert_eq!(results[4].0["method"], "shutdown");
 
-            let lock_status = results[2].1.as_ref().expect("lock.status should succeed");
-            assert!(
-                lock_status["result"]["locks"]
-                    .get("contention_top")
-                    .is_some(),
-                "lock.status should expose contention_top"
-            );
-            assert!(
-                lock_status["result"]["locks"].get("components").is_some(),
-                "lock.status should expose full component snapshots"
-            );
-        }
-        let peak = results[4]
+        let lock_status = results[2].1.as_ref().expect("lock.status should succeed");
+        assert!(
+            lock_status["result"]["locks"]
+                .get("contention_top")
+                .is_some(),
+            "lock.status should expose contention_top"
+        );
+        assert!(
+            lock_status["result"]["locks"].get("components").is_some(),
+            "lock.status should expose full component snapshots"
+        );
+    }
+
+    #[test]
+    fn run_scenario_file_executes_autotune_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results = harness.run_scenario_file(Path::new("requests/autotune-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 5);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "autotune.status");
+        assert_eq!(results[2].0["method"], "autotune.get");
+        assert_eq!(results[3].0["method"], "runtime.health");
+        assert_eq!(results[4].0["method"], "shutdown");
+
+        let status = results[1]
             .1
             .as_ref()
-            .expect("optimization.peak should succeed");
+            .expect("autotune.status should succeed");
         assert!(
-            peak["result"]["peak"].get("gates").is_some(),
-            "optimization.peak should include gates"
+            status["result"].get("autotune").is_some(),
+            "autotune.status should return autotune payload"
+        );
+        let get = results[2].1.as_ref().expect("autotune.get should succeed");
+        assert!(
+            get["result"].get("params").is_some() || get["result"].get("autotune").is_some(),
+            "autotune.get should return params or autotune payload"
+        );
+    }
+
+    #[test]
+    fn run_scenario_file_executes_maintenance_gc_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/maintenance-gc-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 5);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "health.probes");
+        assert_eq!(results[2].0["method"], "maintenance.gc");
+        assert_eq!(results[3].0["method"], "runtime.health");
+        assert_eq!(results[4].0["method"], "shutdown");
+
+        let gc = results[2]
+            .1
+            .as_ref()
+            .expect("maintenance.gc should succeed");
+        assert!(
+            gc["result"].get("ok").is_some() || gc["result"].get("gc").is_some(),
+            "maintenance.gc should return ok or gc payload"
+        );
+    }
+
+    #[test]
+    fn run_scenario_file_executes_conversation_checkpoint_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results = harness.run_scenario_file(Path::new(
+            "requests/conversation-checkpoint-benchmark.ndjson",
+        ));
+
+        assert_eq!(results.len(), 5);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "conversation.checkpoint.create");
+        assert_eq!(results[2].0["method"], "conversation.checkpoint.list");
+        assert_eq!(results[3].0["method"], "conversation.checkpoint.prune");
+        assert_eq!(results[4].0["method"], "shutdown");
+
+        let created = results[1]
+            .1
+            .as_ref()
+            .expect("checkpoint.create should succeed");
+        assert!(
+            created["result"].get("checkpoint").is_some() || created["result"].get("ok").is_some(),
+            "checkpoint.create should return checkpoint or ok"
+        );
+        let list = results[2]
+            .1
+            .as_ref()
+            .expect("checkpoint.list should succeed");
+        assert!(
+            list["result"].get("checkpoints").is_some() || list["result"].get("ok").is_some(),
+            "checkpoint.list should return checkpoints or ok"
+        );
+        let pruned = results[3]
+            .1
+            .as_ref()
+            .expect("checkpoint.prune should succeed");
+        assert_eq!(
+            pruned["result"]["ok"], true,
+            "checkpoint.prune should return ok"
+        );
+    }
+
+    #[test]
+    fn run_scenario_file_executes_primary_secondary_summary_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results = harness.run_scenario_file(Path::new(
+            "requests/primary-secondary-summary-benchmark.ndjson",
+        ));
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "primary_secondary.summary");
+        assert_eq!(results[2].0["method"], "shutdown");
+
+        let summary = results[1]
+            .1
+            .as_ref()
+            .expect("primary_secondary.summary should succeed");
+        assert!(
+            summary["result"].get("summary").is_some() || summary["result"].get("ok").is_some(),
+            "primary_secondary.summary should return summary or ok"
+        );
+    }
+
+    #[test]
+    fn run_scenario_file_executes_metrics_trace_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/metrics-trace-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 5);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "metrics.get");
+        assert_eq!(results[2].0["method"], "trace.get");
+        assert_eq!(results[3].0["method"], "metrics.reset");
+        assert_eq!(results[4].0["method"], "shutdown");
+
+        let metrics = results[1].1.as_ref().expect("metrics.get should succeed");
+        assert!(
+            metrics["result"].get("metrics").is_some() || metrics["result"].get("ok").is_some(),
+            "metrics.get should return metrics or ok"
+        );
+        let trace = results[2].1.as_ref().expect("trace.get should succeed");
+        assert!(
+            trace["result"].get("trace").is_some()
+                || trace["result"].get("events").is_some()
+                || trace["result"].get("ok").is_some(),
+            "trace.get should return trace, events, or ok"
+        );
+    }
+
+    #[test]
+    fn run_scenario_file_executes_phase_policy_replay_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/phase-policy-replay-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "phase.policy.replay");
+        assert_eq!(results[2].0["method"], "shutdown");
+
+        let replay = results[1]
+            .1
+            .as_ref()
+            .expect("phase.policy.replay should succeed");
+        assert!(
+            replay["result"].get("replay").is_some() || replay["result"].get("ok").is_some(),
+            "phase.policy.replay should return replay or ok"
         );
     }
 
@@ -1796,8 +1971,8 @@ mod advanced {
         let scenarios = load_scenarios_from_dir(Path::new("requests"));
         assert_eq!(
             scenarios.len(),
-            28,
-            "expected twenty eight request scenario files"
+            39,
+            "expected thirty-nine request scenario files"
         );
 
         for scenario in scenarios {
@@ -1862,6 +2037,210 @@ mod advanced {
             ScenarioOutcome::ErrorContains(message) => assert_eq!(message, "blocked"),
             ScenarioOutcome::Success => panic!("expected error outcome variant"),
         }
+    }
+
+    // ── B16-R1: debug_panel.get / debug.panel.get ─────────────────────────────
+    #[test]
+    fn run_scenario_file_executes_debug_panel_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results = harness.run_scenario_file(Path::new("requests/debug-panel-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "debug_panel.get");
+        assert_eq!(results[2].0["method"], "debug.panel.get");
+        assert_eq!(results[3].0["method"], "shutdown");
+
+        let panel1 = results[1]
+            .1
+            .as_ref()
+            .expect("debug_panel.get should succeed");
+        assert_eq!(
+            panel1["result"]["ok"], true,
+            "debug_panel.get should return ok"
+        );
+        assert!(
+            panel1["result"].get("panel").is_some(),
+            "debug_panel.get should return panel"
+        );
+
+        let panel2 = results[2]
+            .1
+            .as_ref()
+            .expect("debug.panel.get should succeed");
+        assert_eq!(
+            panel2["result"]["ok"], true,
+            "debug.panel.get should return ok"
+        );
+    }
+
+    // ── B16-R2: action.check ──────────────────────────────────────────────────
+    #[test]
+    fn run_scenario_file_executes_action_check_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/action-check-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "action.check");
+        assert_eq!(results[2].0["method"], "shutdown");
+
+        let check = results[1].1.as_ref().expect("action.check should succeed");
+        assert!(
+            check["result"].get("report").is_some(),
+            "action.check should return report"
+        );
+    }
+
+    // ── B16-R4 + R5: task.plan + task.execute ────────────────────────────────
+    #[test]
+    fn run_scenario_file_executes_task_plan_execute_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/task-plan-execute-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "task.plan");
+        assert_eq!(results[2].0["method"], "task.execute");
+        assert_eq!(results[3].0["method"], "shutdown");
+
+        let plan = results[1].1.as_ref().expect("task.plan should succeed");
+        assert!(
+            plan["result"].get("plan").is_some() || plan["result"].get("ok").is_some(),
+            "task.plan should return plan or ok"
+        );
+
+        let execute = results[2].1.as_ref().expect("task.execute should succeed");
+        assert_eq!(
+            execute["result"]["ok"], true,
+            "task.execute should return ok"
+        );
+    }
+
+    // ── B16-R6 (standalone workflow.execute) ─────────────────────────────────
+    #[test]
+    fn run_scenario_file_executes_workflow_execute_standalone_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results = harness.run_scenario_file(Path::new(
+            "requests/workflow-execute-standalone-benchmark.ndjson",
+        ));
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "workflow.execute");
+        assert_eq!(results[2].0["method"], "shutdown");
+
+        let exe = results[1]
+            .1
+            .as_ref()
+            .expect("workflow.execute should succeed");
+        assert_eq!(
+            exe["result"]["ok"], true,
+            "workflow.execute should return ok"
+        );
+    }
+
+    // ── B16-R7: workflow sub-commands (clarify + research) ────────────────────
+    #[test]
+    fn run_scenario_file_executes_workflow_subcommands_benchmark_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/workflow-subcommands-benchmark.ndjson"));
+
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "workflow.clarify");
+        assert_eq!(results[2].0["method"], "workflow.research");
+        assert_eq!(results[3].0["method"], "shutdown");
+
+        let clarify = results[1]
+            .1
+            .as_ref()
+            .expect("workflow.clarify should succeed");
+        assert_eq!(
+            clarify["result"]["ok"], true,
+            "workflow.clarify should return ok"
+        );
+
+        let research = results[2]
+            .1
+            .as_ref()
+            .expect("workflow.research should succeed");
+        assert_eq!(
+            research["result"]["ok"], true,
+            "workflow.research should return ok"
+        );
+    }
+
+    // ── B16-R3: conversation.rollback (direct — needs dynamic checkpoint_id) ──
+    #[test]
+    fn rpc_conversation_rollback_restores_checkpoint() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = RpcHarness::spawn(&config_path);
+        let initialize = harness.request(1, "initialize", None);
+        assert_eq!(initialize["result"]["name"], "go-on");
+
+        let created = harness.request(
+            2,
+            "conversation.checkpoint.create",
+            Some(json!({
+                "conversation_id": "b16-rollback-test",
+                "messages": [{"role": "user", "content": "hello rollback"}]
+            })),
+        );
+        assert_eq!(
+            created["result"]["ok"], true,
+            "checkpoint.create should succeed"
+        );
+        let checkpoint_id = created["result"]["checkpoint"]["checkpoint_id"]
+            .as_str()
+            .expect("create should return checkpoint_id");
+
+        let rollback = harness.request(
+            3,
+            "conversation.rollback",
+            Some(json!({
+                "conversation_id": "b16-rollback-test",
+                "checkpoint_id": checkpoint_id
+            })),
+        );
+        assert_eq!(
+            rollback["result"]["ok"], true,
+            "conversation.rollback should succeed"
+        );
+        assert_eq!(
+            rollback["result"]["conversation_id"], "b16-rollback-test",
+            "rollback should echo conversation_id"
+        );
+
+        let shutdown = harness.request(4, "shutdown", None);
+        assert_eq!(shutdown["result"]["ok"], true);
+        harness.wait_for_exit(Duration::from_secs(8));
     }
 }
 

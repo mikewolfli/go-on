@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","method":"initialize","params":{"protocol":"acp","version":"1.0"},"id":1}
+{"jsonrpc":"2.0","method":"workflow.clarify","params":{"task":"b16 clarify smoke"},"id":2}
+{"jsonrpc":"2.0","method":"workflow.research","params":{"task":"b16 research smoke"},"id":3}
+{"jsonrpc":"2.0","method":"shutdown","params":{},"id":4}

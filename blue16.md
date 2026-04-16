@@ -571,3 +571,49 @@ B16-H1 与 B16-H2 可在不改变架构的前提下独立修复，应立即执�
 GUI 结构整体合理，Tauri + Vue 3 + Pinia + vue-router + vue-i18n 的技术选型正确，文件拆分粒度基本合适（13 个 View，平均 170 行）。
 核心问题集中在两点：用户操作安全（无确认高危操作）与代码质量（App.vue God File、store 职责过宽、视图层类型不安全）。
 B16-G1 与 B16-G2 应优先于一切架构重构立即处理。
+
+---
+
+## 补充章节：B16-R 系列 — 工程覆盖缺口全量收口（2026-04-16 追加）
+
+承接 BLUE15 完成后遗留的后端 RPC 测试覆盖缺口，补齐所有已在 is_acp_request() 路由白名单注册但无场景文件/集成测试/CI 闸门的端点。
+
+| ID | RPC 方法 | 缺口说明 |
+|---|---|---|
+| B16-R1 | debug_panel.get / debug.panel.get | 无场景、无测试 |
+| B16-R2 | ction.check | 无场景、无测试 |
+| B16-R3 | conversation.checkpoint.prune | checkpoint 系列缺 prune |
+| B16-R4 | 	ask.plan + 	ask.execute（独立场景） | 无独立覆盖场景 |
+| B16-R5 | workflow.execute（独立场景） | 无独立覆盖场景 |
+| B16-R6 | workflow.clarify / workflow.generate（路由可达性） | 无场景、无测试 |
+
+验收标准：
+1. 每项均有 .ndjson 场景文件 + 集成测试函数 + CI 步骤 6aw
+2. 
+djson_scenario_files_all_pass 更新至 40
+3. cargo check --tests 零 warning 零 error
+4. vscode-addon Settings 面板相应按钮确认已注册（debug_panel/action.check/task.plan/task.execute/workflow.execute）
+
+### 回写记录
+
+**完成时间：2026-04-16**
+
+**完成率：100%（6/6 项）**
+
+| ID | 状态 | 具体实施 |
+|---|---|---|
+| B16-R0（修复） | ✅ 已完成 | 修复 `conversation-checkpoint-benchmark.ndjson`：step2 加 `conversation_id`+`messages`，step4 由 rollback 改为 checkpoint.prune，step3 加 `conversation_id` |
+| B16-R1 | ✅ 已完成 | 新建 `requests/debug-panel-benchmark.ndjson`（4步：init→debug_panel.get→debug.panel.get→shutdown）+ 集成测试 + vscode-addon `go-on.debugPanelGet` 命令注册（rpcCommandRegistry.ts + settingsView.ts 按钮 + package.json activationEvents/commands）|
+| B16-R2 | ✅ 已完成 | 新建 `requests/action-check-benchmark.ndjson`（3步）+ 集成测试 + vscode-addon `go-on.actionCheck` 命令注册 |
+| B16-R3 | ✅ 已完成 | `conversation.checkpoint.prune` 已通过修复后的 checkpoint-benchmark 场景覆盖；新增 `rpc_conversation_rollback_restores_checkpoint` 直连测试（动态 checkpoint_id 链路）|
+| B16-R4+R5 | ✅ 已完成 | 新建 `requests/task-plan-execute-benchmark.ndjson`（4步：init→task.plan→task.execute{requirement_confirmed:true}→shutdown）+ 集成测试 |
+| B16-R6 | ✅ 已完成 | 新建 `requests/workflow-execute-standalone-benchmark.ndjson`（3步）+ 集成测试 |
+| B16-R7 | ✅ 已完成 | 新建 `requests/workflow-subcommands-benchmark.ndjson`（4步：init→workflow.clarify→workflow.research→shutdown）+ 集成测试 |
+
+**技术收口：**
+- 场景文件：34 → 39（新增 5 个）
+- 集成测试：新增 `run_scenario_file_executes_debug_panel_benchmark_requests`、`run_scenario_file_executes_action_check_benchmark_requests`、`run_scenario_file_executes_task_plan_execute_benchmark_requests`、`run_scenario_file_executes_workflow_execute_standalone_benchmark_requests`、`run_scenario_file_executes_workflow_subcommands_benchmark_requests`、`rpc_conversation_rollback_restores_checkpoint`（直连测试）
+- `ndjson_scenario_files_all_pass` 断言：34 → 39
+- CI 新增步骤 `6aw`：7 个新测试 + `ndjson_scenario_files_all_pass` 全量验证
+- vscode-addon：`go-on.debugPanelGet` + `go-on.actionCheck` 两个新命令全链路注册
+- `cargo check --tests` 零 warning / 零 error；`vscode-addon npm run check` 零 warning / 零 error

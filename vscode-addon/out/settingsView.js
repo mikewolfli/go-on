@@ -184,6 +184,9 @@ class GoOnSettingsViewProvider {
             governanceStatus: 'go-on.governanceStatus',
             governancePlanGet: 'go-on.governancePlanGet',
             governanceAuditRecent: 'go-on.governanceAuditRecent',
+            lockStatus: 'go-on.lockStatus',
+            debugPanelGet: 'go-on.debugPanelGet',
+            actionCheck: 'go-on.actionCheck',
         };
         this.manager = _manager;
         this.context = _context;
@@ -1021,6 +1024,7 @@ class GoOnSettingsViewProvider {
                         <button class="action-button" id="stopGoOn">Stop Go-On</button>
                         <button class="action-button" id="healthCheck">Health Check</button>
                         <button class="action-button" id="healthProbes">Health Probes</button>
+                        <button class="action-button" id="lockStatus">Lock Status</button>
                         <button class="action-button" id="observabilityAlerts">Observability Alerts</button>
                         <button class="action-button" id="securityBaseline">Security Baseline</button>
                         <button class="action-button" id="harnessStatus">Harness Status</button>
@@ -1050,6 +1054,8 @@ class GoOnSettingsViewProvider {
                         <button class="action-button" id="governanceStatus">Governance Status</button>
                         <button class="action-button" id="governancePlanGet">Governance Plan</button>
                         <button class="action-button" id="governanceAuditRecent">Governance Audit</button>
+                        <button class="action-button" id="debugPanelGet">Debug Panel</button>
+                        <button class="action-button" id="actionCheck">Action Check</button>
                     </div>
 
                     <div style="margin-top: 20px; padding: 10px; background: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--vscode-textBlockQuote-border);">

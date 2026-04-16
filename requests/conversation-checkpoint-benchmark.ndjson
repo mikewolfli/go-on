@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","method":"initialize","params":{"protocol":"acp","version":"1.0"},"id":1}
+{"jsonrpc":"2.0","method":"conversation.checkpoint.create","params":{"conversation_id":"b16-cp-test","messages":[{"role":"user","content":"hello"}]},"id":2}
+{"jsonrpc":"2.0","method":"conversation.checkpoint.list","params":{"conversation_id":"b16-cp-test"},"id":3}
+{"jsonrpc":"2.0","method":"conversation.checkpoint.prune","params":{"conversation_id":"b16-cp-test","keep":1},"id":4}
+{"jsonrpc":"2.0","method":"shutdown","params":{},"id":5}

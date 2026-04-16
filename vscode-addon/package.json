@@ -56,6 +56,7 @@
     "onCommand:go-on.runtimeStability",
     "onCommand:go-on.governancePlanGet",
     "onCommand:go-on.governanceAuditRecent",
+    "onCommand:go-on.lockStatus",
     "onCommand:go-on.autotuneStatus",
     "onCommand:go-on.selectorStatus",
     "onCommand:go-on.autotuneGet",
@@ -75,6 +76,8 @@
     "onCommand:go-on.checkpointList",
     "onCommand:go-on.conversationRollback",
     "onCommand:go-on.primarySecondarySummary",
+    "onCommand:go-on.debugPanelGet",
+    "onCommand:go-on.actionCheck",
     "onView:go-on-workflow",
     "onView:go-on-process-flow"
   ],
@@ -292,6 +295,11 @@
         "icon": "$(history)"
       },
       {
+        "command": "go-on.lockStatus",
+        "title": "Get Lock Monitor Status (RPC)",
+        "icon": "$(lock)"
+      },
+      {
         "command": "go-on.selectorStatus",
         "title": "Get Selector Status (RPC)",
         "icon": "$(symbol-method)"
@@ -380,6 +388,16 @@
         "command": "go-on.primarySecondarySummary",
         "title": "Primary/Secondary Agent Summary (RPC)",
         "icon": "$(mirror)"
+      },
+      {
+        "command": "go-on.debugPanelGet",
+        "title": "Debug Panel (RPC)",
+        "icon": "$(debug)"
+      },
+      {
+        "command": "go-on.actionCheck",
+        "title": "Action Check (RPC)",
+        "icon": "$(pass)"
       }
     ],
     "views": {

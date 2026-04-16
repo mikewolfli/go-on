@@ -898,6 +898,37 @@ export function registerRpcCommands(deps: RpcCommandRegistryDeps): vscode.Dispos
         }
     });
 
+    const debugPanelGetRpcCommand = vscode.commands.registerCommand('go-on.debugPanelGet', async () => {
+        if (!ensureRunning(deps)) {
+            return;
+        }
+        try {
+            const result = asRecord(await deps.sendRequest('debug_panel.get', {}));
+            const panel = asRecord(result.panel);
+            const conversations = asRecord(panel.conversations);
+            vscode.window.showInformationMessage(
+                `debug_panel.get: conversations=${Number(conversations.count ?? 0)}, checkpoints=${Number(conversations.checkpoints ?? 0)}`
+            );
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`debug_panel.get failed: ${getErrorMessage(error)}`);
+        }
+    });
+
+    const actionCheckRpcCommand = vscode.commands.registerCommand('go-on.actionCheck', async () => {
+        if (!ensureRunning(deps)) {
+            return;
+        }
+        try {
+            const result = asRecord(await deps.sendRequest('action.check', { kind: 'all' }));
+            const report = asRecord(result.report);
+            vscode.window.showInformationMessage(
+                `action.check: ok=${Boolean(result.ok)}, checks=${Number(report.total_checks ?? 0)}`
+            );
+        } catch (error: unknown) {
+            vscode.window.showErrorMessage(`action.check failed: ${getErrorMessage(error)}`);
+        }
+    });
+
     return [
         workflowExecuteRpcCommand,
         taskPlanRpcCommand,
@@ -940,5 +971,7 @@ export function registerRpcCommands(deps: RpcCommandRegistryDeps): vscode.Dispos
         checkpointListRpcCommand,
         conversationRollbackRpcCommand,
         primarySecondarySummaryRpcCommand,
+        debugPanelGetRpcCommand,
+        actionCheckRpcCommand,
     ];
 }

@@ -745,6 +745,28 @@ cargo test run_scenario_file_executes_lock_status_benchmark_requests -- --nocapt
 cargo test ndjson_scenario_files_all_pass -- --nocapture
 echo "✅ BLUE15 P1-4 锁状态主链可观测测试通过"
 
+# 6av 全量遗漏 RPC 场景覆盖收口（autotune/maintenance-gc/checkpoint/primary-secondary/metrics-trace/phase-policy-replay）
+echo "=== 步骤6av: 运行全量遗漏RPC场景覆盖集中收口测试 ==="
+cargo test run_scenario_file_executes_autotune_benchmark_requests -- --nocapture
+cargo test run_scenario_file_executes_maintenance_gc_benchmark_requests -- --nocapture
+cargo test run_scenario_file_executes_conversation_checkpoint_benchmark_requests -- --nocapture
+cargo test run_scenario_file_executes_primary_secondary_summary_benchmark_requests -- --nocapture
+cargo test run_scenario_file_executes_metrics_trace_benchmark_requests -- --nocapture
+cargo test run_scenario_file_executes_phase_policy_replay_benchmark_requests -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ 全量遗漏RPC场景覆盖收口测试通过"
+
+# 6aw B16-R 系列 — 工程覆盖缺口全量收口（debug_panel/action.check/checkpoint.prune/task.plan+execute/workflow.execute/workflow.clarify+research/conversation.rollback）
+echo "=== 步骤6aw: 运行 B16-R 系列 RPC 覆盖全量收口测试 ==="
+cargo test run_scenario_file_executes_debug_panel_benchmark_requests -- --nocapture
+cargo test run_scenario_file_executes_action_check_benchmark_requests -- --nocapture
+cargo test run_scenario_file_executes_task_plan_execute_benchmark_requests -- --nocapture
+cargo test run_scenario_file_executes_workflow_execute_standalone_benchmark_requests -- --nocapture
+cargo test run_scenario_file_executes_workflow_subcommands_benchmark_requests -- --nocapture
+cargo test rpc_conversation_rollback_restores_checkpoint -- --nocapture
+cargo test ndjson_scenario_files_all_pass -- --nocapture
+echo "✅ B16-R 系列 RPC 覆盖全量收口测试通过"
+
 # 5.2 GUI 契约烟测
 echo "=== 步骤5.2: 运行GUI契约烟测 ==="
 cd GUI

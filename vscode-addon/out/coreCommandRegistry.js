@@ -107,6 +107,23 @@ function registerCoreCommands(deps) {
             vscode.window.showErrorMessage(`health.probes failed: ${getErrorMessage(error)}`);
         }
     });
+    const lockStatusCommand = vscode.commands.registerCommand('go-on.lockStatus', async () => {
+        if (!(await ensureRunning(deps))) {
+            return;
+        }
+        try {
+            const result = asRecord(await deps.sendRequest('lock.status', { top_n: 5 }));
+            const locks = asRecord(result.locks);
+            const contentionTop = Array.isArray(locks.contention_top) ? locks.contention_top : [];
+            const topLabel = contentionTop.length > 0
+                ? String(asRecord(contentionTop[0]).name ?? '-')
+                : '-';
+            vscode.window.showInformationMessage(`lock.status: status=${String(locks.status ?? 'unknown')}, tracked=${Number(locks.components_tracked ?? 0)}, poisoned=${Number(locks.poisoned_total ?? 0)}, recovered=${Number(locks.recovered_total ?? 0)}, slow_waits=${Number(locks.slow_wait_total ?? 0)}, max_wait_ms=${Number(locks.max_wait_ms ?? 0).toFixed(3)}, top=${topLabel}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`lock.status failed: ${getErrorMessage(error)}`);
+        }
+    });
     const breakerStatusCommand = vscode.commands.registerCommand('go-on.breakerStatus', async () => {
         try {
             const result = await deps.sendRequest('breaker.status');
@@ -158,6 +175,7 @@ function registerCoreCommands(deps) {
         sendRequestCommand,
         healthCheckCommand,
         healthProbesCommand,
+        lockStatusCommand,
         breakerStatusCommand,
         cacheClearCommand,
         vectorClearCommand,
