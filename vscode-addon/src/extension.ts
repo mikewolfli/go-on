@@ -343,11 +343,11 @@ let goOnManager: GoOnManager;
 let statusProvider: GoOnStatusProvider;
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('Go-On extension is now active!');
+    console.info('Go-On extension is now active!');
 
     // Initialize i18n system
     const currentLanguage = i18n.getCurrentLanguage();
-    console.log(`Go-On UI Language: ${currentLanguage}`);
+    console.info(`Go-On UI Language: ${currentLanguage}`);
 
     // Initialize config manager
     const config = vscode.workspace.getConfiguration('go-on');
@@ -548,7 +548,7 @@ async function syncLanguageToApp(language: string): Promise<void> {
         await config.update('language', language, vscode.ConfigurationTarget.Global);
 
         // Log successful sync
-        console.log(`Language synchronized: VS Code ${language} -> App ${language}`);
+        console.info(`Language synchronized: VS Code ${language} -> App ${language}`);
     } catch (error) {
         console.warn('Failed to sync language:', error);
     }

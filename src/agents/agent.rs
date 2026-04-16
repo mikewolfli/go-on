@@ -177,7 +177,13 @@ fn pick_secret_pool_index(field_name: &str, len: usize) -> usize {
     }
 
     let group = rotation_group(field_name);
-    let mut state = secret_pool_state().lock().unwrap();
+    let mut state = match secret_pool_state().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            warn!("secret pool rotation state lock poisoned; recovering rotation state");
+            poisoned.into_inner()
+        }
+    };
 
     if field_name.ends_with("api_key_env") {
         let entry = state.entry(group).or_insert(0);

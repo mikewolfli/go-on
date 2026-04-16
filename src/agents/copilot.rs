@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::time::sleep;
+use tracing::warn;
 
 use crate::agent::{Agent, Message};
 use crate::agents::{
@@ -60,7 +61,13 @@ impl CopilotAgent {
     async fn copilot_token(&self) -> Result<String> {
         // Fast path: check cache without doing any async work.
         {
-            let guard = self.cached.lock().unwrap();
+            let guard = match self.cached.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    warn!("copilot token cache lock poisoned during read; recovering cached token state");
+                    poisoned.into_inner()
+                }
+            };
             if let Some(ref c) = *guard {
                 // Keep a 60-second safety margin before the stated expiry.
                 if Self::now_secs() + 60 < c.expires_at {
@@ -112,7 +119,13 @@ impl CopilotAgent {
         });
 
         {
-            let mut guard = self.cached.lock().unwrap();
+            let mut guard = match self.cached.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    warn!("copilot token cache lock poisoned during write; recovering cached token state");
+                    poisoned.into_inner()
+                }
+            };
             *guard = Some(CachedToken {
                 token: token.clone(),
                 expires_at,

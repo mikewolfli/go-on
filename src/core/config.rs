@@ -3354,9 +3354,15 @@ mod tests {
         let cfg = valid_config();
         let report = super::build_config_health_report(&config_path, &cfg);
 
-        assert_eq!(report.total, 0);
-        assert_eq!(report.profile_recommendation, "minimal");
+        assert_eq!(report.total, 1);
+        assert_eq!(report.info_count, 0);
+        assert_eq!(report.warn_count, 1);
+        assert_eq!(report.profile_recommendation, "balanced");
         assert!(!report.recommendations.is_empty());
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "PRODUCTION_STRICT_RECOMMENDED"));
     }
 
     #[test]
@@ -3419,7 +3425,11 @@ mod tests {
         assert!(codes
             .iter()
             .any(|code| code == "RUNTIME_OBSERVABILITY_OVERHEAD_RISK"));
-        assert_eq!(report.profile_recommendation, "balanced");
+        assert!(codes
+            .iter()
+            .any(|code| code == "PRODUCTION_STRICT_RECOMMENDED"));
+        assert_eq!(report.warn_count, 3);
+        assert_eq!(report.profile_recommendation, "full");
         assert!(report
             .recommendations
             .iter()

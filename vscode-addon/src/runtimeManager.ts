@@ -103,7 +103,7 @@ export class GoOnManager {
 
             this.process.stdout?.on('data', (data: Buffer) => {
                 const output = data.toString();
-                console.log(`Go-On stdout: ${output}`);
+                console.info(`Go-On stdout: ${output}`);
 
                 try {
                     const lines = output.trim().split('\n');
@@ -144,7 +144,7 @@ export class GoOnManager {
             });
 
             this.process.on('close', (code: number) => {
-                console.log(`Go-On process exited with code ${code}`);
+                console.info(`Go-On process exited with code ${code}`);
                 const failedBeforeStartup = !resolved;
                 this.process = null;
                 this.updateStatus();
@@ -260,8 +260,8 @@ export class GoOnManager {
                 .find((component) => component.name === 'provider_dependencies');
 
             if (!providerComponent) {
-                this.providerReadyCache = { checkedAt: now, ready: true };
-                return true;
+                this.providerReadyCache = { checkedAt: now, ready: false };
+                return false;
             }
 
             const details = asRecord(providerComponent.details);
@@ -271,8 +271,8 @@ export class GoOnManager {
             this.providerReadyCache = { checkedAt: now, ready: isReady };
             return isReady;
         } catch {
-            this.providerReadyCache = { checkedAt: now, ready: true };
-            return true;
+            this.providerReadyCache = { checkedAt: now, ready: false };
+            return false;
         }
     }
 

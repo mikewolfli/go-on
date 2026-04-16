@@ -255,10 +255,10 @@ async function updateRulesMarkdownFiles(context, payload) {
 let goOnManager;
 let statusProvider;
 function activate(context) {
-    console.log('Go-On extension is now active!');
+    console.info('Go-On extension is now active!');
     // Initialize i18n system
     const currentLanguage = i18n_1.i18n.getCurrentLanguage();
-    console.log(`Go-On UI Language: ${currentLanguage}`);
+    console.info(`Go-On UI Language: ${currentLanguage}`);
     // Initialize config manager
     const config = vscode.workspace.getConfiguration('go-on');
     const configPath = config.get('configPath', './config.toml');
@@ -398,7 +398,7 @@ async function syncLanguageToApp(language) {
         // Store language preference in app settings
         await config.update('language', language, vscode.ConfigurationTarget.Global);
         // Log successful sync
-        console.log(`Language synchronized: VS Code ${language} -> App ${language}`);
+        console.info(`Language synchronized: VS Code ${language} -> App ${language}`);
     }
     catch (error) {
         console.warn('Failed to sync language:', error);

@@ -228,9 +228,29 @@ impl MetricsRecorder {
         }
     }
 
+    fn read_metrics(&self) -> std::sync::RwLockReadGuard<'_, AppMetrics> {
+        match self.metrics.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("enhanced telemetry metrics lock poisoned during read; recovering metrics state");
+                poisoned.into_inner()
+            }
+        }
+    }
+
+    fn write_metrics(&self) -> std::sync::RwLockWriteGuard<'_, AppMetrics> {
+        match self.metrics.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("enhanced telemetry metrics lock poisoned during write; recovering metrics state");
+                poisoned.into_inner()
+            }
+        }
+    }
+
     /// Record a request
     pub fn record_request(&self, success: bool, latency_ms: f64) {
-        let mut metrics = self.metrics.write().unwrap();
+        let mut metrics = self.write_metrics();
         metrics.requests_total += 1;
         if success {
             metrics.requests_success += 1;
@@ -248,31 +268,31 @@ impl MetricsRecorder {
 
     /// Record a cache hit
     pub fn record_cache_hit(&self) {
-        let mut metrics = self.metrics.write().unwrap();
+        let mut metrics = self.write_metrics();
         metrics.cache_hits += 1;
     }
 
     /// Record a cache miss
     pub fn record_cache_miss(&self) {
-        let mut metrics = self.metrics.write().unwrap();
+        let mut metrics = self.write_metrics();
         metrics.cache_misses += 1;
     }
 
     /// Update active connections
     pub fn update_active_connections(&self, count: u64) {
-        let mut metrics = self.metrics.write().unwrap();
+        let mut metrics = self.write_metrics();
         metrics.active_connections = count;
     }
 
     /// Update memory usage
     pub fn update_memory_usage(&self, bytes: u64) {
-        let mut metrics = self.metrics.write().unwrap();
+        let mut metrics = self.write_metrics();
         metrics.memory_usage_bytes = bytes;
     }
 
     /// Get current metrics snapshot
     pub fn get_metrics(&self) -> AppMetrics {
-        self.metrics.read().unwrap().clone()
+        self.read_metrics().clone()
     }
 
     /// Export metrics as JSON

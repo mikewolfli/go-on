@@ -70,12 +70,17 @@ const output = ref("");
 const customMethod = ref("");
 const customParams = ref("{}");
 
-function parseRpcOutput(raw: string): any {
+function parseRpcOutput(raw: string): unknown {
   try {
     return JSON.parse(raw);
-  } catch {
-    return {};
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid RPC response payload: ${reason}`);
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
 async function call(method: string, params: unknown = {}) {
@@ -151,16 +156,18 @@ async function callQualityBaseline() {
     const traceRaw = await invokeRuntimeRpc("trace.metrics", "{}");
     const metrics = await getMetrics();
 
-    const health = parseRpcOutput(healthRaw)?.result ?? {};
-    const trace = parseRpcOutput(traceRaw)?.result ?? {};
-    const timeouts = trace?.timeouts ?? {};
+    const health = asRecord(asRecord(parseRpcOutput(healthRaw)).result);
+    const trace = asRecord(asRecord(parseRpcOutput(traceRaw)).result);
+    const lifecycle = asRecord(health.lifecycle);
+    const timeouts = asRecord(trace.timeouts);
+    const slowRequests = Array.isArray(trace.slow_requests_top_n) ? trace.slow_requests_top_n : [];
 
     output.value = JSON.stringify(
       {
         quality_baseline: {
           health: {
-            is_healthy: Boolean(health?.lifecycle?.is_healthy ?? false),
-            shutting_down: Boolean(health?.lifecycle?.shutting_down ?? false),
+            is_healthy: Boolean(lifecycle.is_healthy ?? false),
+            shutting_down: Boolean(lifecycle.shutting_down ?? false),
           },
           metrics: {
             total_requests: Number(metrics?.total_requests ?? 0),
@@ -169,13 +176,11 @@ async function callQualityBaseline() {
             avg_request_duration_ms: Number(metrics?.avg_request_duration_ms ?? 0),
           },
           benchmark: {
-            buffered_events: Number(trace?.buffered_events ?? 0),
-            slow_requests_top_n: Array.isArray(trace?.slow_requests_top_n)
-              ? trace.slow_requests_top_n.length
-              : 0,
-            agent_request_timeout_total: Number(timeouts?.agent_request_total ?? 0),
-            review_gate_timeout_total: Number(timeouts?.review_gate_total ?? 0),
-            runtime_probe_timeout_total: Number(timeouts?.runtime_probe_total ?? 0),
+            buffered_events: Number(trace.buffered_events ?? 0),
+            slow_requests_top_n: slowRequests.length,
+            agent_request_timeout_total: Number(timeouts.agent_request_total ?? 0),
+            review_gate_timeout_total: Number(timeouts.review_gate_total ?? 0),
+            runtime_probe_timeout_total: Number(timeouts.runtime_probe_total ?? 0),
           },
         },
       },

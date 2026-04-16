@@ -67,7 +67,7 @@ class GoOnManager {
             }, 10000);
             this.process.stdout?.on('data', (data) => {
                 const output = data.toString();
-                console.log(`Go-On stdout: ${output}`);
+                console.info(`Go-On stdout: ${output}`);
                 try {
                     const lines = output.trim().split('\n');
                     for (const line of lines) {
@@ -106,7 +106,7 @@ class GoOnManager {
                 console.error(`Go-On stderr: ${text}`);
             });
             this.process.on('close', (code) => {
-                console.log(`Go-On process exited with code ${code}`);
+                console.info(`Go-On process exited with code ${code}`);
                 const failedBeforeStartup = !resolved;
                 this.process = null;
                 this.updateStatus();
@@ -200,8 +200,8 @@ class GoOnManager {
                 .map((component) => asRecord(component))
                 .find((component) => component.name === 'provider_dependencies');
             if (!providerComponent) {
-                this.providerReadyCache = { checkedAt: now, ready: true };
-                return true;
+                this.providerReadyCache = { checkedAt: now, ready: false };
+                return false;
             }
             const details = asRecord(providerComponent.details);
             const ready = Number(details.ready ?? 0);
@@ -211,8 +211,8 @@ class GoOnManager {
             return isReady;
         }
         catch {
-            this.providerReadyCache = { checkedAt: now, ready: true };
-            return true;
+            this.providerReadyCache = { checkedAt: now, ready: false };
+            return false;
         }
     }
     async notifyAndOpenSetupWizard() {

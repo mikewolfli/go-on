@@ -255,7 +255,10 @@ mod test_suite {
         // Use the function from helpers module
         use crate::acp::helpers::conversation::touch_conversation_order;
         touch_conversation_order(&order, "conv3");
-        let guard = order.lock().unwrap();
+        let guard = match order.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         assert_eq!(guard.len(), 3);
         assert_eq!(guard[2], "conv3");
     }

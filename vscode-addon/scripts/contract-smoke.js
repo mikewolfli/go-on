@@ -9,6 +9,7 @@ const contract = JSON.parse(
     fs.readFileSync(path.join(repoRoot, 'contracts', 'editor-capability-matrix.json'), 'utf8')
 );
 const extensionSource = fs.readFileSync(path.join(addonRoot, 'src', 'extension.ts'), 'utf8');
+const runtimeManagerSource = fs.readFileSync(path.join(addonRoot, 'src', 'runtimeManager.ts'), 'utf8');
 const monitorSource = fs.readFileSync(path.join(addonRoot, 'src', 'statusMonitor.ts'), 'utf8');
 const contractSource = fs.readFileSync(path.join(addonRoot, 'src', 'protocolContract.ts'), 'utf8');
 
@@ -169,13 +170,13 @@ assert.ok(contractSource.includes('protocol: {'));
 assert.ok(contractSource.includes('responsesApi: {'));
 assert.ok(contractSource.includes('vscodeAddonCompileCheckedInMainChain: true'));
 assert.ok(contractSource.includes('streamSetupUnavailableDegradesToCompleted: true'));
-assert.ok(extensionSource.includes('protocolContract.errors.providerNotReady'));
-assert.ok(extensionSource.includes('protocolContract.errors.setupWizardPrompt'));
+assert.ok(runtimeManagerSource.includes('protocolContract.errors.providerNotReady'));
+assert.ok(runtimeManagerSource.includes('protocolContract.errors.setupWizardPrompt'));
 assert.deepEqual(contract.errors.requestErrorKinds, ['PuaViolation', 'BudgetExceeded', 'SandboxBlocked']);
 assert.equal(contract.errors.requestErrorContextPrefix, 'acp.handle_request.dispatch');
-assert.ok(extensionSource.includes('formatRpcError'));
-assert.ok(extensionSource.includes('rpc_error:'));
-assert.ok(extensionSource.includes('protocolContract.errors.requestErrorContextPrefix'));
+assert.ok(runtimeManagerSource.includes('formatRpcError'));
+assert.ok(runtimeManagerSource.includes('rpc_error:'));
+assert.ok(runtimeManagerSource.includes('protocolContract.errors.requestErrorContextPrefix'));
 assert.ok(monitorSource.includes('protocolContract.statusTerms.healthy'));
 assert.ok(monitorSource.includes('protocolContract.statusTerms.healthCheckFailed'));
 

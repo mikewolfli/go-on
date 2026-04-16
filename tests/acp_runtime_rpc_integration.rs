@@ -2304,14 +2304,19 @@ fn rpc_unknown_method_and_config_reload() {
         .as_str()
         .expect("reload path should be string");
     assert!(Path::new(reload_path).ends_with("config.toml"));
-    assert_eq!(reload["result"]["warning_count"], 0);
-    assert_eq!(reload["result"]["warnings"], json!([]));
-    assert_eq!(reload["result"]["profile_recommendation"], "minimal");
+    assert_eq!(reload["result"]["warning_count"], 1);
+    assert_eq!(reload["result"]["profile_recommendation"], "balanced");
     assert!(reload["result"]["recommendations"].is_array());
-    assert_eq!(reload["result"]["health"]["score"], 100);
+    assert_eq!(reload["result"]["health"]["score"], 85);
     assert_eq!(reload["result"]["health"]["critical_count"], 0);
-    assert_eq!(reload["result"]["health"]["warn_count"], 0);
+    assert_eq!(reload["result"]["health"]["warn_count"], 1);
     assert_eq!(reload["result"]["health"]["info_count"], 0);
+    assert!(reload["result"]["warnings"]
+        .as_array()
+        .expect("warnings should be array")
+        .iter()
+        .filter_map(|warning| warning.as_str())
+        .any(|warning| warning.contains("runtime.production_strict=false")));
 
     let shutdown = harness.request(12, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);

@@ -78,7 +78,7 @@
   "main": "./out/extension.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/go-on"
+    "url": "https://github.com/mikewolfli/go-on"
   },
   "contributes": {
     "commands": [
