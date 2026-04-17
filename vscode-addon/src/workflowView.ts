@@ -20,6 +20,7 @@ type WorkflowStore = Record<string, WorkflowData>;
 export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'go-on-workflow';
     private _view?: vscode.WebviewView;
+    private _messageSubscription?: vscode.Disposable;
     private readonly manager: RuntimeManagerLike;
     private readonly context: vscode.ExtensionContext;
 
@@ -30,6 +31,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     ) {
         this.manager = _manager;
         this.context = _context;
+        this.context.subscriptions.push(new vscode.Disposable(() => this._messageSubscription?.dispose()));
     }
 
     public resolveWebviewView(
@@ -48,7 +50,8 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
 
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
-        webviewView.webview.onDidReceiveMessage(
+        this._messageSubscription?.dispose();
+        this._messageSubscription = webviewView.webview.onDidReceiveMessage(
             async (message) => {
                 switch (message.type) {
                     case 'createWorkflow':
@@ -62,8 +65,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
                         break;
                 }
             },
-            undefined,
-            this.context.subscriptions
+            undefined
         );
     }
 

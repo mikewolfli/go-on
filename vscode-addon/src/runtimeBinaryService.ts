@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
+import type { ClientRequest } from 'http';
+import type { Socket } from 'net';
 import * as path from 'path';
 import * as https from 'https';
 import * as os from 'os';
@@ -11,6 +14,8 @@ export interface RuntimeResolution {
     executablePath: string;
     runtimeDir: string;
 }
+
+const DOWNLOAD_TIMEOUT_MS = 15000;
 
 function isSupportedExecutablePath(filePath: string): boolean {
     if (os.platform() === 'win32') {
@@ -60,6 +65,81 @@ function buildReleaseAssetUrl(repository: string, tag: string, assetName: string
     return `https://github.com/${repository}/releases/download/${tag}/${assetName}`;
 }
 
+async function computeFileSha256(filePath: string): Promise<string> {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    await new Promise<void>((resolve, reject) => {
+        stream.on('data', (chunk) => hash.update(chunk));
+        stream.on('end', resolve);
+        stream.on('error', reject);
+    });
+    return hash.digest('hex');
+}
+
+function attachDownloadTimeout(request: ClientRequest, url: string) {
+    request.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
+        request.destroy(new Error(`Download timed out after ${DOWNLOAD_TIMEOUT_MS}ms: ${url}`));
+    });
+
+    request.on('socket', (socket: Socket) => {
+        socket.setTimeout(DOWNLOAD_TIMEOUT_MS);
+        socket.on('timeout', () => {
+            request.destroy(new Error(`Socket timed out after ${DOWNLOAD_TIMEOUT_MS}ms: ${url}`));
+        });
+    });
+}
+
+async function downloadTextFile(url: string, maxRedirects: number = 5): Promise<string> {
+    if (maxRedirects <= 0) {
+        throw new Error('Too many redirects while downloading checksum file');
+    }
+    return new Promise<string>((resolve, reject) => {
+        const request = https.get(url, (response) => {
+            const statusCode = response.statusCode ?? 0;
+            if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
+                response.resume();
+                downloadTextFile(response.headers.location, maxRedirects - 1).then(resolve).catch(reject);
+                return;
+            }
+            if (statusCode < 200 || statusCode >= 300) {
+                response.resume();
+                reject(new Error(`Checksum download failed with HTTP ${statusCode}`));
+                return;
+            }
+            let text = '';
+            response.setEncoding('utf8');
+            response.on('data', (chunk: string) => { text += chunk; });
+            response.on('end', () => resolve(text));
+            response.on('error', reject);
+        });
+        attachDownloadTimeout(request, url);
+        request.on('error', reject);
+    });
+}
+
+async function verifyArchiveChecksum(archivePath: string, checksumUrl: string): Promise<void> {
+    let checksumText: string;
+    try {
+        checksumText = await downloadTextFile(checksumUrl);
+    } catch (err) {
+        // If the checksum file is not available (e.g. pre-existing release without one), skip silently.
+        return;
+    }
+    // Checksum files may be "<hash>  <filename>" or just "<hash>".
+    const expectedHash = checksumText.trim().split(/\s+/)[0].toLowerCase();
+    if (!expectedHash || expectedHash.length !== 64) {
+        throw new Error(`Integrity check failed: checksum file has unexpected format`);
+    }
+    const actualHash = await computeFileSha256(archivePath);
+    if (actualHash !== expectedHash) {
+        await fsPromises.unlink(archivePath).catch(() => { /* ignore cleanup error */ });
+        throw new Error(
+            `Integrity check failed: expected SHA-256 ${expectedHash}, got ${actualHash}. ` +
+            'The downloaded archive may be corrupted or tampered with.'
+        );
+    }
+}
+
 async function downloadFile(url: string, destinationPath: string, maxRedirects: number = 5): Promise<void> {
     if (maxRedirects <= 0) {
         throw new Error('Too many redirects while downloading file');
@@ -68,6 +148,11 @@ async function downloadFile(url: string, destinationPath: string, maxRedirects: 
     await fsPromises.mkdir(path.dirname(destinationPath), { recursive: true });
 
     await new Promise<void>((resolve, reject) => {
+        const rejectWithCleanup = (error: unknown) => {
+            void fsPromises.unlink(destinationPath).catch(() => undefined);
+            reject(error);
+        };
+
         const request = https.get(url, (response) => {
             const statusCode = response.statusCode ?? 0;
 
@@ -89,10 +174,12 @@ async function downloadFile(url: string, destinationPath: string, maxRedirects: 
                 fileStream.close();
                 resolve();
             });
-            fileStream.on('error', reject);
+            fileStream.on('error', rejectWithCleanup);
+            response.on('error', rejectWithCleanup);
         });
 
-        request.on('error', reject);
+        attachDownloadTimeout(request, url);
+        request.on('error', rejectWithCleanup);
     });
 }
 
@@ -312,9 +399,12 @@ export async function ensureGoOnBinary(
     const archivePath = path.join(context.globalStorageUri.fsPath, assetName);
     const downloadUrl = buildReleaseAssetUrl(releaseRepository, releaseTag, assetName);
 
+    const checksumUrl = downloadUrl + '.sha256';
+
     vscode.window.showInformationMessage(`Go-On runtime not found. Downloading ${assetName} from ${releaseRepository} (${releaseTag})...`);
     try {
         await downloadFile(downloadUrl, archivePath);
+        await verifyArchiveChecksum(archivePath, checksumUrl);
         await extractArchive(archivePath, runtimeDir);
     } catch (error: unknown) {
         return await promptForManualBinaryPath(

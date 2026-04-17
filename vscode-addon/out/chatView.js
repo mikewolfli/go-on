@@ -13,6 +13,7 @@ class GoOnChatViewProvider {
         this.context = _context;
         this.onViewResolved = _onViewResolved;
         this._loadSessions();
+        this.context.subscriptions.push(new vscode.Disposable(() => this._messageSubscription?.dispose()));
     }
     _loadSessions() {
         const storedSessions = this.context.globalState.get('go-on-chat-sessions', {});
@@ -64,7 +65,8 @@ class GoOnChatViewProvider {
                 void vscode.window.showWarningMessage(`Go-On: Failed to initialize runtime: ${error instanceof Error ? error.message : String(error)}`);
             });
         }
-        webviewView.webview.onDidReceiveMessage(async (message) => {
+        this._messageSubscription?.dispose();
+        this._messageSubscription = webviewView.webview.onDidReceiveMessage(async (message) => {
             switch (message.type) {
                 case 'sendMessage':
                     await this._handleSendMessage(message.text);
@@ -88,7 +90,7 @@ class GoOnChatViewProvider {
                     this._sendSessionsList();
                     break;
             }
-        }, undefined, this.context.subscriptions);
+        }, undefined);
     }
     async _handleSendMessage(text) {
         if (!this._view)

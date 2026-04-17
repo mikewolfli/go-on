@@ -2,7 +2,12 @@
   <el-row :gutter="16">
     <el-col :span="12">
       <el-card>
-        <template #header>{{ t("aiUsage.snapshot") }}</template>
+        <template #header>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <span>{{ t("aiUsage.snapshot") }}</span>
+            <el-tag v-if="runtime.aiUsageStale" type="warning">{{ t("common.staleData") }}</el-tag>
+          </div>
+        </template>
         <el-descriptions :column="1" border>
           <el-descriptions-item :label="t('aiUsage.timestamp')">{{ runtime.aiUsage.timestamp }}</el-descriptions-item>
           <el-descriptions-item :label="t('aiUsage.requestsPerMinute')">{{ runtime.aiUsage.requestsPerMinute }}</el-descriptions-item>
@@ -24,7 +29,12 @@
     </el-col>
     <el-col :span="24" style="margin-top:16px;">
       <el-card>
-        <template #header>{{ t("aiUsage.trend") }}</template>
+        <template #header>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <span>{{ t("aiUsage.trend") }}</span>
+            <el-tag v-if="runtime.usageHeatmapStale" type="warning">{{ t("common.staleData") }}</el-tag>
+          </div>
+        </template>
         <el-table :data="runtime.usageHeatmap.trend" size="small" height="220">
           <el-table-column prop="secondBucket" :label="t('aiUsage.timeBucket')" width="160">
             <template #default="scope">{{ scope.row.secondBucket }}s</template>

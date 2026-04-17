@@ -104,6 +104,12 @@
     "title": "Logs",
     "filter": "filter keyword"
   },
+  "common": {
+    "offlineMode": "Offline mode",
+    "offlineModeHint": "Live runtime data is unavailable. The GUI is showing the last known snapshot.",
+    "staleData": "Stale snapshot",
+    "staleDataHint": "Some panels are currently showing cached or previously fetched data instead of a fresh runtime response."
+  },
   "setup": {
     "title": "Setup Wizard Shortcut",
     "hint": "Run common setup commands without leaving GUI.",

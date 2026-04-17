@@ -25,6 +25,13 @@ export class RpcCache {
     }
 
     get<T>(key: string): T | null {
+        const entry = this.getEntry<T>(key);
+        if (!entry) return null;
+
+        return entry.value as T;
+    }
+
+    getEntry<T>(key: string): CacheEntry<T> | null {
         const entry = this.cache.get(key);
         if (!entry) return null;
 
@@ -34,7 +41,7 @@ export class RpcCache {
             return null;
         }
 
-        return entry.value as T;
+        return entry as CacheEntry<T>;
     }
 
     has(key: string): boolean {

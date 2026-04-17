@@ -1,19 +1,73 @@
 import { invoke } from "@tauri-apps/api/core";
 import { rpcCache } from "../utils/cache";
 
-// Cache decorator helper
-async function withCache<T>(
+export interface CacheMetadata {
+    cached: boolean;
+    cachedAt: number;
+    ageMs: number;
+    ttl: number;
+}
+
+export interface CachedResponse<T> {
+    value: T;
+    cache: CacheMetadata;
+}
+
+const DEFAULT_INVOKE_TIMEOUT_MS = 15000;
+const STARTUP_INVOKE_TIMEOUT_MS = 20000;
+const RUNTIME_RPC_TIMEOUT_MS = 30000;
+
+function buildCacheMetadata(cached: boolean, cachedAt: number, ttl: number): CacheMetadata {
+    return {
+        cached,
+        cachedAt,
+        ageMs: Math.max(0, Date.now() - cachedAt),
+        ttl,
+    };
+}
+
+async function invokeWithTimeout<T>(
+    command: string,
+    args?: Record<string, unknown>,
+    timeoutMs: number = DEFAULT_INVOKE_TIMEOUT_MS,
+): Promise<T> {
+    return await new Promise<T>((resolve, reject) => {
+        const timeoutId = window.setTimeout(() => {
+            reject(new Error(`Tauri command timed out after ${timeoutMs}ms: ${command}`));
+        }, timeoutMs);
+
+        invoke<T>(command, args)
+            .then((result) => {
+                window.clearTimeout(timeoutId);
+                resolve(result);
+            })
+            .catch((error) => {
+                window.clearTimeout(timeoutId);
+                reject(error);
+            });
+    });
+}
+
+async function withCacheMeta<T>(
     key: string,
     fn: () => Promise<T>,
     ttl: number = 5000
-): Promise<T> {
-    const cached = rpcCache.get<T>(key);
-    if (cached !== null) {
-        return cached;
+): Promise<CachedResponse<T>> {
+    const cachedEntry = rpcCache.getEntry<T>(key);
+    if (cachedEntry !== null) {
+        return {
+            value: cachedEntry.value,
+            cache: buildCacheMetadata(true, cachedEntry.timestamp, cachedEntry.ttl),
+        };
     }
-    const result = await fn();
-    rpcCache.set(key, result, ttl);
-    return result;
+
+    const fetchedAt = Date.now();
+    const value = await fn();
+    rpcCache.set(key, value, ttl);
+    return {
+        value,
+        cache: buildCacheMetadata(false, fetchedAt, ttl),
+    };
 }
 
 export interface ServiceStatus {
@@ -131,116 +185,144 @@ export interface ProviderSelectionSaveResult {
 }
 
 export async function configureService(executablePath: string, workingDir: string) {
-    return invoke<void>("configure_service", { executablePath, workingDir });
+    return invokeWithTimeout<void>("configure_service", { executablePath, workingDir }, STARTUP_INVOKE_TIMEOUT_MS);
 }
 
 export async function configureServiceByExecutable(executablePath: string) {
-    return invoke<void>("configure_service_by_executable", { executablePath });
+    return invokeWithTimeout<void>("configure_service_by_executable", { executablePath }, STARTUP_INVOKE_TIMEOUT_MS);
 }
 
 export async function configureServiceByDirectory(directoryPath: string) {
-    return invoke<void>("configure_service_by_directory", { directoryPath });
+    return invokeWithTimeout<void>("configure_service_by_directory", { directoryPath }, STARTUP_INVOKE_TIMEOUT_MS);
 }
 
 export async function backendExecutableExists() {
-    return invoke<boolean>("backend_executable_exists");
+    return invokeWithTimeout<boolean>("backend_executable_exists");
 }
 
 export async function autoConfigureBackendPath() {
-    return invoke<AutoConfigureResult>("auto_configure_backend_path");
+    return invokeWithTimeout<AutoConfigureResult>("auto_configure_backend_path", undefined, STARTUP_INVOKE_TIMEOUT_MS);
 }
 
 export async function exitApp() {
-    return invoke<void>("exit_app");
+    return invokeWithTimeout<void>("exit_app");
 }
 
 export async function resetDefaultSettings() {
-    return invoke<string>("reset_default_settings");
+    return invokeWithTimeout<string>("reset_default_settings");
 }
 
 export async function setProviderApiKey(provider: string, apiKey: string, envVar?: string) {
-    return invoke<string>("set_provider_api_key", { provider, apiKey, envVar });
+    return invokeWithTimeout<string>("set_provider_api_key", { provider, apiKey, envVar }, STARTUP_INVOKE_TIMEOUT_MS);
 }
 
 export async function clearProviderApiKey(provider: string, envVar?: string) {
-    return invoke<string>("clear_provider_api_key", { provider, envVar });
+    return invokeWithTimeout<string>("clear_provider_api_key", { provider, envVar }, STARTUP_INVOKE_TIMEOUT_MS);
 }
 
 export async function listProviderCatalog() {
-    return invoke<ProviderCatalogEntry[]>("list_provider_catalog");
+    return invokeWithTimeout<ProviderCatalogEntry[]>("list_provider_catalog");
 }
 
 export async function saveProviderSelection(provider: string, model: string, envVar?: string) {
-    return invoke<ProviderSelectionSaveResult>("save_provider_selection", { provider, model, envVar });
+    return invokeWithTimeout<ProviderSelectionSaveResult>("save_provider_selection", { provider, model, envVar }, STARTUP_INVOKE_TIMEOUT_MS);
 }
 
 export async function fetchGithubCopilotToken() {
-    return invoke<CopilotTokenResult>("fetch_github_copilot_token");
+    return invokeWithTimeout<CopilotTokenResult>("fetch_github_copilot_token", undefined, RUNTIME_RPC_TIMEOUT_MS);
 }
 
 export async function invokeRuntimeRpc(method: string, paramsJson?: string) {
-    return invoke<string>("invoke_runtime_rpc", { method, paramsJson });
+    return invokeWithTimeout<string>("invoke_runtime_rpc", { method, paramsJson }, RUNTIME_RPC_TIMEOUT_MS);
 }
 
 export async function startService() {
-    return invoke<ServiceStatus>("start_service");
+    return invokeWithTimeout<ServiceStatus>("start_service", undefined, STARTUP_INVOKE_TIMEOUT_MS);
 }
 
 export async function stopService() {
-    return invoke<ServiceStatus>("stop_service");
+    return invokeWithTimeout<ServiceStatus>("stop_service", undefined, STARTUP_INVOKE_TIMEOUT_MS);
 }
 
 export async function restartService() {
-    return invoke<ServiceStatus>("restart_service");
+    return invokeWithTimeout<ServiceStatus>("restart_service", undefined, STARTUP_INVOKE_TIMEOUT_MS);
 }
 
 export async function serviceStatus() {
-    return invoke<ServiceStatus>("service_status");
+    return invokeWithTimeout<ServiceStatus>("service_status");
 }
 
-export async function checkHealth(endpoint?: string) {
+export async function checkHealthWithMeta(endpoint?: string, options?: { bypassCache?: boolean }) {
     const cacheKey = `health:${endpoint || "default"}`;
-    return withCache(cacheKey, () => invoke<HealthSnapshot>("check_health", { endpoint }), 3000);
+    if (options?.bypassCache) {
+        const fetchedAt = Date.now();
+        const value = await invokeWithTimeout<HealthSnapshot>("check_health", { endpoint });
+        return {
+            value,
+            cache: buildCacheMetadata(false, fetchedAt, 0),
+        };
+    }
+    return withCacheMeta(cacheKey, () => invokeWithTimeout<HealthSnapshot>("check_health", { endpoint }), 3000);
+}
+
+export async function checkHealth(endpoint?: string, options?: { bypassCache?: boolean }) {
+    return (await checkHealthWithMeta(endpoint, options)).value;
+}
+
+export async function getAiUsageSnapshotWithMeta() {
+    return withCacheMeta("ai_usage", () => invokeWithTimeout<AiUsageSnapshot>("get_ai_usage_snapshot"), 5000);
 }
 
 export async function getAiUsageSnapshot() {
-    return withCache("ai_usage", () => invoke<AiUsageSnapshot>("get_ai_usage_snapshot"), 5000);
+    return (await getAiUsageSnapshotWithMeta()).value;
+}
+
+export async function getUsageHeatmapWithMeta(windowSeconds = 300) {
+    const cacheKey = `heatmap:${windowSeconds}`;
+    return withCacheMeta(cacheKey, () => invokeWithTimeout<UsageHeatmap>("get_usage_heatmap", { windowSeconds }), 5000);
 }
 
 export async function getUsageHeatmap(windowSeconds = 300) {
-    const cacheKey = `heatmap:${windowSeconds}`;
-    return withCache(cacheKey, () => invoke<UsageHeatmap>("get_usage_heatmap", { windowSeconds }), 5000);
+    return (await getUsageHeatmapWithMeta(windowSeconds)).value;
+}
+
+export async function getEndpointHealthStatsWithMeta() {
+    return withCacheMeta("endpoint_stats", () => invokeWithTimeout<EndpointHealthStat[]>("get_endpoint_health_stats"), 5000);
 }
 
 export async function getEndpointHealthStats() {
-    return withCache("endpoint_stats", () => invoke<EndpointHealthStat[]>("get_endpoint_health_stats"), 5000);
+    return (await getEndpointHealthStatsWithMeta()).value;
+}
+
+export async function getEditorIntegrationStatusWithMeta() {
+    return withCacheMeta("editor_status", () => invokeWithTimeout<EditorIntegrationStatus[]>("get_editor_integration_status"), 5000);
 }
 
 export async function getEditorIntegrationStatus() {
-    return withCache("editor_status", () => invoke<EditorIntegrationStatus[]>("get_editor_integration_status"), 5000);
+    return (await getEditorIntegrationStatusWithMeta()).value;
 }
 
 export async function getRecentLogs(logPath?: string, lines = 200) {
     // Logs are not cached to always get latest
-    return invoke<LogChunk>("read_recent_logs", { logPath, lines, maskSensitive: true });
+    return invokeWithTimeout<LogChunk>("read_recent_logs", { logPath, lines, maskSensitive: true });
 }
 
 export async function runCliCommand(command: string) {
-    return invoke<string>("run_cli_command", { command });
+    return invokeWithTimeout<string>("run_cli_command", { command }, RUNTIME_RPC_TIMEOUT_MS);
 }
 
 export async function showMiniConsole() {
-    return invoke<void>("show_mini_console");
+    return invokeWithTimeout<void>("show_mini_console");
 }
 
 export async function hideMiniConsole() {
-    return invoke<void>("hide_mini_console");
+    return invokeWithTimeout<void>("hide_mini_console");
 }
 
 export async function switchToMainWindow() {
-    return invoke<void>("switch_to_main_window");
+    return invokeWithTimeout<void>("switch_to_main_window");
 }
 
 export async function switchToMiniWindow() {
-    return invoke<void>("switch_to_mini_window");
+    return invokeWithTimeout<void>("switch_to_mini_window");
 }

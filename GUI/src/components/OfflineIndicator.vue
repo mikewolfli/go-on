@@ -1,7 +1,7 @@
 <template>
   <transition name="slide-fade">
     <div
-      v-if="runtime.offline"
+      v-if="runtime.offline || runtime.hasStaleData"
       style="
         background-color: #fff3cd;
         border: 1px solid #ffc107;
@@ -14,9 +14,9 @@
       "
     >
       <span style="font-size: 20px">⚠️</span>
-      <span style="font-weight: 500">{{ t("common.offlineMode") }}</span>
+      <span style="font-weight: 500">{{ runtime.offline ? t("common.offlineMode") : t("common.staleData") }}</span>
       <span style="font-size: 12px; color: #666">
-        {{ t("common.offlineModeHint") }}
+        {{ runtime.offline ? t("common.offlineModeHint") : t("common.staleDataHint") }}
       </span>
     </div>
   </transition>

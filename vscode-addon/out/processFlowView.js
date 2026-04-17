@@ -7,6 +7,7 @@ class GoOnProcessFlowViewProvider {
         this._extensionUri = _extensionUri;
         this.manager = _manager;
         this.context = _context;
+        this.context.subscriptions.push(new vscode.Disposable(() => this._messageSubscription?.dispose()));
     }
     _extractResponseText(result) {
         if (!result || typeof result !== 'object') {
@@ -24,7 +25,8 @@ class GoOnProcessFlowViewProvider {
             ]
         };
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
-        webviewView.webview.onDidReceiveMessage(async (message) => {
+        this._messageSubscription?.dispose();
+        this._messageSubscription = webviewView.webview.onDidReceiveMessage(async (message) => {
             switch (message.type) {
                 case 'createProcess':
                     await this._createProcess(message.processData);
@@ -39,7 +41,7 @@ class GoOnProcessFlowViewProvider {
                     await this._importProcesses(message.processes);
                     break;
             }
-        }, undefined, this.context.subscriptions);
+        }, undefined);
         // Load existing processes
         this._loadProcesses();
     }

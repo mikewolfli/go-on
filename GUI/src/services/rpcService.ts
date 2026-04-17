@@ -208,8 +208,10 @@ export interface SkillRemoveResult {
 function parseRpcJson(raw: string): unknown {
   try {
     return JSON.parse(raw || "{}");
-  } catch {
-    return {};
+  } catch (error) {
+    const preview = (raw || "").slice(0, 200);
+    const reason = error instanceof Error ? error.message : "unknown parse error";
+    throw new Error(`Invalid RPC JSON response: ${reason}. preview=${preview}`);
   }
 }
 

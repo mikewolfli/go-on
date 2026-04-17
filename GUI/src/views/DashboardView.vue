@@ -10,7 +10,12 @@
     </el-col>
     <el-col :span="8">
       <el-card>
-        <template #header>{{ t("dashboard.health") }}</template>
+        <template #header>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <span>{{ t("dashboard.health") }}</span>
+            <el-tag v-if="runtime.healthStale" type="warning">{{ t("common.staleData") }}</el-tag>
+          </div>
+        </template>
         <div>{{ t("dashboard.ok") }}: {{ runtime.health.ok }}</div>
         <div>{{ t("dashboard.endpoint") }}: {{ runtime.health.endpoint }}</div>
         <div>{{ t("dashboard.code") }}: {{ runtime.health.responseCode ?? '-' }}</div>
@@ -18,7 +23,12 @@
     </el-col>
     <el-col :span="8">
       <el-card>
-        <template #header>{{ t("dashboard.ai") }}</template>
+        <template #header>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <span>{{ t("dashboard.ai") }}</span>
+            <el-tag v-if="runtime.aiUsageStale" type="warning">{{ t("common.staleData") }}</el-tag>
+          </div>
+        </template>
         <div>{{ t("dashboard.rpm") }}: {{ runtime.aiUsage.requestsPerMinute }}</div>
         <div>{{ t("dashboard.success") }}: {{ runtime.aiUsage.successRate.toFixed(2) }}%</div>
         <div>{{ t("dashboard.latency") }}: {{ runtime.aiUsage.avgLatencyMs.toFixed(1) }} ms</div>

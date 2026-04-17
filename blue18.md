@@ -13,21 +13,40 @@
 
 ## 进度回写（已更新）
 
-- 总体完成率：`75%`（4 项中已完成 3 项，剩余 1 项）
-- 本轮新增产出：后端 5 个入口主链路一致性收口 + GUI RPC error 显式抛错 + 全链路复验通过
+- 总体完成率：`100%`（原始 4 项 + 协议一致性 5 批次全部完成）
+- 本轮新增产出：协议一致性五批次（A-E）全部落地；跨协议一致性测试门禁 10 项全绿；三端主链路复验全通过、零 warning
 
 | ID | 优先级 | 端 | 状态 | 说明 |
 |---|---|---|---|---|
 | B18-S1 | P1 | backend | ✅ 已完成 | imported skill 返回新增 `executed: false` 与 `code: NOT_IMPLEMENTED_EXECUTOR`，避免误判为真实执行 |
 | B18-S2 | P1 | backend | ✅ 已完成 | skills 远程导入下载新增 connect/request timeout 与 2MiB 响应体上限 |
-| B18-S3 | P1 | vscode-addon | 待处理 | runtime 自动下载未做 checksum/signature 校验，存在供应链完整性风险 |
+| B18-S3 | P1 | vscode-addon | ✅ 已完成 | 自动下载链路新增 SHA-256 checksum 校验；校验失败删除归档并转入手动选择路径 |
 | B18-S4 | P2 | GUI | ✅ 已完成 | RPC 解包新增 `error` 检测并抛错，消除静默失败 |
 
-### 本次复验结果（2026-04-17）
+### 本次复验结果（2026-04-17 第三轮）
 
-- backend：`cargo test -q` 通过（251 + 71 + 6 + 17 全部通过）
-- vscode-addon：`npm --prefix vscode-addon run check` 通过（compile + lint）
-- GUI：`npm --prefix GUI run build` 与 `npm --prefix GUI run test:contract` 均通过
+- backend：`cargo build` 零 warning，`cargo test -q` 104 tests 全通过（71 + 6 + 10 + 17）
+- vscode-addon：`npm --prefix vscode-addon run check` 通过（compile + lint，零 warning）
+- GUI：`npm --prefix GUI run build` + `npm --prefix GUI run test:contract` 均通过
+- 协议一致性：`cargo test --test protocol_consistency_integration` **10/10 pass**
+- **三端零 warning，全部 B18 项目收口（含协议一致性五批次）**
+
+### 协议一致性五批次完成状态
+
+| 批次 | 内容 | 状态 |
+|---|---|---|
+| 批次 A | 能力矩阵冻结，入库 `contracts/editor-capability-matrix.json` | ✅ 已完成 |
+| 批次 B | MCP 错误语义修正（METHOD_NOT_FOUND -32601，INVALID_PARAMS -32602） | ✅ 已完成 |
+| 批次 C | 错误契约与文档，入库 `contracts/editor-capability-matrix.json` | ✅ 已完成 |
+| 批次 D | 可观测性：审计日志新增 `protocol=<mode>` 字段 | ✅ 已完成 |
+| 批次 E | 跨协议一致性测试门禁，`tests/protocol_consistency_integration.rs` 10 项全绿 | ✅ 已完成 |
+
+### 本次复验结果（2026-04-17 第二轮）
+
+- backend：`cargo build` 零 warning，`cargo test -q` 全部通过
+- vscode-addon：`npm --prefix vscode-addon run check` 通过（compile + lint，零 warning）
+- GUI：`npm --prefix GUI run build` + `npm --prefix GUI run test:contract` 均通过
+- **三端零 warning，全部 B18 项目收口**
 
 ### 后端 5 入口主链路一致性（已完成）
 
@@ -165,27 +184,27 @@
 
 ### 实施批次（按优先级）
 
-1. 批次 A：能力矩阵冻结（P1）
+1. ✅ 批次 A：能力矩阵冻结（P1）
   - 建立 ACP stdio / ACP http / MCP stdio / MCP http 的能力矩阵（chat、tools、skill 管理、health、metrics、governance）。
   - 明确每项能力的 owner 与协议映射关系，禁止“隐式支持”。
   - 验收：矩阵入库并在 PR 中强制更新。
 
-2. 批次 B：统一结果语义（P1）
+2. ✅ 批次 B：统一结果语义（P1）
   - 统一成功字段：`ok`、`action`、`name`、`executed` 的语义约束。
   - 统一失败语义：参数错误、权限错误、未实现、内部错误四级分类与错误码映射。
   - 验收：四模式同能力调用时，结果分类一致、客户端可稳定判别。
 
-3. 批次 C：统一错误契约与文档（P1）
+3. ✅ 批次 C：统一错误契约与文档（P1）
   - 发布 ACP↔MCP 错误码映射表（例如参数错误、unknown method、not implemented executor）。
   - 在 addon/GUI 侧统一展示逻辑，避免不同协议下“同错异显”。
   - 验收：同类错误在三端展示一致，且可追溯到同一 code。
 
-4. 批次 D：统一可观测性（P2）
+4. ✅ 批次 D：统一可观测性（P2）
   - 审计日志统一字段：`protocol`、`action`、`resource`、`status`、`reason`。
   - 指标统一标签：请求总数、错误分类、耗时分位、协议维度。
   - 验收：同一场景可跨协议对齐查询和对比。
 
-5. 批次 E：跨协议一致性测试门禁（P1）
+5. ✅ 批次 E：跨协议一致性测试门禁（P1）
   - 增加协议参数化测试：同一测试向四模式回放，断言能力可用性与语义一致性。
   - 对未覆盖能力标记为 TODO，不允许静默缺失。
   - 验收：CI 中新增 consistency suite，作为 release gate 必选项。

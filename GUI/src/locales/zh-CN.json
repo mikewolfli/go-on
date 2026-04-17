@@ -104,6 +104,12 @@
     "title": "日志",
     "filter": "过滤关键字"
   },
+  "common": {
+    "offlineMode": "离线模式",
+    "offlineModeHint": "当前无法拿到实时运行时数据，GUI 正在展示最后一次成功获取的快照。",
+    "staleData": "陈旧快照",
+    "staleDataHint": "部分面板当前展示的是缓存值或上一次成功拉取的数据，而不是最新的运行时响应。"
+  },
   "setup": {
     "title": "引导命令快捷入口",
     "hint": "无需离开 GUI 即可执行常用初始化与检查命令。",

@@ -108,7 +108,10 @@ fn is_acp_request(method: &str) -> bool {
              | "trace.metrics"
              | "debug_panel.get"
              | "debug.panel.get"
-    )
+            // MCP-bridge methods that ACP stdio also dispatches
+            | "mcp.tools.list"
+            | "mcp.tools.call"
+            )
 }
 // Request handling implementation functions for ACP server
 //
@@ -1037,7 +1040,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     server,
                     request.id,
                     -32601,
-                    format!("ACP妯″紡涓嬩笉鏀寔鏂规硶: {}", method),
+                    format!("ACP mode does not support method: {}", method),
                     None,
                 )
                 .await;
@@ -1049,7 +1052,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     server,
                     request.id,
                     -32601,
-                    format!("MCP妯″紡涓嬩笉鏀寔鏂规硶: {}", method),
+                    format!("MCP mode does not support method: {}", method),
                     None,
                 )
                 .await;
@@ -1535,6 +1538,18 @@ async fn handle_mcp_tools_call(
 }
 
 fn record_mcp_tool_audit(name: &str, arguments: &Value, success: bool, reason: &str) {
+    record_tool_call_audit_with_protocol(name, arguments, success, reason, "acp_stdio");
+}
+
+/// Records a tool-call audit entry for any protocol mode.
+/// Exported for use by the MCP handler layer.
+pub(crate) fn record_tool_call_audit_with_protocol(
+    name: &str,
+    arguments: &Value,
+    success: bool,
+    reason: &str,
+    protocol: &str,
+) {
     let action = governance_action_for_tool(name);
     let reversible = matches!(action, GovernanceAction::Read | GovernanceAction::Search);
     let file_path = audit_file_path_from_arguments(name, arguments);
@@ -1543,10 +1558,11 @@ fn record_mcp_tool_audit(name: &str, arguments: &Value, success: bool, reason: &
         agent: "mcp.tools.call".to_string(),
         file_path,
         change_summary: format!(
-            "tool={} action={} status={}",
+            "tool={} action={} status={} protocol={}",
             name,
             governance_action_label(action),
-            if success { "ok" } else { "error" }
+            if success { "ok" } else { "error" },
+            protocol,
         ),
         approval_reason: reason.to_string(),
         confidence_score: if success { 1.0 } else { 0.0 },
@@ -1559,14 +1575,25 @@ fn record_mcp_tool_audit(name: &str, arguments: &Value, success: bool, reason: &
 }
 
 fn record_skill_admin_audit(action: &str, target: &str, success: bool, reason: &str) {
+    record_skill_admin_audit_with_protocol(action, target, success, reason, "acp_stdio");
+}
+
+fn record_skill_admin_audit_with_protocol(
+    action: &str,
+    target: &str,
+    success: bool,
+    reason: &str,
+    protocol: &str,
+) {
     let entry = AutonomousEditAuditEntry {
         timestamp: crate::acp::prelude::now_ts().to_string(),
         agent: format!("skill.{}", action),
         file_path: target.to_string(),
         change_summary: format!(
-            "action={} status={}",
+            "action={} status={} protocol={}",
             action,
-            if success { "ok" } else { "error" }
+            if success { "ok" } else { "error" },
+            protocol,
         ),
         approval_reason: reason.to_string(),
         confidence_score: if success { 1.0 } else { 0.0 },

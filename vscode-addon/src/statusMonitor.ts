@@ -7,6 +7,10 @@ export class StatusMonitor {
     private statusBarItem: vscode.StatusBarItem;
     private healthCheckTimer: NodeJS.Timeout | undefined;
     private manager: RuntimeManagerLike;
+    private consecutiveFailures = 0;
+    private readonly maxFailures = 3;
+    private healthCheckInFlight = false;
+    private failureWarningShown = false;
 
     constructor(manager: RuntimeManagerLike) {
         this.manager = manager;
@@ -29,28 +33,35 @@ export class StatusMonitor {
     }
 
     private startHealthMonitoring() {
+        if (this.healthCheckTimer) {
+            return;
+        }
         const config = vscode.workspace.getConfiguration('go-on');
         const interval = config.get<number>('health.interval', 300) * 1000; // Convert to milliseconds
 
-        let consecutiveFailures = 0;
-        const maxFailures = 3;
-
         this.healthCheckTimer = setInterval(async () => {
-            if (this.manager.isRunning()) {
-                try {
-                    const health = await this.manager.sendRequest('runtime.health');
-                    this.updateHealthStatus(health);
-                    consecutiveFailures = 0; // Reset counter on success
-                } catch (error) {
-                    consecutiveFailures++;
+            if (!this.manager.isRunning() || this.healthCheckInFlight) {
+                return;
+            }
 
-                    this.statusBarItem.tooltip = `Go-On Status: ${protocolContract.statusTerms.healthCheckFailed} (${consecutiveFailures}/${maxFailures})\nClick to open chat`;
+            this.healthCheckInFlight = true;
+            try {
+                const health = await this.manager.sendRequest('runtime.health');
+                this.updateHealthStatus(health);
+                this.consecutiveFailures = 0;
+                this.failureWarningShown = false;
+            } catch {
+                this.consecutiveFailures++;
+                this.statusBarItem.tooltip = `Go-On Status: ${protocolContract.statusTerms.healthCheckFailed} (${this.consecutiveFailures}/${this.maxFailures})\nMonitoring will continue automatically.\nClick to open chat`;
 
-                    if (consecutiveFailures >= maxFailures) {
-                        this.stopHealthMonitoring();
-                        vscode.window.showWarningMessage('Go-On: Health checks failed. Please restart the extension.');
-                    }
+                if (this.consecutiveFailures >= this.maxFailures && !this.failureWarningShown) {
+                    this.failureWarningShown = true;
+                    void vscode.window.showWarningMessage(
+                        'Go-On: Health checks are failing, but monitoring is still running and will recover automatically once the backend responds again.'
+                    );
                 }
+            } finally {
+                this.healthCheckInFlight = false;
             }
         }, interval);
     }
@@ -70,6 +81,9 @@ export class StatusMonitor {
 
     public refresh() {
         this.updateStatus();
+        if (!this.healthCheckTimer) {
+            this.startHealthMonitoring();
+        }
     }
 
     public dispose() {

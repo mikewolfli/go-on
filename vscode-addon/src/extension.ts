@@ -357,6 +357,9 @@ export function activate(context: vscode.ExtensionContext) {
     const configPath = config.get<string>('configPath', './config.toml');
     configManager.initialize(configPath).catch(err => {
         goOnOutput.appendLine(`warn: config manager init failed: ${err}`);
+        void vscode.window.showWarningMessage(
+            `Go-On: configuration initialization failed: ${err instanceof Error ? err.message : String(err)}`
+        );
     });
 
     // Sync VS Code language to app configuration

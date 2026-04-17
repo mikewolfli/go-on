@@ -1288,14 +1288,26 @@ async fn handle_responses_api(
         write_http_json_response(socket, 400, payload).await?;
         return Ok(());
     }
-    if body.get("input").is_none() {
-        let payload = build_responses_error(
-            "missing_required_field",
-            "invalid_request_error",
-            "input is required",
-        );
-        write_http_json_response(socket, 400, payload).await?;
-        return Ok(());
+    match body.get("input") {
+        None => {
+            let payload = build_responses_error(
+                "missing_required_field",
+                "invalid_request_error",
+                "input is required",
+            );
+            write_http_json_response(socket, 400, payload).await?;
+            return Ok(());
+        }
+        Some(value) if value.is_null() || (!value.is_string() && !value.is_array()) => {
+            let payload = build_responses_error(
+                "invalid_input",
+                "invalid_request_error",
+                "input must be a string or an array of input messages",
+            );
+            write_http_json_response(socket, 400, payload).await?;
+            return Ok(());
+        }
+        Some(_) => {}
     }
     if let Some(v) = body.get("max_output_tokens") {
         if !v.is_u64() {
@@ -1500,7 +1512,15 @@ async fn handle_responses_api(
         }
     }
 
-    let input = req.input.as_ref().expect("validated input presence");
+    let Some(input) = req.input.as_ref() else {
+        let payload = build_responses_error(
+            "invalid_input",
+            "invalid_request_error",
+            "input must be a string or an array of input messages",
+        );
+        write_http_json_response(socket, 400, payload).await?;
+        return Ok(());
+    };
     if !input.is_string() && !input.is_array() {
         let payload = build_responses_error(
             "invalid_input",
@@ -2481,6 +2501,10 @@ mod tests {
         // Unsupported input type should produce no mapped messages.
         let invalid_input = serde_json::json!({"text": "not valid responses input"});
         let msgs = responses_input_to_messages(&invalid_input);
+        assert!(msgs.is_empty());
+
+        let null_input = serde_json::Value::Null;
+        let msgs = responses_input_to_messages(&null_input);
         assert!(msgs.is_empty());
     }
 

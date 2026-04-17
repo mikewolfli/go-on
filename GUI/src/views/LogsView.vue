@@ -4,6 +4,7 @@
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <span>{{ t("logs.title") }}</span>
         <el-space>
+          <el-tag v-if="runtime.logsStale" type="warning">{{ t("common.staleData") }}</el-tag>
           <el-input v-model="keyword" size="small" :placeholder="t('logs.filter')" style="width: 200px" />
           <el-button size="small" @click="runtime.refreshLogs(300)">{{ t("app.refresh") }}</el-button>
         </el-space>

@@ -7,6 +7,7 @@ class GoOnWorkflowViewProvider {
         this._extensionUri = _extensionUri;
         this.manager = _manager;
         this.context = _context;
+        this.context.subscriptions.push(new vscode.Disposable(() => this._messageSubscription?.dispose()));
     }
     resolveWebviewView(webviewView, _context, _token) {
         this._view = webviewView;
@@ -17,7 +18,8 @@ class GoOnWorkflowViewProvider {
             ]
         };
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
-        webviewView.webview.onDidReceiveMessage(async (message) => {
+        this._messageSubscription?.dispose();
+        this._messageSubscription = webviewView.webview.onDidReceiveMessage(async (message) => {
             switch (message.type) {
                 case 'createWorkflow':
                     await this._createWorkflow(message.workflowData);
@@ -29,7 +31,7 @@ class GoOnWorkflowViewProvider {
                     this._deleteWorkflow(message.workflowId);
                     break;
             }
-        }, undefined, this.context.subscriptions);
+        }, undefined);
     }
     getErrorMessage(error) {
         return error instanceof Error ? error.message : String(error);

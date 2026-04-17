@@ -38,12 +38,11 @@ export async function waitForBackendHealthy(timeoutMs = 12000): Promise<boolean>
   while (Date.now() < deadline) {
     try {
       const status = await serviceStatus();
-      if (!status.running) {
-        return false;
-      }
-      const health = await checkHealth();
-      if (health.ok) {
-        return true;
+      if (status.running) {
+        const health = await checkHealth(undefined, { bypassCache: true });
+        if (health.ok) {
+          return true;
+        }
       }
     } catch {
       // Continue polling until timeout.

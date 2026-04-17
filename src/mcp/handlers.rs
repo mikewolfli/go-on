@@ -2,10 +2,36 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
+use crate::acp::r#impl::request::record_tool_call_audit_with_protocol;
 use crate::tool::ToolInput;
 
 use super::tools::{tool_descriptor, validate_required_arguments};
 use super::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpResource, McpServer, MCP_VERSION};
+
+/// Signals an invalid / missing parameter in an MCP request.
+/// Dispatched as JSON-RPC INVALID_PARAMS (-32602).
+#[derive(Debug)]
+struct McpParamError(String);
+
+impl std::fmt::Display for McpParamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for McpParamError {}
+
+fn invalid_params(msg: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(McpParamError(msg.into()))
+}
+
+fn error_code_for(err: &anyhow::Error) -> i32 {
+    if err.downcast_ref::<McpParamError>().is_some() {
+        super::error_codes::INVALID_PARAMS
+    } else {
+        super::error_codes::INTERNAL_ERROR
+    }
+}
 
 impl McpServer {
     pub async fn handle_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
@@ -19,7 +45,16 @@ impl McpServer {
             "models/list" => self.handle_list_models(&request).await,
             _ => {
                 warn!("MCP: unknown method '{}'", request.method);
-                Err(anyhow::anyhow!("Unknown method: {}", request.method))
+                return Ok(JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: super::error_codes::METHOD_NOT_FOUND,
+                        message: format!("Unknown method: {}", request.method),
+                        data: None,
+                    }),
+                    id: request.id,
+                });
             }
         };
 
@@ -28,7 +63,7 @@ impl McpServer {
             Err(err) => (
                 None,
                 Some(JsonRpcError {
-                    code: super::error_codes::INTERNAL_ERROR,
+                    code: error_code_for(&err),
                     message: err.to_string(),
                     data: None,
                 }),
@@ -74,11 +109,11 @@ impl McpServer {
         let params = request
             .params
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Missing parameters"))?;
+            .ok_or_else(|| invalid_params("Missing parameters"))?;
 
         let tool_name = params["name"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing tool name"))?;
+            .ok_or_else(|| invalid_params("Missing tool name"))?;
         let tool_input = params
             .get("arguments")
             .cloned()
@@ -92,7 +127,7 @@ impl McpServer {
         let tool = self
             .tool_registry
             .get(tool_name)
-            .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", tool_name))?;
+            .ok_or_else(|| invalid_params(format!("Unknown tool: {}", tool_name)))?;
         validate_required_arguments(tool_name, &tool_input)?;
         let result = tool.run(&ToolInput {
             task_id: request
@@ -109,6 +144,13 @@ impl McpServer {
         })?;
 
         info!("MCP: Tool '{}' returned: {:?}", tool_name, result);
+        record_tool_call_audit_with_protocol(
+            tool_name,
+            &tool_input,
+            true,
+            "tool executed via mcp",
+            "mcp_stdio",
+        );
         Ok(json!({
             "content": [{
                 "type": "text",
@@ -141,11 +183,11 @@ impl McpServer {
         let params = request
             .params
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Missing parameters"))?;
+            .ok_or_else(|| invalid_params("Missing parameters"))?;
 
         let uri = params["uri"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing URI"))?;
+            .ok_or_else(|| invalid_params("Missing URI"))?;
 
         match uri {
             "go-on://agents" => Ok(json!({
@@ -164,7 +206,7 @@ impl McpServer {
             })),
             _ => {
                 warn!("MCP: unknown resource '{}'", uri);
-                Err(anyhow::anyhow!("Unknown resource: {}", uri))
+                Err(invalid_params(format!("Unknown resource: {}", uri)))
             }
         }
     }

@@ -13,6 +13,7 @@ interface ChatMessage {
 export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'go-on-chat';
     private _view?: vscode.WebviewView;
+    private _messageSubscription?: vscode.Disposable;
     private readonly _executionOutput = vscode.window.createOutputChannel('Go-On Code Execution');
     private _currentSession: string = 'default';
     private _sessions: Map<string, ChatMessage[]> = new Map();
@@ -31,6 +32,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         this.context = _context;
         this.onViewResolved = _onViewResolved;
         this._loadSessions();
+        this.context.subscriptions.push(new vscode.Disposable(() => this._messageSubscription?.dispose()));
     }
 
     private _loadSessions() {
@@ -97,7 +99,8 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
             });
         }
 
-        webviewView.webview.onDidReceiveMessage(
+        this._messageSubscription?.dispose();
+        this._messageSubscription = webviewView.webview.onDidReceiveMessage(
             async (message) => {
                 switch (message.type) {
                     case 'sendMessage':
@@ -123,8 +126,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                         break;
                 }
             },
-            undefined,
-            this.context.subscriptions
+            undefined
         );
     }
 

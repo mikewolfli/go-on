@@ -190,6 +190,7 @@ class GoOnSettingsViewProvider {
         };
         this.manager = _manager;
         this.context = _context;
+        this.context.subscriptions.push(new vscode.Disposable(() => this._messageSubscription?.dispose()));
     }
     resolveWebviewView(webviewView, _context, _token) {
         this._view = webviewView;
@@ -198,7 +199,8 @@ class GoOnSettingsViewProvider {
             localResourceRoots: [this._extensionUri]
         };
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
-        webviewView.webview.onDidReceiveMessage(async (message) => {
+        this._messageSubscription?.dispose();
+        this._messageSubscription = webviewView.webview.onDidReceiveMessage(async (message) => {
             try {
                 await this._handleWebviewMessage(message);
             }
@@ -208,7 +210,7 @@ class GoOnSettingsViewProvider {
                     message: this._getErrorMessage(error),
                 });
             }
-        }, undefined, this.context.subscriptions);
+        }, undefined);
         this._sendCurrentSettings();
     }
     _getErrorMessage(error) {

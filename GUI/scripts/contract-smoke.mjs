@@ -98,7 +98,9 @@ assert.equal(contract.protocol.acpPreludeMetricsSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.orchestrationSkillRegistrySuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.rustAllTargetsFullGateCheckedInMainChain, true);
 assert.ok(tauriSource.includes('fn protocol_mode_from_config_text'));
-assert.ok(tauriSource.includes('line.eq_ignore_ascii_case("[protocol]")'));
+assert.ok(tauriSource.includes('Some("protocol")'));
+assert.ok(tauriSource.includes('Some("runtime")'));
+assert.ok(tauriSource.includes('protocol_mode'));
 assert.ok(
     tauriSource.includes('"auto" => Some("adaptive")') ||
     tauriSource.includes('"auto" => Some("auto")')

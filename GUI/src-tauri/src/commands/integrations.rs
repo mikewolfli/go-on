@@ -39,17 +39,35 @@ struct ErrorContract {
 
 fn capability_matrix() -> &'static CapabilityMatrix {
     static MATRIX: OnceLock<CapabilityMatrix> = OnceLock::new();
-    MATRIX.get_or_init(|| {
+    MATRIX.get_or_init(|| CapabilityMatrix {
+        runtime: RuntimeContract {
+            base_url: "http://127.0.0.1:8090".to_string(),
+            health_path: "/health".to_string(),
+        },
+        openai: OpenAiContract {
+            models_path: "/v1/models".to_string(),
+        },
+        errors: ErrorContract {
+            runtime_probe_passed: "runtime probe passed".to_string(),
+        },
+    })
+}
+
+fn try_capability_matrix() -> Result<&'static CapabilityMatrix, String> {
+    static PARSED: OnceLock<Result<CapabilityMatrix, String>> = OnceLock::new();
+    let parsed = PARSED.get_or_init(|| {
         serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../contracts/editor-capability-matrix.json"
         )))
-        .expect("editor capability matrix should be valid json")
-    })
+        .map_err(|err| format!("failed to parse editor capability matrix: {err}"))
+    });
+
+    parsed.as_ref().map_err(|err| err.clone())
 }
 
 fn runtime_health_endpoint() -> String {
-    let contract = capability_matrix();
+    let contract = try_capability_matrix().unwrap_or_else(|_| capability_matrix());
     format!(
         "{}{}",
         contract.runtime.base_url, contract.runtime.health_path
@@ -57,7 +75,7 @@ fn runtime_health_endpoint() -> String {
 }
 
 fn openai_models_endpoint() -> String {
-    let contract = capability_matrix();
+    let contract = try_capability_matrix().unwrap_or_else(|_| capability_matrix());
     format!(
         "{}{}",
         contract.runtime.base_url, contract.openai.models_path
@@ -177,8 +195,24 @@ fn probe_http(url: &str) -> ProbeResult {
     }
 }
 
+fn normalize_protocol_mode(value: &str) -> Option<&'static str> {
+    match value.trim().trim_matches('"').to_ascii_lowercase().as_str() {
+        "adaptive" => Some("adaptive"),
+        "acp_stdio" | "acp+stdio" => Some("acp_stdio"),
+        "acp_http" | "acp+http" => Some("acp_http"),
+        "mcp_stdio" | "mcp+stdio" => Some("mcp_stdio"),
+        "mcp_http" | "mcp+http" => Some("mcp_http"),
+        "auto" => Some("adaptive"),
+        "acp" => Some("acp_stdio"),
+        "mcp" => Some("mcp_stdio"),
+        _ => None,
+    }
+}
+
 fn protocol_mode_from_config_text(text: &str) -> Option<&'static str> {
-    let mut in_protocol_section = false;
+    let mut current_section: Option<String> = None;
+    let mut runtime_mode: Option<&'static str> = None;
+    let mut top_level_mode: Option<&'static str> = None;
 
     for raw_line in text.lines() {
         let line = raw_line.trim();
@@ -187,38 +221,32 @@ fn protocol_mode_from_config_text(text: &str) -> Option<&'static str> {
         }
 
         if line.starts_with('[') && line.ends_with(']') {
-            in_protocol_section = line.eq_ignore_ascii_case("[protocol]");
-            continue;
-        }
-
-        if !in_protocol_section {
+            current_section = Some(line[1..line.len() - 1].trim().to_ascii_lowercase());
             continue;
         }
 
         let Some((name, value)) = line.split_once('=') else {
             continue;
         };
-        if !name.trim().eq_ignore_ascii_case("mode") {
-            continue;
-        }
 
-        let value = value.trim().trim_matches('"').to_ascii_lowercase();
-        return match value.as_str() {
-            // canonical 5 options
-            "adaptive" => Some("adaptive"),
-            "acp_stdio" | "acp+stdio" => Some("acp_stdio"),
-            "acp_http" | "acp+http" => Some("acp_http"),
-            "mcp_stdio" | "mcp+stdio" => Some("mcp_stdio"),
-            "mcp_http" | "mcp+http" => Some("mcp_http"),
-            // backward-compatible aliases
-            "auto" => Some("adaptive"),
-            "acp" => Some("acp_stdio"),
-            "mcp" => Some("mcp_stdio"),
-            _ => None,
+        let normalized = match normalize_protocol_mode(value) {
+            Some(mode) => mode,
+            None => continue,
         };
+
+        match current_section.as_deref() {
+            Some("protocol") if name.trim().eq_ignore_ascii_case("mode") => return Some(normalized),
+            Some("runtime") if name.trim().eq_ignore_ascii_case("protocol_mode") => {
+                runtime_mode = Some(normalized);
+            }
+            None if name.trim().eq_ignore_ascii_case("protocol_mode") => {
+                top_level_mode = Some(normalized);
+            }
+            _ => {}
+        }
     }
 
-    None
+    runtime_mode.or(top_level_mode)
 }
 
 fn detect_protocol_mode() -> String {
@@ -253,8 +281,10 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
     let vscode_processes = count_processes(&["code.exe", "code", "code - insiders", "codium"]);
     let protocol_mode = detect_protocol_mode();
 
-    let models_endpoint = openai_models_endpoint();
-    let health_endpoint = runtime_health_endpoint();
+    let contract = try_capability_matrix().unwrap_or_else(|_| capability_matrix());
+    let contract_load_error = try_capability_matrix().err();
+    let models_endpoint = format!("{}{}", contract.runtime.base_url, contract.openai.models_path);
+    let health_endpoint = format!("{}{}", contract.runtime.base_url, contract.runtime.health_path);
 
     let zed_models_probe = probe_http(&models_endpoint);
     let zed_health_probe = probe_http(&health_endpoint);
@@ -325,10 +355,17 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
             endpoint_code: vscode_probe.code,
             addon_present: vscode_addon_present,
             note: if vscode_addon_present && vscode_probe.ok {
-                format!(
-                    "Extension workspace detected; {}",
-                    capability_matrix().errors.runtime_probe_passed
-                )
+                if let Some(err) = &contract_load_error {
+                    format!(
+                        "Extension workspace detected; {} (contract fallback active: {})",
+                        contract.errors.runtime_probe_passed, err
+                    )
+                } else {
+                    format!(
+                        "Extension workspace detected; {}",
+                        contract.errors.runtime_probe_passed
+                    )
+                }
             } else if vscode_addon_present {
                 format!(
                     "Extension detected, but runtime probe failed: {}",
@@ -343,7 +380,7 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
 
 #[cfg(test)]
 mod tests {
-    use super::protocol_mode_from_config_text;
+    use super::{capability_matrix, protocol_mode_from_config_text};
 
     #[test]
     fn protocol_mode_parser_reads_protocol_section_only() {
@@ -400,5 +437,36 @@ maintenance_interval_seconds = 30
 "#;
 
         assert_eq!(protocol_mode_from_config_text(text), None);
+    }
+
+    #[test]
+    fn protocol_mode_parser_reads_runtime_protocol_mode_fallback() {
+        let text = r#"
+[runtime]
+protocol_mode = "mcp_http"
+maintenance_interval_seconds = 30
+"#;
+
+        assert_eq!(protocol_mode_from_config_text(text), Some("mcp_http"));
+    }
+
+    #[test]
+    fn protocol_mode_parser_prefers_protocol_section_over_runtime_fallback() {
+        let text = r#"
+protocol_mode = "acp"
+
+[runtime]
+protocol_mode = "mcp_http"
+
+[protocol]
+mode = "adaptive"
+"#;
+
+        assert_eq!(protocol_mode_from_config_text(text), Some("adaptive"));
+    }
+
+    #[test]
+    fn capability_matrix_fallback_matches_runtime_contract_port() {
+        assert_eq!(capability_matrix().runtime.base_url, "http://127.0.0.1:8090");
     }
 }

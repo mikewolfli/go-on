@@ -1,10 +1,10 @@
 import { defineStore } from "pinia";
 import {
-    checkHealth,
-    getEditorIntegrationStatus,
-    getAiUsageSnapshot,
-    getEndpointHealthStats,
-    getUsageHeatmap,
+    checkHealthWithMeta,
+    getEditorIntegrationStatusWithMeta,
+    getAiUsageSnapshotWithMeta,
+    getEndpointHealthStatsWithMeta,
+    getUsageHeatmapWithMeta,
     getRecentLogs,
     type EndpointHealthStat,
     type EditorIntegrationStatus,
@@ -65,7 +65,25 @@ export const useRuntimeStore = defineStore("runtime", {
             breakerCount: 0,
             upstreamFailureCount: 0,
         } as AiUsageSnapshot,
+        healthStale: false,
+        aiUsageStale: false,
+        logsStale: false,
+        endpointHealthStatsStale: false,
+        editorIntegrationsStale: false,
+        usageHeatmapStale: false,
+        statusPollingGeneration: 0,
+        logsPollingGeneration: 0,
     }),
+    getters: {
+        hasStaleData(state) {
+            return state.healthStale
+                || state.aiUsageStale
+                || state.logsStale
+                || state.endpointHealthStatsStale
+                || state.editorIntegrationsStale
+                || state.usageHeatmapStale;
+        },
+    },
     actions: {
         async refreshStatus() {
             try {
@@ -80,53 +98,70 @@ export const useRuntimeStore = defineStore("runtime", {
         },
         async refreshHealth() {
             try {
-                this.health = await checkHealth();
+                const result = await checkHealthWithMeta();
+                this.health = result.value;
                 this.lastKnownHealth = this.health;
                 this.offline = false;
+                this.healthStale = result.cache.cached;
             } catch (error) {
                 this.lastError = String(error);
                 this.offline = true;
                 // Restore from last known
                 this.health = this.lastKnownHealth;
+                this.healthStale = true;
             }
         },
         async refreshAiUsage() {
             try {
-                this.aiUsage = await getAiUsageSnapshot();
+                const result = await getAiUsageSnapshotWithMeta();
+                this.aiUsage = result.value;
                 this.lastKnownAiUsage = this.aiUsage;
+                this.aiUsageStale = result.cache.cached;
             } catch (error) {
                 this.lastError = String(error);
                 // Restore from last known
                 this.aiUsage = this.lastKnownAiUsage;
+                this.aiUsageStale = true;
             }
         },
         async refreshLogs(lines = 200) {
             try {
                 this.logs = await getRecentLogs(undefined, lines);
+                this.logsStale = false;
             } catch (error) {
                 this.lastError = String(error);
                 // Logs are not critical for offline mode
+                this.logsStale = true;
             }
         },
         async refreshUsageHeatmap() {
             try {
-                this.usageHeatmap = await getUsageHeatmap(this.heatmapWindowSeconds);
+                const result = await getUsageHeatmapWithMeta(this.heatmapWindowSeconds);
+                this.usageHeatmap = result.value;
+                this.usageHeatmapStale = result.cache.cached;
             } catch (error) {
                 this.lastError = String(error);
+                this.usageHeatmapStale = true;
             }
         },
         async refreshEditorIntegrations() {
             try {
-                this.editorIntegrations = await getEditorIntegrationStatus();
+                const result = await getEditorIntegrationStatusWithMeta();
+                this.editorIntegrations = result.value;
+                this.editorIntegrationsStale = result.cache.cached;
             } catch (error) {
                 this.lastError = String(error);
+                this.editorIntegrationsStale = true;
             }
         },
         async refreshEndpointHealthStats() {
             try {
-                this.endpointHealthStats = await getEndpointHealthStats();
+                const result = await getEndpointHealthStatsWithMeta();
+                this.endpointHealthStats = result.value;
+                this.endpointHealthStatsStale = result.cache.cached;
             } catch (error) {
                 this.lastError = String(error);
+                this.endpointHealthStatsStale = true;
             }
         },
         async setHeatmapWindow(seconds: number) {
@@ -156,8 +191,12 @@ export const useRuntimeStore = defineStore("runtime", {
         },
         startStatusPolling() {
             this.stopStatusPolling();
+            const generation = ++this.statusPollingGeneration;
             void this.refreshAll();
             this.statusTimer = window.setInterval(async () => {
+                if (generation !== this.statusPollingGeneration) {
+                    return;
+                }
                 if (this.statusPollingInFlight) {
                     return;
                 }
@@ -170,6 +209,7 @@ export const useRuntimeStore = defineStore("runtime", {
             }, this.statusPollingMs);
         },
         stopStatusPolling() {
+            this.statusPollingGeneration += 1;
             if (this.statusTimer) {
                 window.clearInterval(this.statusTimer);
                 this.statusTimer = undefined;
@@ -178,8 +218,12 @@ export const useRuntimeStore = defineStore("runtime", {
         },
         startLogsPolling(lines = 200) {
             this.stopLogsPolling();
+            const generation = ++this.logsPollingGeneration;
             void this.refreshLogs(lines);
             this.logsTimer = window.setInterval(async () => {
+                if (generation !== this.logsPollingGeneration) {
+                    return;
+                }
                 if (this.logsPollingInFlight) {
                     return;
                 }
@@ -192,6 +236,7 @@ export const useRuntimeStore = defineStore("runtime", {
             }, this.logsPollingMs);
         },
         stopLogsPolling() {
+            this.logsPollingGeneration += 1;
             if (this.logsTimer) {
                 window.clearInterval(this.logsTimer);
                 this.logsTimer = undefined;

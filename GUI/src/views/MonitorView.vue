@@ -5,6 +5,7 @@
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
           <span>{{ t("monitor.title") }}</span>
           <el-space>
+            <el-tag v-if="runtime.hasStaleData" type="warning">{{ t("common.staleData") }}</el-tag>
             <el-button size="small" type="primary" :loading="selfChecking" @click="runSelfCheck">
               {{ t("monitor.runSelfCheck") }}
             </el-button>
@@ -62,7 +63,12 @@
     </el-card>
 
     <el-card>
-      <template #header>{{ t("monitor.endpointHealth") }}</template>
+      <template #header>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+          <span>{{ t("monitor.endpointHealth") }}</span>
+          <el-tag v-if="runtime.endpointHealthStatsStale" type="warning">{{ t("common.staleData") }}</el-tag>
+        </div>
+      </template>
       <el-table :data="runtime.endpointHealthStats" size="small" height="220">
         <el-table-column prop="endpoint" :label="t('monitor.endpoint')" min-width="220" />
         <el-table-column prop="total" :label="t('monitor.total')" width="90" />
@@ -76,7 +82,12 @@
     </el-card>
 
     <el-card>
-      <template #header>{{ t("monitor.trend") }}</template>
+      <template #header>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+          <span>{{ t("monitor.trend") }}</span>
+          <el-tag v-if="runtime.usageHeatmapStale" type="warning">{{ t("common.staleData") }}</el-tag>
+        </div>
+      </template>
       <el-table :data="runtime.usageHeatmap.trend" size="small" height="260">
         <el-table-column prop="secondBucket" :label="t('monitor.timeBucket')" width="160">
           <template #default="scope">{{ scope.row.secondBucket }}s</template>
@@ -86,7 +97,12 @@
     </el-card>
 
     <el-card>
-      <template #header>{{ t("monitor.integrations") }}</template>
+      <template #header>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+          <span>{{ t("monitor.integrations") }}</span>
+          <el-tag v-if="runtime.editorIntegrationsStale" type="warning">{{ t("common.staleData") }}</el-tag>
+        </div>
+      </template>
       <el-table :data="runtime.editorIntegrations" size="small" height="260">
         <el-table-column prop="editor" :label="t('monitor.editor')" width="120" />
         <el-table-column prop="interfaceName" :label="t('monitor.interfaceType')" min-width="180" />

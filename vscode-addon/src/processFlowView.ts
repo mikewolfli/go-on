@@ -26,6 +26,7 @@ type ProcessStore = Record<string, ProcessData>;
 export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'go-on-process-flow';
     private _view?: vscode.WebviewView;
+    private _messageSubscription?: vscode.Disposable;
     private readonly manager: RuntimeManagerLike;
     private readonly context: vscode.ExtensionContext;
 
@@ -36,6 +37,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     ) {
         this.manager = _manager;
         this.context = _context;
+        this.context.subscriptions.push(new vscode.Disposable(() => this._messageSubscription?.dispose()));
     }
 
     private _extractResponseText(result: unknown): string | undefined {
@@ -62,7 +64,8 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
 
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
-        webviewView.webview.onDidReceiveMessage(
+        this._messageSubscription?.dispose();
+        this._messageSubscription = webviewView.webview.onDidReceiveMessage(
             async (message) => {
                 switch (message.type) {
                     case 'createProcess':
@@ -79,8 +82,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
                         break;
                 }
             },
-            undefined,
-            this.context.subscriptions
+            undefined
         );
 
         // Load existing processes
