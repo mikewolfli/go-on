@@ -51,6 +51,13 @@ otel_exporter = "otlp"
 otel_service_name = "go-on"
 otel_sample_ratio = 1.0
 trace_slow_top_n = 20
+skills_enabled = true
+# Skills import is off by default; enable only with explicit allowlist + sha policy.
+skills_import_enabled = false
+skills_allowed_sources = ["local:*"]
+skills_require_sha256 = true
+skills_allow_floating_ref = false
+skills_cache_dir = "skills_cache"
 
 [autotune]
 enabled = false

@@ -13,7 +13,8 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "=== BLUE15 Stage C release readiness gate ==="
 echo "=== 1) Release readiness scenario replay ==="
-"$SCRIPT_DIR/run-request.sh" "$CONFIG" "$ROOT_DIR/requests/release-readiness-drill.ndjson" "$BINARY"
+cat "$ROOT_DIR/requests/release-readiness-drill.ndjson" | \
+  "$BINARY" --config "$CONFIG" --protocol-mode acp_stdio
 
 echo "=== 2) Integration assertions ==="
 cargo test run_scenario_file_executes_release_readiness_drill_requests -- --nocapture

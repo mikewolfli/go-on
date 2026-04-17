@@ -94,6 +94,11 @@ fn is_acp_request(method: &str) -> bool {
                 | "governance.plan.get"
                 | "governance.plan.update"
                 | "governance.audit.recent"
+                | "skill.import"
+                | "skill.enable"
+                | "skill.disable"
+                | "skill.list_imported"
+                | "skill.remove"
             | "phase.policy.replay"
             | "primary_secondary.summary"
             | "governance.status"
@@ -119,7 +124,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Instant, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use serde::de::DeserializeOwned;
@@ -165,6 +170,10 @@ use crate::governance::hardening::{
 use crate::i18n::runtime::{t, tf};
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPromotionReport, MemoryStore};
 use crate::orchestration::task_router::TaskRouter;
+use crate::orchestration::skill_import::{
+    ImportedSkillRecord, SkillImportManifest, SkillImportPolicy, SkillImportRequest,
+    SkillImportStore,
+};
 use crate::pua::{
     load_learning_records, DynamicQualityCompass, LearningRecord, PuaExecutionReport,
     PuaFeedbackCollector, PuaRuleEngine, PuaStageRequirement, TaskContext, TaskType,
@@ -1156,6 +1165,28 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         "mcp.tools.call" => {
             handle_mcp_tools_call(server, request.params.unwrap_or_default(), request_id).await
         }
+        "skill.import" => {
+            handle_skill_import(server, request.params.unwrap_or_default(), request_id).await
+        }
+        "skill.enable" => {
+            handle_skill_enabled_toggle(server, request.params.unwrap_or_default(), request_id, true)
+                .await
+        }
+        "skill.disable" => {
+            handle_skill_enabled_toggle(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+                false,
+            )
+            .await
+        }
+        "skill.list_imported" => {
+            handle_skill_list_imported(server, request_id).await
+        }
+        "skill.remove" => {
+            handle_skill_remove(server, request.params.unwrap_or_default(), request_id).await
+        }
         "chat" => {
             handle_chat(
                 server,
@@ -1525,6 +1556,210 @@ fn record_mcp_tool_audit(name: &str, arguments: &Value, success: bool, reason: &
     if let Err(err) = mcp_audit_logger().record(&entry) {
         debug!("failed to record mcp audit log: {}", err);
     }
+}
+
+fn record_skill_admin_audit(action: &str, target: &str, success: bool, reason: &str) {
+    let entry = AutonomousEditAuditEntry {
+        timestamp: crate::acp::prelude::now_ts().to_string(),
+        agent: format!("skill.{}", action),
+        file_path: target.to_string(),
+        change_summary: format!(
+            "action={} status={}",
+            action,
+            if success { "ok" } else { "error" }
+        ),
+        approval_reason: reason.to_string(),
+        confidence_score: if success { 1.0 } else { 0.0 },
+        reversible: action != "import",
+    };
+    if let Err(err) = mcp_audit_logger().record(&entry) {
+        debug!("failed to record skill admin audit: {}", err);
+    }
+}
+
+fn parse_skill_name_param(params: &Value) -> Result<String> {
+    params
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| anyhow::anyhow!("missing required param: name"))
+}
+
+fn skill_import_policy(server: &AcpServer) -> SkillImportPolicy {
+    SkillImportPolicy::from_runtime(&server.runtime_config)
+}
+
+fn open_skill_import_store(server: &AcpServer) -> Result<SkillImportStore> {
+    SkillImportStore::load(skill_import_policy(server))
+}
+
+fn normalize_imported_record(record: ImportedSkillRecord) -> Value {
+    json!({
+        "name": record.name,
+        "version": record.version,
+        "description": record.description,
+        "source": record.source,
+        "source_ref": record.source_ref,
+        "sha256": record.sha256,
+        "manifest_path": record.manifest_path,
+        "enabled": record.enabled,
+        "imported_at": record.imported_at,
+    })
+}
+
+async fn handle_skill_import(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let request: SkillImportRequest = serde_json::from_value(params)
+        .context("invalid params for skill.import")?;
+    let mut store = open_skill_import_store(server)?;
+    let imported = match store.import_skill(request).await {
+        Ok(record) => record,
+        Err(err) => {
+            record_skill_admin_audit("import", "skill.import", false, &err.to_string());
+            return send_error(server, request_id, -32602, err.to_string(), None).await;
+        }
+    };
+    store.save()?;
+    let imported_name = imported.name.clone();
+    record_skill_admin_audit(
+        "import",
+        &imported.name,
+        true,
+        "imported skill manifest with supply-chain checks",
+    );
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "action": "import",
+            "name": imported_name,
+            "skill": normalize_imported_record(imported)
+        }),
+    )
+    .await
+}
+
+async fn handle_skill_list_imported(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    let store = open_skill_import_store(server)?;
+    let skills = store
+        .list()
+        .into_iter()
+        .map(normalize_imported_record)
+        .collect::<Vec<_>>();
+    let total = skills.len();
+    let enabled = skills
+        .iter()
+        .filter(|skill| skill.get("enabled").and_then(Value::as_bool) == Some(true))
+        .count();
+    let disabled = total.saturating_sub(enabled);
+    record_skill_admin_audit("list_imported", "skill.list_imported", true, "listed imported skills");
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "action": "list_imported",
+            "total": total,
+            "enabled": enabled,
+            "disabled": disabled,
+            "skills": skills,
+        }),
+    )
+    .await
+}
+
+async fn handle_skill_enabled_toggle(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+    enabled: bool,
+) -> Result<()> {
+    let action = if enabled { "enable" } else { "disable" };
+    let name = match parse_skill_name_param(&params) {
+        Ok(name) => name,
+        Err(err) => {
+            record_skill_admin_audit(action, "skill.toggle", false, &err.to_string());
+            return send_error(server, request_id, -32602, err.to_string(), None).await;
+        }
+    };
+    let mut store = open_skill_import_store(server)?;
+    let updated = match store.set_enabled(&name, enabled) {
+        Ok(record) => record,
+        Err(err) => {
+            record_skill_admin_audit(
+                action,
+                &name,
+                false,
+                &err.to_string(),
+            );
+            return send_error(server, request_id, -32602, err.to_string(), None).await;
+        }
+    };
+    store.save()?;
+    record_skill_admin_audit(
+        action,
+        &name,
+        true,
+        "updated imported skill state",
+    );
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "action": action,
+            "name": name,
+            "skill": normalize_imported_record(updated),
+        }),
+    )
+    .await
+}
+
+async fn handle_skill_remove(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let name = match parse_skill_name_param(&params) {
+        Ok(name) => name,
+        Err(err) => {
+            record_skill_admin_audit("remove", "skill.remove", false, &err.to_string());
+            return send_error(server, request_id, -32602, err.to_string(), None).await;
+        }
+    };
+    let mut store = open_skill_import_store(server)?;
+    let removed = store.remove(&name);
+    if !removed {
+        let reason = format!("imported skill '{}' not found", name);
+        record_skill_admin_audit("remove", &name, false, &reason);
+        return send_error(server, request_id, -32602, reason, None).await;
+    }
+    let unregistered = server
+        .skill_registry
+        .lock()
+        .map(|mut registry| registry.unregister(&name))
+        .unwrap_or(false);
+    store.save()?;
+    record_skill_admin_audit("remove", &name, true, "removed imported skill record");
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "action": "remove",
+            "removed": removed,
+            "unregistered": unregistered,
+            "name": name,
+        }),
+    )
+    .await
 }
 
 fn governance_action_label(action: GovernanceAction) -> &'static str {
@@ -5899,6 +6134,39 @@ fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
         }));
     }
 
+    if let Ok(store) = open_skill_import_store(server) {
+        for record in store.list().into_iter().filter(|record| record.enabled) {
+            let (description, input_schema) = load_imported_skill_manifest(&record)
+                .map(|manifest| {
+                    let description = if manifest.description.trim().is_empty() {
+                        format!("Imported skill manifest {}@{}", manifest.name, manifest.version)
+                    } else {
+                        manifest.description
+                    };
+                    (description, manifest.input_schema)
+                })
+                .unwrap_or_else(|| {
+                    (
+                        format!("Imported skill manifest {}@{}", record.name, record.version),
+                        json!({"type": "object"}),
+                    )
+                });
+
+            tools.push(json!({
+                "name": record.name,
+                "description": description,
+                "input_schema": input_schema,
+                "x_import": {
+                    "source": record.source,
+                    "source_ref": record.source_ref,
+                    "sha256": record.sha256,
+                    "version": record.version,
+                    "manifest_path": record.manifest_path,
+                }
+            }));
+        }
+    }
+
     tools
 }
 
@@ -6002,10 +6270,55 @@ async fn execute_mcp_tool_call(server: &AcpServer, name: &str, arguments: &Value
                     }
                     outcome
                 }
-                None => anyhow::bail!("unknown mcp tool: {name}"),
+                None => {
+                    if let Some(imported) = find_enabled_imported_skill(server, name)? {
+                        if let Some(manifest) = load_imported_skill_manifest(&imported) {
+                            return Ok(json!({
+                                "ok": true,
+                                "executed": false,
+                                "mode": "imported_manifest",
+                                "code": "NOT_IMPLEMENTED_EXECUTOR",
+                                "name": manifest.name,
+                                "version": manifest.version,
+                                "source": imported.source,
+                                "source_ref": imported.source_ref,
+                                "sha256": imported.sha256,
+                                "input": arguments,
+                                "note": "Imported skill is manifest-backed in this release; execution returns structured passthrough until runtime plugin executor is enabled."
+                            }));
+                        }
+                        return Ok(json!({
+                            "ok": true,
+                            "executed": false,
+                            "mode": "imported_manifest",
+                            "code": "NOT_IMPLEMENTED_EXECUTOR",
+                            "name": imported.name,
+                            "version": imported.version,
+                            "source": imported.source,
+                            "source_ref": imported.source_ref,
+                            "sha256": imported.sha256,
+                            "input": arguments,
+                            "note": "Imported skill manifest is unavailable; returned metadata passthrough response."
+                        }));
+                    }
+                    anyhow::bail!("unknown mcp tool: {name}")
+                }
             }
         }
     }
+}
+
+fn find_enabled_imported_skill(server: &AcpServer, name: &str) -> Result<Option<ImportedSkillRecord>> {
+    let store = open_skill_import_store(server)?;
+    Ok(store
+        .list()
+        .into_iter()
+        .find(|record| record.enabled && record.name == name))
+}
+
+fn load_imported_skill_manifest(record: &ImportedSkillRecord) -> Option<SkillImportManifest> {
+    let raw = fs::read_to_string(&record.manifest_path).ok()?;
+    serde_json::from_str::<SkillImportManifest>(&raw).ok()
 }
 
 fn budget_scope_key(name: &str, arguments: &Value) -> String {

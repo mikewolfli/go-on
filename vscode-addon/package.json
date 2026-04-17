@@ -56,6 +56,9 @@
     "onCommand:go-on.runtimeStability",
     "onCommand:go-on.governancePlanGet",
     "onCommand:go-on.governanceAuditRecent",
+    "onCommand:go-on.skillListImported",
+    "onCommand:go-on.skillImportLocal",
+    "onCommand:go-on.skillToggle",
     "onCommand:go-on.lockStatus",
     "onCommand:go-on.autotuneStatus",
     "onCommand:go-on.selectorStatus",
@@ -293,6 +296,21 @@
         "command": "go-on.governanceAuditRecent",
         "title": "Get Governance Audit Recent (RPC)",
         "icon": "$(history)"
+      },
+      {
+        "command": "go-on.skillListImported",
+        "title": "List Imported Skills (RPC)",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "command": "go-on.skillImportLocal",
+        "title": "Import Local Skill Manifest (RPC)",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "go-on.skillToggle",
+        "title": "Enable/Disable/Remove Imported Skill (RPC)",
+        "icon": "$(plug)"
       },
       {
         "command": "go-on.lockStatus",

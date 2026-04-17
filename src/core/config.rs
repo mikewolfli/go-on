@@ -816,6 +816,21 @@ pub struct RuntimeConfig {
     /// Default is `true` for development; set to `false` in production (`config.production.toml`).
     #[serde(default = "default_runtime_skills_enabled")]
     pub skills_enabled: bool,
+    /// Enable skills import APIs (`skill.import`, `skill.enable`, etc.).
+    #[serde(default)]
+    pub skills_import_enabled: bool,
+    /// Allowed source prefixes for importing skills. Supports trailing `*` wildcard prefix matching.
+    #[serde(default)]
+    pub skills_allowed_sources: Vec<String>,
+    /// Require import requests to provide expected SHA256 digest.
+    #[serde(default = "default_runtime_skills_require_sha256")]
+    pub skills_require_sha256: bool,
+    /// Allow floating refs (`main`, `latest`, non-SHA refs`) when importing from GitHub.
+    #[serde(default)]
+    pub skills_allow_floating_ref: bool,
+    /// Cache directory used to persist imported skill manifests and index.
+    #[serde(default = "default_runtime_skills_cache_dir")]
+    pub skills_cache_dir: String,
 }
 
 impl Default for RuntimeConfig {
@@ -841,6 +856,11 @@ impl Default for RuntimeConfig {
             otel_sample_ratio: default_runtime_otel_sample_ratio(),
             trace_slow_top_n: default_runtime_trace_slow_top_n(),
             skills_enabled: default_runtime_skills_enabled(),
+            skills_import_enabled: false,
+            skills_allowed_sources: Vec::new(),
+            skills_require_sha256: default_runtime_skills_require_sha256(),
+            skills_allow_floating_ref: false,
+            skills_cache_dir: default_runtime_skills_cache_dir(),
         }
     }
 }
@@ -891,6 +911,14 @@ fn default_runtime_trace_slow_top_n() -> usize {
 
 fn default_runtime_skills_enabled() -> bool {
     true
+}
+
+fn default_runtime_skills_require_sha256() -> bool {
+    true
+}
+
+fn default_runtime_skills_cache_dir() -> String {
+    "skills_cache".to_string()
 }
 
 #[allow(dead_code)]
@@ -2891,6 +2919,11 @@ mod tests {
             otel_sample_ratio: 1.0,
             trace_slow_top_n: 20,
             skills_enabled: true,
+            skills_import_enabled: false,
+            skills_allowed_sources: Vec::new(),
+            skills_require_sha256: true,
+            skills_allow_floating_ref: false,
+            skills_cache_dir: "skills_cache".to_string(),
         });
 
         let err = cfg
@@ -3427,6 +3460,11 @@ mod tests {
             otel_sample_ratio: 1.0,
             trace_slow_top_n: 20,
             skills_enabled: true,
+            skills_import_enabled: false,
+            skills_allowed_sources: Vec::new(),
+            skills_require_sha256: true,
+            skills_allow_floating_ref: false,
+            skills_cache_dir: "skills_cache".to_string(),
         });
 
         let report = super::build_config_health_report(&config_path, &cfg);

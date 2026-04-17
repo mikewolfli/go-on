@@ -10,6 +10,59 @@
 default_phase = "coding"
 model_selection_mode = "adaptive"
 
+[agents]
+
+[agents.deepseek]
+type = "deepseek"
+api_key_env = "keyring://go-on/deepseek_api_key"
+model = "deepseek-chat"
+supports_system = true
+
+[flow]
+name = "Production Adaptive"
+phases = ["planning", "coding", "review", "delivery"]
+
+[phases.planning]
+description = "Planning phase"
+agents = ["deepseek"]
+fallback = true
+
+[phases.coding]
+description = "Coding phase"
+agents = ["deepseek"]
+fallback = true
+
+[phases.coding.options]
+autopilot_complexity = "auto"
+request_timeout_seconds = 150
+review_timeout_seconds = 60
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+full_auto_review_agents = ["deepseek"]
+phase_max_inflight = 24
+global_max_inflight = 128
+
+[phases.review]
+description = "Review phase"
+agents = ["deepseek"]
+fallback = true
+
+[phases.review.options]
+request_timeout_seconds = 60
+review_timeout_policy = "reject"
+review_min_response_chars = 12
+phase_max_inflight = 16
+global_max_inflight = 128
+
+[phases.delivery]
+description = "Delivery phase"
+agents = ["deepseek"]
+fallback = false
+
+[phases.delivery.options]
+request_timeout_seconds = 90
+
 [protocol]
 mode = "acp_http"
 
@@ -32,6 +85,13 @@ trace_slow_top_n = 20
 # Skills extension: set to true to enable builtin skills (e.g. builtin.echo).
 # Keep false in production to minimize the exposed tool surface.
 skills_enabled = false
+# Imported skills are disabled by default in production.
+skills_import_enabled = false
+# Allowlist is explicit: keep empty unless approved sources are reviewed.
+skills_allowed_sources = []
+skills_require_sha256 = true
+skills_allow_floating_ref = false
+skills_cache_dir = "skills_cache"
 
 [cache]
 enabled = true

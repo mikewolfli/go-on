@@ -6,6 +6,7 @@ pub mod orchestrator;
 #[allow(dead_code)]
 pub mod roles;
 pub mod skill;
+pub mod skill_import;
 pub mod task_decomposer;
 pub mod task_graph;
 pub mod task_router;

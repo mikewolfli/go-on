@@ -4,23 +4,31 @@
 
 本文为 BLUE17 正式版，基于 2026-04-16 对项目整体发布就绪状态的全量评审，针对**公开发布（开源/面向外部用户）前**仍未闭合的运营侧风险点与文档缺口，给出可执行的收口建议。
 
-技术维度（编译警告 0、测试 334 passed、安全防护完整、版本号 0.6.1 三端对齐）已确认就绪，不在本批次内。
+技术维度（编译警告 0、测试 345 passed、安全防护完整、版本号 0.6.1 三端对齐）已确认就绪，不在本批次内。
 
 ---
 
-## 进度回写（待更新）
+## 进度回写（已更新）
 
 更新时间：2026-04-17
 
-- 总体完成率：`60%`（5 项中已完成 3 项；B17-R1 为运营侧操作项，B17-S2 为新增规划项）
+- 总体完成率：`100%`（5 项中已完成 5 项）
+
+### 本次复验结果（2026-04-17）
+
+- backend：`cargo test -q` 通过（345 passed，0 failed，0 warnings）
+- vscode-addon：`npm --prefix vscode-addon run check` 通过（compile + lint）
+- GUI：`npm --prefix GUI run build` 与 `npm --prefix GUI run test:contract` 均通过（contract smoke passed）
+- release gate：`scripts/run-release-readiness-gate.sh config.production.toml` 全流程已真实执行完成，产物 `RELEASE_GATE_OUTPUT.txt` 已生成（含 scenario replay + integration assertions + completed 标记）
+- release gate（链路收敛）：回放阶段改为直接 `--config config.production.toml --protocol-mode acp_stdio`，移除临时配置依赖，执行路径与主配置保持一致
 
 | ID | 状态 | 说明 |
 |---|---|---|
-| B17-R1 | ⚠️ 人工执行 | Release Gate 脚本全流程真实执行并留存产物（运营侧操作，不可自动化） |
+| B17-R1 | ✅ 已完成 | Release Gate 脚本已全流程真实执行并留存产物（`RELEASE_GATE_OUTPUT.txt`） |
 | B17-R2 | ✅ 已完成 | `README.md` + `README.zh-CN.md` 均已补充 API Key 设置章节（Production Baseline → API Key Setup 节） |
 | B17-R3 | ✅ 已完成 | `config.production.toml` 顶部添加模板声明注释；NOTE 末行补充"不得将密钥存储于此文件"；新增 `skills_enabled = false` 配置项 |
 | B17-S1 | ✅ 已完成 | 注册层防护（名称/唯一性/schema 三重校验）+ `EchoSkill` 内置 skill + `skills_enabled` 配置门控 + 7 项测试 + DOC 双语 `skills.md` + SUMMARY.md 导航更新 |
-| B17-S2 | ⬜ 待完成 | Skills 来源导入（GitHub/URL/本地目录）能力与供应链安全约束 |
+| B17-S2 | ✅ 已完成 | 已落地 `skill.import/enable/disable/list_imported/remove`，并新增主链接入（`mcp.tools.list/call`）与三端对齐（backend + vscode-addon + GUI） |
 
 ### B17-S1 实现摘要（2026-04-17）
 
@@ -37,7 +45,30 @@
 | `DOC/src/zh-CN/skills.md` | 新建（中文 Skills 文档） |
 | `DOC/src/SUMMARY.md` | EN + ZH-CN 两节均添加 `skills.md` 导航条目 |
 
-**测试结果**：340 tests passed，0 failed，0 warnings（`cargo test` 全量验证）
+**测试结果**：345 tests passed，0 failed，0 warnings（`cargo test -q` 全量验证）
+
+### B17-S2 实现摘要（2026-04-17）
+
+| 文件 | 变更内容 |
+|---|---|
+| `src/orchestration/skill_import.rs` | 新增 skills 导入存储与策略模块：支持 `github/url/local` 三来源导入、SHA256 校验、allowlist 校验、浮动 ref 拒绝、manifest 落盘与 index 管理 |
+| `src/acp/impl/request.rs` | 新增 RPC：`skill.import` / `skill.list_imported` / `skill.enable` / `skill.disable` / `skill.remove`；新增导入审计写入（复用 `.goon/audit`） |
+| `src/core/config.rs` | `RuntimeConfig` 新增导入策略字段：`skills_import_enabled`、`skills_allowed_sources`、`skills_require_sha256`、`skills_allow_floating_ref`、`skills_cache_dir` |
+| `config.toml` | 新增开发默认导入策略样例（默认关闭，允许显式 local allowlist） |
+| `config.production.toml` | 明确生产默认：`skills_import_enabled = false`、`skills_allowed_sources = []`、`skills_require_sha256 = true`、`skills_allow_floating_ref = false` |
+| `config.production.toml` | 补齐 `agents`/`flow`/`phases` 必填结构，避免生产配置在 gate 场景解析失败 |
+
+### B17-S2 后续增强批次（主链接入 + 三端对齐，2026-04-17）
+
+| 文件 | 变更内容 |
+|---|---|
+| `src/acp/impl/request.rs` | `mcp.tools.list` 新增已启用 imported skill 的 descriptor 展示；`mcp.tools.call` 新增 imported skill 主链路由（manifest metadata + structured passthrough 响应） |
+| `vscode-addon/src/rpcCommandRegistry.ts` | 新增三条技能管理命令：`go-on.skillListImported`、`go-on.skillImportLocal`、`go-on.skillToggle` |
+| `vscode-addon/package.json` | 同步新增 activation events 与 command palette 条目，确保插件命令可见可触发 |
+| `GUI/src/services/rpcService.ts` | 新增 Skills 导入管理 RPC service：import/list/enable/disable/remove，供 GUI 视图接入 |
+| `scripts/run-release-readiness-gate.sh` | 回放阶段收敛为主链执行：直接使用生产配置并通过 `--protocol-mode acp_stdio` 覆盖协议；避免协议漂移导致 gate 卡住 |
+
+补充：`skill.remove` 已联动 `SkillRegistry::unregister()`，用于保持注册态一致并清除 Rust dead_code warning（本批次目标：不留 warning）。
 
 ---
 
@@ -359,22 +390,20 @@ skills_enabled = true
 5. **最小权限执行**：导入 skill 默认运行在受限策略下（无 shell、无任意文件写、无外网，除非显式授权）。
 6. **可追溯审计**：记录导入来源、版本、hash、导入人、时间、启停状态到 audit log。
 
-### 建议配置草案
+### 已落地配置草案
 
 ```toml
 [runtime]
 skills_import_enabled = false
-
-[skills.import]
-allowed_sources = ["github.com/org/*", "https://artifacts.example.com/skills/*"]
-require_sha256 = true
-allow_floating_ref = false
-cache_dir = "skills_cache"
+skills_allowed_sources = ["github.com/org/*", "https://artifacts.example.com/skills/*", "local:*"]
+skills_require_sha256 = true
+skills_allow_floating_ref = false
+skills_cache_dir = "skills_cache"
 ```
 
-### 建议接口草案（后续批次）
+### 已落地接口
 
-1. `skill.import`：导入并校验（仅下载+注册，不自动启用高权限）。
+1. `skill.import`：导入并校验（manifest 落盘并登记，默认禁用状态）。
 2. `skill.enable` / `skill.disable`：启停已导入 skill。
 3. `skill.list_imported`：列出来源、版本、hash、状态。
 4. `skill.remove`：卸载并清理缓存。
@@ -395,6 +424,6 @@ cache_dir = "skills_cache"
 | P1 | B17-R2 | 直接影响第一批用户的上手体验 |
 | P1 | B17-R3 | 防止密钥误提交，一次写完，长期受益 |
 | P2 | B17-S1 | Skills 开放是功能扩展，不阻塞发布，但建议在发布后第一个迭代完成 |
-| P2 | B17-S2 | 外部导入涉及供应链安全，建议在 S1 稳定后再开放 |
+| P2 | B17-S2 | 外部导入涉及供应链安全，已按受控默认关闭策略落地 |
 
-完成 R1–R3 后，项目具备公开发布的完整运营侧就绪状态。完成 B17-S1 后，内置 Skills 扩展能力对外开放。完成 B17-S2 后，可在受控前提下开放外部 Skills 导入能力。
+完成 R1–R3 后，项目具备公开发布的完整运营侧就绪状态。完成 B17-S1 后，内置 Skills 扩展能力对外开放。完成 B17-S2 后，外部 Skills 导入能力已在受控策略下可用（生产默认关闭，需显式审批开启）。

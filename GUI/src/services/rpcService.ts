@@ -155,6 +155,56 @@ export interface MetricsResult {
   avg_request_duration_ms?: number;
 }
 
+export interface SkillImportSourceGithub {
+  kind: "github";
+  repo: string;
+  ref: string;
+  path?: string;
+  sha256?: string;
+}
+
+export interface SkillImportSourceUrl {
+  kind: "url";
+  url: string;
+  sha256?: string;
+}
+
+export interface SkillImportSourceLocal {
+  kind: "local";
+  path: string;
+  sha256?: string;
+}
+
+export type SkillImportSource = SkillImportSourceGithub | SkillImportSourceUrl | SkillImportSourceLocal;
+
+export interface ImportedSkillRecord {
+  name?: string;
+  version?: string;
+  description?: string;
+  source?: string;
+  source_ref?: string;
+  sha256?: string;
+  manifest_path?: string;
+  enabled?: boolean;
+  imported_at?: number;
+}
+
+export interface SkillImportResult {
+  ok?: boolean;
+  skill?: ImportedSkillRecord;
+}
+
+export interface SkillListImportedResult {
+  ok?: boolean;
+  skills?: ImportedSkillRecord[];
+}
+
+export interface SkillRemoveResult {
+  ok?: boolean;
+  removed?: boolean;
+  name?: string;
+}
+
 function parseRpcJson(raw: string): unknown {
   try {
     return JSON.parse(raw || "{}");
@@ -163,10 +213,39 @@ function parseRpcJson(raw: string): unknown {
   }
 }
 
+function rpcErrorMessage(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const root = payload as Record<string, unknown>;
+  const error = root.error;
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+
+  const errorObj = error as Record<string, unknown>;
+  const message = errorObj.message;
+  const code = errorObj.code;
+  if (typeof message === "string" && message.trim().length > 0) {
+    return typeof code === "number" ? `[${code}] ${message}` : message;
+  }
+
+  return "RPC request failed";
+}
+
 function unwrapResult<T>(payload: unknown): T {
+  const errorMessage = rpcErrorMessage(payload);
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
   if (payload && typeof payload === "object" && "result" in (payload as Record<string, unknown>)) {
     const result = (payload as Record<string, unknown>).result;
     if (result !== undefined) {
+      const nestedErrorMessage = rpcErrorMessage(result);
+      if (nestedErrorMessage) {
+        throw new Error(nestedErrorMessage);
+      }
       return result as T;
     }
   }
@@ -209,4 +288,24 @@ export async function getBreakerStatus(): Promise<BreakerStatusResult> {
 
 export async function getMetrics(): Promise<MetricsResult> {
   return callRpcJson<MetricsResult>("metrics.get", {});
+}
+
+export async function importSkill(source: SkillImportSource): Promise<SkillImportResult> {
+  return callRpcJson<SkillImportResult>("skill.import", { source });
+}
+
+export async function listImportedSkills(): Promise<SkillListImportedResult> {
+  return callRpcJson<SkillListImportedResult>("skill.list_imported", {});
+}
+
+export async function enableImportedSkill(name: string): Promise<SkillImportResult> {
+  return callRpcJson<SkillImportResult>("skill.enable", { name });
+}
+
+export async function disableImportedSkill(name: string): Promise<SkillImportResult> {
+  return callRpcJson<SkillImportResult>("skill.disable", { name });
+}
+
+export async function removeImportedSkill(name: string): Promise<SkillRemoveResult> {
+  return callRpcJson<SkillRemoveResult>("skill.remove", { name });
 }

@@ -416,6 +416,84 @@ function registerRpcCommands(deps) {
             vscode.window.showErrorMessage(`governance.audit.recent failed: ${getErrorMessage(error)}`);
         }
     });
+    const skillListImportedRpcCommand = vscode.commands.registerCommand('go-on.skillListImported', async () => {
+        if (!ensureRunning(deps)) {
+            return;
+        }
+        try {
+            const result = asRecord(await deps.sendRequest('skill.list_imported', {}));
+            const skills = asArray(result.skills);
+            const enabled = Number(result.enabled ?? skills.filter((item) => asRecord(item).enabled === true).length);
+            const total = Number(result.total ?? skills.length);
+            const disabled = Number(result.disabled ?? Math.max(0, total - enabled));
+            vscode.window.showInformationMessage(`skill.list_imported: total=${total}, enabled=${enabled}, disabled=${disabled}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`skill.list_imported failed: ${getErrorMessage(error)}`);
+        }
+    });
+    const skillImportLocalRpcCommand = vscode.commands.registerCommand('go-on.skillImportLocal', async () => {
+        if (!ensureRunning(deps)) {
+            return;
+        }
+        const manifestPath = await vscode.window.showInputBox({
+            prompt: 'Local manifest path for skill.import',
+            placeHolder: '/absolute/path/to/manifest.json or skill directory'
+        });
+        if (!manifestPath) {
+            return;
+        }
+        const sha256 = await vscode.window.showInputBox({
+            prompt: 'Expected SHA256 digest (required when policy enforces it)',
+            placeHolder: '64-char sha256 hex'
+        });
+        try {
+            const result = asRecord(await deps.sendRequest('skill.import', {
+                source: {
+                    kind: 'local',
+                    path: manifestPath,
+                    sha256: sha256?.trim() || undefined,
+                },
+            }));
+            const skill = asRecord(result.skill);
+            vscode.window.showInformationMessage(`skill.import: name=${String(skill.name ?? '-')}, version=${String(skill.version ?? '-')}, enabled=${Boolean(skill.enabled)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`skill.import failed: ${getErrorMessage(error)}`);
+        }
+    });
+    const skillToggleRpcCommand = vscode.commands.registerCommand('go-on.skillToggle', async () => {
+        if (!ensureRunning(deps)) {
+            return;
+        }
+        const name = await vscode.window.showInputBox({
+            prompt: 'Imported skill name',
+            placeHolder: 'e.g. local.echo'
+        });
+        if (!name) {
+            return;
+        }
+        const action = await vscode.window.showQuickPick(['enable', 'disable', 'remove'], {
+            placeHolder: 'Select skill action'
+        });
+        if (!action) {
+            return;
+        }
+        try {
+            const method = action === 'enable' ? 'skill.enable' : action === 'disable' ? 'skill.disable' : 'skill.remove';
+            const result = asRecord(await deps.sendRequest(method, { name }));
+            const removed = Boolean(result.removed);
+            const skill = asRecord(result.skill);
+            if (action === 'remove') {
+                vscode.window.showInformationMessage(`skill.remove: name=${name}, removed=${removed}`);
+                return;
+            }
+            vscode.window.showInformationMessage(`${method}: name=${String(skill.name ?? name)}, enabled=${Boolean(skill.enabled)}`);
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`skill operation failed: ${getErrorMessage(error)}`);
+        }
+    });
     const autotuneGetRpcCommand = vscode.commands.registerCommand('go-on.autotuneGet', async () => {
         if (!ensureRunning(deps)) {
             return;
@@ -835,6 +913,9 @@ function registerRpcCommands(deps) {
         governanceStatusRpcCommand,
         governancePlanGetRpcCommand,
         governanceAuditRecentRpcCommand,
+        skillListImportedRpcCommand,
+        skillImportLocalRpcCommand,
+        skillToggleRpcCommand,
         autotuneGetRpcCommand,
         autotuneResetRpcCommand,
         metricsGetRpcCommand,
