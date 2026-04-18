@@ -3,12 +3,14 @@
 //! This module provides an implementation for the Anthropic Claude API.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::time::sleep;
+use tracing::warn;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
@@ -31,6 +33,8 @@ pub struct AnthropicAgent {
     /// HTTP client
     client: reqwest::Client,
 }
+
+static ANTHROPIC_SSE_PARSE_ERROR_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 impl AnthropicAgent {
     /// Create a new Anthropic agent
@@ -156,7 +160,16 @@ impl AnthropicAgent {
                 }
                 Ok(action)
             }
-            Err(_) => Ok(SseEventAction::Continue),
+            Err(err) => {
+                let total = ANTHROPIC_SSE_PARSE_ERROR_TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
+                warn!(
+                    error = %err,
+                    parse_error_total = total,
+                    data_preview = %truncate_event_data(data, 160),
+                    "anthropic SSE frame parse failed; continue streaming"
+                );
+                Ok(SseEventAction::Continue)
+            }
         })
         .await
     }
@@ -227,6 +240,16 @@ fn parse_anthropic_event(data: &str) -> Result<(SseEventAction, Option<String>)>
         .map(|text| text.to_string());
 
     Ok((SseEventAction::Continue, token))
+}
+
+fn truncate_event_data(data: &str, max_chars: usize) -> String {
+    let mut iter = data.chars();
+    let truncated: String = iter.by_ref().take(max_chars).collect();
+    if iter.next().is_some() {
+        format!("{}...", truncated)
+    } else {
+        truncated
+    }
 }
 
 #[async_trait]

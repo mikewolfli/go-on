@@ -1,4 +1,5 @@
 ﻿use super::*;
+use crate::protocol::access_mode::{normalize_protocol_mode, resolve_access_selection};
 
 pub(super) fn governance_rule_fingerprint(config_path: Option<&str>) -> Value {
     let base_dir = config_path
@@ -166,10 +167,11 @@ pub(super) fn governance_config_summary(config_path: Option<&str>) -> Value {
 }
 
 fn normalize_protocol_mode_for_baseline(raw: &str) -> String {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "adaptive" | "auto" => "auto".to_string(),
-        "acp" | "acp_stdio" | "acp_http" => "acp".to_string(),
-        "mcp" | "mcp_stdio" | "mcp_http" => "mcp".to_string(),
+    let lowered = raw.trim().to_ascii_lowercase();
+    match normalize_protocol_mode(raw).unwrap_or(lowered.as_str()) {
+        "adaptive" => "adaptive".to_string(),
+        "acp_stdio" | "acp_http" => "acp".to_string(),
+        "mcp_stdio" | "mcp_http" => "mcp".to_string(),
         other => other.to_string(),
     }
 }
@@ -384,6 +386,10 @@ pub(super) async fn handle_config_baseline(
         server.runtime_config.protocol_mode.as_deref(),
         protocol_mode_from_file.as_deref(),
     );
+    let access_selection = resolve_access_selection(
+        server.runtime_config.protocol_mode.as_deref(),
+        server.runtime_config.acp_http_bind_addr.as_deref(),
+    );
     let entry_auth_key_env = server.runtime_config.entry_auth_api_key_env.clone();
     let entry_auth_key_configured = std::env::var(&entry_auth_key_env)
         .ok()
@@ -399,7 +405,13 @@ pub(super) async fn handle_config_baseline(
                 "status": if legacy_mappings.is_empty() { "frozen" } else { "migration_required" },
                 "source_precedence": ["cli_override", "env", "config_file", "default"],
                 "effective": {
-                    "protocol_mode": server.runtime_config.protocol_mode.clone().unwrap_or_else(|| "auto".to_string()),
+                    "configured_mode": access_selection.configured_mode,
+                    "protocol_mode": server.runtime_config.protocol_mode.clone().unwrap_or_else(|| "adaptive".to_string()),
+                    "protocol_capability": access_selection.protocol_capability.as_str(),
+                    "request_dispatch_mode": access_selection.request_dispatch_mode.as_str(),
+                    "startup_transport": access_selection.startup_transport.as_str(),
+                    "transport_strategy": access_selection.transport_strategy,
+                    "selection_reason": access_selection.selection_reason,
                     "maintenance_interval_seconds": server.runtime_config.maintenance_interval_seconds,
                     "health_interval_seconds": server.runtime_config.health_interval_seconds,
                     "shutdown_drain_seconds": server.runtime_config.shutdown_drain_seconds,

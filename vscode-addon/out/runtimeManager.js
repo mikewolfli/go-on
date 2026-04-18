@@ -7,6 +7,15 @@ const protocolContract_1 = require("./protocolContract");
 function asRecord(value) {
     return typeof value === 'object' && value !== null ? value : {};
 }
+function normalizeProtocolMode(mode) {
+    return mode.trim().toLowerCase();
+}
+function isAllowedProtocolMode(mode) {
+    if (mode === 'from_config') {
+        return true;
+    }
+    return protocolContract_1.protocolContract.protocol.supportedModes.includes(mode);
+}
 class GoOnManager {
     /** Connect a VS Code OutputChannel so Go-On process output is visible to users. */
     setOutputChannel(channel) {
@@ -54,8 +63,13 @@ class GoOnManager {
             let resolved = false;
             let stderrBuffer = '';
             const args = ['--config', configPath, '--verbose'];
-            if (protocolMode && protocolMode !== 'from_config') {
-                args.push('--protocol-mode', protocolMode);
+            const normalizedProtocolMode = normalizeProtocolMode(protocolMode || 'from_config');
+            if (!isAllowedProtocolMode(normalizedProtocolMode)) {
+                reject(new Error(`Invalid protocol mode '${protocolMode}'. Allowed values: from_config, ${protocolContract_1.protocolContract.protocol.supportedModes.join(', ')}`));
+                return;
+            }
+            if (normalizedProtocolMode !== 'from_config') {
+                args.push('--protocol-mode', normalizedProtocolMode);
             }
             this.process = (0, child_process_1.spawn)(executablePath, args, {
                 cwd,

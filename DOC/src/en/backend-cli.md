@@ -237,7 +237,7 @@ Accepted values:
 
 Recommended usage:
 
-- `adaptive`: safest default when multiple clients may attach.
+- `adaptive`: safest default when multiple clients may attach; it preserves dual-stack request routing and derives the startup transport from runtime prerequisites.
 - `acp_stdio`: best when an editor launches `go-on` as a child process.
 - `acp_http`: best when an ACP-compatible client wants one shared long-running backend.
 - `mcp_stdio`: use only when your client explicitly expects MCP over stdio.

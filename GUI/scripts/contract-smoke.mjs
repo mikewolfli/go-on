@@ -24,9 +24,19 @@ const runtimeOpsSource = fs.readFileSync(
 
 assert.equal(contract.surfaces.gui.supports.openAiCompat, true);
 assert.equal(contract.surfaces.gui.supports.responsesNative, false);
-assert.deepEqual(contract.protocol.supportedModes, ['acp', 'mcp', 'auto']);
-assert.equal(contract.protocol.defaultMode, 'auto');
+assert.equal(typeof contract.verification?.generatedBy, 'string');
+assert.equal(typeof contract.verification?.generatedAt, 'string');
+assert.equal(typeof contract.verification?.sourceOfTruth, 'string');
+assert.ok(contract.verification.generatedBy.length > 0);
+assert.ok(contract.verification.generatedAt.includes('T'));
+assert.ok(contract.verification.sourceOfTruth.length > 0);
+assert.deepEqual(contract.protocol.supportedModes, ['adaptive', 'acp_stdio', 'acp_http', 'mcp_stdio', 'mcp_http']);
+assert.equal(contract.protocol.defaultMode, 'adaptive');
 assert.equal(contract.protocol.autoModeSupportsAcpAndMcp, true);
+assert.equal(contract.protocol.protocolCapabilityModel, 'capability_plus_transport');
+assert.equal(contract.protocol.adaptiveSelectionModel, 'client_type_routed');
+assert.equal(contract.protocol.adaptiveStartupTransportStrategy, 'http_if_bind_else_stdio');
+assert.equal(contract.protocol.fixedModesAreConfigDriven, true);
 assert.equal(contract.protocol.acpInitializeProtocol, 'acp');
 assert.equal(contract.protocol.mcpInitializeProtocolVersion, '2024-11-05');
 assert.equal(contract.protocol.coexistenceValidatedByRpcIntegration, true);
@@ -106,8 +116,7 @@ assert.ok(
     tauriSource.includes('"auto" => Some("auto")')
 );
 assert.ok(
-    tauriSource.includes('Adaptive mode enabled; ACP/A2A and MCP are negotiated automatically') ||
-    tauriSource.includes('Auto mode enabled; ACP/A2A and MCP are negotiated automatically')
+    tauriSource.includes('Adaptive mode enabled; runtime chooses the best client-facing path and routes requests by client type')
 );
 assert.equal(contract.openai.streamDoneMarker, '[DONE]');
 assert.equal(contract.responsesApi.path, '/v1/responses');
@@ -189,8 +198,8 @@ assert.equal(contract.responsesApi.nonStreamSetupUnavailableRetrievableById, tru
 assert.ok(protocolSource.includes('editor-capability-matrix.json'));
 assert.ok(apiSource.includes('defaultRuntimeBaseUrl'));
 assert.ok(tauriSource.includes('capability_matrix()'));
-assert.ok(tauriSource.includes('runtime_health_endpoint()'));
-assert.ok(tauriSource.includes('openai_models_endpoint()'));
+assert.ok(tauriSource.includes('contract.runtime.health_path'));
+assert.ok(tauriSource.includes('contract.openai.models_path'));
 assert.deepEqual(contract.errors.requestErrorKinds, ['PuaViolation', 'BudgetExceeded', 'SandboxBlocked']);
 assert.equal(contract.errors.requestErrorContextPrefix, 'acp.handle_request.dispatch');
 assert.ok(runtimeOpsSource.includes('rpc_error:{code}:{kind}:{message}'));

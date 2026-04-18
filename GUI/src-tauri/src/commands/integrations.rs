@@ -66,22 +66,6 @@ fn try_capability_matrix() -> Result<&'static CapabilityMatrix, String> {
     parsed.as_ref().map_err(|err| err.clone())
 }
 
-fn runtime_health_endpoint() -> String {
-    let contract = try_capability_matrix().unwrap_or_else(|_| capability_matrix());
-    format!(
-        "{}{}",
-        contract.runtime.base_url, contract.runtime.health_path
-    )
-}
-
-fn openai_models_endpoint() -> String {
-    let contract = try_capability_matrix().unwrap_or_else(|_| capability_matrix());
-    format!(
-        "{}{}",
-        contract.runtime.base_url, contract.openai.models_path
-    )
-}
-
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorIntegrationStatus {
@@ -311,7 +295,7 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
                     "Health reachable, but current mode is MCP-only; ACP/A2A may be rejected"
                         .to_string()
                 } else if protocol_mode == "adaptive" {
-                    "Adaptive mode enabled; ACP/A2A and MCP are negotiated automatically"
+                    "Adaptive mode enabled; runtime chooses the best client-facing path and routes requests by client type"
                         .to_string()
                 } else {
                     "ACP/A2A path is reachable".to_string()
@@ -335,7 +319,7 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
                 if !mode_supports_mcp(&protocol_mode) {
                     "Models endpoint reachable, but current mode is ACP-only; MCP provider may be limited".to_string()
                 } else if protocol_mode == "adaptive" {
-                    "Adaptive mode enabled; MCP provider and ACP/A2A are both supported".to_string()
+                    "Adaptive mode enabled; provider-facing requests are routed through the active transport without pinning a fixed interface".to_string()
                 } else {
                     "MCP LLM provider endpoint is reachable".to_string()
                 }

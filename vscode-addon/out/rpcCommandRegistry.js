@@ -234,11 +234,14 @@ function registerRpcCommands(deps) {
             const migration = asRecord(baseline.migration);
             const file = asRecord(baseline.file);
             const status = String(baseline.status ?? 'unknown');
-            const protocolMode = String(effective.protocol_mode ?? 'auto');
+            const configuredMode = String(effective.configured_mode ?? effective.protocol_mode ?? 'adaptive');
+            const capability = String(effective.protocol_capability ?? 'unknown');
+            const dispatch = String(effective.request_dispatch_mode ?? 'unknown');
+            const transport = String(effective.startup_transport ?? 'unknown');
             const strictEnabled = effective.production_strict === true;
             const legacyCount = Number(migration.legacy_key_count ?? 0);
             const explicitCount = Number(file.runtime_explicit_field_count ?? 0);
-            vscode.window.showInformationMessage(`config.baseline: status=${status}, protocol=${protocolMode}, strict=${strictEnabled ? 'on' : 'off'}, runtime_explicit=${explicitCount}, legacy_keys=${legacyCount}`);
+            vscode.window.showInformationMessage(`config.baseline: status=${status}, mode=${configuredMode}, capability=${capability}, dispatch=${dispatch}, transport=${transport}, strict=${strictEnabled ? 'on' : 'off'}, runtime_explicit=${explicitCount}, legacy_keys=${legacyCount}`);
         }
         catch (error) {
             vscode.window.showErrorMessage(`config.baseline failed: ${getErrorMessage(error)}`);

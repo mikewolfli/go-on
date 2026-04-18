@@ -10,11 +10,13 @@
 
 The backend supports five access modes:
 
-- `adaptive`: auto-negotiate ACP and MCP compatible flows when possible.
+- `adaptive`: keep dual-stack capability and route requests by client type while deriving startup transport from runtime prerequisites.
 - `acp_stdio`: run ACP over stdio for editor-launched child-process integrations.
 - `acp_http`: expose ACP-style HTTP endpoints from a long-running backend process.
 - `mcp_stdio`: expose MCP over stdio.
 - `mcp_http`: expose MCP and OpenAI-compatible HTTP endpoints.
+
+In this model, explicit fixed modes are still config-driven. `adaptive` is not a silent rewrite to one fixed interface; today it selects an HTTP entry when `--acp-http-bind` is present and otherwise keeps a stdio entry while preserving ACP/MCP request dispatch compatibility.
 
 The HTTP runtime exposes a practical integration surface around `http://127.0.0.1:8090` by default when started with `--acp-http-bind`:
 

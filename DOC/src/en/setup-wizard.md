@@ -121,7 +121,7 @@ For most operators:
 1. Run `go-on --setup --setup-level standard --setup-secrets auto`.
 2. Run `go-on --status`.
 3. If you will use Zed or GUI over HTTP, start the backend with `--protocol-mode adaptive --acp-http-bind 127.0.0.1:8090`.
-4. If you will use an editor-spawned stdio integration, switch that client to `acp_stdio` or `mcp_stdio` as required.
+4. If you will use an editor-spawned stdio integration, keep `adaptive` or switch that client to `acp_stdio` or `mcp_stdio` when you need a fixed protocol surface.
 
 ## When to rerun setup
 

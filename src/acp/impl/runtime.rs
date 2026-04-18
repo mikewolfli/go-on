@@ -1900,6 +1900,7 @@ async fn handle_http_connection(
     let path = request_line_parts
         .next()
         .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing path"))?;
+    let adaptive_signal = infer_adaptive_signal(method, path, header_part);
 
     if apply_entry_guards(
         socket,
@@ -2138,11 +2139,48 @@ async fn handle_http_connection(
         duration.as_secs_f64() * 1000.0,
     );
     info!(
-        "HTTP {} completed in {:?} (ok={})",
-        path_label, duration, success
+        "HTTP {} completed in {:?} (ok={}, adaptive_signal={})",
+        path_label, duration, success, adaptive_signal
     );
 
     dispatch_result
+}
+
+fn infer_adaptive_signal(method: &str, path: &str, headers: &str) -> &'static str {
+    if matches!(path, "/chat" | "/chat/stream") {
+        return "acp_http_path";
+    }
+    if matches!(path, "/chat/completions" | "/v1/chat/completions" | "/v1/responses") {
+        return "openai_http_path";
+    }
+    if path.starts_with("/v1/") {
+        return "openai_api_prefix";
+    }
+
+    if let Some(protocol_hint) = extract_header_value(headers, "x-go-on-protocol") {
+        let hint = protocol_hint.trim().to_ascii_lowercase();
+        if hint == "acp" {
+            return "header_hint_acp";
+        }
+        if hint == "mcp" {
+            return "header_hint_mcp";
+        }
+    }
+
+    if let Some(content_type) = extract_header_value(headers, "content-type") {
+        if content_type.to_ascii_lowercase().contains("application/json") {
+            if method == "POST" {
+                return "json_post_fallback";
+            }
+            return "json_http_fallback";
+        }
+    }
+
+    if method == "GET" {
+        "read_probe_fallback"
+    } else {
+        "generic_http_fallback"
+    }
 }
 
 fn extract_content_length(headers: &str) -> Option<usize> {

@@ -139,52 +139,7 @@ use crate::setup::{
 };
 use crate::tool::ToolRegistry;
 use crate::vector::VectorStore;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AccessMode {
-    Adaptive,
-    AcpStdio,
-    AcpHttp,
-    McpStdio,
-    McpHttp,
-}
-
-impl AccessMode {
-    fn from_config(value: Option<&str>) -> Self {
-        let Some(raw) = value else {
-            return Self::Adaptive;
-        };
-        match raw.trim().to_ascii_lowercase().as_str() {
-            // New 5-mode options
-            "adaptive" => Self::Adaptive,
-            "acp_stdio" | "acp+stdio" => Self::AcpStdio,
-            "acp_http" | "acp+http" => Self::AcpHttp,
-            "mcp_stdio" | "mcp+stdio" => Self::McpStdio,
-            "mcp_http" | "mcp+http" => Self::McpHttp,
-            // Backward-compatible aliases
-            "auto" => Self::Adaptive,
-            "acp" => Self::AcpStdio,
-            "mcp" => Self::McpStdio,
-            _ => Self::Adaptive,
-        }
-    }
-}
-
-fn normalize_protocol_mode(raw: &str) -> Option<&'static str> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        // canonical 5 options
-        "adaptive" => Some("adaptive"),
-        "acp_stdio" | "acp+stdio" => Some("acp_stdio"),
-        "acp_http" | "acp+http" => Some("acp_http"),
-        "mcp_stdio" | "mcp+stdio" => Some("mcp_stdio"),
-        "mcp_http" | "mcp+http" => Some("mcp_http"),
-        // backward-compatible aliases
-        "auto" => Some("adaptive"),
-        "acp" => Some("acp_stdio"),
-        "mcp" => Some("mcp_stdio"),
-        _ => None,
-    }
-}
+use crate::protocol::access_mode::{normalize_protocol_mode, resolve_access_selection, TransportMode};
 
 fn validate_cli_protocol_mode(raw: Option<&str>) -> Result<Option<String>> {
     let Some(value) = raw else {
@@ -1465,15 +1420,18 @@ async fn run() -> Result<()> {
         runtime_config.protocol_mode = Some(mode);
     }
 
-    let access_mode = AccessMode::from_config(runtime_config.protocol_mode.as_deref());
     let acp_http_bind = cli
         .acp_http_bind
         .clone()
         .or_else(|| runtime_config.acp_http_bind_addr.clone());
+    let access_selection = resolve_access_selection(
+        runtime_config.protocol_mode.as_deref(),
+        acp_http_bind.as_deref(),
+    );
+    runtime_config.protocol_mode = Some(access_selection.configured_mode.clone());
 
-    match access_mode {
-        AccessMode::Adaptive => {
-            runtime_config.protocol_mode = Some("auto".to_string());
+    match access_selection.configured_mode.as_str() {
+        "adaptive" | "acp_stdio" => {
             let mut server = new_acp_server(
                 flow,
                 registry,
@@ -1488,32 +1446,14 @@ async fn run() -> Result<()> {
                 Some(http_client),
                 cli.verbose,
             );
-            if let Some(bind_addr) = acp_http_bind {
-                run_acp_http_server(Arc::new(server), bind_addr).await
-            } else {
+            if matches!(access_selection.startup_transport, TransportMode::Stdio) {
                 run_acp_server(&mut server).await
+            } else {
+                let bind_addr = acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string());
+                run_acp_http_server(Arc::new(server), bind_addr).await
             }
         }
-        AccessMode::AcpStdio => {
-            runtime_config.protocol_mode = Some("acp".to_string());
-            let mut server = new_acp_server(
-                flow,
-                registry,
-                cache,
-                vector_store,
-                config.vector.clone(),
-                autotune_state,
-                autotune_config,
-                autotune_state_path,
-                Some(config_path.to_string_lossy().to_string()),
-                runtime_config,
-                Some(http_client),
-                cli.verbose,
-            );
-            run_acp_server(&mut server).await
-        }
-        AccessMode::AcpHttp => {
-            runtime_config.protocol_mode = Some("acp".to_string());
+        "acp_http" => {
             let bind_addr = acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string());
             let server = new_acp_server(
                 flow,
@@ -1531,7 +1471,7 @@ async fn run() -> Result<()> {
             );
             run_acp_http_server(Arc::new(server), bind_addr).await
         }
-        AccessMode::McpStdio => {
+        "mcp_stdio" => {
             let tool_registry = Arc::new(ToolRegistry::new());
             let server = McpStdioServer::new(
                 registry,
@@ -1541,7 +1481,7 @@ async fn run() -> Result<()> {
             );
             server.run().await
         }
-        AccessMode::McpHttp => {
+        "mcp_http" => {
             let bind_addr = acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string());
             let tool_registry = Arc::new(ToolRegistry::new());
             let server = McpHttpServer::new(
@@ -1553,6 +1493,7 @@ async fn run() -> Result<()> {
             );
             server.run().await
         }
+        _ => unreachable!(),
     }
 }
 

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Setup Wizard - go-on Documentation</title>
+        <title>Skills 扩展 - go-on Documentation</title>
 
 
         <!-- Custom HTML head -->
@@ -177,107 +177,106 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="setup-wizard"><a class="header" href="#setup-wizard">Setup Wizard</a></h1>
-<p>The setup wizard is implemented in the backend and is the recommended way to bootstrap a clean machine or a fresh working directory.</p>
-<h2 id="what-it-writes"><a class="header" href="#what-it-writes">What it writes</a></h2>
-<p>The setup flow targets the backend configuration path and then writes supporting defaults around it:</p>
-<ul>
-<li><code>config.toml</code></li>
-<li>default rules files near the config directory</li>
-<li>optional secret references for environment variables or keyring-backed values</li>
-</ul>
-<p>The setup path currently uses the adaptive template family.</p>
-<h2 id="entry-points"><a class="header" href="#entry-points">Entry points</a></h2>
-<p>Interactive mode:</p>
-<pre><code class="language-bash">go-on --setup
+                        <h1 id="skills-扩展"><a class="header" href="#skills-扩展">Skills 扩展</a></h1>
+<p>Skills 系统为 go-on 运行时提供了一种轻量、类型安全的能力单元注册与分发机制，
+类似于 MCP Tools，但直接内嵌在运行时中，无需额外网络调用。</p>
+<hr>
+<h2 id="启用-skills"><a class="header" href="#启用-skills">启用 Skills</a></h2>
+<p>通过 <code>config.toml</code>（或 <code>config.production.toml</code>）中的单一开关控制：</p>
+<pre><code class="language-toml">[runtime]
+skills_enabled = true   # true = 启动时加载内置 skills（默认值）
+                        # false = 不加载（生产环境推荐）
 </code></pre>
-<p>Non-interactive leaning mode:</p>
-<pre><code class="language-bash">go-on --setup --setup-profile adaptive --setup-level standard --setup-secrets auto
-</code></pre>
-<p>Overwrite existing files:</p>
-<pre><code class="language-bash">go-on --setup --force
-</code></pre>
-<h2 id="accepted-setup-profile"><a class="header" href="#accepted-setup-profile">Accepted setup profile</a></h2>
-<p>Current accepted profile:</p>
+<blockquote>
+<p><strong>生产环境提示</strong>：<code>config.production.toml</code> 默认 <code>skills_enabled = false</code>，
+以减少暴露面。如有需要可显式开启。</p>
+</blockquote>
+<hr>
+<h2 id="内置-skills"><a class="header" href="#内置-skills">内置 Skills</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>名称</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>builtin.echo</code></td><td>原样返回输入值（冒烟测试用 skill）</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="skill-命名规则"><a class="header" href="#skill-命名规则">Skill 命名规则</a></h2>
+<p>通过内部 <code>SkillRegistry::register()</code> API 注册自定义 skill 时，名称必须满足：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>约束</th><th>规则</th></tr>
+</thead>
+<tbody>
+<tr><td>长度</td><td>1–64 字符</td></tr>
+<tr><td>允许字符</td><td><code>a-z</code>、<code>0-9</code>、<code>.</code>、<code>_</code>、<code>-</code></td></tr>
+<tr><td>唯一性</td><td>名称不可重复，重复注册将返回错误</td></tr>
+<tr><td>Schema</td><td><code>input_schema()</code> 必须返回 JSON <strong>对象</strong>（<code>{…}</code>）</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="实现自定义-skill"><a class="header" href="#实现自定义-skill">实现自定义 Skill</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::sync::Arc;
+use anyhow::Result;
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use crate::orchestration::skill::Skill;
+
+pub struct GreetSkill;
+
+#[async_trait]
+impl Skill for GreetSkill {
+    fn name(&amp;self) -&gt; &amp;str { "my.greet" }
+
+    fn description(&amp;self) -&gt; &amp;str { "根据给定名字返回问候语" }
+
+    fn input_schema(&amp;self) -&gt; Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" }
+            },
+            "required": ["name"]
+        })
+    }
+
+    async fn execute(&amp;self, input: &amp;Value) -&gt; Result&lt;Value&gt; {
+        let name = input["name"].as_str().unwrap_or("stranger");
+        Ok(json!({ "greeting": format!("你好，{name}！") }))
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>服务器启动后注册：</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>server.register_skill(Arc::new(GreetSkill));
+<span class="boring">}</span></code></pre>
+<blockquote>
+<p>注册失败（名称重复、命名不合法、Schema 非对象）仅记录 <code>WARN</code> 日志，
+不会导致服务器崩溃。</p>
+</blockquote>
+<hr>
+<h2 id="相关文档"><a class="header" href="#相关文档">相关文档</a></h2>
 <ul>
-<li><code>adaptive</code></li>
+<li><a href="overview.html">架构总览</a></li>
+<li><a href="backend-cli.html">后端 CLI</a></li>
 </ul>
-<p>That matches the runtime architecture: one config baseline that can serve ACP and MCP oriented front ends.</p>
-<h2 id="setup-levels"><a class="header" href="#setup-levels">Setup levels</a></h2>
-<h3 id="quick"><a class="header" href="#quick"><code>quick</code></a></h3>
-<p>Use this when you want the shortest successful bootstrap.</p>
-<p>Behavioral characteristic:</p>
-<ul>
-<li>skips the extra-agent prompt to keep the flow minimal</li>
-</ul>
-<h3 id="standard"><a class="header" href="#standard"><code>standard</code></a></h3>
-<p>Recommended default.</p>
-<p>Use this when you want a balanced guided setup without having to hand-edit everything afterward.</p>
-<h3 id="custom"><a class="header" href="#custom"><code>custom</code></a></h3>
-<p>Use this when you want more manual control over provider and agent choices.</p>
-<h2 id="secret-modes"><a class="header" href="#secret-modes">Secret modes</a></h2>
-<h3 id="env"><a class="header" href="#env"><code>env</code></a></h3>
-<p>Keep secrets as environment-driven values.</p>
-<p>Use this when you already manage keys through shell profile, <code>.env</code>, CI, or process manager injection.</p>
-<h3 id="keyring"><a class="header" href="#keyring"><code>keyring</code></a></h3>
-<p>Store secret material in the OS keyring and let config refer to keyring-backed entries.</p>
-<p>Use this when you want a local desktop-friendly secret flow with less plain-text exposure.</p>
-<h3 id="auto"><a class="header" href="#auto"><code>auto</code></a></h3>
-<p>Auto-detect the best path.</p>
-<p>Implementation behavior:</p>
-<ul>
-<li>if environment variables are already available, setup prefers <code>env</code></li>
-<li>otherwise the wizard prompts for secret-handling choice</li>
-</ul>
-<h2 id="provider-detection-behavior"><a class="header" href="#provider-detection-behavior">Provider detection behavior</a></h2>
-<p>The wizard detects available providers based on the chosen secret mode and the current machine state.</p>
-<p>The flow then:</p>
-<ol>
-<li>detects providers</li>
-<li>prompts for provider selection</li>
-<li>applies setup-level defaults</li>
-<li>writes the adaptive config</li>
-<li>optionally stores secrets in keyring</li>
-</ol>
-<p>If no provider is selected, setup aborts rather than generating a misleading non-runnable config.</p>
-<h2 id="keyring-behavior"><a class="header" href="#keyring-behavior">Keyring behavior</a></h2>
-<p>When keyring mode is selected, the generated config is converted from environment placeholders to keyring-backed references.</p>
-<p>In this repository those references follow the <code>keyring://go-on/&lt;account&gt;</code> pattern.</p>
-<h2 id="secret-management-outside-the-wizard"><a class="header" href="#secret-management-outside-the-wizard">Secret management outside the wizard</a></h2>
-<p>The wizard is not the only secret entry point. You can manage secrets later with CLI actions:</p>
-<pre><code class="language-bash">go-on --secret list
-go-on --secret set --secret-name openai --secret-value YOUR_KEY
-</code></pre>
-<p>That is the clean recovery path if setup was correct but credentials changed later.</p>
-<h2 id="recommended-setup-sequence"><a class="header" href="#recommended-setup-sequence">Recommended setup sequence</a></h2>
-<p>For most operators:</p>
-<ol>
-<li>Run <code>go-on --setup --setup-level standard --setup-secrets auto</code>.</li>
-<li>Run <code>go-on --status</code>.</li>
-<li>If you will use Zed or GUI over HTTP, start the backend with <code>--protocol-mode adaptive --acp-http-bind 127.0.0.1:8090</code>.</li>
-<li>If you will use an editor-spawned stdio integration, keep <code>adaptive</code> or switch that client to <code>acp_stdio</code> or <code>mcp_stdio</code> when you need a fixed protocol surface.</li>
-</ol>
-<h2 id="when-to-rerun-setup"><a class="header" href="#when-to-rerun-setup">When to rerun setup</a></h2>
-<p>Rerun setup when:</p>
-<ul>
-<li>moving to a new machine</li>
-<li>replacing your provider set</li>
-<li>switching from env-based secrets to keyring-based secrets</li>
-<li>restoring a broken or missing <code>config.toml</code></li>
-</ul>
-<p>Avoid rerunning setup with <code>--force</code> unless you intend to replace the current file set.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../en/backend-cli.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../zh-CN/gui.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../en/zed.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -285,13 +284,10 @@ go-on --secret set --secret-name openai --secret-value YOUR_KEY
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../en/backend-cli.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../zh-CN/gui.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../en/zed.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                    </a>
             </nav>
 
         </div>

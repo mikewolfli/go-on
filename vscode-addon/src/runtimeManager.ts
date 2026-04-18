@@ -29,6 +29,17 @@ function asRecord(value: unknown): Record<string, unknown> {
     return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
 }
 
+function normalizeProtocolMode(mode: string): string {
+    return mode.trim().toLowerCase();
+}
+
+function isAllowedProtocolMode(mode: string): boolean {
+    if (mode === 'from_config') {
+        return true;
+    }
+    return protocolContract.protocol.supportedModes.includes(mode);
+}
+
 export class GoOnManager {
     private process: ChildProcess | null = null;
     private requestId = 0;
@@ -89,8 +100,18 @@ export class GoOnManager {
             let stderrBuffer = '';
 
             const args = ['--config', configPath, '--verbose'];
-            if (protocolMode && protocolMode !== 'from_config') {
-                args.push('--protocol-mode', protocolMode);
+            const normalizedProtocolMode = normalizeProtocolMode(protocolMode || 'from_config');
+            if (!isAllowedProtocolMode(normalizedProtocolMode)) {
+                reject(
+                    new Error(
+                        `Invalid protocol mode '${protocolMode}'. Allowed values: from_config, ${protocolContract.protocol.supportedModes.join(', ')}`
+                    )
+                );
+                return;
+            }
+
+            if (normalizedProtocolMode !== 'from_config') {
+                args.push('--protocol-mode', normalizedProtocolMode);
             }
 
             this.process = spawn(executablePath, args, {

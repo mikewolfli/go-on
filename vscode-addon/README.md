@@ -117,7 +117,7 @@ npm run compile
 
 1. 启动 go-on backend（建议 `mode = "adaptive"`）。
 2. 在 VS Code 设置 `go-on.executablePath` 与 `go-on.configPath`。
-3. 若需强制协议，设置 `go-on.runtime.protocolMode` 为 `acp_stdio` / `acp_http` / `mcp_stdio` / `mcp_http`。
+3. `adaptive` 表示双栈能力 + 按请求类型路由；若需固定接口，再设置 `go-on.runtime.protocolMode` 为 `acp_stdio` / `acp_http` / `mcp_stdio` / `mcp_http`。
 4. 执行命令 `go-on.start`，并用 `go-on.healthCheck` 验证主链可用。
 
 ## Sync Policy

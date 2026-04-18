@@ -40,6 +40,7 @@ Desktop console for go-on built with Tauri 2 + Vue + Vite.
 推荐协议模式：
 
 - backend `config.toml` 使用：`[protocol].mode = "adaptive"`
+- `adaptive` 表示 runtime 保留双栈能力，并按客户端类型选择路径；若配置了 `acp_http_bind_addr`，GUI 会优先走 HTTP 探测
 - 若只走 GUI HTTP 链路，可用：`acp_http` 或 `mcp_http`
 
 错误溯源对齐（BLUE14 AGENT4）：

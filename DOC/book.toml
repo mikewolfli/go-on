@@ -2,7 +2,6 @@
 title = "go-on Documentation"
 authors = ["GitHub Copilot"]
 language = "en"
-multilingual = false
 src = "src"
 
 [build]

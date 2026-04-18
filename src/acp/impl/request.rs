@@ -1,29 +1,9 @@
-﻿/// 鍗忚妯″紡
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProtocolMode {
-    Auto,
-    Acp,
-    Mcp,
-}
-
-impl ProtocolMode {
-    pub fn from_str(s: &str) -> Self {
-        match s.to_ascii_lowercase().as_str() {
-            "acp" => ProtocolMode::Acp,
-            "mcp" => ProtocolMode::Mcp,
-            _ => ProtocolMode::Auto,
-        }
-    }
-}
+﻿use crate::protocol::access_mode::{request_dispatch_mode, RequestDispatchMode};
 
 /// 浠巆onfig.toml/runtime_config璇诲彇鍗忚妯″紡
-fn get_protocol_mode(server: &AcpServer) -> ProtocolMode {
+fn get_protocol_mode(server: &AcpServer) -> RequestDispatchMode {
     // 灏濊瘯浠巖untime_config.protocol_mode璇诲彇
-    if let Some(mode) = server.runtime_config.protocol_mode.as_deref() {
-        ProtocolMode::from_str(mode)
-    } else {
-        ProtocolMode::Auto
-    }
+    request_dispatch_mode(server.runtime_config.protocol_mode.as_deref())
 }
 
 /// 鍒ゆ柇璇锋眰灞炰簬MCP鍗忚
@@ -1034,7 +1014,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
     let protocol_mode = get_protocol_mode(server);
     let method = request.method.as_str();
     match protocol_mode {
-        ProtocolMode::Acp => {
+        RequestDispatchMode::Acp => {
             if !is_acp_request(method) {
                 return send_error(
                     server,
@@ -1046,7 +1026,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                 .await;
             }
         }
-        ProtocolMode::Mcp => {
+        RequestDispatchMode::Mcp => {
             if !is_mcp_request(method) {
                 return send_error(
                     server,
@@ -1058,7 +1038,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                 .await;
             }
         }
-        ProtocolMode::Auto => {
+        RequestDispatchMode::Auto => {
             // 鑻ヤ负MCP鏂规硶锛屼紭鍏堣蛋MCP鍒嗘敮锛屽惁鍒欒蛋ACP
             // 鍏佽娣风敤
         }

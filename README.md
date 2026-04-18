@@ -57,6 +57,12 @@ Example:
 mode = "adaptive"
 ```
 
+Interpretation:
+
+- `adaptive` means dual-stack protocol capability with request-type aware routing.
+- Explicit fixed modes stay config-driven and are never silently overwritten.
+- The current startup transport is derived from runtime prerequisites: HTTP when `acp_http_bind_addr` is available, otherwise stdio.
+
 ## Quick Start
 
 ### 1) Build and Test

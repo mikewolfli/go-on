@@ -1,17 +1,28 @@
 {
   "version": "2026-04-16-blue15-stagec-r1",
+  "verification": {
+    "generatedBy": "contract-smoke-gates",
+    "generatedAt": "2026-04-18T00:00:00Z",
+    "sourceOfTruth": "main-chain-ci-gates"
+  },
   "runtime": {
     "baseUrl": "http://127.0.0.1:8090",
     "healthPath": "/health"
   },
   "protocol": {
     "supportedModes": [
-      "acp",
-      "mcp",
-      "auto"
+      "adaptive",
+      "acp_stdio",
+      "acp_http",
+      "mcp_stdio",
+      "mcp_http"
     ],
-    "defaultMode": "auto",
+    "defaultMode": "adaptive",
     "autoModeSupportsAcpAndMcp": true,
+    "protocolCapabilityModel": "capability_plus_transport",
+    "adaptiveSelectionModel": "client_type_routed",
+    "adaptiveStartupTransportStrategy": "http_if_bind_else_stdio",
+    "fixedModesAreConfigDriven": true,
     "acpInitializeProtocol": "acp",
     "mcpInitializeProtocolVersion": "2024-11-05",
     "coexistenceValidatedByRpcIntegration": true,

@@ -15,9 +15,19 @@ const contractSource = fs.readFileSync(path.join(addonRoot, 'src', 'protocolCont
 
 assert.equal(contract.surfaces.vscodeAddon.supports.openAiCompat, true);
 assert.equal(contract.surfaces.vscodeAddon.supports.responsesNative, false);
-assert.deepEqual(contract.protocol.supportedModes, ['acp', 'mcp', 'auto']);
-assert.equal(contract.protocol.defaultMode, 'auto');
+assert.equal(typeof contract.verification?.generatedBy, 'string');
+assert.equal(typeof contract.verification?.generatedAt, 'string');
+assert.equal(typeof contract.verification?.sourceOfTruth, 'string');
+assert.ok(contract.verification.generatedBy.length > 0);
+assert.ok(contract.verification.generatedAt.includes('T'));
+assert.ok(contract.verification.sourceOfTruth.length > 0);
+assert.deepEqual(contract.protocol.supportedModes, ['adaptive', 'acp_stdio', 'acp_http', 'mcp_stdio', 'mcp_http']);
+assert.equal(contract.protocol.defaultMode, 'adaptive');
 assert.equal(contract.protocol.autoModeSupportsAcpAndMcp, true);
+assert.equal(contract.protocol.protocolCapabilityModel, 'capability_plus_transport');
+assert.equal(contract.protocol.adaptiveSelectionModel, 'client_type_routed');
+assert.equal(contract.protocol.adaptiveStartupTransportStrategy, 'http_if_bind_else_stdio');
+assert.equal(contract.protocol.fixedModesAreConfigDriven, true);
 assert.equal(contract.protocol.acpInitializeProtocol, 'acp');
 assert.equal(contract.protocol.mcpInitializeProtocolVersion, '2024-11-05');
 assert.equal(contract.protocol.coexistenceValidatedByRpcIntegration, true);

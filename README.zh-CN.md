@@ -57,6 +57,12 @@ go-on 是一个基于 Rust 的 ACP/MCP 运行时，聚焦智能体编排、治�
 mode = "adaptive"
 ```
 
+解释说明：
+
+- `adaptive` 表示双栈协议能力加按请求类型路由，不等于写死某个固定接口。
+- `acp_stdio`、`acp_http`、`mcp_stdio`、`mcp_http` 这 4 个固定模式仍严格由显式配置决定。
+- 当前启动传输会根据运行前提推导：存在 `acp_http_bind_addr` 时优先提供 HTTP，否则提供 stdio。
+
 ## 快速开始
 
 ### 1）构建与测试

@@ -15,6 +15,10 @@ type ProtocolSupport = {
     supportedModes: string[];
     defaultMode: string;
     autoModeSupportsAcpAndMcp: boolean;
+    protocolCapabilityModel: string;
+    adaptiveSelectionModel: string;
+    adaptiveStartupTransportStrategy: string;
+    fixedModesAreConfigDriven: boolean;
     acpInitializeProtocol: string;
     mcpInitializeProtocolVersion: string;
     coexistenceValidatedByRpcIntegration: boolean;
@@ -156,9 +160,13 @@ const fallbackContract: ProtocolContract = {
         healthPath: '/health',
     },
     protocol: {
-        supportedModes: ['acp', 'mcp', 'auto'],
-        defaultMode: 'auto',
+        supportedModes: ['adaptive', 'acp_stdio', 'acp_http', 'mcp_stdio', 'mcp_http'],
+        defaultMode: 'adaptive',
         autoModeSupportsAcpAndMcp: true,
+        protocolCapabilityModel: 'capability_plus_transport',
+        adaptiveSelectionModel: 'client_type_routed',
+        adaptiveStartupTransportStrategy: 'http_if_bind_else_stdio',
+        fixedModesAreConfigDriven: true,
         acpInitializeProtocol: 'acp',
         mcpInitializeProtocolVersion: '2024-11-05',
         coexistenceValidatedByRpcIntegration: true,
