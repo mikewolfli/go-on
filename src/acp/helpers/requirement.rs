@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::{
     orchestration::task_router::TaskRouter,
@@ -28,6 +28,59 @@ pub struct RequirementGateDecision {
     pub clarification_artifact_path: Option<PathBuf>,
     /// Path to governance artifact
     pub governance_artifact_path: PathBuf,
+}
+
+/// Unified gate facade decision used by workflow/task main paths.
+#[derive(Debug, Clone)]
+pub struct RequirementGateFacadeDecision {
+    /// Stable kind for cross-surface consumers.
+    pub kind: String,
+    /// Whether the gate blocks execution.
+    pub blocked: bool,
+    /// Gate reason.
+    pub reason: Option<String>,
+    /// Missing requirement fields.
+    pub missing_fields: Vec<String>,
+    /// Suggested next step.
+    pub next_step: Value,
+    /// Path to clarification artifact (if any).
+    pub clarification_artifact_path: Option<PathBuf>,
+    /// Path to governance artifact.
+    pub governance_artifact_path: PathBuf,
+}
+
+impl RequirementGateFacadeDecision {
+    /// Build the canonical JSON payload for blocked gate responses.
+    pub fn blocked_payload(&self) -> Value {
+        json!({
+            "kind": self.kind,
+            "blocked": self.blocked,
+            "reason": self.reason,
+            "missing_fields": self.missing_fields,
+            "next_step": self.next_step,
+            "governance_artifact_path": self.governance_artifact_path.display().to_string(),
+            "clarification_artifact_path": self
+                .clarification_artifact_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+        })
+    }
+
+    /// Build the canonical JSON payload for successful gate checks.
+    pub fn success_payload(&self) -> Value {
+        json!({
+            "kind": self.kind,
+            "blocked": self.blocked,
+            "confirmed": !self.blocked,
+            "missing_fields": self.missing_fields,
+            "next_step": self.next_step,
+            "governance_artifact_path": self.governance_artifact_path.display().to_string(),
+            "clarification_artifact_path": self
+                .clarification_artifact_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+        })
+    }
 }
 
 /// Learning clarification metrics
@@ -247,6 +300,35 @@ pub fn evaluate_requirement_gate(
         missing_fields,
         clarification_artifact_path,
         governance_artifact_path,
+    })
+}
+
+/// Evaluate unified requirement gate facade for workflow/task main paths.
+pub fn evaluate_requirement_gate_facade(
+    ledger: &ArtifactLedger,
+    task: &str,
+    params: &Value,
+    source: &str,
+) -> anyhow::Result<RequirementGateFacadeDecision> {
+    let gate = evaluate_requirement_gate(ledger, task, params, source)?;
+    let next_step = if gate.blocked {
+        json!({
+            "method": "workflow.clarify",
+            "task": task,
+            "missing_fields": gate.missing_fields,
+        })
+    } else {
+        json!({"status": "confirmed"})
+    };
+
+    Ok(RequirementGateFacadeDecision {
+        kind: "requirement_contract".to_string(),
+        blocked: gate.blocked,
+        reason: gate.reason,
+        missing_fields: gate.missing_fields,
+        next_step,
+        clarification_artifact_path: gate.clarification_artifact_path,
+        governance_artifact_path: gate.governance_artifact_path,
     })
 }
 

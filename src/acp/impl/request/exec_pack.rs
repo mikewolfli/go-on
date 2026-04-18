@@ -8,21 +8,16 @@ pub(super) async fn handle_workflow_execute(
 ) -> Result<()> {
     let task = params_task(&params).unwrap_or_default();
     let ledger = clone_artifact_ledger(server);
-    let gate = evaluate_requirement_gate(&ledger, &task, &params, "workflow.execute")?;
+    let gate = evaluate_requirement_gate_facade(&ledger, &task, &params, "workflow.execute")?;
     if gate.blocked {
         return send_error(
             server,
             request_id,
             -32006,
             gate.reason
+                .clone()
                 .unwrap_or_else(|| "requirement confirmation required".to_string()),
-            Some(json!({
-                "kind": "requirement_contract",
-                "missing_fields": gate.missing_fields,
-                "next_step": {"method": "workflow.clarify", "task": task},
-                "governance_artifact_path": gate.governance_artifact_path.display().to_string(),
-                "clarification_artifact_path": gate.clarification_artifact_path.map(|path| path.display().to_string()),
-            })),
+            Some(gate.blocked_payload()),
         )
         .await;
     }
@@ -236,6 +231,10 @@ pub(super) async fn handle_workflow_execute(
                 "planning": adaptive_planning,
                 "execution_defaults": execution_context.adaptive_defaults,
             },
+            "requirement_gate": {
+                "confirmed": true,
+                "gate": gate.success_payload(),
+            },
             "lazy_load": execution_report.lazy_load,
             "review_policy": review_policy,
             "reviews": reviews,
@@ -299,39 +298,17 @@ pub(super) async fn handle_task_execute(
         return send_result(server, request_id, cached_response).await;
     }
 
-    if !params
-        .get("requirement_confirmed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return send_error(
-            server,
-            request_id,
-            -32006,
-            "requirement clarification/confirmation is required before planning or execution"
-                .to_string(),
-            Some(json!({
-                "kind": "requirement_contract",
-                "next_step": {"method": "workflow.clarify", "task": task},
-            })),
-        )
-        .await;
-    }
-
     let ledger = clone_artifact_ledger(server);
-    let gate = evaluate_requirement_gate(&ledger, task, &params, "task.execute")?;
+    let gate = evaluate_requirement_gate_facade(&ledger, task, &params, "task.execute")?;
     if gate.blocked {
         return send_error(
             server,
             request_id,
             -32006,
             gate.reason
+                .clone()
                 .unwrap_or_else(|| "requirement confirmation required".to_string()),
-            Some(json!({
-                "kind": "requirement_contract",
-                "missing_fields": gate.missing_fields,
-                "next_step": {"method": "workflow.clarify", "task": task},
-            })),
+            Some(gate.blocked_payload()),
         )
         .await;
     }
@@ -437,6 +414,10 @@ pub(super) async fn handle_task_execute(
         "adaptive": {
             "planning": adaptive_planning,
             "execution_defaults": execution_context.adaptive_defaults,
+        },
+        "requirement_gate": {
+            "confirmed": true,
+            "gate": gate.success_payload(),
         },
         "lazy_load": execution_report.lazy_load,
         "artifacts": {

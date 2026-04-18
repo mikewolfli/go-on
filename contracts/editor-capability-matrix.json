@@ -50,6 +50,8 @@
     "rpcActionVectorMaintenanceAndMetricsCheckedInMainChain": true,
     "rpcUnknownMethodAndConfigReloadCheckedInMainChain": true,
     "rpcTaskGovernanceRequirementGateCheckedInMainChain": true,
+    "rpcUnifiedGateFacadeCheckedInMainChain": true,
+    "rpcWorkflowResearchConsultGateCheckedInMainChain": true,
     "rpcWorkflowReviewPolicyAndLearningFeedbackCheckedInMainChain": true,
     "rpcWorkflowDualReviewAndDecisionsCheckedInMainChain": true,
     "rpcLearningSummaryAggregatesMetricsCheckedInMainChain": true,

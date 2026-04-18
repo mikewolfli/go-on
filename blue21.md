@@ -21,6 +21,59 @@
 
 ---
 
+## BLUE21-GATE 一轮封口实施步骤（执行基线）
+
+执行目标：在不推翻现有能力的前提下，引入统一 Gate Facade（编排层），把主链路门控收口为一致输入/输出，并保证三端口径一致。
+
+1. 文档先行（本文件）
+- 固化本轮实施步骤、验收门禁与完成率口径。
+
+2. backend 统一 Gate Facade
+- 在 `src/acp/helpers/requirement.rs` 增加统一门控决策封装（保持现有 requirement gate 逻辑不变）。
+- 统一返回字段：`kind / blocked / reason / missing_fields / next_step / governance_artifact_path / clarification_artifact_path`。
+
+3. 主链路接入（必须全接）
+- `workflow.generate`、`task.plan`、`workflow.execute`、`task.execute` 统一走 Gate Facade。
+- 删除主链路中重复/分散的 requirement gate 拼装分支，避免语义漂移。
+
+4. 三端一致性对齐
+- backend 输出字段口径统一后，addon/GUI 的链路消费保持兼容。
+- 契约文件补充 gate facade 可用性声明（只增不破坏）。
+
+5. 无 warning 门禁复验
+- backend：`cargo check --all-targets`
+- 协议主链：`cargo test --test protocol_consistency_integration -- --nocapture`
+- addon：`npm --prefix vscode-addon run check && node vscode-addon/scripts/contract-smoke.js`
+- GUI：`npm --prefix GUI run test:contract && npm --prefix GUI run build`
+
+6. 回写闭合
+- 本文件回写：实施结果、门禁结果、完成率。
+- 目标：一轮封口，完整闭合。
+
+执行状态：✅ 已完成（2026-04-18，同轮封口）
+
+主链路接入结果：
+- `workflow.generate` → 统一接入 Gate Facade
+- `task.plan` → 统一接入 Gate Facade
+- `workflow.execute` → 统一接入 Gate Facade
+- `task.execute` → 统一接入 Gate Facade（并移除重复的前置 requirement_confirmed 分支）
+
+统一字段口径（backend 输出）：
+- `kind`
+- `blocked`
+- `reason`
+- `missing_fields`
+- `next_step`
+- `governance_artifact_path`
+- `clarification_artifact_path`
+
+三端一致性同步：
+- 契约新增：`protocol.rpcUnifiedGateFacadeCheckedInMainChain = true`
+- addon smoke：新增该字段断言
+- GUI smoke：新增该字段断言
+
+---
+
 ## 扫描轮次与收敛过程
 
 ### 第 1 轮：全局静态风险扫描
@@ -177,10 +230,25 @@
 3. 契约治理
 - `contracts/editor-capability-matrix.json`
   - 新增 `verification.generatedBy/generatedAt/sourceOfTruth`
+  - 新增 `protocol.rpcUnifiedGateFacadeCheckedInMainChain`
 - `vscode-addon/scripts/contract-smoke.js`
   - 增加 verification 元数据断言
+  - 增加 unified gate facade 断言
 - `GUI/scripts/contract-smoke.mjs`
   - 增加 verification 元数据断言
+  - 增加 unified gate facade 断言
+
+4. Gate Facade 编排层（本轮新增）
+- `src/acp/helpers/requirement.rs`
+  - 新增 `RequirementGateFacadeDecision`
+  - 新增 `evaluate_requirement_gate_facade(...)`
+  - 新增统一 JSON 构造：`blocked_payload()` / `success_payload()`
+- `src/acp/impl/request.rs`
+  - `workflow.generate` / `task.plan` 改为调用统一 Gate Facade
+  - 响应中 `requirement_gate` 改为统一 `gate` 结构
+- `src/acp/impl/request/exec_pack.rs`
+  - `workflow.execute` / `task.execute` 改为调用统一 Gate Facade
+  - `task.execute` 移除重复前置门控分支，避免语义漂移
 
 ### 本次门禁复验（2026-04-18）
 
@@ -188,11 +256,48 @@
 - 协议一致性：`cargo test --test protocol_consistency_integration -- --nocapture` 10/10 通过
 - addon：`npm --prefix vscode-addon run check && node vscode-addon/scripts/contract-smoke.js` 通过
 - GUI：`npm --prefix GUI run test:contract && npm --prefix GUI run build` 通过
-- 结论：三端一致、链路完整、无新增 warning
+- 结论：三端一致、链路完整、无新增 warning（Gate Facade 主链全接入已验证）
+
+### 多轮追加扫描与修复（2026-04-18，收敛到 0 问题）
+
+第 A 轮（冲突扫描）：
+- 扫描 `workflow.* / task.*` 全链路门控调用分布。
+- 发现新增冲突：`workflow.research` 与 `workflow.consult` 仍未接入统一 Gate Facade，属于同域门控不一致。
+
+第 B 轮（立即修复）：
+- `src/acp/impl/request.rs`
+  - `handle_workflow_research` 接入 `evaluate_requirement_gate_facade(...)`。
+  - `handle_workflow_consult` 接入 `evaluate_requirement_gate_facade(...)`。
+  - `workflow.consult` 增补 `task is required` 参数校验，与相邻 workflow 方法对齐。
+  - 两个方法统一返回 `requirement_gate.gate` 成功结构，阻断时统一 `blocked_payload()`。
+
+第 C 轮（治理固化）：
+- `contracts/editor-capability-matrix.json`
+  - 新增 `protocol.rpcWorkflowResearchConsultGateCheckedInMainChain = true`。
+- `vscode-addon/scripts/contract-smoke.js`
+  - 增加上述字段断言。
+- `GUI/scripts/contract-smoke.mjs`
+  - 增加上述字段断言。
+
+第 D 轮（复验）：
+- `cargo check --all-targets` 通过。
+- `cargo test --test protocol_consistency_integration -- --nocapture` 10/10 通过。
+- `cargo test --test acp_runtime_rpc_integration rpc_task_execute_blocks_when_requirement_not_confirmed -- --nocapture` 通过。
+- `cargo test --test acp_runtime_rpc_integration rpc_workflow_execute_returns_review_policy_and_learning_feedback_fields -- --nocapture` 通过。
+
+第 E 轮（收敛复扫）：
+- 统一 Facade 调用点覆盖：
+  - `workflow.generate`
+  - `task.plan`
+  - `workflow.execute`
+  - `task.execute`
+  - `workflow.research`
+  - `workflow.consult`
+- 未再发现门控冲突与契约漂移。
 
 ---
 
 ## 回写完成率
 
 - BLUE21 本轮任务完成率：`100%`
-- 说明：本次目标为“按 BLUE21 改进项一轮封口，保证链路完整最优、三端一致、无 warning 并回写完成率”；该目标已完成。
+- 说明：本次目标为“按 BLUE21 改进项一轮封口，保证链路完整最优、三端一致、无 warning 并回写完成率”；并已完成 Gate Facade 扩展至 workflow/task 同域主链与相邻链路，多轮扫描收敛到 0 冲突。

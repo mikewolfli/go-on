@@ -142,7 +142,7 @@ use crate::evaluation::TraceEvent;
 
 use crate::acp::helpers::policy::{rank_execution_agents, resolve_review_policy};
 use crate::acp::helpers::requirement::{
-    evaluate_requirement_gate, parse_requirement_contract_from_params,
+    evaluate_requirement_gate_facade, parse_requirement_contract_from_params,
     resolve_learning_clarification_metrics,
 };
 use crate::flow_with_models::FlowModelSelector;
@@ -3864,6 +3864,22 @@ async fn handle_workflow_research(
     }
 
     let ledger = clone_artifact_ledger(server);
+    let requirement_gate =
+        evaluate_requirement_gate_facade(&ledger, &task, &params, "workflow.research")?;
+    if requirement_gate.blocked {
+        return send_error(
+            server,
+            request_id,
+            -32006,
+            requirement_gate
+                .reason
+                .clone()
+                .unwrap_or_else(|| "requirement confirmation is required".to_string()),
+            Some(requirement_gate.blocked_payload()),
+        )
+        .await;
+    }
+
     let plan = build_task_plan(&task);
     let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
 
@@ -3908,6 +3924,10 @@ async fn handle_workflow_research(
             "artifact_path": artifact_path.display().to_string(),
             "plan_artifact_path": plan_artifact_path.display().to_string(),
             "planned_subtasks": plan.planned_subtasks.len(),
+            "requirement_gate": {
+                "confirmed": true,
+                "gate": requirement_gate.success_payload(),
+            }
         }),
     )
     .await
@@ -3921,7 +3941,34 @@ async fn handle_workflow_consult(
     _trace: &RequestTraceContext,
 ) -> Result<()> {
     let task = params_task(&params).unwrap_or_default();
+    if task.trim().is_empty() {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "task is required".to_string(),
+            None,
+        )
+        .await;
+    }
+
     let ledger = clone_artifact_ledger(server);
+    let requirement_gate =
+        evaluate_requirement_gate_facade(&ledger, &task, &params, "workflow.consult")?;
+    if requirement_gate.blocked {
+        return send_error(
+            server,
+            request_id,
+            -32006,
+            requirement_gate
+                .reason
+                .clone()
+                .unwrap_or_else(|| "requirement confirmation is required".to_string()),
+            Some(requirement_gate.blocked_payload()),
+        )
+        .await;
+    }
+
     let artifact = ConsultationArtifact {
         generated_at: crate::acp::prelude::now_ts(),
         task: task.clone(),
@@ -3946,6 +3993,10 @@ async fn handle_workflow_consult(
             "ok": true,
             "artifact": artifact,
             "artifact_path": artifact_path.display().to_string(),
+            "requirement_gate": {
+                "confirmed": true,
+                "gate": requirement_gate.success_payload(),
+            }
         }),
     )
     .await
@@ -3980,7 +4031,8 @@ async fn handle_workflow_generate(
     }
 
     let ledger = clone_artifact_ledger(server);
-    let requirement_gate = evaluate_requirement_gate(&ledger, task, &params, "workflow.generate")?;
+    let requirement_gate =
+        evaluate_requirement_gate_facade(&ledger, task, &params, "workflow.generate")?;
     if requirement_gate.blocked {
         return send_error(
             server,
@@ -3990,13 +4042,7 @@ async fn handle_workflow_generate(
                 .reason
                 .clone()
                 .unwrap_or_else(|| "requirement confirmation is required".to_string()),
-            Some(json!({
-                "kind": "requirement_contract",
-                "task": task,
-                "missing_fields": requirement_gate.missing_fields,
-                "next_step": {"method": "workflow.clarify", "task": task},
-                "governance_artifact_path": requirement_gate.governance_artifact_path.display().to_string(),
-            })),
+            Some(requirement_gate.blocked_payload()),
         )
         .await;
     }
@@ -4037,11 +4083,7 @@ async fn handle_workflow_generate(
             "workflow_artifact_path": workflow_artifact_path.display().to_string(),
             "requirement_gate": {
                 "confirmed": true,
-                "governance_artifact_path": requirement_gate.governance_artifact_path.display().to_string(),
-                "clarification_artifact_path": requirement_gate
-                    .clarification_artifact_path
-                    .as_ref()
-                    .map(|path| path.display().to_string()),
+                "gate": requirement_gate.success_payload(),
             }
         }),
     )
@@ -4077,7 +4119,7 @@ async fn handle_task_plan(
     }
 
     let ledger = clone_artifact_ledger(server);
-    let requirement_gate = evaluate_requirement_gate(&ledger, task, &params, "task.plan")?;
+    let requirement_gate = evaluate_requirement_gate_facade(&ledger, task, &params, "task.plan")?;
     if requirement_gate.blocked {
         return send_error(
             server,
@@ -4087,13 +4129,7 @@ async fn handle_task_plan(
                 .reason
                 .clone()
                 .unwrap_or_else(|| "requirement confirmation is required".to_string()),
-            Some(json!({
-                "kind": "requirement_contract",
-                "task": task,
-                "missing_fields": requirement_gate.missing_fields,
-                "next_step": {"method": "workflow.clarify", "task": task},
-                "governance_artifact_path": requirement_gate.governance_artifact_path.display().to_string(),
-            })),
+            Some(requirement_gate.blocked_payload()),
         )
         .await;
     }
@@ -4124,11 +4160,7 @@ async fn handle_task_plan(
             "artifact_path": artifact_path.display().to_string(),
             "requirement_gate": {
                 "confirmed": true,
-                "governance_artifact_path": requirement_gate.governance_artifact_path.display().to_string(),
-                "clarification_artifact_path": requirement_gate
-                    .clarification_artifact_path
-                    .as_ref()
-                    .map(|path| path.display().to_string()),
+                "gate": requirement_gate.success_payload(),
             }
         }),
     )

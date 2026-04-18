@@ -64,6 +64,8 @@ assert.equal(contract.protocol.rpcLegacyMethodAliasesCompatibilityCheckedInMainC
 assert.equal(contract.protocol.rpcActionVectorMaintenanceAndMetricsCheckedInMainChain, true);
 assert.equal(contract.protocol.rpcUnknownMethodAndConfigReloadCheckedInMainChain, true);
 assert.equal(contract.protocol.rpcTaskGovernanceRequirementGateCheckedInMainChain, true);
+assert.equal(contract.protocol.rpcUnifiedGateFacadeCheckedInMainChain, true);
+assert.equal(contract.protocol.rpcWorkflowResearchConsultGateCheckedInMainChain, true);
 assert.equal(contract.protocol.rpcWorkflowReviewPolicyAndLearningFeedbackCheckedInMainChain, true);
 assert.equal(contract.protocol.rpcWorkflowDualReviewAndDecisionsCheckedInMainChain, true);
 assert.equal(contract.protocol.rpcLearningSummaryAggregatesMetricsCheckedInMainChain, true);
