@@ -271,6 +271,8 @@ pub(super) async fn handle_workflow_confirm(
     };
     let clarification_session_artifact_path =
         persist_clarification_session_artifact(&ledger, &clarification_session)?;
+    let learning_profile = build_learning_profile("workflow.confirm", &task, &params);
+    let knowledge_refinement = build_knowledge_refinement_profile("workflow.confirm", &task, &params, &learning_profile);
 
     send_result(
         server,
@@ -281,6 +283,8 @@ pub(super) async fn handle_workflow_confirm(
             "requirement_contract_artifact_path": requirement_contract_artifact_path.display().to_string(),
             "clarification_session": clarification_session,
             "clarification_session_artifact_path": clarification_session_artifact_path.display().to_string(),
+            "learning_profile": learning_profile,
+            "knowledge_refinement": knowledge_refinement,
         }),
     )
     .await
@@ -324,6 +328,8 @@ pub(super) async fn handle_workflow_clarify(
     };
     let clarification_session_artifact_path =
         persist_clarification_session_artifact(&ledger, &clarification_session)?;
+    let learning_profile = build_learning_profile("workflow.clarify", &task, &params);
+    let knowledge_refinement = build_knowledge_refinement_profile("workflow.clarify", &task, &params, &learning_profile);
 
     send_result(
         server,
@@ -332,6 +338,8 @@ pub(super) async fn handle_workflow_clarify(
             "ok": true,
             "clarification_session": clarification_session,
             "clarification_session_artifact_path": clarification_session_artifact_path.display().to_string(),
+            "learning_profile": learning_profile,
+            "knowledge_refinement": knowledge_refinement,
         }),
     )
     .await
@@ -432,21 +440,40 @@ pub(super) async fn handle_workflow_research(
         request_id.as_ref(),
         Some(artifact_path.display().to_string().as_str()),
     );
+    let capability_profile = build_capability_profile("workflow.research", &task, &params);
+    let governance_profile =
+        build_universal_governance_profile("workflow.research", &capability_profile, &params);
+    let sandbox_profile = build_sandbox_profile("workflow.research", &params, &capability_profile);
+    let approval_checkpoint = build_approval_checkpoint("workflow.research", &change_bundle, &params);
+    let repo_context = build_repo_native_context("workflow.research", &params, &change_bundle);
+    let learning_profile = build_learning_profile("workflow.research", &task, &params);
+    let token_economy =
+        build_token_economy("workflow.research", &params, &governance_profile, &execution_cycle);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("workflow.research", &task, &params, &learning_profile);
 
     send_result(
         server,
         request_id,
         json!({
             "ok": true,
+            "capability_profile": capability_profile,
+            "governance_profile": governance_profile,
+            "learning_profile": learning_profile,
+            "token_economy": token_economy,
+            "knowledge_refinement": knowledge_refinement,
             "artifact": artifact,
             "artifact_path": artifact_path.display().to_string(),
             "plan_artifact_path": plan_artifact_path.display().to_string(),
             "planned_subtasks": plan.planned_subtasks.len(),
             "execution_cycle": execution_cycle,
+            "sandbox_profile": sandbox_profile,
             "requirement_gate": {
                 "confirmed": true,
                 "gate": requirement_gate_payload,
             },
+            "approval_checkpoint": approval_checkpoint,
+            "repo_context": repo_context,
             "gates": gates,
             "artifacts": {
                 "research": artifact_path.display().to_string(),
@@ -534,18 +561,37 @@ pub(super) async fn handle_workflow_consult(
         request_id.as_ref(),
         Some(artifact_path.display().to_string().as_str()),
     );
+    let capability_profile = build_capability_profile("workflow.consult", &task, &params);
+    let governance_profile =
+        build_universal_governance_profile("workflow.consult", &capability_profile, &params);
+    let sandbox_profile = build_sandbox_profile("workflow.consult", &params, &capability_profile);
+    let approval_checkpoint = build_approval_checkpoint("workflow.consult", &change_bundle, &params);
+    let repo_context = build_repo_native_context("workflow.consult", &params, &change_bundle);
+    let learning_profile = build_learning_profile("workflow.consult", &task, &params);
+    let token_economy =
+        build_token_economy("workflow.consult", &params, &governance_profile, &execution_cycle);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("workflow.consult", &task, &params, &learning_profile);
     send_result(
         server,
         request_id,
         json!({
             "ok": true,
+            "capability_profile": capability_profile,
+            "governance_profile": governance_profile,
+            "learning_profile": learning_profile,
+            "token_economy": token_economy,
+            "knowledge_refinement": knowledge_refinement,
             "artifact": artifact,
             "artifact_path": artifact_path.display().to_string(),
             "execution_cycle": execution_cycle,
+            "sandbox_profile": sandbox_profile,
             "requirement_gate": {
                 "confirmed": true,
                 "gate": requirement_gate_payload,
             },
+            "approval_checkpoint": approval_checkpoint,
+            "repo_context": repo_context,
             "gates": gates,
             "artifacts": {
                 "consultation": artifact_path.display().to_string(),
@@ -636,6 +682,17 @@ pub(super) async fn handle_workflow_generate(
         request_id.as_ref(),
         Some(workflow_artifact_path.display().to_string().as_str()),
     );
+    let capability_profile = build_capability_profile("workflow.generate", task, &params);
+    let governance_profile =
+        build_universal_governance_profile("workflow.generate", &capability_profile, &params);
+    let sandbox_profile = build_sandbox_profile("workflow.generate", &params, &capability_profile);
+    let approval_checkpoint = build_approval_checkpoint("workflow.generate", &change_bundle, &params);
+    let repo_context = build_repo_native_context("workflow.generate", &params, &change_bundle);
+    let learning_profile = build_learning_profile("workflow.generate", task, &params);
+    let token_economy =
+        build_token_economy("workflow.generate", &params, &governance_profile, &execution_cycle);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("workflow.generate", task, &params, &learning_profile);
 
     record_trace_event(
         server,
@@ -658,6 +715,11 @@ pub(super) async fn handle_workflow_generate(
         request_id,
         json!({
             "ok": true,
+            "capability_profile": capability_profile,
+            "governance_profile": governance_profile,
+            "learning_profile": learning_profile,
+            "token_economy": token_economy,
+            "knowledge_refinement": knowledge_refinement,
             "plan": plan,
             "workflow": workflow,
             "adaptive": {
@@ -666,10 +728,13 @@ pub(super) async fn handle_workflow_generate(
             "plan_artifact_path": plan_artifact_path.display().to_string(),
             "workflow_artifact_path": workflow_artifact_path.display().to_string(),
             "execution_cycle": execution_cycle,
+            "sandbox_profile": sandbox_profile,
             "requirement_gate": {
                 "confirmed": true,
                 "gate": requirement_gate_payload,
             },
+            "approval_checkpoint": approval_checkpoint,
+            "repo_context": repo_context,
             "gates": gates,
             "artifacts": {
                 "plan": plan_artifact_path.display().to_string(),
@@ -750,6 +815,17 @@ pub(super) async fn handle_task_plan(
         request_id.as_ref(),
         Some(artifact_path.display().to_string().as_str()),
     );
+    let capability_profile = build_capability_profile("task.plan", task, &params);
+    let governance_profile =
+        build_universal_governance_profile("task.plan", &capability_profile, &params);
+    let sandbox_profile = build_sandbox_profile("task.plan", &params, &capability_profile);
+    let approval_checkpoint = build_approval_checkpoint("task.plan", &change_bundle, &params);
+    let repo_context = build_repo_native_context("task.plan", &params, &change_bundle);
+    let learning_profile = build_learning_profile("task.plan", task, &params);
+    let token_economy =
+        build_token_economy("task.plan", &params, &governance_profile, &execution_cycle);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("task.plan", task, &params, &learning_profile);
     record_trace_event(
         server,
         trace,
@@ -770,16 +846,24 @@ pub(super) async fn handle_task_plan(
         request_id,
         json!({
             "ok": true,
+            "capability_profile": capability_profile,
+            "governance_profile": governance_profile,
+            "learning_profile": learning_profile,
+            "token_economy": token_economy,
+            "knowledge_refinement": knowledge_refinement,
             "plan": plan,
             "artifact_path": artifact_path.display().to_string(),
             "run_mode": normalize_plan_control_mode(params.get("mode").and_then(Value::as_str)),
             "memory_graph": memory_graph,
             "memory_recall": memory_recall,
             "execution_cycle": execution_cycle,
+            "sandbox_profile": sandbox_profile,
             "requirement_gate": {
                 "confirmed": true,
                 "gate": requirement_gate_payload,
             },
+            "approval_checkpoint": approval_checkpoint,
+            "repo_context": repo_context,
             "gates": gates,
             "artifacts": {
                 "plan": artifact_path.display().to_string(),

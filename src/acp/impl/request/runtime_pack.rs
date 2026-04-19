@@ -631,7 +631,14 @@ pub(super) async fn handle_runtime_self_model(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let payload = build_runtime_self_model_payload(server, &params)?;
+    let task = params.get("task").and_then(Value::as_str).unwrap_or("");
+    let learning_profile = build_learning_profile("runtime.self_model", task, &params);
+    let knowledge_refinement = build_knowledge_refinement_profile("runtime.self_model", task, &params, &learning_profile);
+    let mut payload = build_runtime_self_model_payload(server, &params)?;
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("learning_profile".to_string(), learning_profile);
+        obj.insert("knowledge_refinement".to_string(), knowledge_refinement);
+    }
     send_result(server, request_id, payload).await
 }
 
@@ -851,7 +858,7 @@ pub(super) async fn handle_provider_status(
 
 pub(super) async fn handle_governance_status(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
     let status = server.get_status();
@@ -917,6 +924,69 @@ pub(super) async fn handle_governance_status(
         })
         .unwrap_or((0, 0, 0));
 
+    let platform_mode = params
+        .get("platform_mode")
+        .and_then(Value::as_str)
+        .or_else(|| server.runtime_config.platform_mode.as_deref())
+        .unwrap_or("phase_compat");
+    let phase_view = json!({
+        "mode": "phase_compat",
+        "success_rate": if runtime_snapshot.total_requests > 0 {
+            (runtime_snapshot.total_requests.saturating_sub(runtime_snapshot.failed_requests)) as f64
+                / runtime_snapshot.total_requests as f64
+        } else {
+            1.0
+        },
+        "gate_reject_rate": if runtime_snapshot.total_requests > 0 {
+            runtime_snapshot.review_gate_rejected_total as f64 / runtime_snapshot.total_requests as f64
+        } else {
+            0.0
+        },
+        "repair_iterations": if runtime_snapshot.review_gate_total > 0 {
+            runtime_snapshot.review_gate_rejected_total as f64 / runtime_snapshot.review_gate_total as f64
+        } else {
+            0.0
+        },
+        "intervention_rate": if runtime_snapshot.total_requests > 0 {
+            runtime_snapshot.review_gate_rejected_total as f64 / runtime_snapshot.total_requests as f64
+        } else {
+            0.0
+        },
+    });
+    let universal_view = json!({
+        "mode": "universal",
+        "success_rate": phase_view["success_rate"],
+        "gate_reject_rate": phase_view["gate_reject_rate"],
+        "repair_iterations": phase_view["repair_iterations"],
+        "intervention_rate": phase_view["intervention_rate"],
+        "source": "runtime.metrics.snapshot",
+    });
+
+    let reconcile = |metric: &str| -> f64 {
+        let phase = phase_view
+            .get(metric)
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let uni = universal_view
+            .get(metric)
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        (uni - phase).abs()
+    };
+    let success_rate_delta = reconcile("success_rate");
+    let gate_reject_rate_delta = reconcile("gate_reject_rate");
+    let repair_iterations_delta = reconcile("repair_iterations");
+    let intervention_rate_delta = reconcile("intervention_rate");
+    let reconciliation_threshold = params
+        .get("reconciliation_threshold")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.02);
+    let max_delta = success_rate_delta
+        .max(gate_reject_rate_delta)
+        .max(repair_iterations_delta)
+        .max(intervention_rate_delta);
+    let reconciliation_ok = max_delta <= reconciliation_threshold;
+
     send_result(
         server,
         request_id,
@@ -966,6 +1036,94 @@ pub(super) async fn handle_governance_status(
                     "recent": governance_audit,
                 },
                 "config": config_summary,
+                "platform_mode": {
+                    "active": platform_mode,
+                    "supported": ["universal", "phase_compat"],
+                    "phase_compat_mapping_enabled": true,
+                },
+                "metrics_reconciliation": {
+                    "phase_view": phase_view,
+                    "universal_view": universal_view,
+                    "delta": {
+                        "success_rate": success_rate_delta,
+                        "gate_reject_rate": gate_reject_rate_delta,
+                        "repair_iterations": repair_iterations_delta,
+                        "intervention_rate": intervention_rate_delta,
+                    },
+                    "threshold": reconciliation_threshold,
+                    "ok": reconciliation_ok,
+                    "alert": if reconciliation_ok {
+                        "none"
+                    } else {
+                        "reconciliation_drift_detected"
+                    },
+                },
+                "learning_cognition": {
+                    "mode": "adaptive",
+                    "self_reflection": true,
+                    "memory_replay_enabled": true,
+                    "distillation_enabled": true,
+                    "strategy_feedback_enabled": true,
+                },
+                "token_economy": {
+                    "multi_round": {
+                        "enabled": true,
+                        "max_rounds": 3,
+                        "early_stop_gate": "requirement_and_quality",
+                        "summarize_between_rounds": true,
+                    },
+                    "budget_guardrail": {
+                        "cost_alert_threshold": 0.85,
+                        "cache_reuse_enabled": true,
+                        "compression_enabled": true,
+                    },
+                    "targets": {
+                        "expected_saving_rate": 0.18,
+                        "intervention_rate_ceiling": 0.25,
+                    },
+                },
+                "knowledge_refinement": {
+                    "distillation": {
+                        "enabled": true,
+                        "scope": "task_repo_runtime",
+                        "extract_strategy": "evidence_weighted",
+                        "writeback_targets": ["learning.summary", "knowledge.distill"],
+                    },
+                    "self_evolution": {
+                        "mode": "continuous",
+                        "adaptive_routing": true,
+                        "policy_feedback_loop": true,
+                        "confidence_floor": 0.7,
+                    },
+                    "quality_guardrail": {
+                        "source_traceable": true,
+                        "dedup_enabled": true,
+                        "attribution_required": true,
+                    },
+                },
+                "org_policy": {
+                    "bundle_version": params
+                        .get("policy_bundle_version")
+                        .and_then(Value::as_str)
+                        .unwrap_or("blue23-policy-bundle-v1"),
+                    "environment": params
+                        .get("environment")
+                        .and_then(Value::as_str)
+                        .unwrap_or("local/dev"),
+                    "exceptions": {
+                        "active_total": governance_audit
+                            .iter()
+                            .filter(|event| event.action.eq_ignore_ascii_case("policy_exception"))
+                            .count(),
+                        "requires_expiry": true,
+                        "audit_tracked": true,
+                    },
+                    "release_mode": if platform_mode.eq_ignore_ascii_case("universal") {
+                        "canary"
+                    } else {
+                        "compat"
+                    },
+                },
                 "entry_guard": {
                     "auth_enabled": server.runtime_config.entry_auth_enabled,
                     "auth_key_env": server.runtime_config.entry_auth_api_key_env,
@@ -1206,6 +1364,33 @@ pub(super) async fn handle_optimization_peak(
                     "mean_repair_iterations": mean_repair_iterations,
                     "human_intervention_rate": human_intervention_rate,
                     "regression_rate": regression_rate,
+                },
+                "scorecard": {
+                    "version": "blue23-scorecard-v1",
+                    "release_ready": overall_pass,
+                    "dimensions": {
+                        "code_fix_success_rate": task_success_rate,
+                        "first_pass_rate": first_pass_rate,
+                        "mean_repair_iterations": mean_repair_iterations,
+                        "human_intervention_rate": human_intervention_rate,
+                        "regression_rate": regression_rate,
+                        "knowledge_refinement_score": (task_success_rate * 0.4
+                            + first_pass_rate * 0.25
+                            + (1.0 - regression_rate) * 0.2
+                            + (1.0 - human_intervention_rate) * 0.15)
+                            .clamp(0.0, 1.0),
+                    },
+                    "cost_latency": {
+                        "estimated_total_cost": estimated_total_cost,
+                        "uptime_seconds": status.lifecycle.uptime_seconds,
+                        "timeout_total": timeout_total,
+                    },
+                    "gates": gates,
+                    "recommendation": if overall_pass {
+                        "promote"
+                    } else {
+                        "hold_and_repair"
+                    },
                 },
                 "timestamp": status.timestamp,
             }

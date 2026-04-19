@@ -206,7 +206,32 @@ impl Drop for RpcHarness {
 }
 
 fn assert_blue22_execution_cycle_shape(result: &Value) {
+    assert!(result["capability_profile"].is_object());
+    assert!(result["capability_profile"]["platform_mode"].is_string());
+    assert!(result["capability_profile"]["phase_compat"].is_object());
+    assert!(result["governance_profile"].is_object());
+    assert!(result["governance_profile"]["risk_band"].is_string());
+    assert!(result["governance_profile"]["budget"].is_object());
+    assert!(result["learning_profile"].is_object());
+    assert!(result["learning_profile"]["learning_mode"].is_string());
+    assert!(result["learning_profile"]["cognition"].is_object());
+    assert!(result["token_economy"].is_object());
+    assert!(result["token_economy"]["budget"]["request_token_budget"].is_number());
+    assert!(result["token_economy"]["multi_round_strategy"]["enabled"].is_boolean());
+    assert!(result["token_economy"]["multi_round_strategy"]["max_rounds"].is_number());
+    assert!(result["knowledge_refinement"].is_object());
+    assert!(result["knowledge_refinement"]["distillation"]["enabled"].is_boolean());
+    assert!(result["knowledge_refinement"]["self_evolution"]["mode"].is_string());
+    assert!(result["sandbox_profile"].is_object());
+    assert!(result["sandbox_profile"]["selected"].is_string());
+    assert!(result["approval_checkpoint"].is_object());
+    assert!(result["approval_checkpoint"]["required"].is_boolean());
+    assert!(result["approval_checkpoint"]["resume_token"].is_string());
+    assert!(result["repo_context"].is_object());
+    assert!(result["repo_context"]["repository"].is_string());
+    assert!(result["repo_context"]["patch_set"]["count"].is_number());
     assert!(result["execution_cycle"].is_object());
+    assert!(result["execution_cycle"]["cycle_id"].is_string());
     assert!(result["execution_cycle"]["current_cycle"].is_object());
     assert!(result["execution_cycle"]["cycles"].is_array());
     assert!(result["execution_cycle"]["history_summary"]["total_cycles"].is_number());
@@ -224,6 +249,10 @@ fn assert_blue22_runtime_execute_cycle_shape(result: &Value) {
     assert!(result["execution_cycle"]["current_cycle"]["patch_set_size"].is_number());
     assert!(result["execution_cycle"]["auto_repair"]["target_subtasks"].is_array());
     assert!(result["execution_cycle"]["auto_repair"].get("next_cycle_preview").is_some());
+    assert!(result["multi_agent"].is_object());
+    assert!(result["multi_agent"]["agent_session"].is_object());
+    assert!(result["multi_agent"]["subtask_sessions"].is_array());
+    assert!(result["multi_agent"]["merge_session"].is_object());
 }
 
 fn assert_blue22_change_bundle_shape(result: &Value) {
@@ -236,6 +265,8 @@ fn assert_blue22_change_bundle_shape(result: &Value) {
     assert!(result["change_bundle"]["commit_suggestion"].is_object());
     assert!(result["change_bundle"]["rollback"].is_object());
     assert!(result["change_bundle"]["commit"].is_object());
+    assert!(result["change_bundle"]["commit_bundle"].is_object());
+    assert!(result["change_bundle"]["pr_bundle"].is_object());
     assert!(result["change_bundle"]["test_coverage"].is_object());
 }
 
@@ -1069,6 +1100,14 @@ mod advanced {
             guardrail["result"]["guardrail"].get("status").is_some(),
             "learning.guardrail should include status"
         );
+        assert!(
+            guardrail["result"].get("learning_profile").is_some(),
+            "learning.guardrail should return learning_profile"
+        );
+        assert!(
+            guardrail["result"].get("knowledge_refinement").is_some(),
+            "learning.guardrail should return knowledge_refinement"
+        );
 
         let summary = results[2]
             .1
@@ -1077,6 +1116,14 @@ mod advanced {
         assert!(
             summary["result"].get("guardrail").is_some(),
             "learning.summary should embed guardrail payload"
+        );
+        assert!(
+            summary["result"].get("learning_profile").is_some(),
+            "learning.summary should return learning_profile"
+        );
+        assert!(
+            summary["result"].get("knowledge_refinement").is_some(),
+            "learning.summary should return knowledge_refinement"
         );
     }
 
@@ -1152,6 +1199,14 @@ mod advanced {
             status_before["result"].get("degraded_services").is_some(),
             "breaker.status should include degraded services"
         );
+        assert!(
+            status_before["result"].get("learning_profile").is_some(),
+            "breaker.status should have lazy-injected learning_profile"
+        );
+        assert!(
+            status_before["result"].get("knowledge_refinement").is_some(),
+            "breaker.status should have lazy-injected knowledge_refinement"
+        );
 
         let dry_run = results[2]
             .1
@@ -1208,6 +1263,14 @@ mod advanced {
         assert!(
             alerts["result"]["alerts"].get("items").is_some(),
             "observability.alerts should include alert items"
+        );
+        assert!(
+            alerts["result"].get("learning_profile").is_some(),
+            "observability.alerts should have lazy-injected learning_profile"
+        );
+        assert!(
+            alerts["result"].get("knowledge_refinement").is_some(),
+            "observability.alerts should have lazy-injected knowledge_refinement"
         );
     }
 
@@ -1291,6 +1354,14 @@ mod advanced {
                 .get("recommendations")
                 .is_some(),
             "runtime.self_model should include recommendations"
+        );
+        assert!(
+            self_model["result"].get("learning_profile").is_some(),
+            "runtime.self_model should return learning_profile"
+        );
+        assert!(
+            self_model["result"].get("knowledge_refinement").is_some(),
+            "runtime.self_model should return knowledge_refinement"
         );
     }
 
@@ -1422,6 +1493,14 @@ mod advanced {
                 .is_some(),
             "knowledge.distill should include strategy layer"
         );
+        assert!(
+            distill["result"].get("learning_profile").is_some(),
+            "knowledge.distill should return learning_profile"
+        );
+        assert!(
+            distill["result"].get("knowledge_refinement").is_some(),
+            "knowledge.distill should return knowledge_refinement"
+        );
     }
 
     #[test]
@@ -1453,6 +1532,14 @@ mod advanced {
             eval["result"]["offline_eval"].get("decision").is_some(),
             "rl.alignment.offline_eval should include decision payload"
         );
+        assert!(
+            eval["result"].get("learning_profile").is_some(),
+            "rl.alignment.offline_eval should return learning_profile"
+        );
+        assert!(
+            eval["result"].get("knowledge_refinement").is_some(),
+            "rl.alignment.offline_eval should return knowledge_refinement"
+        );
     }
 
     #[test]
@@ -1482,6 +1569,14 @@ mod advanced {
         assert!(
             hardness["result"]["hardness"].get("budget").is_some(),
             "hardness.status should include budget profile"
+        );
+        assert!(
+            hardness["result"].get("learning_profile").is_some(),
+            "hardness.status should have lazy-injected learning_profile"
+        );
+        assert!(
+            hardness["result"].get("knowledge_refinement").is_some(),
+            "hardness.status should have lazy-injected knowledge_refinement"
         );
 
         let execution = results[2].1.as_ref().expect("task.execute should succeed");
@@ -1566,6 +1661,14 @@ mod advanced {
             baseline["result"]["baseline"].get("migration").is_some(),
             "config.baseline should include migration summary"
         );
+        assert!(
+            baseline["result"].get("learning_profile").is_some(),
+            "config.baseline should have lazy-injected learning_profile"
+        );
+        assert!(
+            baseline["result"].get("knowledge_refinement").is_some(),
+            "config.baseline should have lazy-injected knowledge_refinement"
+        );
     }
 
     #[test]
@@ -1599,6 +1702,14 @@ mod advanced {
         assert!(
             contract["result"]["contract"].get("version").is_some(),
             "error.contract should include contract version"
+        );
+        assert!(
+            contract["result"].get("learning_profile").is_some(),
+            "error.contract should have lazy-injected learning_profile"
+        );
+        assert!(
+            contract["result"].get("knowledge_refinement").is_some(),
+            "error.contract should have lazy-injected knowledge_refinement"
         );
 
         let health = results[2]
@@ -1643,6 +1754,14 @@ mod advanced {
                 .is_some(),
             "build.repro should include release manifest metadata"
         );
+        assert!(
+            build_repro["result"].get("learning_profile").is_some(),
+            "build.repro should have lazy-injected learning_profile"
+        );
+        assert!(
+            build_repro["result"].get("knowledge_refinement").is_some(),
+            "build.repro should have lazy-injected knowledge_refinement"
+        );
     }
 
     #[test]
@@ -1678,6 +1797,14 @@ mod advanced {
                 .get("waterline")
                 .is_some(),
             "data.lifecycle should include storage waterline summary"
+        );
+        assert!(
+            lifecycle["result"].get("learning_profile").is_some(),
+            "data.lifecycle should have lazy-injected learning_profile"
+        );
+        assert!(
+            lifecycle["result"].get("knowledge_refinement").is_some(),
+            "data.lifecycle should have lazy-injected knowledge_refinement"
         );
     }
 
@@ -1721,6 +1848,18 @@ mod advanced {
             peak["result"]["peak"]["indicators"]["task_success_rate"].is_number(),
             "optimization.peak indicators should include task_success_rate"
         );
+        assert!(
+            peak["result"]["peak"]["scorecard"].is_object(),
+            "optimization.peak should include blue23 scorecard"
+        );
+        assert!(
+            peak["result"]["peak"]["scorecard"]["dimensions"].is_object(),
+            "optimization.peak scorecard should include dimensions"
+        );
+        assert!(
+            peak["result"]["peak"]["scorecard"]["dimensions"]["knowledge_refinement_score"].is_number(),
+            "optimization.peak scorecard should include knowledge_refinement_score"
+        );
 
         let governance = results[2]
             .1
@@ -1734,6 +1873,42 @@ mod advanced {
             governance["result"]["governance"]["tool_matrix"]["summary"]["tool_total"]
                 .is_number(),
             "governance.status should include tool matrix summary"
+        );
+        assert!(
+            governance["result"]["governance"]["platform_mode"]["active"].is_string(),
+            "governance.status should expose platform mode"
+        );
+        assert!(
+            governance["result"]["governance"]["metrics_reconciliation"]["phase_view"].is_object(),
+            "governance.status should include phase metrics view"
+        );
+        assert!(
+            governance["result"]["governance"]["metrics_reconciliation"]["universal_view"].is_object(),
+            "governance.status should include universal metrics view"
+        );
+        assert!(
+            governance["result"]["governance"]["metrics_reconciliation"]["ok"].is_boolean(),
+            "governance.status should include reconciliation status"
+        );
+        assert!(
+            governance["result"]["governance"]["learning_cognition"].is_object(),
+            "governance.status should include learning cognition view"
+        );
+        assert!(
+            governance["result"]["governance"]["token_economy"].is_object(),
+            "governance.status should include token economy view"
+        );
+        assert!(
+            governance["result"]["governance"]["knowledge_refinement"].is_object(),
+            "governance.status should include knowledge refinement view"
+        );
+        assert!(
+            governance["result"]["governance"]["org_policy"]["bundle_version"].is_string(),
+            "governance.status should include org policy bundle version"
+        );
+        assert!(
+            governance["result"]["governance"]["org_policy"]["exceptions"]["active_total"].is_number(),
+            "governance.status should include org policy exception summary"
         );
     }
 

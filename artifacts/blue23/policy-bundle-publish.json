@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "action": "blue23-policy-bundle-publish",
+  "bundle_version": "blue23-policy-bundle-v1",
+  "environment": "staging",
+  "release_mode": "canary",
+  "generated_at": "2026-04-19T07:10:44Z",
+  "exceptions": {
+    "requires_expiry": true,
+    "audit_tracked": true
+  }
+}

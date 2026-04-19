@@ -14,6 +14,9 @@ pub(super) async fn handle_learning_summary(
         .unwrap_or(20)
         .max(1);
     let guardrail = summarize_learning_guardrail(window, &params)?;
+    let task = params.get("task").and_then(Value::as_str).unwrap_or("");
+    let learning_profile = build_learning_profile("learning.summary", task, &params);
+    let knowledge_refinement = build_knowledge_refinement_profile("learning.summary", task, &params, &learning_profile);
     let knowledge_bus =
         read_latest_artifact::<KnowledgeBusArtifact>(&ledger, "spec", "latest-knowledge.json");
     let Some(bus) = read_latest_artifact::<WorkflowLearningBusArtifact>(
@@ -34,7 +37,9 @@ pub(super) async fn handle_learning_summary(
                     "latest_generated_at": bus.generated_at,
                     "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
                 })).unwrap_or_else(|| json!({"total_events": 0, "sampled_events": 0, "recent": []})),
-                "events": []
+                "events": [],
+                "learning_profile": learning_profile,
+                "knowledge_refinement": knowledge_refinement,
             }),
         )
         .await;
@@ -104,6 +109,8 @@ pub(super) async fn handle_learning_summary(
                 "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
             })).unwrap_or_else(|| json!({"total_events": 0, "sampled_events": 0, "recent": []})),
             "events": events,
+            "learning_profile": learning_profile,
+            "knowledge_refinement": knowledge_refinement,
         }),
     )
     .await
@@ -459,8 +466,10 @@ pub(super) async fn handle_learning_guardrail(
         .unwrap_or(50)
         .max(1);
     let guardrail = summarize_learning_guardrail(window, &params)?;
-
-    send_result(server, request_id, json!({ "ok": true, "guardrail": guardrail })).await
+    let task = params.get("task").and_then(Value::as_str).unwrap_or("");
+    let learning_profile = build_learning_profile("learning.guardrail", task, &params);
+    let knowledge_refinement = build_knowledge_refinement_profile("learning.guardrail", task, &params, &learning_profile);
+    send_result(server, request_id, json!({ "ok": true, "guardrail": guardrail, "learning_profile": learning_profile, "knowledge_refinement": knowledge_refinement })).await
 }
 
 pub(super) async fn handle_learning_replay(
@@ -489,6 +498,9 @@ pub(super) async fn handle_learning_replay(
         .count();
     let learning_bus =
         read_latest_artifact::<WorkflowLearningBusArtifact>(&ledger, "spec", "latest-learning.json");
+    let task = params.get("task").and_then(Value::as_str).unwrap_or("");
+    let learning_profile = build_learning_profile("learning.replay", task, &params);
+    let knowledge_refinement = build_knowledge_refinement_profile("learning.replay", task, &params, &learning_profile);
 
     send_result(
         server,
@@ -513,7 +525,9 @@ pub(super) async fn handle_learning_replay(
                     "sampled_events": 0,
                     "recent": []
                 }))
-            }
+            },
+            "learning_profile": learning_profile,
+            "knowledge_refinement": knowledge_refinement,
         }),
     )
     .await
@@ -737,6 +751,9 @@ pub(super) async fn handle_knowledge_distill(
         append_knowledge_tombstones(&new_tombstones)?;
     }
     let tombstones = load_knowledge_tombstones(tombstone_limit);
+    let task_ref = params.get("task").and_then(Value::as_str).unwrap_or("");
+    let learning_profile = build_learning_profile("knowledge.distill", task_ref, &params);
+    let knowledge_refinement = build_knowledge_refinement_profile("knowledge.distill", task_ref, &params, &learning_profile);
 
     let mut strategy_rules = Vec::new();
     for event in summary_events.iter().take(strategy_limit) {
@@ -808,7 +825,9 @@ pub(super) async fn handle_knowledge_distill(
                         "items": tombstones,
                     }
                 }
-            }
+            },
+            "learning_profile": learning_profile,
+            "knowledge_refinement": knowledge_refinement,
         }),
     )
     .await
@@ -1074,7 +1093,15 @@ pub(super) async fn handle_rl_alignment_offline_eval(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_result(server, request_id, build_rl_alignment_offline_eval_payload(&params)).await
+    let task = params.get("task").and_then(Value::as_str).unwrap_or("");
+    let learning_profile = build_learning_profile("rl.alignment.offline_eval", task, &params);
+    let knowledge_refinement = build_knowledge_refinement_profile("rl.alignment.offline_eval", task, &params, &learning_profile);
+    let mut payload = build_rl_alignment_offline_eval_payload(&params);
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("learning_profile".to_string(), learning_profile);
+        obj.insert("knowledge_refinement".to_string(), knowledge_refinement);
+    }
+    send_result(server, request_id, payload).await
 }
 
 pub(super) async fn handle_phase_policy_replay(
@@ -1177,6 +1204,9 @@ pub(super) async fn handle_phase_policy_replay(
         .and_then(|row| row.get("phase"))
         .and_then(Value::as_str)
         .map(|value| value.to_string());
+    let task = params.get("task").and_then(Value::as_str).unwrap_or("");
+    let learning_profile = build_learning_profile("phase.policy.replay", task, &params);
+    let knowledge_refinement = build_knowledge_refinement_profile("phase.policy.replay", task, &params, &learning_profile);
 
     send_result(
         server,
@@ -1197,7 +1227,9 @@ pub(super) async fn handle_phase_policy_replay(
             "phase_scores": ranked,
             "agreement": {
                 "matches_empirical_best": controller_recommended.is_some() && controller_recommended == empirical_best,
-            }
+            },
+            "learning_profile": learning_profile,
+            "knowledge_refinement": knowledge_refinement,
         }),
     )
     .await
@@ -1261,6 +1293,9 @@ pub(super) async fn handle_primary_secondary_summary(
             *root_causes.entry(event.failover_root_cause.clone()).or_insert(0_u64) += 1;
         }
     }
+    let task = params.get("task").and_then(Value::as_str).unwrap_or("");
+    let learning_profile = build_learning_profile("primary_secondary.summary", task, &params);
+    let knowledge_refinement = build_knowledge_refinement_profile("primary_secondary.summary", task, &params, &learning_profile);
 
     send_result(
         server,
@@ -1279,7 +1314,9 @@ pub(super) async fn handle_primary_secondary_summary(
                 "failover_root_causes": root_causes,
                 "latest_policy": policy,
                 "latest_failover": failover,
-            }
+            },
+            "learning_profile": learning_profile,
+            "knowledge_refinement": knowledge_refinement,
         }),
     )
     .await

@@ -758,6 +758,9 @@ pub struct RuntimeConfig {
     /// 协议模式: auto/acp/mcp
     #[serde(default)]
     pub protocol_mode: Option<String>,
+    /// 平台模式: universal/phase_compat
+    #[serde(default)]
+    pub platform_mode: Option<String>,
     /// Emit PUA execution report into JSON-RPC response metadata when enabled
     #[serde(default)]
     pub pua_report: bool,
@@ -837,6 +840,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             protocol_mode: None,
+            platform_mode: Some("phase_compat".to_string()),
             pua_report: false,
             deployment_target: None,
             maintenance_interval_seconds: default_runtime_maintenance_interval_seconds(),
@@ -2903,6 +2907,7 @@ mod tests {
             health_interval_seconds: 30,
             shutdown_drain_seconds: 10,
             protocol_mode: None,
+            platform_mode: Some("phase_compat".to_string()),
             pua_report: false,
             deployment_target: None,
             acp_http_bind_addr: None,
@@ -3444,6 +3449,7 @@ mod tests {
             health_interval_seconds: 120,
             shutdown_drain_seconds: 30,
             protocol_mode: None,
+            platform_mode: Some("phase_compat".to_string()),
             pua_report: false,
             deployment_target: None,
             acp_http_bind_addr: None,

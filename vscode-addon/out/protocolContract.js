@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.defaultWorkflowControlMode = exports.workflowControlModes = exports.protocolContract = void 0;
+exports.defaultPlatformMode = exports.platformModes = exports.defaultWorkflowControlMode = exports.workflowControlModes = exports.protocolContract = void 0;
 const fs = require("fs");
 const path = require("path");
 const fallbackContract = {
@@ -13,6 +13,16 @@ const fallbackContract = {
         supportedModes: ['adaptive', 'acp_stdio', 'acp_http', 'mcp_stdio', 'mcp_http'],
         workflowControlModes: ['manual', 'assisted', 'autonomous'],
         defaultWorkflowControlMode: 'assisted',
+        platformModes: ['universal', 'phase_compat'],
+        defaultPlatformMode: 'phase_compat',
+        universalPlatformEnabled: true,
+        phaseCompatMappingEnabled: true,
+        universalExecutionCycleSchemaVersion: 'blue23-universal-cycle-v1',
+        universalGateModelCheckedInMainChain: true,
+        universalResponseSkeletonCheckedInMainChain: true,
+        universalSandboxProfileCheckedInMainChain: true,
+        universalApprovalCheckpointCheckedInMainChain: true,
+        universalCapabilityProfileCheckedInMainChain: true,
         defaultMode: 'adaptive',
         autoModeSupportsAcpAndMcp: true,
         protocolCapabilityModel: 'capability_plus_transport',
@@ -184,4 +194,6 @@ function loadProtocolContract() {
 exports.protocolContract = loadProtocolContract();
 exports.workflowControlModes = exports.protocolContract.protocol.workflowControlModes ?? ['manual', 'assisted', 'autonomous'];
 exports.defaultWorkflowControlMode = exports.protocolContract.protocol.defaultWorkflowControlMode ?? 'assisted';
+exports.platformModes = exports.protocolContract.protocol.platformModes ?? ['universal', 'phase_compat'];
+exports.defaultPlatformMode = exports.protocolContract.protocol.defaultPlatformMode ?? 'phase_compat';
 //# sourceMappingURL=protocolContract.js.map

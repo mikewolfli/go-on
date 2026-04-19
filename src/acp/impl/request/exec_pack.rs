@@ -260,6 +260,50 @@ fn normalize_control_mode(mode: &str) -> &'static str {
     }
 }
 
+fn build_multi_agent_sessions(
+    task: &str,
+    source: &str,
+    report: &RuntimeExecutionReport,
+) -> Value {
+    let agent_session_id = format!("agent-session-{}", crate::acp::prelude::now_ts_ms());
+    let merge_session_id = format!("merge-session-{}", crate::acp::prelude::now_ts_ms());
+    let subtask_sessions = report
+        .assignment_records
+        .iter()
+        .map(|record| {
+            json!({
+                "subtask_session_id": format!("subtask-session-{}-{}", record.phase_index, record.task_index),
+                "subtask_id": record.subtask_id,
+                "phase_index": record.phase_index,
+                "assigned_role": record
+                    .desired_role
+                    .clone()
+                    .unwrap_or_else(|| "implementer".to_string()),
+                "selected_agent": record.effective_executor,
+                "status": if record.failover_applied { "rerouted" } else { "completed" },
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "agent_session": {
+            "id": agent_session_id,
+            "task": task,
+            "source": source,
+            "roles": ["planner", "implementer", "verifier", "reviewer"],
+            "subtask_count": report.assignment_records.len(),
+            "failover_count": report.failover_count,
+        },
+        "subtask_sessions": subtask_sessions,
+        "merge_session": {
+            "id": merge_session_id,
+            "strategy": "reviewer_consensus",
+            "conflict_policy": "final_reviewer_decides",
+            "status": if report.subtasks_failed == 0 { "merged" } else { "partial" },
+        }
+    })
+}
+
 fn build_runtime_cycle_patch_set(
     records: &[crate::reinforcement::PlannedSubtaskRecord],
 ) -> Vec<Value> {
@@ -870,12 +914,29 @@ pub(super) async fn handle_workflow_execute(
         request_id.as_ref(),
         Some(artifact_path.display().to_string().as_str()),
     );
+    let capability_profile = build_capability_profile("workflow.execute", &task, &params);
+    let governance_profile =
+        build_universal_governance_profile("workflow.execute", &capability_profile, &params);
+    let sandbox_profile = build_sandbox_profile("workflow.execute", &params, &capability_profile);
+    let approval_checkpoint = build_approval_checkpoint("workflow.execute", &change_bundle, &params);
+    let repo_context = build_repo_native_context("workflow.execute", &params, &change_bundle);
+    let learning_profile = build_learning_profile("workflow.execute", &task, &params);
+    let token_economy =
+        build_token_economy("workflow.execute", &params, &governance_profile, &execution_cycle);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("workflow.execute", &task, &params, &learning_profile);
+    let multi_agent = build_multi_agent_sessions(&task, "workflow.execute", &execution_report);
 
     send_result(
         server,
         request_id,
         json!({
             "ok": true,
+            "capability_profile": capability_profile,
+            "governance_profile": governance_profile,
+            "learning_profile": learning_profile,
+            "token_economy": token_economy,
+            "knowledge_refinement": knowledge_refinement,
             "artifact_path": artifact_path.display().to_string(),
             "plan_artifact_path": plan_artifact_path.display().to_string(),
             "workflow_artifact_path": workflow_artifact_path.display().to_string(),
@@ -887,10 +948,14 @@ pub(super) async fn handle_workflow_execute(
                 "execution_defaults": execution_context.adaptive_defaults,
             },
             "execution_cycle": execution_cycle,
+            "sandbox_profile": sandbox_profile,
             "requirement_gate": {
                 "confirmed": true,
                 "gate": requirement_gate_payload,
             },
+            "approval_checkpoint": approval_checkpoint,
+            "repo_context": repo_context,
+            "multi_agent": multi_agent,
             "gates": gates,
             "lazy_load": execution_report.lazy_load,
             "review_policy": review_policy,
@@ -1183,9 +1248,26 @@ pub(super) async fn handle_task_execute(
         request_id.as_ref(),
         Some(execution_path.display().to_string().as_str()),
     );
+    let capability_profile = build_capability_profile("task.execute", task, &params);
+    let governance_profile =
+        build_universal_governance_profile("task.execute", &capability_profile, &params);
+    let sandbox_profile = build_sandbox_profile("task.execute", &params, &capability_profile);
+    let approval_checkpoint = build_approval_checkpoint("task.execute", &change_bundle, &params);
+    let repo_context = build_repo_native_context("task.execute", &params, &change_bundle);
+    let learning_profile = build_learning_profile("task.execute", task, &params);
+    let token_economy =
+        build_token_economy("task.execute", &params, &governance_profile, &execution_cycle);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("task.execute", task, &params, &learning_profile);
+    let multi_agent = build_multi_agent_sessions(task, "task.execute", &execution_report);
 
     let response_payload = json!({
         "ok": true,
+        "capability_profile": capability_profile,
+        "governance_profile": governance_profile,
+        "learning_profile": learning_profile,
+        "token_economy": token_economy,
+        "knowledge_refinement": knowledge_refinement,
         "execution_mode": "runtime_execute",
         "run_mode": normalize_control_mode(&execution_context.adaptive_defaults.applied_mode),
         "plan": plan,
@@ -1197,10 +1279,14 @@ pub(super) async fn handle_task_execute(
             "execution_defaults": execution_context.adaptive_defaults,
         },
         "execution_cycle": execution_cycle,
+        "sandbox_profile": sandbox_profile,
         "requirement_gate": {
             "confirmed": true,
             "gate": requirement_gate_payload,
         },
+        "approval_checkpoint": approval_checkpoint,
+        "repo_context": repo_context,
+        "multi_agent": multi_agent,
         "gates": gates,
         "lazy_load": execution_report.lazy_load,
         "artifacts": {

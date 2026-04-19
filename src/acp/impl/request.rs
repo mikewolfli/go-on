@@ -104,6 +104,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Instant, UNIX_EPOCH};
 
@@ -117,6 +118,11 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::time::Duration;
 use tracing::{debug, info};
+
+// Task-local: carries the current dispatch method through send_result for universal profile injection
+tokio::task_local! {
+    static DISPATCH_REQUEST_METHOD: String;
+}
 
 use crate::acp::background::run_maintenance_cycle;
 use crate::acp::helpers::context::{
@@ -1145,7 +1151,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         0,
     );
     let request_id = request.id.clone();
-    let result = match request.method.as_str() {
+    let dispatch_method = request.method.clone();
+    let result = DISPATCH_REQUEST_METHOD
+        .scope(dispatch_method, async {
+        match request.method.as_str() {
         "initialize" => protocol_pack::handle_initialize(server, request_id).await,
         "mcp.initialize" => protocol_pack::handle_mcp_initialize(server, request_id).await,
         "mcp.tools.list" => protocol_pack::handle_mcp_tools_list(server, request_id).await,
@@ -1488,6 +1497,8 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             .await
         }
     }
+    })
+    .await
     .map_err(|error| attach_request_dispatch_context(error, request.method.as_str()));
 
     let duration_ms = started.elapsed().as_millis() as u64;
@@ -6704,11 +6715,65 @@ async fn send_error(
 
 /// Send result response
 async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Result<()> {
+    let method = DISPATCH_REQUEST_METHOD.try_with(|m| m.clone()).unwrap_or_default();
+    let result = inject_platform_profiles_if_absent(result, &method);
     let result = match take_pua_report(id.as_ref()) {
         Some(encoded) => inject_pua_report_into_result(result, encoded),
         None => result,
     };
     crate::acp::r#impl::io::send_result(server, id, result).await
+}
+
+/// Universal lazy-load platform profile injection: called by send_result for every response.
+/// Injects `learning_profile` and `knowledge_refinement` if the handler did not already set them.
+/// Handlers that explicitly build these objects retain their richer, task-specific versions.
+fn inject_platform_profiles_if_absent(mut result: Value, method: &str) -> Value {
+    // Only inject into object responses (not notifications / empty)
+    let Some(obj) = result.as_object_mut() else {
+        return result;
+    };
+    // Infrastructure endpoints (metrics, health, shutdown, protocol handshakes, trace, debug)
+    // get a lightweight platform_context marker only — they carry no AI task semantics.
+    let is_infrastructure = matches!(
+        method,
+        "metrics" | "metrics.get" | "metrics.prometheus" | "metrics.reset"
+        | "debug_panel.get" | "debug.panel.get"
+        | "trace.get" | "trace.metrics"
+        | "shutdown"
+        | "health" | "runtime.health" | "health.probes"
+        | "initialize" | "mcp.initialize" | "mcp.tools.list" | "mcp.tools.call"
+        | "skill.import" | "skill.enable" | "skill.disable"
+        | "skill.list_imported" | "skill.remove"
+        | "chat" | "phase" | "phase.status"
+    );
+    if is_infrastructure {
+        if !obj.contains_key("platform_context") {
+            obj.insert("platform_context".to_string(), json!({
+                "schema_version": "blue24-platform-universal-v1",
+                "platform": "go-on",
+                "ai_profiles_active": true,
+                "method": method,
+                "profile_class": "infrastructure",
+            }));
+        }
+        return result;
+    }
+    // All semantic endpoints get full learning_profile + knowledge_refinement if not already present.
+    let empty_params = json!({});
+    if !obj.contains_key("learning_profile") {
+        obj.insert(
+            "learning_profile".to_string(),
+            build_learning_profile(method, "", &empty_params),
+        );
+    }
+    if !obj.contains_key("knowledge_refinement") {
+        let lp = obj.get("learning_profile").cloned().unwrap_or_else(|| json!({}));
+        obj.insert(
+            "knowledge_refinement".to_string(),
+            build_knowledge_refinement_profile(method, "", &empty_params, &lp),
+        );
+    }
+    result
 }
 
 /// Create new request trace
@@ -6793,7 +6858,13 @@ fn build_execution_cycle(
     status: &str,
     _details: Vec<String>,
 ) -> Value {
+    let cycle_id = format!(
+        "cycle-{}-{}",
+        method.replace('.', "-"),
+        crate::acp::prelude::now_ts_ms()
+    );
     json!({
+        "cycle_id": cycle_id,
         "method": method,
         "action": action,
         "status": status,
@@ -6810,6 +6881,380 @@ fn build_execution_cycle(
         "auto_repair": {
             "target_subtasks": [],
             "next_cycle_preview": null
+        }
+    })
+}
+
+fn resolve_platform_mode(params: &Value) -> &'static str {
+    match params
+        .get("platform_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("phase_compat")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "universal" => "universal",
+        _ => "phase_compat",
+    }
+}
+
+fn map_phase_to_capability_profile(phase: Option<&str>, method: &str) -> Value {
+    let phase_value = phase.unwrap_or("default");
+    let inferred_capability = if method.contains("plan") || method.contains("generate") {
+        "planning"
+    } else if method.contains("research") || method.contains("consult") {
+        "analysis"
+    } else if method.contains("execute") {
+        "execution"
+    } else {
+        "governance"
+    };
+
+    json!({
+        "phase": phase_value,
+        "capability": inferred_capability,
+        "mapping_status": "mapped",
+        "mapping_version": "blue23-phase-compat-v1",
+    })
+}
+
+fn build_capability_profile(method: &str, task: &str, params: &Value) -> Value {
+    let platform_mode = resolve_platform_mode(params);
+    let phase = params.get("phase").and_then(Value::as_str);
+    let run_mode = params
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("assisted");
+
+    let intent = if method.contains("plan") || method.contains("generate") {
+        "plan"
+    } else if method.contains("research") {
+        "research"
+    } else if method.contains("consult") {
+        "consult"
+    } else if method.contains("execute") {
+        "execute"
+    } else {
+        "analyze"
+    };
+
+    json!({
+        "schema_version": "blue23-capability-profile-v1",
+        "platform_mode": platform_mode,
+        "intent": intent,
+        "task": task,
+        "constraints": {
+            "requirement_confirmed": params
+                .get("requirement_confirmed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "run_mode": run_mode,
+        },
+        "gates": {
+            "requirement_gate": "required",
+            "review_gate": "governed",
+        },
+        "execution_cycle": {
+            "model": "universal_cycle",
+            "supports_auto_repair": true,
+        },
+        "toolchain": {
+            "profile": "governed_runtime",
+            "fallback_enabled": true,
+        },
+        "evidence": {
+            "traceable": true,
+            "artifact_backed": true,
+        },
+        "phase_compat": map_phase_to_capability_profile(phase, method),
+    })
+}
+
+fn build_sandbox_profile(method: &str, params: &Value, capability_profile: &Value) -> Value {
+    let explicit = params.get("sandbox_profile").and_then(Value::as_str);
+    let method_lower = method.to_ascii_lowercase();
+    let selected = explicit.unwrap_or_else(|| {
+        if method_lower.contains("execute") {
+            "workspace_exec"
+        } else if method_lower.contains("plan")
+            || method_lower.contains("research")
+            || method_lower.contains("consult")
+            || method_lower.contains("generate")
+        {
+            "read_only"
+        } else {
+            "workspace_write"
+        }
+    });
+
+    json!({
+        "selected": selected,
+        "reason": format!("risk-adaptive selection for {}", method),
+        "allowed_profiles": ["read_only", "workspace_write", "workspace_exec", "elevated"],
+        "from_capability_profile": capability_profile.get("schema_version").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn build_approval_checkpoint(method: &str, change_bundle: &Value, params: &Value) -> Value {
+    let risk_level = change_bundle
+        .get("risk")
+        .and_then(|risk| risk.get("level"))
+        .and_then(Value::as_str)
+        .unwrap_or("low");
+    let explicit_force = params
+        .get("approval_required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let required = explicit_force || matches!(risk_level, "high" | "critical");
+    let checkpoint_id = format!("approval-{}-{}", method.replace('.', "-"), crate::acp::prelude::now_ts_ms());
+    let resume_token = format!("resume-{}-{}", method.replace('.', "-"), crate::acp::prelude::now_ts_ms());
+    json!({
+        "required": required,
+        "checkpoint_id": checkpoint_id,
+        "resume_token": resume_token,
+        "state": if required { "pending" } else { "not_required" },
+        "reason": if required {
+            format!("{} risk operation requires approval", risk_level)
+        } else {
+            "approval not required for current risk profile".to_string()
+        },
+        "risk_level": risk_level,
+        "required_evidence": ["change_bundle", "gates", "trace_ref"],
+        "approver_scope": if required { "human_reviewer" } else { "none" },
+        "expires_at": crate::acp::prelude::now_ts() + 3600,
+        "method": method,
+    })
+}
+
+fn detect_git_branch() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .arg("rev-parse")
+        .arg("--abbrev-ref")
+        .arg("HEAD")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8(output.stdout).ok()?;
+    let branch = branch.trim();
+    if branch.is_empty() {
+        None
+    } else {
+        Some(branch.to_string())
+    }
+}
+
+fn build_repo_native_context(method: &str, params: &Value, change_bundle: &Value) -> Value {
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| ".".to_string());
+    let branch = params
+        .get("branch")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(detect_git_branch)
+        .unwrap_or_else(|| "unknown".to_string());
+    let worktree = params
+        .get("worktree")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| cwd.clone());
+    let patch_set_count = change_bundle
+        .get("files")
+        .and_then(Value::as_array)
+        .map(|files| files.len())
+        .unwrap_or(0);
+
+    json!({
+        "repository": cwd,
+        "branch": branch,
+        "worktree": worktree,
+        "method": method,
+        "patch_set": {
+            "count": patch_set_count,
+            "source": "change_bundle.files",
+        },
+        "commit_bundle": change_bundle.get("commit_bundle").cloned().unwrap_or(Value::Null),
+        "pr_bundle": change_bundle.get("pr_bundle").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn build_universal_governance_profile(
+    method: &str,
+    capability_profile: &Value,
+    params: &Value,
+) -> Value {
+    let intent = capability_profile
+        .get("intent")
+        .and_then(Value::as_str)
+        .unwrap_or("analyze");
+    let risk_band = if method.contains("execute") {
+        "high"
+    } else if intent == "consult" || intent == "research" {
+        "medium"
+    } else {
+        "low"
+    };
+    let max_iterations = params
+        .get("auto_repair_max_iterations")
+        .and_then(Value::as_u64)
+        .unwrap_or(2);
+    let token_budget = params
+        .get("budget_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(if risk_band == "high" { 6000 } else { 3000 });
+    let time_budget_seconds = params
+        .get("budget_time_seconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(if risk_band == "high" { 240 } else { 120 });
+
+    json!({
+        "schema_version": "blue23-governance-profile-v1",
+        "risk_band": risk_band,
+        "budget": {
+            "token_budget": token_budget,
+            "time_budget_seconds": time_budget_seconds,
+            "max_iterations": max_iterations,
+        },
+        "policy_source": "capability_profile",
+        "phase_compat_enabled": capability_profile
+            .get("platform_mode")
+            .and_then(Value::as_str)
+            .unwrap_or("phase_compat")
+            == "phase_compat",
+    })
+}
+
+fn build_learning_profile(method: &str, task: &str, params: &Value) -> Value {
+    let learning_mode = params
+        .get("learning_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("adaptive");
+    let replay_enabled = params
+        .get("learning_replay_enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let memory_scope = params
+        .get("memory_scope")
+        .and_then(Value::as_str)
+        .unwrap_or("task_and_repo");
+
+    json!({
+        "schema_version": "blue23-learning-profile-v1",
+        "learning_mode": learning_mode,
+        "memory_scope": memory_scope,
+        "cognition": {
+            "self_reflection": true,
+            "strategy_adaptation": true,
+            "confidence_tracking": true,
+            "phase": if method.contains("execute") { "execution" } else { "planning" },
+        },
+        "learning_loop": {
+            "replay_enabled": replay_enabled,
+            "distillation_enabled": true,
+            "feedback_to_strategy": true,
+        },
+        "task_ref": {
+            "method": method,
+            "task": task,
+        }
+    })
+}
+
+fn build_token_economy(
+    method: &str,
+    params: &Value,
+    governance_profile: &Value,
+    execution_cycle: &Value,
+) -> Value {
+    let token_budget = governance_profile
+        .get("budget")
+        .and_then(|budget| budget.get("token_budget"))
+        .and_then(Value::as_u64)
+        .unwrap_or(3000);
+    let repair_iterations = execution_cycle
+        .get("history_summary")
+        .and_then(|summary| summary.get("repair_iterations"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let max_rounds = params
+        .get("token_rounds")
+        .and_then(Value::as_u64)
+        .unwrap_or(1 + repair_iterations)
+        .max(1);
+    let reserve_ratio = if method.contains("execute") { 0.35 } else { 0.2 };
+    let expected_saving_rate = if method.contains("execute") { 0.18 } else { 0.12 };
+
+    json!({
+        "schema_version": "blue23-token-economy-v1",
+        "budget": {
+            "request_token_budget": token_budget,
+            "reserve_ratio": reserve_ratio,
+            "compression_enabled": true,
+            "cache_reuse_enabled": true,
+        },
+        "multi_round_strategy": {
+            "enabled": true,
+            "max_rounds": max_rounds,
+            "summarize_between_rounds": true,
+            "early_stop_gate": "requirement_and_quality",
+        },
+        "optimization": {
+            "expected_saving_rate": expected_saving_rate,
+            "cost_alert_threshold": 0.85,
+            "status": "governed",
+        }
+    })
+}
+
+fn build_knowledge_refinement_profile(
+    method: &str,
+    task: &str,
+    params: &Value,
+    learning_profile: &Value,
+) -> Value {
+    let distill_scope = params
+        .get("distill_scope")
+        .and_then(Value::as_str)
+        .unwrap_or("task_repo_runtime");
+    let evolution_mode = params
+        .get("evolution_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("continuous");
+    let confidence = if method.contains("execute") { 0.78 } else { 0.72 };
+
+    json!({
+        "schema_version": "blue23-knowledge-refinement-v1",
+        "distillation": {
+            "enabled": true,
+            "scope": distill_scope,
+            "extract_strategy": "evidence_weighted",
+            "writeback_targets": ["learning.summary", "knowledge.distill"],
+        },
+        "self_evolution": {
+            "mode": evolution_mode,
+            "adaptive_routing": true,
+            "policy_feedback_loop": true,
+            "confidence": confidence,
+        },
+        "knowledge_quality": {
+            "source_traceable": true,
+            "dedup_enabled": true,
+            "guardrail_enforced": true,
+        },
+        "task_ref": {
+            "method": method,
+            "task": task,
+            "learning_mode": learning_profile
+                .get("learning_mode")
+                .cloned()
+                .unwrap_or(Value::String("adaptive".to_string())),
         }
     })
 }
@@ -6923,6 +7368,18 @@ fn build_change_bundle(
             "message": message,
             "timestamp": crate::acp::prelude::now_ts(),
             "author": "workflow"
+        },
+        "commit_bundle": {
+            "message": message,
+            "scope": commit_scope,
+            "ready": status == "passed",
+            "files_count": files.len(),
+        },
+        "pr_bundle": {
+            "title": message,
+            "summary": description,
+            "risk_level": level,
+            "ready": status == "passed",
         },
         "test_coverage": {
             "overall_coverage": 0.0,

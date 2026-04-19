@@ -15,6 +15,16 @@ type ProtocolSupport = {
     supportedModes: string[];
     workflowControlModes?: string[];
     defaultWorkflowControlMode?: string;
+    platformModes?: string[];
+    defaultPlatformMode?: string;
+    universalPlatformEnabled?: boolean;
+    phaseCompatMappingEnabled?: boolean;
+    universalExecutionCycleSchemaVersion?: string;
+    universalGateModelCheckedInMainChain?: boolean;
+    universalResponseSkeletonCheckedInMainChain?: boolean;
+    universalSandboxProfileCheckedInMainChain?: boolean;
+    universalApprovalCheckpointCheckedInMainChain?: boolean;
+    universalCapabilityProfileCheckedInMainChain?: boolean;
     defaultMode: string;
     autoModeSupportsAcpAndMcp: boolean;
     protocolCapabilityModel: string;
@@ -165,6 +175,16 @@ const fallbackContract: ProtocolContract = {
         supportedModes: ['adaptive', 'acp_stdio', 'acp_http', 'mcp_stdio', 'mcp_http'],
         workflowControlModes: ['manual', 'assisted', 'autonomous'],
         defaultWorkflowControlMode: 'assisted',
+        platformModes: ['universal', 'phase_compat'],
+        defaultPlatformMode: 'phase_compat',
+        universalPlatformEnabled: true,
+        phaseCompatMappingEnabled: true,
+        universalExecutionCycleSchemaVersion: 'blue23-universal-cycle-v1',
+        universalGateModelCheckedInMainChain: true,
+        universalResponseSkeletonCheckedInMainChain: true,
+        universalSandboxProfileCheckedInMainChain: true,
+        universalApprovalCheckpointCheckedInMainChain: true,
+        universalCapabilityProfileCheckedInMainChain: true,
         defaultMode: 'adaptive',
         autoModeSupportsAcpAndMcp: true,
         protocolCapabilityModel: 'capability_plus_transport',
@@ -340,3 +360,7 @@ export const workflowControlModes =
     protocolContract.protocol.workflowControlModes ?? ['manual', 'assisted', 'autonomous'];
 export const defaultWorkflowControlMode =
     protocolContract.protocol.defaultWorkflowControlMode ?? 'assisted';
+export const platformModes =
+    protocolContract.protocol.platformModes ?? ['universal', 'phase_compat'];
+export const defaultPlatformMode =
+    protocolContract.protocol.defaultPlatformMode ?? 'phase_compat';
