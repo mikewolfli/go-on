@@ -86,7 +86,9 @@ mod three_endpoint_contract_tests {
         // Check actions field (must be array)
         if !obj.contains_key("actions") && !obj.contains_key("repair_actions_executed") {
             // Either actions or repair_actions_executed must exist
-            return Err("repair_history must contain 'actions' or 'repair_actions_executed'".to_string());
+            return Err(
+                "repair_history must contain 'actions' or 'repair_actions_executed'".to_string(),
+            );
         }
 
         if let Some(actions) = obj.get("actions") {
@@ -277,8 +279,16 @@ mod three_endpoint_contract_tests {
 
         // Field names must match exactly
         assert_eq!(
-            backend_response.as_object().unwrap().keys().collect::<std::collections::HashSet<_>>(),
-            addon_expected.as_object().unwrap().keys().collect::<std::collections::HashSet<_>>()
+            backend_response
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<std::collections::HashSet<_>>(),
+            addon_expected
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<std::collections::HashSet<_>>()
         );
     }
 

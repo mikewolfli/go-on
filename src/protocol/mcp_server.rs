@@ -13,6 +13,7 @@ use tracing::{debug, info, warn};
 use crate::agent::AgentRegistry;
 use crate::i18n::runtime::{t, tf};
 use crate::mcp::{JsonRpcRequest, JsonRpcResponse, McpServer};
+use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
 use crate::tool::ToolRegistry;
 
 /// MCP Server with stdio transport
@@ -206,23 +207,31 @@ async fn handle_http_connection(
     })?;
 
     if method == "GET" && path == "/health" {
-        write_http_json_response(
-            socket,
-            200,
+        let body = inject_platform_profiles_if_absent(
             serde_json::json!({
                 "status": "ok",
                 "protocolVersion": crate::mcp::MCP_VERSION,
             }),
+            "health",
+        );
+        write_http_json_response(
+            socket,
+            200,
+            body,
         )
         .await?;
         return Ok(());
     }
 
     if method != "POST" {
+        let body = inject_platform_profiles_if_absent(
+            serde_json::json!({"error": "method not allowed"}),
+            "mcp.unknown_method",
+        );
         write_http_json_response(
             socket,
             405,
-            serde_json::json!({"error": "method not allowed"}),
+            body,
         )
         .await?;
         return Ok(());
@@ -245,13 +254,15 @@ async fn handle_http_connection(
                 "MCP HTTP: JSON-RPC parse error from {} {}: {}",
                 method, path, parse_error
             );
+            let error_data =
+                inject_platform_profiles_if_absent(serde_json::json!({}), "mcp.parse_error");
             let error_response = JsonRpcResponse {
                 jsonrpc: "2.0".to_string(),
                 result: None,
                 error: Some(crate::mcp::JsonRpcError {
                     code: crate::mcp::error_codes::PARSE_ERROR,
                     message: format!("Parse error: {}", parse_error),
-                    data: None,
+                    data: Some(error_data),
                 }),
                 id: None,
             };

@@ -16,7 +16,8 @@ pub(super) async fn handle_learning_summary(
     let guardrail = summarize_learning_guardrail(window, &params)?;
     let task = params.get("task").and_then(Value::as_str).unwrap_or("");
     let learning_profile = build_learning_profile("learning.summary", task, &params);
-    let knowledge_refinement = build_knowledge_refinement_profile("learning.summary", task, &params, &learning_profile);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("learning.summary", task, &params, &learning_profile);
     let knowledge_bus =
         read_latest_artifact::<KnowledgeBusArtifact>(&ledger, "spec", "latest-knowledge.json");
     let Some(bus) = read_latest_artifact::<WorkflowLearningBusArtifact>(
@@ -60,7 +61,10 @@ pub(super) async fn handle_learning_summary(
         / count as f64;
     let avg_speedup = events.iter().map(|item| item.parallel_speedup).sum::<f64>() / count as f64;
     let avg_risk = events.iter().map(|item| item.risk_score).sum::<f64>() / count as f64;
-    let failover_total = events.iter().map(|item| item.failover_count as u64).sum::<u64>();
+    let failover_total = events
+        .iter()
+        .map(|item| item.failover_count as u64)
+        .sum::<u64>();
     let avg_rounds = events
         .iter()
         .map(|item| item.clarification_rounds as f64)
@@ -299,7 +303,10 @@ fn summarize_learning_guardrail(window: usize, params: &Value) -> Result<Value> 
                     .map(|item| !item.trim().is_empty())
                     .unwrap_or(false);
                 let complexity_ok = payload.get("complexity").and_then(Value::as_u64).is_some();
-                let totals_ok = payload.get("subtasks_total").and_then(Value::as_u64).is_some();
+                let totals_ok = payload
+                    .get("subtasks_total")
+                    .and_then(Value::as_u64)
+                    .is_some();
                 let risk_score = payload
                     .get("risk_score")
                     .and_then(Value::as_f64)
@@ -326,8 +333,16 @@ fn summarize_learning_guardrail(window: usize, params: &Value) -> Result<Value> 
             }
             LearningRecord::Pua(payload) => {
                 let stage_ok = !payload.stage.trim().is_empty();
-                let checks_ok = !payload.missing_checks.iter().any(|item| item.trim().is_empty());
-                (stage_ok && checks_ok, stage_ok, !payload.passed || payload.escalation_level >= 2, 0)
+                let checks_ok = !payload
+                    .missing_checks
+                    .iter()
+                    .any(|item| item.trim().is_empty());
+                (
+                    stage_ok && checks_ok,
+                    stage_ok,
+                    !payload.passed || payload.escalation_level >= 2,
+                    0,
+                )
             }
         };
 
@@ -342,7 +357,9 @@ fn summarize_learning_guardrail(window: usize, params: &Value) -> Result<Value> 
             if evidence_complete && attributable {
                 stats.high_risk_complete = stats.high_risk_complete.saturating_add(1);
             }
-            if !(evidence_complete && attributable) && generated_at > stats.last_high_risk_incomplete_at {
+            if !(evidence_complete && attributable)
+                && generated_at > stats.last_high_risk_incomplete_at
+            {
                 stats.last_high_risk_incomplete_at = generated_at;
             }
         }
@@ -468,7 +485,8 @@ pub(super) async fn handle_learning_guardrail(
     let guardrail = summarize_learning_guardrail(window, &params)?;
     let task = params.get("task").and_then(Value::as_str).unwrap_or("");
     let learning_profile = build_learning_profile("learning.guardrail", task, &params);
-    let knowledge_refinement = build_knowledge_refinement_profile("learning.guardrail", task, &params, &learning_profile);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("learning.guardrail", task, &params, &learning_profile);
     send_result(server, request_id, json!({ "ok": true, "guardrail": guardrail, "learning_profile": learning_profile, "knowledge_refinement": knowledge_refinement })).await
 }
 
@@ -496,11 +514,15 @@ pub(super) async fn handle_learning_replay(
         .iter()
         .filter(|record| matches!(record, LearningRecord::Pua(_)))
         .count();
-    let learning_bus =
-        read_latest_artifact::<WorkflowLearningBusArtifact>(&ledger, "spec", "latest-learning.json");
+    let learning_bus = read_latest_artifact::<WorkflowLearningBusArtifact>(
+        &ledger,
+        "spec",
+        "latest-learning.json",
+    );
     let task = params.get("task").and_then(Value::as_str).unwrap_or("");
     let learning_profile = build_learning_profile("learning.replay", task, &params);
-    let knowledge_refinement = build_knowledge_refinement_profile("learning.replay", task, &params, &learning_profile);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("learning.replay", task, &params, &learning_profile);
 
     send_result(
         server,
@@ -753,7 +775,12 @@ pub(super) async fn handle_knowledge_distill(
     let tombstones = load_knowledge_tombstones(tombstone_limit);
     let task_ref = params.get("task").and_then(Value::as_str).unwrap_or("");
     let learning_profile = build_learning_profile("knowledge.distill", task_ref, &params);
-    let knowledge_refinement = build_knowledge_refinement_profile("knowledge.distill", task_ref, &params, &learning_profile);
+    let knowledge_refinement = build_knowledge_refinement_profile(
+        "knowledge.distill",
+        task_ref,
+        &params,
+        &learning_profile,
+    );
 
     let mut strategy_rules = Vec::new();
     for event in summary_events.iter().take(strategy_limit) {
@@ -877,7 +904,11 @@ fn parse_rl_reward_weights(params: &Value) -> RlRewardWeights {
 }
 
 fn mean(values: &[f64]) -> f64 {
-    if values.is_empty() { 0.0 } else { values.iter().sum::<f64>() / values.len() as f64 }
+    if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<f64>() / values.len() as f64
+    }
 }
 
 fn collect_rl_offline_eval_samples(
@@ -917,7 +948,10 @@ fn collect_rl_offline_eval_samples(
 
                 let tool_error_rate =
                     (subtasks_failed as f64 / subtasks_total as f64).clamp(0.0, 1.0);
-                let gates_ok = payload.get("gates_ok").and_then(Value::as_bool).unwrap_or(true);
+                let gates_ok = payload
+                    .get("gates_ok")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
                 let safety_penalty = if gates_ok { 0.0 } else { 1.0 };
 
                 let reward = (weights.success * if success { 1.0 } else { 0.0 }
@@ -927,7 +961,10 @@ fn collect_rl_offline_eval_samples(
                     .clamp(-1.0, 1.0);
 
                 Some(RlOfflineEvalSample {
-                    timestamp: payload.get("generated_at").and_then(Value::as_i64).unwrap_or(0),
+                    timestamp: payload
+                        .get("generated_at")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0),
                     success,
                     latency_cost,
                     tool_error_rate,
@@ -971,8 +1008,14 @@ pub(super) fn build_rl_alignment_offline_eval_payload(params: &Value) -> Value {
         samples.split_at(split_index)
     };
 
-    let baseline_rewards = baseline_slice.iter().map(|item| item.reward).collect::<Vec<_>>();
-    let candidate_rewards = candidate_slice.iter().map(|item| item.reward).collect::<Vec<_>>();
+    let baseline_rewards = baseline_slice
+        .iter()
+        .map(|item| item.reward)
+        .collect::<Vec<_>>();
+    let candidate_rewards = candidate_slice
+        .iter()
+        .map(|item| item.reward)
+        .collect::<Vec<_>>();
     let baseline_mean = mean(&baseline_rewards);
     let candidate_mean = mean(&candidate_rewards);
     let improvement = candidate_mean - baseline_mean;
@@ -1014,7 +1057,11 @@ pub(super) fn build_rl_alignment_offline_eval_payload(params: &Value) -> Value {
     let enough_samples = samples.len() >= 20;
     let safe_to_promote = candidate_safety <= (baseline_safety + 0.05);
     let pass = enough_samples && improvement >= pass_threshold && safe_to_promote;
-    let recommended_mode = if pass && !drift_alert { "adaptive" } else { "conservative" };
+    let recommended_mode = if pass && !drift_alert {
+        "adaptive"
+    } else {
+        "conservative"
+    };
 
     let warnings = {
         let mut items = Vec::new();
@@ -1095,7 +1142,12 @@ pub(super) async fn handle_rl_alignment_offline_eval(
 ) -> Result<()> {
     let task = params.get("task").and_then(Value::as_str).unwrap_or("");
     let learning_profile = build_learning_profile("rl.alignment.offline_eval", task, &params);
-    let knowledge_refinement = build_knowledge_refinement_profile("rl.alignment.offline_eval", task, &params, &learning_profile);
+    let knowledge_refinement = build_knowledge_refinement_profile(
+        "rl.alignment.offline_eval",
+        task,
+        &params,
+        &learning_profile,
+    );
     let mut payload = build_rl_alignment_offline_eval_payload(&params);
     if let Some(obj) = payload.as_object_mut() {
         obj.insert("learning_profile".to_string(), learning_profile);
@@ -1179,7 +1231,12 @@ pub(super) async fn handle_phase_policy_replay(
             .get("empirical_score")
             .and_then(Value::as_f64)
             .unwrap_or(0.0)
-            .partial_cmp(&left.get("empirical_score").and_then(Value::as_f64).unwrap_or(0.0))
+            .partial_cmp(
+                &left
+                    .get("empirical_score")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0),
+            )
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
@@ -1206,7 +1263,8 @@ pub(super) async fn handle_phase_policy_replay(
         .map(|value| value.to_string());
     let task = params.get("task").and_then(Value::as_str).unwrap_or("");
     let learning_profile = build_learning_profile("phase.policy.replay", task, &params);
-    let knowledge_refinement = build_knowledge_refinement_profile("phase.policy.replay", task, &params, &learning_profile);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("phase.policy.replay", task, &params, &learning_profile);
 
     send_result(
         server,
@@ -1286,16 +1344,26 @@ pub(super) async fn handle_primary_secondary_summary(
         .map(|item| item.secondary_utilization_rate)
         .sum::<f64>()
         / count as f64;
-    let total_failovers = events.iter().map(|item| item.failover_count as u64).sum::<u64>();
+    let total_failovers = events
+        .iter()
+        .map(|item| item.failover_count as u64)
+        .sum::<u64>();
     let mut root_causes = HashMap::new();
     for event in &events {
         if !event.failover_root_cause.is_empty() {
-            *root_causes.entry(event.failover_root_cause.clone()).or_insert(0_u64) += 1;
+            *root_causes
+                .entry(event.failover_root_cause.clone())
+                .or_insert(0_u64) += 1;
         }
     }
     let task = params.get("task").and_then(Value::as_str).unwrap_or("");
     let learning_profile = build_learning_profile("primary_secondary.summary", task, &params);
-    let knowledge_refinement = build_knowledge_refinement_profile("primary_secondary.summary", task, &params, &learning_profile);
+    let knowledge_refinement = build_knowledge_refinement_profile(
+        "primary_secondary.summary",
+        task,
+        &params,
+        &learning_profile,
+    );
 
     send_result(
         server,

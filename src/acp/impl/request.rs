@@ -82,7 +82,7 @@ fn is_acp_request(method: &str) -> bool {
             | "phase.policy.replay"
             | "primary_secondary.summary"
             | "governance.status"
-             // diagnostics / ops 鈥?also used by vscode-addon in ACP mode
+             // diagnostics / ops also used by vscode-addon in ACP mode
              | "metrics.reset"
              | "trace.get"
              | "trace.metrics"
@@ -91,7 +91,7 @@ fn is_acp_request(method: &str) -> bool {
             // MCP-bridge methods that ACP stdio also dispatches
             | "mcp.tools.list"
             | "mcp.tools.call"
-            )
+    )
 }
 // Request handling implementation functions for ACP server
 //
@@ -158,11 +158,11 @@ use crate::governance::hardening::{
 };
 use crate::i18n::runtime::{t, tf};
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPromotionReport, MemoryStore};
-use crate::orchestration::task_router::TaskRouter;
 use crate::orchestration::skill_import::{
     ImportedSkillRecord, SkillImportManifest, SkillImportPolicy, SkillImportRequest,
     SkillImportStore,
 };
+use crate::orchestration::task_router::TaskRouter;
 use crate::pua::{
     load_learning_records, DynamicQualityCompass, LearningRecord, PuaExecutionReport,
     PuaFeedbackCollector, PuaRuleEngine, PuaStageRequirement, TaskContext, TaskType,
@@ -191,8 +191,8 @@ use crate::rpc_protocol::{value_to_id, JsonRpcRequest, RequestTraceContext};
 
 mod config_pack;
 mod exec_pack;
-mod lifecycle_pack;
 mod learning_pack;
+mod lifecycle_pack;
 mod ops_pack;
 mod protocol_pack;
 mod repro_pack;
@@ -1154,352 +1154,410 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
     let dispatch_method = request.method.clone();
     let result = DISPATCH_REQUEST_METHOD
         .scope(dispatch_method, async {
-        match request.method.as_str() {
-        "initialize" => protocol_pack::handle_initialize(server, request_id).await,
-        "mcp.initialize" => protocol_pack::handle_mcp_initialize(server, request_id).await,
-        "mcp.tools.list" => protocol_pack::handle_mcp_tools_list(server, request_id).await,
-        "mcp.tools.call" => {
-            protocol_pack::handle_mcp_tools_call(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "skill.import" => {
-            protocol_pack::handle_skill_import(server, request.params.unwrap_or_default(), request_id)
-                .await
-        }
-        "skill.enable" => {
-            protocol_pack::handle_skill_enabled_toggle(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-                true,
-            )
-            .await
-        }
-        "skill.disable" => {
-            protocol_pack::handle_skill_enabled_toggle(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-                false,
-            )
-            .await
-        }
-        "skill.list_imported" => {
-            protocol_pack::handle_skill_list_imported(server, request_id).await
-        }
-        "skill.remove" => {
-            protocol_pack::handle_skill_remove(server, request.params.unwrap_or_default(), request_id)
-                .await
-        }
-        "chat" => {
-            protocol_pack::handle_chat(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-                &trace,
-            )
-            .await
-        }
-        "phase" | "phase.status" => {
-            protocol_pack::handle_phase(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-                &trace,
-            )
-            .await
-        }
-        "metrics.get" => runtime_pack::handle_metrics_get(server, request_id).await,
-        "metrics" => runtime_pack::handle_metrics(server, request_id).await,
-        "metrics.prometheus" => runtime_pack::handle_metrics_prometheus(server, request_id).await,
-        "metrics.reset" => runtime_pack::handle_metrics_reset(server, request_id).await,
-        "debug_panel.get" | "debug.panel.get" => {
-            runtime_pack::handle_debug_panel_get(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "trace.get" => {
-            runtime_pack::handle_trace_get(server, request.params.unwrap_or_default(), request_id)
-                .await
-        }
-        "trace.metrics" => runtime_pack::handle_trace_metrics(server, request_id).await,
-        "shutdown" => runtime_pack::handle_shutdown(server, request_id).await,
-        "health" | "runtime.health" => runtime_pack::handle_health(server, request_id).await,
-        "health.probes" => runtime_pack::handle_health_probes(server, request_id).await,
-        "lock.status" => {
-            handle_lock_status(server, request.params.unwrap_or_default(), request_id).await
-        }
-        "runtime.self_model" => {
-            runtime_pack::handle_runtime_self_model(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "provider.status" => {
-            runtime_pack::handle_provider_status(server, request.params.unwrap_or_default(), request_id)
-                .await
-        }
-        "release.readiness" => {
-            handle_release_readiness(server, request.params.unwrap_or_default(), request_id).await
-        }
-        "runtime.stability" => {
-            runtime_pack::handle_runtime_stability(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "observability.alerts" => {
-            handle_observability_alerts(server, request.params.unwrap_or_default(), request_id)
-                .await
-        }
-        "security.baseline" => {
-            handle_security_baseline(server, request.params.unwrap_or_default(), request_id).await
-        }
-        "harness.status" => {
-            handle_harness_status(server, request.params.unwrap_or_default(), request_id).await
-        }
-        "breaker.status" => handle_breaker_status(server, request_id).await,
-        "breaker.reset" => {
-            handle_breaker_reset(server, request.params.unwrap_or_default(), request_id).await
-        }
-        "breaker.recovery" => {
-            handle_breaker_recovery(server, request.params.unwrap_or_default(), request_id).await
-        }
-        "cache.clear" => handle_cache_clear(server, request_id).await,
-        "vector.clear" => handle_vector_clear(server, request_id).await,
-        "maintenance.gc" => handle_maintenance_gc(server, request_id).await,
-        "data.lifecycle" => {
-            handle_data_lifecycle(server, request.params.unwrap_or_default(), request_id).await
-        }
-        "action.check" => {
-            runtime_pack::handle_action_check(server, request.params.unwrap_or_default(), request_id)
-                .await
-        }
-        "conversation.checkpoint.create" => {
-            runtime_pack::handle_conversation_checkpoint_create(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "conversation.checkpoint.list" => {
-            runtime_pack::handle_conversation_checkpoint_list(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "conversation.rollback" => {
-            runtime_pack::handle_conversation_rollback(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-                .await
-        }
-        "conversation.checkpoint.prune" => {
-            runtime_pack::handle_conversation_checkpoint_prune(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "config.reload" => handle_config_reload(server, request_id).await,
-        "config.baseline" => {
-            handle_config_baseline(server, request.params.unwrap_or_default(), request_id).await
-        }
-        "build.repro" => repro_pack::handle_build_repro(server, request_id).await,
-        "optimization.peak" => {
-            runtime_pack::handle_optimization_peak(server, request.params.unwrap_or_default(), request_id)
-                .await
-        }
-        "error.contract" => runtime_pack::handle_error_contract(server, request_id).await,
-        "autotune.get" => runtime_pack::handle_autotune_get(server, request_id).await,
-        "autotune.status" => runtime_pack::handle_autotune_status(server, request_id).await,
-        "autotune.reset" => {
-            runtime_pack::handle_autotune_reset(server, request.params.unwrap_or_default(), request_id)
-                .await
-        }
-        "selector.status" => runtime_pack::handle_selector_status(server, request_id).await,
-        "hardness.status" => {
-            runtime_pack::handle_hardness_status(server, request.params.unwrap_or_default(), request_id)
-                .await
-        }
-        "cost.status" => {
-            runtime_pack::handle_cost_status(server, request.params.unwrap_or_default(), request_id)
-                .await
-        }
-        "workflow.confirm" => {
-            workflow_pack::handle_workflow_confirm(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-                &trace,
-            )
-            .await
-        }
-        "workflow.clarify" => {
-            workflow_pack::handle_workflow_clarify(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-                &trace,
-            )
-            .await
-        }
-        "workflow.research" => {
-            workflow_pack::handle_workflow_research(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-                &trace,
-            )
-            .await
-        }
-        "workflow.consult" => {
-            workflow_pack::handle_workflow_consult(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-                &trace,
-            )
-            .await
-        }
-        "workflow.generate" => {
-            workflow_pack::handle_workflow_generate(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-                &trace,
-            )
-            .await
-        }
-        "workflow.execute" => {
-            handle_workflow_execute(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-                &trace,
-            )
-            .await
-        }
-        "task.plan" => {
-            workflow_pack::handle_task_plan(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-                &trace,
-            )
-            .await
-        }
-        "task.execute" => {
-            handle_task_execute(server, request.params.unwrap_or_default(), request_id).await
-        }
-        "learning.summary" => {
-            learning_pack::handle_learning_summary(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "learning.replay" => {
-            learning_pack::handle_learning_replay(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "learning.guardrail" => {
-            learning_pack::handle_learning_guardrail(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "knowledge.distill" => {
-            learning_pack::handle_knowledge_distill(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "rl.alignment.offline_eval" => {
-            learning_pack::handle_rl_alignment_offline_eval(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "governance.status" => {
-            runtime_pack::handle_governance_status(server, request.params.unwrap_or_default(), request_id)
-                .await
-        }
-        "governance.plan.get" => runtime_pack::handle_governance_plan_get(server, request_id).await,
-        "governance.plan.update" => {
-            runtime_pack::handle_governance_plan_update(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "governance.audit.recent" => {
-            runtime_pack::handle_governance_audit_recent(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "phase.policy.replay" => {
-            learning_pack::handle_phase_policy_replay(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        "primary_secondary.summary" => {
-            learning_pack::handle_primary_secondary_summary(
-                server,
-                request.params.unwrap_or_default(),
-                request_id,
-            )
-            .await
-        }
-        _ => {
-            send_error(
-                server,
-                request_id,
-                -32601,
-                format!("unknown method: {}", request.method),
-                None,
-            )
-            .await
-        }
-    }
-    })
-    .await
-    .map_err(|error| attach_request_dispatch_context(error, request.method.as_str()));
+            match request.method.as_str() {
+                "initialize" => protocol_pack::handle_initialize(server, request_id).await,
+                "mcp.initialize" => protocol_pack::handle_mcp_initialize(server, request_id).await,
+                "mcp.tools.list" => protocol_pack::handle_mcp_tools_list(server, request_id).await,
+                "mcp.tools.call" => {
+                    protocol_pack::handle_mcp_tools_call(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "skill.import" => {
+                    protocol_pack::handle_skill_import(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "skill.enable" => {
+                    protocol_pack::handle_skill_enabled_toggle(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        true,
+                    )
+                    .await
+                }
+                "skill.disable" => {
+                    protocol_pack::handle_skill_enabled_toggle(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        false,
+                    )
+                    .await
+                }
+                "skill.list_imported" => {
+                    protocol_pack::handle_skill_list_imported(server, request_id).await
+                }
+                "skill.remove" => {
+                    protocol_pack::handle_skill_remove(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "chat" => {
+                    protocol_pack::handle_chat(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        &trace,
+                    )
+                    .await
+                }
+                "phase" | "phase.status" => {
+                    protocol_pack::handle_phase(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        &trace,
+                    )
+                    .await
+                }
+                "metrics.get" => runtime_pack::handle_metrics_get(server, request_id).await,
+                "metrics" => runtime_pack::handle_metrics(server, request_id).await,
+                "metrics.prometheus" => {
+                    runtime_pack::handle_metrics_prometheus(server, request_id).await
+                }
+                "metrics.reset" => runtime_pack::handle_metrics_reset(server, request_id).await,
+                "debug_panel.get" | "debug.panel.get" => {
+                    runtime_pack::handle_debug_panel_get(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "trace.get" => {
+                    runtime_pack::handle_trace_get(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "trace.metrics" => runtime_pack::handle_trace_metrics(server, request_id).await,
+                "shutdown" => runtime_pack::handle_shutdown(server, request_id).await,
+                "health" | "runtime.health" => {
+                    runtime_pack::handle_health(server, request_id).await
+                }
+                "health.probes" => runtime_pack::handle_health_probes(server, request_id).await,
+                "lock.status" => {
+                    handle_lock_status(server, request.params.unwrap_or_default(), request_id).await
+                }
+                "runtime.self_model" => {
+                    runtime_pack::handle_runtime_self_model(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "provider.status" => {
+                    runtime_pack::handle_provider_status(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "release.readiness" => {
+                    handle_release_readiness(server, request.params.unwrap_or_default(), request_id)
+                        .await
+                }
+                "runtime.stability" => {
+                    runtime_pack::handle_runtime_stability(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "observability.alerts" => {
+                    handle_observability_alerts(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "security.baseline" => {
+                    handle_security_baseline(server, request.params.unwrap_or_default(), request_id)
+                        .await
+                }
+                "harness.status" => {
+                    handle_harness_status(server, request.params.unwrap_or_default(), request_id)
+                        .await
+                }
+                "breaker.status" => handle_breaker_status(server, request_id).await,
+                "breaker.reset" => {
+                    handle_breaker_reset(server, request.params.unwrap_or_default(), request_id)
+                        .await
+                }
+                "breaker.recovery" => {
+                    handle_breaker_recovery(server, request.params.unwrap_or_default(), request_id)
+                        .await
+                }
+                "cache.clear" => handle_cache_clear(server, request_id).await,
+                "vector.clear" => handle_vector_clear(server, request_id).await,
+                "maintenance.gc" => handle_maintenance_gc(server, request_id).await,
+                "data.lifecycle" => {
+                    handle_data_lifecycle(server, request.params.unwrap_or_default(), request_id)
+                        .await
+                }
+                "action.check" => {
+                    runtime_pack::handle_action_check(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "conversation.checkpoint.create" => {
+                    runtime_pack::handle_conversation_checkpoint_create(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "conversation.checkpoint.list" => {
+                    runtime_pack::handle_conversation_checkpoint_list(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "conversation.rollback" => {
+                    runtime_pack::handle_conversation_rollback(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "conversation.checkpoint.prune" => {
+                    runtime_pack::handle_conversation_checkpoint_prune(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "config.reload" => handle_config_reload(server, request_id).await,
+                "config.baseline" => {
+                    handle_config_baseline(server, request.params.unwrap_or_default(), request_id)
+                        .await
+                }
+                "build.repro" => repro_pack::handle_build_repro(server, request_id).await,
+                "optimization.peak" => {
+                    runtime_pack::handle_optimization_peak(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "error.contract" => runtime_pack::handle_error_contract(server, request_id).await,
+                "autotune.get" => runtime_pack::handle_autotune_get(server, request_id).await,
+                "autotune.status" => runtime_pack::handle_autotune_status(server, request_id).await,
+                "autotune.reset" => {
+                    runtime_pack::handle_autotune_reset(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "selector.status" => runtime_pack::handle_selector_status(server, request_id).await,
+                "hardness.status" => {
+                    runtime_pack::handle_hardness_status(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "cost.status" => {
+                    runtime_pack::handle_cost_status(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "workflow.confirm" => {
+                    workflow_pack::handle_workflow_confirm(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        &trace,
+                    )
+                    .await
+                }
+                "workflow.clarify" => {
+                    workflow_pack::handle_workflow_clarify(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        &trace,
+                    )
+                    .await
+                }
+                "workflow.research" => {
+                    workflow_pack::handle_workflow_research(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        &trace,
+                    )
+                    .await
+                }
+                "workflow.consult" => {
+                    workflow_pack::handle_workflow_consult(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        &trace,
+                    )
+                    .await
+                }
+                "workflow.generate" => {
+                    workflow_pack::handle_workflow_generate(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        &trace,
+                    )
+                    .await
+                }
+                "workflow.execute" => {
+                    handle_workflow_execute(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        &trace,
+                    )
+                    .await
+                }
+                "task.plan" => {
+                    workflow_pack::handle_task_plan(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        &trace,
+                    )
+                    .await
+                }
+                "task.execute" => {
+                    handle_task_execute(server, request.params.unwrap_or_default(), request_id)
+                        .await
+                }
+                "learning.summary" => {
+                    learning_pack::handle_learning_summary(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "learning.replay" => {
+                    learning_pack::handle_learning_replay(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "learning.guardrail" => {
+                    learning_pack::handle_learning_guardrail(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "knowledge.distill" => {
+                    learning_pack::handle_knowledge_distill(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "rl.alignment.offline_eval" => {
+                    learning_pack::handle_rl_alignment_offline_eval(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "governance.status" => {
+                    runtime_pack::handle_governance_status(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "governance.plan.get" => {
+                    runtime_pack::handle_governance_plan_get(server, request_id).await
+                }
+                "governance.plan.update" => {
+                    runtime_pack::handle_governance_plan_update(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "governance.audit.recent" => {
+                    runtime_pack::handle_governance_audit_recent(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "phase.policy.replay" => {
+                    learning_pack::handle_phase_policy_replay(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "primary_secondary.summary" => {
+                    learning_pack::handle_primary_secondary_summary(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                _ => {
+                    send_error(
+                        server,
+                        request_id,
+                        -32601,
+                        format!("unknown method: {}", request.method),
+                        None,
+                    )
+                    .await
+                }
+            }
+        })
+        .await
+        .map_err(|error| attach_request_dispatch_context(error, request.method.as_str()));
 
     let duration_ms = started.elapsed().as_millis() as u64;
     let success = result.is_ok() && !take_error_response_mark(&trace.request_id);
@@ -1716,8 +1774,8 @@ async fn handle_skill_import(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let request: SkillImportRequest = serde_json::from_value(params)
-        .context("invalid params for skill.import")?;
+    let request: SkillImportRequest =
+        serde_json::from_value(params).context("invalid params for skill.import")?;
     let mut store = open_skill_import_store(server)?;
     let imported = match store.import_skill(request).await {
         Ok(record) => record,
@@ -1760,7 +1818,12 @@ async fn handle_skill_list_imported(server: &AcpServer, request_id: Option<Value
         .filter(|skill| skill.get("enabled").and_then(Value::as_bool) == Some(true))
         .count();
     let disabled = total.saturating_sub(enabled);
-    record_skill_admin_audit("list_imported", "skill.list_imported", true, "listed imported skills");
+    record_skill_admin_audit(
+        "list_imported",
+        "skill.list_imported",
+        true,
+        "listed imported skills",
+    );
     send_result(
         server,
         request_id,
@@ -1794,22 +1857,12 @@ async fn handle_skill_enabled_toggle(
     let updated = match store.set_enabled(&name, enabled) {
         Ok(record) => record,
         Err(err) => {
-            record_skill_admin_audit(
-                action,
-                &name,
-                false,
-                &err.to_string(),
-            );
+            record_skill_admin_audit(action, &name, false, &err.to_string());
             return send_error(server, request_id, -32602, err.to_string(), None).await;
         }
     };
     store.save()?;
-    record_skill_admin_audit(
-        action,
-        &name,
-        true,
-        "updated imported skill state",
-    );
+    record_skill_admin_audit(action, &name, true, "updated imported skill state");
     send_result(
         server,
         request_id,
@@ -6273,7 +6326,10 @@ fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
             let (description, input_schema) = load_imported_skill_manifest(&record)
                 .map(|manifest| {
                     let description = if manifest.description.trim().is_empty() {
-                        format!("Imported skill manifest {}@{}", manifest.name, manifest.version)
+                        format!(
+                            "Imported skill manifest {}@{}",
+                            manifest.name, manifest.version
+                        )
                     } else {
                         manifest.description
                     };
@@ -6442,7 +6498,10 @@ async fn execute_mcp_tool_call(server: &AcpServer, name: &str, arguments: &Value
     }
 }
 
-fn find_enabled_imported_skill(server: &AcpServer, name: &str) -> Result<Option<ImportedSkillRecord>> {
+fn find_enabled_imported_skill(
+    server: &AcpServer,
+    name: &str,
+) -> Result<Option<ImportedSkillRecord>> {
     let store = open_skill_import_store(server)?;
     Ok(store
         .list()
@@ -6705,6 +6764,11 @@ async fn send_error(
     data: Option<Value>,
 ) -> Result<()> {
     mark_error_response(id.as_ref());
+    let error_data = inject_platform_profiles_if_absent(
+        data.unwrap_or_else(|| json!({})),
+        "acp.error",
+    );
+    let data = Some(error_data);
     let data = match take_pua_report(id.as_ref()) {
         Some(encoded) => Some(inject_pua_report_into_error_data(data, encoded)),
         None => data,
@@ -6715,7 +6779,9 @@ async fn send_error(
 
 /// Send result response
 async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Result<()> {
-    let method = DISPATCH_REQUEST_METHOD.try_with(|m| m.clone()).unwrap_or_default();
+    let method = DISPATCH_REQUEST_METHOD
+        .try_with(|m| m.clone())
+        .unwrap_or_default();
     let result = inject_platform_profiles_if_absent(result, &method);
     let result = match take_pua_report(id.as_ref()) {
         Some(encoded) => inject_pua_report_into_result(result, encoded),
@@ -6727,7 +6793,7 @@ async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Re
 /// Universal lazy-load platform profile injection: called by send_result for every response.
 /// Injects `learning_profile` and `knowledge_refinement` if the handler did not already set them.
 /// Handlers that explicitly build these objects retain their richer, task-specific versions.
-fn inject_platform_profiles_if_absent(mut result: Value, method: &str) -> Value {
+pub(crate) fn inject_platform_profiles_if_absent(mut result: Value, method: &str) -> Value {
     // Only inject into object responses (not notifications / empty)
     let Some(obj) = result.as_object_mut() else {
         return result;
@@ -6736,25 +6802,54 @@ fn inject_platform_profiles_if_absent(mut result: Value, method: &str) -> Value 
     // get a lightweight platform_context marker only — they carry no AI task semantics.
     let is_infrastructure = matches!(
         method,
-        "metrics" | "metrics.get" | "metrics.prometheus" | "metrics.reset"
-        | "debug_panel.get" | "debug.panel.get"
-        | "trace.get" | "trace.metrics"
-        | "shutdown"
-        | "health" | "runtime.health" | "health.probes"
-        | "initialize" | "mcp.initialize" | "mcp.tools.list" | "mcp.tools.call"
-        | "skill.import" | "skill.enable" | "skill.disable"
-        | "skill.list_imported" | "skill.remove"
-        | "chat" | "phase" | "phase.status"
+        "metrics"
+            | "metrics.get"
+            | "metrics.prometheus"
+            | "metrics.reset"
+            | "debug_panel.get"
+            | "debug.panel.get"
+            | "trace.get"
+            | "trace.metrics"
+            | "shutdown"
+            | "health"
+            | "runtime.health"
+            | "health.probes"
+            | "initialize"
+            | "mcp.initialize"
+            | "mcp.tools.list"
+            | "mcp.tools.call"
+            | "tools/list"
+            | "tools/call"
+            | "resources/list"
+            | "resources/read"
+            | "agents/list"
+            | "models/list"
+            | "skill.import"
+            | "skill.enable"
+            | "skill.disable"
+            | "skill.list_imported"
+            | "skill.remove"
+            | "acp.error"
+            | "chat"
+            | "openai.chat.completions"
+            | "responses.api"
+            | "mcp.parse_error"
+            | "mcp.unknown_method"
+            | "phase"
+            | "phase.status"
     );
     if is_infrastructure {
         if !obj.contains_key("platform_context") {
-            obj.insert("platform_context".to_string(), json!({
-                "schema_version": "blue24-platform-universal-v1",
-                "platform": "go-on",
-                "ai_profiles_active": true,
-                "method": method,
-                "profile_class": "infrastructure",
-            }));
+            obj.insert(
+                "platform_context".to_string(),
+                json!({
+                    "schema_version": "blue24-platform-universal-v1",
+                    "platform": "go-on",
+                    "ai_profiles_active": true,
+                    "method": method,
+                    "profile_class": "infrastructure",
+                }),
+            );
         }
         return result;
     }
@@ -6767,7 +6862,10 @@ fn inject_platform_profiles_if_absent(mut result: Value, method: &str) -> Value 
         );
     }
     if !obj.contains_key("knowledge_refinement") {
-        let lp = obj.get("learning_profile").cloned().unwrap_or_else(|| json!({}));
+        let lp = obj
+            .get("learning_profile")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
         obj.insert(
             "knowledge_refinement".to_string(),
             build_knowledge_refinement_profile(method, "", &empty_params, &lp),
@@ -6852,12 +6950,7 @@ fn record_trace_event(
 }
 
 /// Build execution cycle artifact
-fn build_execution_cycle(
-    method: &str,
-    action: &str,
-    status: &str,
-    _details: Vec<String>,
-) -> Value {
+fn build_execution_cycle(method: &str, action: &str, status: &str, _details: Vec<String>) -> Value {
     let cycle_id = format!(
         "cycle-{}-{}",
         method.replace('.', "-"),
@@ -7007,8 +7100,16 @@ fn build_approval_checkpoint(method: &str, change_bundle: &Value, params: &Value
         .unwrap_or(false);
 
     let required = explicit_force || matches!(risk_level, "high" | "critical");
-    let checkpoint_id = format!("approval-{}-{}", method.replace('.', "-"), crate::acp::prelude::now_ts_ms());
-    let resume_token = format!("resume-{}-{}", method.replace('.', "-"), crate::acp::prelude::now_ts_ms());
+    let checkpoint_id = format!(
+        "approval-{}-{}",
+        method.replace('.', "-"),
+        crate::acp::prelude::now_ts_ms()
+    );
+    let resume_token = format!(
+        "resume-{}-{}",
+        method.replace('.', "-"),
+        crate::acp::prelude::now_ts_ms()
+    );
     json!({
         "required": required,
         "checkpoint_id": checkpoint_id,
@@ -7145,8 +7246,39 @@ fn build_learning_profile(method: &str, task: &str, params: &Value) -> Value {
         .and_then(Value::as_str)
         .unwrap_or("task_and_repo");
 
+    let task_len = task.len();
+    let cognitive_load = if task_len > 300 || method.contains("execute") {
+        "high"
+    } else if task_len > 80 || method.contains("plan") {
+        "medium"
+    } else {
+        "low"
+    };
+
+    let current_strategy = if method.contains("research") || method.contains("consult") {
+        "exploration"
+    } else if method.contains("execute") {
+        "execution"
+    } else if method.contains("plan") || method.contains("generate") {
+        "planning"
+    } else {
+        "reflection"
+    };
+
+    let repair_rounds = params
+        .get("repair_iterations")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let adaptation_signal = if repair_rounds >= 2 {
+        "needs_adjustment"
+    } else if repair_rounds == 1 {
+        "adjusting"
+    } else {
+        "stable"
+    };
+
     json!({
-        "schema_version": "blue23-learning-profile-v1",
+        "schema_version": "blue24-learning-profile-v2",
         "learning_mode": learning_mode,
         "memory_scope": memory_scope,
         "cognition": {
@@ -7155,10 +7287,27 @@ fn build_learning_profile(method: &str, task: &str, params: &Value) -> Value {
             "confidence_tracking": true,
             "phase": if method.contains("execute") { "execution" } else { "planning" },
         },
+        "meta_cognition": {
+            "reflection_depth": if method.contains("execute") { "deep" } else { "standard" },
+            "strategy_evaluation": {
+                "current_strategy": current_strategy,
+                "adaptation_signal": adaptation_signal,
+                "bias_correction_active": true,
+                "repair_rounds_observed": repair_rounds,
+            },
+            "self_improvement": {
+                "bottleneck_awareness": true,
+                "correction_loop_active": true,
+                "hypothesis_testing": method.contains("research") || method.contains("consult"),
+            },
+            "cognitive_load_estimate": cognitive_load,
+            "awareness_level": "operational",
+        },
         "learning_loop": {
             "replay_enabled": replay_enabled,
             "distillation_enabled": true,
             "feedback_to_strategy": true,
+            "cross_round_compression": repair_rounds > 0,
         },
         "task_ref": {
             "method": method,
@@ -7188,25 +7337,77 @@ fn build_token_economy(
         .and_then(Value::as_u64)
         .unwrap_or(1 + repair_iterations)
         .max(1);
-    let reserve_ratio = if method.contains("execute") { 0.35 } else { 0.2 };
-    let expected_saving_rate = if method.contains("execute") { 0.18 } else { 0.12 };
+    let reserve_ratio = if method.contains("execute") {
+        0.35
+    } else {
+        0.2
+    };
+
+    // Dynamic task complexity: explicit param wins, else infer from task text length.
+    let task_len = params
+        .get("task")
+        .and_then(Value::as_str)
+        .map(str::len)
+        .unwrap_or(0);
+    let task_complexity = params
+        .get("complexity")
+        .and_then(Value::as_str)
+        .unwrap_or(if task_len > 300 {
+            "high"
+        } else if task_len > 80 {
+            "medium"
+        } else {
+            "low"
+        });
+
+    // Compression level escalates with repair history and task complexity.
+    let compression_level = if repair_iterations >= 3 || task_complexity == "high" {
+        "aggressive"
+    } else if repair_iterations >= 1 || task_complexity == "medium" {
+        "moderate"
+    } else {
+        "light"
+    };
+
+    let expected_saving_rate = match compression_level {
+        "aggressive" => 0.38,
+        "moderate" => 0.24,
+        _ => {
+            if method.contains("execute") {
+                0.18
+            } else {
+                0.12
+            }
+        }
+    };
+
+    let per_round_budget = token_budget / max_rounds.max(1);
+    let cumulative_saving_estimate = (token_budget as f64 * expected_saving_rate) as u64;
 
     json!({
-        "schema_version": "blue23-token-economy-v1",
+        "schema_version": "blue24-token-economy-v2",
         "budget": {
             "request_token_budget": token_budget,
+            "per_round_budget": per_round_budget,
             "reserve_ratio": reserve_ratio,
             "compression_enabled": true,
             "cache_reuse_enabled": true,
+        },
+        "compression": {
+            "level": compression_level,
+            "task_complexity": task_complexity,
+            "repair_iterations_observed": repair_iterations,
         },
         "multi_round_strategy": {
             "enabled": true,
             "max_rounds": max_rounds,
             "summarize_between_rounds": true,
             "early_stop_gate": "requirement_and_quality",
+            "cross_round_kv_cache": true,
         },
         "optimization": {
             "expected_saving_rate": expected_saving_rate,
+            "cumulative_saving_estimate_tokens": cumulative_saving_estimate,
             "cost_alert_threshold": 0.85,
             "status": "governed",
         }
@@ -7227,15 +7428,50 @@ fn build_knowledge_refinement_profile(
         .get("evolution_mode")
         .and_then(Value::as_str)
         .unwrap_or("continuous");
-    let confidence = if method.contains("execute") { 0.78 } else { 0.72 };
+
+    // Confidence degrades gracefully with repair rounds — reflects real epistemic state.
+    let repair_rounds = params
+        .get("repair_iterations")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let confidence: f64 = if method.contains("execute") {
+        match repair_rounds {
+            0 => 0.82,
+            1 => 0.78,
+            2 => 0.73,
+            _ => 0.68,
+        }
+    } else {
+        match repair_rounds {
+            0 => 0.75,
+            1 => 0.72,
+            _ => 0.68,
+        }
+    };
+
+    // Staleness signal: knowledge may need refresh after repeated repairs.
+    let staleness_risk = if repair_rounds >= 3 {
+        "elevated"
+    } else if repair_rounds >= 1 {
+        "moderate"
+    } else {
+        "low"
+    };
 
     json!({
-        "schema_version": "blue23-knowledge-refinement-v1",
+        "schema_version": "blue24-knowledge-refinement-v2",
         "distillation": {
             "enabled": true,
             "scope": distill_scope,
             "extract_strategy": "evidence_weighted",
             "writeback_targets": ["learning.summary", "knowledge.distill"],
+        },
+        "cross_round": {
+            "distillation_enabled": repair_rounds > 0,
+            "stale_knowledge_detection": true,
+            "staleness_risk": staleness_risk,
+            "writeback_on_convergence": true,
+            "rounds_since_update": repair_rounds,
         },
         "self_evolution": {
             "mode": evolution_mode,
@@ -7301,7 +7537,8 @@ fn build_change_bundle(
                 || lower.ends_with(".jsx")
             {
                 "source"
-            } else if lower.ends_with(".md") || lower.ends_with(".json") || lower.ends_with(".toml") {
+            } else if lower.ends_with(".md") || lower.ends_with(".json") || lower.ends_with(".toml")
+            {
                 "metadata"
             } else {
                 "unknown"
@@ -7317,7 +7554,12 @@ fn build_change_bundle(
 
     let impact_surface = file_change_summary
         .iter()
-        .filter_map(|entry| entry.get("role").and_then(Value::as_str).map(str::to_string))
+        .filter_map(|entry| {
+            entry
+                .get("role")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
@@ -7390,11 +7632,7 @@ fn build_change_bundle(
 }
 
 /// Build trace reference artifact
-fn build_trace_ref(
-    method: &str,
-    request_id: Option<&Value>,
-    artifact_path: Option<&str>,
-) -> Value {
+fn build_trace_ref(method: &str, request_id: Option<&Value>, artifact_path: Option<&str>) -> Value {
     json!({
         "method": method,
         "request_id": request_id.cloned().unwrap_or_default(),

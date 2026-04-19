@@ -128,6 +128,9 @@ use crate::config::{
 use crate::flow::FlowManager;
 use crate::i18n::runtime::{init_i18n, tf};
 use crate::mcp_server::{McpHttpServer, McpStdioServer};
+use crate::protocol::access_mode::{
+    normalize_protocol_mode, resolve_access_selection, TransportMode,
+};
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
     persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger, RuntimeHealthcheckReport,
@@ -139,7 +142,6 @@ use crate::setup::{
 };
 use crate::tool::ToolRegistry;
 use crate::vector::VectorStore;
-use crate::protocol::access_mode::{normalize_protocol_mode, resolve_access_selection, TransportMode};
 
 fn validate_cli_protocol_mode(raw: Option<&str>) -> Result<Option<String>> {
     let Some(value) = raw else {

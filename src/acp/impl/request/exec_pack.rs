@@ -1,4 +1,4 @@
-﻿/// Auto-Repair Loop Support for Step 2 of BLUE22
+/// Auto-Repair Loop Support for Step 2 of BLUE22
 /// Implements autonomous iterative repair capabilities for failed subtasks
 
 #[derive(Debug, Clone)]
@@ -9,7 +9,7 @@ struct RepairContext {
     failure_classes: Vec<String>,
     budget_tokens: u64,
     budget_time_seconds: u64,
-    governance_mode: String,  // "assisted", "conservative", "manual"
+    governance_mode: String, // "assisted", "conservative", "manual"
     repair_actions: Vec<RepairAction>,
     cycle_reports: Vec<RepairCycleReport>,
 }
@@ -30,7 +30,7 @@ struct RepairAction {
     target_subtask_id: String,
     description: String,
     applied_at: i64,
-    result: String,  // "success", "in_progress", "failed"
+    result: String, // "success", "in_progress", "failed"
     details: Value,
 }
 
@@ -133,21 +133,33 @@ fn evaluate_repair_termination_criteria(
 ) -> (bool, String) {
     // Check iteration limit
     if context.iteration >= context.max_iterations {
-        return (true, format!("reached max iterations ({})", context.max_iterations));
+        return (
+            true,
+            format!("reached max iterations ({})", context.max_iterations),
+        );
     }
 
     // Check time budget
     let elapsed_ms = crate::acp::prelude::now_ts_ms() as u64 - start_time_ms;
     let budget_ms = context.budget_time_seconds * 1000;
     if elapsed_ms > budget_ms {
-        return (true, format!("exceeded time budget ({} > {}ms)", elapsed_ms, budget_ms));
+        return (
+            true,
+            format!("exceeded time budget ({} > {}ms)", elapsed_ms, budget_ms),
+        );
     }
 
     // Check token budget (simplified - would track actual token usage in full impl)
     let estimated_tokens_per_action = 500;
     let estimated_total_tokens = context.repair_actions.len() as u64 * estimated_tokens_per_action;
     if estimated_total_tokens > context.budget_tokens {
-        return (true, format!("exceeded token budget ({} > {})", estimated_total_tokens, context.budget_tokens));
+        return (
+            true,
+            format!(
+                "exceeded token budget ({} > {})",
+                estimated_total_tokens, context.budget_tokens
+            ),
+        );
     }
 
     (false, "within budget".to_string())
@@ -159,7 +171,7 @@ fn should_continue_repair_loop(
     start_time_ms: u64,
 ) -> bool {
     if failed_subtask_count == 0 {
-        return false;  // All subtasks passed, stop repair
+        return false; // All subtasks passed, stop repair
     }
 
     let (should_terminate, _reason) = evaluate_repair_termination_criteria(context, start_time_ms);
@@ -174,7 +186,7 @@ fn apply_repair_strategy_to_failed_subtasks(
 
     for record in failed_records {
         if context.iteration >= context.max_iterations {
-            break;  // Respect iteration limit
+            break; // Respect iteration limit
         }
 
         let repair_action = json!({
@@ -191,7 +203,10 @@ fn apply_repair_strategy_to_failed_subtasks(
             context,
             "retry_subtask",
             record.id.clone(),
-            format!("Retrying subtask with adaptive strategy in iteration {}", context.iteration),
+            format!(
+                "Retrying subtask with adaptive strategy in iteration {}",
+                context.iteration
+            ),
             "in_progress",
             repair_action.clone(),
         );
@@ -207,7 +222,8 @@ fn build_repair_loop_state(
     failed_count: usize,
     start_time_ms: u64,
 ) -> Value {
-    let (should_terminate, termination_reason) = evaluate_repair_termination_criteria(context, start_time_ms);
+    let (should_terminate, termination_reason) =
+        evaluate_repair_termination_criteria(context, start_time_ms);
 
     json!({
         "iteration": context.iteration,
@@ -227,7 +243,6 @@ fn build_repair_loop_state(
         "budget_tokens_limit": context.budget_tokens,
     })
 }
-
 
 fn build_repair_history_response(context: &RepairContext) -> Value {
     json!({
@@ -260,11 +275,7 @@ fn normalize_control_mode(mode: &str) -> &'static str {
     }
 }
 
-fn build_multi_agent_sessions(
-    task: &str,
-    source: &str,
-    report: &RuntimeExecutionReport,
-) -> Value {
+fn build_multi_agent_sessions(task: &str, source: &str, report: &RuntimeExecutionReport) -> Value {
     let agent_session_id = format!("agent-session-{}", crate::acp::prelude::now_ts_ms());
     let merge_session_id = format!("merge-session-{}", crate::acp::prelude::now_ts_ms());
     let subtask_sessions = report
@@ -385,7 +396,11 @@ fn build_runtime_execution_cycle(
     };
 
     if let Value::Object(obj) = &mut cycle {
-        let status = if auto_repair_eligible { "degraded" } else { "passed" };
+        let status = if auto_repair_eligible {
+            "degraded"
+        } else {
+            "passed"
+        };
         let current_cycle = json!({
             "iteration": 1,
             "plan_version": "v1",
@@ -495,7 +510,10 @@ fn finalize_repair_action_results(
 ) {
     let mut outcome_by_id = HashMap::new();
     for record in records {
-        outcome_by_id.insert(record.id.clone(), record.outcome.clone().unwrap_or_default());
+        outcome_by_id.insert(
+            record.id.clone(),
+            record.outcome.clone().unwrap_or_default(),
+        );
     }
 
     for action in context.repair_actions.iter_mut() {
@@ -553,11 +571,8 @@ async fn execute_runtime_subtasks_with_repair_loop(
             .iter()
             .filter(|record| record.outcome.as_deref() == Some("failed"))
             .count();
-        let _loop_state = build_repair_loop_state(
-            repair_context,
-            failed_after,
-            repair_start_time_ms,
-        );
+        let _loop_state =
+            build_repair_loop_state(repair_context, failed_after, repair_start_time_ms);
         let actions_applied = repair_context
             .repair_actions
             .iter()
@@ -673,7 +688,11 @@ pub(super) async fn handle_workflow_execute(
         params.get("governance"),
     );
     let mut repair_context = if auto_repair_enabled {
-        build_repair_context(task.clone(), failure_taxonomy.clone(), params.get("governance"))
+        build_repair_context(
+            task.clone(),
+            failure_taxonomy.clone(),
+            params.get("governance"),
+        )
     } else {
         RepairContext {
             iteration: 0,
@@ -889,9 +908,7 @@ pub(super) async fn handle_workflow_execute(
         "execution_summary",
         format!(
             "workflow.execute completed {} subtasks with {} failures for task '{}'",
-            execution_report.subtasks_completed,
-            execution_report.subtasks_failed,
-            task
+            execution_report.subtasks_completed, execution_report.subtasks_failed, task
         ),
         if execution_report.subtasks_failed > 0 {
             "medium"
@@ -918,11 +935,16 @@ pub(super) async fn handle_workflow_execute(
     let governance_profile =
         build_universal_governance_profile("workflow.execute", &capability_profile, &params);
     let sandbox_profile = build_sandbox_profile("workflow.execute", &params, &capability_profile);
-    let approval_checkpoint = build_approval_checkpoint("workflow.execute", &change_bundle, &params);
+    let approval_checkpoint =
+        build_approval_checkpoint("workflow.execute", &change_bundle, &params);
     let repo_context = build_repo_native_context("workflow.execute", &params, &change_bundle);
     let learning_profile = build_learning_profile("workflow.execute", &task, &params);
-    let token_economy =
-        build_token_economy("workflow.execute", &params, &governance_profile, &execution_cycle);
+    let token_economy = build_token_economy(
+        "workflow.execute",
+        &params,
+        &governance_profile,
+        &execution_cycle,
+    );
     let knowledge_refinement =
         build_knowledge_refinement_profile("workflow.execute", &task, &params, &learning_profile);
     let multi_agent = build_multi_agent_sessions(&task, "workflow.execute", &execution_report);
@@ -1220,7 +1242,11 @@ pub(super) async fn handle_task_execute(
     let repair_history = build_repair_history_response(&repair_context);
     let gates = build_gate_matrix(
         requirement_gate_payload.clone(),
-        if summary.subtasks_failed > 0 { "degraded" } else { "passed" },
+        if summary.subtasks_failed > 0 {
+            "degraded"
+        } else {
+            "passed"
+        },
         "not_run",
         "not_run",
         Some(("planning", "passed")),
@@ -1229,11 +1255,13 @@ pub(super) async fn handle_task_execute(
         "execution_summary",
         format!(
             "task.execute completed {} subtasks with {} failures for task '{}'",
-            summary.subtasks_completed,
-            summary.subtasks_failed,
-            task
+            summary.subtasks_completed, summary.subtasks_failed, task
         ),
-        if summary.subtasks_failed > 0 { "medium" } else { "low" },
+        if summary.subtasks_failed > 0 {
+            "medium"
+        } else {
+            "low"
+        },
         "not_run",
         format!("feat(task): execute governed task {}", task),
         vec![
@@ -1255,8 +1283,12 @@ pub(super) async fn handle_task_execute(
     let approval_checkpoint = build_approval_checkpoint("task.execute", &change_bundle, &params);
     let repo_context = build_repo_native_context("task.execute", &params, &change_bundle);
     let learning_profile = build_learning_profile("task.execute", task, &params);
-    let token_economy =
-        build_token_economy("task.execute", &params, &governance_profile, &execution_cycle);
+    let token_economy = build_token_economy(
+        "task.execute",
+        &params,
+        &governance_profile,
+        &execution_cycle,
+    );
     let knowledge_refinement =
         build_knowledge_refinement_profile("task.execute", task, &params, &learning_profile);
     let multi_agent = build_multi_agent_sessions(task, "task.execute", &execution_report);

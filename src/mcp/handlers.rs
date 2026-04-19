@@ -2,7 +2,9 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
-use crate::acp::r#impl::request::record_tool_call_audit_with_protocol;
+use crate::acp::r#impl::request::{
+    inject_platform_profiles_if_absent, record_tool_call_audit_with_protocol,
+};
 use crate::tool::ToolInput;
 
 use super::tools::{tool_descriptor, validate_required_arguments};
@@ -45,13 +47,15 @@ impl McpServer {
             "models/list" => self.handle_list_models(&request).await,
             _ => {
                 warn!("MCP: unknown method '{}'", request.method);
+                let error_data =
+                    inject_platform_profiles_if_absent(json!({}), "mcp.unknown_method");
                 return Ok(JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     result: None,
                     error: Some(JsonRpcError {
                         code: super::error_codes::METHOD_NOT_FOUND,
                         message: format!("Unknown method: {}", request.method),
-                        data: None,
+                        data: Some(error_data),
                     }),
                     id: request.id,
                 });
@@ -59,15 +63,21 @@ impl McpServer {
         };
 
         let (response_result, response_error) = match result {
-            Ok(value) => (Some(value), None),
-            Err(err) => (
-                None,
-                Some(JsonRpcError {
-                    code: error_code_for(&err),
-                    message: err.to_string(),
-                    data: None,
-                }),
-            ),
+            Ok(value) => {
+                let value = inject_platform_profiles_if_absent(value, request.method.as_str());
+                (Some(value), None)
+            }
+            Err(err) => {
+                let error_data = inject_platform_profiles_if_absent(json!({}), request.method.as_str());
+                (
+                    None,
+                    Some(JsonRpcError {
+                        code: error_code_for(&err),
+                        message: err.to_string(),
+                        data: Some(error_data),
+                    }),
+                )
+            }
         };
 
         Ok(JsonRpcResponse {

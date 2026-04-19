@@ -248,7 +248,9 @@ fn assert_blue22_runtime_execute_cycle_shape(result: &Value) {
     assert!(result["execution_cycle"]["current_cycle"]["patch_set"].is_array());
     assert!(result["execution_cycle"]["current_cycle"]["patch_set_size"].is_number());
     assert!(result["execution_cycle"]["auto_repair"]["target_subtasks"].is_array());
-    assert!(result["execution_cycle"]["auto_repair"].get("next_cycle_preview").is_some());
+    assert!(result["execution_cycle"]["auto_repair"]
+        .get("next_cycle_preview")
+        .is_some());
     assert!(result["multi_agent"].is_object());
     assert!(result["multi_agent"]["agent_session"].is_object());
     assert!(result["multi_agent"]["subtask_sessions"].is_array());
@@ -1204,7 +1206,9 @@ mod advanced {
             "breaker.status should have lazy-injected learning_profile"
         );
         assert!(
-            status_before["result"].get("knowledge_refinement").is_some(),
+            status_before["result"]
+                .get("knowledge_refinement")
+                .is_some(),
             "breaker.status should have lazy-injected knowledge_refinement"
         );
 
@@ -1857,7 +1861,8 @@ mod advanced {
             "optimization.peak scorecard should include dimensions"
         );
         assert!(
-            peak["result"]["peak"]["scorecard"]["dimensions"]["knowledge_refinement_score"].is_number(),
+            peak["result"]["peak"]["scorecard"]["dimensions"]["knowledge_refinement_score"]
+                .is_number(),
             "optimization.peak scorecard should include knowledge_refinement_score"
         );
 
@@ -1870,8 +1875,7 @@ mod advanced {
             "governance.status should return governance payload"
         );
         assert!(
-            governance["result"]["governance"]["tool_matrix"]["summary"]["tool_total"]
-                .is_number(),
+            governance["result"]["governance"]["tool_matrix"]["summary"]["tool_total"].is_number(),
             "governance.status should include tool matrix summary"
         );
         assert!(
@@ -1883,7 +1887,8 @@ mod advanced {
             "governance.status should include phase metrics view"
         );
         assert!(
-            governance["result"]["governance"]["metrics_reconciliation"]["universal_view"].is_object(),
+            governance["result"]["governance"]["metrics_reconciliation"]["universal_view"]
+                .is_object(),
             "governance.status should include universal metrics view"
         );
         assert!(
@@ -1907,7 +1912,8 @@ mod advanced {
             "governance.status should include org policy bundle version"
         );
         assert!(
-            governance["result"]["governance"]["org_policy"]["exceptions"]["active_total"].is_number(),
+            governance["result"]["governance"]["org_policy"]["exceptions"]["active_total"]
+                .is_number(),
             "governance.status should include org policy exception summary"
         );
     }
@@ -4262,6 +4268,220 @@ fn rpc_workflow_execute_auto_consultation_blocks_without_consensus() {
     assert!(execute["error"]["data"]["consultation_artifact_path"].is_string());
 
     let shutdown = harness.request(183, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+// ---------------------------------------------------------------------------
+// BLUE24 — AI meta-cognition, token economy v2, knowledge refinement v2
+// ---------------------------------------------------------------------------
+
+/// Verify meta_cognition block is present and well-formed in learning_profile.
+/// Uses the existing task-plan-execute benchmark to ensure proper request ordering.
+#[test]
+fn blue24_learning_profile_has_meta_cognition_block() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_test_config(&config_path, 60, 120, 5);
+    let mut harness = AdvancedRpcHarness::new(&config_path);
+
+    let results =
+        harness.run_scenario_file(Path::new("requests/task-plan-execute-benchmark.ndjson"));
+    assert_eq!(results.len(), 4);
+
+    // task.plan — planning-class
+    let plan = results[1].1.as_ref().expect("task.plan should succeed");
+    let plan_lp = &plan["result"]["learning_profile"];
+    assert!(plan_lp.is_object(), "task.plan must return learning_profile");
+    assert_eq!(
+        plan_lp["schema_version"], "blue24-learning-profile-v2",
+        "learning_profile schema_version must be blue24-learning-profile-v2"
+    );
+    assert!(
+        plan_lp["meta_cognition"].is_object(),
+        "learning_profile must contain meta_cognition block"
+    );
+    assert!(
+        plan_lp["meta_cognition"]["reflection_depth"].is_string(),
+        "meta_cognition.reflection_depth must be a string"
+    );
+    assert!(
+        plan_lp["meta_cognition"]["strategy_evaluation"]["current_strategy"].is_string(),
+        "meta_cognition.strategy_evaluation.current_strategy must be a string"
+    );
+    assert!(
+        plan_lp["meta_cognition"]["strategy_evaluation"]["adaptation_signal"].is_string(),
+        "meta_cognition.strategy_evaluation.adaptation_signal must be a string"
+    );
+    assert!(
+        plan_lp["meta_cognition"]["self_improvement"]["bottleneck_awareness"].is_boolean(),
+        "meta_cognition.self_improvement.bottleneck_awareness must be boolean"
+    );
+    assert!(
+        plan_lp["meta_cognition"]["cognitive_load_estimate"].is_string(),
+        "meta_cognition.cognitive_load_estimate must be a string"
+    );
+    assert_eq!(
+        plan_lp["meta_cognition"]["awareness_level"], "operational",
+        "meta_cognition.awareness_level must be 'operational'"
+    );
+    assert_eq!(
+        plan_lp["meta_cognition"]["reflection_depth"], "standard",
+        "task.plan meta_cognition.reflection_depth must be 'standard'"
+    );
+
+    // task.execute — execution-class; reflection_depth must be "deep"
+    let execute = results[2].1.as_ref().expect("task.execute should succeed");
+    let exec_lp = &execute["result"]["learning_profile"];
+    assert!(exec_lp.is_object(), "task.execute must return learning_profile");
+    assert_eq!(
+        exec_lp["meta_cognition"]["reflection_depth"], "deep",
+        "task.execute meta_cognition.reflection_depth must be 'deep'"
+    );
+}
+
+/// Verify token_economy v2 has dynamic compression fields.
+/// Uses the existing task-plan-execute benchmark.
+#[test]
+fn blue24_token_economy_has_dynamic_compression() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_test_config(&config_path, 60, 120, 5);
+    let mut harness = AdvancedRpcHarness::new(&config_path);
+
+    let results =
+        harness.run_scenario_file(Path::new("requests/task-plan-execute-benchmark.ndjson"));
+    assert_eq!(results.len(), 4);
+
+    let execute = results[2].1.as_ref().expect("task.execute should succeed");
+    let te = &execute["result"]["token_economy"];
+    assert!(te.is_object(), "task.execute must return token_economy");
+    assert_eq!(
+        te["schema_version"], "blue24-token-economy-v2",
+        "token_economy schema_version must be blue24-token-economy-v2"
+    );
+    assert!(
+        te["budget"]["per_round_budget"].is_number(),
+        "token_economy.budget must include per_round_budget"
+    );
+    assert!(
+        te["compression"].is_object(),
+        "token_economy must include compression block"
+    );
+    assert!(
+        te["compression"]["level"].is_string(),
+        "token_economy.compression.level must be a string"
+    );
+    assert!(
+        te["compression"]["task_complexity"].is_string(),
+        "token_economy.compression.task_complexity must be a string"
+    );
+    assert!(
+        te["optimization"]["cumulative_saving_estimate_tokens"].is_number(),
+        "token_economy.optimization must include cumulative_saving_estimate_tokens"
+    );
+    assert!(
+        te["multi_round_strategy"]["cross_round_kv_cache"].is_boolean(),
+        "token_economy.multi_round_strategy must include cross_round_kv_cache"
+    );
+}
+
+/// Verify knowledge_refinement v2 has cross_round distillation block.
+/// Uses the existing task-plan-execute benchmark.
+#[test]
+fn blue24_knowledge_refinement_has_cross_round_distillation() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_test_config(&config_path, 60, 120, 5);
+    let mut harness = AdvancedRpcHarness::new(&config_path);
+
+    let results =
+        harness.run_scenario_file(Path::new("requests/task-plan-execute-benchmark.ndjson"));
+    assert_eq!(results.len(), 4);
+
+    let execute = results[2].1.as_ref().expect("task.execute should succeed");
+    let kr = &execute["result"]["knowledge_refinement"];
+    assert!(kr.is_object(), "task.execute must return knowledge_refinement");
+    assert_eq!(
+        kr["schema_version"], "blue24-knowledge-refinement-v2",
+        "knowledge_refinement schema_version must be blue24-knowledge-refinement-v2"
+    );
+    assert!(
+        kr["cross_round"].is_object(),
+        "knowledge_refinement must include cross_round block"
+    );
+    assert!(
+        kr["cross_round"]["stale_knowledge_detection"].is_boolean(),
+        "cross_round.stale_knowledge_detection must be boolean"
+    );
+    assert!(
+        kr["cross_round"]["staleness_risk"].is_string(),
+        "cross_round.staleness_risk must be a string"
+    );
+    assert!(
+        kr["cross_round"]["writeback_on_convergence"].is_boolean(),
+        "cross_round.writeback_on_convergence must be boolean"
+    );
+    let confidence = kr["self_evolution"]["confidence"]
+        .as_f64()
+        .expect("knowledge_refinement.self_evolution.confidence must be a float");
+    assert!(
+        (0.0..=1.0).contains(&confidence),
+        "confidence must be in [0.0, 1.0]; got {confidence}"
+    );
+}
+/// Verify runtime.self_model now includes a meta_cognition block.
+#[test]
+fn blue24_self_model_has_meta_cognition_block() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_test_config(&config_path, 60, 120, 5);
+    let mut harness = RpcHarness::spawn(&config_path);
+
+    let init = harness.request(330, "initialize", None);
+    assert_eq!(init["result"]["protocol"], "acp");
+
+    let result = harness.request(331, "runtime.self_model", None);
+    let sm = &result["result"]["self_model"];
+    assert!(sm.is_object(), "runtime.self_model result must include self_model");
+    assert!(
+        sm["meta_cognition"].is_object(),
+        "self_model must contain meta_cognition block"
+    );
+    assert!(
+        sm["meta_cognition"]["self_consistency_score"].is_number(),
+        "meta_cognition.self_consistency_score must be a number"
+    );
+    let score = sm["meta_cognition"]["self_consistency_score"]
+        .as_f64()
+        .expect("self_consistency_score must be a float");
+    assert!(
+        (0.0..=1.0).contains(&score),
+        "self_consistency_score must be in [0.0, 1.0]; got {score}"
+    );
+    assert!(
+        sm["meta_cognition"]["goal_stability"].is_string(),
+        "meta_cognition.goal_stability must be a string"
+    );
+    assert!(
+        sm["meta_cognition"]["capability_boundary"]["known_limits"].is_array(),
+        "capability_boundary.known_limits must be an array"
+    );
+    assert!(
+        sm["meta_cognition"]["metacognitive_loop"]["active"].is_boolean(),
+        "metacognitive_loop.active must be boolean"
+    );
+    assert!(
+        sm["meta_cognition"]["world_model"]["runtime_state_known"].is_boolean(),
+        "world_model.runtime_state_known must be boolean"
+    );
+    assert_eq!(
+        sm["meta_cognition"]["schema_version"],
+        "blue24-self-model-meta-cognition-v1",
+        "meta_cognition.schema_version must be blue24-self-model-meta-cognition-v1"
+    );
+
+    let shutdown = harness.request(332, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
     harness.wait_for_exit(Duration::from_secs(8));
 }

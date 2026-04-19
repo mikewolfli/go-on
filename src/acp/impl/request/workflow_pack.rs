@@ -38,7 +38,8 @@ fn enrich_response_with_repair_readiness(
         return response;
     }
 
-    let auto_repair_eligible = should_enable_auto_repair_for_workflow(failure_count, governance_config, None);
+    let auto_repair_eligible =
+        should_enable_auto_repair_for_workflow(failure_count, governance_config, None);
 
     if let Value::Object(ref mut obj) = response {
         obj.insert(
@@ -166,7 +167,8 @@ fn build_task_memory_graph_and_recall(ledger: &ArtifactLedger, task: &str) -> (V
 
                     edges.push(json!({"from": "task:current", "to": problem_node, "rel": "related_problem"}));
                     edges.push(json!({"from": problem_node, "to": fix_node, "rel": "fixed_by"}));
-                    edges.push(json!({"from": fix_node, "to": evidence_node, "rel": "verified_by"}));
+                    edges
+                        .push(json!({"from": fix_node, "to": evidence_node, "rel": "verified_by"}));
 
                     evidence.push(json!({
                         "task": event_task,
@@ -272,7 +274,8 @@ pub(super) async fn handle_workflow_confirm(
     let clarification_session_artifact_path =
         persist_clarification_session_artifact(&ledger, &clarification_session)?;
     let learning_profile = build_learning_profile("workflow.confirm", &task, &params);
-    let knowledge_refinement = build_knowledge_refinement_profile("workflow.confirm", &task, &params, &learning_profile);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("workflow.confirm", &task, &params, &learning_profile);
 
     send_result(
         server,
@@ -329,7 +332,8 @@ pub(super) async fn handle_workflow_clarify(
     let clarification_session_artifact_path =
         persist_clarification_session_artifact(&ledger, &clarification_session)?;
     let learning_profile = build_learning_profile("workflow.clarify", &task, &params);
-    let knowledge_refinement = build_knowledge_refinement_profile("workflow.clarify", &task, &params, &learning_profile);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("workflow.clarify", &task, &params, &learning_profile);
 
     send_result(
         server,
@@ -415,8 +419,12 @@ pub(super) async fn handle_workflow_research(
     };
     let artifact_path = persist_workflow_research(&ledger, &artifact)?;
     let requirement_gate_payload = requirement_gate.success_payload();
-    let execution_cycle =
-        build_execution_cycle("workflow.research", "review_research_artifact", "not_run", Vec::new());
+    let execution_cycle = build_execution_cycle(
+        "workflow.research",
+        "review_research_artifact",
+        "not_run",
+        Vec::new(),
+    );
     let gates = build_gate_matrix(
         requirement_gate_payload.clone(),
         "passed",
@@ -426,7 +434,10 @@ pub(super) async fn handle_workflow_research(
     );
     let change_bundle = build_change_bundle(
         "analysis_only",
-        format!("workflow.research produced analysis artifacts for task '{}'", task),
+        format!(
+            "workflow.research produced analysis artifacts for task '{}'",
+            task
+        ),
         "low",
         "not_run",
         format!("docs(research): capture analysis for {}", task),
@@ -444,11 +455,16 @@ pub(super) async fn handle_workflow_research(
     let governance_profile =
         build_universal_governance_profile("workflow.research", &capability_profile, &params);
     let sandbox_profile = build_sandbox_profile("workflow.research", &params, &capability_profile);
-    let approval_checkpoint = build_approval_checkpoint("workflow.research", &change_bundle, &params);
+    let approval_checkpoint =
+        build_approval_checkpoint("workflow.research", &change_bundle, &params);
     let repo_context = build_repo_native_context("workflow.research", &params, &change_bundle);
     let learning_profile = build_learning_profile("workflow.research", &task, &params);
-    let token_economy =
-        build_token_economy("workflow.research", &params, &governance_profile, &execution_cycle);
+    let token_economy = build_token_economy(
+        "workflow.research",
+        &params,
+        &governance_profile,
+        &execution_cycle,
+    );
     let knowledge_refinement =
         build_knowledge_refinement_profile("workflow.research", &task, &params, &learning_profile);
 
@@ -539,8 +555,12 @@ pub(super) async fn handle_workflow_consult(
     };
     let artifact_path = persist_consultation_artifact(&ledger, &artifact)?;
     let requirement_gate_payload = requirement_gate.success_payload();
-    let execution_cycle =
-        build_execution_cycle("workflow.consult", "review_consensus_plan", "not_run", Vec::new());
+    let execution_cycle = build_execution_cycle(
+        "workflow.consult",
+        "review_consensus_plan",
+        "not_run",
+        Vec::new(),
+    );
     let gates = build_gate_matrix(
         requirement_gate_payload.clone(),
         "passed",
@@ -550,7 +570,10 @@ pub(super) async fn handle_workflow_consult(
     );
     let change_bundle = build_change_bundle(
         "consultation_only",
-        format!("workflow.consult produced a consensus plan for task '{}'", task),
+        format!(
+            "workflow.consult produced a consensus plan for task '{}'",
+            task
+        ),
         "medium",
         "not_run",
         format!("docs(consult): capture consensus plan for {}", task),
@@ -565,11 +588,16 @@ pub(super) async fn handle_workflow_consult(
     let governance_profile =
         build_universal_governance_profile("workflow.consult", &capability_profile, &params);
     let sandbox_profile = build_sandbox_profile("workflow.consult", &params, &capability_profile);
-    let approval_checkpoint = build_approval_checkpoint("workflow.consult", &change_bundle, &params);
+    let approval_checkpoint =
+        build_approval_checkpoint("workflow.consult", &change_bundle, &params);
     let repo_context = build_repo_native_context("workflow.consult", &params, &change_bundle);
     let learning_profile = build_learning_profile("workflow.consult", &task, &params);
-    let token_economy =
-        build_token_economy("workflow.consult", &params, &governance_profile, &execution_cycle);
+    let token_economy = build_token_economy(
+        "workflow.consult",
+        &params,
+        &governance_profile,
+        &execution_cycle,
+    );
     let knowledge_refinement =
         build_knowledge_refinement_profile("workflow.consult", &task, &params, &learning_profile);
     send_result(
@@ -668,7 +696,10 @@ pub(super) async fn handle_workflow_generate(
     );
     let change_bundle = build_change_bundle(
         "planning_only",
-        format!("workflow.generate emitted a workflow graph for task '{}'", task),
+        format!(
+            "workflow.generate emitted a workflow graph for task '{}'",
+            task
+        ),
         "low",
         "not_run",
         format!("docs(workflow): capture generated workflow for {}", task),
@@ -686,11 +717,16 @@ pub(super) async fn handle_workflow_generate(
     let governance_profile =
         build_universal_governance_profile("workflow.generate", &capability_profile, &params);
     let sandbox_profile = build_sandbox_profile("workflow.generate", &params, &capability_profile);
-    let approval_checkpoint = build_approval_checkpoint("workflow.generate", &change_bundle, &params);
+    let approval_checkpoint =
+        build_approval_checkpoint("workflow.generate", &change_bundle, &params);
     let repo_context = build_repo_native_context("workflow.generate", &params, &change_bundle);
     let learning_profile = build_learning_profile("workflow.generate", task, &params);
-    let token_economy =
-        build_token_economy("workflow.generate", &params, &governance_profile, &execution_cycle);
+    let token_economy = build_token_economy(
+        "workflow.generate",
+        &params,
+        &governance_profile,
+        &execution_cycle,
+    );
     let knowledge_refinement =
         build_knowledge_refinement_profile("workflow.generate", task, &params, &learning_profile);
 
@@ -794,7 +830,8 @@ pub(super) async fn handle_task_plan(
     let plan = build_task_plan(task);
     let artifact_path = persist_task_plan(&ledger, &plan)?;
     let requirement_gate_payload = requirement_gate.success_payload();
-    let execution_cycle = build_execution_cycle("task.plan", "review_task_plan", "not_run", Vec::new());
+    let execution_cycle =
+        build_execution_cycle("task.plan", "review_task_plan", "not_run", Vec::new());
     let gates = build_gate_matrix(
         requirement_gate_payload.clone(),
         "passed",

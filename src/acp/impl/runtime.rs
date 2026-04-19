@@ -20,7 +20,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::acp::background::start_background_tasks;
 use crate::acp::r#impl::io::send_error;
-use crate::acp::r#impl::request::handle_request;
+use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
 
 use crate::acp::server::AcpServer;
 use crate::adaptive_selector::AdaptiveModelSelector;
@@ -856,6 +856,20 @@ fn build_responses_error(
     })
 }
 
+async fn write_http_json_response_with_context(
+    socket: &mut TcpStream,
+    status: u16,
+    body: serde_json::Value,
+    method: &str,
+) -> Result<()> {
+    let body = inject_platform_profiles_if_absent(body, method);
+    write_http_json_response(socket, status, body).await
+}
+
+async fn write_responses_api_error(socket: &mut TcpStream, payload: serde_json::Value) -> Result<()> {
+    write_http_json_response_with_context(socket, 400, payload, "responses.api").await
+}
+
 fn is_supported_responses_tool_choice(value: &serde_json::Value) -> bool {
     matches!(value.as_str(), Some("auto" | "none" | "required"))
 }
@@ -1068,7 +1082,8 @@ async fn handle_openai_chat_completions(
                     "type": "invalid_request_error"
                 }
             });
-            write_http_json_response(socket, 400, payload).await?;
+            write_http_json_response_with_context(socket, 400, payload, "openai.chat.completions")
+                .await?;
             return Ok(());
         }
     };
@@ -1098,6 +1113,7 @@ async fn handle_openai_chat_completions(
                         &model,
                         &degraded_openai_message(&err),
                     );
+                    let payload = inject_platform_profiles_if_absent(payload, "openai.chat.completions");
                     write_http_json_response(socket, 200, payload).await?;
                     return Ok(());
                 }
@@ -1107,7 +1123,13 @@ async fn handle_openai_chat_completions(
                         "type": "go_on_upstream_error"
                     }
                 });
-                write_http_json_response(socket, 502, payload).await?;
+                write_http_json_response_with_context(
+                    socket,
+                    502,
+                    payload,
+                    "openai.chat.completions",
+                )
+                .await?;
                 return Ok(());
             }
         };
@@ -1116,6 +1138,7 @@ async fn handle_openai_chat_completions(
             .and_then(|value| value.as_str())
             .unwrap_or_default();
         let payload = build_openai_completion(&request_id, &model, response_text);
+        let payload = inject_platform_profiles_if_absent(payload, "openai.chat.completions");
         write_http_json_response(socket, 200, payload).await?;
         return Ok(());
     }
@@ -1265,7 +1288,7 @@ async fn handle_responses_api(
             "invalid_request_error",
             "request body must be a JSON object",
         );
-        write_http_json_response(socket, 400, payload).await?;
+        write_responses_api_error(socket, payload).await?;
         return Ok(());
     }
 
@@ -1277,7 +1300,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "model must be a string",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
         let payload = build_responses_error(
@@ -1285,7 +1308,7 @@ async fn handle_responses_api(
             "invalid_request_error",
             "model is required",
         );
-        write_http_json_response(socket, 400, payload).await?;
+        write_responses_api_error(socket, payload).await?;
         return Ok(());
     }
     match body.get("input") {
@@ -1295,7 +1318,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "input is required",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
         Some(value) if value.is_null() || (!value.is_string() && !value.is_array()) => {
@@ -1304,7 +1327,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "input must be a string or an array of input messages",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
         Some(_) => {}
@@ -1316,7 +1339,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "max_output_tokens must be a positive integer",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
     }
@@ -1327,7 +1350,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "temperature must be a number",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         };
         if !(0.0..=2.0).contains(&value) {
@@ -1336,7 +1359,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "temperature must be between 0 and 2",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
     }
@@ -1347,7 +1370,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "metadata must be an object",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
     }
@@ -1358,7 +1381,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "reasoning must be an object",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
     }
@@ -1369,7 +1392,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "tools must be an array",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
         if v.as_array()
@@ -1380,7 +1403,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "tools entries must be objects",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
         if let Some(reason) = v
@@ -1388,7 +1411,7 @@ async fn handle_responses_api(
             .and_then(|items| items.iter().find_map(validate_responses_tool))
         {
             let payload = build_responses_error("invalid_input", "invalid_request_error", reason);
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
     }
@@ -1399,7 +1422,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "tool_choice must be a string or object",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
         if v.is_string() && !is_supported_responses_tool_choice(v) {
@@ -1408,12 +1431,12 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "tool_choice string must be one of: auto, none, required",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
         if let Some(reason) = v.as_object().and_then(|_| validate_responses_tool(v)) {
             let payload = build_responses_error("invalid_input", "invalid_request_error", reason);
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
     }
@@ -1424,7 +1447,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "previous_response_id must be a non-empty string",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
     }
@@ -1437,7 +1460,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 format!("invalid responses request: {err}"),
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
     };
@@ -1450,7 +1473,7 @@ async fn handle_responses_api(
             "invalid_request_error",
             "model must be a non-empty string",
         );
-        write_http_json_response(socket, 400, payload).await?;
+        write_responses_api_error(socket, payload).await?;
         return Ok(());
     }
 
@@ -1460,7 +1483,7 @@ async fn handle_responses_api(
             "invalid_request_error",
             "max_output_tokens must be greater than 0",
         );
-        write_http_json_response(socket, 400, payload).await?;
+        write_responses_api_error(socket, payload).await?;
         return Ok(());
     }
 
@@ -1483,7 +1506,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "tool_choice=required requires at least one declared tool",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         }
 
@@ -1497,7 +1520,7 @@ async fn handle_responses_api(
                     "invalid_request_error",
                     "tool_choice object requires tools to be provided",
                 );
-                write_http_json_response(socket, 400, payload).await?;
+                write_responses_api_error(socket, payload).await?;
                 return Ok(());
             }
             if !declared_tool_names.contains(name) {
@@ -1506,7 +1529,7 @@ async fn handle_responses_api(
                     "invalid_request_error",
                     "tool_choice function.name must match a declared tool",
                 );
-                write_http_json_response(socket, 400, payload).await?;
+                write_responses_api_error(socket, payload).await?;
                 return Ok(());
             }
         }
@@ -1518,7 +1541,7 @@ async fn handle_responses_api(
             "invalid_request_error",
             "input must be a string or an array of input messages",
         );
-        write_http_json_response(socket, 400, payload).await?;
+        write_responses_api_error(socket, payload).await?;
         return Ok(());
     };
     if !input.is_string() && !input.is_array() {
@@ -1527,7 +1550,7 @@ async fn handle_responses_api(
             "invalid_request_error",
             "input must be a string or an array of input messages",
         );
-        write_http_json_response(socket, 400, payload).await?;
+        write_responses_api_error(socket, payload).await?;
         return Ok(());
     }
 
@@ -1549,7 +1572,7 @@ async fn handle_responses_api(
             "invalid_request_error",
             "input must contain at least one non-empty user message",
         );
-        write_http_json_response(socket, 400, payload).await?;
+        write_responses_api_error(socket, payload).await?;
         return Ok(());
     }
 
@@ -1572,7 +1595,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "previous_response_id not found",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         };
 
@@ -1582,7 +1605,7 @@ async fn handle_responses_api(
                 "tool_error",
                 "previous_response_id has no pending tool_call",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         };
 
@@ -1592,7 +1615,7 @@ async fn handle_responses_api(
                 "tool_error",
                 "input must include a tool result with matching tool_call_id",
             );
-            write_http_json_response(socket, 400, payload).await?;
+            write_responses_api_error(socket, payload).await?;
             return Ok(());
         };
 
@@ -1693,6 +1716,7 @@ async fn handle_responses_api(
                     &model,
                     &degraded_openai_message(&err),
                 );
+                let payload = inject_platform_profiles_if_absent(payload, "responses.api");
                 store_responses_api_payload(server.as_ref(), &payload);
                 write_http_json_response(socket, 200, payload).await?;
                 return Ok(());
@@ -1727,6 +1751,7 @@ async fn handle_responses_api(
         .and_then(|v| v.as_str())
         .unwrap_or_default();
     let payload = build_responses_api_response(&request_id, &model, response_text);
+    let payload = inject_platform_profiles_if_absent(payload, "responses.api");
     store_responses_api_payload(server.as_ref(), &payload);
     write_http_json_response(socket, 200, payload).await?;
     Ok(())
@@ -1793,6 +1818,7 @@ async fn handle_responses_api_stream(
             .await?;
 
             let completed = build_responses_api_response(request_id, model, text);
+            let completed = inject_platform_profiles_if_absent(completed, "responses.api");
             store_responses_api_payload(server.as_ref(), &completed);
 
             write_sse_event(
@@ -1825,6 +1851,7 @@ async fn handle_responses_api_stream(
                 .await?;
 
                 let completed = build_responses_api_response(request_id, model, &text);
+                let completed = inject_platform_profiles_if_absent(completed, "responses.api");
                 store_responses_api_payload(server.as_ref(), &completed);
 
                 write_sse_event(
@@ -1918,33 +1945,52 @@ async fn handle_http_connection(
     if method == "GET" {
         match path {
             "/health" => {
-                write_http_json_response(socket, 200, serde_json::to_value(server.get_status())?)
-                    .await?;
+                write_http_json_response_with_context(
+                    socket,
+                    200,
+                    serde_json::to_value(server.get_status())?,
+                    "health",
+                )
+                .await?;
             }
             "/v1/responses" => {
                 let data = list_responses_api_payloads(server.as_ref());
-                write_http_json_response(
+                write_http_json_response_with_context(
                     socket,
                     200,
                     serde_json::json!({
                         "object": "list",
                         "data": data,
                     }),
+                    "responses.api",
                 )
                 .await?;
             }
             "/v1/models" | "/v1/model" | "/models" => {
-                write_http_json_response(socket, 200, build_openai_models_response()).await?;
+                write_http_json_response_with_context(
+                    socket,
+                    200,
+                    build_openai_models_response(),
+                    "openai.chat.completions",
+                )
+                .await?;
             }
             "/" => {
-                write_http_json_response(socket, 200, build_root_capabilities_response()).await?;
+                write_http_json_response_with_context(
+                    socket,
+                    200,
+                    build_root_capabilities_response(),
+                    "initialize",
+                )
+                .await?;
             }
             _ if extract_response_id_from_path(path).is_some() => {
                 let response_id = extract_response_id_from_path(path).expect("checked response id");
                 if let Some(payload) = load_responses_api_payload(server.as_ref(), response_id) {
-                    write_http_json_response(socket, 200, payload).await?;
+                    write_http_json_response_with_context(socket, 200, payload, "responses.api")
+                        .await?;
                 } else {
-                    write_http_json_response(
+                    write_http_json_response_with_context(
                         socket,
                         404,
                         build_responses_error(
@@ -1952,23 +1998,30 @@ async fn handle_http_connection(
                             "invalid_request_error",
                             "response id not found",
                         ),
+                        "responses.api",
                     )
                     .await?;
                 }
             }
             _ => {
-                write_http_json_response(socket, 404, serde_json::json!({"error": "not found"}))
-                    .await?;
+                write_http_json_response_with_context(
+                    socket,
+                    404,
+                    serde_json::json!({"error": "not found"}),
+                    "chat",
+                )
+                .await?;
             }
         }
         return Ok(());
     }
 
     if method != "POST" {
-        write_http_json_response(
+        write_http_json_response_with_context(
             socket,
             405,
             serde_json::json!({"error": "method not allowed"}),
+            "chat",
         )
         .await?;
         return Ok(());
@@ -1978,7 +2031,7 @@ async fn handle_http_connection(
     let content_length = extract_content_length(header_part).unwrap_or(0);
     if content_length == 0 {
         if responses_path {
-            write_http_json_response(
+            write_http_json_response_with_context(
                 socket,
                 400,
                 build_responses_error(
@@ -1986,13 +2039,15 @@ async fn handle_http_connection(
                     "invalid_request_error",
                     "request body required",
                 ),
+                "responses.api",
             )
             .await?;
         } else {
-            write_http_json_response(
+            write_http_json_response_with_context(
                 socket,
                 400,
                 serde_json::json!({"error": "request body required"}),
+                "chat",
             )
             .await?;
         }
@@ -2010,7 +2065,7 @@ async fn handle_http_connection(
         Ok(value) => value,
         Err(err) => {
             if responses_path {
-                write_http_json_response(
+                write_http_json_response_with_context(
                     socket,
                     400,
                     build_responses_error(
@@ -2018,13 +2073,15 @@ async fn handle_http_connection(
                         "invalid_request_error",
                         format!("invalid json body: {err}"),
                     ),
+                    "responses.api",
                 )
                 .await?;
             } else {
-                write_http_json_response(
+                write_http_json_response_with_context(
                     socket,
                     400,
                     serde_json::json!({"error": format!("invalid json body: {err}")}),
+                    "chat",
                 )
                 .await?;
             }
@@ -2041,10 +2098,11 @@ async fn handle_http_connection(
                         match serde_json::from_value(body) {
                             Ok(value) => value,
                             Err(err) => {
-                                write_http_json_response(
+                                write_http_json_response_with_context(
                                 socket,
                                 400,
                                 serde_json::json!({"error": format!("invalid chat params: {err}")}),
+                                "chat",
                             )
                             .await?;
                                 return Ok(());
@@ -2059,6 +2117,7 @@ async fn handle_http_connection(
                         None,
                     )
                     .await?;
+                    let result = inject_platform_profiles_if_absent(result, "chat");
                     write_http_json_response(socket, 200, result).await?;
                 }
                 "/chat/stream" => {
@@ -2066,10 +2125,11 @@ async fn handle_http_connection(
                         match serde_json::from_value(body) {
                             Ok(value) => value,
                             Err(err) => {
-                                write_http_json_response(
+                                write_http_json_response_with_context(
                                 socket,
                                 400,
                                 serde_json::json!({"error": format!("invalid chat params: {err}")}),
+                                "chat",
                             )
                             .await?;
                                 return Ok(());
@@ -2096,7 +2156,10 @@ async fn handle_http_connection(
                     }
 
                     match task.await {
-                        Ok(Ok(result)) => write_sse_event(socket, "result", &result).await?,
+                        Ok(Ok(result)) => {
+                            let result = inject_platform_profiles_if_absent(result, "chat");
+                            write_sse_event(socket, "result", &result).await?
+                        }
                         Ok(Err(err)) => {
                             write_sse_event(
                                 socket,
@@ -2120,10 +2183,11 @@ async fn handle_http_connection(
                     handle_responses_api(socket, Arc::clone(&server), body).await?;
                 }
                 _ => {
-                    write_http_json_response(
+                    write_http_json_response_with_context(
                         socket,
                         404,
                         serde_json::json!({"error": "not found"}),
+                        "chat",
                     )
                     .await?;
                 }
@@ -2150,7 +2214,10 @@ fn infer_adaptive_signal(method: &str, path: &str, headers: &str) -> &'static st
     if matches!(path, "/chat" | "/chat/stream") {
         return "acp_http_path";
     }
-    if matches!(path, "/chat/completions" | "/v1/chat/completions" | "/v1/responses") {
+    if matches!(
+        path,
+        "/chat/completions" | "/v1/chat/completions" | "/v1/responses"
+    ) {
         return "openai_http_path";
     }
     if path.starts_with("/v1/") {
@@ -2168,7 +2235,10 @@ fn infer_adaptive_signal(method: &str, path: &str, headers: &str) -> &'static st
     }
 
     if let Some(content_type) = extract_header_value(headers, "content-type") {
-        if content_type.to_ascii_lowercase().contains("application/json") {
+        if content_type
+            .to_ascii_lowercase()
+            .contains("application/json")
+        {
             if method == "POST" {
                 return "json_post_fallback";
             }

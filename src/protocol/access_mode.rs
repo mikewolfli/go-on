@@ -85,7 +85,9 @@ pub fn request_dispatch_mode(raw: Option<&str>) -> RequestDispatchMode {
 }
 
 fn has_http_bind(http_bind: Option<&str>) -> bool {
-    http_bind.map(|value| !value.trim().is_empty()).unwrap_or(false)
+    http_bind
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
 }
 
 pub fn resolve_access_selection(

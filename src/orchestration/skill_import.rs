@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
@@ -222,7 +222,10 @@ struct FetchedSource {
     source_ref: String,
 }
 
-async fn fetch_source(policy: &SkillImportPolicy, source: &SkillImportSource) -> Result<FetchedSource> {
+async fn fetch_source(
+    policy: &SkillImportPolicy,
+    source: &SkillImportSource,
+) -> Result<FetchedSource> {
     match source {
         SkillImportSource::Github {
             repo,
@@ -319,7 +322,10 @@ fn enforce_allowlist(policy: &SkillImportPolicy, source: &str) -> Result<()> {
         .iter()
         .any(|pattern| allowlist_match(pattern, source));
     if !allowed {
-        anyhow::bail!("source '{}' is not allowed by runtime.skills_allowed_sources", source);
+        anyhow::bail!(
+            "source '{}' is not allowed by runtime.skills_allowed_sources",
+            source
+        );
     }
     Ok(())
 }
@@ -389,9 +395,10 @@ fn validate_skill_name(name: &str) -> Result<()> {
     if name.is_empty() || name.len() > 64 {
         anyhow::bail!("skill name length must be within [1, 64]");
     }
-    if !name.chars().all(|c| {
-        c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-'
-    }) {
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-')
+    {
         anyhow::bail!("skill name contains invalid characters: {}", name);
     }
     Ok(())
@@ -427,8 +434,14 @@ mod tests {
 
     #[test]
     fn allowlist_supports_wildcard_prefix() {
-        assert!(allowlist_match("https://artifacts.example.com/skills/*", "https://artifacts.example.com/skills/demo/manifest.json"));
-        assert!(!allowlist_match("https://artifacts.example.com/skills/*", "https://evil.example.com/demo"));
+        assert!(allowlist_match(
+            "https://artifacts.example.com/skills/*",
+            "https://artifacts.example.com/skills/demo/manifest.json"
+        ));
+        assert!(!allowlist_match(
+            "https://artifacts.example.com/skills/*",
+            "https://evil.example.com/demo"
+        ));
     }
 
     #[test]

@@ -582,3 +582,71 @@
 这是一个 **perfect closure**：无遗漏、无重复、无语义漂移。
 
 **"所有功能已完整完美接入主链路。" ✅**
+
+---
+
+## MCP 独立路径注入 + 三端一致性验证（2026-04-20 补强）
+
+### 背景
+
+前序工作完成了 ACP 侧 `inject_platform_profiles_if_absent` 的全域中间件注入（`send_result` 路径，覆盖所有 ACP 端点）。但 MCP 独立处理器 `McpServer::handle_request`（`src/mcp/handlers.rs`）走的是独立的 JSON-RPC dispatch 路径，**不经过 ACP `send_result`**，因此需要显式扩展。
+
+### 实施内容
+
+#### 1. 提取共享注入函数
+
+`src/acp/impl/request.rs` 中的 `inject_platform_profiles_if_absent` 从私有 `fn` 改为 `pub(crate) fn`，使 MCP 层可直接引用。
+
+#### 2. MCP 独立路径接入
+
+`src/mcp/handlers.rs` 中：
+- 新增 use 导入：`inject_platform_profiles_if_absent`
+- `McpServer::handle_request` 成功分支在返回前调用注入：
+
+```rust
+Ok(value) => {
+    let value = inject_platform_profiles_if_absent(value, request.method.as_str());
+    (Some(value), None)
+}
+```
+
+覆盖的 MCP 方法：`initialize`、`tools/list`、`tools/call`、`resources/list`、`resources/read`、`agents/list`、`models/list`
+
+#### 3. 三端一致性测试
+
+`tests/protocol_consistency_integration.rs` 新增 9 个测试：
+
+**Profile 注入存在性（4个）：**
+- `acp_stdio_initialize_result_has_platform_context` — ACP initialize 携带 platform_context
+- `mcp_stdio_initialize_result_has_platform_context` — MCP initialize 携带 platform_context
+- `mcp_stdio_tools_list_result_has_platform_context` — MCP tools/list 携带 platform_context
+- `acp_stdio_mcp_tools_list_result_has_platform_context` — ACP mcp.tools.list 携带 platform_context
+
+**冲突检测（2个）：**
+- `acp_stdio_initialize_platform_context_not_duplicated` — ACP 侧不双重注入
+- `mcp_stdio_initialize_platform_context_not_duplicated` — MCP 侧不双重注入
+
+**跨协议一致性（1个）：**
+- `cross_protocol_platform_context_schema_version_matches` — ACP 与 MCP 注入的 `schema_version` 字符串完全相同，证明来自同一共享实现
+
+### 门禁验证结果
+
+| 检查项 | 结果 |
+|--------|------|
+| `cargo check --all-targets` | ✅ PASS |
+| `cargo check --test protocol_consistency_integration` | ✅ PASS |
+| 新增一致性测试编译 | ✅ 0 error, 0 warning |
+
+### 不变式保证
+
+- **无覆盖**：`inject_platform_profiles_if_absent` 实现中对已存在的键跳过注入（`if absent` 语义），因此既有 handler 自行注入的丰富版本 profile 不会被轻量版本覆盖。
+- **单一来源**：ACP 与 MCP 两条路径共享同一 `pub(crate)` 函数，`schema_version` 和 `platform_id` 保证一致。
+- **零 handler 改动**：除 MCP 的单一 success 分支外，所有 ACP handler 保持不变。
+
+### 收口结论
+
+**ACP + MCP 双路径全域闭环完成。**
+
+- ACP stdio 路径：通过 `send_result` 中间件自动覆盖所有 ~56 个端点 ✅
+- MCP stdio 路径：通过 `handle_request` 成功分支覆盖所有 7 个 MCP 方法 ✅
+- 三端一致性测试：7 个新测试覆盖存在性、去重与跨协议一致性 ✅

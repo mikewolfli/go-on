@@ -227,10 +227,7 @@ pub(super) async fn handle_trace_metrics(
     send_result(server, request_id, trace_metrics_snapshot(server)).await
 }
 
-pub(super) async fn handle_shutdown(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn handle_shutdown(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     info!("{}", t("info.shutdown_requested"));
     server.begin_shutdown();
     server.shutdown_notify.notify_waiters();
@@ -633,7 +630,8 @@ pub(super) async fn handle_runtime_self_model(
 ) -> Result<()> {
     let task = params.get("task").and_then(Value::as_str).unwrap_or("");
     let learning_profile = build_learning_profile("runtime.self_model", task, &params);
-    let knowledge_refinement = build_knowledge_refinement_profile("runtime.self_model", task, &params, &learning_profile);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("runtime.self_model", task, &params, &learning_profile);
     let mut payload = build_runtime_self_model_payload(server, &params)?;
     if let Some(obj) = payload.as_object_mut() {
         obj.insert("learning_profile".to_string(), learning_profile);
@@ -730,6 +728,47 @@ fn build_runtime_self_model_payload(server: &AcpServer, params: &Value) -> Resul
         .or_else(|| stability.get("timestamp").cloned())
         .unwrap_or_else(|| json!(0));
 
+    // Self-consistency score: higher when both probes and stability agree on readiness.
+    let self_consistency_score: f64 = match (readiness_status, stability_level) {
+        ("ready", "stable") => 0.95,
+        ("ready", _) => 0.80,
+        ("degraded", _) => 0.55,
+        _ => 0.40,
+    };
+
+    // Goal stability: drifting when fallback was triggered or drift alert is active.
+    let goal_stability = if drift_alert || fallback_triggered {
+        "drifting"
+    } else {
+        "stable"
+    };
+
+    // Capability boundary: list known constraints as structured limits.
+    let health_errors = summary
+        .get("health_errors")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let strict_violations = summary
+        .get("strict_violations")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut known_limits: Vec<&str> = Vec::new();
+    if health_errors > 0 {
+        known_limits.push("health_component_degraded");
+    }
+    if strict_violations > 0 {
+        known_limits.push("strict_mode_violation_detected");
+    }
+    if drift_alert {
+        known_limits.push("reward_drift_detected");
+    }
+    if !safe_restart_ready {
+        known_limits.push("restart_unsafe");
+    }
+    if known_limits.is_empty() {
+        known_limits.push("none_detected");
+    }
+
     Ok(json!({
         "ok": true,
         "self_model": {
@@ -753,6 +792,29 @@ fn build_runtime_self_model_payload(server: &AcpServer, params: &Value) -> Resul
                 "health_warnings": summary.get("health_warnings").cloned().unwrap_or_else(|| json!(0)),
                 "config_warnings": summary.get("config_warnings").cloned().unwrap_or_else(|| json!(0)),
                 "strict_violations": summary.get("strict_violations").cloned().unwrap_or_else(|| json!(0)),
+            },
+            "meta_cognition": {
+                "self_consistency_score": self_consistency_score,
+                "goal_stability": goal_stability,
+                "capability_boundary": {
+                    "known_limits": known_limits,
+                    "confidence_envelope": if self_consistency_score >= 0.80 {
+                        "within_bounds"
+                    } else {
+                        "approaching_limits"
+                    },
+                },
+                "metacognitive_loop": {
+                    "active": true,
+                    "last_reflection": "self_model_query",
+                    "reflection_trigger": "explicit_query",
+                },
+                "world_model": {
+                    "runtime_state_known": readiness_status == "ready",
+                    "environment_stable": !drift_alert,
+                    "adaptation_needed": fallback_triggered || drift_alert,
+                },
+                "schema_version": "blue24-self-model-meta-cognition-v1",
             },
             "warnings": warnings,
             "recommendations": recommendations,
@@ -1303,12 +1365,14 @@ pub(super) async fn handle_optimization_peak(
         1.0
     };
     let first_pass_rate = if runtime_snapshot.review_gate_total > 0 {
-        runtime_snapshot.review_gate_approved_total as f64 / runtime_snapshot.review_gate_total as f64
+        runtime_snapshot.review_gate_approved_total as f64
+            / runtime_snapshot.review_gate_total as f64
     } else {
         1.0
     };
     let mean_repair_iterations = if runtime_snapshot.review_gate_total > 0 {
-        (runtime_snapshot.review_gate_rejected_total as f64 / runtime_snapshot.review_gate_total as f64)
+        (runtime_snapshot.review_gate_rejected_total as f64
+            / runtime_snapshot.review_gate_total as f64)
             .clamp(0.0, 1.0)
             * 2.0
     } else {
@@ -1415,7 +1479,10 @@ fn append_governance_audit_event(event: &GovernanceAuditEvent) -> Result<()> {
     let dir = Path::new(GOVERNANCE_AUDIT_DIR);
     fs::create_dir_all(dir)?;
     let path = dir.join(GOVERNANCE_AUDIT_FILE);
-    let mut file = fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
     let line = serde_json::to_string(event)?;
     writeln!(file, "{}", line)?;
     Ok(())
@@ -1569,9 +1636,18 @@ struct LockHealthSummary {
 }
 
 fn summarize_lock_health(components: &[AcpLockSnapshot]) -> LockHealthSummary {
-    let poisoned_total = components.iter().map(|item| item.poisoned_total).sum::<u64>();
-    let recovered_total = components.iter().map(|item| item.recovered_total).sum::<u64>();
-    let slow_wait_total = components.iter().map(|item| item.slow_wait_total).sum::<u64>();
+    let poisoned_total = components
+        .iter()
+        .map(|item| item.poisoned_total)
+        .sum::<u64>();
+    let recovered_total = components
+        .iter()
+        .map(|item| item.recovered_total)
+        .sum::<u64>();
+    let slow_wait_total = components
+        .iter()
+        .map(|item| item.slow_wait_total)
+        .sum::<u64>();
     let max_wait_ms = components
         .iter()
         .map(|item| item.max_wait_ms)
@@ -1603,7 +1679,12 @@ pub(super) async fn handle_action_check(
         .and_then(ActionCheckKind::parse)
         .unwrap_or(ActionCheckKind::All);
     let report = run_action_check(&clone_artifact_ledger(server), kind)?;
-    send_result(server, request_id, json!({"ok": report.ok, "report": report})).await
+    send_result(
+        server,
+        request_id,
+        json!({"ok": report.ok, "report": report}),
+    )
+    .await
 }
 
 pub(super) async fn handle_conversation_checkpoint_create(
@@ -1661,7 +1742,10 @@ pub(super) async fn handle_conversation_checkpoint_create(
         }
     };
 
-    let note = params.get("note").and_then(Value::as_str).map(str::to_string);
+    let note = params
+        .get("note")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let checkpoint =
         create_checkpoint_record(server, conversation_id, branch_id, messages, note, None).await;
 
@@ -1695,7 +1779,10 @@ pub(super) async fn handle_conversation_checkpoint_list(
         .get("branch_id")
         .or_else(|| params.get("branch"))
         .and_then(Value::as_str);
-    let limit = params.get("limit").and_then(Value::as_u64).map(|v| v as usize);
+    let limit = params
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize);
     let checkpoints = list_checkpoint_records(server, conversation_id, branch_id, limit).await;
 
     send_result(
@@ -1840,7 +1927,10 @@ pub(super) async fn handle_autotune_status(
     };
 
     let autotune_config = server.autotune_config.as_ref().cloned();
-    let enabled = autotune_config.as_ref().map(|cfg| cfg.enabled).unwrap_or(false);
+    let enabled = autotune_config
+        .as_ref()
+        .map(|cfg| cfg.enabled)
+        .unwrap_or(false);
 
     send_result(
         server,
@@ -2014,7 +2104,8 @@ pub(super) async fn handle_autotune_reset(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let (Some(autotune), Some(config)) = (server.autotune.as_ref(), server.autotune_config.as_ref())
+    let (Some(autotune), Some(config)) =
+        (server.autotune.as_ref(), server.autotune_config.as_ref())
     else {
         return send_result(
             server,

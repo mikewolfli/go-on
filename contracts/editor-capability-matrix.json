@@ -155,7 +155,14 @@
     "acpPreludeMetricsSuiteCheckedInMainChain": true,
     "orchestrationSkillRegistrySuiteCheckedInMainChain": true,
     "rustAllTargetsFullGateCheckedInMainChain": true,
-    "rpcLockStatusCheckedInMainChain": true
+    "rpcLockStatusCheckedInMainChain": true,
+    "blue24MetaCognitionProfileInLearningProfile": true,
+    "blue24TokenEconomyDynamicCompression": true,
+    "blue24KnowledgeRefinementCrossRoundDistillation": true,
+    "blue24SelfModelMetaCognitionBlock": true,
+    "blue24LearningProfileSchemaV2": true,
+    "blue24TokenEconomySchemaV2": true,
+    "blue24KnowledgeRefinementSchemaV2": true
   },
   "openai": {
     "modelsPath": "/v1/models",
