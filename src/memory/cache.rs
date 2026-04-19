@@ -1,13 +1,15 @@
 //! Cache implementation
 //!
-//! This module provides a SQLite-based response cache for storing and retrieving agent responses.
+//! Conditionally compiled:
+//! - `backend-sqlite` (profile-local, profile-simple-server): rusqlite-backed, sync API
+//! - `backend-postgres` (profile-multi-users-server): postgres-backed sync API
 
-use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension};
+
+// ─── Shared types (both backends) ────────────────────────────────────────────
 
 /// Cached response structure
 pub struct CachedResponse {
@@ -30,7 +32,14 @@ pub struct ResponseCacheStats {
     pub avg_hits_per_entry: f64,
 }
 
+// ─── SQLite backend (profile-local / profile-simple-server) ──────────────────
+#[cfg(not(feature = "backend-postgres"))]
+use std::path::Path;
+#[cfg(not(feature = "backend-postgres"))]
+use rusqlite::{params, Connection, OptionalExtension};
+
 /// SQLite-based response cache
+#[cfg(not(feature = "backend-postgres"))]
 pub struct ResponseCache {
     /// SQLite connection (mutex-protected)
     conn: Mutex<Connection>,
@@ -40,6 +49,7 @@ pub struct ResponseCache {
     max_entries: usize,
 }
 
+#[cfg(not(feature = "backend-postgres"))]
 impl ResponseCache {
     /// Create a new response cache
     ///
@@ -301,7 +311,7 @@ fn now_ts() -> i64 {
         .unwrap_or(0)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "backend-postgres")))]
 mod tests {
     use super::ResponseCache;
 
@@ -347,3 +357,184 @@ mod tests {
         assert!((stats.avg_hits_per_entry - 1.5).abs() < f64::EPSILON);
     }
 }
+
+// ─── PostgreSQL backend (profile-multi-users-server) ─────────────────────────
+//
+// Methods share the same sync signature as the SQLite backend so all callers
+// (spawn_blocking wrappers in storage.rs / background.rs) work without changes.
+// Internally this uses the synchronous `postgres` client, which fits the
+// existing sync API and the current `spawn_blocking` call sites.
+#[cfg(feature = "backend-postgres")]
+use postgres::{Client, NoTls};
+
+#[cfg(feature = "backend-postgres")]
+pub struct ResponseCache {
+    client: Mutex<Client>,
+    default_ttl_seconds: u64,
+    max_entries: usize,
+}
+
+#[cfg(feature = "backend-postgres")]
+impl ResponseCache {
+    /// Connect to PostgreSQL and run schema migrations.
+    ///
+    /// `url` — libpq-style connection string, e.g.
+    /// `"postgres://user:pass@localhost/go_on"`
+    pub fn new(url: &str, default_ttl_seconds: u64, max_entries: usize) -> Result<Self> {
+        let mut client = Client::connect(url, NoTls)?;
+        client.batch_execute(
+            "CREATE TABLE IF NOT EXISTS response_cache (
+                cache_key        TEXT    PRIMARY KEY,
+                response_text    TEXT    NOT NULL,
+                agent_name       TEXT,
+                created_at       BIGINT  NOT NULL,
+                updated_at       BIGINT  NOT NULL,
+                expires_at       BIGINT  NOT NULL,
+                hit_count        BIGINT  NOT NULL DEFAULT 0,
+                last_hit_at      BIGINT
+            );
+            CREATE INDEX IF NOT EXISTS idx_response_cache_expires_at
+                ON response_cache(expires_at);",
+        )?;
+
+        Ok(Self {
+            client: Mutex::new(client),
+            default_ttl_seconds,
+            max_entries,
+        })
+    }
+
+    pub fn get(&self, cache_key: &str) -> Result<Option<CachedResponse>> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'get'"))?;
+        let now = now_ts();
+        client.execute("DELETE FROM response_cache WHERE expires_at <= $1", &[&now])?;
+
+        let row = client.query_opt(
+            "SELECT response_text, agent_name FROM response_cache
+             WHERE cache_key = $1 AND expires_at > $2",
+            &[&cache_key, &now],
+        )?;
+
+        if let Some(row) = row {
+            client.execute(
+                "UPDATE response_cache SET hit_count = hit_count + 1, last_hit_at = $2
+                 WHERE cache_key = $1",
+                &[&cache_key, &now],
+            )?;
+
+            Ok(Some(CachedResponse {
+                response_text: row.get(0),
+                agent_name: row.get(1),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn put(
+        &self,
+        cache_key: &str,
+        response_text: &str,
+        agent_name: &str,
+        ttl_seconds: Option<u64>,
+    ) -> Result<()> {
+        if response_text.trim().is_empty() {
+            return Ok(());
+        }
+        let ttl = ttl_seconds.unwrap_or(self.default_ttl_seconds);
+        if ttl == 0 {
+            return Ok(());
+        }
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'put'"))?;
+        let max_entries = self.max_entries as i64;
+        let now = now_ts();
+        let expires_at = now + ttl as i64;
+        client.execute(
+            "INSERT INTO response_cache
+                (cache_key, response_text, agent_name, created_at, updated_at, expires_at, hit_count)
+             VALUES ($1, $2, $3, $4, $4, $5, 0)
+             ON CONFLICT (cache_key) DO UPDATE SET
+                response_text = EXCLUDED.response_text,
+                agent_name    = EXCLUDED.agent_name,
+                updated_at    = EXCLUDED.updated_at,
+                expires_at    = EXCLUDED.expires_at",
+            &[&cache_key, &response_text, &agent_name, &now, &expires_at],
+        )?;
+
+        client.execute(
+            "DELETE FROM response_cache
+             WHERE cache_key NOT IN (
+                 SELECT cache_key FROM response_cache
+                 ORDER BY updated_at DESC LIMIT $1
+             )",
+            &[&max_entries],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn purge_expired(&self) -> Result<usize> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'purge_expired'"))?;
+        let now = now_ts();
+        Ok(client.execute("DELETE FROM response_cache WHERE expires_at <= $1", &[&now])? as usize)
+    }
+
+    pub fn clear_all(&self) -> Result<usize> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'clear_all'"))?;
+        Ok(client.execute("DELETE FROM response_cache", &[])? as usize)
+    }
+
+    /// No-op on PostgreSQL — VACUUM is managed by autovacuum.
+    pub fn vacuum(&self) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn entry_count(&self) -> Result<u64> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'entry_count'"))?;
+        let row = client.query_one("SELECT COUNT(*) FROM response_cache", &[])?;
+        let count: i64 = row.get(0);
+        Ok(count.max(0) as u64)
+    }
+
+    pub fn stats(&self) -> Result<ResponseCacheStats> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'stats'"))?;
+        let row = client.query_one(
+            "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
+            &[],
+        )?;
+        let entry_count_raw: i64 = row.get(0);
+        let total_hits_raw: i64 = row.get(1);
+        let entry_count = entry_count_raw.max(0) as u64;
+        let total_hits = total_hits_raw.max(0) as u64;
+        let avg_hits_per_entry = if entry_count == 0 {
+            0.0
+        } else {
+            total_hits as f64 / entry_count as f64
+        };
+        Ok(ResponseCacheStats {
+            entry_count,
+            max_entries: self.max_entries,
+            total_hits,
+            avg_hits_per_entry,
+        })
+    }
+}
+

@@ -93,6 +93,9 @@ pub struct ConversationCheckpoint {
     pub created_at: i64,
     /// Optional note
     pub note: Option<String>,
+    /// Persisted meta-cognition state for save/restore continuity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metacognitive_loop: Option<Value>,
     /// Messages in this checkpoint
     pub messages: Vec<Message>,
 }

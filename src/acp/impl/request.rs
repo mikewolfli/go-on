@@ -3539,7 +3539,7 @@ async fn handle_conversation_rollback(
         }
     };
     let previous_head = get_branch_head_id(server, conversation_id, branch_id).await;
-    let rollback = create_checkpoint_record(
+    let mut rollback = create_checkpoint_record(
         server,
         conversation_id,
         branch_id,
@@ -3548,6 +3548,22 @@ async fn handle_conversation_rollback(
         Some(checkpoint_id.to_string()),
     )
     .await;
+    let metacognitive_loop = persist_checkpoint_metacognitive_loop(
+        server,
+        conversation_id,
+        branch_id,
+        &rollback.checkpoint_id,
+        checkpoint.metacognitive_loop.clone().unwrap_or_else(|| {
+            json!({
+                "active": true,
+                "schema_version": "blue25-metacognitive-loop-v1",
+                "last_reflection": format!("rollback:{}", checkpoint_id),
+                "reflection_trigger": "rollback_restore",
+            })
+        }),
+    )
+    .await;
+    rollback.metacognitive_loop = Some(metacognitive_loop.clone());
 
     send_result(
         server,
@@ -3557,6 +3573,7 @@ async fn handle_conversation_rollback(
             "conversation_id": conversation_id,
             "branch_id": branch_id,
             "checkpoint": rollback,
+            "metacognitive_loop": metacognitive_loop,
             "previous_head": previous_head,
             "current_head": rollback.checkpoint_id,
         }),
@@ -6268,6 +6285,7 @@ pub(crate) async fn create_checkpoint_record(
             .or_else(|| state.branch_heads.get(&branch_key).cloned()),
         created_at: crate::acp::prelude::now_ts(),
         note,
+        metacognitive_loop: None,
         messages,
     };
     state.branch_heads.insert(branch_key, checkpoint_id);
@@ -6275,6 +6293,46 @@ pub(crate) async fn create_checkpoint_record(
     state.checkpoints.push(checkpoint.clone());
     enforce_checkpoint_capacity(&mut state, 0, Some(&checkpoint.checkpoint_id));
     checkpoint
+}
+
+pub(crate) async fn persist_checkpoint_metacognitive_loop(
+    server: &AcpServer,
+    conversation_id: &str,
+    branch_id: &str,
+    checkpoint_id: &str,
+    mut metacognitive_loop: Value,
+) -> Value {
+    let mut state = server.conversation_state.lock().await;
+    let cycle_count = state
+        .checkpoints
+        .iter()
+        .filter(|checkpoint| {
+            checkpoint.conversation_id == conversation_id && checkpoint.branch_id == branch_id
+        })
+        .count() as u64;
+
+    if let Some(obj) = metacognitive_loop.as_object_mut() {
+        obj.insert("cycle_count".to_string(), json!(cycle_count.max(1)));
+        obj.insert(
+            "conversation_id".to_string(),
+            Value::String(conversation_id.to_string()),
+        );
+        obj.insert("branch_id".to_string(), Value::String(branch_id.to_string()));
+        obj.insert(
+            "checkpoint_id".to_string(),
+            Value::String(checkpoint_id.to_string()),
+        );
+    }
+
+    if let Some(checkpoint) = state
+        .checkpoints
+        .iter_mut()
+        .find(|checkpoint| checkpoint.checkpoint_id == checkpoint_id)
+    {
+        checkpoint.metacognitive_loop = Some(metacognitive_loop.clone());
+    }
+
+    metacognitive_loop
 }
 
 fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
@@ -7232,7 +7290,7 @@ fn build_universal_governance_profile(
     })
 }
 
-fn build_learning_profile(method: &str, task: &str, params: &Value) -> Value {
+pub(crate) fn build_learning_profile(method: &str, task: &str, params: &Value) -> Value {
     let learning_mode = params
         .get("learning_mode")
         .and_then(Value::as_str)
@@ -7414,7 +7472,7 @@ fn build_token_economy(
     })
 }
 
-fn build_knowledge_refinement_profile(
+pub(crate) fn build_knowledge_refinement_profile(
     method: &str,
     task: &str,
     params: &Value,
@@ -7720,6 +7778,7 @@ mod tests {
         assert_eq!(infer_workflow_parallelism(&workflow), 3);
     }
 
+    #[cfg(not(feature = "backend-postgres"))]
     #[test]
     fn collect_vector_context_snippets_searches_execution_and_semantic_phase() {
         let dir = tempfile::tempdir().expect("temp dir should be created");

@@ -2557,8 +2557,10 @@ fn http_chat_stream_emits_sse_and_persists_knowledge() {
     assert!(response.contains("200 OK"));
     assert!(response.contains("Content-Type: text/event-stream"));
     assert!(response.contains("event: chunk"));
+    assert!(response.contains("event: telemetry"));
     assert!(response.contains("event: done"));
     assert!(response.contains("event: result"));
+    assert!(response.contains("compression_ratio"));
 
     let knowledge_path = temp
         .path()
@@ -2568,6 +2570,16 @@ fn http_chat_stream_emits_sse_and_persists_knowledge() {
     let raw = fs::read_to_string(&knowledge_path).expect("knowledge artifact should exist");
     assert!(raw.contains("reusable_insights"));
     assert!(raw.contains("verification_steps"));
+
+    let distillation_path = temp
+        .path()
+        .join(".goon")
+        .join("spec")
+        .join("latest-session-distillation.json");
+    let distillation_raw =
+        fs::read_to_string(&distillation_path).expect("session distillation artifact should exist");
+    assert!(distillation_raw.contains("learning_profile"));
+    assert!(distillation_raw.contains("knowledge_refinement"));
 
     let _ = child.kill();
     let _ = child.wait();

@@ -1,14 +1,26 @@
 //! Vector storage and search
 //!
-//! This module provides vector storage and similarity search functionality for memory retrieval.
+//! Conditionally compiled:
+//! - `backend-sqlite` (profile-local, profile-simple-server): rusqlite-backed, sync API
+//! - `backend-postgres` (profile-multi-users-server): postgres + pgvector-backed sync API
 
+#[cfg(not(feature = "backend-postgres"))]
 use std::path::Path;
 use std::sync::Mutex;
+#[cfg(not(feature = "backend-postgres"))]
+use std::sync::Once;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension};
+#[cfg(feature = "backend-postgres")]
+use pgvector::Vector;
+#[cfg(not(feature = "backend-postgres"))]
+use rusqlite::{ffi::sqlite3_auto_extension, params, Connection, OptionalExtension};
+#[cfg(not(feature = "backend-postgres"))]
+use sqlite_vec::sqlite3_vec_init;
 use sha2::{Digest, Sha256};
+#[cfg(not(feature = "backend-postgres"))]
+use tracing::warn;
 
 /// Vector search hit
 #[allow(dead_code)]
@@ -49,6 +61,14 @@ impl VectorPrecisionFeedback {
 }
 
 /// Vector store for similarity search
+#[cfg(not(feature = "backend-postgres"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SqliteVectorMode {
+    SqliteVec,
+    JsonFallback,
+}
+
+#[cfg(not(feature = "backend-postgres"))]
 pub struct VectorStore {
     /// SQLite connection (mutex-protected)
     conn: Mutex<Connection>,
@@ -56,8 +76,11 @@ pub struct VectorStore {
     dimensions: usize,
     /// Maximum number of entries to keep
     max_entries: usize,
+    /// Selected sqlite vector implementation mode.
+    mode: SqliteVectorMode,
 }
 
+#[cfg(not(feature = "backend-postgres"))]
 impl VectorStore {
     /// Create a new vector store
     ///
@@ -69,12 +92,17 @@ impl VectorStore {
     /// # Returns
     /// * `Result<Self>` - Returns Ok(Self) if the store is created successfully, or an error if something goes wrong
     pub fn new(path: &Path, dimensions: usize, max_entries: usize) -> Result<Self> {
+        if dimensions == 0 {
+            anyhow::bail!("vector.dimensions must be greater than 0");
+        }
+
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
             }
         }
 
+        register_sqlite_vec_auto_extension();
         let conn = Connection::open(path)?;
         conn.execute_batch(
             "
@@ -86,7 +114,8 @@ impl VectorStore {
                 phase TEXT NOT NULL,
                 query_text TEXT NOT NULL,
                 response_text TEXT NOT NULL,
-                embedding_json TEXT NOT NULL,
+                embedding_json TEXT,
+                embedding_blob BLOB,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 hit_count INTEGER NOT NULL DEFAULT 0,
@@ -104,10 +133,13 @@ impl VectorStore {
             ",
         )?;
 
+        let mode = resolve_sqlite_vector_mode(&conn)?;
+
         Ok(Self {
             conn: Mutex::new(conn),
             dimensions,
             max_entries,
+            mode,
         })
     }
 
@@ -129,6 +161,7 @@ impl VectorStore {
 
         let embedding = embed_text(query, self.dimensions);
         let embedding_json = serde_json::to_string(&embedding)?;
+        let embedding_blob = embedding_blob(&embedding);
         let memory_key = build_memory_key(phase, query);
         let now = now_ts();
 
@@ -136,6 +169,11 @@ impl VectorStore {
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'upsert'"))?;
+
+        let (json_value, blob_value): (Option<String>, Option<Vec<u8>>) = match self.mode {
+            SqliteVectorMode::SqliteVec => (None, Some(embedding_blob)),
+            SqliteVectorMode::JsonFallback => (Some(embedding_json), None),
+        };
 
         conn.execute(
             "
@@ -145,18 +183,20 @@ impl VectorStore {
                 query_text,
                 response_text,
                 embedding_json,
+                embedding_blob,
                 created_at,
                 updated_at,
                 hit_count,
                 last_hit_at
             )
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?6, 0, NULL)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, 0, NULL)
             ON CONFLICT(memory_key) DO UPDATE SET
                 response_text = excluded.response_text,
                 embedding_json = excluded.embedding_json,
+                embedding_blob = excluded.embedding_blob,
                 updated_at = excluded.updated_at
             ",
-            params![memory_key, phase, query, response, embedding_json, now,],
+            params![memory_key, phase, query, response, json_value, blob_value, now,],
         )?;
 
         conn.execute(
@@ -210,51 +250,80 @@ impl VectorStore {
             .lock()
             .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'search'"))?;
 
-        let mut stmt = conn.prepare(
-            "
-            SELECT memory_key, response_text, embedding_json, updated_at
-            FROM vector_memory
-            WHERE phase = ?1
-            ORDER BY updated_at DESC
-            LIMIT 300
-            ",
-        )?;
+        let mut scored = match self.mode {
+            SqliteVectorMode::SqliteVec => {
+                let query_blob = embedding_blob(&query_embedding);
+                let mut stmt = conn.prepare(
+                    "
+                    SELECT memory_key, response_text, updated_at,
+                           vec_distance_cosine(embedding_blob, ?2) AS distance
+                    FROM vector_memory
+                    WHERE phase = ?1
+                      AND embedding_blob IS NOT NULL
+                    ORDER BY distance ASC, updated_at DESC
+                    LIMIT 300
+                    ",
+                )?;
+                let mut rows = stmt.query(params![phase, query_blob])?;
+                let mut scored: Vec<(String, f32, String)> = Vec::new();
 
-        let mut rows = stmt.query(params![phase])?;
-        // (memory_key, blended_score, response_text)
-        let mut scored: Vec<(String, f32, String)> = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            let memory_key: String = row.get(0)?;
-            let response_text: String = row.get(1)?;
-            let embedding_json: String = row.get(2)?;
-            let updated_at: i64 = row.get(3)?;
-
-            let memory_embedding: Vec<f32> = match serde_json::from_str(&embedding_json) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if memory_embedding.len() != query_embedding.len() {
-                continue;
+                while let Some(row) = rows.next()? {
+                    let memory_key: String = row.get(0)?;
+                    let response_text: String = row.get(1)?;
+                    let updated_at: i64 = row.get(2)?;
+                    let distance: f64 = row.get(3)?;
+                    let similarity = (1.0_f32 - distance as f32).clamp(0.0, 1.0);
+                    if similarity < min_similarity {
+                        continue;
+                    }
+                    let blended = blend_similarity_with_recency(similarity, now, updated_at);
+                    scored.push((memory_key, blended, response_text));
+                }
+                scored
             }
+            SqliteVectorMode::JsonFallback => {
+                let mut stmt = conn.prepare(
+                    "
+                    SELECT memory_key, response_text, embedding_json, updated_at
+                    FROM vector_memory
+                    WHERE phase = ?1
+                    ORDER BY updated_at DESC
+                    LIMIT 300
+                    ",
+                )?;
 
-            let similarity = cosine_similarity(&query_embedding, &memory_embedding);
-            if similarity < min_similarity {
-                continue;
+                let mut rows = stmt.query(params![phase])?;
+                let mut scored: Vec<(String, f32, String)> = Vec::new();
+
+                while let Some(row) = rows.next()? {
+                    let memory_key: String = row.get(0)?;
+                    let response_text: String = row.get(1)?;
+                    let embedding_json: Option<String> = row.get(2)?;
+                    let updated_at: i64 = row.get(3)?;
+
+                    let Some(embedding_json) = embedding_json else {
+                        continue;
+                    };
+                    let memory_embedding: Vec<f32> = match serde_json::from_str(&embedding_json) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    if memory_embedding.len() != query_embedding.len() {
+                        continue;
+                    }
+
+                    let similarity = cosine_similarity(&query_embedding, &memory_embedding);
+                    if similarity < min_similarity {
+                        continue;
+                    }
+
+                    let blended = blend_similarity_with_recency(similarity, now, updated_at);
+                    scored.push((memory_key, blended, response_text));
+                }
+
+                scored
             }
-
-            // Time-decay weight: entries age at roughly 1/(1 + age_days * 0.05).
-            // At 0 days: weight = 1.0.  At 20 days: weight ≈ 0.5.  At 200 days: weight ≈ 0.09.
-            // Blended score = 70% similarity + 30% recency, keeping the raw similarity
-            // above min_similarity gate (already checked above) while demoting stale entries.
-            const DECAY_FACTOR: f64 = 0.05;
-            let age_secs = (now - updated_at).max(0) as f64;
-            let age_days = age_secs / 86_400.0;
-            let recency_weight = (1.0 / (1.0 + age_days * DECAY_FACTOR)) as f32;
-            let blended = similarity * 0.70 + recency_weight * 0.30;
-
-            scored.push((memory_key, blended, response_text));
-        }
+        };
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);
@@ -398,6 +467,57 @@ impl VectorStore {
     }
 }
 
+#[cfg(not(feature = "backend-postgres"))]
+fn register_sqlite_vec_auto_extension() {
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| unsafe {
+        sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
+    });
+}
+
+#[cfg(not(feature = "backend-postgres"))]
+fn resolve_sqlite_vector_mode(conn: &Connection) -> Result<SqliteVectorMode> {
+    let probe = conn.query_row("SELECT vec_version()", [], |row| row.get::<_, String>(0));
+    match probe {
+        Ok(_) => Ok(SqliteVectorMode::SqliteVec),
+        Err(err) => {
+            #[cfg(feature = "profile-local")]
+            {
+                warn!(
+                    "sqlite-vec unavailable, falling back to JSON embedding table for profile-local: {}",
+                    err
+                );
+                Ok(SqliteVectorMode::JsonFallback)
+            }
+
+            #[cfg(not(feature = "profile-local"))]
+            {
+                Err(anyhow::anyhow!(
+                    "sqlite-vec is required for this build profile but failed to initialize: {}",
+                    err
+                ))
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "backend-postgres"))]
+fn embedding_blob(values: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(values.len() * std::mem::size_of::<f32>());
+    for value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn blend_similarity_with_recency(similarity: f32, now: i64, updated_at: i64) -> f32 {
+    const DECAY_FACTOR: f64 = 0.05;
+    let age_secs = (now - updated_at).max(0) as f64;
+    let age_days = age_secs / 86_400.0;
+    let recency_weight = (1.0 / (1.0 + age_days * DECAY_FACTOR)) as f32;
+    similarity * 0.70 + recency_weight * 0.30
+}
+
 fn tokenize(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter_map(|token| {
@@ -462,7 +582,7 @@ fn now_ts() -> i64 {
         .unwrap_or(0)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "backend-postgres")))]
 mod tests {
     use super::{VectorPrecisionFeedback, VectorStore};
 
@@ -538,6 +658,7 @@ mod tests {
 
     #[test]
     fn vector_search_time_decay_demotes_stale_entry() {
+        #[cfg(not(feature = "backend-postgres"))]
         use rusqlite::{params, Connection};
 
         let dir = tempfile::tempdir().expect("temp dir should be created");
@@ -555,22 +676,31 @@ mod tests {
         let stale_ts: i64 = super::now_ts() - 180 * 86_400;
         {
             let conn = Connection::open(&db_path).expect("should open db");
-            conn.execute(
-                "INSERT OR REPLACE INTO vector_memory(memory_key, phase, query_text, response_text, embedding_json, created_at, updated_at, hit_count)
-                 VALUES('__stale_key__', 'coding', 'rust async performance stale', 'stale answer', '[]', ?1, ?1, 0)",
-                params![stale_ts],
-            )
-            .expect("stale insert should work");
-
-            // Give the stale entry a valid embedding so it computes a real similarity.
             let embedding = super::embed_text("rust async performance stale", 64);
             let embedding_json =
                 serde_json::to_string(&embedding).expect("should serialize embedding");
+            let embedding_blob = super::embedding_blob(&embedding);
+            let (json_value, blob_value): (Option<String>, Option<Vec<u8>>) = match store.mode {
+                super::SqliteVectorMode::SqliteVec => (None, Some(embedding_blob)),
+                super::SqliteVectorMode::JsonFallback => (Some(embedding_json), None),
+            };
+
             conn.execute(
-                "UPDATE vector_memory SET embedding_json = ?1 WHERE memory_key = '__stale_key__'",
-                params![embedding_json],
+                "INSERT OR REPLACE INTO vector_memory(
+                    memory_key,
+                    phase,
+                    query_text,
+                    response_text,
+                    embedding_json,
+                    embedding_blob,
+                    created_at,
+                    updated_at,
+                    hit_count
+                 )
+                 VALUES('__stale_key__', 'coding', 'rust async performance stale', 'stale answer', ?1, ?2, ?3, ?3, 0)",
+                params![json_value, blob_value, stale_ts],
             )
-            .expect("stale embedding update should work");
+            .expect("stale insert should work");
         }
 
         // The fresh entry should rank higher than the stale one despite similar embeddings.
@@ -587,5 +717,245 @@ mod tests {
             first_snippet.contains("fresh"),
             "fresh entry should rank first but got: {first_snippet:?}"
         );
+    }
+}
+
+// ─── PostgreSQL backend (profile-multi-users-server) ─────────────────────────
+//
+// Embeddings are computed in Rust (sha2-based projection, same as SQLite backend)
+// and stored in a native `pgvector` column through the synchronous `postgres`
+// client. Methods expose the same sync signature as the SQLite backend.
+#[cfg(feature = "backend-postgres")]
+use postgres::{Client, NoTls};
+
+#[cfg(feature = "backend-postgres")]
+pub struct VectorStore {
+    client: Mutex<Client>,
+    dimensions: usize,
+    max_entries: usize,
+}
+
+#[cfg(feature = "backend-postgres")]
+impl VectorStore {
+    /// Connect to PostgreSQL and run schema migrations.
+    ///
+    /// `url` — libpq-style connection string, e.g.
+    /// `"postgres://user:pass@localhost/go_on"`
+    pub fn new(url: &str, dimensions: usize, max_entries: usize) -> Result<Self> {
+        if dimensions == 0 {
+            anyhow::bail!("vector.dimensions must be greater than 0 for pgvector backend");
+        }
+
+        let mut client = Client::connect(url, NoTls)?;
+
+        let schema_sql = format!(
+            "CREATE TABLE IF NOT EXISTS vector_memory (
+                memory_key      TEXT PRIMARY KEY,
+                phase           TEXT NOT NULL,
+                query_text      TEXT NOT NULL,
+                response_text   TEXT NOT NULL,
+                embedding       vector({dimensions}) NOT NULL,
+                created_at      BIGINT NOT NULL,
+                updated_at      BIGINT NOT NULL,
+                hit_count       BIGINT NOT NULL DEFAULT 0,
+                last_hit_at     BIGINT
+            );
+            CREATE INDEX IF NOT EXISTS idx_vector_memory_phase_updated_at
+                ON vector_memory(phase, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_vector_memory_embedding_cosine
+                ON vector_memory USING hnsw (embedding vector_cosine_ops);
+            CREATE TABLE IF NOT EXISTS phase_summary (
+                phase           TEXT PRIMARY KEY,
+                summary_text    TEXT NOT NULL,
+                updated_at      BIGINT NOT NULL
+            );"
+        );
+
+        client.batch_execute("CREATE EXTENSION IF NOT EXISTS vector")?;
+        client.batch_execute(&schema_sql)?;
+
+        Ok(Self {
+            client: Mutex::new(client),
+            dimensions,
+            max_entries,
+        })
+    }
+
+    pub fn upsert(&self, phase: &str, query_text: &str, response_text: &str) -> Result<()> {
+        let query = query_text.trim();
+        let response = response_text.trim();
+        if query.is_empty() || response.is_empty() {
+            return Ok(());
+        }
+        let embedding = Vector::from(embed_text(query, self.dimensions));
+        let memory_key = build_memory_key(phase, query);
+        let now = now_ts();
+        let max_entries = self.max_entries as i64;
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'upsert'"))?;
+        client.execute(
+            "INSERT INTO vector_memory
+                (memory_key, phase, query_text, response_text, embedding,
+                 created_at, updated_at, hit_count)
+             VALUES ($1, $2, $3, $4, $5, $6, $6, 0)
+             ON CONFLICT (memory_key) DO UPDATE SET
+                response_text  = EXCLUDED.response_text,
+                embedding      = EXCLUDED.embedding,
+                updated_at     = EXCLUDED.updated_at",
+            &[&memory_key, &phase, &query, &response_text, &embedding, &now],
+        )?;
+
+        client.execute(
+            "DELETE FROM vector_memory
+             WHERE memory_key NOT IN (
+                 SELECT memory_key FROM vector_memory
+                 ORDER BY updated_at DESC LIMIT $1
+             )",
+            &[&max_entries],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn search(
+        &self,
+        phase: &str,
+        query_text: &str,
+        top_k: usize,
+        min_similarity: f32,
+        max_snippet_chars: usize,
+    ) -> Result<(Vec<VectorHit>, VectorPrecisionFeedback)> {
+        if top_k == 0 {
+            return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
+        }
+        let query = query_text.trim();
+        if query.is_empty() {
+            return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
+        }
+
+        let query_embedding = Vector::from(embed_text(query, self.dimensions));
+        let now = now_ts();
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'search'"))?;
+        let rows = client.query(
+            "SELECT memory_key, response_text, updated_at,
+                    1 - (embedding <=> $2) AS similarity
+             FROM vector_memory
+             WHERE phase = $1
+             ORDER BY embedding <=> $2
+             LIMIT 300",
+            &[&phase, &query_embedding],
+        )?;
+
+        let mut scored: Vec<(String, f32, String)> = Vec::new();
+        for row in rows {
+            let memory_key: String = row.get(0);
+            let response_text: String = row.get(1);
+            let updated_at: i64 = row.get(2);
+            let similarity = (row.get::<_, f64>(3) as f32).clamp(0.0, 1.0);
+            if similarity < min_similarity {
+                continue;
+            }
+            let blended = blend_similarity_with_recency(similarity, now, updated_at);
+            scored.push((memory_key, blended, response_text));
+        }
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(top_k);
+
+        if !scored.is_empty() {
+            for (key, _, _) in &scored {
+                let _ = client.execute(
+                    "UPDATE vector_memory
+                     SET hit_count = hit_count + 1, last_hit_at = $2
+                     WHERE memory_key = $1",
+                    &[key, &now],
+                );
+            }
+        }
+
+        let hits: Vec<VectorHit> = scored
+            .into_iter()
+            .map(|(_, score, text)| VectorHit {
+                similarity: score,
+                response_snippet: trim_chars(&text, max_snippet_chars),
+            })
+            .collect();
+
+        let feedback = VectorPrecisionFeedback::new(&hits);
+        Ok((hits, feedback))
+    }
+
+    pub fn get_phase_summary(&self, phase: &str) -> Result<Option<String>> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'get_phase_summary'"))?;
+        Ok(client
+            .query_opt(
+                "SELECT summary_text FROM phase_summary WHERE phase = $1",
+                &[&phase],
+            )?
+            .map(|row| row.get(0)))
+    }
+
+    pub fn upsert_phase_summary(&self, phase: &str, summary_text: &str) -> Result<()> {
+        let text = summary_text.trim();
+        if text.is_empty() {
+            return Ok(());
+        }
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'upsert_phase_summary'"))?;
+        let now = now_ts();
+        client.execute(
+            "INSERT INTO phase_summary (phase, summary_text, updated_at)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (phase) DO UPDATE SET
+                 summary_text = EXCLUDED.summary_text,
+                 updated_at   = EXCLUDED.updated_at",
+            &[&phase, &text, &now],
+        )?;
+        Ok(())
+    }
+
+    pub fn memory_entry_count(&self) -> Result<u64> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'memory_entry_count'"))?;
+        let row = client.query_one("SELECT COUNT(*) FROM vector_memory", &[])?;
+        let count: i64 = row.get(0);
+        Ok(count.max(0) as u64)
+    }
+
+    pub fn summary_entry_count(&self) -> Result<u64> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'summary_entry_count'"))?;
+        let row = client.query_one("SELECT COUNT(*) FROM phase_summary", &[])?;
+        let count: i64 = row.get(0);
+        Ok(count.max(0) as u64)
+    }
+
+    pub fn clear_all(&self) -> Result<(usize, usize)> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'clear_all'"))?;
+        let memory_deleted = client.execute("DELETE FROM vector_memory", &[])? as usize;
+        let summaries_deleted = client.execute("DELETE FROM phase_summary", &[])? as usize;
+        Ok((memory_deleted, summaries_deleted))
+    }
+
+    /// No-op on PostgreSQL — VACUUM is managed by autovacuum.
+    pub fn vacuum(&self) -> Result<()> {
+        Ok(())
     }
 }

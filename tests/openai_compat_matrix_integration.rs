@@ -507,6 +507,10 @@ async fn responses_api_r1_minimal_request() {
         "stream must emit response.completed event: {stream_body}"
     );
     assert!(
+        stream_body.contains("response.token_economy"),
+        "stream must emit response.token_economy event: {stream_body}"
+    );
+    assert!(
         stream_body.contains("[DONE]"),
         "stream must end with [DONE]: {stream_body}"
     );
@@ -1608,20 +1612,23 @@ async fn responses_api_r4_complete_field_matrix() {
     assert!(resp["id"].as_str().unwrap_or_default().starts_with("resp_"));
     assert!(resp["created_at"].is_number(), "created_at must be numeric");
     assert!(resp["usage"].is_object(), "usage must be object");
-    assert_eq!(
-        resp["usage"]["input_tokens"].as_u64(),
-        Some(0),
-        "usage.input_tokens"
+    assert!(
+        resp["usage"]["input_tokens"].as_u64().unwrap_or(0) > 0,
+        "usage.input_tokens should reflect estimated request tokens"
     );
-    assert_eq!(
-        resp["usage"]["output_tokens"].as_u64(),
-        Some(0),
-        "usage.output_tokens"
+    assert!(
+        resp["usage"]["output_tokens"].as_u64().unwrap_or(0) > 0,
+        "usage.output_tokens should reflect estimated response tokens"
     );
-    assert_eq!(
-        resp["usage"]["total_tokens"].as_u64(),
-        Some(0),
-        "usage.total_tokens"
+    assert!(
+        resp["usage"]["total_tokens"].as_u64().unwrap_or(0)
+            >= resp["usage"]["input_tokens"].as_u64().unwrap_or(0),
+        "usage.total_tokens must be at least input_tokens"
+    );
+    assert!(resp["token_economy"].is_object(), "token_economy must be present");
+    assert!(
+        resp["token_economy"]["compression_ratio"].is_number(),
+        "token_economy.compression_ratio must be numeric"
     );
     assert!(resp["error"].is_null(), "error must be null on success");
     assert!(
@@ -1692,10 +1699,13 @@ async fn responses_api_r4_complete_field_matrix() {
         .await
         .expect("failed to read stream body");
 
-    // Verify event ordering: created → [delta*] → completed → [DONE]
+    // Verify event ordering: created → [delta*] → token_economy → completed → [DONE]
     let created_pos = stream_body.find("response.created").unwrap_or(usize::MAX);
     let delta_pos = stream_body
         .find("response.output_text.delta")
+        .unwrap_or(usize::MAX);
+    let telemetry_pos = stream_body
+        .find("response.token_economy")
         .unwrap_or(usize::MAX);
     let completed_pos = stream_body.find("response.completed").unwrap_or(usize::MAX);
     let done_pos = stream_body.find("[DONE]").unwrap_or(usize::MAX);
@@ -1723,8 +1733,14 @@ async fn responses_api_r4_complete_field_matrix() {
             "response.created must precede response.output_text.delta"
         );
         assert!(
-            delta_pos < completed_pos,
-            "response.output_text.delta must precede response.completed"
+            delta_pos < telemetry_pos,
+            "response.output_text.delta must precede response.token_economy"
+        );
+    }
+    if telemetry_pos < usize::MAX {
+        assert!(
+            telemetry_pos < completed_pos,
+            "response.token_economy must precede response.completed"
         );
     }
 
@@ -1870,6 +1886,10 @@ async fn responses_api_stream_degrades_setup_unavailable() {
     assert!(
         stream_body.contains("response.completed"),
         "degraded stream must emit response.completed instead of failed: {stream_body}"
+    );
+    assert!(
+        stream_body.contains("response.token_economy"),
+        "degraded stream must emit response.token_economy: {stream_body}"
     );
     assert!(
         !stream_body.contains("response.failed"),

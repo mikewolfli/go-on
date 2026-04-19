@@ -2,13 +2,16 @@
 
 ## Execution Status (2026-04-19)
 
-- Overall completion: **100%** (4 / 4 weighted items)
+- Overall completion: **100%** (BLUE25 core + 4 / 4 Next Focus items closed)
 - Validation proof:
   - `cargo check --all-targets`: 0 errors, 0 warnings ✅
-  - `cargo test --test acp_runtime_rpc_integration`: 75 passed, 0 failed ✅
+  - `cargo test --test transport_parity_integration`: 14 passed, 0 failed ✅ (transport parity + route inventory + source guards for Responses 502 and streaming error branches)
   - `cargo test --test protocol_consistency_integration`: 17 passed, 0 failed ✅
+  - `cargo test --test acp_runtime_rpc_integration`: passed ✅
   - `cargo test --test step2_three_endpoint_contract`: 10 passed, 0 failed ✅
-  - `cargo test --test transport_parity_integration`: 10 passed, 0 failed ✅ (10 new blue25 tests)
+  - `cargo test --test openai_compat_matrix_integration`: passed ✅
+  - `cargo test process_chat_request_wires_vector_context_and_checkpoint_tree`: passed ✅
+  - `cargo test estimate_token_economy_reports_compression_ratio`: passed ✅
 
 ---
 
@@ -94,7 +97,7 @@ This ensures compatibility and error responses stay on the lightweight `profile_
 
 ### Item 4 — Transport parity integration tests (`tests/transport_parity_integration.rs`)
 
-New test suite with 10 tests (all passing):
+New test suite with 14 tests (all passing):
 
 | Test | What it verifies |
 |---|---|
@@ -103,13 +106,52 @@ New test suite with 10 tests (all passing):
 | `acp_http_responses_api_response_has_platform_context` | `/v1/responses` returns `platform_context.profile_class = "infrastructure"` + correct schema_version |
 | `acp_stdio_and_acp_http_share_same_schema_version` | ACP stdio and ACP HTTP report identical `schema_version`, proving single shared injection source |
 | `acp_http_error_payloads_keep_platform_context` | ACP HTTP OpenAI/Responses 4xx payloads still include `platform_context` |
+| `acp_http_responses_api_upstream_502_branch_keeps_context_writer` | Static source guard prevents the Responses API 502 branch from bypassing the context-aware writer |
+| `acp_http_responses_api_stream_failed_branch_keeps_platform_context` | Static source guard prevents Responses API SSE failed events from omitting `platform_context` |
+| `acp_http_chat_stream_error_branches_keep_platform_context` | Static source guard prevents `/chat/stream` task-error and panic SSE branches from omitting `platform_context` |
 | `mcp_http_error_data_keeps_platform_context` | MCP HTTP unknown-method + parse-error JSON-RPC responses include `platform_context` in `error.data` |
 | `acp_http_health_response_has_platform_context` | ACP HTTP `/health` baseline response includes `platform_context` |
 | `mcp_http_health_response_has_platform_context` | MCP HTTP `/health` baseline response includes `platform_context` |
 | `acp_http_method_not_allowed_has_platform_context` | ACP HTTP `405 method not allowed` payload includes `platform_context` |
 | `mcp_http_method_not_allowed_has_platform_context` | MCP HTTP `405 method not allowed` payload includes `platform_context` |
+| `acp_http_route_inventory_changes_require_transport_gate_update` | Static route inventory gate fails if any ACP HTTP endpoint is added without explicit parity test maintenance |
 
 Tests use the `local_echo` agent type for reliable execution without real AI backend, following the pattern established in `openai_compat_matrix_integration.rs`.
+
+### Item 5 — Streaming token economy feedback (`src/acp/impl/chat.rs`, `src/acp/impl/runtime.rs`)
+
+The streaming paths now expose real token-efficiency telemetry instead of placeholder usage blocks:
+
+- ACP `/chat/stream` now emits `event: telemetry` with `token_economy.compression_ratio`, token counts, saving ratio, and efficiency class before final result emission.
+- Responses API SSE now emits `response.token_economy` between `response.output_text.delta` and `response.completed`.
+- Non-stream `/v1/responses` payloads now carry real `usage` values derived from the same token-economy estimator, plus a top-level `token_economy` object.
+- `openai_compat_matrix_integration` was updated so the Responses API contract now locks this telemetry in rather than assuming zero-token placeholders.
+
+### Item 6 — Meta-cognition loop persistence across checkpoints (`src/acp/prelude.rs`, `src/acp/impl/request.rs`, `src/acp/impl/request/runtime_pack.rs`, `src/acp/impl/chat.rs`)
+
+Checkpoint records now persist reflective state across save/restore cycles:
+
+- `ConversationCheckpoint` now carries optional `metacognitive_loop` state.
+- Chat completion stores `cycle_count`, `last_reflection`, trigger, selected agent, and checkpoint identity into the checkpoint just written.
+- `conversation.rollback` restores and re-publishes the persisted `metacognitive_loop` instead of dropping reflective state during rollback.
+- Chat results now surface `metacognitive_loop` directly so ACP stdio / ACP HTTP / stream result surfaces stay aligned.
+
+### Item 7 — Cross-agent knowledge distillation (`src/acp/impl/chat.rs`)
+
+Chat completion now performs an automatic session-end merge/writeback step instead of leaving distillation as a manual capability only:
+
+- At response completion, the runtime synthesizes a merged `learning_profile` and `knowledge_refinement` block from the selected agent, candidate agents, and attempt outcomes.
+- The merged artifact is written to `.goon/spec/latest-session-distillation.json`.
+- Session-end distillation also writes back into the shared learning and knowledge buses, so the multi-agent session updates the shared epistemic base automatically.
+- Chat results now include a `distillation` block with artifact paths and merge summary.
+
+### Item 8 — Transport parity automation (`tests/transport_parity_integration.rs`)
+
+A real automation gate now exists instead of a TODO note:
+
+- The transport parity suite includes a static ACP HTTP route inventory assertion.
+- Any new HTTP route added to `handle_http_connection(...)` now forces the route inventory test to fail until parity coverage is explicitly updated.
+- The suite is serialized with a guard to remove flaky multi-harness startup races, so the parity gate is stable in CI rather than probabilistic.
 
 ---
 
@@ -133,15 +175,65 @@ Tests use the `local_echo` agent type for reliable execution without real AI bac
 - Item 1 (9 inject calls in runtime.rs): **Completed (100%)**
 - Item 2 (error-path parity closure): **Completed (100%)**
 - Item 3 (is_infrastructure extension): **Completed (100%)**
-- Item 4 (transport parity test suite, 10 new passing tests): **Completed (100%)**
+- Item 4 (transport parity test suite, 14 passing tests including route inventory gate and error-branch source guards): **Completed (100%)**
+- Item 5 (streaming token economy feedback): **Completed (100%)**
+- Item 6 (meta-cognition loop persistence across checkpoints): **Completed (100%)**
+- Item 7 (cross-agent knowledge distillation auto-merge): **Completed (100%)**
+- Item 8 (transport parity automation gate): **Completed (100%)**
 
 ---
 
-## Next Focus
+## Final State
 
-Carried from BLUE24 next focus + BLUE25 forward work:
+This BLUE25 delivery is now fully sealed:
 
-- **Streaming token economy feedback**: real-time compression ratio reporting in SSE stream events — AI can observe its own token efficiency per round
-- **Meta-cognition loop persistence across checkpoints**: `metacognitive_loop.cycle_count` and `last_reflection` survive conversation save/restore cycles
-- **Cross-agent knowledge distillation**: multi-agent sessions merge their `learning_profile` and `knowledge_refinement` blocks at session end, building a shared epistemic base
-- **Transport parity automation**: gate that ensures any new HTTP endpoint added in future is automatically verified for `platform_context` presence (static analysis hook or CI assertion)
+- Four transport chains remain unified on `platform_context` injection across success, error, health, and method-not-allowed surfaces.
+- Streaming and non-stream response paths now expose consistent token-economy telemetry.
+- Checkpoint save / rollback / restore flows preserve `metacognitive_loop` continuity instead of resetting reflective state.
+- Multi-agent chat sessions now auto-distill and write back merged learning/knowledge state at response completion.
+- ACP HTTP route growth is now guarded by an explicit parity automation test, preventing future silent drift.
+
+---
+
+## Review Round Log
+
+### Round 1 — Full review closure (2026-04-19)
+
+Findings closed in this round:
+
+- Fixed a real ACP HTTP parity leak in `handle_responses_api`: the non-degraded `502` upstream-error branch now uses `write_http_json_response_with_context(..., "responses.api")` instead of the raw writer, so `platform_context` is preserved on that live error surface.
+- Added a deterministic source guard in `tests/transport_parity_integration.rs` to prevent future regressions where the Responses API `502` branch could bypass the context-aware writer again.
+- Hardened the parity suite harness so one failing test no longer poisons the shared guard lock and masks unrelated transport results.
+- Corrected stale storage backend module headers in `src/memory/cache.rs` and `src/memory/vector.rs` so the documented backend now matches the compiled `postgres` / `pgvector` implementation instead of the old `sqlx` wording.
+
+Validation for this round:
+
+- `cargo test --test transport_parity_integration`: 12 passed, 0 failed ✅
+- `cargo check --all-targets`: passed ✅
+- Follow-up grep audit: no remaining raw `write_http_json_response(socket, 502, ...)` calls in `src/acp/impl/runtime.rs`, no remaining stale `sqlx` wording in `src/memory/*` headers, and no remaining `suite_guard().lock().expect(...)` poison points in the parity suite ✅
+
+### Round 2 — Streaming error-path closure (2026-04-19)
+
+Findings closed in this round:
+
+- Fixed a Responses API SSE parity leak in `handle_responses_api_stream`: the `response.failed` payload is now passed through `inject_platform_profiles_if_absent(..., "responses.api")` before storage and emission.
+- Fixed two `/chat/stream` SSE parity leaks: both the task-error branch and the task-panic branch now inject `platform_context` before sending the `error` event.
+- Added deterministic transport-parity source guards so future edits cannot silently remove injection from these streaming error branches.
+
+Validation for this round:
+
+- `cargo test --test transport_parity_integration`: 14 passed, 0 failed ✅
+- `cargo check --all-targets`: passed ✅
+- Final focused grep audit: Responses SSE failed branch injects `platform_context`, `/chat/stream` error branches no longer write raw JSON error payloads, and no new raw ACP runtime `502` writer was introduced ✅
+
+### Round 3 — Continue pass (no new findings, 2026-04-19)
+
+Findings closed in this round:
+
+- No new conflicts or hidden issues were discovered in the continued full-chain pass.
+- Re-checked the active table section and transport summary formatting in this report; no structural markdown issue requiring edits was found.
+
+Validation for this round:
+
+- `cargo test --test openai_compat_matrix_integration`: 6 passed, 0 failed ✅
+- Existing transport parity and compile closure from Round 2 remains valid (`transport_parity_integration` 14 passed, `cargo check --all-targets` passed) ✅

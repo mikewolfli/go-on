@@ -1843,7 +1843,7 @@ pub(super) async fn handle_conversation_rollback(
         }
     };
     let previous_head = get_branch_head_id(server, conversation_id, branch_id).await;
-    let rollback = create_checkpoint_record(
+    let mut rollback = create_checkpoint_record(
         server,
         conversation_id,
         branch_id,
@@ -1852,6 +1852,22 @@ pub(super) async fn handle_conversation_rollback(
         Some(checkpoint_id.to_string()),
     )
     .await;
+    let metacognitive_loop = crate::acp::r#impl::request::persist_checkpoint_metacognitive_loop(
+        server,
+        conversation_id,
+        branch_id,
+        &rollback.checkpoint_id,
+        checkpoint.metacognitive_loop.clone().unwrap_or_else(|| {
+            json!({
+                "active": true,
+                "schema_version": "blue25-metacognitive-loop-v1",
+                "last_reflection": format!("rollback:{}", checkpoint_id),
+                "reflection_trigger": "rollback_restore",
+            })
+        }),
+    )
+    .await;
+    rollback.metacognitive_loop = Some(metacognitive_loop.clone());
 
     send_result(
         server,
@@ -1861,6 +1877,7 @@ pub(super) async fn handle_conversation_rollback(
             "conversation_id": conversation_id,
             "branch_id": branch_id,
             "checkpoint": rollback,
+            "metacognitive_loop": metacognitive_loop,
             "previous_head": previous_head,
             "current_head": rollback.checkpoint_id,
         }),

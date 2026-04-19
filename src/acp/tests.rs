@@ -19,6 +19,7 @@ mod test_suite {
             enabled: true,
             auto_mode: false,
             path: "vector.sqlite3".to_string(),
+            connection_string: None,
             dimensions: 192,
             min_query_chars: 140,
             top_k: 4,
@@ -277,6 +278,7 @@ mod test_suite {
                 parent_checkpoint_id: None,
                 created_at: i as i64,
                 note: None,
+                metacognitive_loop: None,
                 messages: Vec::new(),
             });
         }

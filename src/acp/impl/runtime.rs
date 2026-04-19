@@ -629,6 +629,21 @@ fn build_responses_api_response(
     })
 }
 
+fn attach_responses_token_economy(
+    mut payload: serde_json::Value,
+    messages: &[crate::agent::Message],
+    response_text: &str,
+) -> serde_json::Value {
+    let token_economy = crate::acp::r#impl::chat::estimate_token_economy(messages, response_text);
+    payload["usage"] = serde_json::json!({
+        "input_tokens": token_economy["input_tokens"].clone(),
+        "output_tokens": token_economy["output_tokens"].clone(),
+        "total_tokens": token_economy["total_tokens"].clone(),
+    });
+    payload["token_economy"] = token_economy;
+    payload
+}
+
 fn build_responses_api_queued_response(request_id: &str, model: &str) -> serde_json::Value {
     serde_json::json!({
         "id": request_id,
@@ -1711,9 +1726,13 @@ async fn handle_responses_api(
         Ok(r) => r,
         Err(err) => {
             if is_setup_or_upstream_unavailable(&err) {
-                let payload = build_responses_api_response(
+                let payload = attach_responses_token_economy(
+                    build_responses_api_response(
                     &request_id,
                     &model,
+                    &degraded_openai_message(&err),
+                    ),
+                    &params.messages,
                     &degraded_openai_message(&err),
                 );
                 let payload = inject_platform_profiles_if_absent(payload, "responses.api");
@@ -1741,7 +1760,7 @@ async fn handle_responses_api(
                     "incomplete_details": null,
                 }),
             );
-            write_http_json_response(socket, 502, payload).await?;
+            write_http_json_response_with_context(socket, 502, payload, "responses.api").await?;
             return Ok(());
         }
     };
@@ -1750,7 +1769,11 @@ async fn handle_responses_api(
         .get("response")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
-    let payload = build_responses_api_response(&request_id, &model, response_text);
+    let payload = attach_responses_token_economy(
+        build_responses_api_response(&request_id, &model, response_text),
+        &params.messages,
+        response_text,
+    );
     let payload = inject_platform_profiles_if_absent(payload, "responses.api");
     store_responses_api_payload(server.as_ref(), &payload);
     write_http_json_response(socket, 200, payload).await?;
@@ -1817,7 +1840,22 @@ async fn handle_responses_api_stream(
             )
             .await?;
 
-            let completed = build_responses_api_response(request_id, model, text);
+            write_sse_event(
+                socket,
+                "response.token_economy",
+                &serde_json::json!({
+                    "type": "response.token_economy",
+                    "response_id": request_id,
+                    "token_economy": crate::acp::r#impl::chat::estimate_token_economy(&params.messages, text),
+                }),
+            )
+            .await?;
+
+            let completed = attach_responses_token_economy(
+                build_responses_api_response(request_id, model, text),
+                &params.messages,
+                text,
+            );
             let completed = inject_platform_profiles_if_absent(completed, "responses.api");
             store_responses_api_payload(server.as_ref(), &completed);
 
@@ -1850,7 +1888,22 @@ async fn handle_responses_api_stream(
                 )
                 .await?;
 
-                let completed = build_responses_api_response(request_id, model, &text);
+                write_sse_event(
+                    socket,
+                    "response.token_economy",
+                    &serde_json::json!({
+                        "type": "response.token_economy",
+                        "response_id": request_id,
+                        "token_economy": crate::acp::r#impl::chat::estimate_token_economy(&params.messages, &text),
+                    }),
+                )
+                .await?;
+
+                let completed = attach_responses_token_economy(
+                    build_responses_api_response(request_id, model, &text),
+                    &params.messages,
+                    &text,
+                );
                 let completed = inject_platform_profiles_if_absent(completed, "responses.api");
                 store_responses_api_payload(server.as_ref(), &completed);
 
@@ -1869,6 +1922,16 @@ async fn handle_responses_api_stream(
             }
 
             let code = classify_responses_upstream_error_code(&err);
+            write_sse_event(
+                socket,
+                "response.token_economy",
+                &serde_json::json!({
+                    "type": "response.token_economy",
+                    "response_id": request_id,
+                    "token_economy": crate::acp::r#impl::chat::estimate_token_economy(&params.messages, ""),
+                }),
+            )
+            .await?;
             let failed = serde_json::json!({
                 "id": request_id,
                 "object": "response",
@@ -1880,6 +1943,7 @@ async fn handle_responses_api_stream(
                 "error": {"code": code, "type": "upstream_error", "message": err.to_string()},
                 "incomplete_details": null,
             });
+            let failed = inject_platform_profiles_if_absent(failed, "responses.api");
             store_responses_api_payload(server.as_ref(), &failed);
 
             write_sse_event(
@@ -2161,19 +2225,24 @@ async fn handle_http_connection(
                             write_sse_event(socket, "result", &result).await?
                         }
                         Ok(Err(err)) => {
+                            let payload = inject_platform_profiles_if_absent(
+                                serde_json::json!({"message": err.to_string()}),
+                                "chat",
+                            );
                             write_sse_event(
                                 socket,
                                 "error",
-                                &serde_json::json!({"message": err.to_string()}),
+                                &payload,
                             )
                             .await?
                         }
-                        Err(err) => write_sse_event(
-                            socket,
-                            "error",
-                            &serde_json::json!({"message": format!("chat task panicked: {err}")}),
-                        )
-                        .await?,
+                        Err(err) => {
+                            let payload = inject_platform_profiles_if_absent(
+                                serde_json::json!({"message": format!("chat task panicked: {err}")}),
+                                "chat",
+                            );
+                            write_sse_event(socket, "error", &payload).await?
+                        }
                     }
                 }
                 "/chat/completions" | "/v1/chat/completions" | "/chat/chat/completions" => {
@@ -2658,6 +2727,7 @@ mod tests {
         let event_names = [
             "response.created",
             "response.output_text.delta",
+            "response.token_economy",
             "response.completed",
             "response.failed",
         ];
@@ -2707,6 +2777,22 @@ mod tests {
         assert!(delta_payload["delta"].is_string());
         assert!(delta_payload["item_id"].is_string());
         assert!(delta_payload["response_id"].is_string());
+
+        let telemetry_payload = serde_json::json!({
+            "type": "response.token_economy",
+            "response_id": "resp_001",
+            "token_economy": {
+                "compression_ratio": 0.5,
+                "input_tokens": 24,
+                "output_tokens": 12,
+                "total_tokens": 36,
+            }
+        });
+        assert_eq!(
+            telemetry_payload["type"].as_str().unwrap_or_default(),
+            "response.token_economy"
+        );
+        assert!(telemetry_payload["token_economy"].is_object());
 
         // Verify completed event payload shape
         let completed_payload = serde_json::json!({

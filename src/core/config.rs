@@ -498,6 +498,7 @@ impl AdaptiveConfig {
                 path: "acp_cache.sqlite3".to_string(),
                 default_ttl_seconds: 3600,
                 max_entries: 5000,
+                connection_string: None,
             })
         } else {
             None
@@ -508,6 +509,7 @@ impl AdaptiveConfig {
                 enabled: true,
                 auto_mode: true,
                 path: "acp_vector.sqlite3".to_string(),
+                connection_string: None,
                 dimensions: 192,
                 min_query_chars: 80,
                 top_k: 2,
@@ -1206,6 +1208,10 @@ pub struct CacheConfig {
     pub default_ttl_seconds: u64,
     #[serde(default = "default_cache_max_entries")]
     pub max_entries: usize,
+    /// PostgreSQL connection URL (used when compiled with profile-multi-users-server).
+    /// Example: "postgres://user:pass@localhost/go_on"
+    #[serde(default)]
+    pub connection_string: Option<String>,
 }
 
 fn default_cache_path() -> String {
@@ -1229,6 +1235,10 @@ pub struct VectorConfig {
     pub auto_mode: bool,
     #[serde(default = "default_vector_path")]
     pub path: String,
+    /// PostgreSQL connection URL (used when compiled with profile-multi-users-server).
+    /// Example: "postgres://user:pass@localhost/go_on"
+    #[serde(default)]
+    pub connection_string: Option<String>,
     #[serde(default = "default_vector_dimensions")]
     pub dimensions: usize,
     #[serde(default = "default_vector_min_query_chars")]
@@ -3429,11 +3439,13 @@ mod tests {
             path: "cache.sqlite3".to_string(),
             default_ttl_seconds: 30,
             max_entries: 20_000,
+            connection_string: None,
         });
         cfg.vector = Some(VectorConfig {
             enabled: false,
             auto_mode: true,
             path: "vector.sqlite3".to_string(),
+            connection_string: None,
             dimensions: 192,
             min_query_chars: 80,
             top_k: 2,

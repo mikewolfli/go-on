@@ -18,6 +18,7 @@ use std::io::Write;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
@@ -29,6 +30,15 @@ fn binary_path() -> PathBuf {
     std::env::var("CARGO_BIN_EXE_go-on")
         .map(PathBuf::from)
         .expect("CARGO_BIN_EXE_go-on is not set; run via `cargo test`")
+}
+
+fn suite_guard() -> &'static Mutex<()> {
+    static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    GUARD.get_or_init(|| Mutex::new(()))
+}
+
+fn lock_suite_guard() -> std::sync::MutexGuard<'static, ()> {
+    suite_guard().lock().unwrap_or_else(|err| err.into_inner())
 }
 
 fn ephemeral_bind_addr() -> String {
@@ -119,6 +129,7 @@ async fn wait_healthy(client: &reqwest::Client, base_url: &str, timeout: Duratio
 /// ACP HTTP /chat must return platform_context.profile_class == "infrastructure".
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_chat_response_has_platform_context() {
+    let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
     write_local_echo_config(&cfg);
@@ -159,6 +170,7 @@ async fn acp_http_chat_response_has_platform_context() {
 /// ACP HTTP /health must also include platform_context for transport baseline parity.
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_health_response_has_platform_context() {
+    let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
     write_local_echo_config(&cfg);
@@ -192,6 +204,7 @@ async fn acp_http_health_response_has_platform_context() {
 /// ACP HTTP /v1/chat/completions must return platform_context.profile_class == "infrastructure".
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_openai_completions_response_has_platform_context() {
+    let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
     write_local_echo_config(&cfg);
@@ -233,6 +246,7 @@ async fn acp_http_openai_completions_response_has_platform_context() {
 /// ACP HTTP /v1/responses must return platform_context.profile_class == "infrastructure".
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_responses_api_response_has_platform_context() {
+    let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
     write_local_echo_config(&cfg);
@@ -274,6 +288,7 @@ async fn acp_http_responses_api_response_has_platform_context() {
 /// confirming they draw from the same single injection source.
 #[tokio::test(flavor = "current_thread")]
 async fn acp_stdio_and_acp_http_share_same_schema_version() {
+    let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
 
     // --- ACP stdio schema_version ---
@@ -354,6 +369,7 @@ async fn acp_stdio_and_acp_http_share_same_schema_version() {
 /// ACP HTTP compatibility endpoints must keep platform_context on 4xx error payloads.
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_error_payloads_keep_platform_context() {
+    let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
     write_local_echo_config(&cfg);
@@ -398,9 +414,87 @@ async fn acp_http_error_payloads_keep_platform_context() {
     );
 }
 
+/// ACP HTTP Responses API 502 branch must keep the context-aware writer.
+#[tokio::test(flavor = "current_thread")]
+async fn acp_http_responses_api_upstream_502_branch_keeps_context_writer() {
+    let _guard = lock_suite_guard();
+    let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime.rs");
+    let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
+    let handler_start = source
+        .find("async fn handle_responses_api(")
+        .expect("handle_responses_api marker must exist");
+    let handler_end = source[handler_start..]
+        .find("async fn handle_responses_api_stream(")
+        .map(|offset| handler_start + offset)
+        .expect("handle_responses_api_stream marker must exist");
+    let section = &source[handler_start..handler_end];
+
+    assert!(
+        section.contains(
+            "write_http_json_response_with_context(socket, 502, payload, \"responses.api\")"
+        ),
+        "responses.api 502 branch must use context-aware writer; section={section}"
+    );
+    assert!(
+        !section.contains("write_http_json_response(socket, 502, payload)"),
+        "responses.api 502 branch must not bypass platform_context injection; section={section}"
+    );
+}
+
+/// ACP HTTP Responses API stream failed event must inject platform_context before SSE write.
+#[tokio::test(flavor = "current_thread")]
+async fn acp_http_responses_api_stream_failed_branch_keeps_platform_context() {
+    let _guard = lock_suite_guard();
+    let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime.rs");
+    let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
+    let handler_start = source
+        .find("async fn handle_responses_api_stream(")
+        .expect("handle_responses_api_stream marker must exist");
+    let handler_end = source[handler_start..]
+        .find("async fn handle_http_connection(")
+        .map(|offset| handler_start + offset)
+        .expect("handle_http_connection marker must exist");
+    let section = &source[handler_start..handler_end];
+
+    assert!(
+        section.contains("let failed = inject_platform_profiles_if_absent(failed, \"responses.api\");"),
+        "responses.api stream failed branch must inject platform_context before SSE emission; section={section}"
+    );
+}
+
+/// ACP HTTP /chat/stream error branches must inject platform_context before SSE write.
+#[tokio::test(flavor = "current_thread")]
+async fn acp_http_chat_stream_error_branches_keep_platform_context() {
+    let _guard = lock_suite_guard();
+    let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime.rs");
+    let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
+    let handler_start = source
+        .find("async fn handle_http_connection(")
+        .expect("handle_http_connection marker must exist");
+    let handler_end = source[handler_start..]
+        .find("fn infer_adaptive_signal(")
+        .map(|offset| handler_start + offset)
+        .expect("infer_adaptive_signal marker must exist");
+    let section = &source[handler_start..handler_end];
+
+    assert!(
+        section.contains("serde_json::json!({\"message\": err.to_string()})")
+            && section.contains("inject_platform_profiles_if_absent(")
+            && section.contains("\"chat\""),
+        "/chat/stream task error branch must inject platform_context before SSE emission; section={section}"
+    );
+    assert!(
+        section.contains("chat task panicked")
+            && section.contains("inject_platform_profiles_if_absent(")
+            && section.contains("write_sse_event(socket, \"error\", &payload)"),
+        "/chat/stream panic branch must inject platform_context before SSE emission; section={section}"
+    );
+}
+
 /// ACP HTTP 405 responses must retain platform_context on method-not-allowed baseline path.
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_method_not_allowed_has_platform_context() {
+    let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
     write_local_echo_config(&cfg);
@@ -434,6 +528,7 @@ async fn acp_http_method_not_allowed_has_platform_context() {
 /// MCP HTTP errors (unknown method + parse error) must include platform_context in error.data.
 #[tokio::test(flavor = "current_thread")]
 async fn mcp_http_error_data_keeps_platform_context() {
+    let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
     write_local_echo_config(&cfg);
@@ -489,6 +584,7 @@ async fn mcp_http_error_data_keeps_platform_context() {
 /// MCP HTTP /health must include platform_context for parity with ACP HTTP/stdio health paths.
 #[tokio::test(flavor = "current_thread")]
 async fn mcp_http_health_response_has_platform_context() {
+    let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
     write_local_echo_config(&cfg);
@@ -522,6 +618,7 @@ async fn mcp_http_health_response_has_platform_context() {
 /// MCP HTTP 405 responses must keep platform_context on method-not-allowed baseline path.
 #[tokio::test(flavor = "current_thread")]
 async fn mcp_http_method_not_allowed_has_platform_context() {
+    let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
     write_local_echo_config(&cfg);
@@ -554,5 +651,63 @@ async fn mcp_http_method_not_allowed_has_platform_context() {
         body["platform_context"]["schema_version"],
         "blue24-platform-universal-v1",
         "mcp http 405 platform_context.schema_version mismatch"
+    );
+}
+
+#[test]
+fn acp_http_route_inventory_changes_require_transport_gate_update() {
+    let _guard = lock_suite_guard();
+    use std::collections::BTreeSet;
+
+    let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime.rs");
+    let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
+    let start = source
+        .find("async fn handle_http_connection(")
+        .expect("handle_http_connection marker must exist");
+    let end = source[start..]
+        .find("fn infer_adaptive_signal(")
+        .map(|offset| start + offset)
+        .expect("infer_adaptive_signal marker must exist");
+    let section = &source[start..end];
+
+    let mut discovered = BTreeSet::new();
+    let bytes = section.as_bytes();
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        if bytes[idx] == b'"' {
+            let rest = &section[idx + 1..];
+            if let Some(close) = rest.find('"') {
+                let candidate = &rest[..close];
+                if candidate.starts_with('/')
+                    && !candidate.contains('{')
+                    && !candidate.contains(' ')
+                    && !candidate.contains("\\r")
+                {
+                    discovered.insert(candidate.to_string());
+                }
+                idx += close + 2;
+                continue;
+            }
+        }
+        idx += 1;
+    }
+
+    let expected = BTreeSet::from([
+        "/".to_string(),
+        "/chat".to_string(),
+        "/chat/chat/completions".to_string(),
+        "/chat/completions".to_string(),
+        "/chat/stream".to_string(),
+        "/health".to_string(),
+        "/models".to_string(),
+        "/v1/chat/completions".to_string(),
+        "/v1/model".to_string(),
+        "/v1/models".to_string(),
+        "/v1/responses".to_string(),
+    ]);
+
+    assert_eq!(
+        discovered, expected,
+        "ACP HTTP route inventory changed. Update transport parity coverage and this gate before adding new endpoints. discovered={discovered:?} expected={expected:?}"
     );
 }

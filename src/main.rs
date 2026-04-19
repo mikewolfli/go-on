@@ -979,29 +979,72 @@ async fn initialize_cache(
     config_path: PathBuf,
     cache_cfg: Option<crate::config::CacheConfig>,
 ) -> Result<Option<Arc<ResponseCache>>> {
-    match cache_cfg {
-        Some(cache_cfg) if cache_cfg.enabled => {
-            let cache_path = resolve_config_relative_path(&config_path, &cache_cfg.path);
-            info!(
-                "sqlite cache enabled at {} (ttl={}s, max_entries={})",
-                cache_path.display(),
-                cache_cfg.default_ttl_seconds,
-                cache_cfg.max_entries
-            );
+    let Some(cache_cfg) = cache_cfg else {
+        return Ok(None);
+    };
+    if !cache_cfg.enabled {
+        return Ok(None);
+    }
 
-            tokio::task::spawn_blocking(move || {
-                ResponseCache::new(
-                    &cache_path,
-                    cache_cfg.default_ttl_seconds,
-                    cache_cfg.max_entries,
-                )
+    // ── PostgreSQL backend (profile-multi-users-server) ──────────────────────
+    #[cfg(feature = "backend-postgres")]
+    {
+        let url = cache_cfg
+            .connection_string
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!(
+                "cache.connection_string is required for profile-multi-users-server"
+            ))?;
+        info!(
+            "postgres cache enabled (ttl={}s, max_entries={})",
+            cache_cfg.default_ttl_seconds, cache_cfg.max_entries
+        );
+        return tokio::task::spawn_blocking(move || {
+            ResponseCache::new(&url, cache_cfg.default_ttl_seconds, cache_cfg.max_entries)
                 .map(Arc::new)
                 .map(Some)
-            })
-            .await
-            .map_err(|err| anyhow::anyhow!("cache init task join error: {}", err))?
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("cache init task join error: {}", e))?;
+    }
+
+    // ── SQLite backend (profile-local / profile-simple-server) ───────────────
+    #[cfg(not(feature = "backend-postgres"))]
+    {
+        let cache_path = resolve_config_relative_path(&config_path, &cache_cfg.path);
+        info!(
+            "sqlite cache enabled at {} (ttl={}s, max_entries={})",
+            cache_path.display(),
+            cache_cfg.default_ttl_seconds,
+            cache_cfg.max_entries
+        );
+
+        let result = tokio::task::spawn_blocking(move || {
+            ResponseCache::new(
+                &cache_path,
+                cache_cfg.default_ttl_seconds,
+                cache_cfg.max_entries,
+            )
+            .map(Arc::new)
+            .map(Some)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("cache init task join error: {}", e))?;
+
+        // profile-local: cache init failure is non-fatal (adaptive behaviour).
+        #[cfg(feature = "profile-local")]
+        {
+            match result {
+                Ok(cache) => return Ok(cache),
+                Err(e) => {
+                    warn!("sqlite cache init failed (adaptive, continuing without cache): {}", e);
+                    return Ok(None);
+                }
+            }
         }
-        _ => Ok(None),
+
+        #[cfg(not(feature = "profile-local"))]
+        return result;
     }
 }
 
@@ -1009,26 +1052,72 @@ async fn initialize_vector_store(
     config_path: PathBuf,
     vector_cfg: Option<crate::config::VectorConfig>,
 ) -> Result<Option<Arc<VectorStore>>> {
-    match vector_cfg {
-        Some(vector_cfg) if vector_cfg.enabled => {
-            let vector_path = resolve_config_relative_path(&config_path, &vector_cfg.path);
-            info!(
-                "vector memory enabled at {} (dims={}, top_k={}, similarity={})",
-                vector_path.display(),
-                vector_cfg.dimensions,
-                vector_cfg.top_k,
-                vector_cfg.min_similarity
-            );
+    let Some(vector_cfg) = vector_cfg else {
+        return Ok(None);
+    };
+    if !vector_cfg.enabled {
+        return Ok(None);
+    }
 
-            tokio::task::spawn_blocking(move || {
-                VectorStore::new(&vector_path, vector_cfg.dimensions, vector_cfg.max_entries)
-                    .map(Arc::new)
-                    .map(Some)
-            })
-            .await
-            .map_err(|err| anyhow::anyhow!("vector init task join error: {}", err))?
+    // ── PostgreSQL backend (profile-multi-users-server) ──────────────────────
+    #[cfg(feature = "backend-postgres")]
+    {
+        let url = vector_cfg
+            .connection_string
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!(
+                "vector.connection_string is required for profile-multi-users-server"
+            ))?;
+        info!(
+            "postgres vector store enabled (dims={}, top_k={}, similarity={})",
+            vector_cfg.dimensions, vector_cfg.top_k, vector_cfg.min_similarity
+        );
+        return tokio::task::spawn_blocking(move || {
+            VectorStore::new(&url, vector_cfg.dimensions, vector_cfg.max_entries)
+                .map(Arc::new)
+                .map(Some)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("vector init task join error: {}", e))?;
+    }
+
+    // ── SQLite backend (profile-local / profile-simple-server) ───────────────
+    #[cfg(not(feature = "backend-postgres"))]
+    {
+        let vector_path = resolve_config_relative_path(&config_path, &vector_cfg.path);
+        info!(
+            "sqlite vector store enabled at {} (dims={}, top_k={}, similarity={})",
+            vector_path.display(),
+            vector_cfg.dimensions,
+            vector_cfg.top_k,
+            vector_cfg.min_similarity
+        );
+
+        let result = tokio::task::spawn_blocking(move || {
+            VectorStore::new(&vector_path, vector_cfg.dimensions, vector_cfg.max_entries)
+                .map(Arc::new)
+                .map(Some)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("vector init task join error: {}", e))?;
+
+        // profile-local: vector init failure is non-fatal (adaptive behaviour).
+        #[cfg(feature = "profile-local")]
+        {
+            match result {
+                Ok(store) => return Ok(store),
+                Err(e) => {
+                    warn!(
+                        "sqlite vector store init failed (adaptive, continuing without vector): {}",
+                        e
+                    );
+                    return Ok(None);
+                }
+            }
         }
-        _ => Ok(None),
+
+        #[cfg(not(feature = "profile-local"))]
+        return result;
     }
 }
 
@@ -1615,11 +1704,13 @@ mod tests {
                 path: "acp_cache.sqlite3".to_string(),
                 default_ttl_seconds: 3600,
                 max_entries: 5000,
+                connection_string: None,
             }),
             vector: Some(VectorConfig {
                 enabled: true,
                 auto_mode: true,
                 path: "acp_vector.sqlite3".to_string(),
+                connection_string: None,
                 dimensions: 192,
                 min_query_chars: 80,
                 top_k: 2,

@@ -4,9 +4,26 @@ version = "0.6.1"
 edition = "2021"
 
 [features]
-default = ["local-acp-sqlite"]
-local-acp-sqlite = []
-server-mcp-postgres = []
+# ── Build profiles ───────────────────────────────────────────────────────────
+# profile-local         : single-user local tool; SQLite cache + adaptive vector store
+#                         (`sqlite-vec` when available, JSON embedding fallback otherwise)
+# profile-simple-server : single-server deployment; SQLite cache + required `sqlite-vec`
+# profile-multi-users-server: multi-user production; PostgreSQL cache + pgvector
+#
+# Build examples:
+#   cargo build                                        # default = profile-local
+#   cargo build --no-default-features -F profile-local
+#   cargo build --no-default-features -F profile-simple-server
+#   cargo build --no-default-features -F profile-multi-users-server
+default = ["profile-local"]
+profile-local = ["backend-sqlite"]
+profile-simple-server = ["backend-sqlite"]
+profile-multi-users-server = ["backend-postgres"]
+backend-sqlite = ["dep:rusqlite", "dep:sqlite-vec"]
+backend-postgres = ["dep:postgres", "dep:pgvector"]
+# Legacy aliases kept for backward compatibility
+local-acp-sqlite = ["profile-local"]
+server-mcp-postgres = ["profile-multi-users-server"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -25,7 +42,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 opentelemetry-stdout = "0.31"
 lazy_static = "1.4"
-rusqlite = { version = "0.39.0", features = ["bundled"] }
+rusqlite = { version = "0.39.0", features = ["bundled"], optional = true }
 sha2 = "0.11.0"
 keyring = { version = "3", features = ["apple-native"] }
 opentelemetry = "0.31"
@@ -33,6 +50,9 @@ opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.31", features = ["trace", "grpc-tonic"] }
 glob = "0.3"
 base64 = "0.22"
+postgres = { version = "0.19", optional = true }
+pgvector = { version = "0.4", features = ["postgres"], optional = true }
+sqlite-vec = { version = "0.1.9", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }

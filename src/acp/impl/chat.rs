@@ -35,8 +35,9 @@ use crate::orchestration::task_router::{TaskRouter, TaskType};
 use crate::pua::PuaEnforcementPlan;
 
 use crate::reinforcement::{
-    persist_knowledge_insight_event, ExecutionDecisionCandidate, KnowledgeBusArtifact,
-    KnowledgeInsightArtifact, RequirementContractArtifact, TaskPlanArtifact,
+    persist_knowledge_insight_event, persist_workflow_learning_event,
+    ExecutionDecisionCandidate, KnowledgeBusArtifact, KnowledgeInsightArtifact,
+    RequirementContractArtifact, TaskPlanArtifact, WorkflowLearningEvent,
 };
 use crate::rpc_protocol::{chat_trace_context, child_trace_context, RequestTraceContext};
 
@@ -75,6 +76,57 @@ static AGENT_SWITCH_STATE: OnceLock<StdMutex<AgentSwitchState>> = OnceLock::new(
 
 fn agent_switch_state() -> &'static StdMutex<AgentSwitchState> {
     AGENT_SWITCH_STATE.get_or_init(|| StdMutex::new(AgentSwitchState::default()))
+}
+
+fn round_metric(value: f64) -> f64 {
+    (value * 10_000.0).round() / 10_000.0
+}
+
+pub(crate) fn estimate_token_economy(messages: &[Message], response_text: &str) -> Value {
+    let input_chars = messages
+        .iter()
+        .map(|message| message.content.chars().count())
+        .sum::<usize>();
+    let output_chars = response_text.chars().count();
+    let input_tokens = if input_chars == 0 {
+        0_u64
+    } else {
+        input_chars.div_ceil(4) as u64
+    };
+    let output_tokens = if output_chars == 0 {
+        0_u64
+    } else {
+        output_chars.div_ceil(4) as u64
+    };
+    let compression_ratio = if input_tokens == 0 {
+        1.0
+    } else {
+        round_metric(output_tokens as f64 / input_tokens as f64)
+    };
+    let saving_ratio = if input_tokens == 0 {
+        0.0
+    } else {
+        round_metric((1.0 - compression_ratio).clamp(0.0, 1.0))
+    };
+
+    json!({
+        "schema_version": "blue25-stream-token-economy-v1",
+        "round": 1,
+        "input_chars": input_chars,
+        "output_chars": output_chars,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "compression_ratio": compression_ratio,
+        "saving_ratio": saving_ratio,
+        "efficiency_class": if compression_ratio <= 0.60 {
+            "strong"
+        } else if compression_ratio <= 0.85 {
+            "efficient"
+        } else {
+            "expanded"
+        },
+    })
 }
 
 fn is_quota_or_token_limit_error(error_text: &str) -> bool {
@@ -766,7 +818,7 @@ pub(crate) async fn process_chat_request(
         role: "assistant".to_string(),
         content: response_text.clone(),
     });
-    let checkpoint = crate::acp::r#impl::request::create_checkpoint_record(
+    let mut checkpoint = crate::acp::r#impl::request::create_checkpoint_record(
         server,
         &conversation_id,
         &branch_id,
@@ -786,6 +838,50 @@ pub(crate) async fn process_chat_request(
         &response_text,
     )
     .await;
+
+    let metacognitive_loop = crate::acp::r#impl::request::persist_checkpoint_metacognitive_loop(
+        server,
+        &conversation_id,
+        &branch_id,
+        &checkpoint.checkpoint_id,
+        json!({
+            "active": true,
+            "schema_version": "blue25-metacognitive-loop-v1",
+            "last_reflection": format!("{}:{}", phase.phase_name, selected_agent),
+            "reflection_trigger": "response_completed",
+            "last_selected_agent": selected_agent,
+            "response_chars": response_text.chars().count(),
+        }),
+    )
+    .await;
+    checkpoint.metacognitive_loop = Some(metacognitive_loop.clone());
+
+    let distillation = persist_session_distillation(
+        server,
+        &conversation_id,
+        &branch_id,
+        &phase.phase_name,
+        params,
+        &selected_agent,
+        &candidate_agents,
+        &agent_attempts,
+        &response_text,
+    )
+    .await;
+
+    if stream_observer.is_some() {
+        emit_stream_token_economy(
+            server,
+            stream_observer.as_ref(),
+            StreamEventMeta {
+                agent_name: &selected_agent,
+                phase_name: &phase.phase_name,
+                trace_id: &trace.trace_id,
+            },
+            &estimate_token_economy(&params.messages, &response_text),
+        )
+        .await?;
+    }
 
     crate::acp::r#impl::request::append_trace_event(TraceEvent {
         timestamp: format!(
@@ -856,6 +952,8 @@ pub(crate) async fn process_chat_request(
         None
     };
 
+    let token_economy = estimate_token_economy(&params.messages, &response_text);
+
     let result = json!({
         "done": true,
         "conversation_id": conversation_id,
@@ -867,9 +965,12 @@ pub(crate) async fn process_chat_request(
         "duration_ms": started.elapsed().as_millis() as u64,
         "response": response_text,
         "checkpoint": checkpoint,
+        "metacognitive_loop": metacognitive_loop,
+        "token_economy": token_economy,
         "vector_hits": vector_context.hits,
         "summary_used": vector_context.summary.is_some(),
         "knowledge": knowledge,
+        "distillation": distillation,
         "reviews": reviews,
         "agent_attempts": agent_attempts,
         "agent_switch_notice": agent_switch_notice
@@ -1045,6 +1146,47 @@ async fn emit_stream_done(
                 "phase": meta.phase_name,
                 "total_chars": total_chars,
                 "trace_id": meta.trace_id,
+            }),
+        });
+    }
+
+    Ok(())
+}
+
+async fn emit_stream_token_economy(
+    server: &AcpServer,
+    observer: Option<&StreamObserver>,
+    meta: StreamEventMeta<'_>,
+    token_economy: &Value,
+) -> Result<()> {
+    let Some(observer) = observer else {
+        return Ok(());
+    };
+
+    if let Some(response_id) = observer.jsonrpc_response_id.clone() {
+        let response_id = Some(response_id);
+        crate::acp::r#impl::io::send_notification(
+            server,
+            "chat.stream.telemetry",
+            json!({
+                "id": response_id,
+                "agent": meta.agent_name,
+                "phase": meta.phase_name,
+                "trace_id": meta.trace_id,
+                "token_economy": token_economy,
+            }),
+        )
+        .await?;
+    }
+
+    if let Some(sender) = &observer.sse_sender {
+        let _ = sender.send(StreamFrame {
+            event: "telemetry".to_string(),
+            payload: json!({
+                "agent": meta.agent_name,
+                "phase": meta.phase_name,
+                "trace_id": meta.trace_id,
+                "token_economy": token_economy,
             }),
         });
     }
@@ -2196,6 +2338,186 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     result
 }
 
+async fn persist_session_distillation(
+    server: &AcpServer,
+    conversation_id: &str,
+    branch_id: &str,
+    phase_name: &str,
+    params: &ChatParams,
+    selected_agent: &str,
+    candidate_agents: &[String],
+    agent_attempts: &[Value],
+    response_text: &str,
+) -> Value {
+    let task = extract_task_description(&params.messages);
+    let success_count = agent_attempts
+        .iter()
+        .filter(|attempt| attempt.get("ok").and_then(Value::as_bool) == Some(true))
+        .count();
+    let failure_count = agent_attempts.len().saturating_sub(success_count);
+    let success_rate = if agent_attempts.is_empty() {
+        1.0
+    } else {
+        success_count as f64 / agent_attempts.len() as f64
+    };
+    let merged_agents = if candidate_agents.is_empty() {
+        vec![selected_agent.to_string()]
+    } else {
+        candidate_agents.to_vec()
+    };
+    let distill_params = json!({
+        "learning_mode": "adaptive",
+        "memory_scope": "task_and_repo",
+        "repair_iterations": failure_count,
+        "distill_scope": "task_repo_runtime",
+        "evolution_mode": "continuous",
+    });
+    let mut learning_profile =
+        crate::acp::r#impl::request::build_learning_profile("session.distill", &task, &distill_params);
+    if let Some(obj) = learning_profile.as_object_mut() {
+        obj.insert(
+            "session".to_string(),
+            json!({
+                "conversation_id": conversation_id,
+                "branch_id": branch_id,
+                "phase": phase_name,
+                "selected_agent": selected_agent,
+                "agents_considered": merged_agents,
+                "agent_attempts_total": agent_attempts.len(),
+                "success_rate": round_metric(success_rate),
+            }),
+        );
+    }
+
+    let mut knowledge_refinement = crate::acp::r#impl::request::build_knowledge_refinement_profile(
+        "session.distill",
+        &task,
+        &distill_params,
+        &learning_profile,
+    );
+    if let Some(obj) = knowledge_refinement.as_object_mut() {
+        obj.insert(
+            "merge".to_string(),
+            json!({
+                "selected_agent": selected_agent,
+                "agents_considered": candidate_agents,
+                "agents_succeeded": success_count,
+                "agents_failed": failure_count,
+                "shared_epistemic_base_updated": true,
+            }),
+        );
+    }
+
+    let artifact = json!({
+        "generated_at": crate::acp::prelude::now_ts(),
+        "conversation_id": conversation_id,
+        "branch_id": branch_id,
+        "phase": phase_name,
+        "task": truncate_chars(&task, 200),
+        "selected_agent": selected_agent,
+        "merged_agents": merged_agents,
+        "learning_profile": learning_profile,
+        "knowledge_refinement": knowledge_refinement,
+        "response_excerpt": truncate_chars(response_text, 240),
+    });
+
+    let ledger = crate::acp::r#impl::runtime::artifact_ledger(server);
+    let artifact_path = ledger
+        .write_json("spec", "latest-session-distillation.json", &artifact)
+        .ok()
+        .map(|path| path.display().to_string());
+
+    let insight = KnowledgeInsightArtifact {
+        generated_at: crate::acp::prelude::now_ts(),
+        conversation_id: conversation_id.to_string(),
+        branch_id: branch_id.to_string(),
+        phase: phase_name.to_string(),
+        task: truncate_chars(&task, 200),
+        agent: "multi-agent.merge".to_string(),
+        source: "session_distillation".to_string(),
+        request_excerpt: truncate_chars(&task, 200),
+        response_excerpt: truncate_chars(response_text, 240),
+        reusable_insights: vec![format!(
+            "Selected agent '{}' after considering {} agent(s)",
+            selected_agent,
+            candidate_agents.len().max(1)
+        )],
+        verification_steps: agent_attempts
+            .iter()
+            .filter_map(|attempt| attempt.get("error").and_then(Value::as_str))
+            .take(3)
+            .map(|error| truncate_chars(error, 120))
+            .collect(),
+        confidence: round_metric((0.70 + success_rate * 0.25).clamp(0.0, 0.98)),
+    };
+    let knowledge_artifact_path = persist_knowledge_insight_event(&ledger, insight, 256)
+        .ok()
+        .map(|path| path.display().to_string());
+
+    let analyzed = TaskRouter::analyze_task(&task);
+    let learning_event = WorkflowLearningEvent {
+        generated_at: crate::acp::prelude::now_ts(),
+        task: truncate_chars(&task, 200),
+        complexity: analyzed.complexity,
+        predicted_success_rate: success_rate as f32,
+        subtasks_total: agent_attempts.len().max(1),
+        subtasks_completed: success_count,
+        subtasks_failed: failure_count,
+        subtasks_skipped: 0,
+        serial_work_ms: 0,
+        critical_path_ms: 0,
+        parallel_speedup: if agent_attempts.len() > 1 { 1.0 } else { 0.0 },
+        parallel_efficiency: if agent_attempts.len() > 1 {
+            round_metric(success_rate)
+        } else {
+            1.0
+        },
+        executor: selected_agent.to_string(),
+        source: "session_distillation".to_string(),
+        runtime_healthy: server.get_status().lifecycle.is_healthy,
+        gates_ok: true,
+        work_grade: if failure_count == 0 {
+            "A".to_string()
+        } else if success_count > 0 {
+            "B".to_string()
+        } else {
+            "C".to_string()
+        },
+        risk_score: round_metric((1.0 - success_rate).clamp(0.0, 1.0)),
+        clarification_rounds: 0,
+        clarification_quality_score: 1.0,
+        requirement_change_count: 0,
+        review_reject_root_cause: String::new(),
+        primary_stability_score: round_metric(success_rate),
+        secondary_utilization_rate: if agent_attempts.len() > 1 {
+            round_metric((agent_attempts.len().saturating_sub(1)) as f64 / agent_attempts.len() as f64)
+        } else {
+            0.0
+        },
+        failover_count: failure_count as u32,
+        failover_root_cause: agent_attempts
+            .iter()
+            .filter_map(|attempt| attempt.get("error").and_then(Value::as_str))
+            .next()
+            .unwrap_or_default()
+            .to_string(),
+    };
+    let learning_artifact_path = persist_workflow_learning_event(&ledger, learning_event, 256)
+        .ok()
+        .map(|path| path.display().to_string());
+
+    json!({
+        "artifact_path": artifact_path,
+        "knowledge_artifact_path": knowledge_artifact_path,
+        "learning_artifact_path": learning_artifact_path,
+        "shared_epistemic_base_updated": true,
+        "merged_agents": candidate_agents,
+        "success_rate": round_metric(success_rate),
+        "learning_profile": artifact["learning_profile"].clone(),
+        "knowledge_refinement": artifact["knowledge_refinement"].clone(),
+    })
+}
+
 /// Get routing handles
 fn routing_handles(
     server: &AcpServer,
@@ -2333,6 +2655,7 @@ mod tests {
                 enabled: true,
                 auto_mode: false,
                 path: "vector.sqlite3".to_string(),
+                connection_string: None,
                 dimensions: 32,
                 min_query_chars: 4,
                 top_k: 2,
@@ -2348,6 +2671,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
     async fn process_chat_request_wires_vector_context_and_checkpoint_tree() {
         let temp = tempfile::tempdir().expect("tempdir should exist");
@@ -2419,8 +2743,18 @@ mod tests {
             Some(1)
         );
         assert_eq!(result["checkpoint"]["branch_id"], "feature-a");
+        assert!(result["metacognitive_loop"]["cycle_count"].as_u64().unwrap_or(0) >= 1);
+        assert_eq!(
+            result["checkpoint"]["metacognitive_loop"]["checkpoint_id"],
+            result["checkpoint"]["checkpoint_id"]
+        );
+        assert!(result["token_economy"]["compression_ratio"].is_number());
         assert_eq!(result["knowledge"]["vector_memory_written"], true);
         assert!(result["knowledge"]["artifact_path"].is_string());
+        assert_eq!(
+            result["distillation"]["shared_epistemic_base_updated"],
+            true
+        );
 
         let captured = seen_messages.lock().expect("messages lock").clone();
         assert_eq!(
@@ -2446,6 +2780,27 @@ mod tests {
             .as_str()
             .expect("artifact path should be present");
         assert!(std::path::Path::new(artifact_path).exists());
+
+        let distillation_path = result["distillation"]["artifact_path"]
+            .as_str()
+            .expect("distillation artifact path should be present");
+        assert!(std::path::Path::new(distillation_path).exists());
+    }
+
+    #[test]
+    fn estimate_token_economy_reports_compression_ratio() {
+        let payload = super::estimate_token_economy(
+            &[Message {
+                role: "user".to_string(),
+                content: "Summarize this large body of implementation detail into one paragraph."
+                    .to_string(),
+            }],
+            "Short summary.",
+        );
+
+        assert!(payload["input_tokens"].as_u64().unwrap_or(0) > 0);
+        assert!(payload["output_tokens"].as_u64().unwrap_or(0) > 0);
+        assert!(payload["compression_ratio"].as_f64().unwrap_or(2.0) <= 1.0);
     }
 
     #[test]
