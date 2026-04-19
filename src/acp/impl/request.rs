@@ -186,8 +186,12 @@ use crate::rpc_protocol::{value_to_id, JsonRpcRequest, RequestTraceContext};
 mod config_pack;
 mod exec_pack;
 mod lifecycle_pack;
+mod learning_pack;
 mod ops_pack;
+mod protocol_pack;
 mod repro_pack;
+mod runtime_pack;
+mod workflow_pack;
 use self::config_pack::*;
 use self::exec_pack::*;
 use self::lifecycle_pack::*;
@@ -1142,21 +1146,32 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
     );
     let request_id = request.id.clone();
     let result = match request.method.as_str() {
-        "initialize" => handle_initialize(server, request_id).await,
-        "mcp.initialize" => handle_mcp_initialize(server, request_id).await,
-        "mcp.tools.list" => handle_mcp_tools_list(server, request_id).await,
+        "initialize" => protocol_pack::handle_initialize(server, request_id).await,
+        "mcp.initialize" => protocol_pack::handle_mcp_initialize(server, request_id).await,
+        "mcp.tools.list" => protocol_pack::handle_mcp_tools_list(server, request_id).await,
         "mcp.tools.call" => {
-            handle_mcp_tools_call(server, request.params.unwrap_or_default(), request_id).await
+            protocol_pack::handle_mcp_tools_call(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         "skill.import" => {
-            handle_skill_import(server, request.params.unwrap_or_default(), request_id).await
-        }
-        "skill.enable" => {
-            handle_skill_enabled_toggle(server, request.params.unwrap_or_default(), request_id, true)
+            protocol_pack::handle_skill_import(server, request.params.unwrap_or_default(), request_id)
                 .await
         }
+        "skill.enable" => {
+            protocol_pack::handle_skill_enabled_toggle(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+                true,
+            )
+            .await
+        }
         "skill.disable" => {
-            handle_skill_enabled_toggle(
+            protocol_pack::handle_skill_enabled_toggle(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -1165,13 +1180,14 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             .await
         }
         "skill.list_imported" => {
-            handle_skill_list_imported(server, request_id).await
+            protocol_pack::handle_skill_list_imported(server, request_id).await
         }
         "skill.remove" => {
-            handle_skill_remove(server, request.params.unwrap_or_default(), request_id).await
+            protocol_pack::handle_skill_remove(server, request.params.unwrap_or_default(), request_id)
+                .await
         }
         "chat" => {
-            handle_chat(
+            protocol_pack::handle_chat(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -1180,7 +1196,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             .await
         }
         "phase" | "phase.status" => {
-            handle_phase(
+            protocol_pack::handle_phase(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -1188,34 +1204,51 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             )
             .await
         }
-        "metrics.get" => handle_metrics_get(server, request_id).await,
-        "metrics" => handle_metrics(server, request_id).await,
-        "metrics.prometheus" => handle_metrics_prometheus(server, request_id).await,
-        "metrics.reset" => handle_metrics_reset(server, request_id).await,
+        "metrics.get" => runtime_pack::handle_metrics_get(server, request_id).await,
+        "metrics" => runtime_pack::handle_metrics(server, request_id).await,
+        "metrics.prometheus" => runtime_pack::handle_metrics_prometheus(server, request_id).await,
+        "metrics.reset" => runtime_pack::handle_metrics_reset(server, request_id).await,
         "debug_panel.get" | "debug.panel.get" => {
-            handle_debug_panel_get(server, request.params.unwrap_or_default(), request_id).await
+            runtime_pack::handle_debug_panel_get(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         "trace.get" => {
-            handle_trace_get(server, request.params.unwrap_or_default(), request_id).await
+            runtime_pack::handle_trace_get(server, request.params.unwrap_or_default(), request_id)
+                .await
         }
-        "trace.metrics" => handle_trace_metrics(server, request_id).await,
-        "shutdown" => handle_shutdown(server, request_id).await,
-        "health" | "runtime.health" => handle_health(server, request_id).await,
-        "health.probes" => handle_health_probes(server, request_id).await,
+        "trace.metrics" => runtime_pack::handle_trace_metrics(server, request_id).await,
+        "shutdown" => runtime_pack::handle_shutdown(server, request_id).await,
+        "health" | "runtime.health" => runtime_pack::handle_health(server, request_id).await,
+        "health.probes" => runtime_pack::handle_health_probes(server, request_id).await,
         "lock.status" => {
             handle_lock_status(server, request.params.unwrap_or_default(), request_id).await
         }
         "runtime.self_model" => {
-            handle_runtime_self_model(server, request.params.unwrap_or_default(), request_id).await
+            runtime_pack::handle_runtime_self_model(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         "provider.status" => {
-            handle_provider_status(server, request.params.unwrap_or_default(), request_id).await
+            runtime_pack::handle_provider_status(server, request.params.unwrap_or_default(), request_id)
+                .await
         }
         "release.readiness" => {
             handle_release_readiness(server, request.params.unwrap_or_default(), request_id).await
         }
         "runtime.stability" => {
-            handle_runtime_stability(server, request.params.unwrap_or_default(), request_id).await
+            runtime_pack::handle_runtime_stability(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         "observability.alerts" => {
             handle_observability_alerts(server, request.params.unwrap_or_default(), request_id)
@@ -1241,10 +1274,11 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             handle_data_lifecycle(server, request.params.unwrap_or_default(), request_id).await
         }
         "action.check" => {
-            handle_action_check(server, request.params.unwrap_or_default(), request_id).await
+            runtime_pack::handle_action_check(server, request.params.unwrap_or_default(), request_id)
+                .await
         }
         "conversation.checkpoint.create" => {
-            handle_conversation_checkpoint_create(
+            runtime_pack::handle_conversation_checkpoint_create(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -1252,7 +1286,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             .await
         }
         "conversation.checkpoint.list" => {
-            handle_conversation_checkpoint_list(
+            runtime_pack::handle_conversation_checkpoint_list(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -1260,11 +1294,15 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             .await
         }
         "conversation.rollback" => {
-            handle_conversation_rollback(server, request.params.unwrap_or_default(), request_id)
+            runtime_pack::handle_conversation_rollback(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
                 .await
         }
         "conversation.checkpoint.prune" => {
-            handle_conversation_checkpoint_prune(
+            runtime_pack::handle_conversation_checkpoint_prune(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -1277,23 +1315,27 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         }
         "build.repro" => repro_pack::handle_build_repro(server, request_id).await,
         "optimization.peak" => {
-            handle_optimization_peak(server, request.params.unwrap_or_default(), request_id).await
+            runtime_pack::handle_optimization_peak(server, request.params.unwrap_or_default(), request_id)
+                .await
         }
-        "error.contract" => handle_error_contract(server, request_id).await,
-        "autotune.get" => handle_autotune_get(server, request_id).await,
-        "autotune.status" => handle_autotune_status(server, request_id).await,
+        "error.contract" => runtime_pack::handle_error_contract(server, request_id).await,
+        "autotune.get" => runtime_pack::handle_autotune_get(server, request_id).await,
+        "autotune.status" => runtime_pack::handle_autotune_status(server, request_id).await,
         "autotune.reset" => {
-            handle_autotune_reset(server, request.params.unwrap_or_default(), request_id).await
+            runtime_pack::handle_autotune_reset(server, request.params.unwrap_or_default(), request_id)
+                .await
         }
-        "selector.status" => handle_selector_status(server, request_id).await,
+        "selector.status" => runtime_pack::handle_selector_status(server, request_id).await,
         "hardness.status" => {
-            handle_hardness_status(server, request.params.unwrap_or_default(), request_id).await
+            runtime_pack::handle_hardness_status(server, request.params.unwrap_or_default(), request_id)
+                .await
         }
         "cost.status" => {
-            handle_cost_status(server, request.params.unwrap_or_default(), request_id).await
+            runtime_pack::handle_cost_status(server, request.params.unwrap_or_default(), request_id)
+                .await
         }
         "workflow.confirm" => {
-            handle_workflow_confirm(
+            workflow_pack::handle_workflow_confirm(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -1302,7 +1344,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             .await
         }
         "workflow.clarify" => {
-            handle_workflow_clarify(
+            workflow_pack::handle_workflow_clarify(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -1311,7 +1353,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             .await
         }
         "workflow.research" => {
-            handle_workflow_research(
+            workflow_pack::handle_workflow_research(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -1320,7 +1362,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             .await
         }
         "workflow.consult" => {
-            handle_workflow_consult(
+            workflow_pack::handle_workflow_consult(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -1329,7 +1371,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             .await
         }
         "workflow.generate" => {
-            handle_workflow_generate(
+            workflow_pack::handle_workflow_generate(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -1347,7 +1389,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             .await
         }
         "task.plan" => {
-            handle_task_plan(
+            workflow_pack::handle_task_plan(
                 server,
                 request.params.unwrap_or_default(),
                 request_id,
@@ -1359,39 +1401,81 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             handle_task_execute(server, request.params.unwrap_or_default(), request_id).await
         }
         "learning.summary" => {
-            handle_learning_summary(server, request.params.unwrap_or_default(), request_id).await
+            learning_pack::handle_learning_summary(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         "learning.replay" => {
-            handle_learning_replay(server, request.params.unwrap_or_default(), request_id).await
+            learning_pack::handle_learning_replay(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         "learning.guardrail" => {
-            handle_learning_guardrail(server, request.params.unwrap_or_default(), request_id).await
+            learning_pack::handle_learning_guardrail(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         "knowledge.distill" => {
-            handle_knowledge_distill(server, request.params.unwrap_or_default(), request_id).await
+            learning_pack::handle_knowledge_distill(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         "rl.alignment.offline_eval" => {
-            handle_rl_alignment_offline_eval(server, request.params.unwrap_or_default(), request_id)
-                .await
+            learning_pack::handle_rl_alignment_offline_eval(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         "governance.status" => {
-            handle_governance_status(server, request.params.unwrap_or_default(), request_id).await
-        }
-        "governance.plan.get" => handle_governance_plan_get(server, request_id).await,
-        "governance.plan.update" => {
-            handle_governance_plan_update(server, request.params.unwrap_or_default(), request_id)
+            runtime_pack::handle_governance_status(server, request.params.unwrap_or_default(), request_id)
                 .await
+        }
+        "governance.plan.get" => runtime_pack::handle_governance_plan_get(server, request_id).await,
+        "governance.plan.update" => {
+            runtime_pack::handle_governance_plan_update(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         "governance.audit.recent" => {
-            handle_governance_audit_recent(server, request.params.unwrap_or_default(), request_id)
-                .await
+            runtime_pack::handle_governance_audit_recent(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         "phase.policy.replay" => {
-            handle_phase_policy_replay(server, request.params.unwrap_or_default(), request_id).await
+            learning_pack::handle_phase_policy_replay(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         "primary_secondary.summary" => {
-            handle_primary_secondary_summary(server, request.params.unwrap_or_default(), request_id)
-                .await
+            learning_pack::handle_primary_secondary_summary(
+                server,
+                request.params.unwrap_or_default(),
+                request_id,
+            )
+            .await
         }
         _ => {
             send_error(
@@ -6700,6 +6784,165 @@ fn record_trace_event(
         error: None,
         pua_stage: None,
     });
+}
+
+/// Build execution cycle artifact
+fn build_execution_cycle(
+    method: &str,
+    action: &str,
+    status: &str,
+    _details: Vec<String>,
+) -> Value {
+    json!({
+        "method": method,
+        "action": action,
+        "status": status,
+        "current_cycle": {
+            "plan_version": "1.0",
+            "patch_set": [],
+            "patch_set_size": 0
+        },
+        "cycles": [],
+        "history_summary": {
+            "total_cycles": 1,
+            "pending_repair_iterations": 0
+        },
+        "auto_repair": {
+            "target_subtasks": [],
+            "next_cycle_preview": null
+        }
+    })
+}
+
+/// Build gate matrix artifact
+fn build_gate_matrix(
+    requirement_gate: Value,
+    gate_status: &str,
+    status2: &str,
+    status3: &str,
+    check: Option<(&str, &str)>,
+) -> Value {
+    let mut gates = json!({
+        "requirement": requirement_gate,
+        "gate": gate_status,
+        "status2": status2,
+        "status3": status3,
+    });
+    if let Some((check_name, check_status)) = check {
+        gates[check_name] = Value::String(check_status.to_string());
+    }
+    gates
+}
+
+/// Build change bundle artifact
+fn build_change_bundle(
+    kind: &str,
+    description: String,
+    level: &str,
+    status: &str,
+    message: String,
+    files: Vec<String>,
+) -> Value {
+    let file_change_summary = files
+        .iter()
+        .map(|path| {
+            let lower = path.to_ascii_lowercase();
+            let file_role = if lower.contains("artifact") || lower.contains("latest-") {
+                "artifact"
+            } else if lower.ends_with(".rs")
+                || lower.ends_with(".ts")
+                || lower.ends_with(".tsx")
+                || lower.ends_with(".js")
+                || lower.ends_with(".jsx")
+            {
+                "source"
+            } else if lower.ends_with(".md") || lower.ends_with(".json") || lower.ends_with(".toml") {
+                "metadata"
+            } else {
+                "unknown"
+            };
+
+            json!({
+                "path": path,
+                "role": file_role,
+                "change_type": "updated",
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let impact_surface = file_change_summary
+        .iter()
+        .filter_map(|entry| entry.get("role").and_then(Value::as_str).map(str::to_string))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    let commit_scope = if kind.contains("execution") {
+        "workflow"
+    } else if kind.contains("analysis") {
+        "research"
+    } else {
+        "runtime"
+    };
+
+    json!({
+        "kind": kind,
+        "description": description,
+        "level": level,
+        "status": status,
+        "message": message,
+        "files": files,
+        "file_change_summary": file_change_summary,
+        "risk": {
+            "level": level,
+            "impact_surface": impact_surface,
+            "summary": format!("{} change bundle with {} linked files", kind, files.len()),
+        },
+        "gate_results": {
+            "overall": status,
+            "tests": status,
+            "verification_mode": "runtime_governed",
+        },
+        "rollback_recommendation": {
+            "recommended": status != "passed",
+            "instructions": [
+                "Revert files listed in file_change_summary.",
+                "Re-run workflow/task execution after fixing root cause.",
+            ],
+        },
+        "commit_suggestion": {
+            "message": message,
+            "scope": commit_scope,
+            "style": "conventional",
+        },
+        "rollback": {
+            "enabled": false,
+            "strategy": "none"
+        },
+        "commit": {
+            "message": message,
+            "timestamp": crate::acp::prelude::now_ts(),
+            "author": "workflow"
+        },
+        "test_coverage": {
+            "overall_coverage": 0.0,
+            "affected_areas": [],
+            "test_plan": "standard"
+        }
+    })
+}
+
+/// Build trace reference artifact
+fn build_trace_ref(
+    method: &str,
+    request_id: Option<&Value>,
+    artifact_path: Option<&str>,
+) -> Value {
+    json!({
+        "method": method,
+        "request_id": request_id.cloned().unwrap_or_default(),
+        "artifact_path": artifact_path.unwrap_or_default(),
+    })
 }
 
 #[cfg(test)]

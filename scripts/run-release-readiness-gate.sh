@@ -21,4 +21,7 @@ cargo test run_scenario_file_executes_release_readiness_drill_requests -- --noca
 cargo test rpc_shutdown_waits_for_inflight_chat_completion -- --nocapture
 cargo test ndjson_scenario_files_all_pass -- --nocapture
 
+echo "=== 3) BLUE22 benchmark snapshot ==="
+"$ROOT_DIR/scripts/run-blue22-benchmark-snapshot.sh"
+
 echo "✅ BLUE15 Stage C release readiness gate completed"

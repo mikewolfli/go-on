@@ -13,6 +13,8 @@ type SurfaceContract = {
 
 type ProtocolSupport = {
     supportedModes: string[];
+    workflowControlModes?: string[];
+    defaultWorkflowControlMode?: string;
     defaultMode: string;
     autoModeSupportsAcpAndMcp: boolean;
     protocolCapabilityModel: string;
@@ -161,6 +163,8 @@ const fallbackContract: ProtocolContract = {
     },
     protocol: {
         supportedModes: ['adaptive', 'acp_stdio', 'acp_http', 'mcp_stdio', 'mcp_http'],
+        workflowControlModes: ['manual', 'assisted', 'autonomous'],
+        defaultWorkflowControlMode: 'assisted',
         defaultMode: 'adaptive',
         autoModeSupportsAcpAndMcp: true,
         protocolCapabilityModel: 'capability_plus_transport',
@@ -332,3 +336,7 @@ function loadProtocolContract(): ProtocolContract {
 }
 
 export const protocolContract = loadProtocolContract();
+export const workflowControlModes =
+    protocolContract.protocol.workflowControlModes ?? ['manual', 'assisted', 'autonomous'];
+export const defaultWorkflowControlMode =
+    protocolContract.protocol.defaultWorkflowControlMode ?? 'assisted';

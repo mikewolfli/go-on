@@ -7,6 +7,7 @@
 use anyhow::Result;
 use glob::Pattern;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -40,6 +41,29 @@ pub struct ToolOutput {
     pub pua_report: Option<PuaExecutionReport>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryPolicy {
+    pub max_retries: usize,
+    pub retry_on_failure: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCapabilityProfile {
+    pub capability: String,
+    pub risk_level: ToolRiskLevel,
+    pub timeout_budget_ms: u64,
+    pub retry_policy: RetryPolicy,
+    pub fallback_chain: Vec<String>,
+}
+
 /// Tool trait
 ///
 /// All tools must implement this trait. The `run` method should be instrumented for tracing and performance monitoring in the implementation, not on the trait itself.
@@ -53,24 +77,124 @@ pub trait Tool: Send + Sync {
 /// Tool registry
 pub struct ToolRegistry {
     tools: Vec<Box<dyn Tool>>,
+    profiles: HashMap<&'static str, ToolCapabilityProfile>,
 }
 
 impl ToolRegistry {
     /// Create a new tool registry and register all built-in tools.
     #[tracing::instrument(level = "info")]
     pub fn new() -> Self {
-        let mut registry = Self { tools: Vec::new() };
-        registry.register(ReadFileTool);
-        registry.register(WriteFileTool);
-        registry.register(SearchFilesTool);
-        registry.register(ApplyPatchTool);
-        registry.register(RunTestsTool);
-        registry.register(InspectGitDiffTool);
+        let mut registry = Self {
+            tools: Vec::new(),
+            profiles: HashMap::new(),
+        };
+        registry.register_with_profile(
+            ReadFileTool,
+            ToolCapabilityProfile {
+                capability: "filesystem_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: vec!["search_files".to_string()],
+            },
+        );
+        registry.register_with_profile(
+            WriteFileTool,
+            ToolCapabilityProfile {
+                capability: "filesystem_write".to_string(),
+                risk_level: ToolRiskLevel::High,
+                timeout_budget_ms: 15_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            SearchFilesTool,
+            ToolCapabilityProfile {
+                capability: "filesystem_search".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: vec!["read_file".to_string()],
+            },
+        );
+        registry.register_with_profile(
+            ApplyPatchTool,
+            ToolCapabilityProfile {
+                capability: "patch_apply".to_string(),
+                risk_level: ToolRiskLevel::High,
+                timeout_budget_ms: 20_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: vec!["inspect_git_diff".to_string()],
+            },
+        );
+        registry.register_with_profile(
+            RunTestsTool,
+            ToolCapabilityProfile {
+                capability: "verification_execute".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 300_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: vec!["inspect_git_diff".to_string()],
+            },
+        );
+        registry.register_with_profile(
+            InspectGitDiffTool,
+            ToolCapabilityProfile {
+                capability: "scm_diff".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 8_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
         registry
     }
+
     pub fn register<T: Tool + 'static>(&mut self, tool: T) {
+        self.register_with_profile(
+            tool,
+            ToolCapabilityProfile {
+                capability: "custom".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+    }
+
+    pub fn register_with_profile<T: Tool + 'static>(
+        &mut self,
+        tool: T,
+        profile: ToolCapabilityProfile,
+    ) {
+        let name = tool.name();
+        self.profiles.insert(name, profile);
         self.tools.push(Box::new(tool));
     }
+
     /// Get a tool by name.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
@@ -82,6 +206,62 @@ impl ToolRegistry {
 
     pub fn names(&self) -> Vec<&'static str> {
         self.tools.iter().map(|tool| tool.name()).collect()
+    }
+
+    pub fn profile(&self, name: &str) -> Option<&ToolCapabilityProfile> {
+        self.profiles.get(name)
+    }
+
+    pub fn capability_matrix(&self) -> serde_json::Value {
+        let matrix = self
+            .tools
+            .iter()
+            .filter_map(|tool| {
+                self.profiles.get(tool.name()).map(|profile| {
+                    serde_json::json!({
+                        "name": tool.name(),
+                        "capability": profile.capability,
+                        "risk_level": profile.risk_level,
+                        "timeout_budget_ms": profile.timeout_budget_ms,
+                        "retry_policy": profile.retry_policy,
+                        "fallback_chain": profile.fallback_chain,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({ "tools": matrix })
+    }
+
+    pub fn run_with_fallback(&self, name: &str, input: &ToolInput) -> Result<ToolOutput> {
+        let Some(primary) = self.get(name) else {
+            anyhow::bail!("tool '{}' not found", name);
+        };
+
+        let mut primary_result = primary.run(input)?;
+        if primary_result.success {
+            return Ok(primary_result);
+        }
+
+        let fallback_chain = self
+            .profile(name)
+            .map(|profile| profile.fallback_chain.clone())
+            .unwrap_or_default();
+
+        for fallback_name in fallback_chain {
+            if let Some(fallback_tool) = self.get(&fallback_name) {
+                let mut fallback_result = fallback_tool.run(input)?;
+                if fallback_result.success {
+                    fallback_result.audit_log = Some(format!(
+                        "primary '{}' failed, fallback '{}' succeeded",
+                        name, fallback_name
+                    ));
+                    return Ok(fallback_result);
+                }
+                primary_result = fallback_result;
+            }
+        }
+
+        Ok(primary_result)
     }
 }
 
@@ -495,5 +675,82 @@ mod tests {
             .expect("diff should be string")
             .to_string();
         assert!(diff.contains("hello world"));
+    }
+
+    struct AlwaysFailTool;
+    impl Tool for AlwaysFailTool {
+        fn name(&self) -> &'static str {
+            "always_fail"
+        }
+
+        fn run(&self, _input: &ToolInput) -> Result<ToolOutput> {
+            Ok(ToolOutput {
+                success: false,
+                result: None,
+                error: Some("forced failure".to_string()),
+                verification: Some("forced_failure".to_string()),
+                audit_log: Some("always_fail executed".to_string()),
+                pua_report: None,
+            })
+        }
+    }
+
+    struct AlwaysPassTool;
+    impl Tool for AlwaysPassTool {
+        fn name(&self) -> &'static str {
+            "always_pass"
+        }
+
+        fn run(&self, _input: &ToolInput) -> Result<ToolOutput> {
+            Ok(ToolOutput {
+                success: true,
+                result: Some(serde_json::json!({"ok": true})),
+                error: None,
+                verification: Some("forced_success".to_string()),
+                audit_log: Some("always_pass executed".to_string()),
+                pua_report: None,
+            })
+        }
+    }
+
+    #[test]
+    fn tool_registry_runs_fallback_chain_when_primary_fails() {
+        let mut registry = ToolRegistry {
+            tools: Vec::new(),
+            profiles: HashMap::new(),
+        };
+        registry.register_with_profile(
+            AlwaysFailTool,
+            ToolCapabilityProfile {
+                capability: "primary".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 1_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: vec!["always_pass".to_string()],
+            },
+        );
+        registry.register_with_profile(
+            AlwaysPassTool,
+            ToolCapabilityProfile {
+                capability: "fallback".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 1_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        let output = registry
+            .run_with_fallback("always_fail", &tool_input(serde_json::json!({})))
+            .expect("fallback execution should succeed");
+        assert!(output.success);
+        let audit_log = output.audit_log.unwrap_or_default();
+        assert!(audit_log.contains("fallback"));
     }
 }

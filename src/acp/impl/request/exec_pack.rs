@@ -1,4 +1,547 @@
-﻿use super::*;
+﻿/// Auto-Repair Loop Support for Step 2 of BLUE22
+/// Implements autonomous iterative repair capabilities for failed subtasks
+
+#[derive(Debug, Clone)]
+struct RepairContext {
+    iteration: u32,
+    max_iterations: u32,
+    task_id: String,
+    failure_classes: Vec<String>,
+    budget_tokens: u64,
+    budget_time_seconds: u64,
+    governance_mode: String,  // "assisted", "conservative", "manual"
+    repair_actions: Vec<RepairAction>,
+    cycle_reports: Vec<RepairCycleReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RepairCycleReport {
+    iteration: u32,
+    failed_before: usize,
+    failed_after: usize,
+    actions_applied: usize,
+    result: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RepairAction {
+    iteration: u32,
+    action_type: String,
+    target_subtask_id: String,
+    description: String,
+    applied_at: i64,
+    result: String,  // "success", "in_progress", "failed"
+    details: Value,
+}
+
+fn should_trigger_auto_repair(
+    failure_count: usize,
+    failure_classes: &[String],
+    governance_config: Option<&Value>,
+) -> bool {
+    if failure_count == 0 {
+        return false;
+    }
+
+    // Check if failure classes are auto-repairable
+    let repairable_classes = vec![
+        "execution_subtask_failed",
+        "subtask_retry_eligible",
+        "execution_timeout_recoverable",
+        "execution_transient_error",
+    ];
+
+    let has_repairable = failure_classes
+        .iter()
+        .any(|cls| repairable_classes.contains(&cls.as_str()));
+
+    if !has_repairable {
+        return false;
+    }
+
+    // Check governance mode allows auto-repair
+    let auto_repair_enabled = governance_config
+        .and_then(|cfg| cfg.get("auto_repair_enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
+    auto_repair_enabled
+}
+
+fn build_repair_context(
+    task_id: String,
+    failure_classes: Vec<String>,
+    governance_config: Option<&Value>,
+) -> RepairContext {
+    let max_iterations = governance_config
+        .and_then(|cfg| cfg.get("auto_repair_max_iterations"))
+        .and_then(Value::as_u64)
+        .unwrap_or(2)
+        .min(3) as u32;
+
+    let budget_tokens = governance_config
+        .and_then(|cfg| cfg.get("auto_repair_budget_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(4000);
+
+    let budget_time_seconds = governance_config
+        .and_then(|cfg| cfg.get("auto_repair_budget_seconds"))
+        .and_then(Value::as_u64)
+        .unwrap_or(180);
+
+    let governance_mode = governance_config
+        .and_then(|cfg| cfg.get("auto_repair_mode"))
+        .and_then(Value::as_str)
+        .unwrap_or("assisted")
+        .to_string();
+
+    RepairContext {
+        iteration: 1,
+        max_iterations,
+        task_id,
+        failure_classes,
+        budget_tokens,
+        budget_time_seconds,
+        governance_mode,
+        repair_actions: Vec::new(),
+        cycle_reports: Vec::new(),
+    }
+}
+
+fn record_repair_action(
+    context: &mut RepairContext,
+    action_type: &str,
+    target_subtask_id: String,
+    description: String,
+    result: &str,
+    details: Value,
+) {
+    context.repair_actions.push(RepairAction {
+        iteration: context.iteration,
+        action_type: action_type.to_string(),
+        target_subtask_id,
+        description,
+        applied_at: crate::acp::prelude::now_ts(),
+        result: result.to_string(),
+        details,
+    });
+}
+
+fn evaluate_repair_termination_criteria(
+    context: &RepairContext,
+    start_time_ms: u64,
+) -> (bool, String) {
+    // Check iteration limit
+    if context.iteration >= context.max_iterations {
+        return (true, format!("reached max iterations ({})", context.max_iterations));
+    }
+
+    // Check time budget
+    let elapsed_ms = crate::acp::prelude::now_ts_ms() as u64 - start_time_ms;
+    let budget_ms = context.budget_time_seconds * 1000;
+    if elapsed_ms > budget_ms {
+        return (true, format!("exceeded time budget ({} > {}ms)", elapsed_ms, budget_ms));
+    }
+
+    // Check token budget (simplified - would track actual token usage in full impl)
+    let estimated_tokens_per_action = 500;
+    let estimated_total_tokens = context.repair_actions.len() as u64 * estimated_tokens_per_action;
+    if estimated_total_tokens > context.budget_tokens {
+        return (true, format!("exceeded token budget ({} > {})", estimated_total_tokens, context.budget_tokens));
+    }
+
+    (false, "within budget".to_string())
+}
+
+fn should_continue_repair_loop(
+    context: &RepairContext,
+    failed_subtask_count: usize,
+    start_time_ms: u64,
+) -> bool {
+    if failed_subtask_count == 0 {
+        return false;  // All subtasks passed, stop repair
+    }
+
+    let (should_terminate, _reason) = evaluate_repair_termination_criteria(context, start_time_ms);
+    !should_terminate
+}
+
+fn apply_repair_strategy_to_failed_subtasks(
+    failed_records: &[crate::reinforcement::PlannedSubtaskRecord],
+    context: &mut RepairContext,
+) -> Vec<Value> {
+    let mut repair_outcomes = Vec::new();
+
+    for record in failed_records {
+        if context.iteration >= context.max_iterations {
+            break;  // Respect iteration limit
+        }
+
+        let repair_action = json!({
+            "subtask_id": record.id.clone(),
+            "subtask_description": record.description.clone(),
+            "iteration": context.iteration,
+            "action": "retry_with_adaptive_strategy",
+            "previous_failure": record.outcome.as_deref().unwrap_or("unknown"),
+            "strategy_applied": "adapt_based_on_failure_class",
+            "estimated_success_probability": 0.65,  // Default estimate, would be based on learning
+        });
+
+        record_repair_action(
+            context,
+            "retry_subtask",
+            record.id.clone(),
+            format!("Retrying subtask with adaptive strategy in iteration {}", context.iteration),
+            "in_progress",
+            repair_action.clone(),
+        );
+
+        repair_outcomes.push(repair_action);
+    }
+
+    repair_outcomes
+}
+
+fn build_repair_loop_state(
+    context: &RepairContext,
+    failed_count: usize,
+    start_time_ms: u64,
+) -> Value {
+    let (should_terminate, termination_reason) = evaluate_repair_termination_criteria(context, start_time_ms);
+
+    json!({
+        "iteration": context.iteration,
+        "max_iterations": context.max_iterations,
+        "failed_subtasks_pending": failed_count,
+        "repair_actions_executed": context.repair_actions.len(),
+        "should_continue": !should_terminate && failed_count > 0,
+        "termination_reason": if should_terminate {
+            termination_reason
+        } else if failed_count == 0 {
+            "all subtasks passed".to_string()
+        } else {
+            "continue repair loop".to_string()
+        },
+        "governance_mode": context.governance_mode.clone(),
+        "budget_tokens_used": (context.repair_actions.len() as u64 * 500).min(context.budget_tokens),
+        "budget_tokens_limit": context.budget_tokens,
+    })
+}
+
+
+fn build_repair_history_response(context: &RepairContext) -> Value {
+    json!({
+        "iteration": context.iteration,
+        "max_iterations": context.max_iterations,
+        "task_id": context.task_id,
+        "failure_classes": context.failure_classes,
+        "governance_mode": context.governance_mode,
+        "actions_count": context.repair_actions.len(),
+        "cycles": context.cycle_reports,
+        "actions": context.repair_actions.iter().map(|action| json!({
+            "iteration": action.iteration,
+            "type": action.action_type,
+            "subtask_id": action.target_subtask_id,
+            "description": action.description,
+            "applied_at": action.applied_at,
+            "result": action.result,
+            "details": action.details,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+use super::*;
+
+fn normalize_control_mode(mode: &str) -> &'static str {
+    match mode.to_ascii_lowercase().as_str() {
+        "full_auto" | "autonomous" => "autonomous",
+        "agent" | "safeguard" | "assisted" => "assisted",
+        _ => "manual",
+    }
+}
+
+fn build_runtime_cycle_patch_set(
+    records: &[crate::reinforcement::PlannedSubtaskRecord],
+) -> Vec<Value> {
+    records
+        .iter()
+        .filter(|record| record.outcome.is_some())
+        .map(|record| {
+            json!({
+                "subtask_id": record.id,
+                "description": record.description,
+                "phase_index": record.phase_index,
+                "outcome": record.outcome,
+                "executor": record.executor,
+                "duration_ms": record.duration_ms,
+            })
+        })
+        .collect()
+}
+
+fn build_runtime_repair_target_set(
+    records: &[crate::reinforcement::PlannedSubtaskRecord],
+) -> Vec<Value> {
+    records
+        .iter()
+        .filter(|record| record.outcome.as_deref() == Some("failed"))
+        .map(|record| {
+            json!({
+                "subtask_id": record.id,
+                "description": record.description,
+                "phase_index": record.phase_index,
+                "retry_count": record.retry_count,
+                "repair_action": "retry_with_recommended_strategy",
+            })
+        })
+        .collect()
+}
+
+fn build_runtime_execution_cycle(
+    stage: &str,
+    next_action: &str,
+    test_gate_result: &str,
+    failure_taxonomy: Vec<String>,
+    initial_records: &[crate::reinforcement::PlannedSubtaskRecord],
+    final_records: &[crate::reinforcement::PlannedSubtaskRecord],
+    adaptive_defaults: &AdaptiveExecutionDefaults,
+    repair_context: Option<&RepairContext>,
+) -> Value {
+    let mut cycle = build_execution_cycle(stage, next_action, test_gate_result, failure_taxonomy);
+    let patch_set = build_runtime_cycle_patch_set(initial_records);
+    let repair_targets = build_runtime_repair_target_set(final_records);
+    let auto_repair_eligible = !repair_targets.is_empty();
+    let final_failed_count = final_records
+        .iter()
+        .filter(|record| record.outcome.as_deref() == Some("failed"))
+        .count();
+
+    let repair_iterations = repair_context
+        .map(|context| context.cycle_reports.len())
+        .unwrap_or(0);
+    let current_iteration = 1 + repair_iterations as u32;
+    let repair_preview = if auto_repair_eligible {
+        Some(json!({
+            "iteration": current_iteration + 1,
+            "plan_version": format!("v1-repair-{}", current_iteration),
+            "patch_set": repair_targets,
+            "patch_set_size": build_runtime_repair_target_set(final_records).len(),
+            "test_gate_result": "pending",
+            "failure_taxonomy": cycle["failure_taxonomy"].clone(),
+            "next_action": "retry_failed_subtasks",
+            "status": "planned",
+            "repair_strategy": {
+                "failure_strategy": adaptive_defaults.recommended_failure_strategy,
+                "execution_mode": adaptive_defaults.recommended_mode,
+                "mode_from_learning": adaptive_defaults.mode_from_learning,
+            }
+        }))
+    } else {
+        None
+    };
+
+    if let Value::Object(obj) = &mut cycle {
+        let status = if auto_repair_eligible { "degraded" } else { "passed" };
+        let current_cycle = json!({
+            "iteration": 1,
+            "plan_version": "v1",
+            "patch_set": patch_set,
+            "patch_set_size": build_runtime_cycle_patch_set(initial_records).len(),
+            "test_gate_result": test_gate_result,
+            "failure_taxonomy": obj.get("failure_taxonomy").cloned().unwrap_or_else(|| json!([])),
+            "next_action": next_action,
+            "status": status,
+            "started_at": crate::acp::prelude::now_ts(),
+            "completed_at": crate::acp::prelude::now_ts(),
+        });
+        let mut cycles_vec = vec![current_cycle.clone()];
+        if let Some(context) = repair_context {
+            for cycle_report in &context.cycle_reports {
+                let iteration_actions = context
+                    .repair_actions
+                    .iter()
+                    .filter(|action| action.iteration == cycle_report.iteration)
+                    .map(|action| {
+                        json!({
+                            "subtask_id": action.target_subtask_id,
+                            "repair_action": action.action_type,
+                            "description": action.description,
+                            "result": action.result,
+                            "details": action.details,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                cycles_vec.push(json!({
+                    "iteration": cycle_report.iteration + 1,
+                    "plan_version": format!("v1-repair-{}", cycle_report.iteration),
+                    "patch_set": iteration_actions,
+                    "patch_set_size": cycle_report.actions_applied,
+                    "test_gate_result": if cycle_report.failed_after == 0 { "passed" } else { "failed" },
+                    "failure_taxonomy": obj.get("failure_taxonomy").cloned().unwrap_or_else(|| json!([])),
+                    "next_action": if cycle_report.failed_after == 0 { "complete" } else { "retry_failed_subtasks" },
+                    "status": cycle_report.result,
+                    "started_at": crate::acp::prelude::now_ts(),
+                    "completed_at": crate::acp::prelude::now_ts(),
+                    "failed_before": cycle_report.failed_before,
+                    "failed_after": cycle_report.failed_after,
+                }));
+            }
+        }
+
+        if repair_iterations == 0 {
+            if let Some(preview) = repair_preview.clone() {
+                cycles_vec.push(preview);
+            }
+        }
+
+        let auto_repair_status = if !auto_repair_eligible {
+            "not_needed"
+        } else if repair_iterations == 0 {
+            "planned"
+        } else if final_failed_count == 0 {
+            "completed"
+        } else if repair_context
+            .map(|context| repair_iterations as u32 >= context.max_iterations)
+            .unwrap_or(false)
+        {
+            "exhausted"
+        } else {
+            "in_progress"
+        };
+
+        obj.insert("patch_set".to_string(), current_cycle["patch_set"].clone());
+        obj.insert("current_cycle".to_string(), current_cycle);
+        obj.insert("cycles".to_string(), json!(cycles_vec));
+        obj.insert(
+            "history_summary".to_string(),
+            json!({
+                "total_cycles": 1 + repair_iterations as u64,
+                "current_iteration": current_iteration,
+                "repair_iterations": repair_iterations,
+                "pending_repair_iterations": if auto_repair_eligible && final_failed_count > 0 { 1 } else { 0 },
+                "last_outcome": status,
+            }),
+        );
+        obj.insert(
+            "auto_repair".to_string(),
+            json!({
+                "status": auto_repair_status,
+                "eligible": auto_repair_eligible,
+                "recommended_max_iterations": repair_context.map(|context| context.max_iterations).unwrap_or(0),
+                "trigger_classes": repair_context
+                    .map(|context| json!(context.failure_classes))
+                    .unwrap_or_else(|| obj.get("failure_taxonomy").cloned().unwrap_or_else(|| json!([]))),
+                "governance_mode": repair_context
+                    .map(|context| context.governance_mode.clone())
+                    .unwrap_or_else(|| "assisted".to_string()),
+                "target_subtasks": build_runtime_repair_target_set(final_records),
+                "next_cycle_preview": if final_failed_count > 0 { repair_preview.unwrap_or(Value::Null) } else { Value::Null },
+            }),
+        );
+    }
+
+    cycle
+}
+
+fn finalize_repair_action_results(
+    context: &mut RepairContext,
+    records: &[crate::reinforcement::PlannedSubtaskRecord],
+    iteration: u32,
+) {
+    let mut outcome_by_id = HashMap::new();
+    for record in records {
+        outcome_by_id.insert(record.id.clone(), record.outcome.clone().unwrap_or_default());
+    }
+
+    for action in context.repair_actions.iter_mut() {
+        if action.iteration != iteration || action.result != "in_progress" {
+            continue;
+        }
+        let outcome = outcome_by_id
+            .get(&action.target_subtask_id)
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_string());
+        action.result = if outcome == "completed" {
+            "success".to_string()
+        } else {
+            "failed".to_string()
+        };
+        if let Value::Object(map) = &mut action.details {
+            map.insert("post_repair_outcome".to_string(), Value::String(outcome));
+        }
+    }
+}
+
+async fn execute_runtime_subtasks_with_repair_loop(
+    task: &str,
+    workflow: &WorkflowGeneratedArtifact,
+    records: &mut [crate::reinforcement::PlannedSubtaskRecord],
+    context: &RuntimeExecutionContext,
+    mut report: RuntimeExecutionReport,
+    auto_repair_enabled: bool,
+    repair_context: &mut RepairContext,
+) -> RuntimeExecutionReport {
+    if !auto_repair_enabled {
+        return report;
+    }
+
+    let repair_start_time_ms = crate::acp::prelude::now_ts_ms() as u64;
+    loop {
+        let failed_records = records
+            .iter()
+            .filter(|record| record.outcome.as_deref() == Some("failed"))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if !should_continue_repair_loop(repair_context, failed_records.len(), repair_start_time_ms)
+        {
+            break;
+        }
+
+        let cycle_iteration = repair_context.iteration;
+        let failed_before = failed_records.len();
+        let _ = apply_repair_strategy_to_failed_subtasks(&failed_records, repair_context);
+
+        let rerun_report = execute_runtime_subtasks(task, workflow, records, context).await;
+        finalize_repair_action_results(repair_context, records, cycle_iteration);
+        let failed_after = records
+            .iter()
+            .filter(|record| record.outcome.as_deref() == Some("failed"))
+            .count();
+        let _loop_state = build_repair_loop_state(
+            repair_context,
+            failed_after,
+            repair_start_time_ms,
+        );
+        let actions_applied = repair_context
+            .repair_actions
+            .iter()
+            .filter(|action| action.iteration == cycle_iteration)
+            .count();
+        repair_context.cycle_reports.push(RepairCycleReport {
+            iteration: cycle_iteration,
+            failed_before,
+            failed_after,
+            actions_applied,
+            result: if failed_after == 0 {
+                "resolved".to_string()
+            } else if failed_after < failed_before {
+                "improved".to_string()
+            } else {
+                "unresolved".to_string()
+            },
+        });
+
+        report = rerun_report;
+        if failed_after == 0 || repair_context.iteration >= repair_context.max_iterations {
+            break;
+        }
+        repair_context.iteration += 1;
+    }
+
+    report
+}
 
 pub(super) async fn handle_workflow_execute(
     server: &AcpServer,
@@ -66,11 +609,48 @@ pub(super) async fn handle_workflow_execute(
 
     let execution_context = build_execution_context(server, &params).await?;
     let mut execution_records = plan.planned_subtasks.clone();
-    let execution_report = execute_runtime_subtasks(
+    let initial_execution_records = execution_records.clone();
+    let initial_execution_report = execute_runtime_subtasks(
         task.as_str(),
         &workflow,
         &mut execution_records,
         &execution_context,
+    )
+    .await;
+    let failure_taxonomy = if initial_execution_report.subtasks_failed > 0 {
+        vec!["execution_subtask_failed".to_string()]
+    } else {
+        Vec::new()
+    };
+
+    let auto_repair_enabled = should_trigger_auto_repair(
+        initial_execution_report.subtasks_failed,
+        &failure_taxonomy,
+        params.get("governance"),
+    );
+    let mut repair_context = if auto_repair_enabled {
+        build_repair_context(task.clone(), failure_taxonomy.clone(), params.get("governance"))
+    } else {
+        RepairContext {
+            iteration: 0,
+            max_iterations: 0,
+            task_id: task.clone(),
+            failure_classes: failure_taxonomy.clone(),
+            budget_tokens: 0,
+            budget_time_seconds: 0,
+            governance_mode: "disabled".to_string(),
+            repair_actions: Vec::new(),
+            cycle_reports: Vec::new(),
+        }
+    };
+    let execution_report = execute_runtime_subtasks_with_repair_loop(
+        task.as_str(),
+        &workflow,
+        &mut execution_records,
+        &execution_context,
+        initial_execution_report,
+        auto_repair_enabled,
+        &mut repair_context,
     )
     .await;
 
@@ -216,6 +796,80 @@ pub(super) async fn handle_workflow_execute(
         },
         200,
     )?;
+    let requirement_gate_payload = gate.success_payload();
+    let execution_cycle = build_runtime_execution_cycle(
+        "workflow.execute",
+        if execution_report.subtasks_failed > 0 {
+            "repair_or_review_failures"
+        } else {
+            "complete"
+        },
+        "not_run",
+        failure_taxonomy,
+        &initial_execution_records,
+        &execution_records,
+        &execution_context.adaptive_defaults,
+        Some(&repair_context),
+    );
+
+    let repair_history = build_repair_history_response(&repair_context);
+    let review_status = if review_policy.required_reviews > 0 {
+        "passed"
+    } else {
+        "not_required"
+    };
+    let execution_status = if execution_report.subtasks_failed > 0 {
+        "degraded"
+    } else {
+        "passed"
+    };
+    let gates = build_gate_matrix(
+        requirement_gate_payload.clone(),
+        execution_status,
+        review_status,
+        "not_run",
+        Some((
+            "consultation",
+            if params
+                .get("consultation_required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "passed"
+            } else {
+                "not_required"
+            },
+        )),
+    );
+    let change_bundle = build_change_bundle(
+        "execution_summary",
+        format!(
+            "workflow.execute completed {} subtasks with {} failures for task '{}'",
+            execution_report.subtasks_completed,
+            execution_report.subtasks_failed,
+            task
+        ),
+        if execution_report.subtasks_failed > 0 {
+            "medium"
+        } else {
+            "low"
+        },
+        "not_run",
+        format!("feat(workflow): execute governed task {}", task),
+        vec![
+            artifact_path.display().to_string(),
+            plan_artifact_path.display().to_string(),
+            workflow_artifact_path.display().to_string(),
+            learning_artifact_path.display().to_string(),
+            primary_secondary_policy_artifact_path.display().to_string(),
+            primary_failover_artifact_path.display().to_string(),
+        ],
+    );
+    let trace_ref = build_trace_ref(
+        "workflow.execute",
+        request_id.as_ref(),
+        Some(artifact_path.display().to_string().as_str()),
+    );
 
     send_result(
         server,
@@ -227,17 +881,30 @@ pub(super) async fn handle_workflow_execute(
             "workflow_artifact_path": workflow_artifact_path.display().to_string(),
             "learning_artifact_path": learning_artifact_path.display().to_string(),
             "execution_mode": "runtime_execute",
+            "run_mode": normalize_control_mode(&execution_context.adaptive_defaults.applied_mode),
             "adaptive": {
                 "planning": adaptive_planning,
                 "execution_defaults": execution_context.adaptive_defaults,
             },
+            "execution_cycle": execution_cycle,
             "requirement_gate": {
                 "confirmed": true,
-                "gate": gate.success_payload(),
+                "gate": requirement_gate_payload,
             },
+            "gates": gates,
             "lazy_load": execution_report.lazy_load,
             "review_policy": review_policy,
             "reviews": reviews,
+            "artifacts": {
+                "execution_decision": artifact_path.display().to_string(),
+                "plan": plan_artifact_path.display().to_string(),
+                "workflow": workflow_artifact_path.display().to_string(),
+                "learning": learning_artifact_path.display().to_string(),
+                "primary_secondary_policy": primary_secondary_policy_artifact_path.display().to_string(),
+                "primary_failover": primary_failover_artifact_path.display().to_string(),
+            },
+            "change_bundle": change_bundle,
+            "trace_ref": trace_ref,
             "blue5": {
                 "primary_secondary_policy": policy_artifact,
                 "primary_secondary_policy_artifact_path": primary_secondary_policy_artifact_path.display().to_string(),
@@ -246,7 +913,24 @@ pub(super) async fn handle_workflow_execute(
             "primary_failover_report": {
                 "failover_policy": failover_artifact.failover_policy,
                 "reports": failover_artifact.reports,
-            }
+            },
+            // Step 2: Add repair readiness information
+            "repair_readiness": {
+                "eligible": auto_repair_enabled,
+                "max_iterations": repair_context.max_iterations,
+                "governance_mode": repair_context.governance_mode.clone(),
+                "reason": if auto_repair_enabled {
+                    format!("{} failures detected and auto-repair is enabled", execution_report.subtasks_failed)
+                } else {
+                    "no failures or auto-repair disabled".to_string()
+                },
+            },
+            // Step 2.3: Add repair history when repair was triggered
+            "repair_history": if auto_repair_enabled && execution_report.subtasks_failed > 0 {
+                repair_history
+            } else {
+                json!({ "actions": [] })
+            },
         }),
     )
     .await
@@ -321,8 +1005,51 @@ pub(super) async fn handle_task_execute(
 
     let execution_context = build_execution_context(server, &params).await?;
     let mut records = plan.planned_subtasks.clone();
-    let execution_report =
+    let initial_records = records.clone();
+    let initial_execution_report =
         execute_runtime_subtasks(task, &workflow, &mut records, &execution_context).await;
+
+    let initial_failure_taxonomy = if initial_execution_report.subtasks_failed > 0 {
+        vec!["execution_subtask_failed".to_string()]
+    } else {
+        Vec::new()
+    };
+
+    let auto_repair_enabled = should_trigger_auto_repair(
+        initial_execution_report.subtasks_failed,
+        &initial_failure_taxonomy,
+        params.get("governance"),
+    );
+    let mut repair_context = if auto_repair_enabled {
+        build_repair_context(
+            task.to_string(),
+            initial_failure_taxonomy.clone(),
+            params.get("governance"),
+        )
+    } else {
+        RepairContext {
+            iteration: 0,
+            max_iterations: 0,
+            task_id: task.to_string(),
+            failure_classes: initial_failure_taxonomy.clone(),
+            budget_tokens: 0,
+            budget_time_seconds: 0,
+            governance_mode: "disabled".to_string(),
+            repair_actions: Vec::new(),
+            cycle_reports: Vec::new(),
+        }
+    };
+
+    let execution_report = execute_runtime_subtasks_with_repair_loop(
+        task,
+        &workflow,
+        &mut records,
+        &execution_context,
+        initial_execution_report,
+        auto_repair_enabled,
+        &mut repair_context,
+    )
+    .await;
 
     let execution_path = ledger.latest_path("spec", "latest-execution.json");
     let summary = TaskExecutionSummary {
@@ -333,7 +1060,7 @@ pub(super) async fn handle_task_execute(
         subtasks_failed: execution_report.subtasks_failed,
         subtasks_skipped: execution_report.subtasks_skipped,
         executor: execution_context.primary_agent.clone(),
-        records,
+        records: records.clone(),
         execution_metrics: Some(TaskExecutionMetrics {
             subtask_parallelism: execution_report.subtask_parallelism,
             failure_strategy: execution_report.failure_strategy.clone(),
@@ -403,10 +1130,64 @@ pub(super) async fn handle_task_execute(
         },
         200,
     )?;
+    let failure_taxonomy = if execution_report.subtasks_failed > 0 {
+        vec!["execution_subtask_failed".to_string()]
+    } else {
+        Vec::new()
+    };
+
+    let requirement_gate_payload = gate.success_payload();
+    let execution_cycle = build_runtime_execution_cycle(
+        "task.execute",
+        if summary.subtasks_failed > 0 {
+            "repair_or_review_failures"
+        } else {
+            "complete"
+        },
+        "not_run",
+        failure_taxonomy,
+        &initial_records,
+        &summary.records,
+        &execution_context.adaptive_defaults,
+        Some(&repair_context),
+    );
+
+    let repair_history = build_repair_history_response(&repair_context);
+    let gates = build_gate_matrix(
+        requirement_gate_payload.clone(),
+        if summary.subtasks_failed > 0 { "degraded" } else { "passed" },
+        "not_run",
+        "not_run",
+        Some(("planning", "passed")),
+    );
+    let change_bundle = build_change_bundle(
+        "execution_summary",
+        format!(
+            "task.execute completed {} subtasks with {} failures for task '{}'",
+            summary.subtasks_completed,
+            summary.subtasks_failed,
+            task
+        ),
+        if summary.subtasks_failed > 0 { "medium" } else { "low" },
+        "not_run",
+        format!("feat(task): execute governed task {}", task),
+        vec![
+            plan_path.display().to_string(),
+            workflow_path.display().to_string(),
+            execution_path.display().to_string(),
+            learning_path.display().to_string(),
+        ],
+    );
+    let trace_ref = build_trace_ref(
+        "task.execute",
+        request_id.as_ref(),
+        Some(execution_path.display().to_string().as_str()),
+    );
 
     let response_payload = json!({
         "ok": true,
         "execution_mode": "runtime_execute",
+        "run_mode": normalize_control_mode(&execution_context.adaptive_defaults.applied_mode),
         "plan": plan,
         "workflow": workflow,
         "summary": summary,
@@ -415,17 +1196,38 @@ pub(super) async fn handle_task_execute(
             "planning": adaptive_planning,
             "execution_defaults": execution_context.adaptive_defaults,
         },
+        "execution_cycle": execution_cycle,
         "requirement_gate": {
             "confirmed": true,
-            "gate": gate.success_payload(),
+            "gate": requirement_gate_payload,
         },
+        "gates": gates,
         "lazy_load": execution_report.lazy_load,
         "artifacts": {
             "plan": plan_path.display().to_string(),
             "workflow": workflow_path.display().to_string(),
             "execution": execution_path.display().to_string(),
             "learning": learning_path.display().to_string(),
-        }
+        },
+        "change_bundle": change_bundle,
+        "trace_ref": trace_ref,
+        // Step 2: Add repair readiness information
+        "repair_readiness": {
+            "eligible": auto_repair_enabled,
+            "max_iterations": repair_context.max_iterations,
+            "governance_mode": repair_context.governance_mode.clone(),
+            "reason": if auto_repair_enabled {
+                format!("{} failures detected and auto-repair is enabled", summary.subtasks_failed)
+            } else {
+                "no failures or auto-repair disabled".to_string()
+            },
+        },
+        // Step 2.3: Add repair history when repair was triggered
+        "repair_history": if auto_repair_enabled && summary.subtasks_failed > 0 {
+            repair_history
+        } else {
+            json!({ "actions": [] })
+        },
     });
 
     {

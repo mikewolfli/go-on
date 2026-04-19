@@ -94,6 +94,68 @@
           </el-descriptions>
         </el-card>
 
+        <el-card shadow="hover">
+          <template #header>
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+              <span>Execution Cycle Timeline</span>
+              <el-tag size="small" type="info">{{ latestRunMode }}</el-tag>
+            </div>
+          </template>
+          <el-table :data="latestCycleTimeline" border stripe>
+            <el-table-column prop="iteration" label="Iteration" width="100" />
+            <el-table-column prop="status" label="Status" width="130" />
+            <el-table-column prop="next_action" label="Next Action" />
+            <el-table-column prop="patch_set_size" label="Patch Set" width="120" />
+            <el-table-column prop="test_gate_result" label="Gate" width="120" />
+          </el-table>
+        </el-card>
+
+        <el-card shadow="hover">
+          <template #header>
+            <span>Gate Matrix / Auto Repair Trace</span>
+          </template>
+          <el-descriptions :columns="2" border>
+            <el-descriptions-item label="Requirement Gate">
+              {{ requirementGateStatus() }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Review Gate">
+              {{ reviewGateStatus() }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Repair Status">
+              {{ repairStatusText() }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Repair Targets">
+              {{ repairTargetCount() }}
+            </el-descriptions-item>
+          </el-descriptions>
+        </el-card>
+
+        <el-card shadow="hover">
+          <template #header>
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+              <span>Benchmark Indicators</span>
+              <el-button size="small" :loading="loadingPeak" @click="refreshPeakIndicators">Refresh</el-button>
+            </div>
+          </template>
+          <el-descriptions :columns="2" border>
+            <el-descriptions-item label="Task Success Rate">
+              {{ peakIndicators.taskSuccessRate.toFixed(4) }}
+            </el-descriptions-item>
+            <el-descriptions-item label="First Pass Rate">
+              {{ peakIndicators.firstPassRate.toFixed(4) }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Mean Repair Iterations">
+              {{ peakIndicators.meanRepairIterations.toFixed(4) }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Human Intervention Rate">
+              {{ peakIndicators.humanInterventionRate.toFixed(4) }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Regression Rate">
+              {{ peakIndicators.regressionRate.toFixed(4) }}
+            </el-descriptions-item>
+          </el-descriptions>
+        </el-card>
+
         <el-divider />
 
         <!-- Raw Output -->
@@ -173,6 +235,74 @@ const activeWorkflows = ref(0);
 const totalExecuted = ref(3);
 const successCount = ref(2);
 const failureCount = ref(1);
+const latestCycleTimeline = ref<Array<{ iteration: number; status: string; next_action: string; patch_set_size: number; test_gate_result: string }>>([]);
+const latestGates = ref<Record<string, unknown>>({});
+const latestAutoRepair = ref<Record<string, unknown>>({});
+const latestRunMode = ref("assisted");
+const loadingPeak = ref(false);
+const peakIndicators = reactive({
+  taskSuccessRate: 0,
+  firstPassRate: 0,
+  meanRepairIterations: 0,
+  humanInterventionRate: 0,
+  regressionRate: 0,
+});
+
+function hydrateExecutionInsights(payload: any) {
+  const result = payload?.result ?? payload ?? {};
+  latestRunMode.value = String(result?.run_mode || "assisted");
+  latestGates.value = (result?.gates || {}) as Record<string, unknown>;
+
+  const cycle = result?.execution_cycle || {};
+  latestAutoRepair.value = (cycle?.auto_repair || {}) as Record<string, unknown>;
+  const cycles = Array.isArray(cycle?.cycles) ? cycle.cycles : [];
+  latestCycleTimeline.value = cycles.map((item: any) => ({
+    iteration: Number(item?.iteration || 0),
+    status: String(item?.status || "unknown"),
+    next_action: String(item?.next_action || "-"),
+    patch_set_size: Number(item?.patch_set_size || 0),
+    test_gate_result: String(item?.test_gate_result || "not_run"),
+  }));
+}
+
+function requirementGateStatus() {
+  const gate = latestGates.value as Record<string, any>;
+  return String(gate?.requirement?.status || gate?.gate || "-");
+}
+
+function reviewGateStatus() {
+  const gate = latestGates.value as Record<string, any>;
+  return String(gate?.status2 || "-");
+}
+
+function repairStatusText() {
+  const repair = latestAutoRepair.value as Record<string, any>;
+  return String(repair?.status || "-");
+}
+
+function repairTargetCount() {
+  const repair = latestAutoRepair.value as Record<string, any>;
+  const targets = Array.isArray(repair?.target_subtasks) ? repair.target_subtasks : [];
+  return Number(targets.length || 0);
+}
+
+async function refreshPeakIndicators() {
+  loadingPeak.value = true;
+  try {
+    const result = await invokeRuntimeRpc("optimization.peak", "{}");
+    const payload = JSON.parse(result);
+    const indicators = payload?.result?.peak?.indicators || {};
+    peakIndicators.taskSuccessRate = Number(indicators.task_success_rate || 0);
+    peakIndicators.firstPassRate = Number(indicators.first_pass_rate || 0);
+    peakIndicators.meanRepairIterations = Number(indicators.mean_repair_iterations || 0);
+    peakIndicators.humanInterventionRate = Number(indicators.human_intervention_rate || 0);
+    peakIndicators.regressionRate = Number(indicators.regression_rate || 0);
+  } catch (err) {
+    ElMessage.error(`Error: ${err}`);
+  } finally {
+    loadingPeak.value = false;
+  }
+}
 
 function taskTextById(taskId: string) {
   const task = tasks.value.find((item) => item.id === taskId);
@@ -211,6 +341,7 @@ async function planTask(taskId: string) {
     const params = JSON.stringify({ task });
     const result = await invokeRuntimeRpc("task.plan", params);
     planOutput.value = result;
+    hydrateExecutionInsights(JSON.parse(result));
     ElMessage.success(t("workflow.planGenerated"));
   } catch (err) {
     ElMessage.error(`Error: ${err}`);
@@ -226,6 +357,7 @@ async function executeTask(taskId: string) {
     rawOutput.value = result;
 
     const data = JSON.parse(result);
+    hydrateExecutionInsights(data);
     if (data.ok) {
       ElMessage.success(t("workflow.taskStarted"));
       // Add to history
@@ -266,6 +398,7 @@ async function confirmExecutePlan() {
     rawOutput.value = result;
 
     const data = JSON.parse(result);
+    hydrateExecutionInsights(data);
     if (data.ok) {
       ElMessage.success(t("workflow.workflowStarted"));
       planOutput.value = "";
@@ -279,4 +412,5 @@ async function confirmExecutePlan() {
 
 // Initialize
 loadTasks();
+refreshPeakIndicators();
 </script>

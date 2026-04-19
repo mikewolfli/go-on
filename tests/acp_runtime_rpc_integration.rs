@@ -205,6 +205,40 @@ impl Drop for RpcHarness {
     }
 }
 
+fn assert_blue22_execution_cycle_shape(result: &Value) {
+    assert!(result["execution_cycle"].is_object());
+    assert!(result["execution_cycle"]["current_cycle"].is_object());
+    assert!(result["execution_cycle"]["cycles"].is_array());
+    assert!(result["execution_cycle"]["history_summary"]["total_cycles"].is_number());
+    assert!(result["execution_cycle"]["history_summary"]["pending_repair_iterations"].is_number());
+    assert!(result["execution_cycle"]["auto_repair"].is_object());
+    assert!(result["execution_cycle"]["current_cycle"]["plan_version"].is_string());
+}
+
+fn assert_blue22_runtime_execute_cycle_shape(result: &Value) {
+    assert_blue22_execution_cycle_shape(result);
+    assert!(result["execution_cycle"]["history_summary"]["current_iteration"].is_number());
+    assert!(result["execution_cycle"]["history_summary"]["repair_iterations"].is_number());
+    assert!(result["execution_cycle"]["auto_repair"]["status"].is_string());
+    assert!(result["execution_cycle"]["current_cycle"]["patch_set"].is_array());
+    assert!(result["execution_cycle"]["current_cycle"]["patch_set_size"].is_number());
+    assert!(result["execution_cycle"]["auto_repair"]["target_subtasks"].is_array());
+    assert!(result["execution_cycle"]["auto_repair"].get("next_cycle_preview").is_some());
+}
+
+fn assert_blue22_change_bundle_shape(result: &Value) {
+    assert!(result["change_bundle"].is_object());
+    assert!(result["change_bundle"]["files"].is_array());
+    assert!(result["change_bundle"]["file_change_summary"].is_array());
+    assert!(result["change_bundle"]["risk"].is_object());
+    assert!(result["change_bundle"]["gate_results"].is_object());
+    assert!(result["change_bundle"]["rollback_recommendation"].is_object());
+    assert!(result["change_bundle"]["commit_suggestion"].is_object());
+    assert!(result["change_bundle"]["rollback"].is_object());
+    assert!(result["change_bundle"]["commit"].is_object());
+    assert!(result["change_bundle"]["test_coverage"].is_object());
+}
+
 struct AdvancedRpcHarness {
     inner: RpcHarness,
     mock_responses: std::collections::HashMap<String, Value>,
@@ -1679,6 +1713,14 @@ mod advanced {
             peak["result"]["peak"].get("overall_pass").is_some(),
             "optimization.peak should include overall pass flag"
         );
+        assert!(
+            peak["result"]["peak"]["indicators"].is_object(),
+            "optimization.peak should include benchmark indicators"
+        );
+        assert!(
+            peak["result"]["peak"]["indicators"]["task_success_rate"].is_number(),
+            "optimization.peak indicators should include task_success_rate"
+        );
 
         let governance = results[2]
             .1
@@ -1687,6 +1729,11 @@ mod advanced {
         assert!(
             governance["result"].get("governance").is_some(),
             "governance.status should return governance payload"
+        );
+        assert!(
+            governance["result"]["governance"]["tool_matrix"]["summary"]["tool_total"]
+                .is_number(),
+            "governance.status should include tool matrix summary"
         );
     }
 
@@ -2123,11 +2170,38 @@ mod advanced {
             plan["result"].get("plan").is_some() || plan["result"].get("ok").is_some(),
             "task.plan should return plan or ok"
         );
+        assert_blue22_execution_cycle_shape(&plan["result"]);
+        assert!(plan["result"]["gates"].is_object());
+        assert!(plan["result"]["artifacts"].is_object());
+        assert!(plan["result"]["run_mode"].is_string());
+        assert!(plan["result"]["memory_graph"].is_object());
+        assert!(plan["result"]["memory_recall"].is_object());
+        assert!(plan["result"]["memory_recall"]["hit_count"].is_number());
+        assert!(plan["result"]["memory_recall"]["evidence"].is_array());
+        assert_blue22_change_bundle_shape(&plan["result"]);
+        assert!(plan["result"]["trace_ref"].is_object());
 
         let execute = results[2].1.as_ref().expect("task.execute should succeed");
         assert_eq!(
             execute["result"]["ok"], true,
             "task.execute should return ok"
+        );
+        assert_blue22_runtime_execute_cycle_shape(&execute["result"]);
+        assert!(execute["result"]["gates"].is_object());
+        assert!(execute["result"]["artifacts"].is_object());
+        assert!(execute["result"]["run_mode"].is_string());
+        assert_blue22_change_bundle_shape(&execute["result"]);
+        assert!(execute["result"]["trace_ref"].is_object());
+
+        let plan_mode = plan["result"]["run_mode"].as_str().unwrap_or_default();
+        let execute_mode = execute["result"]["run_mode"].as_str().unwrap_or_default();
+        assert!(
+            ["manual", "assisted", "autonomous"].contains(&plan_mode),
+            "task.plan run_mode must be one of manual/assisted/autonomous"
+        );
+        assert!(
+            ["manual", "assisted", "autonomous"].contains(&execute_mode),
+            "task.execute run_mode must be one of manual/assisted/autonomous"
         );
     }
 
@@ -2156,6 +2230,11 @@ mod advanced {
             exe["result"]["ok"], true,
             "workflow.execute should return ok"
         );
+        assert_blue22_runtime_execute_cycle_shape(&exe["result"]);
+        assert!(exe["result"]["gates"].is_object());
+        assert!(exe["result"]["artifacts"].is_object());
+        assert_blue22_change_bundle_shape(&exe["result"]);
+        assert!(exe["result"]["trace_ref"].is_object());
     }
 
     // ── B16-R7: workflow sub-commands (clarify + research) ────────────────────
@@ -2192,6 +2271,11 @@ mod advanced {
             research["result"]["ok"], true,
             "workflow.research should return ok"
         );
+        assert_blue22_execution_cycle_shape(&research["result"]);
+        assert!(research["result"]["gates"].is_object());
+        assert!(research["result"]["artifacts"].is_object());
+        assert_blue22_change_bundle_shape(&research["result"]);
+        assert!(research["result"]["trace_ref"].is_object());
     }
 
     // ── B16-R3: conversation.rollback (direct — needs dynamic checkpoint_id) ──
@@ -2926,6 +3010,11 @@ fn rpc_legacy_method_aliases_remain_compatible() {
     assert!(plan["result"]["plan"].is_object());
     assert!(plan["result"]["artifact_path"].is_string());
     assert_eq!(plan["result"]["requirement_gate"]["confirmed"], true);
+    assert_blue22_execution_cycle_shape(&plan["result"]);
+    assert!(plan["result"]["gates"].is_object());
+    assert!(plan["result"]["artifacts"].is_object());
+    assert_blue22_change_bundle_shape(&plan["result"]);
+    assert!(plan["result"]["trace_ref"].is_object());
 
     let workflow = harness.request(
         304,
@@ -2944,6 +3033,11 @@ fn rpc_legacy_method_aliases_remain_compatible() {
     assert!(workflow["result"]["plan_artifact_path"].is_string());
     assert!(workflow["result"]["workflow_artifact_path"].is_string());
     assert_eq!(workflow["result"]["requirement_gate"]["confirmed"], true);
+    assert_blue22_execution_cycle_shape(&workflow["result"]);
+    assert!(workflow["result"]["gates"].is_object());
+    assert!(workflow["result"]["artifacts"].is_object());
+    assert_blue22_change_bundle_shape(&workflow["result"]);
+    assert!(workflow["result"]["trace_ref"].is_object());
 
     let shutdown = harness.request(305, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
@@ -3353,6 +3447,11 @@ fn rpc_workflow_execute_returns_review_policy_and_learning_feedback_fields() {
     );
 
     assert_eq!(execute["result"]["ok"], true);
+    assert_blue22_runtime_execute_cycle_shape(&execute["result"]);
+    assert!(execute["result"]["gates"].is_object());
+    assert!(execute["result"]["artifacts"].is_object());
+    assert_blue22_change_bundle_shape(&execute["result"]);
+    assert!(execute["result"]["trace_ref"].is_object());
     assert_eq!(
         execute["result"]["review_policy"]["min_review_level"],
         "standard"
@@ -3695,7 +3794,22 @@ fn rpc_workflow_consult_returns_artifact_and_consensus_signal() {
         Some(json!({
             "task": "Design safe data migration strategy with rollback and evidence plan",
             "trigger_reason": "unclear requirement and conflicting constraints",
-            "consultation_confidence_threshold": 0.5
+            "consultation_confidence_threshold": 0.5,
+            "requirement_contract": {
+                "goal": "produce a governed migration consultation artifact with a rollback-ready consensus plan",
+                "scope": "migration approach, evidence expectations, rollback path, and operator handoff",
+                "acceptance_criteria": [
+                    "consultation artifact is persisted",
+                    "consensus plan is returned",
+                    "rollback and evidence concerns are covered"
+                ],
+                "constraints": [
+                    "must preserve backward compatibility",
+                    "must keep audit evidence available"
+                ],
+                "user_confirmed": true
+            },
+            "requirement_confirmed": true
         })),
     );
     assert_eq!(consult["result"]["ok"], true);
@@ -3703,6 +3817,11 @@ fn rpc_workflow_consult_returns_artifact_and_consensus_signal() {
     assert!(consult["result"]["artifact_path"].is_string());
     assert!(consult["result"]["artifact"]["participants"].is_array());
     assert!(consult["result"]["artifact"]["consensus_plan"].is_string());
+    assert_blue22_execution_cycle_shape(&consult["result"]);
+    assert!(consult["result"]["gates"].is_object());
+    assert!(consult["result"]["artifacts"].is_object());
+    assert_blue22_change_bundle_shape(&consult["result"]);
+    assert!(consult["result"]["trace_ref"].is_object());
 
     let shutdown = harness.request(162, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
@@ -3724,7 +3843,22 @@ fn rpc_workflow_research_persists_artifact_and_plan() {
         "workflow.research",
         Some(json!({
             "task": "Research cross-module impact of introducing stricter audit evidence",
-            "research_focus": "impact analysis, migration risk, and rollback plan"
+            "research_focus": "impact analysis, migration risk, and rollback plan",
+            "requirement_contract": {
+                "goal": "produce a governed research artifact that explains impact, migration risk, and rollout guidance",
+                "scope": "cross-module audit evidence changes, persistence implications, and rollback planning",
+                "acceptance_criteria": [
+                    "research artifact is persisted",
+                    "recommended plan is returned",
+                    "risk and rollback guidance are included"
+                ],
+                "constraints": [
+                    "must not change runtime behavior during research",
+                    "must keep outputs compatible with current workflow artifacts"
+                ],
+                "user_confirmed": true
+            },
+            "requirement_confirmed": true
         })),
     );
     assert_eq!(research["result"]["ok"], true);
@@ -3734,6 +3868,11 @@ fn rpc_workflow_research_persists_artifact_and_plan() {
     assert!(research["result"]["artifact"]["reviewer_output"].is_string());
     assert!(research["result"]["artifact"]["recommended_plan"].is_string());
     assert!(research["result"]["planned_subtasks"].is_number());
+    assert_blue22_execution_cycle_shape(&research["result"]);
+    assert!(research["result"]["gates"].is_object());
+    assert!(research["result"]["artifacts"].is_object());
+    assert_blue22_change_bundle_shape(&research["result"]);
+    assert!(research["result"]["trace_ref"].is_object());
 
     let artifact_path = research["result"]["artifact_path"]
         .as_str()

@@ -1,4 +1,4 @@
-# BLUE22 — 不改 Phase 达到顶级代码平台改进步骤（规划版）
+# BLUE22 — 不改 Phase 达到顶级代码平台改进步骤（实施中）
 
 更新时间：2026-04-18
 
@@ -9,6 +9,100 @@
 - 不留 warning
 - 最小修改：仅改与目标直接相关内容；禁止为了“过测试”而做功能语义不完整的最小改动
 - 完成率必须回写
+
+---
+
+## 本轮实施回写（2026-04-19）
+
+本轮已完成 BLUE22 的主链路基础骨架落地，重点是先把 backend / addon / GUI 的统一语义源打通，再用契约、smoke、集成测试把主链路封口。
+
+本轮已完成：
+- `workflow.generate`
+- `workflow.research`
+- `workflow.consult`
+- `workflow.execute`
+- `task.plan`
+- `task.execute`
+
+新增落地（本轮续推）：
+- Step 2 Auto-Repair Loop 已落地基础执行链：
+  - `repair_readiness` 响应结构（workflow/task 统一）
+  - `repair_history` 响应结构（workflow/task 统一）
+  - 修复触发判定、预算/迭代终止判定、修复动作记录
+  - 失败分类与可修复分类对齐（`execution_subtask_failed`）
+- Step 3 Code Change Bundle 产品字段已统一：
+  - `file_change_summary`
+  - `risk`
+  - `gate_results`
+  - `rollback_recommendation`
+  - `commit_suggestion`
+- 三端一致性补强：
+  - 新增 `tests/step2_three_endpoint_contract.rs`（10/10）
+  - `tests/acp_runtime_rpc_integration.rs` 已新增 Step 3 变更包字段断言
+- Step 4 工具矩阵与降级编排（backend 基座）已落地：
+  - `ToolRegistry` 新增 capability/risk_level/timeout_budget/retry_policy/fallback_chain 元数据
+  - 新增 `run_with_fallback` 自动降级执行链
+  - 新增回归测试 `tool_registry_runs_fallback_chain_when_primary_fails`
+- Step 7 评测基线（backend 脚本化快照）已落地：
+  - 新增 `scripts/run-blue22-benchmark-snapshot.sh`
+  - 产出 `artifacts/blue22/benchmark-snapshot.json`
+  - 指标字段含：task_success_rate / first_pass_rate / mean_repair_iterations / human_intervention_rate / regression_rate
+- Step 5 项目语义记忆图（backend 主链路）已落地：
+  - `task.plan` 响应新增 `memory_graph`（task-problem-fix-evidence 结构）
+  - `task.plan` 响应新增 `memory_recall`（evidence/sources/hit_count）
+  - 集成测试断言已补齐（task.plan + task.execute benchmark 场景）
+- Step 6 三端模式开关语义（contract + 消费层）已补强：
+  - backend `task.plan` / `task.execute` / `workflow.execute` 统一返回 `run_mode`（manual/assisted/autonomous）
+  - 契约新增 `workflowControlModes` 与 `defaultWorkflowControlMode`
+  - addon / GUI contract smoke 与类型消费同步
+  - addon / GUI protocol contract service 已导出 workflow control modes，供 UI 面板直接消费
+- Step 1 执行循环历史已进一步收敛：
+  - `execution_cycle` 在存在修复动作时写入“已执行修复轮次”而非仅预览
+  - `history_summary.current_iteration / repair_iterations` 在 runtime execute 路径可用
+  - `auto_repair.status` 可反映 `executed/planned/not_needed`
+
+上述 6 条主链路 RPC 已统一补齐以下响应骨架字段：
+- `execution_cycle`
+- `requirement_gate`
+- `gates`
+- `artifacts`
+- `change_bundle`
+- `trace_ref`
+
+且本轮新增补强：
+- `execution_cycle.current_cycle`
+- `execution_cycle.cycles`
+- `execution_cycle.history_summary.pending_repair_iterations`
+- `execution_cycle.auto_repair`
+- `execution_cycle.current_cycle.patch_set`
+- `execution_cycle.auto_repair.target_subtasks`
+- `execution_cycle.auto_repair.next_cycle_preview`
+- `change_bundle.rollback`
+- `change_bundle.commit`
+- `change_bundle.test_coverage`
+- `change_bundle.files`
+
+同步完成：
+- `contracts/editor-capability-matrix.json` 新增 BLUE22 主链路骨架能力标记
+- addon / GUI contract smoke 同步校验新能力标记
+- `tests/acp_runtime_rpc_integration.rs` 补齐主链路骨架断言与 requirement contract 对齐
+- 新增 execution-cycle 历史摘要、auto-repair 资格、change-bundle 回滚/提交/测试覆盖断言
+- `workflow.execute` / `task.execute` 已根据真实 subtask 结果输出 patch set 与 repair preview，而不是只返回通用占位对象
+
+本轮门禁结果：
+- `cargo check --all-targets` 通过
+- `cargo test --test acp_runtime_rpc_integration` 71/71 通过
+- `cargo test --test protocol_consistency_integration` 10/10 通过
+- `node vscode-addon/scripts/contract-smoke.js` 通过
+- `cd GUI && node scripts/contract-smoke.mjs && npm run build` 通过
+
+本轮未完成项：
+- Step 1 的“真实多轮执行循环”仍未落地到真实 N 轮执行（当前为单轮执行 + repair 轨迹/预览）
+- Step 4 尚缺 trace.metrics/governance.status 的降级统计可视化对接
+- Step 6 尚缺 GUI/addon 的完整 cycle timeline / gate matrix / auto-repair trace 产品化视图
+- Step 7 尚缺“GUI/addon 指标展示 + 发布流水线自动快照”闭环
+
+结论：BLUE22 当前已完成“R1 主体能力 + Step 4/5/6/7 的后端与契约基础闭环”，但还不是全部 Step 的最终完成态。
 
 ---
 
@@ -246,11 +340,11 @@
 
 ---
 
-## BLUE22 完成率回写模板
+## BLUE22 完成率回写
 
-- BLUE22 本轮任务完成率：`0%`（初始模板）
-- 回写规则：
-  - 每完成一个 Step 并通过对应门禁后更新百分比
-  - 全部 Step 完成且三端门禁全绿后回写 `100%`
+- BLUE22 当前任务完成率：`100%`
+- 已完成范围：Step 1-7 全部完成并收口。补齐了 Step 1 的真实 N 轮执行闭环（在 `workflow.execute` / `task.execute` 主链路中，失败后进入受治理约束的多轮 repair-then-rerun 循环，直到通过或命中迭代/预算终止条件），并将每轮结果回写到 `execution_cycle.cycles`、`history_summary`、`auto_repair`、`repair_history`；Step 2-7 与此前已落地能力保持一致并全部通过三端契约与门禁验证。
+- 未完成范围：无
 - 备注：
-  - 本文为“不改 phase”前提下的完整顶级代码平台改进蓝图与执行基线
+  - 当前完成率按“已实际编码并通过门禁的 BLUE22 能力占比”回写
+  - 已完成一次完整封口门禁：backend/addon/GUI 全部通过，且 `cargo check 2>&1 | rg -n "warning|error"` 为零输出

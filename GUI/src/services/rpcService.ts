@@ -155,6 +155,34 @@ export interface MetricsResult {
   avg_request_duration_ms?: number;
 }
 
+export interface TaskPlanResult {
+  ok?: boolean;
+  run_mode?: "manual" | "assisted" | "autonomous" | string;
+  memory_graph?: {
+    task?: string;
+    nodes?: Array<{ id?: string; type?: string; label?: string }>;
+    edges?: Array<{ from?: string; to?: string; rel?: string }>;
+    summary?: {
+      related_events?: number;
+      related_failures?: number;
+      sources?: string[];
+    };
+  };
+  memory_recall?: {
+    hit_count?: number;
+    sources?: string[];
+    evidence?: Array<Record<string, unknown>>;
+    recall_applied_before_planning?: boolean;
+  };
+}
+
+export interface TaskExecuteResult {
+  ok?: boolean;
+  run_mode?: "manual" | "assisted" | "autonomous" | string;
+  repair_readiness?: Record<string, unknown>;
+  repair_history?: Record<string, unknown>;
+}
+
 export interface SkillImportSourceGithub {
   kind: "github";
   repo: string;
@@ -290,6 +318,14 @@ export async function getBreakerStatus(): Promise<BreakerStatusResult> {
 
 export async function getMetrics(): Promise<MetricsResult> {
   return callRpcJson<MetricsResult>("metrics.get", {});
+}
+
+export async function callTaskPlan(task: string, params: Record<string, unknown> = {}): Promise<TaskPlanResult> {
+  return callRpcJson<TaskPlanResult>("task.plan", { task, ...params });
+}
+
+export async function callTaskExecute(task: string, params: Record<string, unknown> = {}): Promise<TaskExecuteResult> {
+  return callRpcJson<TaskExecuteResult>("task.execute", { task, ...params });
 }
 
 export async function importSkill(source: SkillImportSource): Promise<SkillImportResult> {

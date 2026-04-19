@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.protocolContract = void 0;
+exports.defaultWorkflowControlMode = exports.workflowControlModes = exports.protocolContract = void 0;
 const fs = require("fs");
 const path = require("path");
 const fallbackContract = {
@@ -11,6 +11,8 @@ const fallbackContract = {
     },
     protocol: {
         supportedModes: ['adaptive', 'acp_stdio', 'acp_http', 'mcp_stdio', 'mcp_http'],
+        workflowControlModes: ['manual', 'assisted', 'autonomous'],
+        defaultWorkflowControlMode: 'assisted',
         defaultMode: 'adaptive',
         autoModeSupportsAcpAndMcp: true,
         protocolCapabilityModel: 'capability_plus_transport',
@@ -180,4 +182,6 @@ function loadProtocolContract() {
     }
 }
 exports.protocolContract = loadProtocolContract();
+exports.workflowControlModes = exports.protocolContract.protocol.workflowControlModes ?? ['manual', 'assisted', 'autonomous'];
+exports.defaultWorkflowControlMode = exports.protocolContract.protocol.defaultWorkflowControlMode ?? 'assisted';
 //# sourceMappingURL=protocolContract.js.map
