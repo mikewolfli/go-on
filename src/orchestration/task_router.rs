@@ -312,6 +312,7 @@ impl TaskRouter {
                 AgentRole::Coder => RoleSpecifications::coder(),
                 AgentRole::Tester => RoleSpecifications::tester(),
                 AgentRole::Reviewer => RoleSpecifications::reviewer(),
+                AgentRole::Custom(_) => RoleSpecifications::coder(), // default spec for custom roles
             })
             .collect()
     }

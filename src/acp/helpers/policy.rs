@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::config::PhaseOptions;
+use crate::orchestration::roles::role_registry_keywords_for;
 use crate::orchestration::task_router::TaskCharacteristics;
 use crate::reinforcement::{
     recommend_reattach_modules_from_policy_history, ActionCheckKind, ArtifactLedger,
@@ -487,7 +488,10 @@ pub fn evaluate_optimization_policy(
     }
 }
 
-/// Get role keywords for agent ranking
+/// Get role keywords for agent ranking.
+/// For built-in roles returns static keyword slices.
+/// For custom roles (unrecognised names), returns no static keywords so the
+/// dynamic path in `rank_execution_agents` handles them via the registry.
 pub fn role_keywords_for(role: &str) -> Vec<&'static str> {
     match role {
         "planner" => vec!["planner", "plan", "architect"],
@@ -495,6 +499,7 @@ pub fn role_keywords_for(role: &str) -> Vec<&'static str> {
         "coder" => vec!["coder", "code", "implement", "dev"],
         "tester" => vec!["tester", "test", "qa", "verify"],
         "reviewer" => vec!["reviewer", "review", "audit"],
+        // Custom roles: return empty – dynamic keyword lookup happens elsewhere.
         _ => vec![],
     }
 }
@@ -522,8 +527,22 @@ pub fn rank_execution_agents(
             let (role_match_score, role_reason) = if let Some(role) = desired_role {
                 let role = role.to_ascii_lowercase();
                 let keywords = role_keywords_for(role.as_str());
-                if !keywords.is_empty() && keywords.iter().any(|keyword| lower.contains(keyword)) {
+                    let dynamic_keywords = if keywords.is_empty() {
+                        role_registry_keywords_for(role.as_str())
+                    } else {
+                        Vec::new()
+                    };
+                    let static_match = !keywords.is_empty()
+                        && keywords.iter().any(|keyword| lower.contains(keyword));
+                    let dynamic_match = !dynamic_keywords.is_empty()
+                        && dynamic_keywords
+                            .iter()
+                            .any(|keyword| lower.contains(&keyword.to_ascii_lowercase()));
+                    if static_match || dynamic_match {
                     (0.35f64, format!("role match for {}", role))
+                } else if keywords.is_empty() {
+                    // Custom or unknown role: neutral score (no penalty)
+                    (0.0f64, format!("custom role neutral for {}", role))
                 } else {
                     (-0.12f64, format!("no explicit role match for {}", role))
                 }

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use crate::agent::{Agent, AgentRegistry};
-use crate::config::{AppConfig, PhaseConfig, PhaseOptions};
+use crate::config::{AppConfig, PhaseConfig, PhaseOptions, WorkflowType};
 use crate::error::ProxyError;
 use crate::pua::merge_phase_principles;
 
@@ -111,11 +111,20 @@ impl FlowManager {
         requested_phase: Option<String>,
         registry: &AgentRegistry,
     ) -> Result<ResolvedRouting> {
-        let phase_name = self
+        let mut phase_name = self
             .forced_phase
             .clone()
             .or(requested_phase)
             .unwrap_or_else(|| self.config.default_phase.clone());
+
+        let workflow_type = self.config.flow.workflow_type.clone();
+
+        // S16 free mode guard: unknown phase should silently fall back to default
+        if workflow_type == WorkflowType::Free
+            && !self.config.flow.phases.iter().any(|name| name == &phase_name)
+        {
+            phase_name = self.config.default_phase.clone();
+        }
 
         if !self
             .config
@@ -288,6 +297,7 @@ mod tests {
             flow: FlowConfig {
                 name: "flow".to_string(),
                 phases: vec!["coding".to_string(), "review".to_string()],
+                workflow_type: crate::config::WorkflowType::Auto,
             },
             phases,
             runtime: Some(RuntimeConfig::default()),
@@ -295,6 +305,10 @@ mod tests {
             vector: None,
             autotune: None,
             model_selection_mode: "adaptive".to_string(),
+            compliance: None,
+            startup_context: None,
+            scheduler: None,
+            reputation: None,
         }
     }
 

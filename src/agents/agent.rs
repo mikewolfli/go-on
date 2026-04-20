@@ -1061,6 +1061,7 @@ mod tests {
             flow: FlowConfig {
                 name: "test".to_string(),
                 phases: vec!["coding".to_string()],
+                workflow_type: crate::config::WorkflowType::Auto,
             },
             phases: {
                 let mut m = HashMap::new();
@@ -1086,6 +1087,10 @@ mod tests {
             vector: None,
             autotune: None,
             model_selection_mode: "adaptive".to_string(),
+            compliance: None,
+            startup_context: None,
+            scheduler: None,
+            reputation: None,
         };
 
         let registry = AgentRegistry::from_config(Arc::new(app_config), reqwest::Client::new());

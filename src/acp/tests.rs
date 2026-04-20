@@ -73,6 +73,7 @@ mod test_suite {
         let flow = FlowConfig {
             name: default_phase.to_string(),
             phases,
+            workflow_type: crate::config::WorkflowType::Auto,
         };
 
         let _config = AppConfig {
@@ -85,6 +86,10 @@ mod test_suite {
             vector: Some(vector_config_fixture()),
             autotune: None,
             model_selection_mode: "auto".to_string(),
+            compliance: None,
+            startup_context: None,
+            scheduler: None,
+            reputation: None,
         };
 
         // Create server using builder

@@ -85,6 +85,28 @@ supports_system = true
 [flow]
 name = "Autopilot Adaptive"
 phases = ["planning", "coding", "review", "delivery"]
+workflow_type = "auto"
+
+[compliance]
+enabled = false
+data_classification_default = "internal"
+retention_policy_default = "standard_30d"
+
+[startup_context]
+enabled = false
+readme_max_chars = 2000
+recent_commits = 5
+
+[scheduler]
+enabled = false
+worker_slots = 4
+max_queue_depth = 1000
+
+[reputation]
+enabled = false
+ema_alpha = 0.2
+degraded_threshold = 0.65
+exclusion_threshold = 0.30
 
 [phases.planning]
 description = "Planning phase"

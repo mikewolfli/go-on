@@ -2,9 +2,15 @@
 //! These structures are intentional framework definitions for Phase 0-9 architecture.
 //! Agent roles and handoff contracts define multi-agent delegation patterns,
 //! to be integrated into the agent orchestrator once role routing is implemented.
+//!
+//! S1 (blue35): Added `AgentRole::Custom(String)` + `RoleDefinition` + `RoleRegistry`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
 
+/// Built-in + extensible agent roles.
+/// `Custom(name)` allows user-defined roles declared in `[[agents.roles]]` config.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum AgentRole {
     Planner,
@@ -12,6 +18,89 @@ pub enum AgentRole {
     Coder,
     Tester,
     Reviewer,
+    /// User-defined role with a lowercase name, e.g. "security_auditor"
+    Custom(String),
+}
+
+impl AgentRole {
+    /// Canonical lower-case string representation
+    pub fn as_str(&self) -> &str {
+        match self {
+            AgentRole::Planner    => "planner",
+            AgentRole::Researcher => "researcher",
+            AgentRole::Coder      => "coder",
+            AgentRole::Tester     => "tester",
+            AgentRole::Reviewer   => "reviewer",
+            AgentRole::Custom(n)  => n.as_str(),
+        }
+    }
+}
+
+// ───────────────────────────────────────────────
+// S1: RoleDefinition + RoleRegistry
+// ───────────────────────────────────────────────
+
+/// Full definition for a custom agent role
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoleDefinition {
+    pub name: String,
+    pub description: String,
+    /// Keywords used by rank_execution_agents; mirrors the built-in role keyword lists
+    pub keywords: Vec<String>,
+    /// Allowed tool names for this role
+    pub allowed_tools: Vec<String>,
+    /// Max tool calls per turn
+    pub max_tool_calls: usize,
+    /// Token budget per turn
+    pub token_budget: usize,
+    /// Timeout in seconds
+    pub timeout_seconds: u64,
+}
+
+/// Runtime registry of custom role definitions.
+/// Populated from `[[agents.custom_roles]]` config at startup.
+#[derive(Debug, Default)]
+pub struct RoleRegistry {
+    roles: HashMap<String, RoleDefinition>,
+}
+
+static ROLE_REGISTRY: OnceLock<RwLock<RoleRegistry>> = OnceLock::new();
+
+pub fn role_registry() -> &'static RwLock<RoleRegistry> {
+    ROLE_REGISTRY.get_or_init(|| RwLock::new(RoleRegistry::new()))
+}
+
+pub fn role_registry_keywords_for(name: &str) -> Vec<String> {
+    role_registry()
+        .read()
+        .map(|registry| registry.keywords_for(name))
+        .unwrap_or_default()
+}
+
+impl RoleRegistry {
+    pub fn new() -> Self { Self::default() }
+
+    pub fn register(&mut self, def: RoleDefinition) {
+        self.roles.insert(def.name.clone(), def);
+    }
+
+    pub fn get(&self, name: &str) -> Option<&RoleDefinition> {
+        self.roles.get(name)
+    }
+
+    pub fn keywords_for(&self, name: &str) -> Vec<String> {
+        self.roles.get(name)
+            .map(|d| d.keywords.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn contains(&self, name: &str) -> bool { self.roles.contains_key(name) }
+
+    pub fn all(&self) -> Vec<&RoleDefinition> {
+        let mut v: Vec<_> = self.roles.values().collect();
+        v.sort_by_key(|d| d.name.as_str());
+        v
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

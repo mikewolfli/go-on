@@ -38,6 +38,18 @@ pub struct AppConfig {
     /// Model selection mode for automatic selection (Phase 10+)
     #[serde(default)]
     pub model_selection_mode: String,
+    /// Compliance configuration (S3)
+    #[serde(default)]
+    pub compliance: Option<ComplianceConfig>,
+    /// Startup context loader configuration (S5)
+    #[serde(default)]
+    pub startup_context: Option<StartupContextConfig>,
+    /// Scheduler configuration (S8/S9)
+    #[serde(default)]
+    pub scheduler: Option<SchedulerConfig>,
+    /// Reputation tracking configuration (S13)
+    #[serde(default)]
+    pub reputation: Option<ReputationConfig>,
 }
 
 /// Simplified adaptive configuration for AI-driven setup
@@ -438,6 +450,7 @@ impl AdaptiveConfig {
                 "review".to_string(),
                 "delivery".to_string(),
             ],
+            workflow_type: WorkflowType::Auto,
         };
 
         let mut phases = HashMap::new();
@@ -534,6 +547,10 @@ impl AdaptiveConfig {
             vector,
             autotune: Some(default_autotune_config()),
             model_selection_mode: "adaptive".to_string(),
+            compliance: None,
+            startup_context: None,
+            scheduler: None,
+            reputation: None,
         }
     }
 }
@@ -1321,6 +1338,129 @@ pub struct AgentConfig {
 pub struct FlowConfig {
     pub name: String,
     pub phases: Vec<String>,
+    #[serde(default)]
+    pub workflow_type: WorkflowType,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowType {
+    #[default]
+    Auto,
+    Manual,
+    Free,
+    Custom,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ComplianceConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub data_classification_default: String,
+    #[serde(default)]
+    pub retention_policy_default: String,
+}
+
+impl Default for ComplianceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            data_classification_default: "internal".to_string(),
+            retention_policy_default: "standard_30d".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StartupContextConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_startup_readme_max_chars")]
+    pub readme_max_chars: usize,
+    #[serde(default = "default_startup_recent_commits")]
+    pub recent_commits: usize,
+}
+
+fn default_startup_readme_max_chars() -> usize {
+    2000
+}
+
+fn default_startup_recent_commits() -> usize {
+    5
+}
+
+impl Default for StartupContextConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            readme_max_chars: default_startup_readme_max_chars(),
+            recent_commits: default_startup_recent_commits(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SchedulerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_scheduler_workers")]
+    pub worker_slots: usize,
+    #[serde(default = "default_scheduler_max_depth")]
+    pub max_queue_depth: usize,
+}
+
+fn default_scheduler_workers() -> usize {
+    4
+}
+
+fn default_scheduler_max_depth() -> usize {
+    1000
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            worker_slots: default_scheduler_workers(),
+            max_queue_depth: default_scheduler_max_depth(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReputationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_reputation_alpha")]
+    pub ema_alpha: f64,
+    #[serde(default = "default_reputation_degraded")]
+    pub degraded_threshold: f64,
+    #[serde(default = "default_reputation_excluded")]
+    pub exclusion_threshold: f64,
+}
+
+fn default_reputation_alpha() -> f64 {
+    0.2
+}
+
+fn default_reputation_degraded() -> f64 {
+    0.65
+}
+
+fn default_reputation_excluded() -> f64 {
+    0.30
+}
+
+impl Default for ReputationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ema_alpha: default_reputation_alpha(),
+            degraded_threshold: default_reputation_degraded(),
+            exclusion_threshold: default_reputation_excluded(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1399,6 +1539,15 @@ impl AppConfig {
         normalize_nested_phase_option_extra(&mut cfg);
         apply_auto_rules(path, &mut cfg);
         Ok(cfg)
+    }
+
+    /// Returns the effective default phase, accounting for free workflow bypass.
+    pub fn effective_default_phase(&self) -> Option<&str> {
+        if self.flow.workflow_type == WorkflowType::Free {
+            None
+        } else {
+            Some(self.default_phase.as_str())
+        }
     }
 
     /// Validate configuration
@@ -2862,6 +3011,7 @@ mod tests {
             flow: FlowConfig {
                 name: "flow".to_string(),
                 phases: vec!["coding".to_string(), "review".to_string()],
+                workflow_type: WorkflowType::Auto,
             },
             phases,
             runtime: Some(RuntimeConfig::default()),
@@ -2869,6 +3019,10 @@ mod tests {
             vector: None,
             autotune: None,
             model_selection_mode: "adaptive".to_string(),
+            compliance: None,
+            startup_context: None,
+            scheduler: None,
+            reputation: None,
         }
     }
 

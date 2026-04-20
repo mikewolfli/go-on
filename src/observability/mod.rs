@@ -15,5 +15,6 @@
 
 pub mod observability;
 pub mod performance;
+pub mod provenance;
 pub mod telemetry;
 pub mod telemetry_enhanced;

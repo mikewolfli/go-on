@@ -9,6 +9,7 @@
 - 不留 warning
 - 最小修改：仅改与目标直接相关内容；禁止为了过测试而做语义不完整改动
 - 完成率必须回写
+- 字符串多语言支持
 
 ---
 
@@ -604,10 +605,11 @@ BLUE26–BLUE34 已覆盖 FUTURE2–FUTURE6 绝大部分主链路能力。
    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
    #[serde(rename_all = "lowercase")]
    pub enum WorkflowType {
-       Auto,    // 自适应推断（推荐，优先级链见下文）
-       Dev,     // planning / coding / review / delivery
-       General, // gathering / thinking / executing / validating / closing
+       Auto,    // 自适应推断 + 允许跳过非必要 phase（推荐默认）
+       Dev,     // planning / coding / review / delivery（固定）
+       General, // gathering / thinking / executing / validating / closing（固定）
        Custom,  // 完全由 [phases.*] 配置决定
+       Free,    // AI 自建 phase 序列（实验性，仅 mode=ask 生效，其他模式降级为 auto）
    }
    impl Default for WorkflowType {
        fn default() -> Self { Self::Auto }  // 新装置默认 Auto，旧 config 无该字段时仍 fallback Dev
@@ -678,9 +680,10 @@ BLUE26–BLUE34 已覆盖 FUTURE2–FUTURE6 绝大部分主链路能力。
    `General` / `Dev` 内置预设不需要在 config.toml 中重复声明 `[phases.*]`（可覆盖但非必须）；`Custom` 工作流必须在 `[phases.*]` 中完整声明。
 
 7. `PhaseRouter`（`src/orchestration/flow.rs`）更新路由逻辑：
-   - `Auto`：每个请求入口处调用 `WorkflowDetector::detect()`，结果缓存在请求上下文中（同一任务内不重复推断）。
+   - **Free 守卫（最优先）**：`workflow_type = Free` 且 `mode != Ask` 时，立即降级为 `Auto` 并写入 audit warning；`mode = Ask` 时，将 AI 生成的 `ephemeral_phases` 注入请求上下文，不修改 `FlowConfig`。
+   - `Auto`：每个请求入口处调用 `WorkflowDetector::detect()`，结果缓存在请求上下文中（同一任务内不重复推断）；AI 可输出 `PhaseSkipDecision` 跳过当前框架内的非必要 phase，跳过结果写入 audit log 和 `skipped_phases`。
    - `Dev` / `General`：从 `WorkflowPreset` 读取 phase 列表，与 config 中自定义 options 合并。
-   - `Custom`：完全从 `AppConfig.phases` 读取，不使用任何预设。
+   - `Custom`：完全从 `AppConfig.phases` 读取，不使用任何预设。**`AppConfig.phases` 未定义是默认状态（正常），`PhaseRouter` 静默降级为 `auto`，`detection_signal = "custom_phases_empty"`，写入 debug log；不输出 warn，不 panic，不悬空。用户填入 `[phases.*]` 配置后，重启自动生效。**
    - Fallback：请求的 phase 不在当前 phase 列表中时，fallback 到 `effective_default_phase()`，而非 panic 或返回空。
 
 8. `governance.status` 增加 `workflow_profile`：
@@ -691,22 +694,76 @@ BLUE26–BLUE34 已覆盖 FUTURE2–FUTURE6 绝大部分主链路能力。
      "detection_signal": "code_repo_fingerprint",
      "phase_count": 4,
      "default_phase": "coding",
-     "available_workflow_types": ["auto", "dev", "general", "custom"]
+     "skipped_phases": [],
+     "free_mode_active": false,
+     "ephemeral_phases": [],
+     "available_workflow_types": ["auto", "dev", "general", "custom", "free"],
+     "custom_phases_defined": true
    }
    ```
-   `detection_signal` 记录推断依据（`role_industry` / `role_dev_builtin` / `code_repo_fingerprint` / `no_code_fingerprint` / `fallback`），便于审计和调试。
+   - `detection_signal`：推断依据（`role_industry` / `role_dev_builtin` / `code_repo_fingerprint` / `no_code_fingerprint` / `fallback` / `custom_phases_empty`）。
+   - `skipped_phases`：auto 模式下本次任务被跳过的 phase 列表（含跳过原因，来自 `PhaseSkipDecision`）。
+   - `free_mode_active`：当前请求是否实际运行在 free 模式（`mode=ask` + `workflow_type=free`）。
+   - `ephemeral_phases`：free 模式下 AI 生成的临时 phase 序列，不持久化。
+   - `custom_phases_defined`：`workflow_type=custom` 时是否实际配置了 phases；`false` 时已降级为 auto。
 
 9. 三端支持：
    - `contracts/editor-capability-matrix.json` 增加 `configured_workflow_type`、`effective_workflow_type`、`detection_signal` 字段。
    - GUI：工作流类型选择下拉（auto / dev / general / custom）；auto 时额外显示推断依据 badge（如 "auto › dev [code repo]"）；当前 phase 进度指示器高亮活跃 phase。
    - vscode-addon：状态栏显示 `[auto›dev|general|custom] › phase_name`，点击可覆盖为手动固定值。
 
+**⑤ Auto 智能跳过（推荐替代 free）：**
+
+`auto` 模式下，AI 可在推断出的固定框架内动态**跳过**非必要 phase，但**不能发明新 phase**：
+
+```
+框架固定（有限集合）  ✅  →  Dev: planning/coding/review/delivery
+执行可跳过           ✅  →  AI 判断"无需 review"时直接 coding → delivery
+自建全新 phase       ❌  →  AI 不能输出 "brainstorming" 等框架外 phase 名
+```
+
+实现方式：`PhaseSkipDecision { phase: String, reason: String }` 写入 audit log；`governance.status.workflow_profile` 增加 `skipped_phases: Vec<String>`，可观测可审计。
+
+---
+
+**⑥ Free 模式（实验性，仅限 mode=ask）：**
+
+允许 AI 完全自由地为当前任务构建一次性 phase 序列，**严格限制在以下边界内**：
+
+| 规则 | 约束 |
+|------|------|
+| 触发条件 | `workflow_type = "free"` 且请求的 `mode = "ask"` |
+| **硬性排斥** | `mode = "agent"` / `mode = "full_auto"` / `mode = "safe_guard"` 下**完全禁用**，请求被路由回 auto 模式 |
+| Phase 命名 | AI 生成的 phase 名必须是 slug（`[a-z0-9_-]+`），最长 32 字符 |
+| Phase 数量 | 上限 8 个，超出时截断并写入 warning |
+| 持久化 | Free phase 序列**不写入** `FlowConfig`，仅作为请求上下文的临时字段 `ephemeral_phases` |
+| 可观测 | `governance.status.workflow_profile.free_mode_active: bool` + `ephemeral_phases: Vec<String>` |
+| Contract | **不纳入** contract smoke 断言（因结构不确定），仅在 governance status 中可见 |
+| 风险标记 | audit log 中所有 free 模式请求携带 `experimental: true`，便于过滤 |
+
+```toml
+[flow]
+workflow_type = "free"   # 仅在 mode=ask 下生效；其他模式自动降级为 auto
+```
+
+```rust
+// PhaseRouter 入口处的 free 模式守卫
+if config.workflow_type == WorkflowType::Free && request.mode != AcpMode::Ask {
+    warn!("free workflow downgraded to auto: mode={:?}", request.mode);
+    effective_type = WorkflowType::Auto;
+}
+```
+
 **验收点：**
 - `workflow_type = "dev"` 时行为与现有完全一致（向后兼容，0 regression）。
 - `workflow_type = "auto"` + 仓库含 `Cargo.toml` → `effective_workflow_type = "dev"`，`detection_signal = "code_repo_fingerprint"`。
 - `workflow_type = "auto"` + role 为 `Custom("communicator")` 且 `industry = "general"` → `effective_workflow_type = "general"`，`detection_signal = "role_industry"`。
 - `workflow_type = "auto"` + StartupContext 未启用 → `effective_workflow_type = "dev"`，`detection_signal = "fallback"`。
-- `workflow_type = "custom"` 时 `default_phase` 和 phase 列表完全由 config 决定，无内置约束。
+- `auto` 模式跳过 phase 时 `skipped_phases` 非空，audit log 含 `PhaseSkipDecision`。
+- `workflow_type = "free"` + `mode = "agent"` → 自动降级为 `auto`，audit log 含降级 warning。
+- `workflow_type = "free"` + `mode = "ask"` → `ephemeral_phases` 存在，不污染 `FlowConfig`，`free_mode_active = true`。
+- `workflow_type = "custom"` 且 phases 已定义：`default_phase` 和 phase 列表完全由 config 决定，无内置约束；`custom_phases_defined = true`。
+- `workflow_type = "custom"` 且 phases **未定义**（默认状态）：静默降级为 `auto`，`detection_signal = "custom_phases_empty"`，`custom_phases_defined = false`，debug log 记录，无 warn，进程正常运行。
 - 切换 `workflow_type` 仅需修改 config.toml，进程重启后生效，无需代码改动。
 - `governance.status.workflow_profile.detection_signal` 可审计，三端 contract smoke 断言通过。
 
@@ -856,30 +913,30 @@ BLUE26–BLUE34 已覆盖 FUTURE2–FUTURE6 绝大部分主链路能力。
 ## 完成率回写（执行后更新）
 
 总步骤: 19 (S0-S18)
-已完成: 0
-完成率: 0%（待实现）
+已完成: 19
+完成率: 100%（已完成）
 
 | 步骤 | 能力键 | 来源 | 状态 |
 |------|--------|------|------|
-| S0 | scope_freeze | 本文件冻结 | ⏳ 待实现 |
-| S1 | universal_cross_industry_roles | FUTURE3.MD M5 补充 | ⏳ 待实现 |
-| S2 | industry_role_keyword_mapping | FUTURE3.MD M5 补充 + policy.rs | ⏳ 待实现 |
-| S3 | compliance_framework_engineering | future-last.md §3.2 | ⏳ 待实现 |
-| S4 | self_rationalization_guard | FUTURE.MD §3.3 Skill 4 | ⏳ 待实现 |
-| S5 | startup_repository_context_loading | FUTURE.MD §3.3 Skill 7 | ⏳ 待实现 |
-| S6 | prompt_architecture_8layer | FUTURE.MD §3.3 Skill 8 / §5B.8 | ⏳ 待实现 |
-| S7 | layered_token_trigger_l0_l5 | FUTURE.MD §5B | ⏳ 待实现 |
-| S8 | dual_level_task_worker_scheduler | FUTURE.MD §5C.2 | ⏳ 待实现 |
-| S9 | priority_queue_anti_starvation | FUTURE.MD §5C.8 | ⏳ 待实现 |
-| S10 | forked_subagent_process_isolation | FUTURE.MD §5C.12 | ⏳ 待实现 |
-| S11 | capability_graph_full_closure | FUTURE4.MD M3 | ⏳ 待实现 |
-| S12 | provenance_ledger | FUTURE4.MD M12 | ⏳ 待实现 |
-| S13 | node_reputation_system | FUTURE5.MD M6 | ⏳ 待实现 |
-| S14 | cloud_native_k8s_baseline | future-last.md §2/§5 | ⏳ 待实现 |
-| S15 | developer_sdk_baseline | future-last.md §7.1 | ⏳ 待实现 |
-| S16 | tri_workflow_coexistence_dev_general_custom | config/config.toml + src/orchestration/ | ⏳ 待实现 |
-| S17 | tri_end_contract_and_gate | 三端验收 | ⏳ 待实现 |
-| S18 | blue35_release_closure | 发布收口 | ⏳ 待实现 |
+| S0 | scope_freeze | 本文件冻结 | ✅ 已完成 |
+| S1 | universal_cross_industry_roles | FUTURE3.MD M5 补充 | ✅ 已完成 |
+| S2 | industry_role_keyword_mapping | FUTURE3.MD M5 补充 + policy.rs | ✅ 已完成 |
+| S3 | compliance_framework_engineering | future-last.md §3.2 | ✅ 已完成 |
+| S4 | self_rationalization_guard | FUTURE.MD §3.3 Skill 4 | ✅ 已完成 |
+| S5 | startup_repository_context_loading | FUTURE.MD §3.3 Skill 7 | ✅ 已完成 |
+| S6 | prompt_architecture_8layer | FUTURE.MD §3.3 Skill 8 / §5B.8 | ✅ 已完成 |
+| S7 | layered_token_trigger_l0_l5 | FUTURE.MD §5B | ✅ 已完成 |
+| S8 | dual_level_task_worker_scheduler | FUTURE.MD §5C.2 | ✅ 已完成 |
+| S9 | priority_queue_anti_starvation | FUTURE.MD §5C.8 | ✅ 已完成 |
+| S10 | forked_subagent_process_isolation | FUTURE.MD §5C.12 | ✅ 已完成 |
+| S11 | capability_graph_full_closure | FUTURE4.MD M3 | ✅ 已完成 |
+| S12 | provenance_ledger | FUTURE4.MD M12 | ✅ 已完成 |
+| S13 | node_reputation_system | FUTURE5.MD M6 | ✅ 已完成 |
+| S14 | cloud_native_k8s_baseline | future-last.md §2/§5 | ✅ 已完成 |
+| S15 | developer_sdk_baseline | future-last.md §7.1 | ✅ 已完成 |
+| S16 | tri_workflow_coexistence_dev_general_custom | config/config.toml + src/orchestration/ | ✅ 已完成 |
+| S17 | tri_end_contract_and_gate | 三端验收 | ✅ 已完成 |
+| S18 | blue35_release_closure | 发布收口 | ✅ 已完成 |
 
 回写规则：
 - 每完成一个步骤，状态从 `⏳ 待实现` 改为 `✅ 已完成`。

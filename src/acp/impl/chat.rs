@@ -2661,6 +2661,7 @@ mod tests {
             flow: FlowConfig {
                 name: "flow".to_string(),
                 phases: vec!["coding".to_string()],
+                workflow_type: crate::config::WorkflowType::Auto,
             },
             phases,
             runtime: None,
@@ -2682,6 +2683,10 @@ mod tests {
             }),
             autotune: None,
             model_selection_mode: "adaptive".to_string(),
+            compliance: None,
+            startup_context: None,
+            scheduler: None,
+            reputation: None,
         }
     }
 

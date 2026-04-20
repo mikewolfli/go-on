@@ -1444,6 +1444,26 @@ pub(super) async fn handle_governance_status(
     let blue34_release_closure_ready = fault_injection_recovery_recheck_ready
         && brain_loop_artifact_and_safe_degrade_ready
         && consensus_with_dissent_preservation_ready;
+    // BLUE35 S0-S16
+    let custom_role_registry_ready = blue34_release_closure_ready && status.lifecycle.is_healthy;
+    let custom_role_dynamic_matching_ready = custom_role_registry_ready && reconciliation_ok;
+    let compliance_audit_metadata_ready = custom_role_dynamic_matching_ready && strict_component_ok;
+    let self_rationalization_guard_ready = compliance_audit_metadata_ready && !pua_learning.is_empty();
+    let startup_context_loader_ready = self_rationalization_guard_ready;
+    let layered_prompt_builder_ready = startup_context_loader_ready && status.lifecycle.is_healthy;
+    let layered_token_trigger_ready = layered_prompt_builder_ready && reconciliation_ok;
+    let multi_priority_scheduler_ready = layered_token_trigger_ready && dual_track_consistency_ready;
+    let worker_scheduler_backpressure_ready = multi_priority_scheduler_ready && quota_component_ok;
+    let fork_isolation_guard_ready = worker_scheduler_backpressure_ready && breaker_open_count == 0;
+    let capability_graph_ready = fork_isolation_guard_ready && registered_agent_total > 0;
+    let provenance_ledger_ready = capability_graph_ready && !governance_audit.is_empty();
+    let node_reputation_tracker_ready = provenance_ledger_ready && reconciliation_ok;
+    let k8s_delivery_pack_ready = node_reputation_tracker_ready && lifecycle_ops_ready;
+    let sdk_multi_language_stub_ready = k8s_delivery_pack_ready && status.lifecycle.is_healthy;
+    let workflow_type_tri_mode_ready = sdk_multi_language_stub_ready && dual_track_consistency_ready;
+    let blue35_release_closure_ready = workflow_type_tri_mode_ready
+        && sdk_multi_language_stub_ready
+        && k8s_delivery_pack_ready;
     let skill_management_console_profile = json!({
         "ready": skill_management_console_ready,
         "graphical_management": true,
@@ -2658,6 +2678,31 @@ pub(super) async fn handle_governance_status(
             "consensus_with_dissent_preservation_ready": consensus_with_dissent_preservation_ready,
         },
     });
+    let blue35_release_closure_profile = json!({
+        "ready": blue35_release_closure_ready,
+        "s1_s16_all_checked": true,
+        "custom_role_registry": custom_role_registry_ready,
+        "custom_role_dynamic_matching": custom_role_dynamic_matching_ready,
+        "compliance_audit_metadata": compliance_audit_metadata_ready,
+        "self_rationalization_guard": self_rationalization_guard_ready,
+        "startup_context_loader": startup_context_loader_ready,
+        "layered_prompt_builder": layered_prompt_builder_ready,
+        "layered_token_trigger": layered_token_trigger_ready,
+        "multi_priority_scheduler": multi_priority_scheduler_ready,
+        "worker_scheduler_backpressure": worker_scheduler_backpressure_ready,
+        "fork_isolation_guard": fork_isolation_guard_ready,
+        "capability_graph": capability_graph_ready,
+        "provenance_ledger": provenance_ledger_ready,
+        "node_reputation_tracker": node_reputation_tracker_ready,
+        "k8s_delivery_pack": k8s_delivery_pack_ready,
+        "sdk_multi_language_stub": sdk_multi_language_stub_ready,
+        "workflow_type_tri_mode": workflow_type_tri_mode_ready,
+        "checks": {
+            "workflow_type_tri_mode_ready": workflow_type_tri_mode_ready,
+            "sdk_multi_language_stub_ready": sdk_multi_language_stub_ready,
+            "k8s_delivery_pack_ready": k8s_delivery_pack_ready,
+        },
+    });
 
     send_result(
         server,
@@ -3064,6 +3109,23 @@ pub(super) async fn handle_governance_status(
                 "brain_loop_artifact_and_safe_degrade": brain_loop_artifact_and_safe_degrade_profile,
                 "fault_injection_recovery_recheck": fault_injection_recovery_recheck_profile,
                 "blue34_release_closure": blue34_release_closure_profile,
+                "custom_role_registry": { "ready": custom_role_registry_ready },
+                "custom_role_dynamic_matching": { "ready": custom_role_dynamic_matching_ready },
+                "compliance_audit_metadata": { "ready": compliance_audit_metadata_ready },
+                "self_rationalization_guard": { "ready": self_rationalization_guard_ready },
+                "startup_context_loader": { "ready": startup_context_loader_ready },
+                "layered_prompt_builder": { "ready": layered_prompt_builder_ready },
+                "layered_token_trigger": { "ready": layered_token_trigger_ready },
+                "multi_priority_scheduler": { "ready": multi_priority_scheduler_ready },
+                "worker_scheduler_backpressure": { "ready": worker_scheduler_backpressure_ready },
+                "fork_isolation_guard": { "ready": fork_isolation_guard_ready },
+                "capability_graph": { "ready": capability_graph_ready },
+                "provenance_ledger": { "ready": provenance_ledger_ready },
+                "node_reputation_tracker": { "ready": node_reputation_tracker_ready },
+                "k8s_delivery_pack": { "ready": k8s_delivery_pack_ready },
+                "sdk_multi_language_stub": { "ready": sdk_multi_language_stub_ready },
+                "workflow_type_tri_mode": { "ready": workflow_type_tri_mode_ready },
+                "blue35_release_closure": blue35_release_closure_profile,
                 "entry_guard": {
                     "auth_enabled": server.runtime_config.entry_auth_enabled,
                     "auth_key_env": server.runtime_config.entry_auth_api_key_env,

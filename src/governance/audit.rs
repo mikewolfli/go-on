@@ -20,6 +20,12 @@ pub struct AuditLogEntry {
     pub outputs: Option<serde_json::Value>,
     pub error: Option<String>,
     pub confidence: Option<f32>,
+    #[serde(default)]
+    pub data_classification: Option<String>,
+    #[serde(default)]
+    pub compliance_tags: Vec<String>,
+    #[serde(default)]
+    pub retention_policy: Option<String>,
 }
 
 /// Audit log sink for collecting decision traces

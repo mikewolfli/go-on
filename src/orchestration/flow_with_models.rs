@@ -222,6 +222,7 @@ mod tests {
             flow: crate::config::FlowConfig {
                 name: "flow".to_string(),
                 phases: vec!["coding".to_string()],
+                workflow_type: crate::config::WorkflowType::Auto,
             },
             phases: HashMap::new(),
             runtime: None,
@@ -229,6 +230,10 @@ mod tests {
             vector: None,
             autotune: None,
             model_selection_mode: mode.to_string(),
+            compliance: None,
+            startup_context: None,
+            scheduler: None,
+            reputation: None,
         }
     }
 

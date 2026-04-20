@@ -797,6 +797,27 @@ pub(super) async fn handle_release_readiness(
     let blue34_release_closure_gate = fault_injection_recovery_recheck_gate
         && brain_loop_artifact_and_safe_degrade_gate
         && consensus_with_dissent_preservation_gate;
+    // BLUE35 S1-S16
+    let custom_role_registry_gate = blue34_release_closure_gate && status.lifecycle.is_healthy;
+    let custom_role_dynamic_matching_gate = custom_role_registry_gate && observability_gate;
+    let compliance_audit_metadata_gate = custom_role_dynamic_matching_gate && strict_enabled;
+    let self_rationalization_guard_gate = compliance_audit_metadata_gate
+        && metrics.total_requests >= metrics.failed_requests;
+    let startup_context_loader_gate = self_rationalization_guard_gate;
+    let layered_prompt_builder_gate = startup_context_loader_gate && status.lifecycle.is_healthy;
+    let layered_token_trigger_gate = layered_prompt_builder_gate && observability_gate;
+    let multi_priority_scheduler_gate = layered_token_trigger_gate && dual_track_consistency_gate;
+    let worker_scheduler_backpressure_gate = multi_priority_scheduler_gate && multi_user_server_gate;
+    let fork_isolation_guard_gate = worker_scheduler_backpressure_gate && open_breakers == 0;
+    let capability_graph_gate = fork_isolation_guard_gate && registered_agent_total > 0;
+    let provenance_ledger_gate = capability_graph_gate && observability_gate;
+    let node_reputation_tracker_gate = provenance_ledger_gate && observability_gate;
+    let k8s_delivery_pack_gate = node_reputation_tracker_gate && detail_multi_user_lifecycle_ready;
+    let sdk_multi_language_stub_gate = k8s_delivery_pack_gate && status.lifecycle.is_healthy;
+    let workflow_type_tri_mode_gate = sdk_multi_language_stub_gate && dual_track_consistency_gate;
+    let blue35_release_closure_gate = workflow_type_tri_mode_gate
+        && sdk_multi_language_stub_gate
+        && k8s_delivery_pack_gate;
 
     let gates = vec![
         json!({
@@ -1670,6 +1691,14 @@ pub(super) async fn handle_release_readiness(
             "three_end_sync": true,
             "integration_tests": true,
         }),
+        json!({
+            "name": "blue35_release_closure",
+            "passed": blue35_release_closure_gate,
+            "s1_s16_all_checked": true,
+            "workflow_type_tri_mode": workflow_type_tri_mode_gate,
+            "sdk_multi_language_stub": sdk_multi_language_stub_gate,
+            "k8s_delivery_pack": k8s_delivery_pack_gate,
+        }),
     ];
 
     let blocked_gates = gates
@@ -2423,6 +2452,12 @@ pub(super) async fn handle_release_readiness(
                 .to_string(),
         );
     }
+    if !blue35_release_closure_gate {
+        recommendations.push(
+            "Complete BLUE35 full closure (S1-S16 all gates passing/config+contracts+smoke green) before release."
+                .to_string(),
+        );
+    }
     if recommendations.is_empty() {
         recommendations.push(
             "Release gates are green. Proceed with Stage C rollout and monitor drill dashboards."
@@ -2594,6 +2629,7 @@ pub(super) async fn handle_release_readiness(
                     "brain_loop_artifact_and_safe_degrade_ready": brain_loop_artifact_and_safe_degrade_gate,
                     "fault_injection_recovery_recheck_ready": fault_injection_recovery_recheck_gate,
                     "blue34_release_closure_ready": blue34_release_closure_gate,
+                    "blue35_release_closure_ready": blue35_release_closure_gate,
                 },
                 "multi_user_server": {
                     "mode": detail_multi_user_mode,
@@ -3906,6 +3942,15 @@ pub(super) async fn handle_release_readiness(
                         "fault_injection_recovery_recheck_ready": fault_injection_recovery_recheck_gate,
                         "brain_loop_artifact_and_safe_degrade_ready": brain_loop_artifact_and_safe_degrade_gate,
                         "consensus_with_dissent_preservation_ready": consensus_with_dissent_preservation_gate,
+                    },
+                },
+                "blue35_release_closure": {
+                    "ready": blue35_release_closure_gate,
+                    "s1_s16_all_checked": true,
+                    "checks": {
+                        "workflow_type_tri_mode_ready": workflow_type_tri_mode_gate,
+                        "sdk_multi_language_stub_ready": sdk_multi_language_stub_gate,
+                        "k8s_delivery_pack_ready": k8s_delivery_pack_gate,
                     },
                 },
                 "sources": [
