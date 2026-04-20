@@ -36,7 +36,10 @@
                 {{ t("security.providerReadyLabel") }}: {{ providerReadyCount }}/{{ providerConfiguredCount }}
               </el-tag>
               <el-tag :type="releaseBlockedGateCount > 0 ? 'warning' : 'success'">
-                {{ t("security.releaseReadinessLabel") }}: {{ releaseReadinessStatus }}
+                {{ t("security.releaseReadinessLabel") }}: {{ releaseReadinessStatus }} ({{ multiUserMode }} / {{ multiUserReady ? 'ready' : 'blocked' }} / lifecycle={{ multiUserLifecycleReady ? 'ready' : 'blocked' }} / consistency={{ dualTrackConsistencyReady ? 'ready' : 'blocked' }} / {{ multiUserSource }} / {{ blockedGateNamesText || '-' }})
+              </el-tag>
+              <el-tag type="info">
+                schema: g={{ governanceSchemaVersion }} / r={{ readinessSchemaVersion }}
               </el-tag>
             </el-space>
             <el-row :gutter="16">
@@ -195,6 +198,14 @@ const providerDegradedCount = ref(0);
 const providerConfiguredCount = ref(0);
 const releaseReadinessStatus = ref("unknown");
 const releaseBlockedGateCount = ref(0);
+const blockedGateNamesText = ref("");
+const multiUserMode = ref("single_user");
+const multiUserReady = ref(false);
+const multiUserLifecycleReady = ref(false);
+const dualTrackConsistencyReady = ref(false);
+const multiUserSource = ref("default");
+const governanceSchemaVersion = ref("unknown");
+const readinessSchemaVersion = ref("unknown");
 const dynamicRulesCount = ref(0);
 const auditRecentCount = ref(0);
 
@@ -252,6 +263,9 @@ async function refreshGovernanceStatus() {
     const governance = parsed?.governance || {};
 
     governanceState.value = String(governance.status || "unknown");
+    governanceSchemaVersion.value = String(
+      governance.schema_version || governance.artifact_contract?.schema_version || "unknown",
+    );
     rulesVersion.value = String(governance.rules?.version || "-");
     strictEnabled.value = governance.config?.production_strict === true;
     entryAuthEnabled.value = governance.config?.entry_auth_enabled === true;
@@ -262,6 +276,11 @@ async function refreshGovernanceStatus() {
       Number(governance.dynamic_rules?.red_line_count || 0) +
       Number(governance.dynamic_rules?.stage_requirement_count || 0) +
       Number(governance.dynamic_rules?.quality_compass_count || 0);
+    multiUserMode.value = String(governance.multi_user_server?.mode || "single_user");
+    multiUserReady.value = governance.multi_user_server?.release_gate?.ready === true;
+    multiUserLifecycleReady.value = governance.multi_user_server?.lifecycle?.ready === true;
+    dualTrackConsistencyReady.value = governance.dual_track_consistency?.ready === true;
+    multiUserSource.value = String(governance.multi_user_server?.inference?.source || "default");
 
     const puaFailed = Number(governance.violations?.pua_recent_failed || 0);
     const breakerOpen = Number(governance.violations?.breaker_open_count || 0);
@@ -285,10 +304,36 @@ async function refreshGovernanceStatus() {
       const releaseReadiness = await getReleaseReadiness();
       const readiness = releaseReadiness?.readiness || {};
       releaseReadinessStatus.value = String(readiness.status || "unknown");
+      readinessSchemaVersion.value = String(
+        readiness.schema_version || readiness.artifact_contract?.schema_version || readiness.version || "unknown",
+      );
       releaseBlockedGateCount.value = Number(readiness.blocked_gate_count || 0);
+      const blockedNames = Array.isArray(readiness.blocked_gate_names)
+        ? readiness.blocked_gate_names.map((item) => String(item))
+        : [];
+      blockedGateNamesText.value = blockedNames.join("|");
+      multiUserMode.value = String(readiness.multi_user_server?.mode || multiUserMode.value);
+      multiUserReady.value = readiness.multi_user_server?.release_gate_ready === true;
+      multiUserLifecycleReady.value =
+        readiness.multi_user_server?.lifecycle?.ready === true ||
+        readiness.summary?.multi_user_lifecycle_ready === true;
+      dualTrackConsistencyReady.value =
+        readiness.dual_track_consistency?.ready === true ||
+        readiness.summary?.dual_track_consistency_ready === true;
+      multiUserSource.value = String(
+        readiness.multi_user_server?.inference?.source ||
+          readiness.summary?.multi_user_inference_source ||
+          multiUserSource.value,
+      );
     } catch {
       releaseReadinessStatus.value = "unknown";
+      readinessSchemaVersion.value = "unknown";
       releaseBlockedGateCount.value = 1;
+      blockedGateNamesText.value = "";
+      multiUserReady.value = false;
+      multiUserLifecycleReady.value = false;
+      dualTrackConsistencyReady.value = false;
+      multiUserSource.value = "default";
     }
 
     const governancePenalty = Math.min(

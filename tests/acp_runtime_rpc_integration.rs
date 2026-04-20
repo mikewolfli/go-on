@@ -438,6 +438,30 @@ fallback = true
     fs::write(path, config).expect("failed to write config file");
 }
 
+fn write_managed_service_config(path: &Path, maintenance: u64, health: u64, shutdown: u64) {
+    write_test_config(path, maintenance, health, shutdown);
+    let mut config = fs::read_to_string(path).expect("failed to read base config");
+    let marker = format!("shutdown_drain_seconds = {}\n", shutdown);
+    let replacement = format!(
+        "shutdown_drain_seconds = {}\ndeployment_target = \"managed-service\"\n",
+        shutdown
+    );
+    config = config.replacen(&marker, &replacement, 1);
+    fs::write(path, config).expect("failed to write managed-service config");
+}
+
+fn write_unknown_deployment_target_config(path: &Path) {
+    write_test_config(path, 60, 120, 5);
+    let mut config = fs::read_to_string(path).expect("failed to read base config");
+    // Use a deployment_target value that is not in the managed-service inference list.
+    config = config.replacen(
+        "shutdown_drain_seconds = 5\n",
+        "shutdown_drain_seconds = 5\ndeployment_target = \"custom-enterprise-deploy\"\n",
+        1,
+    );
+    fs::write(path, config).expect("failed to write unknown deployment_target config");
+}
+
 fn write_warning_config(path: &Path) {
     let config = r#"default_phase = "coding"
 
@@ -1874,6 +1898,15 @@ mod advanced {
             governance["result"].get("governance").is_some(),
             "governance.status should return governance payload"
         );
+        assert_eq!(
+            governance["result"]["governance"]["schema_version"], "blue26-governance-v1",
+            "governance.status should expose governance schema_version"
+        );
+        assert_eq!(
+            governance["result"]["governance"]["artifact_contract"]["schema_version"],
+            "blue26-governance-v1",
+            "governance.status should expose artifact contract schema version"
+        );
         assert!(
             governance["result"]["governance"]["tool_matrix"]["summary"]["tool_total"].is_number(),
             "governance.status should include tool matrix summary"
@@ -1916,6 +1949,56 @@ mod advanced {
                 .is_number(),
             "governance.status should include org policy exception summary"
         );
+        assert!(
+            governance["result"]["governance"]["multi_user_server"].is_object(),
+            "governance.status should include multi_user_server view"
+        );
+        assert!(
+            governance["result"]["governance"]["multi_user_server"]["tenant_context"]
+                ["tenant_id_required"]
+                .is_boolean(),
+            "governance.status should expose tenant_id requirement flag"
+        );
+        assert!(
+            governance["result"]["governance"]["multi_user_server"]["components"]["authn_authz"]
+                ["status"]
+                .is_string(),
+            "governance.status should include authn/authz component status"
+        );
+        assert!(
+            governance["result"]["governance"]["multi_user_server"]["release_gate"]["ready"]
+                .is_boolean(),
+            "governance.status should include multi_user release gate readiness"
+        );
+        assert!(
+            governance["result"]["governance"]["multi_user_server"]["inference"]["source"]
+                .is_string(),
+            "governance.status should include server mode inference source"
+        );
+        assert!(
+            governance["result"]["governance"]["multi_user_server"]["inference"]
+                ["deployment_target"]
+                .is_string(),
+            "governance.status should include server mode deployment target"
+        );
+        assert!(
+            governance["result"]["governance"]["multi_user_server"]["lifecycle"]["ready"]
+                .is_boolean(),
+            "governance.status should include multi-user lifecycle readiness"
+        );
+        assert!(
+            governance["result"]["governance"]["multi_user_server"]["lifecycle"]["blocking_issues"]
+                .is_array(),
+            "governance.status should include multi-user lifecycle blocking issues"
+        );
+        assert!(
+            governance["result"]["governance"]["dual_track_consistency"]["ready"].is_boolean(),
+            "governance.status should include dual-track consistency readiness"
+        );
+        assert!(
+            governance["result"]["governance"]["dual_track_consistency"]["issues"].is_array(),
+            "governance.status should include dual-track consistency issues"
+        );
     }
 
     #[test]
@@ -1941,6 +2024,15 @@ mod advanced {
             readiness["result"].get("readiness").is_some(),
             "release.readiness should return readiness payload"
         );
+        assert_eq!(
+            readiness["result"]["readiness"]["schema_version"], "blue26-release-readiness-v2",
+            "release.readiness should expose readiness schema_version"
+        );
+        assert_eq!(
+            readiness["result"]["readiness"]["artifact_contract"]["schema_version"],
+            "blue26-release-readiness-v2",
+            "release.readiness should expose artifact contract schema version"
+        );
         assert!(
             readiness["result"]["readiness"].get("gates").is_some(),
             "release.readiness should include gate matrix"
@@ -1950,6 +2042,136 @@ mod advanced {
                 .get("overall_pass")
                 .is_some(),
             "release.readiness should include overall gate result"
+        );
+        assert!(
+            readiness["result"]["readiness"]["multi_user_server"].is_object(),
+            "release.readiness should include multi_user_server summary"
+        );
+        assert!(
+            readiness["result"]["readiness"]["multi_user_server"]["release_gate_ready"]
+                .is_boolean(),
+            "release.readiness should include multi-user gate ready flag"
+        );
+        assert!(
+            readiness["result"]["readiness"]["multi_user_server"]["inference"]["source"]
+                .is_string(),
+            "release.readiness should include server mode inference source"
+        );
+        assert!(
+            readiness["result"]["readiness"]["summary"]["multi_user_inference_source"].is_string(),
+            "release.readiness summary should include multi-user inference source"
+        );
+        assert!(
+            readiness["result"]["readiness"]["blocked_gate_names"].is_array(),
+            "release.readiness should include blocked gate names list"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "multi_user_server"),
+            "release.readiness should include multi_user_server gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "dual_track_consistency"),
+            "release.readiness should include dual_track_consistency gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "multi_user_lifecycle_ops"),
+            "release.readiness should include multi_user_lifecycle_ops gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["summary"]["multi_user_lifecycle_ready"].is_boolean(),
+            "release.readiness summary should include multi-user lifecycle readiness"
+        );
+        assert!(
+            readiness["result"]["readiness"]["summary"]["dual_track_consistency_ready"]
+                .is_boolean(),
+            "release.readiness summary should include dual-track consistency readiness"
+        );
+        assert!(
+            readiness["result"]["readiness"]["multi_user_server"]["lifecycle"]["ready"]
+                .is_boolean(),
+            "release.readiness should include lifecycle readiness in multi_user_server"
+        );
+        assert!(
+            readiness["result"]["readiness"]["dual_track_consistency"]["ready"].is_boolean(),
+            "release.readiness should include dual-track consistency object"
+        );
+    }
+
+    #[test]
+    fn managed_service_target_infers_multi_user_mode_on_main_chain() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_managed_service_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+
+        let governance = harness
+            .send_request(json!({
+                "jsonrpc": "2.0",
+                "id": 8801,
+                "method": "governance.status",
+                "params": {}
+            }))
+            .expect("governance.status should succeed");
+        assert_eq!(
+            governance["result"]["governance"]["multi_user_server"]["mode"], "multi_user",
+            "managed-service target should infer multi_user mode in governance.status"
+        );
+        assert_eq!(
+            governance["result"]["governance"]["multi_user_server"]["inference"]["source"],
+            "deployment_target",
+            "governance.status should report deployment_target inference source"
+        );
+        assert_eq!(
+            governance["result"]["governance"]["schema_version"], "blue26-governance-v1",
+            "managed-service path should preserve governance schema_version"
+        );
+
+        let readiness = harness
+            .send_request(json!({
+                "jsonrpc": "2.0",
+                "id": 8802,
+                "method": "release.readiness",
+                "params": {}
+            }))
+            .expect("release.readiness should succeed");
+        assert_eq!(
+            readiness["result"]["readiness"]["multi_user_server"]["mode"], "multi_user",
+            "managed-service target should infer multi_user mode in release.readiness"
+        );
+        assert_eq!(
+            readiness["result"]["readiness"]["multi_user_server"]["inference"]["source"],
+            "deployment_target",
+            "release.readiness should report deployment_target inference source"
+        );
+        assert_eq!(
+            readiness["result"]["readiness"]["schema_version"], "blue26-release-readiness-v2",
+            "managed-service path should preserve readiness schema_version"
+        );
+        assert!(
+            readiness["result"]["readiness"]["multi_user_server"]["lifecycle"]["ready"]
+                .is_boolean(),
+            "managed-service path should include lifecycle readiness state"
+        );
+        assert!(
+            readiness["result"]["readiness"]["dual_track_consistency"]["ready"].is_boolean(),
+            "managed-service path should include dual-track consistency state"
+        );
+        assert!(
+            readiness["result"]["readiness"]["blocked_gate_names"].is_array(),
+            "release.readiness should include blocked gate names list in managed-service inference path"
         );
     }
 
@@ -1978,6 +2200,63 @@ mod advanced {
         assert!(
             alerts["result"]["alerts"].get("items").is_some(),
             "observability.alerts should include items"
+        );
+    }
+
+    #[test]
+    fn run_scenario_file_executes_multi_user_lifecycle_drill_requests() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_managed_service_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+        let results =
+            harness.run_scenario_file(Path::new("requests/multi-user-lifecycle-drill.ndjson"));
+
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].0["method"], "initialize");
+        assert_eq!(results[1].0["method"], "governance.status");
+        assert_eq!(results[2].0["method"], "release.readiness");
+        assert_eq!(results[3].0["method"], "shutdown");
+
+        let governance = results[1]
+            .1
+            .as_ref()
+            .expect("governance.status should succeed");
+        assert_eq!(
+            governance["result"]["governance"]["multi_user_server"]["mode"], "multi_user",
+            "governance.status drill should run in multi_user mode"
+        );
+        assert!(
+            governance["result"]["governance"]["multi_user_server"]["lifecycle"]["ready"]
+                .is_boolean(),
+            "governance.status drill should expose lifecycle ready flag"
+        );
+        assert!(
+            governance["result"]["governance"]["multi_user_server"]["lifecycle"]["blocking_issues"]
+                .is_array(),
+            "governance.status drill should expose lifecycle blocking issues"
+        );
+
+        let readiness = results[2]
+            .1
+            .as_ref()
+            .expect("release.readiness should succeed");
+        assert_eq!(
+            readiness["result"]["readiness"]["multi_user_server"]["mode"], "multi_user",
+            "release.readiness drill should run in multi_user mode"
+        );
+        assert!(
+            readiness["result"]["readiness"]["summary"]["multi_user_lifecycle_ready"].is_boolean(),
+            "release.readiness drill should expose summary lifecycle readiness"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "multi_user_lifecycle_ops"),
+            "release.readiness drill should include multi_user_lifecycle_ops gate"
         );
     }
 
@@ -2197,11 +2476,7 @@ mod advanced {
     #[test]
     fn ndjson_scenario_files_all_pass() {
         let scenarios = load_scenarios_from_dir(Path::new("requests"));
-        assert_eq!(
-            scenarios.len(),
-            39,
-            "expected thirty-nine request scenario files"
-        );
+        assert_eq!(scenarios.len(), 40, "expected forty request scenario files");
 
         for scenario in scenarios {
             let temp = tempdir().expect("failed to create temp dir");
@@ -3507,17 +3782,34 @@ fn startup_fails_when_cache_vector_paths_are_unavailable() {
         .output()
         .expect("failed to run go-on for startup failure scenario");
 
-    assert!(
-        !output.status.success(),
-        "startup should fail on unavailable sqlite file paths"
-    );
-    let stderr_text = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr_text.contains("unable to open database file")
-            || stderr_text.contains("fatal error")
-            || stderr_text.contains("error.fatal")
-            || stderr_text.contains("database")
-    );
+    #[cfg(feature = "profile-local")]
+    {
+        assert!(
+            output.status.success(),
+            "profile-local should degrade gracefully when sqlite paths are unavailable"
+        );
+        let stderr_text = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr_text.contains("continuing without cache")
+                || stderr_text.contains("continuing without vector")
+                || stderr_text.contains("sqlite")
+        );
+    }
+
+    #[cfg(not(feature = "profile-local"))]
+    {
+        assert!(
+            !output.status.success(),
+            "startup should fail on unavailable sqlite file paths"
+        );
+        let stderr_text = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr_text.contains("unable to open database file")
+                || stderr_text.contains("fatal error")
+                || stderr_text.contains("error.fatal")
+                || stderr_text.contains("database")
+        );
+    }
 }
 
 #[test]
@@ -4304,7 +4596,10 @@ fn blue24_learning_profile_has_meta_cognition_block() {
     // task.plan — planning-class
     let plan = results[1].1.as_ref().expect("task.plan should succeed");
     let plan_lp = &plan["result"]["learning_profile"];
-    assert!(plan_lp.is_object(), "task.plan must return learning_profile");
+    assert!(
+        plan_lp.is_object(),
+        "task.plan must return learning_profile"
+    );
     assert_eq!(
         plan_lp["schema_version"], "blue24-learning-profile-v2",
         "learning_profile schema_version must be blue24-learning-profile-v2"
@@ -4345,7 +4640,10 @@ fn blue24_learning_profile_has_meta_cognition_block() {
     // task.execute — execution-class; reflection_depth must be "deep"
     let execute = results[2].1.as_ref().expect("task.execute should succeed");
     let exec_lp = &execute["result"]["learning_profile"];
-    assert!(exec_lp.is_object(), "task.execute must return learning_profile");
+    assert!(
+        exec_lp.is_object(),
+        "task.execute must return learning_profile"
+    );
     assert_eq!(
         exec_lp["meta_cognition"]["reflection_depth"], "deep",
         "task.execute meta_cognition.reflection_depth must be 'deep'"
@@ -4413,7 +4711,10 @@ fn blue24_knowledge_refinement_has_cross_round_distillation() {
 
     let execute = results[2].1.as_ref().expect("task.execute should succeed");
     let kr = &execute["result"]["knowledge_refinement"];
-    assert!(kr.is_object(), "task.execute must return knowledge_refinement");
+    assert!(
+        kr.is_object(),
+        "task.execute must return knowledge_refinement"
+    );
     assert_eq!(
         kr["schema_version"], "blue24-knowledge-refinement-v2",
         "knowledge_refinement schema_version must be blue24-knowledge-refinement-v2"
@@ -4455,7 +4756,10 @@ fn blue24_self_model_has_meta_cognition_block() {
 
     let result = harness.request(331, "runtime.self_model", None);
     let sm = &result["result"]["self_model"];
-    assert!(sm.is_object(), "runtime.self_model result must include self_model");
+    assert!(
+        sm.is_object(),
+        "runtime.self_model result must include self_model"
+    );
     assert!(
         sm["meta_cognition"].is_object(),
         "self_model must contain meta_cognition block"
@@ -4488,12 +4792,195 @@ fn blue24_self_model_has_meta_cognition_block() {
         "world_model.runtime_state_known must be boolean"
     );
     assert_eq!(
-        sm["meta_cognition"]["schema_version"],
-        "blue24-self-model-meta-cognition-v1",
+        sm["meta_cognition"]["schema_version"], "blue24-self-model-meta-cognition-v1",
         "meta_cognition.schema_version must be blue24-self-model-meta-cognition-v1"
     );
 
     let shutdown = harness.request(332, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+// ── BLUE26 S14: adversarial / negative-path tests ─────────────────────────────
+// These tests verify that the system handles unexpected, invalid, or edge-case
+// inputs robustly — a prerequisite for the deterministic+adversarial dual-track gate.
+
+#[test]
+fn adversarial_unknown_deployment_target_defaults_to_single_user_mode() {
+    // A deployment_target value not in the managed-service recognition list must
+    // result in single_user mode for both governance.status and release.readiness.
+    // This prevents unintended privilege escalation via mis-typed deployment targets.
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_unknown_deployment_target_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    harness.request(9901, "initialize", None);
+
+    let governance = harness.request(9902, "governance.status", None);
+    let gov_mode = governance["result"]["governance"]["multi_user_server"]["mode"]
+        .as_str()
+        .expect("governance multi_user_server.mode should be string");
+    assert_eq!(
+        gov_mode, "single_user",
+        "unknown deployment_target must default to single_user in governance.status"
+    );
+    let gov_source = governance["result"]["governance"]["multi_user_server"]["inference"]["source"]
+        .as_str()
+        .expect("inference.source should be string");
+    assert_eq!(
+        gov_source, "default",
+        "unknown deployment_target should yield inference.source=default"
+    );
+
+    let readiness = harness.request(9903, "release.readiness", None);
+    let read_mode = readiness["result"]["readiness"]["multi_user_server"]["mode"]
+        .as_str()
+        .expect("readiness multi_user_server.mode should be string");
+    assert_eq!(
+        read_mode, "single_user",
+        "unknown deployment_target must default to single_user in release.readiness"
+    );
+
+    let shutdown = harness.request(9904, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn adversarial_explicit_single_user_param_overrides_managed_service_inference() {
+    // Even when deployment_target=managed-service would normally infer multi_user,
+    // an explicit server_mode=single_user param in the request must take precedence.
+    // This verifies that explicit request intent always wins over environment inference.
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_managed_service_config(&config_path, 60, 120, 5);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    harness.request(9910, "initialize", None);
+
+    // Without override: managed-service should infer multi_user.
+    let governance_inferred = harness.request(9911, "governance.status", None);
+    assert_eq!(
+        governance_inferred["result"]["governance"]["multi_user_server"]["mode"], "multi_user",
+        "managed-service config should infer multi_user by default"
+    );
+
+    // With explicit single_user override: must respect the explicit param.
+    let governance_override = harness.request(
+        9912,
+        "governance.status",
+        Some(json!({ "server_mode": "single_user" })),
+    );
+    let override_mode = governance_override["result"]["governance"]["multi_user_server"]["mode"]
+        .as_str()
+        .expect("overridden mode should be string");
+    assert_eq!(
+        override_mode, "single_user",
+        "explicit server_mode=single_user must override managed-service inference"
+    );
+    let override_source = governance_override["result"]["governance"]["multi_user_server"]
+        ["inference"]["source"]
+        .as_str()
+        .expect("inference.source should be string after override");
+    assert_eq!(
+        override_source, "request",
+        "inference.source must be 'request' when explicit server_mode is provided"
+    );
+
+    let shutdown = harness.request(9913, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn adversarial_governance_and_readiness_return_valid_structure_with_empty_params() {
+    // Governance and readiness must return a valid, fully-structured response
+    // even when called with empty params ({}) or null — no panics, no missing fields.
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_test_config(&config_path, 60, 120, 5);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    harness.request(9920, "initialize", None);
+
+    // governance.status with empty object params
+    let gov_empty = harness.request(9921, "governance.status", Some(json!({})));
+    assert!(
+        gov_empty.get("error").is_none() || gov_empty["error"].is_null(),
+        "governance.status with empty params must not return error"
+    );
+    assert!(
+        gov_empty["result"]["governance"].is_object(),
+        "governance.status must return governance object with empty params"
+    );
+    assert_eq!(
+        gov_empty["result"]["governance"]["schema_version"], "blue26-governance-v1",
+        "governance.status with empty params must preserve schema_version"
+    );
+
+    // release.readiness with empty object params
+    let read_empty = harness.request(9922, "release.readiness", Some(json!({})));
+    assert!(
+        read_empty.get("error").is_none() || read_empty["error"].is_null(),
+        "release.readiness with empty params must not return error"
+    );
+    assert!(
+        read_empty["result"]["readiness"].is_object(),
+        "release.readiness must return readiness object with empty params"
+    );
+    assert_eq!(
+        read_empty["result"]["readiness"]["schema_version"], "blue26-release-readiness-v2",
+        "release.readiness with empty params must preserve schema_version"
+    );
+    assert!(
+        read_empty["result"]["readiness"]["blocked_gate_names"].is_array(),
+        "release.readiness must include blocked_gate_names with empty params"
+    );
+
+    let shutdown = harness.request(9923, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn adversarial_invalid_method_returns_jsonrpc_error_does_not_crash_process() {
+    // Sending an unknown method must return a JSON-RPC -32601 error and must NOT
+    // terminate or corrupt the process — subsequent valid requests must still work.
+    // This is the deterministic adversarial gate for robustness under invalid input.
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_test_config(&config_path, 60, 120, 5);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    harness.request(9930, "initialize", None);
+
+    // Unknown method must return error code -32601.
+    let unknown = harness.request(9931, "blue26.adversarial.nonexistent.method", None);
+    assert_eq!(
+        unknown["error"]["code"], -32601,
+        "unknown method must return JSON-RPC error code -32601"
+    );
+    let err_msg = unknown["error"]["message"]
+        .as_str()
+        .expect("error.message should be string");
+    assert!(
+        err_msg.contains("unknown method") || err_msg.contains("method not found"),
+        "error.message should describe unknown method, got: {err_msg}"
+    );
+
+    // Process must still be alive and responsive after the error.
+    let health = harness.request(9932, "runtime.health", None);
+    assert!(
+        health.get("error").is_none() || health["error"].is_null(),
+        "runtime.health must succeed after an unknown method error"
+    );
+    assert!(
+        health["result"]["lifecycle"].is_object(),
+        "runtime.health lifecycle should be present after adversarial request"
+    );
+
+    let shutdown = harness.request(9933, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
     harness.wait_for_exit(Duration::from_secs(8));
 }

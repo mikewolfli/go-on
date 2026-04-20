@@ -162,7 +162,34 @@
     "blue24SelfModelMetaCognitionBlock": true,
     "blue24LearningProfileSchemaV2": true,
     "blue24TokenEconomySchemaV2": true,
-    "blue24KnowledgeRefinementSchemaV2": true
+    "blue24KnowledgeRefinementSchemaV2": true,
+    "rpcGovernanceStatusMultiUserServerViewCheckedInMainChain": true,
+    "multiUserServerComponentMatrixCheckedInMainChain": true,
+    "multiTenantReleaseGateCheckedInMainChain": true,
+    "rpcReleaseReadinessMultiUserServerGateCheckedInMainChain": true,
+    "rpcReleaseReadinessMultiUserSummaryCheckedInMainChain": true,
+    "rpcGovernanceStatusServerModeInferenceFromDeploymentTargetCheckedInMainChain": true,
+    "rpcReleaseReadinessServerModeInferenceFromDeploymentTargetCheckedInMainChain": true,
+    "rpcGovernanceStatusServerModeInferenceSourceCheckedInMainChain": true,
+    "rpcReleaseReadinessServerModeInferenceSourceCheckedInMainChain": true,
+    "rpcReleaseReadinessBlockedGateNamesCheckedInMainChain": true,
+    "rpcGovernanceStatusSchemaVersionCheckedInMainChain": true,
+    "rpcReleaseReadinessSchemaVersionCheckedInMainChain": true,
+    "artifactSchemaVersionedOutputCheckedInMainChain": true,
+    "adversarialUnknownDeploymentTargetDefaultsSingleUserCheckedInMainChain": true,
+    "adversarialExplicitSingleUserOverridesInferenceCheckedInMainChain": true,
+    "adversarialEmptyParamsReturnValidStructureCheckedInMainChain": true,
+    "adversarialInvalidMethodReturnsJsonRpcErrorCheckedInMainChain": true,
+    "deterministicAdversarialDualTrackGateCheckedInMainChain": true,
+    "blue26S16CiTopLevelGateCheckedInMainChain": true,
+    "blue26S16GateBlocksBuildOnFailureCheckedInMainChain": true,
+    "rpcGovernanceStatusMultiUserLifecycleOpsCheckedInMainChain": true,
+    "rpcReleaseReadinessMultiUserLifecycleOpsCheckedInMainChain": true,
+    "rpcReleaseReadinessMultiUserLifecycleGateCheckedInMainChain": true,
+    "rpcGovernanceStatusDualTrackConsistencyCheckedInMainChain": true,
+    "rpcReleaseReadinessDualTrackConsistencyCheckedInMainChain": true,
+    "rpcReleaseReadinessDualTrackConsistencyGateCheckedInMainChain": true,
+    "multiUserLifecycleDrillScenarioCheckedInMainChain": true
   },
   "openai": {
     "modelsPath": "/v1/models",
@@ -375,100 +402,280 @@
     "_version": "blue18-batch-a",
     "capabilities": {
       "chat": {
-        "acp_stdio": { "supported": true, "method": "chat", "owner": "acp/request" },
-        "acp_http":  { "supported": true, "path": "/chat", "owner": "acp/runtime" },
-        "mcp_stdio": { "supported": false },
-        "mcp_http":  { "supported": false }
+        "acp_stdio": {
+          "supported": true,
+          "method": "chat",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": true,
+          "path": "/chat",
+          "owner": "acp/runtime"
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
       },
       "openai_compat": {
-        "acp_stdio": { "supported": false },
-        "acp_http":  { "supported": true, "path": "/v1/chat/completions", "owner": "acp/runtime" },
-        "mcp_stdio": { "supported": false },
-        "mcp_http":  { "supported": false }
+        "acp_stdio": {
+          "supported": false
+        },
+        "acp_http": {
+          "supported": true,
+          "path": "/v1/chat/completions",
+          "owner": "acp/runtime"
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
       },
       "responses_api": {
-        "acp_stdio": { "supported": false },
-        "acp_http":  { "supported": true, "path": "/v1/responses", "owner": "acp/runtime" },
-        "mcp_stdio": { "supported": false },
-        "mcp_http":  { "supported": false }
+        "acp_stdio": {
+          "supported": false
+        },
+        "acp_http": {
+          "supported": true,
+          "path": "/v1/responses",
+          "owner": "acp/runtime"
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
       },
       "tools_list": {
-        "acp_stdio": { "supported": true, "method": "mcp.tools.list", "owner": "acp/request" },
-        "acp_http":  { "supported": false },
-        "mcp_stdio": { "supported": true, "method": "tools/list", "owner": "mcp/handlers" },
-        "mcp_http":  { "supported": true, "method": "tools/list", "owner": "mcp/handlers" }
+        "acp_stdio": {
+          "supported": true,
+          "method": "mcp.tools.list",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": true,
+          "method": "tools/list",
+          "owner": "mcp/handlers"
+        },
+        "mcp_http": {
+          "supported": true,
+          "method": "tools/list",
+          "owner": "mcp/handlers"
+        }
       },
       "tools_call": {
-        "acp_stdio": { "supported": true, "method": "mcp.tools.call", "owner": "acp/request" },
-        "acp_http":  { "supported": false },
-        "mcp_stdio": { "supported": true, "method": "tools/call", "owner": "mcp/handlers" },
-        "mcp_http":  { "supported": true, "method": "tools/call", "owner": "mcp/handlers" }
+        "acp_stdio": {
+          "supported": true,
+          "method": "mcp.tools.call",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": true,
+          "method": "tools/call",
+          "owner": "mcp/handlers"
+        },
+        "mcp_http": {
+          "supported": true,
+          "method": "tools/call",
+          "owner": "mcp/handlers"
+        }
       },
       "skill_import": {
-        "acp_stdio": { "supported": true, "method": "skill.import", "owner": "acp/request" },
-        "acp_http":  { "supported": false },
-        "mcp_stdio": { "supported": false },
-        "mcp_http":  { "supported": false }
+        "acp_stdio": {
+          "supported": true,
+          "method": "skill.import",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
       },
       "skill_enable": {
-        "acp_stdio": { "supported": true, "method": "skill.enable", "owner": "acp/request" },
-        "acp_http":  { "supported": false },
-        "mcp_stdio": { "supported": false },
-        "mcp_http":  { "supported": false }
+        "acp_stdio": {
+          "supported": true,
+          "method": "skill.enable",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
       },
       "skill_disable": {
-        "acp_stdio": { "supported": true, "method": "skill.disable", "owner": "acp/request" },
-        "acp_http":  { "supported": false },
-        "mcp_stdio": { "supported": false },
-        "mcp_http":  { "supported": false }
+        "acp_stdio": {
+          "supported": true,
+          "method": "skill.disable",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
       },
       "skill_list_imported": {
-        "acp_stdio": { "supported": true, "method": "skill.list_imported", "owner": "acp/request" },
-        "acp_http":  { "supported": false },
-        "mcp_stdio": { "supported": false },
-        "mcp_http":  { "supported": false }
+        "acp_stdio": {
+          "supported": true,
+          "method": "skill.list_imported",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
       },
       "skill_remove": {
-        "acp_stdio": { "supported": true, "method": "skill.remove", "owner": "acp/request" },
-        "acp_http":  { "supported": false },
-        "mcp_stdio": { "supported": false },
-        "mcp_http":  { "supported": false }
+        "acp_stdio": {
+          "supported": true,
+          "method": "skill.remove",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
       },
       "health": {
-        "acp_stdio": { "supported": true, "method": "runtime.health", "owner": "acp/request" },
-        "acp_http":  { "supported": true, "path": "/health", "owner": "acp/runtime" },
-        "mcp_stdio": { "supported": false },
-        "mcp_http":  { "supported": false }
+        "acp_stdio": {
+          "supported": true,
+          "method": "runtime.health",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": true,
+          "path": "/health",
+          "owner": "acp/runtime"
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
       },
       "metrics": {
-        "acp_stdio": { "supported": true, "method": "metrics.get", "owner": "acp/request" },
-        "acp_http":  { "supported": false },
-        "mcp_stdio": { "supported": false },
-        "mcp_http":  { "supported": false }
+        "acp_stdio": {
+          "supported": true,
+          "method": "metrics.get",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
       },
       "governance": {
-        "acp_stdio": { "supported": true, "method": "governance.status", "owner": "acp/request" },
-        "acp_http":  { "supported": false },
-        "mcp_stdio": { "supported": false },
-        "mcp_http":  { "supported": false }
+        "acp_stdio": {
+          "supported": true,
+          "method": "governance.status",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
       },
       "models_list": {
-        "acp_stdio": { "supported": false },
-        "acp_http":  { "supported": true, "path": "/v1/models", "owner": "acp/runtime" },
-        "mcp_stdio": { "supported": true, "method": "models/list", "owner": "mcp/handlers" },
-        "mcp_http":  { "supported": true, "method": "models/list", "owner": "mcp/handlers" }
+        "acp_stdio": {
+          "supported": false
+        },
+        "acp_http": {
+          "supported": true,
+          "path": "/v1/models",
+          "owner": "acp/runtime"
+        },
+        "mcp_stdio": {
+          "supported": true,
+          "method": "models/list",
+          "owner": "mcp/handlers"
+        },
+        "mcp_http": {
+          "supported": true,
+          "method": "models/list",
+          "owner": "mcp/handlers"
+        }
       },
       "agents_list": {
-        "acp_stdio": { "supported": false },
-        "acp_http":  { "supported": false },
-        "mcp_stdio": { "supported": true, "method": "agents/list", "owner": "mcp/handlers" },
-        "mcp_http":  { "supported": true, "method": "agents/list", "owner": "mcp/handlers" }
+        "acp_stdio": {
+          "supported": false
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": true,
+          "method": "agents/list",
+          "owner": "mcp/handlers"
+        },
+        "mcp_http": {
+          "supported": true,
+          "method": "agents/list",
+          "owner": "mcp/handlers"
+        }
       },
       "resources": {
-        "acp_stdio": { "supported": false },
-        "acp_http":  { "supported": false },
-        "mcp_stdio": { "supported": true, "method": "resources/list", "owner": "mcp/handlers" },
-        "mcp_http":  { "supported": true, "method": "resources/list", "owner": "mcp/handlers" }
+        "acp_stdio": {
+          "supported": false
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": true,
+          "method": "resources/list",
+          "owner": "mcp/handlers"
+        },
+        "mcp_http": {
+          "supported": true,
+          "method": "resources/list",
+          "owner": "mcp/handlers"
+        }
       }
     }
   },
@@ -476,19 +683,49 @@
     "_comment": "JSON-RPC error code semantics shared across ACP stdio + MCP stdio/http. ACP HTTP uses HTTP status codes.",
     "_version": "blue18-batch-c",
     "jsonRpcCodes": {
-      "-32700": { "name": "PARSE_ERROR",       "meaning": "Malformed JSON input" },
-      "-32600": { "name": "INVALID_REQUEST",   "meaning": "Not a valid JSON-RPC request object" },
-      "-32601": { "name": "METHOD_NOT_FOUND",  "meaning": "Unknown or unsupported method for this mode" },
-      "-32602": { "name": "INVALID_PARAMS",    "meaning": "Invalid or missing method parameters" },
-      "-32603": { "name": "INTERNAL_ERROR",    "meaning": "Unhandled server-side error" }
+      "-32700": {
+        "name": "PARSE_ERROR",
+        "meaning": "Malformed JSON input"
+      },
+      "-32600": {
+        "name": "INVALID_REQUEST",
+        "meaning": "Not a valid JSON-RPC request object"
+      },
+      "-32601": {
+        "name": "METHOD_NOT_FOUND",
+        "meaning": "Unknown or unsupported method for this mode"
+      },
+      "-32602": {
+        "name": "INVALID_PARAMS",
+        "meaning": "Invalid or missing method parameters"
+      },
+      "-32603": {
+        "name": "INTERNAL_ERROR",
+        "meaning": "Unhandled server-side error"
+      }
     },
     "acpExtensions": {
-      "NOT_IMPLEMENTED_EXECUTOR": { "field": "code", "meaning": "Skill imported but no executor registered; executed=false" }
+      "NOT_IMPLEMENTED_EXECUTOR": {
+        "field": "code",
+        "meaning": "Skill imported but no executor registered; executed=false"
+      }
     },
     "crossModeConsistency": {
-      "unknownMethod":   { "acp_stdio": -32601, "mcp_stdio": -32601, "mcp_http": -32601 },
-      "missingParams":   { "acp_stdio": -32602, "mcp_stdio": -32602, "mcp_http": -32602 },
-      "internalError":   { "acp_stdio": -32603, "mcp_stdio": -32603, "mcp_http": -32603 }
+      "unknownMethod": {
+        "acp_stdio": -32601,
+        "mcp_stdio": -32601,
+        "mcp_http": -32601
+      },
+      "missingParams": {
+        "acp_stdio": -32602,
+        "mcp_stdio": -32602,
+        "mcp_http": -32602
+      },
+      "internalError": {
+        "acp_stdio": -32603,
+        "mcp_stdio": -32603,
+        "mcp_http": -32603
+      }
     }
   }
 }

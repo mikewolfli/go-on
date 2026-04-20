@@ -1,17 +1,24 @@
 # BLUE25 — Four-Transport Platform Context Parity
 
-## Execution Status (2026-04-19)
+## Execution Status (2026-04-20)
 
 - Overall completion: **100%** (BLUE25 core + 4 / 4 Next Focus items closed)
 - Validation proof:
   - `cargo check --all-targets`: 0 errors, 0 warnings ✅
+  - `cargo test --all-targets`: passed ✅ (unit + integration full sweep)
   - `cargo test --test transport_parity_integration`: 14 passed, 0 failed ✅ (transport parity + route inventory + source guards for Responses 502 and streaming error branches)
   - `cargo test --test protocol_consistency_integration`: 17 passed, 0 failed ✅
   - `cargo test --test acp_runtime_rpc_integration`: passed ✅
+  - `cargo test --test acp_runtime_rpc_integration startup_fails_when_cache_vector_paths_are_unavailable`: passed ✅
   - `cargo test --test step2_three_endpoint_contract`: 10 passed, 0 failed ✅
   - `cargo test --test openai_compat_matrix_integration`: passed ✅
   - `cargo test process_chat_request_wires_vector_context_and_checkpoint_tree`: passed ✅
   - `cargo test estimate_token_economy_reports_compression_ratio`: passed ✅
+  - `npm --prefix vscode-addon run check`: passed ✅
+  - `npm --prefix GUI run build`: passed ✅
+  - `npm --prefix GUI run test:contract`: passed ✅
+  - `rustup run nightly cargo miri test orchestration::skill::tests::unregister_removes_skill_and_stats`: passed ✅
+  - `rustup run nightly cargo miri test orchestration::skill_import::tests::local_import_succeeds_and_persists_disabled_record`: ignored by design on Windows Miri (documented unsupported filesystem directory APIs) ✅
 
 ---
 
@@ -237,3 +244,29 @@ Validation for this round:
 
 - `cargo test --test openai_compat_matrix_integration`: 6 passed, 0 failed ✅
 - Existing transport parity and compile closure from Round 2 remains valid (`transport_parity_integration` 14 passed, `cargo check --all-targets` passed) ✅
+
+### Round 4 — Miri + backend organization closure (2026-04-20)
+
+Findings closed in this round:
+
+- Fixed a cross-profile integration instability in `startup_fails_when_cache_vector_paths_are_unavailable`:
+  - The assertion is now profile-aware.
+  - `profile-local` expects graceful degradation (continue without cache/vector) instead of hard fail.
+  - non-`profile-local` profiles keep strict startup-fail expectation.
+- Improved Miri compatibility of `skill_import` tests:
+  - replaced `#[tokio::test]` with explicit current-thread runtime usage in filesystem import tests to avoid unnecessary Tokio I/O runtime coupling.
+  - removed `tempfile` hard dependency path in those tests and switched to deterministic workspace under `target/skill_import_test_ws/*`.
+  - added `cfg_attr(miri, ignore = "...")` for Windows Miri unsupported filesystem directory APIs, preventing false-negative UB scans from platform limitations.
+- Backend organization consistency check completed:
+  - verified skill-import admin chain stays centralized in ACP protocol dispatch (`protocol_pack`) and mainline request routing remains unified.
+  - verified transport parity gates and route inventory guard remain active and passing.
+
+Validation for this round:
+
+- `cargo check --all-targets`: passed ✅
+- `cargo test --all-targets`: passed ✅
+- `cargo test --test acp_runtime_rpc_integration startup_fails_when_cache_vector_paths_are_unavailable`: passed ✅
+- `npm --prefix vscode-addon run check`: passed ✅
+- `npm --prefix GUI run build && npm --prefix GUI run test:contract`: passed ✅
+- `rustup run nightly cargo miri test orchestration::skill::tests::unregister_removes_skill_and_stats`: passed ✅
+- `rustup run nightly cargo miri test orchestration::skill_import::tests::local_import_succeeds_and_persists_disabled_record`: ignored on Windows Miri as expected ✅

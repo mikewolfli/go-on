@@ -2636,6 +2636,25 @@ fn push_rule_warning(warnings: &mut Vec<ConfigWarning>, path: &Path, code: &str)
     }
 }
 
+fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    if account == "openai_compatible_api_key" {
+        candidates.push("OPENAI_API_KEY".to_string());
+    }
+
+    candidates.push(account.replace('-', "_").to_ascii_uppercase());
+    candidates.push(
+        format!("{}_{}", service, account)
+            .replace('-', "_")
+            .to_ascii_uppercase(),
+    );
+
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
 fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
     if !is_keyring_ref(value) {
         return Ok(());
@@ -2651,25 +2670,49 @@ fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
             value
         )
     })?;
-    let entry = keyring::Entry::new(service, account).map_err(|err| {
-        anyhow::anyhow!("failed to open keyring entry for {}: {}", field_name, err)
-    })?;
-    let secret = entry.get_password().map_err(|err| {
-        anyhow::anyhow!(
-            "keyring entry for {}/{} not found or cannot be read: {}. \
-             Hint: Run 'go-on --setup --config config.toml' to store credentials in keyring.",
-            service,
-            account,
-            err
-        )
-    })?;
-    if secret.trim().is_empty() {
-        anyhow::bail!(
-            "keyring entry for {}/{} resolved to empty value. \
-             Hint: Run 'go-on --setup --config config.toml' to update the credential.",
-            service,
-            account
-        );
+    let mut secret = String::new();
+    let mut keyring_error: Option<String> = None;
+    match keyring::Entry::new(service, account) {
+        Ok(entry) => match entry.get_password() {
+            Ok(value) if !value.trim().is_empty() => {
+                secret = value;
+            }
+            Ok(_) => {
+                keyring_error = Some("resolved to empty value".to_string());
+            }
+            Err(err) => {
+                keyring_error = Some(format!("cannot be read: {}", err));
+            }
+        },
+        Err(err) => {
+            keyring_error = Some(format!("failed to open keyring entry: {}", err));
+        }
+    }
+
+    if secret.is_empty() {
+        let fallback_candidates = keyring_env_fallback_candidates(service, account);
+        for env_name in &fallback_candidates {
+            if let Ok(env_value) = std::env::var(env_name) {
+                if !env_value.trim().is_empty() {
+                    warn!(
+                        "{} keyring ref {} fell back to env {}",
+                        field_name, value, env_name
+                    );
+                    secret = env_value;
+                    break;
+                }
+            }
+        }
+
+        if secret.is_empty() {
+            anyhow::bail!(
+                "keyring entry for {}/{} unavailable ({}). Hint: run 'go-on --setup --config config.toml' or set one of env vars: {}",
+                service,
+                account,
+                keyring_error.unwrap_or_else(|| "unknown keyring error".to_string()),
+                fallback_candidates.join(", ")
+            );
+        }
     }
 
     // 验证密钥安全性

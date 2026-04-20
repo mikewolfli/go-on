@@ -345,7 +345,7 @@ fn build_security_baseline_payload(server: &AcpServer) -> Value {
 
 pub(super) async fn handle_release_readiness(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
     let status = server.get_status();
@@ -396,6 +396,55 @@ pub(super) async fn handle_release_readiness(
         .get("ingress_status")
         .and_then(Value::as_str)
         .unwrap_or("risk");
+    let strict_enabled = baseline
+        .get("production_strict")
+        .and_then(|value| value.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let entry_auth_enabled = baseline
+        .get("entry_auth")
+        .and_then(|value| value.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let entry_auth_key_configured = baseline
+        .get("entry_auth")
+        .and_then(|value| value.get("key_configured"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let deployment_target = server
+        .runtime_config
+        .deployment_target
+        .as_deref()
+        .unwrap_or("local-dev")
+        .to_ascii_lowercase();
+    let infer_multi_user_from_target = matches!(
+        deployment_target.as_str(),
+        "managed-service" | "managed_service" | "managed" | "multi-user-server"
+    );
+
+    let explicit_server_mode = params
+        .get("server_mode")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase());
+    let server_mode_source = if explicit_server_mode.is_some() {
+        "request"
+    } else if infer_multi_user_from_target {
+        "deployment_target"
+    } else {
+        "default"
+    };
+    let requested_server_mode = explicit_server_mode.unwrap_or_else(|| {
+        if infer_multi_user_from_target {
+            "multi_user".to_string()
+        } else {
+            "single_user".to_string()
+        }
+    });
+    let multi_user_enabled = matches!(
+        requested_server_mode.as_str(),
+        "multi_user" | "multi-user" | "multi_tenant" | "multi-tenant"
+    );
 
     let provider_gate_status = provider_status
         .get("status")
@@ -442,6 +491,79 @@ pub(super) async fn handle_release_readiness(
         && open_breakers == 0
         && degraded_services.is_empty()
         && lock_summary.status != "warn";
+    let multi_user_server_gate = if multi_user_enabled {
+        strict_enabled && entry_auth_enabled && entry_auth_key_configured
+    } else {
+        true
+    };
+    let lifecycle_backup_restore_ready = if multi_user_enabled {
+        strict_enabled
+    } else {
+        true
+    };
+    let lifecycle_freeze_unfreeze_ready = if multi_user_enabled {
+        entry_auth_enabled
+    } else {
+        true
+    };
+    let lifecycle_deprovision_cleanup_ready = if multi_user_enabled {
+        entry_auth_enabled && entry_auth_key_configured
+    } else {
+        true
+    };
+    let multi_user_lifecycle_gate = lifecycle_backup_restore_ready
+        && lifecycle_freeze_unfreeze_ready
+        && lifecycle_deprovision_cleanup_ready;
+    let mut lifecycle_blocking_issues = Vec::new();
+    if multi_user_enabled && !lifecycle_backup_restore_ready {
+        lifecycle_blocking_issues.push("lifecycle_backup_restore_not_ready");
+    }
+    if multi_user_enabled && !lifecycle_freeze_unfreeze_ready {
+        lifecycle_blocking_issues.push("lifecycle_freeze_unfreeze_not_ready");
+    }
+    if multi_user_enabled && !lifecycle_deprovision_cleanup_ready {
+        lifecycle_blocking_issues.push("lifecycle_deprovision_cleanup_not_ready");
+    }
+    let summary_multi_user_mode = if multi_user_enabled {
+        "multi_user"
+    } else {
+        "single_user"
+    };
+    let detail_multi_user_mode = summary_multi_user_mode;
+    let summary_multi_user_gate_ready = multi_user_server_gate;
+    let detail_multi_user_gate_ready = multi_user_server_gate;
+    let summary_multi_user_lifecycle_ready = multi_user_lifecycle_gate;
+    let detail_multi_user_lifecycle_ready = multi_user_lifecycle_gate;
+    let summary_multi_user_inference_source = server_mode_source;
+    let detail_multi_user_inference_source = server_mode_source;
+    let readiness_schema_version = "blue26-release-readiness-v2";
+    let readiness_artifact_schema_version = "blue26-release-readiness-v2";
+    let companion_governance_schema_version = "blue26-governance-v1";
+    let dual_track_schema_consistent =
+        readiness_schema_version == readiness_artifact_schema_version;
+    let dual_track_mode_consistent = summary_multi_user_mode == detail_multi_user_mode;
+    let dual_track_gate_consistent = summary_multi_user_gate_ready == detail_multi_user_gate_ready;
+    let dual_track_lifecycle_consistent =
+        summary_multi_user_lifecycle_ready == detail_multi_user_lifecycle_ready;
+    let dual_track_source_consistent =
+        summary_multi_user_inference_source == detail_multi_user_inference_source;
+    let mut dual_track_consistency_issues = Vec::new();
+    if !dual_track_schema_consistent {
+        dual_track_consistency_issues.push("readiness_schema_artifact_mismatch");
+    }
+    if !dual_track_mode_consistent {
+        dual_track_consistency_issues.push("multi_user_mode_summary_detail_mismatch");
+    }
+    if !dual_track_gate_consistent {
+        dual_track_consistency_issues.push("multi_user_gate_summary_detail_mismatch");
+    }
+    if !dual_track_lifecycle_consistent {
+        dual_track_consistency_issues.push("multi_user_lifecycle_summary_detail_mismatch");
+    }
+    if !dual_track_source_consistent {
+        dual_track_consistency_issues.push("multi_user_inference_source_summary_detail_mismatch");
+    }
+    let dual_track_consistency_gate = dual_track_consistency_issues.is_empty();
 
     let gates = vec![
         json!({
@@ -483,12 +605,43 @@ pub(super) async fn handle_release_readiness(
             "degraded_services": degraded_services.len(),
             "lock_status": lock_summary.status,
         }),
+        json!({
+            "name": "dual_track_consistency",
+            "passed": dual_track_consistency_gate,
+            "schema_consistent": dual_track_schema_consistent,
+            "summary_detail_mode_consistent": dual_track_mode_consistent,
+            "summary_detail_gate_consistent": dual_track_gate_consistent,
+            "summary_detail_lifecycle_consistent": dual_track_lifecycle_consistent,
+            "summary_detail_inference_source_consistent": dual_track_source_consistent,
+        }),
+        json!({
+            "name": "multi_user_server",
+            "passed": multi_user_server_gate,
+            "mode": if multi_user_enabled { "multi_user" } else { "single_user" },
+            "entry_auth_enabled": entry_auth_enabled,
+            "entry_auth_key_configured": entry_auth_key_configured,
+            "production_strict_enabled": strict_enabled,
+        }),
+        json!({
+            "name": "multi_user_lifecycle_ops",
+            "passed": multi_user_lifecycle_gate,
+            "mode": if multi_user_enabled { "multi_user" } else { "single_user" },
+            "backup_restore_ready": lifecycle_backup_restore_ready,
+            "freeze_unfreeze_ready": lifecycle_freeze_unfreeze_ready,
+            "deprovision_cleanup_ready": lifecycle_deprovision_cleanup_ready,
+        }),
     ];
 
     let blocked_gates = gates
         .iter()
         .filter(|gate| gate.get("passed").and_then(Value::as_bool) == Some(false))
         .count() as u64;
+    let blocked_gate_names: Vec<String> = gates
+        .iter()
+        .filter(|gate| gate.get("passed").and_then(Value::as_bool) == Some(false))
+        .filter_map(|gate| gate.get("name").and_then(Value::as_str))
+        .map(ToString::to_string)
+        .collect();
 
     let mut recommendations = Vec::new();
     if !stability_gate {
@@ -521,6 +674,24 @@ pub(super) async fn handle_release_readiness(
                 .to_string(),
         );
     }
+    if !dual_track_consistency_gate {
+        recommendations.push(
+            "Resolve readiness dual-track consistency mismatches before release promotion."
+                .to_string(),
+        );
+    }
+    if !multi_user_server_gate {
+        recommendations.push(
+            "For multi-user server mode, enable production_strict and harden entry auth with configured key before release."
+                .to_string(),
+        );
+    }
+    if !multi_user_lifecycle_gate {
+        recommendations.push(
+            "For multi-user lifecycle ops, ensure backup/restore, freeze/unfreeze and deprovision cleanup readiness before release."
+                .to_string(),
+        );
+    }
     if recommendations.is_empty() {
         recommendations.push(
             "Release gates are green. Proceed with Stage C rollout and monitor drill dashboards."
@@ -535,9 +706,28 @@ pub(super) async fn handle_release_readiness(
             "ok": true,
             "readiness": {
                 "version": "blue15-stagec-release-readiness-v1",
+                "schema_version": readiness_schema_version,
+                "artifact_contract": {
+                    "schema_version": readiness_artifact_schema_version,
+                    "compatibility": "backward-compatible-v1",
+                    "source": "main_chain",
+                    "companion": {
+                        "governance_schema_version": companion_governance_schema_version
+                    }
+                },
+                "dual_track_consistency": {
+                    "ready": dual_track_consistency_gate,
+                    "issues": dual_track_consistency_issues,
+                    "schema_consistent": dual_track_schema_consistent,
+                    "summary_detail_mode_consistent": dual_track_mode_consistent,
+                    "summary_detail_gate_consistent": dual_track_gate_consistent,
+                    "summary_detail_lifecycle_consistent": dual_track_lifecycle_consistent,
+                    "summary_detail_inference_source_consistent": dual_track_source_consistent,
+                },
                 "overall_pass": blocked_gates == 0,
                 "status": if blocked_gates == 0 { "ready" } else { "blocked" },
                 "blocked_gate_count": blocked_gates,
+                "blocked_gate_names": blocked_gate_names,
                 "gates": gates,
                 "summary": {
                     "uptime_seconds": status.lifecycle.uptime_seconds,
@@ -546,13 +736,43 @@ pub(super) async fn handle_release_readiness(
                     "open_breakers": open_breakers,
                     "degraded_services": degraded_services.len(),
                     "lock_slow_wait_total": lock_summary.slow_wait_total,
+                    "multi_user_mode": summary_multi_user_mode,
+                    "multi_user_gate_ready": summary_multi_user_gate_ready,
+                    "multi_user_lifecycle_ready": summary_multi_user_lifecycle_ready,
+                    "multi_user_inference_source": summary_multi_user_inference_source,
+                    "dual_track_consistency_ready": dual_track_consistency_gate,
+                },
+                "multi_user_server": {
+                    "mode": detail_multi_user_mode,
+                    "inference": {
+                        "source": detail_multi_user_inference_source,
+                        "deployment_target": deployment_target,
+                        "requested_server_mode": requested_server_mode,
+                    },
+                    "release_gate_ready": detail_multi_user_gate_ready,
+                    "entry_auth_enabled": entry_auth_enabled,
+                    "entry_auth_key_configured": entry_auth_key_configured,
+                    "production_strict_enabled": strict_enabled,
+                    "lifecycle": {
+                        "ready": detail_multi_user_lifecycle_ready,
+                        "backup_restore_ready": lifecycle_backup_restore_ready,
+                        "freeze_unfreeze_ready": lifecycle_freeze_unfreeze_ready,
+                        "deprovision_cleanup_ready": lifecycle_deprovision_cleanup_ready,
+                        "blocking_issues": lifecycle_blocking_issues,
+                        "runbook_version": "blue26-multi-user-lifecycle-v1",
+                    },
+                    "dual_track_consistency": {
+                        "ready": dual_track_consistency_gate,
+                        "issues": dual_track_consistency_issues,
+                    },
                 },
                 "sources": [
                     "runtime.stability",
                     "security.baseline",
                     "provider.status",
                     "build.repro",
-                    "observability.alerts"
+                    "observability.alerts",
+                    "governance.status"
                 ],
                 "recommendations": recommendations,
                 "timestamp": status.timestamp,

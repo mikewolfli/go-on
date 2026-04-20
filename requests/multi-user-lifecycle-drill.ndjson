@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"client":"blue26-s17-lifecycle-drill","version":"1.0.0"}}
+{"jsonrpc":"2.0","id":2,"method":"governance.status","params":{"server_mode":"multi_user","environment":"production","policy_bundle_version":"blue26-s17-lifecycle-drill-v1"}}
+{"jsonrpc":"2.0","id":3,"method":"release.readiness","params":{"server_mode":"multi_user"}}
+{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}

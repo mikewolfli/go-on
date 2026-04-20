@@ -126,6 +126,26 @@ fn split_secret_pool(raw: &str) -> Vec<String> {
     vec![trimmed.to_string()]
 }
 
+fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    // Keep compatibility with legacy OPENAI naming while using keyring account naming.
+    if account == "openai_compatible_api_key" {
+        candidates.push("OPENAI_API_KEY".to_string());
+    }
+
+    candidates.push(account.replace('-', "_").to_ascii_uppercase());
+    candidates.push(
+        format!("{}_{}", service, account)
+            .replace('-', "_")
+            .to_ascii_uppercase(),
+    );
+
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
 fn load_secret_value(secret_ref: &str, field_name: &str) -> Result<String> {
     if let Some(locator) = secret_ref.strip_prefix(KEYRING_PREFIX) {
         let (service, account) = locator.split_once('/').ok_or_else(|| {
@@ -144,17 +164,39 @@ fn load_secret_value(secret_ref: &str, field_name: &str) -> Result<String> {
             );
         }
 
-        let entry = keyring::Entry::new(service, account)
-            .map_err(|err| anyhow::anyhow!("failed to open keyring entry: {}", err))?;
-        let value = entry
-            .get_password()
-            .map_err(|err| anyhow::anyhow!("failed to read keyring entry: {}", err))?;
+        let keyring_error = match keyring::Entry::new(service, account) {
+            Ok(entry) => match entry.get_password() {
+                Ok(value) if !value.trim().is_empty() => return Ok(value),
+                Ok(_) => "resolved to empty value".to_string(),
+                Err(err) => {
+                    format!("failed to read keyring entry: {}", err)
+                }
+            },
+            Err(err) => {
+                format!("failed to open keyring entry: {}", err)
+            }
+        };
 
-        if value.trim().is_empty() {
-            anyhow::bail!("keyring entry for {} resolved to empty value", field_name);
+        let fallback_candidates = keyring_env_fallback_candidates(service, account);
+        for env_name in &fallback_candidates {
+            if let Ok(value) = std::env::var(env_name) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    warn!(
+                        "{} keyring lookup failed, using env fallback {}",
+                        field_name, env_name
+                    );
+                    return Ok(trimmed.to_string());
+                }
+            }
         }
 
-        return Ok(value);
+        anyhow::bail!(
+            "keyring entry for {} unavailable ({}); env fallback not set (tried: {})",
+            field_name,
+            keyring_error,
+            fallback_candidates.join(", ")
+        );
     }
 
     std::env::var(secret_ref)

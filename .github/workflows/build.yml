@@ -2,8 +2,50 @@
 name: Build Backend and GUI
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 jobs:
+  gate:
+    name: BLUE26 Top-Level Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install addon dependencies
+        run: npm --prefix vscode-addon ci
+      - name: Install GUI dependencies
+        run: npm --prefix GUI ci
+      - name: Backend check (0 warnings)
+        run: cargo check --all-targets 2>&1 | tee /tmp/cargo-check.log && ! grep -c "^warning" /tmp/cargo-check.log | grep -v "^0"
+      - name: Backend integration tests (BLUE26 release-readiness)
+        run: cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_release_readiness_benchmark_requests -- --nocapture
+      - name: Backend integration tests (BLUE26 governance)
+        run: cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_governance_dynamic_rules_benchmark_requests -- --nocapture
+      - name: Backend integration tests (managed-service inference)
+        run: cargo test --test acp_runtime_rpc_integration managed_service_target_infers_multi_user_mode_on_main_chain -- --nocapture
+      - name: Backend integration tests (S14 adversarial paths)
+        run: cargo test --test acp_runtime_rpc_integration adversarial_ -- --nocapture
+      - name: Backend integration tests (S17 multi-user lifecycle drill)
+        run: cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_multi_user_lifecycle_drill_requests -- --nocapture
+      - name: VS Code addon compile + lint
+        run: npm --prefix vscode-addon run check
+      - name: VS Code addon contract smoke
+        run: node vscode-addon/scripts/contract-smoke.js
+      - name: GUI build
+        run: npm --prefix GUI run build
+      - name: GUI contract smoke
+        run: npm --prefix GUI run test:contract
   build:
+    name: Full Build
+    needs: gate
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

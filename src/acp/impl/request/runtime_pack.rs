@@ -1049,12 +1049,153 @@ pub(super) async fn handle_governance_status(
         .max(intervention_rate_delta);
     let reconciliation_ok = max_delta <= reconciliation_threshold;
 
+    let policy_environment = params
+        .get("environment")
+        .and_then(Value::as_str)
+        .unwrap_or("local/dev");
+    let policy_bundle_version = params
+        .get("policy_bundle_version")
+        .and_then(Value::as_str)
+        .unwrap_or("blue23-policy-bundle-v1");
+
+    let deployment_target = server
+        .runtime_config
+        .deployment_target
+        .as_deref()
+        .unwrap_or("local-dev")
+        .to_ascii_lowercase();
+    let infer_multi_user_from_target = matches!(
+        deployment_target.as_str(),
+        "managed-service" | "managed_service" | "managed" | "multi-user-server"
+    );
+
+    let explicit_server_mode = params
+        .get("server_mode")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase());
+    let server_mode_source = if explicit_server_mode.is_some() {
+        "request"
+    } else if infer_multi_user_from_target {
+        "deployment_target"
+    } else {
+        "default"
+    };
+
+    let requested_server_mode = explicit_server_mode.unwrap_or_else(|| {
+        if infer_multi_user_from_target {
+            "multi_user".to_string()
+        } else {
+            "single_user".to_string()
+        }
+    });
+    let multi_user_enabled = matches!(
+        requested_server_mode.as_str(),
+        "multi_user" | "multi-user" | "multi_tenant" | "multi-tenant"
+    );
+
+    let auth_key_configured = std::env::var(&server.runtime_config.entry_auth_api_key_env)
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let auth_component_ok = server.runtime_config.entry_auth_enabled && auth_key_configured;
+    let quota_component_ok = server.runtime_config.entry_rate_limit_rpm > 0
+        && server.runtime_config.entry_rate_limit_burst > 0;
+    let strict_component_ok = config_summary
+        .get("production_strict")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let isolation_component_ok = if multi_user_enabled {
+        auth_component_ok && strict_component_ok
+    } else {
+        true
+    };
+    let lifecycle_backup_restore_ready = !multi_user_enabled || strict_component_ok;
+    let lifecycle_freeze_unfreeze_ready =
+        !multi_user_enabled || server.runtime_config.entry_auth_enabled;
+    let lifecycle_deprovision_cleanup_ready = !multi_user_enabled || auth_component_ok;
+    let mut lifecycle_blocking_issues = Vec::new();
+    if multi_user_enabled && !lifecycle_backup_restore_ready {
+        lifecycle_blocking_issues.push("lifecycle_backup_restore_not_ready");
+    }
+    if multi_user_enabled && !lifecycle_freeze_unfreeze_ready {
+        lifecycle_blocking_issues.push("lifecycle_freeze_unfreeze_not_ready");
+    }
+    if multi_user_enabled && !lifecycle_deprovision_cleanup_ready {
+        lifecycle_blocking_issues.push("lifecycle_deprovision_cleanup_not_ready");
+    }
+    let lifecycle_ops_ready = lifecycle_blocking_issues.is_empty();
+    let server_mode = if multi_user_enabled {
+        "multi_user"
+    } else {
+        "single_user"
+    };
+    let governance_schema_version = "blue26-governance-v1";
+    let governance_artifact_schema_version = "blue26-governance-v1";
+    let companion_readiness_schema_version = "blue26-release-readiness-v2";
+    let dual_track_inference_source_valid = matches!(
+        server_mode_source,
+        "request" | "deployment_target" | "default"
+    );
+    let dual_track_requested_mode_matches_effective = matches!(
+        (requested_server_mode.as_str(), server_mode),
+        ("multi_user", "multi_user")
+            | ("multi-user", "multi_user")
+            | ("multi_tenant", "multi_user")
+            | ("multi-tenant", "multi_user")
+            | ("single_user", "single_user")
+            | ("single-user", "single_user")
+    );
+    let mut dual_track_consistency_issues = Vec::new();
+    if governance_schema_version != governance_artifact_schema_version {
+        dual_track_consistency_issues.push("governance_schema_artifact_mismatch");
+    }
+    if !dual_track_inference_source_valid {
+        dual_track_consistency_issues.push("invalid_inference_source");
+    }
+    if !dual_track_requested_mode_matches_effective {
+        dual_track_consistency_issues.push("requested_server_mode_mismatch");
+    }
+    let dual_track_consistency_ready = dual_track_consistency_issues.is_empty();
+
+    let release_gate_ready = (!multi_user_enabled
+        || (isolation_component_ok && lifecycle_ops_ready))
+        && quota_component_ok
+        && reconciliation_ok;
+    let mut blocking_issues = Vec::new();
+    if multi_user_enabled && !auth_component_ok {
+        blocking_issues.push("entry_auth_not_hardened");
+    }
+    if multi_user_enabled && !lifecycle_ops_ready {
+        blocking_issues.push("multi_user_lifecycle_ops_not_ready");
+    }
+    if !quota_component_ok {
+        blocking_issues.push("quota_not_configured");
+    }
+    if !reconciliation_ok {
+        blocking_issues.push("metrics_reconciliation_drift");
+    }
+
     send_result(
         server,
         request_id,
         json!({
             "ok": true,
             "governance": {
+                "schema_version": governance_schema_version,
+                "artifact_contract": {
+                    "schema_version": governance_artifact_schema_version,
+                    "compatibility": "backward-compatible-v1",
+                    "source": "main_chain",
+                    "companion": {
+                        "release_readiness_schema_version": companion_readiness_schema_version
+                    }
+                },
+                "dual_track_consistency": {
+                    "ready": dual_track_consistency_ready,
+                    "issues": dual_track_consistency_issues,
+                    "governance_schema_version": governance_schema_version,
+                    "readiness_schema_version": companion_readiness_schema_version,
+                },
                 "status": if status.lifecycle.is_healthy && recent_failed == 0 && breaker_open_count == 0 {
                     "healthy"
                 } else {
@@ -1164,14 +1305,8 @@ pub(super) async fn handle_governance_status(
                     },
                 },
                 "org_policy": {
-                    "bundle_version": params
-                        .get("policy_bundle_version")
-                        .and_then(Value::as_str)
-                        .unwrap_or("blue23-policy-bundle-v1"),
-                    "environment": params
-                        .get("environment")
-                        .and_then(Value::as_str)
-                        .unwrap_or("local/dev"),
+                    "bundle_version": policy_bundle_version,
+                    "environment": policy_environment,
                     "exceptions": {
                         "active_total": governance_audit
                             .iter()
@@ -1186,13 +1321,71 @@ pub(super) async fn handle_governance_status(
                         "compat"
                     },
                 },
+                "multi_user_server": {
+                    "mode": server_mode,
+                    "inference": {
+                        "source": server_mode_source,
+                        "deployment_target": deployment_target,
+                        "requested_server_mode": requested_server_mode,
+                    },
+                    "tenant_context": {
+                        "tenant_id_required": multi_user_enabled,
+                        "cross_tenant_access_denied_by_default": multi_user_enabled,
+                        "default_tenant_scope": if multi_user_enabled { "required" } else { "workspace" },
+                    },
+                    "components": {
+                        "authn_authz": {
+                            "status": if auth_component_ok { "pass" } else { "warn" },
+                            "entry_auth_enabled": server.runtime_config.entry_auth_enabled,
+                            "entry_auth_key_configured": auth_key_configured,
+                        },
+                        "data_execution_isolation": {
+                            "status": if isolation_component_ok { "pass" } else { "warn" },
+                            "isolation_policy": if multi_user_enabled { "tenant-scoped" } else { "workspace-scoped" },
+                            "production_strict_enabled": strict_component_ok,
+                        },
+                        "resource_quota": {
+                            "status": if quota_component_ok { "pass" } else { "warn" },
+                            "rate_limit_rpm": server.runtime_config.entry_rate_limit_rpm,
+                            "rate_limit_burst": server.runtime_config.entry_rate_limit_burst,
+                            "token_budget_tracking": true,
+                            "tool_budget_tracking": true,
+                        },
+                        "audit_forensics": {
+                            "status": if governance_audit.is_empty() { "warn" } else { "pass" },
+                            "recent_events": governance_audit.len(),
+                            "evidence_tracked": true,
+                        },
+                        "lifecycle_ops": {
+                            "status": if lifecycle_ops_ready { "pass" } else { "warn" },
+                            "backup_restore": lifecycle_backup_restore_ready,
+                            "freeze_unfreeze": lifecycle_freeze_unfreeze_ready,
+                            "deprovision_cleanup": lifecycle_deprovision_cleanup_ready,
+                        },
+                    },
+                    "lifecycle": {
+                        "ready": lifecycle_ops_ready,
+                        "backup_restore_ready": lifecycle_backup_restore_ready,
+                        "freeze_unfreeze_ready": lifecycle_freeze_unfreeze_ready,
+                        "deprovision_cleanup_ready": lifecycle_deprovision_cleanup_ready,
+                        "blocking_issues": lifecycle_blocking_issues,
+                        "runbook_version": "blue26-multi-user-lifecycle-v1",
+                    },
+                    "dual_track_consistency": {
+                        "ready": dual_track_consistency_ready,
+                        "issues": dual_track_consistency_issues,
+                    },
+                    "release_gate": {
+                        "ready": release_gate_ready,
+                        "blocking_issues": blocking_issues,
+                        "bundle_version": policy_bundle_version,
+                        "environment": policy_environment,
+                    },
+                },
                 "entry_guard": {
                     "auth_enabled": server.runtime_config.entry_auth_enabled,
                     "auth_key_env": server.runtime_config.entry_auth_api_key_env,
-                    "auth_key_configured": std::env::var(&server.runtime_config.entry_auth_api_key_env)
-                        .ok()
-                        .map(|value| !value.trim().is_empty())
-                        .unwrap_or(false),
+                    "auth_key_configured": auth_key_configured,
                     "rate_limit_rpm": server.runtime_config.entry_rate_limit_rpm,
                     "rate_limit_burst": server.runtime_config.entry_rate_limit_burst,
                     "sources_tracked": entry_sources_tracked,

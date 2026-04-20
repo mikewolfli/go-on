@@ -432,6 +432,15 @@ impl SkillImportSource {
 mod tests {
     use super::*;
 
+    fn test_workspace(name: &str) -> PathBuf {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("skill_import_test_ws")
+            .join(format!("{}-{}", name, now_ts()));
+        fs::create_dir_all(&root).expect("create test workspace");
+        root
+    }
+
     #[test]
     fn allowlist_supports_wildcard_prefix() {
         assert!(allowlist_match(
@@ -451,16 +460,20 @@ mod tests {
         assert!(!is_floating_ref("d34db33fd34db33fd34db33fd34db33fd34db33f"));
     }
 
-    #[tokio::test]
-    async fn local_import_requires_matching_sha_when_enabled() {
-        let temp = tempfile::tempdir().expect("temp dir");
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Miri on Windows does not support filesystem directory creation APIs"
+    )]
+    fn local_import_requires_matching_sha_when_enabled() {
+        let root = test_workspace("requires_sha");
         let manifest = json!({
             "name": "local.echo",
             "version": "1.0.0",
             "description": "local skill",
             "input_schema": {"type": "object"}
         });
-        let manifest_path = temp.path().join("manifest.json");
+        let manifest_path = root.join("manifest.json");
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 
         let policy = SkillImportPolicy {
@@ -468,26 +481,33 @@ mod tests {
             allowed_sources: vec!["local:*".to_string()],
             require_sha256: true,
             allow_floating_ref: false,
-            cache_dir: temp.path().join("cache").display().to_string(),
+            cache_dir: root.join("cache").display().to_string(),
         };
         let mut store = SkillImportStore::load(policy).unwrap();
 
-        let err = store
-            .import_skill(SkillImportRequest {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("build tokio runtime for test");
+        let err = runtime
+            .block_on(store.import_skill(SkillImportRequest {
                 source: SkillImportSource::Local {
                     path: manifest_path.display().to_string(),
                     sha256: None,
                 },
-            })
-            .await
+            }))
             .unwrap_err();
 
         assert!(err.to_string().contains("sha256 is required"));
     }
 
-    #[tokio::test]
-    async fn local_import_succeeds_and_persists_disabled_record() {
-        let temp = tempfile::tempdir().expect("temp dir");
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Miri on Windows does not support filesystem directory creation APIs"
+    )]
+    fn local_import_succeeds_and_persists_disabled_record() {
+        let root = test_workspace("persist_record");
         let manifest = json!({
             "name": "local.echo",
             "version": "1.0.1",
@@ -496,7 +516,7 @@ mod tests {
         });
         let payload = serde_json::to_vec(&manifest).unwrap();
         let sha = compute_sha256_hex(&payload);
-        let manifest_path = temp.path().join("manifest.json");
+        let manifest_path = root.join("manifest.json");
         fs::write(&manifest_path, payload).unwrap();
 
         let policy = SkillImportPolicy {
@@ -504,17 +524,20 @@ mod tests {
             allowed_sources: vec!["local:*".to_string()],
             require_sha256: true,
             allow_floating_ref: false,
-            cache_dir: temp.path().join("cache").display().to_string(),
+            cache_dir: root.join("cache").display().to_string(),
         };
         let mut store = SkillImportStore::load(policy).unwrap();
-        let imported = store
-            .import_skill(SkillImportRequest {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("build tokio runtime for test");
+        let imported = runtime
+            .block_on(store.import_skill(SkillImportRequest {
                 source: SkillImportSource::Local {
                     path: manifest_path.display().to_string(),
                     sha256: Some(sha),
                 },
-            })
-            .await
+            }))
             .unwrap();
         assert_eq!(imported.name, "local.echo");
         assert!(!imported.enabled);

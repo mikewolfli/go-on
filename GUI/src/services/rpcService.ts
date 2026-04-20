@@ -2,6 +2,21 @@ import { invokeRuntimeRpc } from "./bridge";
 
 export interface GovernanceStatusResult {
   governance?: {
+    schema_version?: string;
+    artifact_contract?: {
+      schema_version?: string;
+      compatibility?: string;
+      source?: string;
+      companion?: {
+        release_readiness_schema_version?: string;
+      };
+    };
+    dual_track_consistency?: {
+      ready?: boolean;
+      issues?: string[];
+      governance_schema_version?: string;
+      readiness_schema_version?: string;
+    };
     status?: string;
     rules?: {
       version?: string;
@@ -27,6 +42,40 @@ export interface GovernanceStatusResult {
     };
     runtime?: {
       is_healthy?: boolean;
+    };
+    multi_user_server?: {
+      mode?: string;
+      inference?: {
+        source?: string;
+        deployment_target?: string;
+        requested_server_mode?: string;
+      };
+      tenant_context?: {
+        tenant_id_required?: boolean;
+        cross_tenant_access_denied_by_default?: boolean;
+        default_tenant_scope?: string;
+      };
+      components?: {
+        authn_authz?: { status?: string };
+        data_execution_isolation?: { status?: string };
+        resource_quota?: { status?: string };
+        audit_forensics?: { status?: string };
+        lifecycle_ops?: { status?: string };
+      };
+      lifecycle?: {
+        ready?: boolean;
+        backup_restore_ready?: boolean;
+        freeze_unfreeze_ready?: boolean;
+        deprovision_cleanup_ready?: boolean;
+        blocking_issues?: string[];
+        runbook_version?: string;
+      };
+      release_gate?: {
+        ready?: boolean;
+        blocking_issues?: string[];
+        bundle_version?: string;
+        environment?: string;
+      };
     };
   };
 }
@@ -70,13 +119,63 @@ export interface ProviderStatusResult {
 export interface ReleaseReadinessResult {
   readiness?: {
     version?: string;
+    schema_version?: string;
+    artifact_contract?: {
+      schema_version?: string;
+      compatibility?: string;
+      source?: string;
+      companion?: {
+        governance_schema_version?: string;
+      };
+    };
+    dual_track_consistency?: {
+      ready?: boolean;
+      issues?: string[];
+      schema_consistent?: boolean;
+      summary_detail_mode_consistent?: boolean;
+      summary_detail_gate_consistent?: boolean;
+      summary_detail_lifecycle_consistent?: boolean;
+      summary_detail_inference_source_consistent?: boolean;
+    };
     status?: string;
     overall_pass?: boolean;
     blocked_gate_count?: number;
+    blocked_gate_names?: string[];
     gates?: Array<{
       name?: string;
       passed?: boolean;
     }>;
+    summary?: {
+      multi_user_mode?: string;
+      multi_user_gate_ready?: boolean;
+      multi_user_lifecycle_ready?: boolean;
+      multi_user_inference_source?: string;
+      dual_track_consistency_ready?: boolean;
+    };
+    multi_user_server?: {
+      mode?: string;
+      inference?: {
+        source?: string;
+        deployment_target?: string;
+        requested_server_mode?: string;
+      };
+      release_gate_ready?: boolean;
+      entry_auth_enabled?: boolean;
+      entry_auth_key_configured?: boolean;
+      production_strict_enabled?: boolean;
+      lifecycle?: {
+        ready?: boolean;
+        backup_restore_ready?: boolean;
+        freeze_unfreeze_ready?: boolean;
+        deprovision_cleanup_ready?: boolean;
+        blocking_issues?: string[];
+        runbook_version?: string;
+      };
+      dual_track_consistency?: {
+        ready?: boolean;
+        issues?: string[];
+      };
+    };
   };
 }
 

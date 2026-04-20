@@ -1,73 +1,31 @@
-=== BLUE15 Stage C release readiness gate ===
-=== 1) Release readiness scenario replay ===
-{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"chat":true,"debug_panel":true,"health":true,"mcp_adapter":true,"metrics":true,"phase":true,"shutdown":true},"name":"go-on","protocol":"acp","version":"0.6.1"}}
-{"id":2,"jsonrpc":"2.0","result":{"ok":true,"stability":{"checks":[{"description":"Health check: 0 errors, 1 warnings","errors":0,"name":"health_check","status":"pass","warnings":1},{"description":"Graceful shutdown capability ready","name":"graceful_shutdown","shutdown_requested":false,"status":"pass","uptime_seconds":0},{"description":"Config validation: 2 warnings","name":"config_validation","status":"pass","warning_count":2},{"description":"No production strict mode violations","name":"production_strict_mode","status":"pass","violation_count":0}],"level":"excellent","recommendation":"System is stable. Safe to operate.","safe_restart_ready":true,"score":100,"summary":{"config_warnings":2,"health_errors":0,"health_warnings":1,"strict_violations":0,"uptime_seconds":0},"timestamp":1776393024}}}
-{"id":3,"jsonrpc":"2.0","result":{"baseline":{"entry_auth":{"enabled":true,"key_configured":true,"key_env":"GO_ON_ENTRY_API_KEY"},"exposed_http":true,"ingress_status":"hardened","level":"ok","production_strict":{"enabled":true,"violation_count":0,"violations":[]},"rate_limit":{"burst":60,"rpm":240},"risk_count":0,"risks":[]},"ok":true}}
-{"id":4,"jsonrpc":"2.0","result":{"alerts":{"critical":0,"info":1,"items":[{"code":"baseline.ok","message":"No active runtime alerts","severity":"info","suggestion":"Continue periodic quality.baseline and trace.metrics checks","value":{"successful_requests":3,"total_requests":3}}],"total":1,"warn":0},"ok":true}}
-{"id":5,"jsonrpc":"2.0","result":{"ok":true,"peak":{"cost":{"budget":{"budget_class":"low","hardness_level":"low","input_tokens_estimate":12,"output_tokens_budget":900,"phase":"execute","total_tokens_budget":912},"compression":{"enabled":true,"reason":"within_budget","strategy":["rolling_summary","dedupe_evidence","adaptive_retrieval_window"],"triggered":false},"hardness":{"budget":{"parallelism_cap":4,"recommended_mode":"edit","required_reviews":1,"timeout_seconds":45},"dimensions":{"context_scale":0.018766666666666664,"cross_file_span":0.0,"recovery_complexity":0.0,"tool_dependency":0.0},"level":"low","normalized":0.006568333333333332,"reasons":["baseline"],"score":0.6568333333333333},"policy_version":"x6-token-cost-v1","routing":{"cooldown_seconds":30,"degrade_strategies":["trim_context_first","downgrade_model_tier","limit_tool_roundtrips"],"high_cost_model_allowed":false,"preferred_model_tier":"economy"},"telemetry":{"agent_timeout_failures_total":0,"estimated_total_cost":0.0012696,"estimated_unit_cost":0.0012696,"failed_requests":0,"review_gate_timeout_total":0,"runtime_probe_timeout_total":0,"total_requests":4}},"frozen_scope":["X1","X2","X3","X4","X5","X6","X7","X8","X9","X10"],"gates":[{"failure_ratio":0.0,"max_failure_ratio":0.1,"max_review_reject_ratio":0.1,"name":"quality","passed":true,"review_reject_ratio":0.0},{"budget_class":"low","estimated_total_cost":0.0012696,"max_estimated_cost":1.5,"name":"cost","passed":true},{"breaker_open_count":0,"max_timeout_total":10,"name":"stability","passed":true,"runtime_healthy":true,"timeout_total":0},{"entry_auth_enabled":true,"entry_auth_key_configured":true,"name":"security","passed":true,"production_strict":true,"strict_violation_count":0},{"missing_required":[],"name":"reproducibility","passed":true,"required_present":6,"required_total":6},{"name":"governance","passed":true,"pua_recent_failed":0,"pua_recent_total":200}],"hardness":{"budget":{"parallelism_cap":4,"recommended_mode":"edit","required_reviews":1,"timeout_seconds":45},"dimensions":{"context_scale":0.018766666666666664,"cross_file_span":0.0,"recovery_complexity":0.0,"tool_dependency":0.0},"level":"low","normalized":0.006568333333333332,"reasons":["baseline"],"score":0.6568333333333333},"overall_pass":true,"status":"peak_ready","summary":{"agent_timeout_failures_total":0,"failed_requests":0,"review_gate_rejected_total":0,"review_gate_timeout_total":0,"runtime_probe_timeout_total":0,"total_requests":4,"uptime_seconds":0},"task":"One-shot optimization peak validation","timestamp":1776393024,"version":"x11-one-shot-optimization-peak-v1","window":{"freeze_mode":"strict","sprint":"blue15-x11"}}}}
-{"id":6,"jsonrpc":"2.0","result":{"ok":true,"shutdown":"initiated"}}
-=== 2) Integration assertions ===
+﻿BLUE26 Release Gate Output
+Generated: 2026-04-20T12:09:02Z
+Config:    config.production.toml
+Overall:   PASS
+Pass:      13 / 13
+Fail:      0 / 13
 
-running 0 tests
+Secret policy: keyring://go-on/deepseek_api_key (canonical).
+  Fallback: DEEPSEEK_API_KEY env var is authorised for CI/dev workstations.
+  Pure-keyring enforcement requires a real secret written to the platform keychain.
 
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.00s
+Step Results:
 
-
-running 1 test
-test advanced::run_scenario_file_executes_release_readiness_drill_requests ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 70 filtered out; finished in 0.09s
-
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
-
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
-
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.00s
+Label                                    Pass ElapsedSec
+-----                                    ---- ----------
+cargo check --all-targets                True        0.4
+integration: release.readiness benchmark True          1
+integration: governance benchmark        True        0.5
+integration: managed-service inference   True          1
+integration: adversarial negative paths  True        1.7
+integration: release readiness drill     True        0.7
+integration: multi-user lifecycle drill  True          1
+integration: shutdown inflight           True          2
+integration: ndjson all pass             True        7.2
+addon: compile + lint                    True        3.6
+addon: contract smoke                    True        0.1
+GUI: build                               True        7.6
+GUI: contract smoke                      True        0.4
 
 
-running 1 test
-test rpc_shutdown_waits_for_inflight_chat_completion ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 70 filtered out; finished in 1.60s
-
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
-
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
-
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.00s
-
-
-running 1 test
-test advanced::ndjson_scenario_files_all_pass ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 70 filtered out; finished in 1.94s
-
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
-
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
-
-✅ BLUE15 Stage C release readiness gate completed

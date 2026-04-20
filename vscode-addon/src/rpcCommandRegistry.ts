@@ -428,13 +428,27 @@ export function registerRpcCommands(deps: RpcCommandRegistryDeps): vscode.Dispos
             const governance = asRecord(result.governance);
             const governanceConfig = asRecord(governance.config);
             const rules = asRecord(governance.rules);
+            const artifactContract = asRecord(governance.artifact_contract);
+            const dualTrack = asRecord(governance.dual_track_consistency);
+            const multiUser = asRecord(governance.multi_user_server);
+            const multiUserLifecycle = asRecord(multiUser.lifecycle);
+            const multiUserInference = asRecord(multiUser.inference);
+            const multiUserReleaseGate = asRecord(multiUser.release_gate);
             const strictEnabled = governanceConfig.production_strict === true;
             const strictViolations = Number(governanceConfig.strict_violation_count ?? 0);
             const entryAuthEnabled = governanceConfig.entry_auth_enabled === true;
             const entryAuthKeyConfigured = governanceConfig.entry_auth_key_configured === true;
             const entryRateLimit = Number(governanceConfig.entry_rate_limit_rpm ?? 0);
+            const multiUserMode = String(multiUser.mode ?? 'single_user');
+            const multiUserReady = Boolean(multiUserReleaseGate.ready ?? false);
+            const multiUserLifecycleReady = Boolean(multiUserLifecycle.ready ?? false);
+            const multiUserSource = String(multiUserInference.source ?? 'default');
+            const dualTrackReady = Boolean(dualTrack.ready ?? false);
+            const governanceSchema = String(
+                governance.schema_version ?? artifactContract.schema_version ?? 'unknown'
+            );
             vscode.window.showInformationMessage(
-                `governance=${governance.status ?? 'unknown'}, strict=${strictEnabled ? 'on' : 'off'}, strict_violations=${strictViolations}, entry_auth=${entryAuthEnabled ? 'on' : 'off'}, entry_key=${entryAuthKeyConfigured ? 'set' : 'missing'}, entry_rpm=${entryRateLimit}, rules=${rules.version ?? '-'}`
+                `governance=${governance.status ?? 'unknown'}, schema=${governanceSchema}, strict=${strictEnabled ? 'on' : 'off'}, strict_violations=${strictViolations}, entry_auth=${entryAuthEnabled ? 'on' : 'off'}, entry_key=${entryAuthKeyConfigured ? 'set' : 'missing'}, entry_rpm=${entryRateLimit}, multi_user_mode=${multiUserMode}, multi_user_ready=${multiUserReady}, multi_user_lifecycle_ready=${multiUserLifecycleReady}, dual_track_ready=${dualTrackReady}, multi_user_source=${multiUserSource}, rules=${rules.version ?? '-'}`
             );
         } catch (error: unknown) {
             vscode.window.showErrorMessage(`governance.status failed: ${getErrorMessage(error)}`);
@@ -763,8 +777,19 @@ export function registerRpcCommands(deps: RpcCommandRegistryDeps): vscode.Dispos
             const result = asRecord(await deps.sendRequest('release.readiness', {}));
             const readiness = asRecord(result.readiness);
             const summary = asRecord(readiness.summary);
+            const artifactContract = asRecord(readiness.artifact_contract);
+            const dualTrack = asRecord(readiness.dual_track_consistency);
+            const multiUser = asRecord(readiness.multi_user_server);
+            const lifecycle = asRecord(multiUser.lifecycle);
+            const inference = asRecord(multiUser.inference);
+            const blockedGateNames = asArray(readiness.blocked_gate_names)
+                .map((item) => String(item))
+                .join('|');
+            const readinessSchema = String(
+                readiness.schema_version ?? artifactContract.schema_version ?? readiness.version ?? 'unknown'
+            );
             vscode.window.showInformationMessage(
-                `release.readiness: status=${String(readiness.status ?? 'unknown')}, overall=${Boolean(readiness.overall_pass)}, blocked=${Number(readiness.blocked_gate_count ?? 0)}, open_breakers=${Number(summary.open_breakers ?? 0)}, degraded_services=${Number(summary.degraded_services ?? 0)}`
+                `release.readiness: status=${String(readiness.status ?? 'unknown')}, schema=${readinessSchema}, overall=${Boolean(readiness.overall_pass)}, blocked=${Number(readiness.blocked_gate_count ?? 0)}, blocked_names=${blockedGateNames || '-'}, open_breakers=${Number(summary.open_breakers ?? 0)}, degraded_services=${Number(summary.degraded_services ?? 0)}, multi_user_mode=${String(multiUser.mode ?? 'single_user')}, multi_user_ready=${Boolean(multiUser.release_gate_ready ?? false)}, multi_user_lifecycle_ready=${Boolean(lifecycle.ready ?? summary.multi_user_lifecycle_ready ?? false)}, dual_track_ready=${Boolean(dualTrack.ready ?? summary.dual_track_consistency_ready ?? false)}, multi_user_source=${String(inference.source ?? summary.multi_user_inference_source ?? 'default')}`
             );
         } catch (error: unknown) {
             vscode.window.showErrorMessage(`release.readiness failed: ${getErrorMessage(error)}`);
