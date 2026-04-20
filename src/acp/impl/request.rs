@@ -7704,12 +7704,14 @@ fn build_trace_ref(method: &str, request_id: Option<&Value>, artifact_path: Opti
 mod tests {
     use serde_json::{json, Value};
 
+    #[cfg(not(feature = "backend-postgres"))]
+    use super::collect_vector_context_snippets;
     use super::{
-        classify_request_error_kind, collect_vector_context_snippets, infer_workflow_parallelism,
-        rebalance_execution_order, session_id_for_task, summarize_lock_health,
-        with_error_contract_data,
+        classify_request_error_kind, infer_workflow_parallelism, rebalance_execution_order,
+        session_id_for_task, summarize_lock_health, with_error_contract_data,
     };
     use crate::acp::prelude::AcpLockSnapshot;
+    #[cfg(not(feature = "backend-postgres"))]
     use crate::vector::VectorStore;
 
     #[test]

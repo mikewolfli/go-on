@@ -44,7 +44,7 @@ fn should_trigger_auto_repair(
     }
 
     // Check if failure classes are auto-repairable
-    let repairable_classes = vec![
+    let repairable_classes = [
         "execution_subtask_failed",
         "subtask_retry_eligible",
         "execution_timeout_recoverable",
@@ -425,6 +425,7 @@ fn build_runtime_repair_target_set(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_runtime_execution_cycle(
     stage: &str,
     next_action: &str,

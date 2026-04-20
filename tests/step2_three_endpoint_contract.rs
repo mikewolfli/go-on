@@ -1,7 +1,6 @@
 /// Step 2.4: Three-Endpoint Contract Consistency Validation
 /// Tests that repair_readiness and repair_history contracts are consistent
 /// across backend (Rust), addon (TypeScript), and GUI (Tauri) endpoints
-
 #[cfg(test)]
 mod three_endpoint_contract_tests {
     use serde_json::{json, Value};

@@ -98,11 +98,13 @@ enabled = true
 path = "acp_cache.sqlite3"
 default_ttl_seconds = 3600
 max_entries = 5000
+connection_string = "postgres://go_on_user:go_on_pass@localhost:5432/go_on"
 
 [vector]
 enabled = true
 auto_mode = true
 path = "acp_vector.sqlite3"
+connection_string = "postgres://go_on_user:go_on_pass@localhost:5432/go_on"
 dimensions = 192
 min_query_chars = 80
 top_k = 2

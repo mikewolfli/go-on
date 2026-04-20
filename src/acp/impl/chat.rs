@@ -2338,6 +2338,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn persist_session_distillation(
     server: &AcpServer,
     conversation_id: &str,
@@ -2590,14 +2591,22 @@ mod tests {
     use serde_json::json;
     use serde_json::Value;
 
+    #[cfg(not(feature = "backend-postgres"))]
+    use super::{process_chat_request, ChatParams};
+    #[cfg(not(feature = "backend-postgres"))]
     use crate::acp::server::ServerBuilder;
-    use crate::agent::{Agent, AgentRegistry, Message, StreamingSender};
+    #[cfg(not(feature = "backend-postgres"))]
+    use crate::agent::AgentRegistry;
+    use crate::agent::{Agent, Message, StreamingSender};
     use crate::config::{AppConfig, FlowConfig, PhaseConfig, PhaseOptions, VectorConfig};
+    #[cfg(not(feature = "backend-postgres"))]
     use crate::flow::FlowManager;
+    #[cfg(not(feature = "backend-postgres"))]
     use crate::rpc_protocol::chat_trace_context;
+    #[cfg(not(feature = "backend-postgres"))]
     use crate::vector::VectorStore;
 
-    use super::{build_phase_summary, process_chat_request, ChatParams};
+    use super::build_phase_summary;
 
     struct RecordingAgent {
         seen_messages: Arc<Mutex<Vec<Message>>>,

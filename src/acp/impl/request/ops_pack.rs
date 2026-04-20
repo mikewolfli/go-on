@@ -580,12 +580,12 @@ pub(super) async fn handle_release_readiness(
         1.0
     };
     let sla_p95_latency_ms = if metrics.total_requests > 0 {
-        metrics.avg_request_duration_ms as f64
+        metrics.avg_request_duration_ms
     } else {
         0.0
     };
     let sla_unit_cost_tokens = if metrics.total_requests > 0 {
-        (metrics.request_latency_sum_ms as f64 / metrics.total_requests as f64).round()
+        (metrics.request_latency_sum_ms / metrics.total_requests as f64).round()
     } else {
         0.0
     };

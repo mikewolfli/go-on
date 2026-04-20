@@ -1,3 +1,4 @@
+#![allow(clippy::await_holding_lock)]
 /// Transport parity gate — BLUE25
 ///
 /// Verifies that all four transport paths inject `platform_context` consistently:

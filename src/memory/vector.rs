@@ -19,7 +19,7 @@ use rusqlite::{ffi::sqlite3_auto_extension, params, Connection, OptionalExtensio
 use sha2::{Digest, Sha256};
 #[cfg(not(feature = "backend-postgres"))]
 use sqlite_vec::sqlite3_vec_init;
-#[cfg(not(feature = "backend-postgres"))]
+#[cfg(all(not(feature = "backend-postgres"), feature = "profile-local"))]
 use tracing::warn;
 
 /// Vector search hit
@@ -65,6 +65,7 @@ impl VectorPrecisionFeedback {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SqliteVectorMode {
     SqliteVec,
+    #[allow(dead_code)]
     JsonFallback,
 }
 
@@ -471,6 +472,7 @@ impl VectorStore {
 fn register_sqlite_vec_auto_extension() {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| unsafe {
+        #[allow(clippy::missing_transmute_annotations)]
         sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
     });
 }
@@ -503,7 +505,7 @@ fn resolve_sqlite_vector_mode(conn: &Connection) -> Result<SqliteVectorMode> {
 
 #[cfg(not(feature = "backend-postgres"))]
 fn embedding_blob(values: &[f32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(values.len() * std::mem::size_of::<f32>());
+    let mut bytes = Vec::with_capacity(std::mem::size_of_val(values));
     for value in values {
         bytes.extend_from_slice(&value.to_le_bytes());
     }

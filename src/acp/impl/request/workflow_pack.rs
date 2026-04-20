@@ -1,6 +1,5 @@
 /// Step 2 Auto-Repair Loop Integration for Workflow Pack
 /// Adds repair decision and governance control for workflow execution failures
-
 fn should_enable_auto_repair_for_workflow(
     failure_count: usize,
     governance_config: Option<&Value>,

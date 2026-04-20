@@ -999,13 +999,13 @@ async fn initialize_cache(
             "postgres cache enabled (ttl={}s, max_entries={})",
             cache_cfg.default_ttl_seconds, cache_cfg.max_entries
         );
-        return tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             ResponseCache::new(&url, cache_cfg.default_ttl_seconds, cache_cfg.max_entries)
                 .map(Arc::new)
                 .map(Some)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("cache init task join error: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("cache init task join error: {}", e))?
     }
 
     // ── SQLite backend (profile-local / profile-simple-server) ───────────────
@@ -1035,13 +1035,13 @@ async fn initialize_cache(
         #[cfg(feature = "profile-local")]
         {
             match result {
-                Ok(cache) => return Ok(cache),
+                Ok(cache) => Ok(cache),
                 Err(e) => {
                     warn!(
                         "sqlite cache init failed (adaptive, continuing without cache): {}",
                         e
                     );
-                    return Ok(None);
+                    Ok(None)
                 }
             }
         }
@@ -1073,13 +1073,13 @@ async fn initialize_vector_store(
             "postgres vector store enabled (dims={}, top_k={}, similarity={})",
             vector_cfg.dimensions, vector_cfg.top_k, vector_cfg.min_similarity
         );
-        return tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             VectorStore::new(&url, vector_cfg.dimensions, vector_cfg.max_entries)
                 .map(Arc::new)
                 .map(Some)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("vector init task join error: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("vector init task join error: {}", e))?
     }
 
     // ── SQLite backend (profile-local / profile-simple-server) ───────────────
@@ -1106,13 +1106,13 @@ async fn initialize_vector_store(
         #[cfg(feature = "profile-local")]
         {
             match result {
-                Ok(store) => return Ok(store),
+                Ok(store) => Ok(store),
                 Err(e) => {
                     warn!(
                         "sqlite vector store init failed (adaptive, continuing without vector): {}",
                         e
                     );
-                    return Ok(None);
+                    Ok(None)
                 }
             }
         }

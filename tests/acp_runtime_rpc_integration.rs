@@ -5200,6 +5200,13 @@ fn task_execute_returns_task_graph_checkpoint() {
         Some(json!({
             "task": "implement login feature",
             "requirement_confirmed": true,
+            "requirement_contract": {
+                "goal": "Add user login capability",
+                "scope": "auth module",
+                "acceptance_criteria": ["user can log in"],
+                "constraints": ["must be secure"],
+                "user_confirmed": true
+            }
         })),
     );
     let result = &execute["result"];
@@ -5246,6 +5253,13 @@ fn task_execute_returns_tool_loop_safety_governance() {
         Some(json!({
             "task": "implement search feature",
             "requirement_confirmed": true,
+            "requirement_contract": {
+                "goal": "Add search functionality",
+                "scope": "search module",
+                "acceptance_criteria": ["user can search"],
+                "constraints": ["must be fast"],
+                "user_confirmed": true
+            }
         })),
     );
     let result = &execute["result"];

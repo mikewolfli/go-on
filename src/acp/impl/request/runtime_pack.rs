@@ -989,7 +989,7 @@ pub(super) async fn handle_governance_status(
     let platform_mode = params
         .get("platform_mode")
         .and_then(Value::as_str)
-        .or_else(|| server.runtime_config.platform_mode.as_deref())
+        .or(server.runtime_config.platform_mode.as_deref())
         .unwrap_or("phase_compat");
     let phase_view = json!({
         "mode": "phase_compat",
@@ -1175,7 +1175,7 @@ pub(super) async fn handle_governance_status(
         blocking_issues.push("metrics_reconciliation_drift");
     }
     let zero_trust_ready = auth_component_ok && strict_component_ok;
-    let compliance_ready = zero_trust_ready && governance_audit.len() >= 1;
+    let compliance_ready = zero_trust_ready && !governance_audit.is_empty();
     let zero_trust_blocking_issues = vec![
         if !auth_component_ok {
             Some("entry_auth_not_hardened")
@@ -1191,9 +1191,11 @@ pub(super) async fn handle_governance_status(
     .into_iter()
     .flatten()
     .collect::<Vec<_>>();
-    let rbac_engine_ready = multi_user_enabled
-        .then_some(auth_component_ok && strict_component_ok)
-        .unwrap_or(true);
+    let rbac_engine_ready = if multi_user_enabled {
+        auth_component_ok && strict_component_ok
+    } else {
+        true
+    };
     let rbac_conflict_resolution_ready = dual_track_consistency_ready;
     let rbac_blocking_issues = vec![
         if multi_user_enabled && !auth_component_ok {
@@ -1218,10 +1220,9 @@ pub(super) async fn handle_governance_status(
     } else {
         1.0
     };
-    let sla_p95_ms = runtime_snapshot.avg_request_duration_ms as f64;
+    let sla_p95_ms = runtime_snapshot.avg_request_duration_ms;
     let sla_cost_per_task = if runtime_snapshot.total_requests > 0 {
-        (runtime_snapshot.request_latency_sum_ms as f64 / runtime_snapshot.total_requests as f64)
-            .round()
+        (runtime_snapshot.request_latency_sum_ms / runtime_snapshot.total_requests as f64).round()
     } else {
         0.0
     };
@@ -1266,7 +1267,7 @@ pub(super) async fn handle_governance_status(
     let subagent_architecture_ready = agent_registry.is_some() && registered_agent_total > 0;
     let subagent_collaboration_ready = subagent_architecture_ready && dual_track_consistency_ready;
     let subagent_observability_ready =
-        subagent_collaboration_ready && reconciliation_ok && governance_audit.len() >= 1;
+        subagent_collaboration_ready && reconciliation_ok && !governance_audit.is_empty();
     let knowledge_management_ready = dual_track_consistency_ready
         && !pua_plan.quality_compass.is_empty()
         && runtime_snapshot.total_requests >= runtime_snapshot.failed_requests;
