@@ -215,10 +215,10 @@ pub trait Agent: Send + Sync {
     ├── error.rs              # Custom error types
     ├── agent.rs              # Agent trait and registry
     ├── agents
-    �?  ├── mod.rs
-    �?  ├── copilot.rs
-    �?  ├── deepseek.rs
-    �?  └── wenxin.rs
+    │   ├── mod.rs
+    │   ├── copilot.rs
+    │   ├── deepseek.rs
+    │   └── wenxin.rs
     └── flow.rs               # Flow management: phase lookup and agent routing
 ```
 
