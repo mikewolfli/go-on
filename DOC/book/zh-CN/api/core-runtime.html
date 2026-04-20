@@ -1,0 +1,803 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>核心运行时 API - go-on Documentation</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-2459343d.css">
+        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../../searchindex-ef049cec.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../toc-9dc2bd9f.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">go-on Documentation</h1>
+
+                    <div class="right-buttons">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/your-org/go-on" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/your-org/go-on/edit/main/DOC/src/src/zh-CN/api/core-runtime.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="核心运行时-api"><a class="header" href="#核心运行时-api">核心运行时 API</a></h1>
+<h2 id="概述"><a class="header" href="#概述">概述</a></h2>
+<p>核心运行时 API 提供系统初始化、关闭、配置管理和基本运行时操作的端点。这些端点对于管理 go-on 运行时生命周期至关重要。</p>
+<h2 id="端点"><a class="header" href="#端点">端点</a></h2>
+<h3 id="健康检查"><a class="header" href="#健康检查">健康检查</a></h3>
+<h4 id="get-health"><a class="header" href="#get-health">GET /health</a></h4>
+<p>检查运行时的整体健康状态。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">GET /health HTTP/1.1
+Host: localhost:8090
+Accept: application/json
+</code></pre>
+<p><strong>查询参数：</strong></p>
+<ul>
+<li><code>verbose</code> (boolean, 可选)：包含详细的组件状态</li>
+<li><code>timeout</code> (integer, 可选)：超时时间（毫秒，默认：5000）</li>
+</ul>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "status": "healthy",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "version": "0.6.1",
+  "uptime_seconds": 3600,
+  "components": {
+    "database": "healthy",
+    "cache": "healthy",
+    "vector_store": "healthy",
+    "model_providers": {
+      "openai": "healthy",
+      "anthropic": "healthy"
+    }
+  }
+}
+</code></pre>
+<p><strong>状态码：</strong></p>
+<ul>
+<li><code>200 OK</code>：运行时健康</li>
+<li><code>503 Service Unavailable</code>：运行时不健康</li>
+</ul>
+<h4 id="get-healthready"><a class="header" href="#get-healthready">GET /health/ready</a></h4>
+<p>检查运行时是否准备好接受请求。</p>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "status": "ready",
+  "timestamp": "2024-01-01T00:00:00Z"
+}
+</code></pre>
+<h4 id="get-healthlive"><a class="header" href="#get-healthlive">GET /health/live</a></h4>
+<p>检查运行时进程是否存活（存活探针）。</p>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "status": "alive",
+  "timestamp": "2024-01-01T00:00:00Z"
+}
+</code></pre>
+<h3 id="运行时信息"><a class="header" href="#运行时信息">运行时信息</a></h3>
+<h4 id="get-runtimeinfo"><a class="header" href="#get-runtimeinfo">GET /runtime/info</a></h4>
+<p>获取详细的运行时信息。</p>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "version": "0.6.1",
+  "build_date": "2024-01-01T00:00:00Z",
+  "git_commit": "a1b2c3d4e5f6",
+  "features": ["backend-sqlite", "sqlite-vec"],
+  "protocols": ["acp_stdio", "acp_http", "mcp_stdio", "mcp_http"],
+  "config_path": "/path/to/config.toml",
+  "data_directory": "/path/to/data",
+  "start_time": "2024-01-01T00:00:00Z",
+  "uptime_seconds": 3600
+}
+</code></pre>
+<h4 id="get-runtimestats"><a class="header" href="#get-runtimestats">GET /runtime/stats</a></h4>
+<p>获取运行时统计信息。</p>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "requests": {
+    "total": 1000,
+    "successful": 950,
+    "failed": 50,
+    "rate_per_second": 10.5
+  },
+  "memory": {
+    "used_mb": 256,
+    "total_mb": 1024,
+    "peak_mb": 512
+  },
+  "cache": {
+    "hits": 800,
+    "misses": 200,
+    "hit_rate": 0.8,
+    "size": 5000,
+    "max_size": 10000
+  },
+  "vector_store": {
+    "entries": 1000,
+    "searches": 500,
+    "avg_search_time_ms": 150
+  }
+}
+</code></pre>
+<h3 id="配置管理"><a class="header" href="#配置管理">配置管理</a></h3>
+<h4 id="get-config"><a class="header" href="#get-config">GET /config</a></h4>
+<p>获取当前运行时配置。</p>
+<p><strong>查询参数：</strong></p>
+<ul>
+<li><code>include_secrets</code> (boolean, 可选)：包含密钥值（默认：false）</li>
+<li><code>format</code> (string, 可选)：输出格式：<code>json</code> 或 <code>toml</code>（默认：<code>json</code>）</li>
+</ul>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "default_phase": "coding",
+  "model_selection_mode": "adaptive",
+  "protocol": {
+    "mode": "adaptive"
+  },
+  "cache": {
+    "enabled": true,
+    "path": "acp_cache.sqlite3",
+    "default_ttl_seconds": 3600,
+    "max_entries": 5000
+  },
+  "vector": {
+    "enabled": true,
+    "auto_mode": true,
+    "path": "acp_vector.sqlite3",
+    "dimensions": 192
+  }
+}
+</code></pre>
+<h4 id="post-configreload"><a class="header" href="#post-configreload">POST /config/reload</a></h4>
+<p>从磁盘重新加载配置。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /config/reload HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "配置重新加载成功",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "changes": {
+    "added": [],
+    "modified": ["cache.max_entries"],
+    "removed": []
+  }
+}
+</code></pre>
+<h4 id="put-config"><a class="header" href="#put-config">PUT /config</a></h4>
+<p>更新运行时配置。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">PUT /config HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+
+{
+  "cache": {
+    "max_entries": 10000
+  }
+}
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "配置更新成功",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "requires_restart": false
+}
+</code></pre>
+<h3 id="初始化"><a class="header" href="#初始化">初始化</a></h3>
+<h4 id="post-initialize"><a class="header" href="#post-initialize">POST /initialize</a></h4>
+<p>使用新配置初始化运行时。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /initialize HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+
+{
+  "setup_level": "standard",
+  "config_overrides": {
+    "default_phase": "coding"
+  }
+}
+</code></pre>
+<p><strong>查询参数：</strong></p>
+<ul>
+<li><code>setup_level</code> (string, 可选)：<code>quick</code>、<code>standard</code> 或 <code>custom</code>（默认：<code>standard</code>）</li>
+<li><code>force</code> (boolean, 可选)：强制重新初始化（默认：false）</li>
+</ul>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "运行时初始化成功",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "config_path": "/path/to/config.toml",
+  "data_directory": "/path/to/data",
+  "components_initialized": ["database", "cache", "vector_store"]
+}
+</code></pre>
+<h3 id="关闭"><a class="header" href="#关闭">关闭</a></h3>
+<h4 id="post-shutdown"><a class="header" href="#post-shutdown">POST /shutdown</a></h4>
+<p>优雅地关闭运行时。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /shutdown HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+
+{
+  "timeout_seconds": 30,
+  "drain_connections": true
+}
+</code></pre>
+<p><strong>查询参数：</strong></p>
+<ul>
+<li><code>timeout_seconds</code> (integer, 可选)：优雅关闭的超时时间（默认：30）</li>
+<li><code>drain_connections</code> (boolean, 可选)：等待活动连接完成（默认：true）</li>
+</ul>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "关闭已启动",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "shutdown_timeout_seconds": 30
+}
+</code></pre>
+<h3 id="协议管理"><a class="header" href="#协议管理">协议管理</a></h3>
+<h4 id="get-protocols"><a class="header" href="#get-protocols">GET /protocols</a></h4>
+<p>获取可用的协议模式及其状态。</p>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "current_mode": "adaptive",
+  "available_modes": [
+    {
+      "name": "adaptive",
+      "description": "具有自适应路由的双栈能力",
+      "enabled": true,
+      "active": true
+    },
+    {
+      "name": "acp_stdio",
+      "description": "ACP over stdio",
+      "enabled": true,
+      "active": false
+    },
+    {
+      "name": "acp_http",
+      "description": "ACP over HTTP",
+      "enabled": true,
+      "active": false
+    },
+    {
+      "name": "mcp_stdio",
+      "description": "MCP over stdio",
+      "enabled": true,
+      "active": false
+    },
+    {
+      "name": "mcp_http",
+      "description": "MCP over HTTP",
+      "enabled": true,
+      "active": false
+    }
+  ]
+}
+</code></pre>
+<h4 id="post-protocolsmodeactivate"><a class="header" href="#post-protocolsmodeactivate">POST /protocols/{mode}/activate</a></h4>
+<p>激活特定的协议模式。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /protocols/acp_http/activate HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "协议模式已激活",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "previous_mode": "adaptive",
+  "new_mode": "acp_http",
+  "requires_restart": false
+}
+</code></pre>
+<h3 id="特性管理"><a class="header" href="#特性管理">特性管理</a></h3>
+<h4 id="get-features"><a class="header" href="#get-features">GET /features</a></h4>
+<p>获取启用的特性及其状态。</p>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "features": [
+    {
+      "name": "backend-sqlite",
+      "enabled": true,
+      "description": "SQLite 数据库支持",
+      "version": "0.39.0"
+    },
+    {
+      "name": "sqlite-vec",
+      "enabled": true,
+      "description": "SQLite 的向量扩展",
+      "version": "0.1.9"
+    },
+    {
+      "name": "otel",
+      "enabled": false,
+      "description": "OpenTelemetry 支持",
+      "version": null
+    }
+  ]
+}
+</code></pre>
+<h4 id="post-featuresnameenable"><a class="header" href="#post-featuresnameenable">POST /features/{name}/enable</a></h4>
+<p>启用特定特性。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /features/otel/enable HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "特性已启用",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "feature": "otel",
+  "requires_restart": true
+}
+</code></pre>
+<h4 id="post-featuresnamedisable"><a class="header" href="#post-featuresnamedisable">POST /features/{name}/disable</a></h4>
+<p>禁用特定特性。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /features/sqlite-vec/disable HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "特性已禁用",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "feature": "sqlite-vec",
+  "requires_restart": true
+}
+</code></pre>
+<h3 id="维护操作"><a class="header" href="#维护操作">维护操作</a></h3>
+<h4 id="post-maintenancegc"><a class="header" href="#post-maintenancegc">POST /maintenance/gc</a></h4>
+<p>运行垃圾回收。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /maintenance/gc HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+
+{
+  "components": ["cache", "vector_store"],
+  "aggressive": false
+}
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "垃圾回收完成",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "components": {
+    "cache": {
+      "entries_removed": 100,
+      "space_freed_mb": 10
+    },
+    "vector_store": {
+      "entries_removed": 50,
+      "space_freed_mb": 5
+    }
+  }
+}
+</code></pre>
+<h4 id="post-maintenancevacuum"><a class="header" href="#post-maintenancevacuum">POST /maintenance/vacuum</a></h4>
+<p>压缩数据库。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /maintenance/vacuum HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+
+{
+  "databases": ["cache", "vector_store"],
+  "analyze": true
+}
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "压缩完成",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "databases": {
+    "cache": {
+      "size_before_mb": 100,
+      "size_after_mb": 80,
+      "space_freed_mb": 20
+    },
+    "vector_store": {
+      "size_before_mb": 200,
+      "size_after_mb": 150,
+      "space_freed_mb": 50
+    }
+  }
+}
+</code></pre>
+<h3 id="诊断"><a class="header" href="#诊断">诊断</a></h3>
+<h4 id="get-diagnostics"><a class="header" href="#get-diagnostics">GET /diagnostics</a></h4>
+<p>获取运行时诊断信息。</p>
+<p><strong>查询参数：</strong></p>
+<ul>
+<li><code>level</code> (string, 可选)：<code>basic</code>、<code>detailed</code> 或 <code>full</code>（默认：<code>basic</code>）</li>
+<li><code>include_logs</code> (boolean, 可选)：包含最近日志（默认：false）</li>
+</ul>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "timestamp": "2024-01-01T00:00:00Z",
+  "system": {
+    "os": "Linux",
+    "arch": "x86_64",
+    "cpu_cores": 8,
+    "total_memory_mb": 16384,
+    "available_memory_mb": 8192
+  },
+  "runtime": {
+    "version": "0.6.1",
+    "uptime_seconds": 3600,
+    "threads": 12,
+    "memory_usage_mb": 256
+  },
+  "components": {
+    "database": {
+      "status": "healthy",
+      "connections": 5,
+      "size_mb": 100
+    },
+    "cache": {
+      "status": "healthy",
+      "entries": 5000,
+      "hit_rate": 0.85
+    }
+  },
+  "issues": [
+    {
+      "level": "warning",
+      "component": "vector_store",
+      "message": "向量存储接近容量限制",
+      "suggestion": "考虑增加 max_entries 或运行维护"
+    }
+  ]
+}
+</code></pre>
+<h2 id="websocket-端点"><a class="header" href="#websocket-端点">WebSocket 端点</a></h2>
+<h3 id="ws-wsruntime"><a class="header" href="#ws-wsruntime">WS /ws/runtime</a></h3>
+<p>实时运行时更新。</p>
+<p><strong>事件：</strong></p>
+<pre><code class="language-json">{
+  "type": "runtime.status_changed",
+  "data": {
+    "status": "healthy",
+    "timestamp": "2024-01-01T00:00:00Z"
+  }
+}
+</code></pre>
+<pre><code class="language-json">{
+  "type": "config.updated",
+  "data": {
+    "path": "cache.max_entries",
+    "old_value": 5000,
+    "new_value": 10000,
+    "timestamp": "2024-01-01T00:00:00Z"
+  }
+}
+</code></pre>
+<h2 id="命令行界面"><a class="header" href="#命令行界面">命令行界面</a></h2>
+<h3 id="健康检查-1"><a class="header" href="#健康检查-1">健康检查</a></h3>
+<pre><code class="language-bash">go-on --health
+go-on --health --verbose
+go-on --health --timeout 10000
+</code></pre>
+<h3 id="配置"><a class="header" href="#配置">配置</a></h3>
+<pre><code class="language-bash">go-on --config-show
+go-on --config-show --format toml
+go-on --config-reload
+go-on --config-update '{"cache.max_entries": 10000}'
+</code></pre>
+<h3 id="初始化-1"><a class="header" href="#初始化-1">初始化</a></h3>
+<pre><code class="language-bash">go-on --init
+go-on --init --setup-level standard
+go-on --init --config config.toml
+</code></pre>
+<h3 id="关闭-1"><a class="header" href="#关闭-1">关闭</a></h3>
+<pre><code class="language-bash">go-on --shutdown
+go-on --shutdown --timeout 60
+</code></pre>
+<h2 id="错误码"><a class="header" href="#错误码">错误码</a></h2>
+<h3 id="常见错误"><a class="header" href="#常见错误">常见错误</a></h3>
+<ul>
+<li><code>RUNTIME_NOT_INITIALIZED</code>：运行时未初始化</li>
+<li><code>CONFIG_INVALID</code>：配置无效或格式错误</li>
+<li><code>FEATURE_NOT_AVAILABLE</code>：请求的特性不可用</li>
+<li><code>PROTOCOL_NOT_SUPPORTED</code>：请求的协议不支持</li>
+<li><code>MAINTENANCE_IN_PROGRESS</code>：维护操作已在进行中</li>
+</ul>
+<h3 id="错误示例"><a class="header" href="#错误示例">错误示例</a></h3>
+<pre><code class="language-json">{
+  "error": {
+    "code": "RUNTIME_NOT_INITIALIZED",
+    "message": "运行时未初始化。请先运行 /initialize。",
+    "details": {
+      "required_action": "initialize"
+    }
+  }
+}
+</code></pre>
+<h2 id="速率限制"><a class="header" href="#速率限制">速率限制</a></h2>
+<h3 id="默认限制"><a class="header" href="#默认限制">默认限制</a></h3>
+<ul>
+<li>健康端点：每分钟 60 个请求</li>
+<li>配置端点：每分钟 30 个请求</li>
+<li>维护端点：每分钟 10 个请求</li>
+</ul>
+<h3 id="头部"><a class="header" href="#头部">头部</a></h3>
+<pre><code>X-RateLimit-Limit: 60
+X-RateLimit-Remaining: 55
+X-RateLimit-Reset: 1614556800
+</code></pre>
+<h2 id="安全考虑"><a class="header" href="#安全考虑">安全考虑</a></h2>
+<h3 id="认证"><a class="header" href="#认证">认证</a></h3>
+<ul>
+<li>本地模式：可选的 API 密钥</li>
+<li>服务器模式：必需的 API 密钥</li>
+<li>敏感操作：始终需要认证</li>
+</ul>
+<h3 id="授权"><a class="header" href="#授权">授权</a></h3>
+<ul>
+<li>健康端点：公开（只读）</li>
+<li>配置端点：需要管理员权限</li>
+<li>维护端点：需要管理员权限</li>
+</ul>
+<h3 id="审计日志"><a class="header" href="#审计日志">审计日志</a></h3>
+<p>所有配置更改和维护操作都记录到审计日志中。</p>
+<h2 id="最佳实践"><a class="header" href="#最佳实践">最佳实践</a></h2>
+<h3 id="健康监控"><a class="header" href="#健康监控">健康监控</a></h3>
+<ul>
+<li>使用 <code>/health</code> 进行就绪探针</li>
+<li>使用 <code>/health/live</code> 进行存活探针</li>
+<li>监控响应时间和错误率</li>
+</ul>
+<h3 id="配置管理-1"><a class="header" href="#配置管理-1">配置管理</a></h3>
+<ul>
+<li>使用版本控制管理配置文件</li>
+<li>先在暂存环境测试配置更改</li>
+<li>使用 <code>/config/reload</code> 进行动态更新</li>
+</ul>
+<h3 id="维护调度"><a class="header" href="#维护调度">维护调度</a></h3>
+<ul>
+<li>在非高峰时段安排维护</li>
+<li>运行压缩前监控磁盘空间</li>
+<li>重大维护操作前备份数据</li>
+</ul>
+<h2 id="下一步"><a class="header" href="#下一步">下一步</a></h2>
+<ul>
+<li>探索 <a href="./safety-governance.html">安全和治理 API</a></li>
+<li>了解 <a href="./observability.html">可观测性 API</a></li>
+<li>查看 <a href="./workflow-task.html">工作流和任务 API</a></li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../zh-CN/api/overview.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../../zh-CN/api/safety-governance.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../zh-CN/api/overview.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../../zh-CN/api/safety-governance.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-c2a407aa.js"></script>
+
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

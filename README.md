@@ -1,4 +1,4 @@
-﻿# go-on
+# go-on
 
 English | [简体中文](README.zh-CN.md)
 
@@ -12,32 +12,53 @@ go-on is a Rust runtime for ACP/MCP-oriented agent orchestration, governance, an
 - Default feature: `local-acp-sqlite`
 - Optional feature scaffold: `server-mcp-postgres`
 
-## Repository Layout (Current)
+## Repository Layout
 
-Top-level key directories:
-
-- `src/`: backend runtime implementation
+### Core Directories
+- `src/`: Backend runtime implementation (Rust)
 - `GUI/`: Tauri + Vue desktop console
 - `vscode-addon/`: VS Code extension
-- `requests/`: NDJSON scenario benchmarks and replay inputs
-- `scripts/`: quality/release gate scripts
-- `deploy/nginx/`: ingress and TLS reverse-proxy templates
-- `tests/`, `test_i18n/`: integration and i18n test suites
-- `languages/`: runtime i18n resources
-- `RULES/`: governance and coding rule packs
 
-Backend source modules under `src/`:
+### Configuration & Scripts
+- `config/`: Configuration files (`config.toml`, `config.production.toml`, `providers.toml`)
+- `scripts/`: Quality/release gate scripts and deployment utilities
+  - `scripts/deploy/nginx/`: Ingress and TLS reverse-proxy templates
 
+### Documentation
+- `docs/`: Comprehensive project documentation
+  - `docs/blueprints/`: Blueprint documents (blue1.md to blue34.md)
+  - `docs/design/`: Design documents and future planning
+  - `docs/guides/`: Implementation guides and status documents
+  - `docs/reports/`: Project evaluation and code review reports
+- `DOC/`: Project documentation in book format
+
+### Testing & Development
+- `tests/`: Integration tests and test artifacts
+  - `tests/artifacts/`: Test artifacts and benchmark results
+  - `tests/requests/`: NDJSON scenario benchmarks and replay inputs
+- `test_i18n/`: Internationalization test suites
+
+### Resources & Rules
+- `languages/`: Runtime i18n resources and PUA rules
+- `RULES/`: Governance and coding rule packs
+- `contracts/`: Editor capability matrix and contracts
+
+### Archive & Temporary Files
+- `archive/`: Archived temporary files and logs
+  - `archive/temp/`: Temporary compilation outputs and logs
+  - `archive/logs/`: Runtime log files
+
+### Backend Source Modules (`src/`)
 - `acp`: ACP server, request routing, workflow/task/chat handling
-- `agents`: provider adapters and agent contracts
-- `core`: config, setup, readiness, errors
-- `governance`: policy/rule controls and audit support
-- `intelligence`: selectors, reinforcement, quality models
-- `optimization`: cost/speed/reliability/failure-prevention
-- `orchestration`: flow/mode/router/tool orchestration
-- `observability`: metrics/trace/perf helpers
-- `memory`: cache/vector stores
-- `protocol`: protocol server and JSON-RPC support
+- `agents`: Provider adapters and agent contracts
+- `core`: Config, setup, readiness, errors
+- `governance`: Policy/rule controls and audit support
+- `intelligence`: Selectors, reinforcement, quality models
+- `optimization`: Cost/speed/reliability/failure-prevention
+- `orchestration`: Flow/mode/router/tool orchestration
+- `observability`: Metrics/trace/performance helpers
+- `memory`: Cache/vector stores
+- `protocol`: Protocol server and JSON-RPC support
 - `mcp`, `i18n`: MCP adapter helpers and language runtime
 
 ## Runtime Modes
@@ -76,22 +97,22 @@ cargo test --all-targets
 ### 2) First-time Setup
 
 ```bash
-cargo run -- --init --config config.toml
-cargo run -- --check --config config.toml
+cargo run -- --init --config config/config.toml
+cargo run -- --check --config config/config.toml
 ```
 
 Optional setup levels:
 
 ```bash
-cargo run -- --init --setup-level quick --config config.toml
-cargo run -- --init --setup-level standard --config config.toml
-cargo run -- --init --setup-level custom --config config.toml
+cargo run -- --init --setup-level quick --config config/config.toml
+cargo run -- --init --setup-level standard --config config/config.toml
+cargo run -- --init --setup-level custom --config config/config.toml
 ```
 
 ### 3) Start Runtime
 
-- Linux/macOS: `./start-go-on.sh`
-- Windows: `start-go-on.bat`
+- Linux/macOS: `./scripts/start-go-on.sh`
+- Windows: `scripts/start-go-on.bat`
 
 Default health endpoint:
 
@@ -101,30 +122,30 @@ Default health endpoint:
 
 Production-oriented template:
 
-- `config.production.toml`
+- `config/config.production.toml`
 
 Current baseline includes:
 
-- loopback bind by default
-- entry auth + entry rate limiting options
-- strict production fail-fast (`runtime.production_strict = true`)
+- Loopback bind by default
+- Entry auth + entry rate limiting options
+- Strict production fail-fast (`runtime.production_strict = true`)
 - OTEL-related runtime settings
 
 ### API Key Setup (production mode)
 
-When running with `config.production.toml`, entry authentication is enabled by default.
+When running with `config/config.production.toml`, entry authentication is enabled by default.
 Set the following environment variable **before** starting the server:
 
 ```bash
 # Linux / macOS
 export GO_ON_ENTRY_API_KEY="your-secret-key-here"
-./start-go-on.sh
+./scripts/start-go-on.sh
 ```
 
 ```powershell
 # Windows
 $env:GO_ON_ENTRY_API_KEY = "your-secret-key-here"
-.\start-go-on.bat
+scripts\start-go-on.bat
 ```
 
 All RPC requests must include the key in the `Authorization` header:
@@ -139,24 +160,24 @@ If this variable is missing or empty the server will reject all requests with er
 
 Ingress and TLS templates:
 
-- `deploy/nginx/go-on.conf`
-- `deploy/nginx/README.md`
+- `scripts/deploy/nginx/go-on.conf`
+- `scripts/deploy/nginx/README.md`
 
 Release readiness checklist:
 
-- `RELEASE_READINESS.md`
+- `docs/RELEASE_READINESS.md`
 
 ## Scenario and Gate Tooling
 
-Scenario replay assets are in `requests/` (runtime health, governance, cost, harness, security, release drill, etc.).
+Scenario replay assets are in `tests/requests/` (runtime health, governance, cost, harness, security, release drill, etc.).
 
-Gate scripts:
+Gate scripts (located in `scripts/`):
 
 - `scripts/run-quality-gate.sh`
 - `scripts/run-quality-gate.ps1`
 - `scripts/run-release-readiness-gate.sh`
 - `scripts/run-release-readiness-gate.ps1`
-- `test_ci.sh`
+- `scripts/test_ci.sh`
 
 ## Cross-surface Components
 
@@ -177,12 +198,36 @@ Representative groups currently exposed:
 - Learning/intelligence: `learning.summary`, `learning.replay`, `learning.guardrail`, `selector.status`, `knowledge.distill`, `rl.alignment.offline_eval`, `hardness.status`
 - Optimization/ops: `cost.status`, `config.baseline`, `error.contract`, `build.repro`, `data.lifecycle`, `harness.status`, `optimization.peak`, `quality.baseline`
 
-## Related Docs
+## Related Documentation
 
-- `blue15.md` (implementation and progress ledger)
-- `README-PUA-UNIVERSAL.md`
-- `MCP_LAYER.md`
-- `GO-ON_PUA_IMPLEMENTATION.md`
+Comprehensive documentation is organized in the `docs/` directory:
+
+### Blueprints (`docs/blueprints/`)
+- `blue1.md` to `blue34.md` - Implementation blueprints and progress ledger
+
+### Design Documents (`docs/design/`)
+- `design.md` - System design overview
+- `FUTURE*.md` - Future planning documents
+- `future-last.md` - Comprehensive future improvement plan
+
+### Guides (`docs/guides/`)
+- `README-PUA-UNIVERSAL.md` - PUA universal implementation guide
+- `MCP_LAYER.md` - MCP layer implementation details
+- `GO-ON_PUA_IMPLEMENTATION.md` - PUA implementation specifics
+- `IMPLEMENTATION_STATUS.md` - Current implementation status
+- `MIGRATION_STATUS.md` - Migration status and plans
+- `PHASE_10_COMPLETE_IMPLEMENTATION.md` - Phase 10 implementation details
+
+### Reports (`docs/reports/`)
+- `PROJECT_EVALUATION_REPORT.md` - Comprehensive project evaluation
+- `CODE_REVIEW_FINAL_REPORT.md` - Code review findings
+- `PHASE_10_DELIVERY_REPORT.md` - Phase 10 delivery report
+- `MIGRATION_FINAL_SUMMARY.md` - Migration summary
+
+### Other Key Documents
+- `docs/RELEASE_READINESS.md` - Release readiness checklist
+- `docs/RULES.md` - Project rules and guidelines
+- `docs/DEVELOPMENT_RULES.md` - Development rules and standards
 
 ## License
 

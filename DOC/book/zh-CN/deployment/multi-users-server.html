@@ -1,0 +1,1001 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>多用户服务器模式 - go-on Documentation</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-2459343d.css">
+        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../../searchindex-ef049cec.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../toc-9dc2bd9f.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">go-on Documentation</h1>
+
+                    <div class="right-buttons">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/your-org/go-on" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/your-org/go-on/edit/main/DOC/src/src/zh-CN/deployment/multi-users-server.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="多用户服务器模式部署"><a class="header" href="#多用户服务器模式部署">多用户服务器模式部署</a></h1>
+<h2 id="概述"><a class="header" href="#概述">概述</a></h2>
+<p>多用户服务器模式（<code>profile-multi-users-server</code>）是 go-on 的企业级部署配置，专为具有多个并发用户的生产环境设计。它使用 PostgreSQL 和 pgvector 进行可扩展存储，并提供安全、监控和高可用性的高级功能。</p>
+<h2 id="特性"><a class="header" href="#特性">特性</a></h2>
+<h3 id="企业能力"><a class="header" href="#企业能力">企业能力</a></h3>
+<ul>
+<li><strong>多用户支持</strong>：专为多个用户并发访问设计</li>
+<li><strong>PostgreSQL 存储</strong>：带 pgvector 扩展的可扩展数据库</li>
+<li><strong>高可用性</strong>：内置冗余和故障转移支持</li>
+<li><strong>高级安全</strong>：基于角色的访问控制、审计日志</li>
+<li><strong>企业监控</strong>：全面的可观测性堆栈</li>
+<li><strong>可扩展性</strong>：水平扩展能力</li>
+</ul>
+<h3 id="架构"><a class="header" href="#架构">架构</a></h3>
+<pre><code>多用户服务器架构：
+├── 应用层：go-on 运行时实例
+├── 数据库层：带 pgvector 的 PostgreSQL
+├── 缓存层：Redis（可选）
+├── 负载均衡器：流量分发
+├── 监控：Prometheus、Grafana、ELK
+└── 备份：自动化备份系统
+</code></pre>
+<h2 id="配置"><a class="header" href="#配置">配置</a></h2>
+<h3 id="服务器配置"><a class="header" href="#服务器配置">服务器配置</a></h3>
+<p>创建 <code>config/multi-users-server.toml</code>：</p>
+<pre><code class="language-toml"># config/multi-users-server.toml
+default_phase = "coding"
+model_selection_mode = "adaptive"
+
+[protocol]
+mode = "mcp_http"  # 多用户访问的 MCP over HTTP
+
+[runtime]
+acp_http_bind_addr = "0.0.0.0:8090"
+production_strict = true
+entry_auth_enabled = true
+entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
+entry_rate_limit_rpm = 5000
+entry_rate_limit_burst = 1000
+session_timeout_minutes = 60
+max_sessions_per_user = 10
+
+[database]
+type = "postgres"
+host = "localhost"
+port = 5432
+database = "go_on_production"
+username_env = "GO_ON_DB_USERNAME"
+password_env = "GO_ON_DB_PASSWORD"
+pool_size = 20
+connection_timeout_seconds = 30
+ssl_mode = "prefer"
+
+[cache]
+enabled = true
+type = "database"  # 使用 PostgreSQL 作为缓存
+# 可选 Redis 缓存
+# type = "redis"
+# redis_url = "redis://localhost:6379"
+
+[vector]
+enabled = true
+type = "pgvector"
+dimensions = 768  # 企业使用的高维度
+top_k = 10
+min_similarity = 0.7
+
+[security]
+rbac_enabled = true
+audit_logging_enabled = true
+data_encryption_enabled = true
+mfa_enabled = false  # 可选：更高安全性时启用
+
+[observability]
+otel_enabled = true
+otel_exporter = "otlp"
+otel_endpoint = "http://localhost:4317"
+metrics_port = 9090
+tracing_sampling_rate = 0.1
+</code></pre>
+<h3 id="特性标志"><a class="header" href="#特性标志">特性标志</a></h3>
+<p>多用户服务器模式需要：</p>
+<ul>
+<li><code>backend-postgres</code>：PostgreSQL 数据库支持</li>
+<li><code>postgres</code>：PostgreSQL 客户端库</li>
+<li><code>pgvector</code>：PostgreSQL 的向量扩展</li>
+</ul>
+<h2 id="安装"><a class="header" href="#安装">安装</a></h2>
+<h3 id="为企业部署构建"><a class="header" href="#为企业部署构建">为企业部署构建</a></h3>
+<pre><code class="language-bash"># 使用 multi-users-server 配置文件构建
+cargo build --no-default-features -F profile-multi-users-server
+
+# 或显式启用特性
+cargo build --features "backend-postgres postgres pgvector"
+</code></pre>
+<h3 id="系统要求"><a class="header" href="#系统要求">系统要求</a></h3>
+<ul>
+<li><strong>CPU</strong>：推荐 4+ 核心</li>
+<li><strong>内存</strong>：8GB+ RAM</li>
+<li><strong>存储</strong>：50GB+ 可用空间（需要 SSD）</li>
+<li><strong>网络</strong>：高速、可靠的连接</li>
+<li><strong>数据库</strong>：PostgreSQL 14+ 带 pgvector 扩展</li>
+</ul>
+<h3 id="docker-compose-设置"><a class="header" href="#docker-compose-设置">Docker Compose 设置</a></h3>
+<p>创建 <code>docker-compose.yml</code>：</p>
+<pre><code class="language-yaml">version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: go_on_production
+      POSTGRES_USER: go_on
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U go_on"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  go-on:
+    build:
+      context: .
+      dockerfile: Dockerfile.multi-users
+    environment:
+      GO_ON_DB_USERNAME: go_on
+      GO_ON_DB_PASSWORD: ${DB_PASSWORD}
+      GO_ON_ENTRY_API_KEY: ${ENTRY_API_KEY}
+      RUST_LOG: info
+    ports:
+      - "8090:8090"
+      - "9090:9090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./config/multi-users-server.toml:/app/config.toml
+      - ./logs:/app/logs
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+</code></pre>
+<h2 id="数据库设置"><a class="header" href="#数据库设置">数据库设置</a></h2>
+<h3 id="postgresql-配置"><a class="header" href="#postgresql-配置">PostgreSQL 配置</a></h3>
+<p>创建 <code>init.sql</code> 用于数据库初始化：</p>
+<pre><code class="language-sql">-- 创建数据库和扩展
+CREATE DATABASE go_on_production;
+\c go_on_production;
+
+-- 启用所需扩展
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- 创建表
+CREATE TABLE IF NOT EXISTS cache (
+    id SERIAL PRIMARY KEY,
+    key VARCHAR(512) UNIQUE NOT NULL,
+    value TEXT NOT NULL,
+    ttl_seconds INTEGER DEFAULT 3600,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP GENERATED ALWAYS AS (created_at + ttl_seconds * INTERVAL '1 second') STORED
+);
+
+CREATE TABLE IF NOT EXISTS vector_store (
+    id SERIAL PRIMARY KEY,
+    embedding vector(768),
+    content TEXT NOT NULL,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(255) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(50) DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    session_token VARCHAR(255) UNIQUE NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    action VARCHAR(255) NOT NULL,
+    resource VARCHAR(255),
+    details JSONB,
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 创建索引
+CREATE INDEX idx_cache_key ON cache(key);
+CREATE INDEX idx_cache_expires_at ON cache(expires_at);
+CREATE INDEX idx_vector_embedding ON vector_store USING ivfflat (embedding vector_cosine_ops);
+CREATE INDEX idx_users_username ON users(username);
+CREATE INDEX idx_sessions_token ON sessions(session_token);
+CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at);
+
+-- 创建角色和权限
+CREATE ROLE go_on_app WITH LOGIN PASSWORD '${APP_DB_PASSWORD}';
+GRANT CONNECT ON DATABASE go_on_production TO go_on_app;
+GRANT USAGE ON SCHEMA public TO go_on_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO go_on_app;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO go_on_app;
+</code></pre>
+<h3 id="数据库性能调优"><a class="header" href="#数据库性能调优">数据库性能调优</a></h3>
+<p>更新 <code>postgresql.conf</code>：</p>
+<pre><code class="language-ini"># 连接设置
+max_connections = 200
+shared_buffers = 2GB
+effective_cache_size = 6GB
+
+# 性能设置
+maintenance_work_mem = 512MB
+checkpoint_completion_target = 0.9
+wal_buffers = 16MB
+default_statistics_target = 100
+
+# 查询优化
+random_page_cost = 1.1
+effective_io_concurrency = 200
+work_mem = 32MB
+</code></pre>
+<h2 id="部署"><a class="header" href="#部署">部署</a></h2>
+<h3 id="kubernetes-部署"><a class="header" href="#kubernetes-部署">Kubernetes 部署</a></h3>
+<p>创建 <code>kubernetes/deployment.yaml</code>：</p>
+<pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-on
+  namespace: go-on-production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: go-on
+  template:
+    metadata:
+      labels:
+        app: go-on
+    spec:
+      containers:
+      - name: go-on
+        image: your-registry/go-on:multi-users-latest
+        ports:
+        - containerPort: 8090
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: GO_ON_DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: go-on-secrets
+              key: db-username
+        - name: GO_ON_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: go-on-secrets
+              key: db-password
+        - name: GO_ON_ENTRY_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: go-on-secrets
+              key: entry-api-key
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8090
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8090
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: go-on-service
+  namespace: go-on-production
+spec:
+  selector:
+    app: go-on
+  ports:
+  - port: 80
+    targetPort: 8090
+    name: http
+  - port: 9090
+    targetPort: 9090
+    name: metrics
+  type: LoadBalancer
+</code></pre>
+<h3 id="负载均衡器配置"><a class="header" href="#负载均衡器配置">负载均衡器配置</a></h3>
+<p>创建 <code>nginx/load-balancer.conf</code>：</p>
+<pre><code class="language-nginx">upstream go_on_backend {
+    least_conn;
+    server go-on-1:8090;
+    server go-on-2:8090;
+    server go-on-3:8090;
+    keepalive 32;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name go-on.example.com;
+    
+    ssl_certificate /etc/ssl/certs/go-on.crt;
+    ssl_certificate_key /etc/ssl/private/go-on.key;
+    
+    # SSL 配置
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512;
+    ssl_prefer_server_ciphers off;
+    
+    location / {
+        proxy_pass http://go_on_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # 超时设置
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+    
+    location /health {
+        proxy_pass http://go_on_backend/health;
+        access_log off;
+    }
+    
+    location /metrics {
+        proxy_pass http://go_on_backend/metrics;
+        access_log off;
+    }
+}
+</code></pre>
+<h2 id="安全"><a class="header" href="#安全">安全</a></h2>
+<h3 id="认证和授权"><a class="header" href="#认证和授权">认证和授权</a></h3>
+<pre><code class="language-toml">[security.authentication]
+type = "jwt"
+jwt_secret_env = "GO_ON_JWT_SECRET"
+token_expiry_hours = 24
+refresh_token_expiry_days = 7
+
+[security.authorization]
+rbac_enabled = true
+roles = ["admin", "user", "viewer"]
+default_role = "user"
+
+[security.audit]
+enabled = true
+retention_days = 90
+sensitive_fields = ["password", "api_key", "token"]
+</code></pre>
+<h3 id="网络安全"><a class="header" href="#网络安全">网络安全</a></h3>
+<pre><code class="language-bash"># 防火墙规则
+sudo ufw allow 443/tcp  # HTTPS
+sudo ufw allow 5432/tcp  # PostgreSQL
+sudo ufw allow 6379/tcp  # Redis
+sudo ufw allow 9090/tcp  # 指标
+sudo ufw allow 4317/tcp  # OpenTelemetry
+
+# 启用防火墙
+sudo ufw --force enable
+</code></pre>
+<h3 id="密钥管理"><a class="header" href="#密钥管理">密钥管理</a></h3>
+<pre><code class="language-bash"># 使用 HashiCorp Vault
+vault kv put secret/go-on \
+  db_username=go_on \
+  db_password=$(openssl rand -base64 32) \
+  entry_api_key=$(openssl rand -base64 48) \
+  jwt_secret=$(openssl rand -base64 64)
+
+# 环境变量
+export GO_ON_DB_USERNAME=$(vault kv get -field=db_username secret/go-on)
+export GO_ON_DB_PASSWORD=$(vault kv get -field=db_password secret/go-on)
+export GO_ON_ENTRY_API_KEY=$(vault kv get -field=entry_api_key secret/go-on)
+export GO_ON_JWT_SECRET=$(vault kv get -field=jwt_secret secret/go-on)
+</code></pre>
+<h2 id="监控和可观测性"><a class="header" href="#监控和可观测性">监控和可观测性</a></h2>
+<h3 id="prometheus-配置"><a class="header" href="#prometheus-配置">Prometheus 配置</a></h3>
+<p>创建 <code>prometheus.yml</code>：</p>
+<pre><code class="language-yaml">global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'go-on'
+    static_configs:
+      - targets: ['go-on:9090']
+    metrics_path: '/metrics/prometheus'
+    
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+      
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - 'alerts.yml'
+</code></pre>
+<h3 id="grafana-仪表板"><a class="header" href="#grafana-仪表板">Grafana 仪表板</a></h3>
+<p>创建 <code>grafana/dashboards/go-on.json</code> 包含关键指标：</p>
+<ul>
+<li>请求率和延迟</li>
+<li>错误率和类型</li>
+<li>数据库性能</li>
+<li>缓存命中率</li>
+<li>用户活动</li>
+<li>资源利用率</li>
+</ul>
+<h3 id="日志聚合"><a class="header" href="#日志聚合">日志聚合</a></h3>
+<pre><code class="language-toml">[logging]
+level = "info"
+format = "json"
+outputs = ["file", "stdout", "loki"]
+
+[logging.loki]
+enabled = true
+url = "http://loki:3100"
+labels = ["app=go-on", "environment=production"]
+batch_size = 1000
+batch_timeout_seconds = 5
+</code></pre>
+<h2 id="备份和灾难恢复"><a class="header" href="#备份和灾难恢复">备份和灾难恢复</a></h2>
+<h3 id="数据库备份"><a class="header" href="#数据库备份">数据库备份</a></h3>
+<pre><code class="language-bash">#!/bin/bash
+# backup.sh
+BACKUP_DIR="/backup/go-on"
+DATE=$(date +%Y%m%d_%H%M%S)
+
+# 备份 PostgreSQL
+pg_dump -h localhost -U go_on -d go_on_production \
+  --format=custom \
+  --file="$BACKUP_DIR/go-on-$DATE.dump"
+
+# 备份配置
+cp /opt/go-on/config/multi-users-server.toml "$BACKUP_DIR/config-$DATE.toml"
+
+# 上传到云存储
+aws s3 cp "$BACKUP_DIR/go-on-$DATE.dump" s3://go-on-backups/
+aws s3 cp "$BACKUP_DIR/config-$DATE.toml" s3://go-on-backups/
+
+# 清理旧备份（保留 30 天）
+find $BACKUP_DIR -name "*.dump" -mtime +30 -delete
+find $BACKUP_DIR -name "*.toml" -mtime +30 -delete
+</code></pre>
+<h3 id="灾难恢复计划"><a class="header" href="#灾难恢复计划">灾难恢复计划</a></h3>
+<ol>
+<li><strong>恢复时间目标 (RTO)</strong>：1 小时</li>
+<li><strong>恢复点目标 (RPO)</strong>：15 分钟</li>
+<li><strong>备份频率</strong>：每小时增量，每日完整</li>
+<li><strong>测试</strong>：每月恢复演练</li>
+</ol>
+<h2 id="扩展"><a class="header" href="#扩展">扩展</a></h2>
+<h3 id="水平扩展"><a class="header" href="#水平扩展">水平扩展</a></h3>
+<pre><code class="language-yaml"># Kubernetes 水平 Pod 自动扩展器
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: go-on-hpa
+  namespace: go-on-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: go-on
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+</code></pre>
+<h3 id="数据库扩展"><a class="header" href="#数据库扩展">数据库扩展</a></h3>
+<pre><code class="language-sql">-- 用于扩展读取的只读副本
+CREATE PUBLICATION go_on_publication FOR ALL TABLES;
+CREATE SUBSCRIPTION go_on_subscription
+  CONNECTION 'host=replica-server port=5432 dbname=go_on_production user=replication_user password=secret'
+  PUBLICATION go_on_publication;
+
+-- 大表分区
+CREATE TABLE cache_partitioned (
+    LIKE cache INCLUDING ALL
+) PARTITION BY RANGE (created_at);
+
+CREATE TABLE cache_2024_q1 PARTITION OF cache_partitioned
+    FOR VALUES FROM ('2024-01-01') TO ('2024-04-01');
+CREATE TABLE cache_2024_q2 PARTITION OF cache_partitioned
+    FOR VALUES FROM ('2024-04-01') TO ('2024-07-01');
+</code></pre>
+<h2 id="迁移"><a class="header" href="#迁移">迁移</a></h2>
+<h3 id="从简单服务器模式迁移"><a class="header" href="#从简单服务器模式迁移">从简单服务器模式迁移</a></h3>
+<pre><code class="language-bash"># 从简单服务器导出数据
+pg_dump -h simple-server -U go_on -d go_on_simple \
+  --format=custom \
+  --file=simple-server-export.dump
+
+# 导入到多用户服务器
+pg_restore -h multi-users-server -U go_on -d go_on_production \
+  --clean \
+  --if-exists \
+  simple-server-export.dump
+
+# 更新配置
+cp config/simple-server.toml config/multi-users-server.toml
+# 在新配置中更新数据库设置
+</code></pre>
+<h3 id="零停机迁移"><a class="header" href="#零停机迁移">零停机迁移</a></h3>
+<ol>
+<li><strong>阶段 1</strong>：在旧系统旁边设置新基础设施</li>
+<li><strong>阶段 2</strong>：开始向两个系统双重写入</li>
+<li><strong>阶段 3</strong>：将读取流量迁移到新系统</li>
+<li><strong>阶段 4</strong>：将写入流量迁移到新系统</li>
+<li><strong>阶段 5</strong>：停用旧系统</li>
+</ol>
+<h2 id="故障排除"><a class="header" href="#故障排除">故障排除</a></h2>
+<h3 id="性能问题"><a class="header" href="#性能问题">性能问题</a></h3>
+<h4 id="数据库瓶颈"><a class="header" href="#数据库瓶颈">数据库瓶颈</a></h4>
+<pre><code class="language-sql">-- 识别慢查询
+SELECT query, calls, total_time, mean_time
+FROM pg_stat_statements
+ORDER BY mean_time DESC
+LIMIT 10;
+
+-- 检查表大小
+SELECT schemaname, tablename, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename))
+FROM pg_tables
+WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
+
+-- 检查索引使用情况
+SELECT schemaname, tablename, indexname, idx_scan, idx_tup_read, idx_tup_fetch
+FROM pg_stat_user_indexes
+ORDER BY idx_scan;
+</code></pre>
+<h4 id="应用问题"><a class="header" href="#应用问题">应用问题</a></h4>
+<pre><code class="language-bash"># 检查应用日志
+kubectl logs -l app=go-on --tail=100
+kubectl logs -l app=go-on --since=1h
+
+# 检查资源使用情况
+kubectl top pods -l app=go-on
+kubectl describe pods -l app=go-on
+
+# 检查网络连接
+kubectl exec go-on-pod -- curl http://postgres:5432
+kubectl exec go-on-pod -- curl http://redis:6379
+</code></pre>
+<h3 id="安全问题"><a class="header" href="#安全问题">安全问题</a></h3>
+<h4 id="审计日志审查"><a class="header" href="#审计日志审查">审计日志审查</a></h4>
+<pre><code class="language-sql">-- 审查最近的安全事件
+SELECT *
+FROM audit_logs
+WHERE action IN ('login_failed', 'access_denied', 'privilege_escalation')
+ORDER BY created_at DESC
+LIMIT 100;
+
+-- 检查可疑活动
+SELECT user_id, COUNT(*) as failed_attempts, MIN(created_at) as first_attempt, MAX(created_at) as last_attempt
+FROM audit_logs
+WHERE action = 'login_failed'
+  AND created_at &gt; NOW() - INTERVAL '1 hour'
+GROUP BY user_id
+HAVING COUNT(*) &gt; 5;
+</code></pre>
+<h4 id="安全扫描"><a class="header" href="#安全扫描">安全扫描</a></h4>
+<pre><code class="language-bash"># 运行漏洞扫描
+trivy image your-registry/go-on:multi-users-latest
+
+# 检查代码中的密钥
+gitleaks detect --source . --verbose
+
+# 网络安全扫描
+nmap -sV -p 80,443,5432,6379,8090,9090 go-on.example.com
+</code></pre>
+<h2 id="维护"><a class="header" href="#维护">维护</a></h2>
+<h3 id="定期维护任务"><a class="header" href="#定期维护任务">定期维护任务</a></h3>
+<pre><code class="language-bash">#!/bin/bash
+# maintenance.sh
+
+# 1. 数据库维护
+psql -h localhost -U go_on -d go_on_production -c "VACUUM ANALYZE;"
+psql -h localhost -U go_on -d go_on_production -c "REINDEX DATABASE go_on_production;"
+
+# 2. 日志轮转
+find /var/log/go-on -name "*.log" -mtime +7 -delete
+
+# 3. 缓存清理
+redis-cli FLUSHDB
+
+# 4. 备份验证
+# （验证最新备份可以恢复）
+</code></pre>
+<h3 id="更新流程"><a class="header" href="#更新流程">更新流程</a></h3>
+<ol>
+<li>
+<p><strong>更新前检查清单</strong>：</p>
+<ul>
+<li>验证备份是最新的</li>
+<li>通知用户维护窗口</li>
+<li>准备回滚计划</li>
+</ul>
+</li>
+<li>
+<p><strong>更新过程</strong>：</p>
+<pre><code class="language-bash"># 1. 部署新版本到暂存环境
+kubectl apply -f kubernetes/staging/
+
+# 2. 运行冒烟测试
+./scripts/smoke-tests.sh
+
+# 3. 部署到生产环境（金丝雀）
+kubectl set image deployment/go-on go-on=your-registry/go-on:new-version
+
+# 4. 监控指标
+watch kubectl get pods -l app=go-on
+
+# 5. 完全推出
+kubectl rollout status deployment/go-on
+</code></pre>
+</li>
+<li>
+<p><strong>更新后验证</strong>：</p>
+<ul>
+<li>验证所有服务健康</li>
+<li>检查错误率和性能</li>
+<li>确认用户功能正常</li>
+</ul>
+</li>
+</ol>
+<h2 id="成本优化"><a class="header" href="#成本优化">成本优化</a></h2>
+<h3 id="资源优化"><a class="header" href="#资源优化">资源优化</a></h3>
+<pre><code class="language-yaml"># Kubernetes 资源请求和限制
+resources:
+  requests:
+    memory: "1Gi"
+    cpu: "500m"
+  limits:
+    memory: "2Gi"
+    cpu: "1000m"
+</code></pre>
+<h3 id="自动扩展策略"><a class="header" href="#自动扩展策略">自动扩展策略</a></h3>
+<ul>
+<li>在非高峰时段缩减规模</li>
+<li>对非关键工作负载使用竞价实例</li>
+<li>实施成本感知调度</li>
+</ul>
+<h3 id="监控成本"><a class="header" href="#监控成本">监控成本</a></h3>
+<ul>
+<li>跟踪数据库存储增长</li>
+<li>监控模型供应商的 API 调用成本</li>
+<li>对意外成本激增发出警报</li>
+</ul>
+<h2 id="支持和社区"><a class="header" href="#支持和社区">支持和社区</a></h2>
+<h3 id="企业支持"><a class="header" href="#企业支持">企业支持</a></h3>
+<ul>
+<li><strong>SLA</strong>：99.9% 正常运行时间保证</li>
+<li><strong>支持渠道</strong>：电子邮件、电话、专用 Slack</li>
+<li><strong>响应时间</strong>：关键：1 小时，高：4 小时，正常：24 小时</li>
+</ul>
+<h3 id="社区资源"><a class="header" href="#社区资源">社区资源</a></h3>
+<ul>
+<li><a href="https://github.com/your-org/go-on/discussions">GitHub 讨论</a></li>
+<li><a href="https://go-on.example.com/docs">文档</a></li>
+<li><a href="https://stackoverflow.com/questions/tagged/go-on">Stack Overflow</a></li>
+</ul>
+<h3 id="培训和认证"><a class="header" href="#培训和认证">培训和认证</a></h3>
+<ul>
+<li>管理员培训课程</li>
+<li>开发者认证计划</li>
+<li>企业团队的定制培训</li>
+</ul>
+<h2 id="下一步"><a class="header" href="#下一步">下一步</a></h2>
+<p>设置多用户服务器模式后，您可以：</p>
+<ol>
+<li>配置 <a href="./high-availability.html">高可用性</a></li>
+<li>设置 <a href="./disaster-recovery.html">灾难恢复</a></li>
+<li>实施 <a href="./advanced-security.html">高级安全</a></li>
+<li>探索 <a href="../api/overview.html">API 文档</a></li>
+<li>加入 <a href="https://github.com/your-org/go-on/discussions/categories/enterprise">企业社区</a></li>
+</ol>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../zh-CN/deployment/simple-server.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../../zh-CN/api/overview.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../zh-CN/deployment/simple-server.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../../zh-CN/api/overview.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-c2a407aa.js"></script>
+
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

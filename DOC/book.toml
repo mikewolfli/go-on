@@ -6,9 +6,17 @@ src = "src"
 
 [build]
 build-dir = "book"
+create-missing = true
 
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "navy"
-git-repository-url = "https://example.invalid/go-on"
+git-repository-url = "https://github.com/your-org/go-on"
 site-url = "/"
+edit-url-template = "https://github.com/your-org/go-on/edit/main/DOC/src/{path}"
+
+[preprocessor.links]
+renderers = ["html"]
+
+[preprocessor.index]
+renderers = ["html"]
