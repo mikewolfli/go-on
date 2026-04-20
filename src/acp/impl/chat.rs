@@ -35,9 +35,9 @@ use crate::orchestration::task_router::{TaskRouter, TaskType};
 use crate::pua::PuaEnforcementPlan;
 
 use crate::reinforcement::{
-    persist_knowledge_insight_event, persist_workflow_learning_event,
-    ExecutionDecisionCandidate, KnowledgeBusArtifact, KnowledgeInsightArtifact,
-    RequirementContractArtifact, TaskPlanArtifact, WorkflowLearningEvent,
+    persist_knowledge_insight_event, persist_workflow_learning_event, ExecutionDecisionCandidate,
+    KnowledgeBusArtifact, KnowledgeInsightArtifact, RequirementContractArtifact, TaskPlanArtifact,
+    WorkflowLearningEvent,
 };
 use crate::rpc_protocol::{chat_trace_context, child_trace_context, RequestTraceContext};
 
@@ -2372,8 +2372,11 @@ async fn persist_session_distillation(
         "distill_scope": "task_repo_runtime",
         "evolution_mode": "continuous",
     });
-    let mut learning_profile =
-        crate::acp::r#impl::request::build_learning_profile("session.distill", &task, &distill_params);
+    let mut learning_profile = crate::acp::r#impl::request::build_learning_profile(
+        "session.distill",
+        &task,
+        &distill_params,
+    );
     if let Some(obj) = learning_profile.as_object_mut() {
         obj.insert(
             "session".to_string(),
@@ -2490,7 +2493,9 @@ async fn persist_session_distillation(
         review_reject_root_cause: String::new(),
         primary_stability_score: round_metric(success_rate),
         secondary_utilization_rate: if agent_attempts.len() > 1 {
-            round_metric((agent_attempts.len().saturating_sub(1)) as f64 / agent_attempts.len() as f64)
+            round_metric(
+                (agent_attempts.len().saturating_sub(1)) as f64 / agent_attempts.len() as f64,
+            )
         } else {
             0.0
         },
@@ -2743,7 +2748,12 @@ mod tests {
             Some(1)
         );
         assert_eq!(result["checkpoint"]["branch_id"], "feature-a");
-        assert!(result["metacognitive_loop"]["cycle_count"].as_u64().unwrap_or(0) >= 1);
+        assert!(
+            result["metacognitive_loop"]["cycle_count"]
+                .as_u64()
+                .unwrap_or(0)
+                >= 1
+        );
         assert_eq!(
             result["checkpoint"]["metacognitive_loop"]["checkpoint_id"],
             result["checkpoint"]["checkpoint_id"]

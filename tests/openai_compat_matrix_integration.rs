@@ -1625,7 +1625,10 @@ async fn responses_api_r4_complete_field_matrix() {
             >= resp["usage"]["input_tokens"].as_u64().unwrap_or(0),
         "usage.total_tokens must be at least input_tokens"
     );
-    assert!(resp["token_economy"].is_object(), "token_economy must be present");
+    assert!(
+        resp["token_economy"].is_object(),
+        "token_economy must be present"
+    );
     assert!(
         resp["token_economy"]["compression_ratio"].is_number(),
         "token_economy.compression_ratio must be numeric"

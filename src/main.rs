@@ -989,12 +989,9 @@ async fn initialize_cache(
     // ── PostgreSQL backend (profile-multi-users-server) ──────────────────────
     #[cfg(feature = "backend-postgres")]
     {
-        let url = cache_cfg
-            .connection_string
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!(
-                "cache.connection_string is required for profile-multi-users-server"
-            ))?;
+        let url = cache_cfg.connection_string.clone().ok_or_else(|| {
+            anyhow::anyhow!("cache.connection_string is required for profile-multi-users-server")
+        })?;
         info!(
             "postgres cache enabled (ttl={}s, max_entries={})",
             cache_cfg.default_ttl_seconds, cache_cfg.max_entries
@@ -1037,7 +1034,10 @@ async fn initialize_cache(
             match result {
                 Ok(cache) => return Ok(cache),
                 Err(e) => {
-                    warn!("sqlite cache init failed (adaptive, continuing without cache): {}", e);
+                    warn!(
+                        "sqlite cache init failed (adaptive, continuing without cache): {}",
+                        e
+                    );
                     return Ok(None);
                 }
             }
@@ -1062,12 +1062,9 @@ async fn initialize_vector_store(
     // ── PostgreSQL backend (profile-multi-users-server) ──────────────────────
     #[cfg(feature = "backend-postgres")]
     {
-        let url = vector_cfg
-            .connection_string
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!(
-                "vector.connection_string is required for profile-multi-users-server"
-            ))?;
+        let url = vector_cfg.connection_string.clone().ok_or_else(|| {
+            anyhow::anyhow!("vector.connection_string is required for profile-multi-users-server")
+        })?;
         info!(
             "postgres vector store enabled (dims={}, top_k={}, similarity={})",
             vector_cfg.dimensions, vector_cfg.top_k, vector_cfg.min_similarity

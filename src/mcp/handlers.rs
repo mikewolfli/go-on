@@ -68,7 +68,8 @@ impl McpServer {
                 (Some(value), None)
             }
             Err(err) => {
-                let error_data = inject_platform_profiles_if_absent(json!({}), request.method.as_str());
+                let error_data =
+                    inject_platform_profiles_if_absent(json!({}), request.method.as_str());
                 (
                     None,
                     Some(JsonRpcError {

@@ -34,9 +34,9 @@ pub struct ResponseCacheStats {
 
 // ─── SQLite backend (profile-local / profile-simple-server) ──────────────────
 #[cfg(not(feature = "backend-postgres"))]
-use std::path::Path;
-#[cfg(not(feature = "backend-postgres"))]
 use rusqlite::{params, Connection, OptionalExtension};
+#[cfg(not(feature = "backend-postgres"))]
+use std::path::Path;
 
 /// SQLite-based response cache
 #[cfg(not(feature = "backend-postgres"))]
@@ -537,4 +537,3 @@ impl ResponseCache {
         })
     }
 }
-

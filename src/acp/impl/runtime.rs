@@ -881,7 +881,10 @@ async fn write_http_json_response_with_context(
     write_http_json_response(socket, status, body).await
 }
 
-async fn write_responses_api_error(socket: &mut TcpStream, payload: serde_json::Value) -> Result<()> {
+async fn write_responses_api_error(
+    socket: &mut TcpStream,
+    payload: serde_json::Value,
+) -> Result<()> {
     write_http_json_response_with_context(socket, 400, payload, "responses.api").await
 }
 
@@ -1128,7 +1131,8 @@ async fn handle_openai_chat_completions(
                         &model,
                         &degraded_openai_message(&err),
                     );
-                    let payload = inject_platform_profiles_if_absent(payload, "openai.chat.completions");
+                    let payload =
+                        inject_platform_profiles_if_absent(payload, "openai.chat.completions");
                     write_http_json_response(socket, 200, payload).await?;
                     return Ok(());
                 }
@@ -1728,9 +1732,9 @@ async fn handle_responses_api(
             if is_setup_or_upstream_unavailable(&err) {
                 let payload = attach_responses_token_economy(
                     build_responses_api_response(
-                    &request_id,
-                    &model,
-                    &degraded_openai_message(&err),
+                        &request_id,
+                        &model,
+                        &degraded_openai_message(&err),
                     ),
                     &params.messages,
                     &degraded_openai_message(&err),

@@ -10,10 +10,10 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
+use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
 use crate::agent::AgentRegistry;
 use crate::i18n::runtime::{t, tf};
 use crate::mcp::{JsonRpcRequest, JsonRpcResponse, McpServer};
-use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
 use crate::tool::ToolRegistry;
 
 /// MCP Server with stdio transport
@@ -214,12 +214,7 @@ async fn handle_http_connection(
             }),
             "health",
         );
-        write_http_json_response(
-            socket,
-            200,
-            body,
-        )
-        .await?;
+        write_http_json_response(socket, 200, body).await?;
         return Ok(());
     }
 
@@ -228,12 +223,7 @@ async fn handle_http_connection(
             serde_json::json!({"error": "method not allowed"}),
             "mcp.unknown_method",
         );
-        write_http_json_response(
-            socket,
-            405,
-            body,
-        )
-        .await?;
+        write_http_json_response(socket, 405, body).await?;
         return Ok(());
     }
 

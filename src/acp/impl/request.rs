@@ -1,4 +1,4 @@
-﻿use crate::protocol::access_mode::{request_dispatch_mode, RequestDispatchMode};
+use crate::protocol::access_mode::{request_dispatch_mode, RequestDispatchMode};
 
 /// 浠巆onfig.toml/runtime_config璇诲彇鍗忚妯″紡
 fn get_protocol_mode(server: &AcpServer) -> RequestDispatchMode {
@@ -6317,7 +6317,10 @@ pub(crate) async fn persist_checkpoint_metacognitive_loop(
             "conversation_id".to_string(),
             Value::String(conversation_id.to_string()),
         );
-        obj.insert("branch_id".to_string(), Value::String(branch_id.to_string()));
+        obj.insert(
+            "branch_id".to_string(),
+            Value::String(branch_id.to_string()),
+        );
         obj.insert(
             "checkpoint_id".to_string(),
             Value::String(checkpoint_id.to_string()),
@@ -6822,10 +6825,8 @@ async fn send_error(
     data: Option<Value>,
 ) -> Result<()> {
     mark_error_response(id.as_ref());
-    let error_data = inject_platform_profiles_if_absent(
-        data.unwrap_or_else(|| json!({})),
-        "acp.error",
-    );
+    let error_data =
+        inject_platform_profiles_if_absent(data.unwrap_or_else(|| json!({})), "acp.error");
     let data = Some(error_data);
     let data = match take_pua_report(id.as_ref()) {
         Some(encoded) => Some(inject_pua_report_into_error_data(data, encoded)),
@@ -7407,16 +7408,17 @@ fn build_token_economy(
         .and_then(Value::as_str)
         .map(str::len)
         .unwrap_or(0);
-    let task_complexity = params
-        .get("complexity")
-        .and_then(Value::as_str)
-        .unwrap_or(if task_len > 300 {
-            "high"
-        } else if task_len > 80 {
-            "medium"
-        } else {
-            "low"
-        });
+    let task_complexity =
+        params
+            .get("complexity")
+            .and_then(Value::as_str)
+            .unwrap_or(if task_len > 300 {
+                "high"
+            } else if task_len > 80 {
+                "medium"
+            } else {
+                "low"
+            });
 
     // Compression level escalates with repair history and task complexity.
     let compression_level = if repair_iterations >= 3 || task_complexity == "high" {

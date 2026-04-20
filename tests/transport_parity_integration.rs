@@ -195,8 +195,7 @@ async fn acp_http_health_response_has_platform_context() {
         "acp_http:/health must contain platform_context; got: {body}"
     );
     assert_eq!(
-        body["platform_context"]["profile_class"],
-        "infrastructure",
+        body["platform_context"]["profile_class"], "infrastructure",
         "acp_http:/health platform_context.profile_class must be infrastructure"
     );
 }
@@ -408,8 +407,7 @@ async fn acp_http_error_payloads_keep_platform_context() {
         "responses.api 4xx payload must include platform_context; got: {bad_responses}"
     );
     assert_eq!(
-        bad_responses["platform_context"]["profile_class"],
-        "infrastructure",
+        bad_responses["platform_context"]["profile_class"], "infrastructure",
         "responses.api error platform_context must use infrastructure class"
     );
 }
@@ -609,8 +607,7 @@ async fn mcp_http_health_response_has_platform_context() {
         "mcp_http:/health must contain platform_context; got: {body}"
     );
     assert_eq!(
-        body["platform_context"]["schema_version"],
-        "blue24-platform-universal-v1",
+        body["platform_context"]["schema_version"], "blue24-platform-universal-v1",
         "mcp_http:/health platform_context.schema_version mismatch"
     );
 }
@@ -648,8 +645,7 @@ async fn mcp_http_method_not_allowed_has_platform_context() {
         "mcp http 405 payload must include platform_context; got: {body}"
     );
     assert_eq!(
-        body["platform_context"]["schema_version"],
-        "blue24-platform-universal-v1",
+        body["platform_context"]["schema_version"], "blue24-platform-universal-v1",
         "mcp http 405 platform_context.schema_version mismatch"
     );
 }

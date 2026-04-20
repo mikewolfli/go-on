@@ -16,9 +16,9 @@ use anyhow::Result;
 use pgvector::Vector;
 #[cfg(not(feature = "backend-postgres"))]
 use rusqlite::{ffi::sqlite3_auto_extension, params, Connection, OptionalExtension};
+use sha2::{Digest, Sha256};
 #[cfg(not(feature = "backend-postgres"))]
 use sqlite_vec::sqlite3_vec_init;
-use sha2::{Digest, Sha256};
 #[cfg(not(feature = "backend-postgres"))]
 use tracing::warn;
 
@@ -804,7 +804,14 @@ impl VectorStore {
                 response_text  = EXCLUDED.response_text,
                 embedding      = EXCLUDED.embedding,
                 updated_at     = EXCLUDED.updated_at",
-            &[&memory_key, &phase, &query, &response_text, &embedding, &now],
+            &[
+                &memory_key,
+                &phase,
+                &query,
+                &response_text,
+                &embedding,
+                &now,
+            ],
         )?;
 
         client.execute(

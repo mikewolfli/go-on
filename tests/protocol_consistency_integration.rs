@@ -256,8 +256,7 @@ fn acp_stdio_unknown_method_returns_minus_32601() {
         resp
     );
     assert_eq!(
-        resp["error"]["data"]["platform_context"]["schema_version"],
-        "blue24-platform-universal-v1",
+        resp["error"]["data"]["platform_context"]["schema_version"], "blue24-platform-universal-v1",
         "acp_stdio:unknown_method platform_context.schema_version mismatch"
     );
     h.shutdown();
@@ -342,8 +341,7 @@ fn mcp_stdio_unknown_method_returns_minus_32601() {
         resp
     );
     assert_eq!(
-        resp["error"]["data"]["platform_context"]["schema_version"],
-        "blue24-platform-universal-v1",
+        resp["error"]["data"]["platform_context"]["schema_version"], "blue24-platform-universal-v1",
         "mcp_stdio:unknown_method platform_context.schema_version mismatch"
     );
     h.shutdown();
