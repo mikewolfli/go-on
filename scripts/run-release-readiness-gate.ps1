@@ -87,11 +87,25 @@ Run-Gate-Step "integration: release readiness drill" {
 Run-Gate-Step "integration: multi-user lifecycle drill" {
     cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_multi_user_lifecycle_drill_requests -- --nocapture
 }
+Run-Gate-Step "integration: task.execute task-graph-checkpoint resume" {
+    cargo test --test acp_runtime_rpc_integration task_execute_returns_task_graph_checkpoint -- --nocapture
+}
+Run-Gate-Step "integration: tool-loop safety-governance S12" {
+    cargo test --test acp_runtime_rpc_integration task_execute_returns_tool_loop_safety_governance -- --nocapture
+}
+Run-Gate-Step "integration: role-collaboration conflict-resolution S13" {
+    cargo test --test acp_runtime_rpc_integration task_execute_returns_role_handoff_conflict_resolution -- --nocapture
+}
 Run-Gate-Step "integration: shutdown inflight" {
     cargo test --test acp_runtime_rpc_integration rpc_shutdown_waits_for_inflight_chat_completion -- --nocapture
 }
 Run-Gate-Step "integration: ndjson all pass" {
     cargo test --test acp_runtime_rpc_integration ndjson_scenario_files_all_pass -- --nocapture
+}
+
+# ── 2b. BLUE26 closure consistency guard ─────────────────────────────────────
+Run-Gate-Step "docs/contract: BLUE26 closure consistency" {
+    & .\scripts\verify-blue26-closure.ps1
 }
 
 # ── 3. VS Code addon ──────────────────────────────────────────────────────────

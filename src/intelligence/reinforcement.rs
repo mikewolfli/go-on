@@ -664,6 +664,36 @@ pub fn persist_task_plan(ledger: &ArtifactLedger, plan: &TaskPlanArtifact) -> Re
     ledger.write_json("spec", "latest-plan.json", plan)
 }
 
+/// B26-S11: TaskGraph checkpoint artifact for Planner/Executor split + breakpoint resume
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskGraphCheckpointArtifact {
+    pub checkpoint_id: String,
+    pub schema_version: String,
+    pub created_at: i64,
+    pub task: String,
+    pub phases_completed: usize,
+    pub subtask_records: Vec<PlannedSubtaskRecord>,
+    pub resume_eligible: bool,
+    pub resume_reason: Option<String>,
+}
+
+pub fn persist_task_graph_checkpoint(
+    ledger: &ArtifactLedger,
+    checkpoint: &TaskGraphCheckpointArtifact,
+) -> Result<PathBuf> {
+    ledger.write_json(
+        "checkpoints",
+        "latest-taskgraph-checkpoint.json",
+        checkpoint,
+    )
+}
+
+pub fn load_task_graph_checkpoint(ledger: &ArtifactLedger) -> Option<TaskGraphCheckpointArtifact> {
+    let path = ledger.latest_path("checkpoints", "latest-taskgraph-checkpoint.json");
+    let bytes = std::fs::read(&path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 pub fn build_workflow_generated_artifact(plan: &TaskPlanArtifact) -> WorkflowGeneratedArtifact {
     let mut nodes = Vec::new();
     let mut edges = Vec::new();

@@ -255,6 +255,34 @@ fn assert_blue22_runtime_execute_cycle_shape(result: &Value) {
     assert!(result["multi_agent"]["agent_session"].is_object());
     assert!(result["multi_agent"]["subtask_sessions"].is_array());
     assert!(result["multi_agent"]["merge_session"].is_object());
+    // B26-S11: task_graph_checkpoint must be present and resumable in execution_cycle
+    assert!(result["execution_cycle"]["task_graph_checkpoint"].is_object());
+    assert!(result["execution_cycle"]["task_graph_checkpoint"]["checkpoint_id"].is_string());
+    assert!(result["execution_cycle"]["task_graph_checkpoint"]["resume_eligible"].is_boolean());
+    assert!(result["execution_cycle"]["task_graph_checkpoint"]["phases_completed"].is_number());
+    // B26-S12: tool_loop (think-act-observe) must be in execution_cycle
+    assert!(result["execution_cycle"]["tool_loop"].is_object());
+    assert!(result["execution_cycle"]["tool_loop"]["phase"].is_string());
+    assert!(result["execution_cycle"]["tool_loop"]["safety_gate_passed"].is_boolean());
+    assert!(result["execution_cycle"]["tool_loop"]["governance"].is_object());
+    // B26-S13: multi_agent must have handoff_protocol + conflict_resolution
+    assert!(result["multi_agent"]["handoff_protocol"].is_object());
+    assert!(result["multi_agent"]["handoff_protocol"]["schema_version"].is_string());
+    assert!(result["multi_agent"]["conflict_resolution"].is_object());
+    assert!(result["multi_agent"]["conflict_resolution"]["resolved"].is_boolean());
+    // B26-S5: memory_graph profile must be present
+    assert!(result["memory_graph"].is_object());
+    assert!(result["memory_graph"]["drift_detected"].is_boolean());
+    // B26-S6: review_adjudication must be structured
+    assert!(result["review_adjudication"].is_object());
+    assert!(result["review_adjudication"]["adjudication"].is_string());
+    assert!(result["review_adjudication"]["evidence_bound"].is_boolean());
+    // B26-S7: replay_scoring (3D) must be present
+    assert!(result["replay_scoring"].is_object());
+    assert!(result["replay_scoring"]["quality_score"].is_number());
+    assert!(result["replay_scoring"]["stability_score"].is_number());
+    assert!(result["replay_scoring"]["cost_score"].is_number());
+    assert!(result["replay_scoring"]["gate_passed"].is_boolean());
 }
 
 fn assert_blue22_change_bundle_shape(result: &Value) {
@@ -1999,6 +2027,491 @@ mod advanced {
             governance["result"]["governance"]["dual_track_consistency"]["issues"].is_array(),
             "governance.status should include dual-track consistency issues"
         );
+        assert!(
+            governance["result"]["governance"]["zero_trust_compliance"].is_object(),
+            "governance.status should include zero trust compliance profile"
+        );
+        assert!(
+            governance["result"]["governance"]["rbac_policy_engine"].is_object(),
+            "governance.status should include RBAC policy engine profile"
+        );
+        assert!(
+            governance["result"]["governance"]["sla_governance"].is_object(),
+            "governance.status should include SLA governance profile"
+        );
+        assert!(
+            governance["result"]["governance"]["skill_engine_core"].is_object(),
+            "governance.status should include skill engine core profile"
+        );
+        assert!(
+            governance["result"]["governance"]["workflow_to_skill_conversion"].is_object(),
+            "governance.status should include workflow-to-skill conversion profile"
+        );
+        assert!(
+            governance["result"]["governance"]["workflow_skill_chain_integration"].is_object(),
+            "governance.status should include workflow-skill chain integration profile"
+        );
+        assert!(
+            governance["result"]["governance"]["skill_management_console"].is_object(),
+            "governance.status should include skill management console profile"
+        );
+        assert!(
+            governance["result"]["governance"]["enterprise_skill_controls"].is_object(),
+            "governance.status should include enterprise skill controls profile"
+        );
+        assert!(
+            governance["result"]["governance"]["core_mode_consistency"].is_object(),
+            "governance.status should include three-mode core consistency profile"
+        );
+        assert!(
+            governance["result"]["governance"]["mode_scenario_adaptability"].is_object(),
+            "governance.status should include mode scenario adaptability profile"
+        );
+        assert!(
+            governance["result"]["governance"]["cross_mode_quality_assurance"].is_object(),
+            "governance.status should include cross-mode quality assurance profile"
+        );
+        assert!(
+            governance["result"]["governance"]["mode_issue_prevention"].is_object(),
+            "governance.status should include mode issue prevention profile"
+        );
+        assert!(
+            governance["result"]["governance"]["subagent_architecture"].is_object(),
+            "governance.status should include subagent architecture profile"
+        );
+        assert!(
+            governance["result"]["governance"]["subagent_collaboration"].is_object(),
+            "governance.status should include subagent collaboration profile"
+        );
+        assert!(
+            governance["result"]["governance"]["subagent_observability"].is_object(),
+            "governance.status should include subagent observability profile"
+        );
+        assert!(
+            governance["result"]["governance"]["knowledge_management"].is_object(),
+            "governance.status should include knowledge management profile"
+        );
+        assert!(
+            governance["result"]["governance"]["performance_optimization"].is_object(),
+            "governance.status should include performance optimization profile"
+        );
+        assert!(
+            governance["result"]["governance"]["enterprise_deploy_ops"].is_object(),
+            "governance.status should include enterprise deploy ops profile"
+        );
+        assert!(
+            governance["result"]["governance"]["ecosystem_extensibility"].is_object(),
+            "governance.status should include ecosystem extensibility profile"
+        );
+        assert!(
+            governance["result"]["governance"]["shared_learning_mainchain"].is_object(),
+            "governance.status should include shared learning main-chain profile"
+        );
+        assert!(
+            governance["result"]["governance"]["self_evolution_mainchain"].is_object(),
+            "governance.status should include self evolution main-chain profile"
+        );
+        assert!(
+            governance["result"]["governance"]["capability_consistency_mainchain"].is_object(),
+            "governance.status should include capability consistency main-chain profile"
+        );
+        assert!(
+            governance["result"]["governance"]["shared_learning_data_flow"].is_object(),
+            "governance.status should include shared learning data-flow profile"
+        );
+        assert!(
+            governance["result"]["governance"]["self_evolution_flow"].is_object(),
+            "governance.status should include self evolution flow profile"
+        );
+        // BLUE27 S0-S17
+        assert!(
+            governance["result"]["governance"]["task_graph_persistence"].is_object(),
+            "governance.status should include task graph persistence profile"
+        );
+        assert!(
+            governance["result"]["governance"]["evaluation_harness_baseline"].is_object(),
+            "governance.status should include evaluation harness baseline profile"
+        );
+        assert!(
+            governance["result"]["governance"]["memory_write_policy"].is_object(),
+            "governance.status should include memory write policy profile"
+        );
+        assert!(
+            governance["result"]["governance"]["task_routing_mainchain"].is_object(),
+            "governance.status should include task routing main-chain profile"
+        );
+        assert!(
+            governance["result"]["governance"]["tool_budget_enforcement"].is_object(),
+            "governance.status should include tool budget enforcement profile"
+        );
+        assert!(
+            governance["result"]["governance"]["state_store_trait"].is_object(),
+            "governance.status should include state store trait profile"
+        );
+        assert!(
+            governance["result"]["governance"]["adversarial_verification"].is_object(),
+            "governance.status should include adversarial verification profile"
+        );
+        assert!(
+            governance["result"]["governance"]["planner_executor_separation"].is_object(),
+            "governance.status should include planner executor separation profile"
+        );
+        assert!(
+            governance["result"]["governance"]["multi_agent_handoff"].is_object(),
+            "governance.status should include multi-agent handoff profile"
+        );
+        assert!(
+            governance["result"]["governance"]["evaluation_replay_engine"].is_object(),
+            "governance.status should include evaluation replay engine profile"
+        );
+        assert!(
+            governance["result"]["governance"]["trace_model_agent_graph"].is_object(),
+            "governance.status should include trace model agent graph profile"
+        );
+        assert!(
+            governance["result"]["governance"]["dynamic_workflow_optimization"].is_object(),
+            "governance.status should include dynamic workflow optimization profile"
+        );
+        assert!(
+            governance["result"]["governance"]["think_act_observe_loop"].is_object(),
+            "governance.status should include think-act-observe loop profile"
+        );
+        assert!(
+            governance["result"]["governance"]["model_degradation_detection"].is_object(),
+            "governance.status should include model degradation detection profile"
+        );
+        assert!(
+            governance["result"]["governance"]["task_decomposition_pipeline"].is_object(),
+            "governance.status should include task decomposition pipeline profile"
+        );
+        assert!(
+            governance["result"]["governance"]["omnipotent_mode_readiness"].is_object(),
+            "governance.status should include omnipotent mode readiness profile"
+        );
+        assert!(
+            governance["result"]["governance"]["sota_gap_benchmark"].is_object(),
+            "governance.status should include SOTA gap benchmark profile"
+        );
+        assert!(
+            governance["result"]["governance"]["blue27_release_closure"].is_object(),
+            "governance.status should include blue27 release closure profile"
+        );
+        // BLUE28 S0-S17
+        assert!(
+            governance["result"]["governance"]["schema_migration_versioning"].is_object(),
+            "governance.status should include schema_migration_versioning profile"
+        );
+        assert!(
+            governance["result"]["governance"]["tenant_auth_api_key"].is_object(),
+            "governance.status should include tenant_auth_api_key profile"
+        );
+        assert!(
+            governance["result"]["governance"]["sqlite_postgres_migration"].is_object(),
+            "governance.status should include sqlite_postgres_migration profile"
+        );
+        assert!(
+            governance["result"]["governance"]["solution_discovery_hub"].is_object(),
+            "governance.status should include solution_discovery_hub profile"
+        );
+        assert!(
+            governance["result"]["governance"]["scenario_matcher"].is_object(),
+            "governance.status should include scenario_matcher profile"
+        );
+        assert!(
+            governance["result"]["governance"]["subai_factory"].is_object(),
+            "governance.status should include subai_factory profile"
+        );
+        assert!(
+            governance["result"]["governance"]["training_orchestrator"].is_object(),
+            "governance.status should include training_orchestrator profile"
+        );
+        assert!(
+            governance["result"]["governance"]["auto_integration_runtime"].is_object(),
+            "governance.status should include auto_integration_runtime profile"
+        );
+        assert!(
+            governance["result"]["governance"]["reinforcement_loop"].is_object(),
+            "governance.status should include reinforcement_loop profile"
+        );
+        assert!(
+            governance["result"]["governance"]["coordinator_council"].is_object(),
+            "governance.status should include coordinator_council profile"
+        );
+        assert!(
+            governance["result"]["governance"]["worker_swarm"].is_object(),
+            "governance.status should include worker_swarm profile"
+        );
+        assert!(
+            governance["result"]["governance"]["consensus_engine"].is_object(),
+            "governance.status should include consensus_engine profile"
+        );
+        assert!(
+            governance["result"]["governance"]["brain_loop"].is_object(),
+            "governance.status should include brain_loop profile"
+        );
+        assert!(
+            governance["result"]["governance"]["node_reputation"].is_object(),
+            "governance.status should include node_reputation profile"
+        );
+        assert!(
+            governance["result"]["governance"]["self_model_core"].is_object(),
+            "governance.status should include self_model_core profile"
+        );
+        assert!(
+            governance["result"]["governance"]["meta_cognition"].is_object(),
+            "governance.status should include meta_cognition profile"
+        );
+        assert!(
+            governance["result"]["governance"]["drift_guard"].is_object(),
+            "governance.status should include drift_guard profile"
+        );
+        assert!(
+            governance["result"]["governance"]["blue28_release_closure"].is_object(),
+            "governance.status should include blue28 release closure profile"
+        );
+        assert!(
+            governance["result"]["governance"]["federated_rl"].is_object(),
+            "governance.status should include federated_rl profile"
+        );
+        assert!(
+            governance["result"]["governance"]["distributed_memory_bus"].is_object(),
+            "governance.status should include distributed_memory_bus profile"
+        );
+        assert!(
+            governance["result"]["governance"]["adaptive_swarm_optimizer"].is_object(),
+            "governance.status should include adaptive_swarm_optimizer profile"
+        );
+        assert!(
+            governance["result"]["governance"]["hyper_node_network"].is_object(),
+            "governance.status should include hyper_node_network profile"
+        );
+        assert!(
+            governance["result"]["governance"]["world_model_pipeline"].is_object(),
+            "governance.status should include world_model_pipeline profile"
+        );
+        assert!(
+            governance["result"]["governance"]["continual_learning_hub"].is_object(),
+            "governance.status should include continual_learning_hub profile"
+        );
+        assert!(
+            governance["result"]["governance"]["blue29_release_closure"].is_object(),
+            "governance.status should include blue29 release closure profile"
+        );
+        assert!(
+            governance["result"]["governance"]["multi_channel_messaging"].is_object(),
+            "governance.status should include multi_channel_messaging profile"
+        );
+        assert!(
+            governance["result"]["governance"]["collaboration_game_engine"].is_object(),
+            "governance.status should include collaboration_game_engine profile"
+        );
+        assert!(
+            governance["result"]["governance"]["consciousness_proxy_metrics"].is_object(),
+            "governance.status should include consciousness_proxy_metrics profile"
+        );
+        assert!(
+            governance["result"]["governance"]["hyper_resilience"].is_object(),
+            "governance.status should include hyper_resilience profile"
+        );
+        assert!(
+            governance["result"]["governance"]["dual_track_awakening_parity"].is_object(),
+            "governance.status should include dual_track_awakening_parity profile"
+        );
+        assert!(
+            governance["result"]["governance"]["cicd_awareness_gate"].is_object(),
+            "governance.status should include cicd_awareness_gate profile"
+        );
+        assert!(
+            governance["result"]["governance"]["blue30_release_closure"].is_object(),
+            "governance.status should include blue30 release closure profile"
+        );
+        assert!(
+            governance["result"]["governance"]["autonomy_boundary_governance"].is_object(),
+            "governance.status should include autonomy_boundary_governance profile"
+        );
+        assert!(
+            governance["result"]["governance"]["emergency_stop_protocol"].is_object(),
+            "governance.status should include emergency_stop_protocol profile"
+        );
+        assert!(
+            governance["result"]["governance"]["collaboration_ab_evaluation"].is_object(),
+            "governance.status should include collaboration_ab_evaluation profile"
+        );
+        assert!(
+            governance["result"]["governance"]["hypernode_topology"].is_object(),
+            "governance.status should include hypernode_topology profile"
+        );
+        assert!(
+            governance["result"]["governance"]["cross_region_priority_routing"].is_object(),
+            "governance.status should include cross_region_priority_routing profile"
+        );
+        assert!(
+            governance["result"]["governance"]["meta_controller_replan"].is_object(),
+            "governance.status should include meta_controller_replan profile"
+        );
+        assert!(
+            governance["result"]["governance"]["blue31_release_closure"].is_object(),
+            "governance.status should include blue31 release closure profile"
+        );
+        assert!(
+            governance["result"]["governance"]["game_theory_balancer"].is_object(),
+            "governance.status should include game_theory_balancer profile"
+        );
+        assert!(
+            governance["result"]["governance"]["federated_rl_v2_guardrail"].is_object(),
+            "governance.status should include federated_rl_v2_guardrail profile"
+        );
+        assert!(
+            governance["result"]["governance"]["continuous_learning_distillation"].is_object(),
+            "governance.status should include continuous_learning_distillation profile"
+        );
+        assert!(
+            governance["result"]["governance"]["drift_auto_takeover"].is_object(),
+            "governance.status should include drift_auto_takeover profile"
+        );
+        assert!(
+            governance["result"]["governance"]["byzantine_fault_injection"].is_object(),
+            "governance.status should include byzantine_fault_injection profile"
+        );
+        assert!(
+            governance["result"]["governance"]["recovery_consistency_recheck"].is_object(),
+            "governance.status should include recovery_consistency_recheck profile"
+        );
+        assert!(
+            governance["result"]["governance"]["blue32_release_closure"].is_object(),
+            "governance.status should include blue32 release closure profile"
+        );
+        assert!(
+            governance["result"]["governance"]["local_reflection_track"].is_object(),
+            "governance.status should include local_reflection_track profile"
+        );
+        assert!(
+            governance["result"]["governance"]["server_awakening_track"].is_object(),
+            "governance.status should include server_awakening_track profile"
+        );
+        assert!(
+            governance["result"]["governance"]["ci_gate_continuous_green"].is_object(),
+            "governance.status should include ci_gate_continuous_green profile"
+        );
+        assert!(
+            governance["result"]["governance"]["staged_rollout_guard"].is_object(),
+            "governance.status should include staged_rollout_guard profile"
+        );
+        assert!(
+            governance["result"]["governance"]["release_train_freeze"].is_object(),
+            "governance.status should include release_train_freeze profile"
+        );
+        assert!(
+            governance["result"]["governance"]["rollout_audit_replay"].is_object(),
+            "governance.status should include rollout_audit_replay profile"
+        );
+        assert!(
+            governance["result"]["governance"]["blue33_release_closure"].is_object(),
+            "governance.status should include blue33 release closure profile"
+        );
+        assert!(
+            governance["result"]["governance"]["autonomy_scope_matrix"].is_object(),
+            "governance.status should include autonomy_scope_matrix profile"
+        );
+        assert!(
+            governance["result"]["governance"]["redline_policy_runtime"].is_object(),
+            "governance.status should include redline_policy_runtime profile"
+        );
+        assert!(
+            governance["result"]["governance"]["human_approval_checkpoint"].is_object(),
+            "governance.status should include human_approval_checkpoint profile"
+        );
+        assert!(
+            governance["result"]["governance"]["supernode_hot_standby"].is_object(),
+            "governance.status should include supernode_hot_standby profile"
+        );
+        assert!(
+            governance["result"]["governance"]["cross_zone_state_snapshot"].is_object(),
+            "governance.status should include cross_zone_state_snapshot profile"
+        );
+        assert!(
+            governance["result"]["governance"]["failover_recovery_drill"].is_object(),
+            "governance.status should include failover_recovery_drill profile"
+        );
+        assert!(
+            governance["result"]["governance"]["blue33_remaining_closure"].is_object(),
+            "governance.status should include blue33 remaining closure profile"
+        );
+        assert!(
+            governance["result"]["governance"]["dual_track_boundary_freeze"].is_object(),
+            "governance.status should include dual_track_boundary_freeze profile"
+        );
+        assert!(
+            governance["result"]["governance"]["state_vector_store_trait_unified"].is_object(),
+            "governance.status should include state_vector_store_trait_unified profile"
+        );
+        assert!(
+            governance["result"]["governance"]["local_server_profile_matrix"].is_object(),
+            "governance.status should include local_server_profile_matrix profile"
+        );
+        assert!(
+            governance["result"]["governance"]["postgres_pgvector_schema_versioning"].is_object(),
+            "governance.status should include postgres_pgvector_schema_versioning profile"
+        );
+        assert!(
+            governance["result"]["governance"]["sqlite_to_pg_migration_dryrun"].is_object(),
+            "governance.status should include sqlite_to_pg_migration_dryrun profile"
+        );
+        assert!(
+            governance["result"]["governance"]["planner_executor_taskgraph_resume"].is_object(),
+            "governance.status should include planner_executor_taskgraph_resume profile"
+        );
+        assert!(
+            governance["result"]["governance"]["think_act_observe_tool_governance"].is_object(),
+            "governance.status should include think_act_observe_tool_governance profile"
+        );
+        assert!(
+            governance["result"]["governance"]["role_handoff_schema_and_conflict_arbiter"]
+                .is_object(),
+            "governance.status should include role_handoff_schema_and_conflict_arbiter profile"
+        );
+        assert!(
+            governance["result"]["governance"]["deterministic_adversarial_double_checks"]
+                .is_object(),
+            "governance.status should include deterministic_adversarial_double_checks profile"
+        );
+        assert!(
+            governance["result"]["governance"]["memory_write_promotion_gc_policy"].is_object(),
+            "governance.status should include memory_write_promotion_gc_policy profile"
+        );
+        assert!(
+            governance["result"]["governance"]["benchmark_replay_and_3d_scoring"].is_object(),
+            "governance.status should include benchmark_replay_and_3d_scoring profile"
+        );
+        assert!(
+            governance["result"]["governance"]["capability_discovery_registry_baseline"]
+                .is_object(),
+            "governance.status should include capability_discovery_registry_baseline profile"
+        );
+        assert!(
+            governance["result"]["governance"]["staged_rollout_canary_rollback_gate"].is_object(),
+            "governance.status should include staged_rollout_canary_rollback_gate profile"
+        );
+        assert!(
+            governance["result"]["governance"]["distributed_node_registry_heartbeat"].is_object(),
+            "governance.status should include distributed_node_registry_heartbeat profile"
+        );
+        assert!(
+            governance["result"]["governance"]["consensus_with_dissent_preservation"].is_object(),
+            "governance.status should include consensus_with_dissent_preservation profile"
+        );
+        assert!(
+            governance["result"]["governance"]["brain_loop_artifact_and_safe_degrade"].is_object(),
+            "governance.status should include brain_loop_artifact_and_safe_degrade profile"
+        );
+        assert!(
+            governance["result"]["governance"]["fault_injection_recovery_recheck"].is_object(),
+            "governance.status should include fault_injection_recovery_recheck profile"
+        );
+        assert!(
+            governance["result"]["governance"]["blue34_release_closure"].is_object(),
+            "governance.status should include blue34 release closure profile"
+        );
     }
 
     #[test]
@@ -2106,6 +2619,825 @@ mod advanced {
         assert!(
             readiness["result"]["readiness"]["dual_track_consistency"]["ready"].is_boolean(),
             "release.readiness should include dual-track consistency object"
+        );
+        assert!(
+            readiness["result"]["readiness"]["zero_trust_compliance"].is_object(),
+            "release.readiness should include zero trust compliance profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["rbac_policy_engine"].is_object(),
+            "release.readiness should include RBAC policy engine profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["sla_governance"].is_object(),
+            "release.readiness should include SLA governance profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "zero_trust_compliance"),
+            "release.readiness should include zero_trust_compliance gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "rbac_policy_engine"),
+            "release.readiness should include rbac_policy_engine gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "sla_governance"),
+            "release.readiness should include sla_governance gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["skill_engine_core"].is_object(),
+            "release.readiness should include skill engine core profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["workflow_to_skill_conversion"].is_object(),
+            "release.readiness should include workflow-to-skill conversion profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["workflow_skill_chain_integration"].is_object(),
+            "release.readiness should include workflow-skill chain integration profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "skill_engine_core"),
+            "release.readiness should include skill_engine_core gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "workflow_to_skill_conversion"),
+            "release.readiness should include workflow_to_skill_conversion gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "workflow_skill_chain_integration"),
+            "release.readiness should include workflow_skill_chain_integration gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["skill_management_console"].is_object(),
+            "release.readiness should include skill management console profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["enterprise_skill_controls"].is_object(),
+            "release.readiness should include enterprise skill controls profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["core_mode_consistency"].is_object(),
+            "release.readiness should include three-mode core consistency profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "skill_management_console"),
+            "release.readiness should include skill_management_console gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "enterprise_skill_controls"),
+            "release.readiness should include enterprise_skill_controls gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "core_mode_consistency"),
+            "release.readiness should include core_mode_consistency gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["mode_scenario_adaptability"].is_object(),
+            "release.readiness should include mode scenario adaptability profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["cross_mode_quality_assurance"].is_object(),
+            "release.readiness should include cross-mode quality assurance profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["mode_issue_prevention"].is_object(),
+            "release.readiness should include mode issue prevention profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "mode_scenario_adaptability"),
+            "release.readiness should include mode_scenario_adaptability gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "cross_mode_quality_assurance"),
+            "release.readiness should include cross_mode_quality_assurance gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "mode_issue_prevention"),
+            "release.readiness should include mode_issue_prevention gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["subagent_architecture"].is_object(),
+            "release.readiness should include subagent architecture profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["subagent_collaboration"].is_object(),
+            "release.readiness should include subagent collaboration profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["subagent_observability"].is_object(),
+            "release.readiness should include subagent observability profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "subagent_architecture"),
+            "release.readiness should include subagent_architecture gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "subagent_collaboration"),
+            "release.readiness should include subagent_collaboration gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "subagent_observability"),
+            "release.readiness should include subagent_observability gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["knowledge_management"].is_object(),
+            "release.readiness should include knowledge management profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["performance_optimization"].is_object(),
+            "release.readiness should include performance optimization profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["enterprise_deploy_ops"].is_object(),
+            "release.readiness should include enterprise deploy ops profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "knowledge_management"),
+            "release.readiness should include knowledge_management gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "performance_optimization"),
+            "release.readiness should include performance_optimization gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "enterprise_deploy_ops"),
+            "release.readiness should include enterprise_deploy_ops gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["ecosystem_extensibility"].is_object(),
+            "release.readiness should include ecosystem extensibility profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["shared_learning_mainchain"].is_object(),
+            "release.readiness should include shared learning main-chain profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["self_evolution_mainchain"].is_object(),
+            "release.readiness should include self evolution main-chain profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "ecosystem_extensibility"),
+            "release.readiness should include ecosystem_extensibility gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "shared_learning_mainchain"),
+            "release.readiness should include shared_learning_mainchain gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "self_evolution_mainchain"),
+            "release.readiness should include self_evolution_mainchain gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["capability_consistency_mainchain"].is_object(),
+            "release.readiness should include capability consistency main-chain profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["shared_learning_data_flow"].is_object(),
+            "release.readiness should include shared learning data-flow profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["self_evolution_flow"].is_object(),
+            "release.readiness should include self evolution flow profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "capability_consistency_mainchain"),
+            "release.readiness should include capability_consistency_mainchain gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "shared_learning_data_flow"),
+            "release.readiness should include shared_learning_data_flow gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "self_evolution_flow"),
+            "release.readiness should include self_evolution_flow gate"
+        );
+        // BLUE27 S0-S17
+        assert!(
+            readiness["result"]["readiness"]["task_graph_persistence"].is_object(),
+            "release.readiness should include task graph persistence profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["evaluation_harness_baseline"].is_object(),
+            "release.readiness should include evaluation harness baseline profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["memory_write_policy"].is_object(),
+            "release.readiness should include memory write policy profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["task_routing_mainchain"].is_object(),
+            "release.readiness should include task routing main-chain profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["tool_budget_enforcement"].is_object(),
+            "release.readiness should include tool budget enforcement profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["state_store_trait"].is_object(),
+            "release.readiness should include state store trait profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["adversarial_verification"].is_object(),
+            "release.readiness should include adversarial verification profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["planner_executor_separation"].is_object(),
+            "release.readiness should include planner executor separation profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["multi_agent_handoff"].is_object(),
+            "release.readiness should include multi-agent handoff profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["evaluation_replay_engine"].is_object(),
+            "release.readiness should include evaluation replay engine profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["trace_model_agent_graph"].is_object(),
+            "release.readiness should include trace model agent graph profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["dynamic_workflow_optimization"].is_object(),
+            "release.readiness should include dynamic workflow optimization profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["think_act_observe_loop"].is_object(),
+            "release.readiness should include think-act-observe loop profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["model_degradation_detection"].is_object(),
+            "release.readiness should include model degradation detection profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["task_decomposition_pipeline"].is_object(),
+            "release.readiness should include task decomposition pipeline profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["omnipotent_mode_readiness"].is_object(),
+            "release.readiness should include omnipotent mode readiness profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["sota_gap_benchmark"].is_object(),
+            "release.readiness should include SOTA gap benchmark profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["blue27_release_closure"].is_object(),
+            "release.readiness should include blue27 release closure profile"
+        );
+        // BLUE28 S0-S17
+        assert!(
+            readiness["result"]["readiness"]["schema_migration_versioning"].is_object(),
+            "release.readiness should include schema_migration_versioning profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["tenant_auth_api_key"].is_object(),
+            "release.readiness should include tenant_auth_api_key profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["sqlite_postgres_migration"].is_object(),
+            "release.readiness should include sqlite_postgres_migration profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["solution_discovery_hub"].is_object(),
+            "release.readiness should include solution_discovery_hub profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["scenario_matcher"].is_object(),
+            "release.readiness should include scenario_matcher profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["subai_factory"].is_object(),
+            "release.readiness should include subai_factory profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["training_orchestrator"].is_object(),
+            "release.readiness should include training_orchestrator profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["auto_integration_runtime"].is_object(),
+            "release.readiness should include auto_integration_runtime profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["reinforcement_loop"].is_object(),
+            "release.readiness should include reinforcement_loop profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["coordinator_council"].is_object(),
+            "release.readiness should include coordinator_council profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["worker_swarm"].is_object(),
+            "release.readiness should include worker_swarm profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["consensus_engine"].is_object(),
+            "release.readiness should include consensus_engine profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["brain_loop"].is_object(),
+            "release.readiness should include brain_loop profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["node_reputation"].is_object(),
+            "release.readiness should include node_reputation profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["self_model_core"].is_object(),
+            "release.readiness should include self_model_core profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["meta_cognition"].is_object(),
+            "release.readiness should include meta_cognition profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["drift_guard"].is_object(),
+            "release.readiness should include drift_guard profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["blue28_release_closure"].is_object(),
+            "release.readiness should include blue28 release closure profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["federated_rl"].is_object(),
+            "release.readiness should include federated_rl profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["distributed_memory_bus"].is_object(),
+            "release.readiness should include distributed_memory_bus profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["adaptive_swarm_optimizer"].is_object(),
+            "release.readiness should include adaptive_swarm_optimizer profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["hyper_node_network"].is_object(),
+            "release.readiness should include hyper_node_network profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["world_model_pipeline"].is_object(),
+            "release.readiness should include world_model_pipeline profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["continual_learning_hub"].is_object(),
+            "release.readiness should include continual_learning_hub profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["blue29_release_closure"].is_object(),
+            "release.readiness should include blue29 release closure profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["multi_channel_messaging"].is_object(),
+            "release.readiness should include multi_channel_messaging profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["collaboration_game_engine"].is_object(),
+            "release.readiness should include collaboration_game_engine profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["consciousness_proxy_metrics"].is_object(),
+            "release.readiness should include consciousness_proxy_metrics profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["hyper_resilience"].is_object(),
+            "release.readiness should include hyper_resilience profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["dual_track_awakening_parity"].is_object(),
+            "release.readiness should include dual_track_awakening_parity profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["cicd_awareness_gate"].is_object(),
+            "release.readiness should include cicd_awareness_gate profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["blue30_release_closure"].is_object(),
+            "release.readiness should include blue30 release closure profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["autonomy_boundary_governance"].is_object(),
+            "release.readiness should include autonomy_boundary_governance profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["emergency_stop_protocol"].is_object(),
+            "release.readiness should include emergency_stop_protocol profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["collaboration_ab_evaluation"].is_object(),
+            "release.readiness should include collaboration_ab_evaluation profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["hypernode_topology"].is_object(),
+            "release.readiness should include hypernode_topology profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["cross_region_priority_routing"].is_object(),
+            "release.readiness should include cross_region_priority_routing profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["meta_controller_replan"].is_object(),
+            "release.readiness should include meta_controller_replan profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["blue31_release_closure"].is_object(),
+            "release.readiness should include blue31 release closure profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["game_theory_balancer"].is_object(),
+            "release.readiness should include game_theory_balancer profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["federated_rl_v2_guardrail"].is_object(),
+            "release.readiness should include federated_rl_v2_guardrail profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["continuous_learning_distillation"].is_object(),
+            "release.readiness should include continuous_learning_distillation profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["drift_auto_takeover"].is_object(),
+            "release.readiness should include drift_auto_takeover profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["byzantine_fault_injection"].is_object(),
+            "release.readiness should include byzantine_fault_injection profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["recovery_consistency_recheck"].is_object(),
+            "release.readiness should include recovery_consistency_recheck profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["blue32_release_closure"].is_object(),
+            "release.readiness should include blue32 release closure profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["local_reflection_track"].is_object(),
+            "release.readiness should include local_reflection_track profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["server_awakening_track"].is_object(),
+            "release.readiness should include server_awakening_track profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["ci_gate_continuous_green"].is_object(),
+            "release.readiness should include ci_gate_continuous_green profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["staged_rollout_guard"].is_object(),
+            "release.readiness should include staged_rollout_guard profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["release_train_freeze"].is_object(),
+            "release.readiness should include release_train_freeze profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["rollout_audit_replay"].is_object(),
+            "release.readiness should include rollout_audit_replay profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["blue33_release_closure"].is_object(),
+            "release.readiness should include blue33 release closure profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["autonomy_scope_matrix"].is_object(),
+            "release.readiness should include autonomy_scope_matrix profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["redline_policy_runtime"].is_object(),
+            "release.readiness should include redline_policy_runtime profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["human_approval_checkpoint"].is_object(),
+            "release.readiness should include human_approval_checkpoint profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["supernode_hot_standby"].is_object(),
+            "release.readiness should include supernode_hot_standby profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["cross_zone_state_snapshot"].is_object(),
+            "release.readiness should include cross_zone_state_snapshot profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["failover_recovery_drill"].is_object(),
+            "release.readiness should include failover_recovery_drill profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["blue33_remaining_closure"].is_object(),
+            "release.readiness should include blue33 remaining closure profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["dual_track_boundary_freeze"].is_object(),
+            "release.readiness should include dual_track_boundary_freeze profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["state_vector_store_trait_unified"].is_object(),
+            "release.readiness should include state_vector_store_trait_unified profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["local_server_profile_matrix"].is_object(),
+            "release.readiness should include local_server_profile_matrix profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["postgres_pgvector_schema_versioning"].is_object(),
+            "release.readiness should include postgres_pgvector_schema_versioning profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["sqlite_to_pg_migration_dryrun"].is_object(),
+            "release.readiness should include sqlite_to_pg_migration_dryrun profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["planner_executor_taskgraph_resume"].is_object(),
+            "release.readiness should include planner_executor_taskgraph_resume profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["think_act_observe_tool_governance"].is_object(),
+            "release.readiness should include think_act_observe_tool_governance profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["role_handoff_schema_and_conflict_arbiter"]
+                .is_object(),
+            "release.readiness should include role_handoff_schema_and_conflict_arbiter profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["deterministic_adversarial_double_checks"].is_object(),
+            "release.readiness should include deterministic_adversarial_double_checks profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["memory_write_promotion_gc_policy"].is_object(),
+            "release.readiness should include memory_write_promotion_gc_policy profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["benchmark_replay_and_3d_scoring"].is_object(),
+            "release.readiness should include benchmark_replay_and_3d_scoring profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["capability_discovery_registry_baseline"].is_object(),
+            "release.readiness should include capability_discovery_registry_baseline profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["staged_rollout_canary_rollback_gate"].is_object(),
+            "release.readiness should include staged_rollout_canary_rollback_gate profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["distributed_node_registry_heartbeat"].is_object(),
+            "release.readiness should include distributed_node_registry_heartbeat profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["consensus_with_dissent_preservation"].is_object(),
+            "release.readiness should include consensus_with_dissent_preservation profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["brain_loop_artifact_and_safe_degrade"].is_object(),
+            "release.readiness should include brain_loop_artifact_and_safe_degrade profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["fault_injection_recovery_recheck"].is_object(),
+            "release.readiness should include fault_injection_recovery_recheck profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["blue34_release_closure"].is_object(),
+            "release.readiness should include blue34 release closure profile"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "task_graph_persistence"),
+            "release.readiness should include task_graph_persistence gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "evaluation_harness_baseline"),
+            "release.readiness should include evaluation_harness_baseline gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "memory_write_policy"),
+            "release.readiness should include memory_write_policy gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "tool_budget_enforcement"),
+            "release.readiness should include tool_budget_enforcement gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "adversarial_verification"),
+            "release.readiness should include adversarial_verification gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "planner_executor_separation"),
+            "release.readiness should include planner_executor_separation gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "multi_agent_handoff"),
+            "release.readiness should include multi_agent_handoff gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "think_act_observe_loop"),
+            "release.readiness should include think_act_observe_loop gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "omnipotent_mode_readiness"),
+            "release.readiness should include omnipotent_mode_readiness gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "blue27_release_closure"),
+            "release.readiness should include blue27_release_closure gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "blue28_release_closure"),
+            "release.readiness should include blue28_release_closure gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "blue29_release_closure"),
+            "release.readiness should include blue29_release_closure gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "blue30_release_closure"),
+            "release.readiness should include blue30_release_closure gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "blue31_release_closure"),
+            "release.readiness should include blue31_release_closure gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "blue32_release_closure"),
+            "release.readiness should include blue32_release_closure gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "blue33_release_closure"),
+            "release.readiness should include blue33_release_closure gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "blue33_remaining_closure"),
+            "release.readiness should include blue33_remaining_closure gate"
+        );
+        assert!(
+            readiness["result"]["readiness"]["gates"]
+                .as_array()
+                .expect("gates should be array")
+                .iter()
+                .any(|gate| gate["name"] == "blue34_release_closure"),
+            "release.readiness should include blue34_release_closure gate"
         );
     }
 
@@ -3847,6 +5179,130 @@ fn rpc_chat_rate_limit_saturation_returns_rate_limited_error() {
     assert!(message.contains("rate limited"));
 
     let shutdown = harness.request(103, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+// B26-S11: task.execute must return task_graph_checkpoint with checkpoint_id + resume_eligible
+#[test]
+fn task_execute_returns_task_graph_checkpoint() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_governance_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(200, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let execute = harness.request(
+        201,
+        "task.execute",
+        Some(json!({
+            "task": "implement login feature",
+            "requirement_confirmed": true,
+        })),
+    );
+    let result = &execute["result"];
+    assert_eq!(result["ok"], true, "task.execute should succeed");
+    assert_blue22_runtime_execute_cycle_shape(result);
+
+    let ckpt = &result["execution_cycle"]["task_graph_checkpoint"];
+    assert!(
+        ckpt["checkpoint_id"].is_string(),
+        "checkpoint_id must be string"
+    );
+    assert!(
+        ckpt["resume_eligible"].is_boolean(),
+        "resume_eligible must be boolean"
+    );
+    assert!(
+        ckpt["phases_completed"].is_number(),
+        "phases_completed must be number"
+    );
+    assert_eq!(
+        ckpt["schema_version"], "blue26-taskgraph-checkpoint-v1",
+        "schema_version must be blue26-taskgraph-checkpoint-v1"
+    );
+
+    let shutdown = harness.request(202, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+// B26-S12: task.execute must return tool_loop (think-act-observe) in execution_cycle
+#[test]
+fn task_execute_returns_tool_loop_safety_governance() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_governance_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(1200, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let execute = harness.request(
+        1201,
+        "task.execute",
+        Some(json!({
+            "task": "implement search feature",
+            "requirement_confirmed": true,
+        })),
+    );
+    let result = &execute["result"];
+    assert_eq!(result["ok"], true, "task.execute should succeed");
+
+    let tl = &result["execution_cycle"]["tool_loop"];
+    assert!(tl.is_object(), "tool_loop must be object");
+    assert_eq!(tl["schema_version"], "blue26-tool-loop-v1");
+    assert!(tl["phase"].is_string(), "tool_loop.phase must be string");
+    assert!(
+        tl["safety_gate_passed"].is_boolean(),
+        "safety_gate_passed must be boolean"
+    );
+    assert!(tl["governance"].is_object(), "governance must be object");
+    assert!(tl["governance"]["dangerous_ops_intercepted"].is_number());
+    assert!(tl["governance"]["whitelist_bypass_count"].is_number());
+
+    let shutdown = harness.request(1202, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+// B26-S13: task.execute must return handoff_protocol + conflict_resolution in multi_agent
+#[test]
+fn task_execute_returns_role_handoff_conflict_resolution() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_workflow_governance_config(&config_path);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    let initialize = harness.request(1300, "initialize", None);
+    assert_eq!(initialize["result"]["name"], "go-on");
+
+    let execute = harness.request(
+        1301,
+        "task.execute",
+        Some(json!({
+            "task": "refactor authentication module",
+            "requirement_confirmed": true,
+        })),
+    );
+    let result = &execute["result"];
+    assert_eq!(result["ok"], true, "task.execute should succeed");
+
+    let hp = &result["multi_agent"]["handoff_protocol"];
+    assert!(hp.is_object(), "handoff_protocol must be object");
+    assert_eq!(hp["schema_version"], "blue26-handoff-v1");
+    assert!(hp["objective_transfer"].is_boolean());
+    assert!(hp["total_handoffs"].is_number());
+
+    let cr = &result["multi_agent"]["conflict_resolution"];
+    assert!(cr.is_object(), "conflict_resolution must be object");
+    assert_eq!(cr["schema_version"], "blue26-conflict-resolution-v1");
+    assert!(cr["resolved"].is_boolean());
+    assert!(cr["adjudicator"].is_string());
+
+    let shutdown = harness.request(1302, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
     harness.wait_for_exit(Duration::from_secs(8));
 }

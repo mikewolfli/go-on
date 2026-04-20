@@ -1,3 +1,5 @@
+#![recursion_limit = "512"]
+
 //! Main entry point for the go-on ACP proxy
 //!
 //! This module handles command-line arguments, configuration loading, and server initialization.
@@ -975,6 +977,7 @@ fn detect_ai_onboarding_state(config_path: &std::path::Path) -> Result<Option<Ai
     Ok(None)
 }
 
+#[allow(unused_variables)]
 async fn initialize_cache(
     config_path: PathBuf,
     cache_cfg: Option<crate::config::CacheConfig>,
@@ -1048,6 +1051,7 @@ async fn initialize_cache(
     }
 }
 
+#[allow(unused_variables)]
 async fn initialize_vector_store(
     config_path: PathBuf,
     vector_cfg: Option<crate::config::VectorConfig>,

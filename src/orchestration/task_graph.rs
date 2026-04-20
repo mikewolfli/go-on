@@ -1,9 +1,3 @@
-//! Task graph and durable plan state for go-on (Phase 3)
-//!
-//! These structures are intentional framework definitions for Phase 0-9 architecture.
-//! TaskGraph provides DAG-based task orchestration that will be integrated into
-//! the execution engine once persistence and traversal logic is implemented.
-
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -70,5 +64,37 @@ impl TaskGraph {
         self.nodes
             .values()
             .all(|n| n.state == "done" || n.state == "failed")
+    }
+
+    /// B26-S11: Snapshot the current graph state into a checkpoint artifact.
+    pub fn snapshot(
+        &self,
+        task: &str,
+        phases_completed: usize,
+        subtask_records: Vec<crate::reinforcement::PlannedSubtaskRecord>,
+    ) -> crate::reinforcement::TaskGraphCheckpointArtifact {
+        let failed_count = subtask_records
+            .iter()
+            .filter(|r| r.outcome.as_deref() == Some("failed"))
+            .count();
+        let resume_eligible = failed_count < subtask_records.len();
+        let resume_reason = if failed_count > 0 {
+            Some(format!(
+                "{} subtasks failed, resume will retry them",
+                failed_count
+            ))
+        } else {
+            None
+        };
+        crate::reinforcement::TaskGraphCheckpointArtifact {
+            checkpoint_id: format!("ckpt-{}", crate::acp::prelude::now_ts()),
+            schema_version: "blue26-taskgraph-checkpoint-v1".to_string(),
+            created_at: crate::acp::prelude::now_ts(),
+            task: task.to_string(),
+            phases_completed,
+            subtask_records,
+            resume_eligible,
+            resume_reason,
+        }
     }
 }

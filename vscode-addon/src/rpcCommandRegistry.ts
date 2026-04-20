@@ -92,7 +92,14 @@ export function registerRpcCommands(deps: RpcCommandRegistryDeps): vscode.Dispos
                 task,
                 requirement_confirmed: true,
             });
-            vscode.window.showInformationMessage(`task.execute completed: ${JSON.stringify(result)}`);
+            const execResult = result as Record<string, unknown>;
+            const execCycle = execResult.execution_cycle as Record<string, unknown> | undefined;
+            const tgCkpt = execCycle?.task_graph_checkpoint as Record<string, unknown> | undefined;
+            const ckptId: string = typeof tgCkpt?.checkpoint_id === 'string' ? tgCkpt.checkpoint_id : 'none';
+            const resumeEligible: boolean = Boolean(tgCkpt?.resume_eligible ?? false);
+            vscode.window.showInformationMessage(
+                `task.execute completed: checkpoint=${ckptId}, resume_eligible=${resumeEligible}`
+            );
         } catch (error: unknown) {
             vscode.window.showErrorMessage(`task.execute failed: ${getErrorMessage(error)}`);
         }
