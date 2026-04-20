@@ -17,7 +17,7 @@ const PROVIDER_CAPABILITY_FILE: &str = "providers.toml";
 
 /// Compile-time embedded providers.toml — ensures full provider list is always
 /// available even when the binary is run from a directory without providers.toml.
-const EMBEDDED_PROVIDERS_TOML: &str = include_str!("../../providers.toml");
+const EMBEDDED_PROVIDERS_TOML: &str = include_str!("../../config/providers.toml");
 
 #[derive(Clone, Debug, serde::Deserialize)]
 struct ProviderSpec {
