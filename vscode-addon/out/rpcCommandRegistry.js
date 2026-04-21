@@ -78,7 +78,12 @@ function registerRpcCommands(deps) {
                 task,
                 requirement_confirmed: true,
             });
-            vscode.window.showInformationMessage(`task.execute completed: ${JSON.stringify(result)}`);
+            const execResult = result;
+            const execCycle = execResult.execution_cycle;
+            const tgCkpt = execCycle?.task_graph_checkpoint;
+            const ckptId = typeof tgCkpt?.checkpoint_id === 'string' ? tgCkpt.checkpoint_id : 'none';
+            const resumeEligible = Boolean(tgCkpt?.resume_eligible ?? false);
+            vscode.window.showInformationMessage(`task.execute completed: checkpoint=${ckptId}, resume_eligible=${resumeEligible}`);
         }
         catch (error) {
             vscode.window.showErrorMessage(`task.execute failed: ${getErrorMessage(error)}`);

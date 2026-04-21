@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerCoreCommands = void 0;
 const vscode = require("vscode");
+const fs = require("fs");
 function getErrorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
@@ -16,6 +17,61 @@ async function ensureRunning(deps) {
     return true;
 }
 function registerCoreCommands(deps) {
+    const diagnoseCommand = vscode.commands.registerCommand('go-on.diagnose', async () => {
+        const output = vscode.window.createOutputChannel('Go-On Diagnosis');
+        output.show(true);
+        output.appendLine('=== Go-On Diagnosis Report ===');
+        output.appendLine(`Time: ${new Date().toISOString()}`);
+        const config = vscode.workspace.getConfiguration('go-on');
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+            output.appendLine('✗ No workspace folder open');
+            vscode.window.showWarningMessage('Go-On diagnosis completed with issues. See "Go-On Diagnosis" output.');
+            return;
+        }
+        output.appendLine(`Workspace: ${workspaceFolder.uri.fsPath}`);
+        output.appendLine('\n1. Runtime binary check');
+        let runtimeDir = '';
+        let executablePath = '';
+        try {
+            const runtime = await deps.ensureBinary(workspaceFolder.uri.fsPath, config, deps.context);
+            runtimeDir = runtime.runtimeDir;
+            executablePath = runtime.executablePath;
+            const exists = fs.existsSync(executablePath);
+            output.appendLine(`${exists ? '✓' : '✗'} Executable: ${executablePath}`);
+        }
+        catch (error) {
+            output.appendLine(`✗ Runtime resolve failed: ${getErrorMessage(error)}`);
+        }
+        output.appendLine('\n2. Config file check');
+        const configuredConfigPath = config.get('configPath', './config.toml');
+        try {
+            const resolvedConfigPath = await deps.resolveConfigPath(workspaceFolder.uri.fsPath, configuredConfigPath, runtimeDir || workspaceFolder.uri.fsPath);
+            const exists = fs.existsSync(resolvedConfigPath);
+            output.appendLine(`${exists ? '✓' : '✗'} Config: ${resolvedConfigPath}`);
+        }
+        catch (error) {
+            output.appendLine(`✗ Config resolve failed: ${getErrorMessage(error)}`);
+        }
+        output.appendLine('\n3. Protocol mode check');
+        const protocolMode = String(config.get('runtime.protocolMode', 'from_config'));
+        output.appendLine(`Configured protocol mode: ${protocolMode}`);
+        output.appendLine('\n4. Runtime health probe');
+        if (!deps.isRunning()) {
+            output.appendLine('! Go-On runtime is not running (skip RPC probe)');
+        }
+        else {
+            try {
+                const result = await deps.sendRequest('runtime.health');
+                output.appendLine(`✓ runtime.health: ${JSON.stringify(result)}`);
+            }
+            catch (error) {
+                output.appendLine(`✗ runtime.health failed: ${getErrorMessage(error)}`);
+            }
+        }
+        output.appendLine('\n=== Diagnosis Complete ===');
+        vscode.window.showInformationMessage('Go-On diagnosis completed.');
+    });
     const startCommand = vscode.commands.registerCommand('go-on.start', async () => {
         const config = vscode.workspace.getConfiguration('go-on');
         const configuredConfigPath = config.get('configPath', './config.toml');
@@ -170,6 +226,7 @@ function registerCoreCommands(deps) {
         }
     });
     return [
+        diagnoseCommand,
         startCommand,
         stopCommand,
         sendRequestCommand,

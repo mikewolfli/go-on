@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.defaultPlatformMode = exports.platformModes = exports.defaultWorkflowControlMode = exports.workflowControlModes = exports.protocolContract = void 0;
+exports.isAllowedProtocolMode = exports.normalizeProtocolMode = exports.defaultPlatformMode = exports.platformModes = exports.defaultWorkflowControlMode = exports.workflowControlModes = exports.protocolContract = void 0;
 const fs = require("fs");
 const path = require("path");
 const fallbackContract = {
@@ -196,4 +196,35 @@ exports.workflowControlModes = exports.protocolContract.protocol.workflowControl
 exports.defaultWorkflowControlMode = exports.protocolContract.protocol.defaultWorkflowControlMode ?? 'assisted';
 exports.platformModes = exports.protocolContract.protocol.platformModes ?? ['universal', 'phase_compat'];
 exports.defaultPlatformMode = exports.protocolContract.protocol.defaultPlatformMode ?? 'phase_compat';
+const protocolModeAliases = {
+    adaptive: 'adaptive',
+    auto: 'adaptive',
+    acp_stdio: 'acp_stdio',
+    'acp+stdio': 'acp_stdio',
+    'acp-stdio': 'acp_stdio',
+    acp: 'acp_stdio',
+    acp_http: 'acp_http',
+    'acp+http': 'acp_http',
+    'acp-http': 'acp_http',
+    mcp_stdio: 'mcp_stdio',
+    'mcp+stdio': 'mcp_stdio',
+    'mcp-stdio': 'mcp_stdio',
+    mcp: 'mcp_stdio',
+    mcp_http: 'mcp_http',
+    'mcp+http': 'mcp_http',
+    'mcp-http': 'mcp_http',
+    from_config: 'from_config',
+};
+function normalizeProtocolMode(mode) {
+    const normalized = protocolModeAliases[mode.trim().toLowerCase()];
+    return normalized ?? mode.trim().toLowerCase();
+}
+exports.normalizeProtocolMode = normalizeProtocolMode;
+function isAllowedProtocolMode(mode) {
+    if (mode === 'from_config') {
+        return true;
+    }
+    return exports.protocolContract.protocol.supportedModes.includes(mode);
+}
+exports.isAllowedProtocolMode = isAllowedProtocolMode;
 //# sourceMappingURL=protocolContract.js.map
