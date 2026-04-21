@@ -7,49 +7,87 @@
     <QuickNavigator />
     <div v-if="monitorOnly" class="monitor-only-banner">
       ⚠️ {{ t("app.monitorOnlyBanner") }}
-      <router-link to="/config" class="monitor-only-config-link">{{ t("app.monitorOnlyConfigLink") }}</router-link>
+      <span class="monitor-only-config-link" @click="activeMainTab = 'config'">{{ t("app.monitorOnlyConfigLink") }}</span>
     </div>
-    <el-container :style="monitorOnly ? 'height: calc(100vh - 36px)' : 'height: 100vh'">
-      <el-aside width="220px" style="border-right: 1px solid #e5e7eb; padding: 12px;">
-        <h3>{{ t("app.name") }}</h3>
-        <el-menu :default-active="activePath" router>
-          <el-menu-item index="/dashboard">{{ t("menu.dashboard") }}</el-menu-item>
-          <el-menu-item index="/monitor">{{ t("menu.monitor") }}</el-menu-item>
-          <el-menu-item index="/ai-usage">{{ t("menu.aiUsage") }}</el-menu-item>
-          <el-menu-item index="/health-breakdown">{{ t("menu.healthBreakdown") }}</el-menu-item>
-          <el-menu-item index="/logs">{{ t("menu.logs") }}</el-menu-item>
-          <el-menu-item index="/setup">{{ t("menu.setup") }}</el-menu-item>
-          <el-menu-item index="/config">{{ t("menu.config") }}</el-menu-item>
-          <el-menu-item index="/providers">{{ t("menu.providers") }}</el-menu-item>
-          <el-menu-item index="/backend-ops">{{ t("menu.backendOps") }}</el-menu-item>
-          <el-menu-item index="/autotune">{{ t("menu.autoTune") }}</el-menu-item>
-          <el-menu-item index="/workflow">{{ t("menu.workflow") }}</el-menu-item>
-          <el-menu-item index="/security">{{ t("menu.security") }}</el-menu-item>
-        </el-menu>
-      </el-aside>
-      <el-container>
-        <el-header style="display:flex;align-items:center;gap:8px;border-bottom:1px solid #e5e7eb;">
-          <el-tag :type="runtime.status.running ? 'success' : 'danger'">
-            {{ runtime.status.running ? t("app.serviceRunning") : t("app.serviceStopped") }}
-          </el-tag>
-          <el-button size="small" type="primary" @click="onStart">{{ t("app.start") }}</el-button>
-          <el-button size="small" @click="onStop">{{ t("app.stop") }}</el-button>
-          <el-button size="small" type="warning" @click="onRestart">{{ t("app.restart") }}</el-button>
-          <el-divider direction="vertical" />
-          <el-button size="small" @click="onSwitchToMiniWindow">{{ t("app.miniConsole") }}</el-button>
-          <el-button size="small" @click="runtime.refreshAll">{{ t("app.refresh") }}</el-button>
-          <el-button size="small" @click="toggleTheme" :title="t('app.toggleTheme')">
-            {{ themeMode === 'light' ? '🌙' : '☀️' }}
-          </el-button>
-          <el-select :model-value="locale" size="small" style="width: 120px" @change="onLocaleChange">
-            <el-option label="English" value="en-US" />
-            <el-option label="简体中文" value="zh-CN" />
-          </el-select>
-        </el-header>
-        <el-main>
-          <router-view />
-        </el-main>
-      </el-container>
+    <el-container :style="monitorOnly ? 'height: calc(100vh - 36px)' : 'height: 100vh'" direction="vertical">
+      <!-- Header -->
+      <el-header class="app-header">
+        <span class="app-title">{{ t("app.name") }}</span>
+        <el-tag :type="runtime.status.running ? 'success' : 'danger'" size="small">
+          {{ runtime.status.running ? t("app.serviceRunning") : t("app.serviceStopped") }}
+        </el-tag>
+        <el-button size="small" type="primary" @click="onStart">{{ t("app.start") }}</el-button>
+        <el-button size="small" @click="onStop">{{ t("app.stop") }}</el-button>
+        <el-button size="small" type="warning" @click="onRestart">{{ t("app.restart") }}</el-button>
+        <el-divider direction="vertical" />
+        <el-button size="small" @click="onSwitchToMiniWindow">{{ t("app.miniConsole") }}</el-button>
+        <el-button size="small" @click="runtime.refreshAll">{{ t("app.refresh") }}</el-button>
+        <el-button size="small" @click="toggleTheme" :title="t('theme.switch')">
+          {{ t(themeLabel) }}
+        </el-button>
+        <el-select :model-value="locale" size="small" style="width: 120px" @change="onLocaleChange">
+          <el-option label="English" value="en-US" />
+          <el-option label="简体中文" value="zh-CN" />
+        </el-select>
+      </el-header>
+
+      <!-- Main 3-tab area -->
+      <el-main class="app-main">
+        <el-tabs v-model="activeMainTab" class="main-tabs">
+          <!-- Monitor Tab -->
+          <el-tab-pane :label="t('tab.monitor')" name="monitor">
+            <el-tabs v-model="activeMonitorSubTab" class="sub-tabs">
+              <el-tab-pane :label="t('menu.dashboard')" name="dashboard">
+                <DashboardView />
+              </el-tab-pane>
+              <el-tab-pane :label="t('menu.monitor')" name="monitor">
+                <MonitorView />
+              </el-tab-pane>
+              <el-tab-pane :label="t('menu.aiUsage')" name="ai-usage">
+                <AiUsageView />
+              </el-tab-pane>
+              <el-tab-pane :label="t('menu.healthBreakdown')" name="health">
+                <HealthBreakdownView />
+              </el-tab-pane>
+              <el-tab-pane :label="t('menu.logs')" name="logs">
+                <LogsView />
+              </el-tab-pane>
+            </el-tabs>
+          </el-tab-pane>
+
+          <!-- Config Tab -->
+          <el-tab-pane :label="t('tab.config')" name="config">
+            <el-tabs v-model="activeConfigSubTab" class="sub-tabs">
+              <el-tab-pane :label="t('menu.setup')" name="setup">
+                <SetupView />
+              </el-tab-pane>
+              <el-tab-pane :label="t('menu.config')" name="config">
+                <ConfigView />
+              </el-tab-pane>
+              <el-tab-pane :label="t('menu.providers')" name="providers">
+                <ProvidersView />
+              </el-tab-pane>
+              <el-tab-pane :label="t('menu.backendOps')" name="backend-ops">
+                <BackendOpsView />
+              </el-tab-pane>
+              <el-tab-pane :label="t('menu.autoTune')" name="autotune">
+                <AutoTuneView />
+              </el-tab-pane>
+              <el-tab-pane :label="t('menu.workflow')" name="workflow">
+                <WorkflowView />
+              </el-tab-pane>
+              <el-tab-pane :label="t('menu.security')" name="security">
+                <SecurityView />
+              </el-tab-pane>
+            </el-tabs>
+          </el-tab-pane>
+
+          <!-- Chat Tab -->
+          <el-tab-pane :label="t('tab.chat')" name="chat">
+            <ChatView />
+          </el-tab-pane>
+        </el-tabs>
+      </el-main>
     </el-container>
   </template>
 </template>
@@ -72,19 +110,38 @@ import {
 } from "./services/backendLifecycle";
 import { useRuntimeStore } from "./stores/runtime";
 import { getLocale, setLocale } from "./locales";
-import { currentTheme, toggleTheme as toggleThemeFunc } from "./utils/theme";
+import { currentThemeLabelKey, toggleTheme as toggleThemeFunc } from "./utils/theme";
 import { useCrashHandler } from "./composables/useCrashHandler";
-import "./styles/dark.css";
+import "./themes/default.css";
+import "./themes/meadow.css";
+import "./themes/ink.css";
+import "./themes/wuxia.css";
+import "./themes/kitty.css";
 import OfflineIndicator from "./components/OfflineIndicator.vue";
 import QuickNavigator from "./components/QuickNavigator.vue";
+import DashboardView from "./views/DashboardView.vue";
+import MonitorView from "./views/MonitorView.vue";
+import AiUsageView from "./views/AiUsageView.vue";
+import HealthBreakdownView from "./views/HealthBreakdownView.vue";
+import LogsView from "./views/LogsView.vue";
+import SetupView from "./views/SetupView.vue";
+import ConfigView from "./views/ConfigView.vue";
+import ProvidersView from "./views/ProvidersView.vue";
+import BackendOpsView from "./views/BackendOpsView.vue";
+import AutoTuneView from "./views/AutoTuneView.vue";
+import WorkflowView from "./views/WorkflowView.vue";
+import SecurityView from "./views/SecurityView.vue";
+import ChatView from "./views/ChatView.vue";
 
 const runtime = useRuntimeStore();
 const route = useRoute();
-const activePath = computed(() => route.path);
 const isMiniRoute = computed(() => route.path === "/mini");
 const { t } = useI18n();
 const locale = ref(getLocale());
-const themeMode = currentTheme;
+const themeLabel = computed(() => currentThemeLabelKey());
+const activeMainTab = ref("monitor");
+const activeMonitorSubTab = ref("dashboard");
+const activeConfigSubTab = ref("setup");
 let previousRunning = runtime.status.running;
 const MONITOR_ONLY_KEY = "goon.gui.monitorOnly";
 let stopRunningWatch: (() => void) | undefined;
@@ -217,5 +274,46 @@ onUnmounted(() => {
   color: #b45309;
   text-decoration: underline;
   font-weight: 500;
+  cursor: pointer;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--color-border, #e5e7eb);
+  padding: 0 16px;
+  flex-wrap: wrap;
+}
+
+.app-title {
+  font-weight: 700;
+  font-size: 15px;
+  margin-right: 8px;
+  color: var(--color-accent, #3b82f6);
+  white-space: nowrap;
+}
+
+.app-main {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-tabs {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-tabs :deep(.el-tabs__content) {
+  flex: 1;
+  overflow: auto;
+  padding: 0 16px 16px;
+}
+
+.sub-tabs :deep(.el-tabs__content) {
+  padding: 12px 0 0;
 }
 </style>

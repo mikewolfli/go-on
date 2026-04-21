@@ -3944,6 +3944,170 @@ pub(super) async fn handle_release_readiness(
                         "consensus_with_dissent_preservation_ready": consensus_with_dissent_preservation_gate,
                     },
                 },
+                // BLUE35 S1-S17 individual readiness entries
+                "custom_role_registry": {
+                    "ready": custom_role_registry_gate,
+                    "role_registry_support": true,
+                    "custom_role_routing": true,
+                    "custom_role_dynamic_matching": true,
+                    "checks": {
+                        "blue34_release_closure_ready": blue34_release_closure_gate,
+                        "runtime_healthy": status.lifecycle.is_healthy,
+                    },
+                },
+                "custom_role_dynamic_matching": {
+                    "ready": custom_role_dynamic_matching_gate,
+                    "dynamic_keyword_matching": true,
+                    "registry_backed_scoring": true,
+                    "checks": {
+                        "custom_role_registry_ready": custom_role_registry_gate,
+                        "observability_gate": observability_gate,
+                    },
+                },
+                "compliance_audit_metadata": {
+                    "ready": compliance_audit_metadata_gate,
+                    "audit_data_classification": true,
+                    "compliance_tags": true,
+                    "retention_policy": true,
+                    "checks": {
+                        "custom_role_dynamic_matching_ready": custom_role_dynamic_matching_gate,
+                        "strict_mode_enabled": strict_enabled,
+                    },
+                },
+                "self_rationalization_guard": {
+                    "ready": self_rationalization_guard_gate,
+                    "weak_evidence_detection": true,
+                    "reexamine_trigger": true,
+                    "full_auto_blocking": true,
+                    "checks": {
+                        "compliance_audit_metadata_ready": compliance_audit_metadata_gate,
+                        "observability_gate": observability_gate,
+                    },
+                },
+                "startup_context_loader": {
+                    "ready": startup_context_loader_gate,
+                    "async_preload": true,
+                    "once_per_process": true,
+                    "code_repo_fingerprint": true,
+                    "checks": {
+                        "self_rationalization_guard_ready": self_rationalization_guard_gate,
+                    },
+                },
+                "layered_prompt_builder": {
+                    "ready": layered_prompt_builder_gate,
+                    "eight_layer_architecture": true,
+                    "static_layer_hash_cache": true,
+                    "dynamic_layer_assembly": true,
+                    "checks": {
+                        "startup_context_loader_ready": startup_context_loader_gate,
+                        "runtime_healthy": status.lifecycle.is_healthy,
+                    },
+                },
+                "layered_token_trigger": {
+                    "ready": layered_token_trigger_gate,
+                    "l0_fast_reject": true,
+                    "l1_cache_hit": true,
+                    "l5_high_risk_verification": true,
+                    "gate_chain": ["L0", "L1", "L2", "L3", "L4", "L5"],
+                    "checks": {
+                        "layered_prompt_builder_ready": layered_prompt_builder_gate,
+                        "observability_gate": observability_gate,
+                    },
+                },
+                "multi_priority_scheduler": {
+                    "ready": multi_priority_scheduler_gate,
+                    "dual_level_scheduler": true,
+                    "l1_task_queue": true,
+                    "l2_worker_pool": true,
+                    "fan_out_join": true,
+                    "checks": {
+                        "layered_token_trigger_ready": layered_token_trigger_gate,
+                        "dual_track_consistency": dual_track_consistency_gate,
+                    },
+                },
+                "worker_scheduler_backpressure": {
+                    "ready": worker_scheduler_backpressure_gate,
+                    "priority_queue": true,
+                    "anti_starvation": true,
+                    "aging_bonus": true,
+                    "checks": {
+                        "multi_priority_scheduler_ready": multi_priority_scheduler_gate,
+                        "multi_user_server_gate": multi_user_server_gate,
+                    },
+                },
+                "fork_isolation_guard": {
+                    "ready": fork_isolation_guard_gate,
+                    "per_child_budget": true,
+                    "zombie_reap": true,
+                    "schema_validation_on_merge": true,
+                    "checks": {
+                        "worker_scheduler_backpressure_ready": worker_scheduler_backpressure_gate,
+                        "open_breakers": open_breakers,
+                    },
+                },
+                "capability_graph": {
+                    "ready": capability_graph_gate,
+                    "node_dependency_graph": true,
+                    "risk_level_tracking": true,
+                    "alternative_path_query": true,
+                    "cycle_detection": true,
+                    "checks": {
+                        "fork_isolation_guard_ready": fork_isolation_guard_gate,
+                        "registered_agent_total": registered_agent_total,
+                    },
+                },
+                "provenance_ledger": {
+                    "ready": provenance_ledger_gate,
+                    "source_traceability": true,
+                    "model_version_tracking": true,
+                    "integration_change_log": true,
+                    "checks": {
+                        "capability_graph_ready": capability_graph_gate,
+                        "observability_gate": observability_gate,
+                    },
+                },
+                "node_reputation_tracker": {
+                    "ready": node_reputation_tracker_gate,
+                    "ema_reputation_score": true,
+                    "routing_influence": true,
+                    "cold_start_handling": true,
+                    "checks": {
+                        "provenance_ledger_ready": provenance_ledger_gate,
+                        "observability_gate": observability_gate,
+                    },
+                },
+                "k8s_delivery_pack": {
+                    "ready": k8s_delivery_pack_gate,
+                    "k8s_manifests": true,
+                    "health_endpoint": true,
+                    "mtls_config": true,
+                    "checks": {
+                        "node_reputation_tracker_ready": node_reputation_tracker_gate,
+                        "lifecycle_ops_ready": detail_multi_user_lifecycle_ready,
+                    },
+                },
+                "sdk_multi_language_stub": {
+                    "ready": sdk_multi_language_stub_gate,
+                    "rust_sdk": true,
+                    "python_sdk": true,
+                    "protocol_version_check": true,
+                    "checks": {
+                        "k8s_delivery_pack_ready": k8s_delivery_pack_gate,
+                        "runtime_healthy": status.lifecycle.is_healthy,
+                    },
+                },
+                "workflow_type_tri_mode": {
+                    "ready": workflow_type_tri_mode_gate,
+                    "auto_detection": true,
+                    "dev_workflow": true,
+                    "general_workflow": true,
+                    "custom_workflow": true,
+                    "free_mode": true,
+                    "checks": {
+                        "sdk_multi_language_stub_ready": sdk_multi_language_stub_gate,
+                        "dual_track_consistency": dual_track_consistency_gate,
+                    },
+                },
                 "blue35_release_closure": {
                     "ready": blue35_release_closure_gate,
                     "s1_s16_all_checked": true,

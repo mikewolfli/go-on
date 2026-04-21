@@ -6454,3 +6454,282 @@ fn adversarial_invalid_method_returns_jsonrpc_error_does_not_crash_process() {
     assert_eq!(shutdown["result"]["ok"], true);
     harness.wait_for_exit(Duration::from_secs(8));
 }
+
+// ── BLUE35 S1-S17: full profile coverage assertions ───────────────────────────
+
+#[test]
+fn blue35_governance_profiles_present_for_s1_s16() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_test_config(&config_path, 60, 120, 5);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    harness.request(19001, "initialize", None);
+
+    let governance = harness.request(19002, "governance.status", None);
+    let gov = &governance["result"]["governance"];
+
+    // S1: custom_role_registry
+    assert!(
+        gov["custom_role_registry"].is_object(),
+        "governance should include custom_role_registry"
+    );
+    assert!(
+        gov["custom_role_registry"]["ready"].is_boolean(),
+        "custom_role_registry.ready must be boolean"
+    );
+
+    // S2: custom_role_dynamic_matching
+    assert!(
+        gov["custom_role_dynamic_matching"].is_object(),
+        "governance should include custom_role_dynamic_matching"
+    );
+
+    // S3: compliance_audit_metadata
+    assert!(
+        gov["compliance_audit_metadata"].is_object(),
+        "governance should include compliance_audit_metadata"
+    );
+    assert!(
+        gov["compliance_audit_metadata"]["compliance_framework_profile"].is_object(),
+        "compliance_audit_metadata must include compliance_framework_profile"
+    );
+
+    // S4: self_rationalization_guard with profile
+    assert!(
+        gov["self_rationalization_guard"].is_object(),
+        "governance should include self_rationalization_guard"
+    );
+    assert!(
+        gov["self_rationalization_guard"]["self_rationalization_guard_profile"].is_object(),
+        "self_rationalization_guard must include self_rationalization_guard_profile"
+    );
+    assert!(
+        gov["self_rationalization_guard"]["self_rationalization_guard_profile"]["reexamine_triggered_count"].is_number(),
+        "self_rationalization_guard_profile must include reexamine_triggered_count"
+    );
+    assert!(
+        gov["self_rationalization_guard"]["self_rationalization_guard_profile"]["weak_evidence_blocked_count"].is_number(),
+        "self_rationalization_guard_profile must include weak_evidence_blocked_count"
+    );
+
+    // S5: startup_context_loader
+    assert!(
+        gov["startup_context_loader"].is_object(),
+        "governance should include startup_context_loader"
+    );
+    assert!(
+        gov["startup_context_loader"]["enabled"].is_boolean(),
+        "startup_context_loader.enabled must be boolean"
+    );
+
+    // S6: layered_prompt_builder with profile
+    assert!(
+        gov["layered_prompt_builder"].is_object(),
+        "governance should include layered_prompt_builder"
+    );
+    assert!(
+        gov["layered_prompt_builder"]["prompt_layer_profile"].is_object(),
+        "layered_prompt_builder must include prompt_layer_profile"
+    );
+    assert!(
+        gov["layered_prompt_builder"]["prompt_layer_profile"]["static_layers_cached"].is_number(),
+        "prompt_layer_profile must include static_layers_cached"
+    );
+
+    // S7: layered_token_trigger with profile
+    assert!(
+        gov["layered_token_trigger"].is_object(),
+        "governance should include layered_token_trigger"
+    );
+    assert!(
+        gov["layered_token_trigger"]["layered_token_trigger_profile"].is_object(),
+        "layered_token_trigger must include layered_token_trigger_profile"
+    );
+    assert!(
+        gov["layered_token_trigger"]["layered_token_trigger_profile"]["l1_cache_hit_count"].is_number(),
+        "layered_token_trigger_profile must include l1_cache_hit_count"
+    );
+
+    // S8: multi_priority_scheduler with dual_level_scheduler_profile
+    assert!(
+        gov["multi_priority_scheduler"].is_object(),
+        "governance should include multi_priority_scheduler"
+    );
+    assert!(
+        gov["multi_priority_scheduler"]["dual_level_scheduler_profile"].is_object(),
+        "multi_priority_scheduler must include dual_level_scheduler_profile"
+    );
+    assert!(
+        gov["multi_priority_scheduler"]["dual_level_scheduler_profile"]["l1_queue_depth"].is_number(),
+        "dual_level_scheduler_profile must include l1_queue_depth"
+    );
+
+    // S9: worker_scheduler_backpressure with priority_queue_profile
+    assert!(
+        gov["worker_scheduler_backpressure"].is_object(),
+        "governance should include worker_scheduler_backpressure"
+    );
+    assert!(
+        gov["worker_scheduler_backpressure"]["priority_queue_profile"].is_object(),
+        "worker_scheduler_backpressure must include priority_queue_profile"
+    );
+    assert!(
+        gov["worker_scheduler_backpressure"]["priority_queue_profile"]["starvation_events_prevented"].is_number(),
+        "priority_queue_profile must include starvation_events_prevented"
+    );
+
+    // S10: fork_isolation_guard with fork_isolation_profile
+    assert!(
+        gov["fork_isolation_guard"].is_object(),
+        "governance should include fork_isolation_guard"
+    );
+    assert!(
+        gov["fork_isolation_guard"]["fork_isolation_profile"].is_object(),
+        "fork_isolation_guard must include fork_isolation_profile"
+    );
+    assert!(
+        gov["fork_isolation_guard"]["fork_isolation_profile"]["zombie_reaped_count"].is_number(),
+        "fork_isolation_profile must include zombie_reaped_count"
+    );
+
+    // S11: capability_graph with capability_graph_profile
+    assert!(
+        gov["capability_graph"].is_object(),
+        "governance should include capability_graph"
+    );
+    assert!(
+        gov["capability_graph"]["capability_graph_profile"].is_object(),
+        "capability_graph must include capability_graph_profile"
+    );
+    assert!(
+        gov["capability_graph"]["capability_graph_profile"]["node_count"].is_number(),
+        "capability_graph_profile must include node_count"
+    );
+
+    // S12: provenance_ledger with provenance_ledger_profile
+    assert!(
+        gov["provenance_ledger"].is_object(),
+        "governance should include provenance_ledger"
+    );
+    assert!(
+        gov["provenance_ledger"]["provenance_ledger_profile"].is_object(),
+        "provenance_ledger must include provenance_ledger_profile"
+    );
+    assert!(
+        gov["provenance_ledger"]["provenance_ledger_profile"]["entry_count"].is_number(),
+        "provenance_ledger_profile must include entry_count"
+    );
+
+    // S13: node_reputation_tracker with node_reputation_profile
+    assert!(
+        gov["node_reputation_tracker"].is_object(),
+        "governance should include node_reputation_tracker"
+    );
+    assert!(
+        gov["node_reputation_tracker"]["node_reputation_profile"].is_object(),
+        "node_reputation_tracker must include node_reputation_profile"
+    );
+    assert!(
+        gov["node_reputation_tracker"]["node_reputation_profile"]["tracked_agent_count"].is_number(),
+        "node_reputation_profile must include tracked_agent_count"
+    );
+
+    // S14: k8s_delivery_pack with cloud_native_profile
+    assert!(
+        gov["k8s_delivery_pack"].is_object(),
+        "governance should include k8s_delivery_pack"
+    );
+    assert!(
+        gov["k8s_delivery_pack"]["cloud_native_profile"].is_object(),
+        "k8s_delivery_pack must include cloud_native_profile"
+    );
+    assert!(
+        gov["k8s_delivery_pack"]["cloud_native_profile"]["health_endpoint_ready"].is_boolean(),
+        "cloud_native_profile must include health_endpoint_ready"
+    );
+
+    // S15: sdk_multi_language_stub with developer_sdk_profile
+    assert!(
+        gov["sdk_multi_language_stub"].is_object(),
+        "governance should include sdk_multi_language_stub"
+    );
+    assert!(
+        gov["sdk_multi_language_stub"]["developer_sdk_profile"].is_object(),
+        "sdk_multi_language_stub must include developer_sdk_profile"
+    );
+
+    // S16: workflow_type_tri_mode with workflow_profile
+    assert!(
+        gov["workflow_type_tri_mode"].is_object(),
+        "governance should include workflow_type_tri_mode"
+    );
+    assert!(
+        gov["workflow_type_tri_mode"]["workflow_profile"].is_object(),
+        "workflow_type_tri_mode must include workflow_profile"
+    );
+    assert!(
+        gov["workflow_type_tri_mode"]["workflow_profile"]["configured_workflow_type"].is_string(),
+        "workflow_profile must include configured_workflow_type"
+    );
+    assert!(
+        gov["workflow_type_tri_mode"]["workflow_profile"]["effective_workflow_type"].is_string(),
+        "workflow_profile must include effective_workflow_type"
+    );
+
+    // S17: blue35_release_closure
+    assert!(
+        gov["blue35_release_closure"].is_object(),
+        "governance should include blue35_release_closure"
+    );
+    assert!(
+        gov["blue35_release_closure"]["ready"].is_boolean(),
+        "blue35_release_closure.ready must be boolean"
+    );
+
+    let shutdown = harness.request(19003, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}
+
+#[test]
+fn blue35_readiness_profiles_present_for_s1_s17() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let config_path = temp.path().join("config.toml");
+    write_test_config(&config_path, 60, 120, 5);
+
+    let mut harness = RpcHarness::spawn(&config_path);
+    harness.request(19010, "initialize", None);
+
+    let readiness = harness.request(19011, "release.readiness", None);
+    let r = &readiness["result"]["readiness"];
+
+    assert!(r["custom_role_registry"].is_object(), "readiness.custom_role_registry must be object");
+    assert!(r["custom_role_dynamic_matching"].is_object(), "readiness.custom_role_dynamic_matching must be object");
+    assert!(r["compliance_audit_metadata"].is_object(), "readiness.compliance_audit_metadata must be object");
+    assert!(r["self_rationalization_guard"].is_object(), "readiness.self_rationalization_guard must be object");
+    assert!(r["startup_context_loader"].is_object(), "readiness.startup_context_loader must be object");
+    assert!(r["layered_prompt_builder"].is_object(), "readiness.layered_prompt_builder must be object");
+    assert!(r["layered_token_trigger"].is_object(), "readiness.layered_token_trigger must be object");
+    assert!(r["multi_priority_scheduler"].is_object(), "readiness.multi_priority_scheduler must be object");
+    assert!(r["worker_scheduler_backpressure"].is_object(), "readiness.worker_scheduler_backpressure must be object");
+    assert!(r["fork_isolation_guard"].is_object(), "readiness.fork_isolation_guard must be object");
+    assert!(r["capability_graph"].is_object(), "readiness.capability_graph must be object");
+    assert!(r["provenance_ledger"].is_object(), "readiness.provenance_ledger must be object");
+    assert!(r["node_reputation_tracker"].is_object(), "readiness.node_reputation_tracker must be object");
+    assert!(r["k8s_delivery_pack"].is_object(), "readiness.k8s_delivery_pack must be object");
+    assert!(r["sdk_multi_language_stub"].is_object(), "readiness.sdk_multi_language_stub must be object");
+    assert!(r["workflow_type_tri_mode"].is_object(), "readiness.workflow_type_tri_mode must be object");
+    assert!(r["blue35_release_closure"].is_object(), "readiness.blue35_release_closure must be object");
+
+    // Verify key sub-fields
+    assert!(r["self_rationalization_guard"]["ready"].is_boolean(), "self_rationalization_guard.ready must be boolean");
+    assert!(r["capability_graph"]["node_dependency_graph"].is_boolean(), "capability_graph.node_dependency_graph must be boolean");
+    assert!(r["workflow_type_tri_mode"]["auto_detection"].is_boolean(), "workflow_type_tri_mode.auto_detection must be boolean");
+    assert!(r["fork_isolation_guard"]["zombie_reap"].is_boolean(), "fork_isolation_guard.zombie_reap must be boolean");
+    assert!(r["layered_token_trigger"]["gate_chain"].is_array(), "layered_token_trigger.gate_chain must be array");
+
+    let shutdown = harness.request(19012, "shutdown", None);
+    assert_eq!(shutdown["result"]["ok"], true);
+    harness.wait_for_exit(Duration::from_secs(8));
+}

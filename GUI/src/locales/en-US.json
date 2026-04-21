@@ -429,5 +429,51 @@
     "refreshed": "Refreshed",
     "offlineMode": "Offline Mode",
     "offlineModeHint": "Service is offline. Showing last known state."
+  },
+  "tab": {
+    "monitor": "Monitor",
+    "config": "Config",
+    "chat": "Chat"
+  },
+  "theme": {
+    "default": "Simple",
+    "meadow": "Meadow",
+    "ink": "Ink",
+    "wuxia": "Wuxia",
+    "kitty": "Kitty",
+    "switch": "Theme"
+  },
+  "chat": {
+    "agents": "Agents",
+    "sessions": "Sessions",
+    "noSessions": "No sessions",
+    "newSession": "New Session",
+    "inputPlaceholder": "Send a message... (Ctrl+Enter to send)",
+    "send": "Send",
+    "thinking": "Thinking...",
+    "noMessages": "Start a conversation",
+    "emptyHistory": "Start a conversation",
+    "sessionSteps": "Workflow Steps",
+    "noSteps": "No steps yet",
+    "noAgents": "No agents available",
+    "errorNoContent": "(empty response)",
+    "you": "You",
+    "assistant": "Assistant",
+    "backendOnline": "Backend Online",
+    "backendOffline": "Backend Offline",
+    "mode": "Mode",
+    "modePlan": "Plan",
+    "modeAgent": "Agent",
+    "modeEdit": "Edit",
+    "modeAuto": "Full Auto",
+    "link": "Link",
+    "linkLocal": "Local",
+    "linkServer": "Simple Server",
+    "linkMulti": "Multi Users",
+    "workflow": "Workflow",
+    "workflowAuto": "Auto",
+    "workflowDev": "Dev",
+    "workflowGeneral": "General",
+    "workflowCustom": "Custom"
   }
 }

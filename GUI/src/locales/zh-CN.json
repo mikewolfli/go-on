@@ -428,6 +428,50 @@
     "cancelled": "已取消",
     "refreshed": "已刷新",
     "offlineMode": "离线模式",
-    "offlineModeHint": "服务离线中。显示最后已知的状态。"
-  }
+    "offlineModeHint": "服务离线中。显示最后已知的状态。"  },
+  "tab": {
+    "monitor": "监控",
+    "config": "配置",
+    "chat": "对话"
+  },
+  "theme": {
+    "default": "简洁",
+    "meadow": "青草",
+    "ink": "水墨",
+    "wuxia": "武侠",
+    "kitty": "萌猫",
+    "switch": "主题"
+  },
+  "chat": {
+    "agents": "智能体",
+    "sessions": "会话",
+    "noSessions": "暂无会话",
+    "newSession": "新建会话",
+    "inputPlaceholder": "发送消息…（Ctrl+Enter 发送）",
+    "send": "发送",
+    "thinking": "思考中…",
+    "noMessages": "开始对话",
+    "emptyHistory": "开始对话",
+    "sessionSteps": "工作流步骤",
+    "noSteps": "暂无步骤",
+    "noAgents": "暂无可用智能体",
+    "errorNoContent": "（空响应）",
+    "you": "你",
+    "assistant": "助手",
+    "backendOnline": "后端在线",
+    "backendOffline": "后端离线",
+    "mode": "模式",
+    "modePlan": "规划",
+    "modeAgent": "代理",
+    "modeEdit": "编辑",
+    "modeAuto": "全自动",
+    "link": "链接",
+    "linkLocal": "本地",
+    "linkServer": "简单服务器",
+    "linkMulti": "多用户",
+    "workflow": "工作流",
+    "workflowAuto": "自动",
+    "workflowDev": "开发",
+    "workflowGeneral": "通用",
+    "workflowCustom": "自定义"  }
 }

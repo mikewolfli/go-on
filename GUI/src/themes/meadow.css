@@ -1,0 +1,30 @@
+/* Theme: Meadow — green natural tones, easy on the eyes */
+:root {
+  --theme-name: "meadow";
+  --color-bg: #f0faf4;
+  --color-surface: #ffffff;
+  --color-surface-alt: #e8f5ee;
+  --color-border: #b7dfc6;
+  --color-text-primary: #1a2e22;
+  --color-text-secondary: #4a7c5e;
+  --color-accent: #16a34a;
+  --color-accent-hover: #15803d;
+  --color-accent-light: #dcfce7;
+  --color-success: #22c55e;
+  --color-warning: #eab308;
+  --color-danger: #ef4444;
+  --color-header-bg: #e8f5ee;
+  --color-sidebar-bg: #f0faf4;
+  --color-tab-active: #16a34a;
+  --color-tab-inactive: #6b9e7e;
+  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --border-radius: 8px;
+  --shadow-sm: 0 1px 4px rgba(22,163,74,0.08);
+  --shadow-md: 0 4px 16px rgba(22,163,74,0.12);
+}
+
+html[data-theme="meadow"] {
+  background-color: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-family);
+}

@@ -118,7 +118,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{ArgAction, Parser, Subcommand};
 use tracing::{error, info, warn};
 
 use crate::acp::r#impl::{new_acp_server, run_acp_http_server, run_acp_server};
@@ -150,12 +150,19 @@ fn validate_cli_protocol_mode(raw: Option<&str>) -> Result<Option<String>> {
         return Ok(None);
     };
 
-    let normalized = match ProtocolMode::from_str(value) {
+    let normalized = match ProtocolMode::from_fuzzy(value) {
         Ok(mode) => mode.to_cli_arg(),
         Err(ProtocolModeError::FromConfigNotSupported) => {
             anyhow::bail!(
                 "invalid --protocol-mode '{}'; from_config is only supported in GUI/VS Code startup settings",
                 value
+            );
+        }
+        Err(ProtocolModeError::AmbiguousPrefix(prefix)) => {
+            anyhow::bail!(
+                "ambiguous --protocol-mode prefix '{}'; allowed: {}",
+                prefix,
+                ProtocolMode::CANONICAL_MODES.join(", ")
             );
         }
         Err(ProtocolModeError::InvalidValue(_)) => {
@@ -175,8 +182,11 @@ fn validate_cli_protocol_mode(raw: Option<&str>) -> Result<Option<String>> {
 #[command(name = "go-on")]
 #[command(about = "ACP proxy with flow, phases and multi-agent routing")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+
     /// Path to configuration file
-    #[arg(long)]
+    #[arg(short = 'c', long)]
     config: Option<PathBuf>,
 
     /// Phase to run
@@ -184,12 +194,16 @@ struct Cli {
     phase: Option<String>,
 
     /// Enable verbose logging
-    #[arg(long, default_value_t = false)]
-    verbose: bool,
+    #[arg(short = 'v', long, action = ArgAction::Count)]
+    verbose: u8,
 
     /// Validate configuration and exit
     #[arg(long, visible_alias = "doctor", default_value_t = false)]
     validate_config: bool,
+
+    /// Run end-to-end diagnosis and print concise remediation output
+    #[arg(long, default_value_t = false)]
+    diagnose: bool,
 
     /// Run setup wizard
     #[arg(long, visible_alias = "init", default_value_t = false)]
@@ -276,18 +290,43 @@ struct Cli {
     status: bool,
 
     /// Bind ACP HTTP server and expose /health, /chat, and /chat/stream
-    #[arg(long)]
+    #[arg(short = 'b', long, visible_alias = "bind")]
     acp_http_bind: Option<String>,
 
     /// Access protocol mode override (adaptive|acp_stdio|acp_http|mcp_stdio|mcp_http)
-    #[arg(long, value_name = "MODE")]
+    #[arg(short = 'm', long, visible_alias = "mode", value_name = "MODE")]
     protocol_mode: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum CliCommand {
+    /// Generate default configuration interactively
+    Init,
+    /// Print runtime readiness status
+    Status,
+    /// Run end-to-end diagnosis with remediation hints
+    Diagnose,
 }
 
 /// Get the default configuration file path
 ///
-/// Returns the path to config.toml in the same directory as the executable
+/// Search order:
+/// 1) ./config.toml
+/// 2) $HOME/.config/go-on/config.toml
+/// 3) <exe_dir>/config.toml
 fn default_config_path() -> Result<PathBuf> {
+    let cwd_candidate = std::env::current_dir()?.join("config.toml");
+    if cwd_candidate.exists() {
+        return Ok(cwd_candidate);
+    }
+
+    if let Some(home_dir) = std::env::var_os("HOME") {
+        let home_candidate = PathBuf::from(home_dir).join(".config/go-on/config.toml");
+        if home_candidate.exists() {
+            return Ok(home_candidate);
+        }
+    }
+
     let exe = std::env::current_exe()?;
     let dir = exe
         .parent()
@@ -1215,14 +1254,22 @@ async fn main() {
 /// Handles command-line arguments, configuration loading, and server initialization
 async fn run() -> Result<()> {
     // Parse command-line arguments
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    if let Some(command) = cli.command.take() {
+        match command {
+            CliCommand::Init => cli.setup = true,
+            CliCommand::Status => cli.status = true,
+            CliCommand::Diagnose => cli.diagnose = true,
+        }
+    }
 
     // Configure telemetry (structured logging, metrics, tracing)
     let telemetry_config = telemetry_enhanced::TelemetryConfig {
-        log_level: if cli.verbose {
-            "debug".to_string()
-        } else {
-            "info".to_string()
+        log_level: match cli.verbose {
+            0 => "warn".to_string(),
+            1 => "info".to_string(),
+            2 => "debug".to_string(),
+            _ => "trace".to_string(),
         },
         ..Default::default()
     };
@@ -1373,6 +1420,41 @@ async fn run() -> Result<()> {
             return Ok(());
         }
 
+        return Ok(());
+    }
+
+    if cli.diagnose {
+        let report = build_runtime_healthcheck_report(Some(&config_path), None, None)?;
+        let error_count = report
+            .components
+            .iter()
+            .filter(|item| item.status == crate::reinforcement::CheckStatus::Error)
+            .count();
+        let warn_count = report
+            .components
+            .iter()
+            .filter(|item| item.status == crate::reinforcement::CheckStatus::Warn)
+            .count();
+        let healthy_count = report
+            .components
+            .iter()
+            .filter(|item| {
+                item.status == crate::reinforcement::CheckStatus::Healthy
+                    || item.status == crate::reinforcement::CheckStatus::Skipped
+            })
+            .count();
+        println!("=== go-on diagnose ===");
+        println!("config: {}", config_path.display());
+        println!("overall: {:?}", report.overall_status);
+        println!(
+            "summary: error={} warn={} healthy={}",
+            error_count, warn_count, healthy_count
+        );
+        if error_count > 0 {
+            println!("suggestion: run `go-on --validate-config -c {}`", config_path.display());
+        } else {
+            println!("suggestion: runtime baseline looks healthy");
+        }
         return Ok(());
     }
 
@@ -1546,7 +1628,7 @@ async fn run() -> Result<()> {
                 Some(config_path.to_string_lossy().to_string()),
                 runtime_config,
                 Some(http_client),
-                cli.verbose,
+                cli.verbose > 0,
             );
             if matches!(access_selection.startup_transport, TransportMode::Stdio) {
                 run_acp_server(&mut server).await
@@ -1569,7 +1651,7 @@ async fn run() -> Result<()> {
                 Some(config_path.to_string_lossy().to_string()),
                 runtime_config,
                 Some(http_client),
-                cli.verbose,
+                cli.verbose > 0,
             );
             run_acp_http_server(Arc::new(server), bind_addr).await
         }
@@ -1806,10 +1888,13 @@ mod tests {
     fn cli_protocol_mode_accepts_all_valid_values() {
         for mode in [
             "adaptive",
+            "adap",
             "acp_stdio",
             "acp_http",
+            "acp-http",
             "mcp_stdio",
             "mcp_http",
+            "mcp-http",
             "auto",
             "acp",
             "mcp",
@@ -1829,5 +1914,11 @@ mod tests {
         assert!(err
             .to_string()
             .contains("invalid --protocol-mode 'invalid_mode'"));
+    }
+
+    #[test]
+    fn cli_protocol_mode_rejects_ambiguous_prefix() {
+        let err = validate_cli_protocol_mode(Some("acp_")).unwrap_err();
+        assert!(err.to_string().contains("ambiguous --protocol-mode prefix"));
     }
 }

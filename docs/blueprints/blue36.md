@@ -676,6 +676,33 @@
 
 ---
 
+## 本机落地进度回写（2026-04-21）
+
+说明：以下状态仅代表当前机器代码落地结果；不引用其他机器状态。
+
+| Step | 状态 | 本机已落地内容 |
+|------|------|----------------|
+| C1 | ✅ 完成（核心） | 新增 `src/shared/protocol_mode.rs`，统一协议模式解析/别名兼容；`src/main.rs` 与 `src/protocol/access_mode.rs` 已接入统一逻辑。 |
+| C2 | ✅ 完成（核心） | CLI 协议模式校验与错误提示统一，支持同一套 canonical/legacy 规则；GUI 启动链路支持协议模式覆盖并透传 `--protocol-mode`。 |
+| C3 | ✅ 完成（首版） | GUI `ConfigView` 新增协议模式选择与说明卡片，支持 `from_config` 与 5 种协议模式，保存时持久化并生效。 |
+| C4 | ✅ 完成（核心） | VS Code Addon 新增 `go-on.diagnose` 一键诊断命令，并接入统一协议模式归一化逻辑。 |
+| C5 | ✅ 完成（基础） | 三语语言包新增协议模式描述与 `invalid_protocol_mode` / suggestion 键，错误提示语义统一。 |
+| C6 | ✅ 完成（核心） | Addon 与 Backend 双诊断通路已落地：Addon `go-on.diagnose` + Backend `--diagnose`；诊断覆盖可执行文件、配置路径、协议模式、运行态健康探针。 |
+| C7 | ⏳ 未开始 | 尚未落地首次使用向导与交互教程完整链路。 |
+| C8 | ⏳ 未开始 | 尚未落地统一文档、示例、视频教程。 |
+
+当前完成率（按 C1-C8）：**6 / 8 = 75%**。
+
+### 本轮补充闭环（R4 后台 CLI 简洁高效）
+
+- 已支持短参数：`-c`（config）、`-b`（bind）、`-m`（mode）、`-v/-vv/-vvv`（日志级别）。
+- 已支持子命令：`go-on init`、`go-on status`、`go-on diagnose`（与原有 flag 兼容）。
+- 已支持协议模式模糊/前缀匹配：如 `--mode adap`、`--mode mcp-http`。
+- 已实现默认配置三段查找：`./config.toml` → `$HOME/.config/go-on/config.toml` → `<exe_dir>/config.toml`。
+- 三端验证通过：`cargo check --all-features`、`cargo test --tests`、`vscode-addon` 编译、`GUI` 构建均为绿色。
+
+---
+
 ## 验收标准
 
 ### 技术验收：
@@ -1066,6 +1093,7 @@ bind = "127.0.0.1:8080"   # HTTP listen address
 | 2026-04-21 | 1.6 | 第四次质量扫描：修复 Tauri GUI `cargo clippy` 8 个错误（`collapsible_str_replace` × 1、`manual_range_contains` × 6、`needless_borrow` × 1）；修复 GUI `zh-CN.json` 4 个未翻译 key（`chat.agents`→智能体、`tab.chat`→对话、`providers.provider`→模型提供商、`providers.autoModel`→自动）；三端全部 clippy/tsc 零错误 | AI Assistant |
 | 2026-04-21 | 1.7 | 第五次质量扫描：CLI R4.1 补全短参数别名（`-c`/`-v`/`-b`/`-m`）；新增 `--stop` 子命令（SIGTERM via PID 文件，Windows 给出友好提示）；新增 `--agents` 子命令（列出所有已配置 Agent 及就绪状态）；三端语言包同步新增 `cli.agents_none/header/row` 3 个 key；GUI ChatView 左侧 Session 列表改为可展开工作流步骤面板（`expandedSession` + `WorkflowStep` + 步骤状态着色），新增 `chat.sessionSteps/noSteps` 2 个 i18n key；三端全部 clippy/tsc 零错误 | AI Assistant |
 | 2026-04-21 | 1.8 | **最终收口**：CLI R4.2 `--help` 精简版（`hide = true` 隐藏高级参数，仅显示 10 个用户常用参数 + after_help 提示）；R4.1 零参数启动配置搜索链（CWD → `$XDG_CONFIG_HOME/go-on` / `%APPDATA%/go-on` / `~/.config/go-on` → exe 目录）；backend/GUI/vscode-addon 三端全部编译零警告；i18n 三端全部对齐（backend 3 语言包各 305 key，GUI 2 语言包各 405 key）；C1-C8 步骤定性为架构演进目标（非本版本范围）；R4.8 所有可落地验收项全部关闭 | AI Assistant |
+| 2026-04-21 | 1.9 | **R1/R3 补全收口**：GUI App.vue 重构为真正的 3-Tab 布局（监控/配置/对话），移除 el-aside sidebar，el-tabs 主框架 + 子 Tab 直接内嵌各 View 组件；5 主题 CSS 文件（default/meadow/ink/wuxia/kitty）全部实装于 `GUI/src/themes/`；theme.ts 重写为 5 主题循环系统（含旧值 light→default/dark→ink 迁移）；ChatView.vue 完整重建（智能体 bar、Session 列表含工作流步骤、对话历史、输入区、模式/链接/工作流 radio 条）；GUI 两语言包新增 tab/theme/chat 三个顶级节点共 35 个 key；GUI `npm run build` 零错误；vscode-addon `npm run compile` 零错误 | AI Assistant |
 
              panel.dispose();
              break;

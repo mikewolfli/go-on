@@ -11,6 +11,7 @@ pub enum ProtocolMode {
 pub enum ProtocolModeError {
     FromConfigNotSupported,
     InvalidValue(String),
+    AmbiguousPrefix(String),
 }
 
 impl ProtocolMode {
@@ -25,15 +26,49 @@ impl ProtocolMode {
     pub fn from_str(value: &str) -> Result<Self, ProtocolModeError> {
         match value.trim().to_ascii_lowercase().as_str() {
             "adaptive" => Ok(Self::Adaptive),
-            "acp_stdio" | "acp+stdio" => Ok(Self::AcpStdio),
-            "acp_http" | "acp+http" => Ok(Self::AcpHttp),
-            "mcp_stdio" | "mcp+stdio" => Ok(Self::McpStdio),
-            "mcp_http" | "mcp+http" => Ok(Self::McpHttp),
+            "acp_stdio" | "acp+stdio" | "acp-stdio" => Ok(Self::AcpStdio),
+            "acp_http" | "acp+http" | "acp-http" => Ok(Self::AcpHttp),
+            "mcp_stdio" | "mcp+stdio" | "mcp-stdio" => Ok(Self::McpStdio),
+            "mcp_http" | "mcp+http" | "mcp-http" => Ok(Self::McpHttp),
             "from_config" => Err(ProtocolModeError::FromConfigNotSupported),
             "auto" => Ok(Self::Adaptive),
             "acp" => Ok(Self::AcpStdio),
             "mcp" => Ok(Self::McpStdio),
             other => Err(ProtocolModeError::InvalidValue(other.to_string())),
+        }
+    }
+
+    pub fn from_fuzzy(value: &str) -> Result<Self, ProtocolModeError> {
+        let trimmed = value.trim().to_ascii_lowercase();
+        if trimmed.is_empty() {
+            return Err(ProtocolModeError::InvalidValue(trimmed));
+        }
+
+        match Self::from_str(&trimmed) {
+            Ok(mode) => return Ok(mode),
+            Err(ProtocolModeError::FromConfigNotSupported) => {
+                return Err(ProtocolModeError::FromConfigNotSupported)
+            }
+            Err(ProtocolModeError::InvalidValue(_)) => {}
+            Err(ProtocolModeError::AmbiguousPrefix(_)) => unreachable!(),
+        }
+
+        let mut matched = Self::CANONICAL_MODES
+            .iter()
+            .copied()
+            .filter(|mode| mode.starts_with(&trimmed));
+
+        let first = matched.next();
+        let second = matched.next();
+
+        match (first, second) {
+            (Some("adaptive"), None) => Ok(Self::Adaptive),
+            (Some("acp_stdio"), None) => Ok(Self::AcpStdio),
+            (Some("acp_http"), None) => Ok(Self::AcpHttp),
+            (Some("mcp_stdio"), None) => Ok(Self::McpStdio),
+            (Some("mcp_http"), None) => Ok(Self::McpHttp),
+            (Some(_), Some(_)) => Err(ProtocolModeError::AmbiguousPrefix(trimmed)),
+            _ => Err(ProtocolModeError::InvalidValue(trimmed)),
         }
     }
 
@@ -68,6 +103,21 @@ mod tests {
         assert_eq!(
             ProtocolMode::from_str("from_config"),
             Err(ProtocolModeError::FromConfigNotSupported)
+        );
+    }
+
+    #[test]
+    fn protocol_mode_accepts_unique_prefixes() {
+        assert_eq!(ProtocolMode::from_fuzzy("adap").unwrap(), ProtocolMode::Adaptive);
+        assert_eq!(ProtocolMode::from_fuzzy("mcp-http").unwrap(), ProtocolMode::McpHttp);
+        assert_eq!(ProtocolMode::from_fuzzy("acp_h").unwrap(), ProtocolMode::AcpHttp);
+    }
+
+    #[test]
+    fn protocol_mode_rejects_ambiguous_prefix() {
+        assert_eq!(
+            ProtocolMode::from_fuzzy("acp_").unwrap_err(),
+            ProtocolModeError::AmbiguousPrefix("acp_".to_string())
         );
     }
 }
