@@ -11,6 +11,18 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 use crate::state::AppState;
 
+fn normalize_protocol_mode(value: &str) -> Option<&'static str> {
+    match value.trim().trim_matches('"').to_ascii_lowercase().as_str() {
+        "adaptive" | "auto" => Some("adaptive"),
+        "acp_stdio" | "acp+stdio" | "acp-stdio" | "acp" => Some("acp_stdio"),
+        "acp_http" | "acp+http" | "acp-http" => Some("acp_http"),
+        "mcp_stdio" | "mcp+stdio" | "mcp-stdio" | "mcp" => Some("mcp_stdio"),
+        "mcp_http" | "mcp+http" | "mcp-http" => Some("mcp_http"),
+        "from_config" | "" => None,
+        _ => None,
+    }
+}
+
 #[derive(Debug, serde::Deserialize, Clone)]
 struct ProviderCatalogFile {
     providers: Vec<ProviderCatalogSpec>,
@@ -664,6 +676,7 @@ pub fn configure_service(
     state: State<'_, AppState>,
     executable_path: String,
     working_dir: String,
+    protocol_mode: Option<String>,
 ) -> Result<(), String> {
     let mut inner = state
         .0
@@ -676,6 +689,10 @@ pub fn configure_service(
         .join("go-on.log")
         .to_string_lossy()
         .to_string();
+    inner.config.protocol_mode = protocol_mode
+        .as_deref()
+        .and_then(normalize_protocol_mode)
+        .map(|s| s.to_string());
 
     let env_path = env_file_path(&working_dir);
     inner.config.extra_env = load_env_file(&env_path);

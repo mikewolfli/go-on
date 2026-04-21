@@ -18,6 +18,7 @@ pub struct ProcessConfig {
     pub executable_path: String,
     pub working_dir: String,
     pub log_path: String,
+    pub protocol_mode: Option<String>,
     pub extra_env: HashMap<String, String>,
 }
 
@@ -89,6 +90,7 @@ impl Default for AppState {
                 executable_path: cwd.join(default_exe).to_string_lossy().to_string(),
                 working_dir: cwd.to_string_lossy().to_string(),
                 log_path: log_path.to_string_lossy().to_string(),
+                protocol_mode: None,
                 extra_env: HashMap::new(),
             },
             process: None,

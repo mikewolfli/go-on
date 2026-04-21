@@ -22,6 +22,11 @@
       "assisted",
       "autonomous"
     ],
+    "workflowProfileFields": [
+      "configured_workflow_type",
+      "effective_workflow_type",
+      "detection_signal"
+    ],
     "platformModes": [
       "universal",
       "phase_compat"

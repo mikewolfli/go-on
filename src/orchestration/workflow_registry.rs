@@ -1,12 +1,16 @@
 //! S16: Workflow Registry
 //!
-//! Defines `WorkflowType` (auto / manual / free / custom) and a registry of
+//! Defines `WorkflowType` (auto / dev / general / free / custom) and a registry of
 //! named workflow presets.  `WorkflowDetector` infers the type from the current
 //! config and runtime context.
+
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::config::WorkflowType;
+use crate::orchestration::roles::{role_registry_industry_for, AgentRole};
+use crate::orchestration::startup_context::StartupContext;
 
 /// A named preset that maps to a WorkflowType and default phase list
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,10 +43,16 @@ impl WorkflowRegistry {
                 description: "Full autopilot: Planner→Coder→Tester→Reviewer chain".to_string(),
             },
             WorkflowPreset {
-                name: "manual".to_string(),
-                workflow_type: WorkflowType::Manual,
-                phases: vec!["coding".to_string()],
-                description: "Human-driven single-phase execution".to_string(),
+                name: "dev".to_string(),
+                workflow_type: WorkflowType::Dev,
+                phases: vec!["planning".to_string(), "coding".to_string(), "review".to_string(), "delivery".to_string()],
+                description: "Development workflow preset".to_string(),
+            },
+            WorkflowPreset {
+                name: "general".to_string(),
+                workflow_type: WorkflowType::General,
+                phases: vec!["gathering".to_string(), "thinking".to_string(), "executing".to_string(), "validating".to_string(), "closing".to_string()],
+                description: "Cross-industry general workflow preset".to_string(),
             },
             WorkflowPreset {
                 name: "free".to_string(),
@@ -73,32 +83,60 @@ impl WorkflowRegistry {
 pub struct WorkflowDetector;
 
 impl WorkflowDetector {
-    /// Infer workflow type from config's `workflow_type` field and optional
-    /// per-request override.
+    /// Infer workflow type from config and optional runtime context.
     pub fn detect(
         config_wf_type: Option<&WorkflowType>,
         request_mode: Option<&str>,
+        role: Option<&AgentRole>,
+        startup_ctx: Option<&StartupContext>,
     ) -> WorkflowType {
-        // Request-level override takes precedence
         if let Some(mode) = request_mode {
             match mode.to_ascii_lowercase().as_str() {
                 "free" | "ask" => return WorkflowType::Free,
-                "manual"       => return WorkflowType::Manual,
+                "dev" | "manual" => return WorkflowType::Dev,
+                "general" => return WorkflowType::General,
                 "auto"         => return WorkflowType::Auto,
                 "custom"       => return WorkflowType::Custom,
                 _ => {}
             }
         }
-        config_wf_type.cloned().unwrap_or_default()
+
+        match config_wf_type.cloned().unwrap_or_default() {
+            WorkflowType::Auto => {
+                if let Some(AgentRole::Custom(name)) = role {
+                    if role_registry_industry_for(name)
+                        .map(|industry| !industry.eq_ignore_ascii_case("dev"))
+                        .unwrap_or(false)
+                    {
+                        return WorkflowType::General;
+                    }
+                }
+
+                if matches!(role, Some(AgentRole::Coder | AgentRole::Tester | AgentRole::Reviewer)) {
+                    return WorkflowType::Dev;
+                }
+
+                if let Some(ctx) = startup_ctx {
+                    if ctx.has_code_repo {
+                        WorkflowType::Dev
+                    } else {
+                        WorkflowType::General
+                    }
+                } else {
+                    WorkflowType::Dev
+                }
+            }
+            other => other,
+        }
     }
 
     /// True when the workflow type requires phase gating
     pub fn requires_phase_gate(wf: &WorkflowType) -> bool {
-        matches!(wf, WorkflowType::Auto | WorkflowType::Custom)
+        matches!(wf, WorkflowType::Auto | WorkflowType::Dev | WorkflowType::General | WorkflowType::Custom)
     }
 
     /// True when review-gate is mandatory
     pub fn requires_review_gate(wf: &WorkflowType) -> bool {
-        matches!(wf, WorkflowType::Auto)
+        matches!(wf, WorkflowType::Auto | WorkflowType::Dev)
     }
 }

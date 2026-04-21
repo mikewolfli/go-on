@@ -3,6 +3,8 @@
 //! Appends an immutable provenance record for every tool call, showing the
 //! data lineage chain: input → tool → output → consumer.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 

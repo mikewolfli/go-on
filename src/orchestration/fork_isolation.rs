@@ -4,6 +4,8 @@
 //! is not accessed cross-fork.  Provides a lightweight join contract that
 //! validates outputs before merging.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

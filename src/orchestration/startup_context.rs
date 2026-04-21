@@ -3,6 +3,8 @@
 //! Asynchronously loads project-level context (README, build commands, recent commits,
 //! style rules) once per process startup. Uses OnceLock to prevent redundant loads.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use tracing::debug;

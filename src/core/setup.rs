@@ -11,7 +11,7 @@ use crate::config::AdaptiveConfig;
 use crate::i18n::runtime::{t, tf};
 use anyhow::{Context, Result};
 
-// 自适应配置模板名称
+// Filename for the adaptive config template.
 const ADAPTIVE_TEMPLATE: &str = "config.toml.autopilot-adaptive";
 const PROVIDER_CAPABILITY_FILE: &str = "providers.toml";
 
@@ -705,7 +705,7 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
     let secret_mode = match options.secret_mode {
         Some(value) => value,
         None => {
-            // 自动检测：如果已有环境变量，使用Env模式，否则询问
+            // Auto-detect: use Env mode if env vars are already set, otherwise prompt.
             let has_env_vars = !detect_available_providers_from_env().is_empty();
             if has_env_vars {
                 println!("{}", t("setup.auto_detected_env_vars"));
@@ -721,7 +721,7 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
         }
     };
 
-    // 检测可用的AI提供商
+    // Detect available AI providers.
     let detected_providers = detect_available_providers(&secret_mode);
     let available_providers = prompt_provider_selection(&detected_providers, setup_level)?;
     // Quick mode: skip extra-agent prompt to keep the flow minimal.
@@ -744,7 +744,7 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
 
     let mut content = generate_adaptive_config_toml(&adaptive_config, &secret_mode, &custom_agents);
 
-    // 如果使用keyring模式，转换环境变量占位符
+    // If using keyring mode, convert env-var placeholders to keyring references.
     if secret_mode == SecretMode::Keyring {
         content = convert_env_placeholders_to_keyring(&content);
     }
@@ -768,7 +768,7 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
         }
 
         SecretMode::AutoDetect => {
-            // 自动检测模式下，询问是否要设置API密钥
+            // Auto-detect mode: ask whether to set up API keys now.
             prompt_yes_no(&t("setup.prompt_setup_api_keys"), true)?
         }
         _ => false,

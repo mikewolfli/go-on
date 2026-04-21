@@ -3,9 +3,9 @@
 //! This module handles the flow management logic, including phase resolution and agent routing.
 //!
 //! Phase 0/1 discipline:
-//! - 所有 phase/agent 路由都应支持 AgentTaskEnvelope/AgentTaskResult/AgentAuditLog 结构
-//! - 推荐在 phase/agent 入口和决策点生成审计日志，便于 trace/replay/audit
-//! - 可扩展 mode/phase/provider 能力兼容矩阵（见 design.md）
+//! - All phase/agent routes must support `AgentTaskEnvelope`, `AgentTaskResult`, and `AgentAuditLog` structures.
+//! - Audit logs should be emitted at phase/agent entry points and decision nodes to support trace/replay/audit.
+//! - The mode/phase/provider capability matrix is extensible (see design.md).
 
 use std::sync::Arc;
 
@@ -309,6 +309,7 @@ mod tests {
             startup_context: None,
             scheduler: None,
             reputation: None,
+            role_registry: HashMap::new(),
         }
     }
 

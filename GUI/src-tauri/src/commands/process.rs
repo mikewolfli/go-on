@@ -117,6 +117,10 @@ fn start_service_impl(state: &AppState) -> Result<ServiceStatus> {
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(stderr_log));
 
+    if let Some(protocol_mode) = inner.config.protocol_mode.as_deref() {
+        cmd.arg("--protocol-mode").arg(protocol_mode);
+    }
+
     for (k, v) in &inner.config.extra_env {
         cmd.env(k, v);
     }

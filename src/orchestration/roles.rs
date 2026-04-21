@@ -5,6 +5,8 @@
 //!
 //! S1 (blue35): Added `AgentRole::Custom(String)` + `RoleDefinition` + `RoleRegistry`.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
@@ -42,9 +44,12 @@ impl AgentRole {
 
 /// Full definition for a custom agent role
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct RoleDefinition {
     pub name: String,
     pub description: String,
+    #[serde(default)]
+    pub industry: String,
     /// Keywords used by rank_execution_agents; mirrors the built-in role keyword lists
     pub keywords: Vec<String>,
     /// Allowed tool names for this role
@@ -60,6 +65,7 @@ pub struct RoleDefinition {
 /// Runtime registry of custom role definitions.
 /// Populated from `[[agents.custom_roles]]` config at startup.
 #[derive(Debug, Default)]
+#[allow(dead_code)]
 pub struct RoleRegistry {
     roles: HashMap<String, RoleDefinition>,
 }
@@ -75,6 +81,27 @@ pub fn role_registry_keywords_for(name: &str) -> Vec<String> {
         .read()
         .map(|registry| registry.keywords_for(name))
         .unwrap_or_default()
+}
+
+pub fn role_registry_count() -> usize {
+    role_registry()
+        .read()
+        .map(|registry| registry.roles.len())
+        .unwrap_or(0)
+}
+
+pub fn role_registry_industry_for(name: &str) -> Option<String> {
+    role_registry()
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|definition| definition.industry.clone()))
+}
+
+pub fn install_role_registry(definitions: HashMap<String, RoleDefinition>) {
+    let lock = role_registry();
+    if let Ok(mut registry) = lock.write() {
+        registry.roles = definitions;
+    }
 }
 
 impl RoleRegistry {

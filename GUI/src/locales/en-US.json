@@ -132,10 +132,36 @@
     "title": "Service Paths",
     "executable": "go-on executable",
     "workingDir": "Working directory",
+    "protocolMode": "Protocol mode",
+    "protocolModeFromConfig": "from_config (read from config.toml)",
+    "protocolModeFromConfigDesc": "Do not pass --protocol-mode. Runtime uses [protocol].mode from config file.",
+    "protocolModeFromConfigRecommended": "Recommended when GUI should follow project config without override",
     "monitorOnly": "Monitor only (no auto-start)",
     "monitorOnlyHint": "When enabled, GUI will not auto-start backend and only connects to running instances",
     "save": "Save Path Config",
     "saved": "Service path configured"
+  },
+  "protocol_mode": {
+    "adaptive": {
+      "description": "Dual-stack capability with adaptive routing",
+      "recommended_for": "Default choice for normal daily use"
+    },
+    "acp_stdio": {
+      "description": "ACP over stdio",
+      "recommended_for": "Best when an editor launches go-on as a child process"
+    },
+    "acp_http": {
+      "description": "ACP over HTTP",
+      "recommended_for": "Best when an ACP-compatible client wants one shared long-running backend"
+    },
+    "mcp_stdio": {
+      "description": "MCP over stdio",
+      "recommended_for": "Use only when your client explicitly expects MCP over stdio"
+    },
+    "mcp_http": {
+      "description": "MCP over HTTP",
+      "recommended_for": "Best when your client wants OpenAI-compatible /v1 HTTP endpoints"
+    }
   },
   "providers": {
     "title": "Provider Models",

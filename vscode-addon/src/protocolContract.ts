@@ -364,3 +364,35 @@ export const platformModes =
     protocolContract.protocol.platformModes ?? ['universal', 'phase_compat'];
 export const defaultPlatformMode =
     protocolContract.protocol.defaultPlatformMode ?? 'phase_compat';
+
+const protocolModeAliases: Record<string, string> = {
+    adaptive: 'adaptive',
+    auto: 'adaptive',
+    acp_stdio: 'acp_stdio',
+    'acp+stdio': 'acp_stdio',
+    'acp-stdio': 'acp_stdio',
+    acp: 'acp_stdio',
+    acp_http: 'acp_http',
+    'acp+http': 'acp_http',
+    'acp-http': 'acp_http',
+    mcp_stdio: 'mcp_stdio',
+    'mcp+stdio': 'mcp_stdio',
+    'mcp-stdio': 'mcp_stdio',
+    mcp: 'mcp_stdio',
+    mcp_http: 'mcp_http',
+    'mcp+http': 'mcp_http',
+    'mcp-http': 'mcp_http',
+    from_config: 'from_config',
+};
+
+export function normalizeProtocolMode(mode: string): string {
+    const normalized = protocolModeAliases[mode.trim().toLowerCase()];
+    return normalized ?? mode.trim().toLowerCase();
+}
+
+export function isAllowedProtocolMode(mode: string): boolean {
+    if (mode === 'from_config') {
+        return true;
+    }
+    return protocolContract.protocol.supportedModes.includes(mode);
+}

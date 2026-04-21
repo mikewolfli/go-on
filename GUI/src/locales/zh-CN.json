@@ -132,10 +132,36 @@
     "title": "服务路径",
     "executable": "go-on 可执行文件",
     "workingDir": "工作目录",
+    "protocolMode": "协议模式",
+    "protocolModeFromConfig": "from_config（从 config.toml 读取）",
+    "protocolModeFromConfigDesc": "不传 --protocol-mode，运行时直接使用配置文件中的 [protocol].mode。",
+    "protocolModeFromConfigRecommended": "当 GUI 需要跟随项目配置且不做覆盖时推荐",
     "monitorOnly": "仅监控（不自动启动）",
     "monitorOnlyHint": "开启后 GUI 不会自动拉起后台，仅连接已运行实例",
     "save": "保存路径配置",
     "saved": "服务路径已保存"
+  },
+  "protocol_mode": {
+    "adaptive": {
+      "description": "双栈能力 + 自适应路由",
+      "recommended_for": "日常使用默认推荐"
+    },
+    "acp_stdio": {
+      "description": "通过 stdio 使用 ACP",
+      "recommended_for": "编辑器以子进程方式拉起 go-on 时最佳"
+    },
+    "acp_http": {
+      "description": "通过 HTTP 使用 ACP",
+      "recommended_for": "ACP 客户端希望共享一个常驻后端时最佳"
+    },
+    "mcp_stdio": {
+      "description": "通过 stdio 使用 MCP",
+      "recommended_for": "仅在客户端明确要求 MCP over stdio 时使用"
+    },
+    "mcp_http": {
+      "description": "通过 HTTP 使用 MCP",
+      "recommended_for": "客户端需要 OpenAI 兼容 /v1 端点时最佳"
+    }
   },
   "providers": {
     "title": "Provider 与模型",

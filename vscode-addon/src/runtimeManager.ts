@@ -1,6 +1,10 @@
 import { ChildProcess, spawn } from 'child_process';
 import * as vscode from 'vscode';
-import { protocolContract } from './protocolContract';
+import {
+    isAllowedProtocolMode,
+    normalizeProtocolMode,
+    protocolContract,
+} from './protocolContract';
 
 interface JsonRpcRequest {
     jsonrpc: '2.0';
@@ -27,17 +31,6 @@ interface PendingRequest {
 
 function asRecord(value: unknown): Record<string, unknown> {
     return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
-}
-
-function normalizeProtocolMode(mode: string): string {
-    return mode.trim().toLowerCase();
-}
-
-function isAllowedProtocolMode(mode: string): boolean {
-    if (mode === 'from_config') {
-        return true;
-    }
-    return protocolContract.protocol.supportedModes.includes(mode);
 }
 
 export class GoOnManager {

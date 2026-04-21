@@ -1,3 +1,5 @@
+use crate::shared::protocol_mode::ProtocolMode;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolCapability {
     AcpOnly,
@@ -58,17 +60,7 @@ pub struct AccessSelection {
 }
 
 pub fn normalize_protocol_mode(raw: &str) -> Option<&'static str> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "adaptive" => Some("adaptive"),
-        "acp_stdio" | "acp+stdio" => Some("acp_stdio"),
-        "acp_http" | "acp+http" => Some("acp_http"),
-        "mcp_stdio" | "mcp+stdio" => Some("mcp_stdio"),
-        "mcp_http" | "mcp+http" => Some("mcp_http"),
-        "auto" => Some("adaptive"),
-        "acp" => Some("acp_stdio"),
-        "mcp" => Some("mcp_stdio"),
-        _ => None,
-    }
+    ProtocolMode::parse_canonical(raw)
 }
 
 pub fn canonical_configured_mode(raw: Option<&str>) -> &'static str {

@@ -940,6 +940,125 @@ pub(super) async fn handle_governance_status(
 
     let rules = governance_rule_fingerprint(server.config_path.as_deref());
     let config_summary = config_pack::governance_config_summary(server.config_path.as_deref());
+    let app_config = server
+        .config_path
+        .as_deref()
+        .map(Path::new)
+        .and_then(|path| AppConfig::load(path).ok());
+    let startup_context = crate::orchestration::startup_context::get().cloned();
+    let role_registry_custom_count = crate::orchestration::roles::role_registry_count();
+
+    let configured_workflow_type = app_config
+        .as_ref()
+        .map(|cfg| cfg.flow.workflow_type.clone())
+        .unwrap_or(crate::config::WorkflowType::Auto);
+    let custom_phases_defined = app_config
+        .as_ref()
+        .map(|cfg| !cfg.flow.phases.is_empty())
+        .unwrap_or(false);
+    let effective_workflow_type = if configured_workflow_type == crate::config::WorkflowType::Custom
+        && !custom_phases_defined
+    {
+        crate::config::WorkflowType::Auto
+    } else {
+        crate::orchestration::workflow_registry::WorkflowDetector::detect(
+            Some(&configured_workflow_type),
+            None,
+            None,
+            startup_context.as_ref(),
+        )
+    };
+    let detection_signal = match configured_workflow_type {
+        crate::config::WorkflowType::Auto => match startup_context.as_ref() {
+            Some(ctx) if ctx.has_code_repo => "code_repo_fingerprint",
+            Some(_) => "no_code_fingerprint",
+            None => "fallback",
+        },
+        crate::config::WorkflowType::Custom if !custom_phases_defined => "custom_phases_empty",
+        crate::config::WorkflowType::Free => "free_mode_configured",
+        crate::config::WorkflowType::Dev => "configured_dev",
+        crate::config::WorkflowType::General => "configured_general",
+        crate::config::WorkflowType::Custom => "configured_custom",
+    };
+    let workflow_label = |wf: &crate::config::WorkflowType| match wf {
+        crate::config::WorkflowType::Auto => "auto",
+        crate::config::WorkflowType::Dev => "dev",
+        crate::config::WorkflowType::General => "general",
+        crate::config::WorkflowType::Custom => "custom",
+        crate::config::WorkflowType::Free => "free",
+    };
+    let effective_phase_count = match effective_workflow_type {
+        crate::config::WorkflowType::Dev => 4,
+        crate::config::WorkflowType::General => 5,
+        crate::config::WorkflowType::Free => 0,
+        crate::config::WorkflowType::Custom | crate::config::WorkflowType::Auto => app_config
+            .as_ref()
+            .map(|cfg| cfg.flow.phases.len())
+            .unwrap_or(0),
+    };
+    let effective_default_phase = match effective_workflow_type {
+        crate::config::WorkflowType::Dev => "coding".to_string(),
+        crate::config::WorkflowType::General => "executing".to_string(),
+        crate::config::WorkflowType::Free => String::new(),
+        crate::config::WorkflowType::Custom | crate::config::WorkflowType::Auto => app_config
+            .as_ref()
+            .and_then(|cfg| cfg.effective_default_phase())
+            .unwrap_or("coding")
+            .to_string(),
+    };
+    let compliance_config = app_config
+        .as_ref()
+        .and_then(|cfg| cfg.compliance.clone())
+        .unwrap_or_default();
+    let startup_context_profile = json!({
+        "enabled": app_config
+            .as_ref()
+            .and_then(|cfg| cfg.startup_context.as_ref())
+            .map(|cfg| cfg.enabled)
+            .unwrap_or(false),
+        "loaded": startup_context.as_ref().map(|ctx| ctx.loaded).unwrap_or(false),
+        "readme_chars": startup_context.as_ref().map(|ctx| ctx.readme_chars).unwrap_or(0),
+        "commit_count": startup_context.as_ref().map(|ctx| ctx.recent_commits.len()).unwrap_or(0),
+        "has_code_repo": startup_context.as_ref().map(|ctx| ctx.has_code_repo).unwrap_or(false),
+    });
+    let compliance_framework_profile = json!({
+        "enabled": compliance_config.enabled,
+        "standards": compliance_config.standards,
+        "audit_retention_days": compliance_config.audit_retention_days,
+        "pii_field_count": compliance_config.pii_fields.len(),
+        "default_data_classification": compliance_config.data_classification_default,
+        "retention_policy": compliance_config.retention_policy_default,
+    });
+    let k8s_manifests_present = [
+        "deploy/k8s/deployment.yaml",
+        "deploy/k8s/service.yaml",
+        "deploy/k8s/configmap.yaml",
+    ]
+    .iter()
+    .all(|path| Path::new(path).exists());
+    let cloud_native_profile = json!({
+        "k8s_manifests_present": k8s_manifests_present,
+        "health_endpoint_ready": true,
+        "health_path": "/health",
+        "mtls_enabled": false,
+    });
+    let developer_sdk_profile = json!({
+        "rust_sdk_present": Path::new("sdk/rust/Cargo.toml").exists(),
+        "python_sdk_present": Path::new("sdk/python/pyproject.toml").exists(),
+        "sdk_version": "0.1.0",
+    });
+    let workflow_profile = json!({
+        "configured_workflow_type": workflow_label(&configured_workflow_type),
+        "effective_workflow_type": workflow_label(&effective_workflow_type),
+        "detection_signal": detection_signal,
+        "phase_count": effective_phase_count,
+        "default_phase": effective_default_phase,
+        "skipped_phases": [],
+        "free_mode_active": effective_workflow_type == crate::config::WorkflowType::Free,
+        "ephemeral_phases": [],
+        "available_workflow_types": ["auto", "dev", "general", "custom", "free"],
+        "custom_phases_defined": custom_phases_defined,
+    });
 
     let entry_rate_snapshot = with_acp_lock(
         server.lock_monitor.as_ref(),
@@ -3109,11 +3228,20 @@ pub(super) async fn handle_governance_status(
                 "brain_loop_artifact_and_safe_degrade": brain_loop_artifact_and_safe_degrade_profile,
                 "fault_injection_recovery_recheck": fault_injection_recovery_recheck_profile,
                 "blue34_release_closure": blue34_release_closure_profile,
-                "custom_role_registry": { "ready": custom_role_registry_ready },
-                "custom_role_dynamic_matching": { "ready": custom_role_dynamic_matching_ready },
-                "compliance_audit_metadata": { "ready": compliance_audit_metadata_ready },
+                "custom_role_registry": {
+                    "ready": custom_role_registry_ready,
+                    "role_registry_custom_count": role_registry_custom_count,
+                },
+                "custom_role_dynamic_matching": {
+                    "ready": custom_role_dynamic_matching_ready,
+                    "role_registry_custom_count": role_registry_custom_count,
+                },
+                "compliance_audit_metadata": {
+                    "ready": compliance_audit_metadata_ready,
+                    "compliance_framework_profile": compliance_framework_profile,
+                },
                 "self_rationalization_guard": { "ready": self_rationalization_guard_ready },
-                "startup_context_loader": { "ready": startup_context_loader_ready },
+                "startup_context_loader": startup_context_profile,
                 "layered_prompt_builder": { "ready": layered_prompt_builder_ready },
                 "layered_token_trigger": { "ready": layered_token_trigger_ready },
                 "multi_priority_scheduler": { "ready": multi_priority_scheduler_ready },
@@ -3122,9 +3250,18 @@ pub(super) async fn handle_governance_status(
                 "capability_graph": { "ready": capability_graph_ready },
                 "provenance_ledger": { "ready": provenance_ledger_ready },
                 "node_reputation_tracker": { "ready": node_reputation_tracker_ready },
-                "k8s_delivery_pack": { "ready": k8s_delivery_pack_ready },
-                "sdk_multi_language_stub": { "ready": sdk_multi_language_stub_ready },
-                "workflow_type_tri_mode": { "ready": workflow_type_tri_mode_ready },
+                "k8s_delivery_pack": {
+                    "ready": k8s_delivery_pack_ready,
+                    "cloud_native_profile": cloud_native_profile,
+                },
+                "sdk_multi_language_stub": {
+                    "ready": sdk_multi_language_stub_ready,
+                    "developer_sdk_profile": developer_sdk_profile,
+                },
+                "workflow_type_tri_mode": {
+                    "ready": workflow_type_tri_mode_ready,
+                    "workflow_profile": workflow_profile,
+                },
                 "blue35_release_closure": blue35_release_closure_profile,
                 "entry_guard": {
                     "auth_enabled": server.runtime_config.entry_auth_enabled,

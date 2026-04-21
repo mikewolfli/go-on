@@ -63,6 +63,7 @@ mod observability;
 mod optimization;
 mod orchestration;
 mod protocol;
+mod shared;
 
 pub use crate::agents::agent;
 pub use crate::core::config;
@@ -130,9 +131,8 @@ use crate::config::{
 use crate::flow::FlowManager;
 use crate::i18n::runtime::{init_i18n, tf};
 use crate::mcp_server::{McpHttpServer, McpStdioServer};
-use crate::protocol::access_mode::{
-    normalize_protocol_mode, resolve_access_selection, TransportMode,
-};
+use crate::protocol::access_mode::{resolve_access_selection, TransportMode};
+use crate::shared::protocol_mode::{ProtocolMode, ProtocolModeError};
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
     persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger, RuntimeHealthcheckReport,
@@ -150,12 +150,22 @@ fn validate_cli_protocol_mode(raw: Option<&str>) -> Result<Option<String>> {
         return Ok(None);
     };
 
-    let normalized = normalize_protocol_mode(value).ok_or_else(|| {
-        anyhow::anyhow!(
-            "invalid --protocol-mode '{}'; allowed: adaptive, acp_stdio, acp_http, mcp_stdio, mcp_http",
-            value
-        )
-    })?;
+    let normalized = match ProtocolMode::from_str(value) {
+        Ok(mode) => mode.to_cli_arg(),
+        Err(ProtocolModeError::FromConfigNotSupported) => {
+            anyhow::bail!(
+                "invalid --protocol-mode '{}'; from_config is only supported in GUI/VS Code startup settings",
+                value
+            );
+        }
+        Err(ProtocolModeError::InvalidValue(_)) => {
+            anyhow::bail!(
+                "invalid --protocol-mode '{}'; allowed: {}",
+                value,
+                ProtocolMode::CANONICAL_MODES.join(", ")
+            );
+        }
+    };
 
     Ok(Some(normalized.to_string()))
 }
@@ -1729,6 +1739,7 @@ mod tests {
             startup_context: None,
             scheduler: None,
             reputation: None,
+            role_registry: HashMap::new(),
         }
     }
 

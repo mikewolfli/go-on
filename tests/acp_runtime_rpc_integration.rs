@@ -1015,7 +1015,7 @@ mod advanced {
             "metrics.prometheus",
             json!({"jsonrpc":"2.0","id":3,"result":{"text":"mocked-prometheus"}}),
         );
-        let results = harness.run_scenario_file(Path::new("requests/runtime-health.ndjson"));
+        let results = harness.run_scenario_file(Path::new("tests/requests/runtime-health.ndjson"));
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1041,7 +1041,7 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results = harness.run_scenario_file(Path::new("requests/quality-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new("tests/requests/quality-benchmark.ndjson"));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1071,7 +1071,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/model-selector-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/model-selector-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1103,7 +1103,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/learning-replay-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/learning-replay-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1133,7 +1133,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results = harness.run_scenario_file(Path::new(
-            "requests/learning-loop-guardrail-benchmark.ndjson",
+            "tests/requests/learning-loop-guardrail-benchmark.ndjson",
         ));
 
         assert_eq!(results.len(), 4);
@@ -1189,7 +1189,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results = harness.run_scenario_file(Path::new(
-            "requests/governance-dynamic-rules-benchmark.ndjson",
+            "tests/requests/governance-dynamic-rules-benchmark.ndjson",
         ));
 
         assert_eq!(results.len(), 5);
@@ -1235,7 +1235,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/breaker-recovery-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/breaker-recovery-benchmark.ndjson"));
 
         assert_eq!(results.len(), 6);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1299,7 +1299,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/observability-alerts-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/observability-alerts-benchmark.ndjson"));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1338,7 +1338,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/runtime-stability-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/runtime-stability-benchmark.ndjson"));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1375,7 +1375,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/runtime-self-model-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/runtime-self-model-benchmark.ndjson"));
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1429,7 +1429,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/provider-status-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/provider-status-benchmark.ndjson"));
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1466,7 +1466,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/security-baseline-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/security-baseline-benchmark.ndjson"));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1496,7 +1496,7 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results = harness.run_scenario_file(Path::new("requests/harness-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new("tests/requests/harness-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1526,7 +1526,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results = harness.run_scenario_file(Path::new(
-            "requests/knowledge-distillation-benchmark.ndjson",
+            "tests/requests/knowledge-distillation-benchmark.ndjson",
         ));
 
         assert_eq!(results.len(), 4);
@@ -1567,7 +1567,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results = harness.run_scenario_file(Path::new(
-            "requests/rl-alignment-offline-eval-benchmark.ndjson",
+            "tests/requests/rl-alignment-offline-eval-benchmark.ndjson",
         ));
 
         assert_eq!(results.len(), 4);
@@ -1606,7 +1606,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/hardness-routing-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/hardness-routing-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1656,7 +1656,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/token-cost-governance-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/token-cost-governance-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1691,7 +1691,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/config-baseline-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/config-baseline-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1735,7 +1735,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/error-contract-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/error-contract-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1785,7 +1785,7 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results = harness.run_scenario_file(Path::new("requests/build-repro-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new("tests/requests/build-repro-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1828,7 +1828,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/data-lifecycle-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/data-lifecycle-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1872,7 +1872,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/optimization-peak-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/optimization-peak-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -2522,7 +2522,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/release-readiness-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/release-readiness-benchmark.ndjson"));
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3515,7 +3515,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/release-readiness-drill.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/release-readiness-drill.ndjson"));
 
         assert_eq!(results.len(), 6);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3543,7 +3543,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/multi-user-lifecycle-drill.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/multi-user-lifecycle-drill.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3599,7 +3599,7 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results = harness.run_scenario_file(Path::new("requests/lock-status-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new("tests/requests/lock-status-benchmark.ndjson"));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3628,7 +3628,7 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results = harness.run_scenario_file(Path::new("requests/autotune-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new("tests/requests/autotune-benchmark.ndjson"));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3660,7 +3660,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/maintenance-gc-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/maintenance-gc-benchmark.ndjson"));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3687,7 +3687,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results = harness.run_scenario_file(Path::new(
-            "requests/conversation-checkpoint-benchmark.ndjson",
+            "tests/requests/conversation-checkpoint-benchmark.ndjson",
         ));
 
         assert_eq!(results.len(), 5);
@@ -3731,7 +3731,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results = harness.run_scenario_file(Path::new(
-            "requests/primary-secondary-summary-benchmark.ndjson",
+            "tests/requests/primary-secondary-summary-benchmark.ndjson",
         ));
 
         assert_eq!(results.len(), 3);
@@ -3757,7 +3757,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/metrics-trace-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/metrics-trace-benchmark.ndjson"));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3788,7 +3788,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/phase-policy-replay-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/phase-policy-replay-benchmark.ndjson"));
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3807,7 +3807,7 @@ mod advanced {
 
     #[test]
     fn ndjson_scenario_files_all_pass() {
-        let scenarios = load_scenarios_from_dir(Path::new("requests"));
+        let scenarios = load_scenarios_from_dir(Path::new("tests/requests"));
         assert_eq!(scenarios.len(), 40, "expected forty request scenario files");
 
         for scenario in scenarios {
@@ -3882,7 +3882,7 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results = harness.run_scenario_file(Path::new("requests/debug-panel-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new("tests/requests/debug-panel-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3922,7 +3922,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/action-check-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/action-check-benchmark.ndjson"));
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3945,7 +3945,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/task-plan-execute-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/task-plan-execute-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -4002,7 +4002,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results = harness.run_scenario_file(Path::new(
-            "requests/workflow-execute-standalone-benchmark.ndjson",
+            "tests/requests/workflow-execute-standalone-benchmark.ndjson",
         ));
 
         assert_eq!(results.len(), 3);
@@ -4034,7 +4034,7 @@ mod advanced {
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
         let results =
-            harness.run_scenario_file(Path::new("requests/workflow-subcommands-benchmark.ndjson"));
+            harness.run_scenario_file(Path::new("tests/requests/workflow-subcommands-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -6060,7 +6060,7 @@ fn blue24_learning_profile_has_meta_cognition_block() {
     let mut harness = AdvancedRpcHarness::new(&config_path);
 
     let results =
-        harness.run_scenario_file(Path::new("requests/task-plan-execute-benchmark.ndjson"));
+        harness.run_scenario_file(Path::new("tests/requests/task-plan-execute-benchmark.ndjson"));
     assert_eq!(results.len(), 4);
 
     // task.plan — planning-class
@@ -6130,7 +6130,7 @@ fn blue24_token_economy_has_dynamic_compression() {
     let mut harness = AdvancedRpcHarness::new(&config_path);
 
     let results =
-        harness.run_scenario_file(Path::new("requests/task-plan-execute-benchmark.ndjson"));
+        harness.run_scenario_file(Path::new("tests/requests/task-plan-execute-benchmark.ndjson"));
     assert_eq!(results.len(), 4);
 
     let execute = results[2].1.as_ref().expect("task.execute should succeed");
@@ -6176,7 +6176,7 @@ fn blue24_knowledge_refinement_has_cross_round_distillation() {
     let mut harness = AdvancedRpcHarness::new(&config_path);
 
     let results =
-        harness.run_scenario_file(Path::new("requests/task-plan-execute-benchmark.ndjson"));
+        harness.run_scenario_file(Path::new("tests/requests/task-plan-execute-benchmark.ndjson"));
     assert_eq!(results.len(), 4);
 
     let execute = results[2].1.as_ref().expect("task.execute should succeed");

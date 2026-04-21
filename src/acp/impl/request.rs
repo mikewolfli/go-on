@@ -1,19 +1,19 @@
 use crate::protocol::access_mode::{request_dispatch_mode, RequestDispatchMode};
 
-/// 浠巆onfig.toml/runtime_config璇诲彇鍗忚妯″紡
+/// Read protocol mode from config.toml / runtime_config.
 fn get_protocol_mode(server: &AcpServer) -> RequestDispatchMode {
-    // 灏濊瘯浠巖untime_config.protocol_mode璇诲彇
+    // Try reading protocol_mode from runtime_config.
     request_dispatch_mode(server.runtime_config.protocol_mode.as_deref())
 }
 
-/// 鍒ゆ柇璇锋眰灞炰簬MCP鍗忚
+/// Returns true if the method belongs to the MCP protocol.
 fn is_mcp_request(method: &str) -> bool {
     method.starts_with("mcp.") || method == "mcp.initialize"
 }
 
-/// 鍒ゆ柇璇锋眰灞炰簬ACP/A2A鍗忚
+/// Returns true if the method belongs to the ACP/A2A protocol.
 fn is_acp_request(method: &str) -> bool {
-    // ACP/A2A甯哥敤鏂规硶
+    // Common ACP/A2A JSON-RPC methods.
     matches!(
         method,
         "initialize"
@@ -97,7 +97,7 @@ fn is_acp_request(method: &str) -> bool {
 //
 // This module contains standalone functions that implement request handling
 // functionality previously in the `impl AcpServer` block in `impl/request.rs`.
-// These functions take `AcpServer` as鍏?first parameter to maintain
+// These functions take `AcpServer` as the first parameter to maintain
 // compatibility with the original implementation.
 
 use std::collections::{HashMap, HashSet};
@@ -1020,7 +1020,7 @@ pub(crate) fn append_trace_event(event: TraceEvent) {
 ///
 /// This function replaces the `AcpServer::handle_request` method.
 pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Result<()> {
-    // 鍗忚鑷€傚簲鍒嗗彂
+    // Adaptive protocol dispatch: route to ACP, MCP, or Auto based on config.
     let protocol_mode = get_protocol_mode(server);
     let method = request.method.as_str();
     match protocol_mode {
@@ -1049,8 +1049,8 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             }
         }
         RequestDispatchMode::Auto => {
-            // 鑻ヤ负MCP鏂规硶锛屼紭鍏堣蛋MCP鍒嗘敮锛屽惁鍒欒蛋ACP
-            // 鍏佽娣风敤
+            // If MCP method, prefer MCP branch; otherwise fall through to ACP.
+            // Mixed-protocol requests are allowed in Auto mode.
         }
     }
 
@@ -2482,7 +2482,7 @@ fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
         server.vector_store.as_deref(),
     )?;
 
-    // 加载配置以检查警告与严格模式违规
+    // Load config to check for warnings and production-strict violations.
     let mut config_warnings = Vec::new();
     let mut strict_violations = Vec::new();
 
@@ -2493,7 +2493,7 @@ fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
         }
     }
 
-    // 计算健康检查汇总
+    // Summarise health check component counts.
     let error_count = report
         .components
         .iter()
@@ -2505,18 +2505,18 @@ fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
         .filter(|item| item.status == CheckStatus::Warn)
         .count();
 
-    // 检查优雅停机状态（shutdown_requested + uptime）
+    // Check graceful-shutdown readiness (shutdown_requested + uptime).
     let graceful_shutdown_ready = !status.lifecycle.shutdown_requested;
     let uptime_seconds = status.lifecycle.uptime_seconds;
 
-    // 检查配置校验状态（通过尝试加载配置来验证）
+    // Verify config validity by attempting to load it.
     let config_valid = if let Some(cfg_path) = config_path {
         AppConfig::load(cfg_path).is_ok()
     } else {
-        true // 如果没有配置路径，认为是有效的
+        true // No config path provided — treat as valid.
     };
 
-    // 计算稳定性得分（0-100）
+    // Compute stability score (0–100).
     let mut stability_score = 100;
     if error_count > 0 {
         stability_score -= (error_count as i32).min(30);
@@ -2535,7 +2535,7 @@ fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
     }
     stability_score = stability_score.clamp(0, 100);
 
-    // 判定稳定性等级
+    // Determine stability tier.
     let stability_level = match stability_score {
         90..=100 => "excellent",
         75..=89 => "good",
@@ -2544,7 +2544,7 @@ fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
         _ => "critical",
     };
 
-    // 判定是否可安全启动重启（优雅关闭支持、配置有效、严格模式无违规）
+    // Safe-restart requires graceful-shutdown support, valid config, and no strict violations.
     let safe_restart_ready =
         graceful_shutdown_ready && config_valid && strict_violations.is_empty();
 

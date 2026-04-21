@@ -184,8 +184,12 @@ export interface ProviderSelectionSaveResult {
     note: string;
 }
 
-export async function configureService(executablePath: string, workingDir: string) {
-    return invokeWithTimeout<void>("configure_service", { executablePath, workingDir }, STARTUP_INVOKE_TIMEOUT_MS);
+export async function configureService(executablePath: string, workingDir: string, protocolMode?: string) {
+    return invokeWithTimeout<void>(
+        "configure_service",
+        { executablePath, workingDir, protocolMode },
+        STARTUP_INVOKE_TIMEOUT_MS
+    );
 }
 
 export async function configureServiceByExecutable(executablePath: string) {

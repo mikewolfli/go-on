@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agent::inspect_secret_pool;
+use crate::orchestration::roles::{install_role_registry, RoleDefinition};
 
 /// Application configuration structure
 #[derive(Debug, Clone, Deserialize)]
@@ -50,6 +51,9 @@ pub struct AppConfig {
     /// Reputation tracking configuration (S13)
     #[serde(default)]
     pub reputation: Option<ReputationConfig>,
+    /// Custom role registry loaded from `[role_registry.*]`
+    #[serde(default)]
+    pub role_registry: HashMap<String, RoleDefinition>,
 }
 
 /// Simplified adaptive configuration for AI-driven setup
@@ -551,6 +555,7 @@ impl AdaptiveConfig {
             startup_context: None,
             scheduler: None,
             reputation: None,
+            role_registry: HashMap::new(),
         }
     }
 }
@@ -774,10 +779,10 @@ impl ConfigHealthReport {
 /// Runtime configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuntimeConfig {
-    /// 协议模式: auto/acp/mcp
+    /// Protocol mode: auto / acp / mcp
     #[serde(default)]
     pub protocol_mode: Option<String>,
-    /// 平台模式: universal/phase_compat
+    /// Platform mode: universal / phase_compat
     #[serde(default)]
     pub platform_mode: Option<String>,
     /// Emit PUA execution report into JSON-RPC response metadata when enabled
@@ -1347,7 +1352,8 @@ pub struct FlowConfig {
 pub enum WorkflowType {
     #[default]
     Auto,
-    Manual,
+    Dev,
+    General,
     Free,
     Custom,
 }
@@ -1357,17 +1363,30 @@ pub struct ComplianceConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
+    pub standards: Vec<String>,
+    #[serde(default)]
     pub data_classification_default: String,
     #[serde(default)]
     pub retention_policy_default: String,
+    #[serde(default = "default_compliance_audit_retention_days")]
+    pub audit_retention_days: u32,
+    #[serde(default)]
+    pub pii_fields: Vec<String>,
+}
+
+fn default_compliance_audit_retention_days() -> u32 {
+    90
 }
 
 impl Default for ComplianceConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            standards: vec!["gdpr".to_string()],
             data_classification_default: "internal".to_string(),
             retention_policy_default: "standard_30d".to_string(),
+            audit_retention_days: default_compliance_audit_retention_days(),
+            pii_fields: Vec::new(),
         }
     }
 }
@@ -1538,15 +1557,37 @@ impl AppConfig {
             .with_context(|| format!("failed to parse toml: {}", path.display()))?;
         normalize_nested_phase_option_extra(&mut cfg);
         apply_auto_rules(path, &mut cfg);
+        if !cfg.role_registry.is_empty() {
+            install_role_registry(cfg.role_registry.clone());
+        }
         Ok(cfg)
     }
 
     /// Returns the effective default phase, accounting for free workflow bypass.
     pub fn effective_default_phase(&self) -> Option<&str> {
-        if self.flow.workflow_type == WorkflowType::Free {
-            None
-        } else {
-            Some(self.default_phase.as_str())
+        match self.flow.workflow_type {
+            WorkflowType::Free => None,
+            WorkflowType::General => {
+                if self.default_phase.trim().is_empty() {
+                    Some("executing")
+                } else {
+                    Some(self.default_phase.as_str())
+                }
+            }
+            WorkflowType::Custom => {
+                if self.default_phase.trim().is_empty() {
+                    self.flow.phases.first().map(|phase| phase.as_str())
+                } else {
+                    Some(self.default_phase.as_str())
+                }
+            }
+            WorkflowType::Auto | WorkflowType::Dev => {
+                if self.default_phase.trim().is_empty() {
+                    Some("coding")
+                } else {
+                    Some(self.default_phase.as_str())
+                }
+            }
         }
     }
 
@@ -2864,20 +2905,20 @@ fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
         }
     }
 
-    // 验证密钥安全性
+    // Validate secret key security.
     validate_secret_security(&secret, field_name)?;
 
     Ok(())
 }
 
-/// 验证密钥的安全性
+/// Validates the security of a secret string.
 ///
-/// # 参数
-/// * `secret` - 要验证的密钥
-/// * `field_name` - 字段名称，用于错误消息
+/// # Parameters
+/// * `secret` - The secret value to validate.
+/// * `field_name` - Field name used in error messages.
 ///
-/// # 返回
-/// * `Result<()>` - 如果密钥安全则返回Ok，否则返回错误
+/// # Returns
+/// * `Result<()>` - `Ok` if the secret is considered safe; an error otherwise.
 fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
     use tracing::warn;
 
@@ -2885,7 +2926,7 @@ fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
         anyhow::bail!("{} is empty", field_name);
     }
 
-    // 检查是否有换行符（可能是多行密钥或注入尝试）
+    // Check for newlines (possible multi-line secret or injection attempt).
     if secret.contains('\n') || secret.contains('\r') {
         warn!(
             "{} contains newline characters, which may be a security issue",
@@ -2893,7 +2934,7 @@ fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
         );
     }
 
-    // 检查密钥长度
+    // Check secret length — very short secrets are likely insecure.
     if secret.len() < 8 {
         warn!(
             "{} is very short ({} characters), which may be insecure",
@@ -2902,7 +2943,7 @@ fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
         );
     }
 
-    // 检查是否包含常见的不安全模式
+    // Check for common insecure patterns.
     let insecure_patterns = [
         ("password", "contains the word 'password'"),
         ("123456", "contains simple numeric sequence"),
@@ -3011,7 +3052,7 @@ mod tests {
             flow: FlowConfig {
                 name: "flow".to_string(),
                 phases: vec!["coding".to_string(), "review".to_string()],
-                workflow_type: WorkflowType::Auto,
+                workflow_type: super::WorkflowType::Auto,
             },
             phases,
             runtime: Some(RuntimeConfig::default()),
@@ -3023,6 +3064,7 @@ mod tests {
             startup_context: None,
             scheduler: None,
             reputation: None,
+            role_registry: HashMap::new(),
         }
     }
 
@@ -3597,7 +3639,7 @@ mod tests {
 
     #[test]
     fn adaptive_template_loads_and_validates() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.toml.autopilot-adaptive");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/config.toml.autopilot-adaptive");
         let cfg = AppConfig::load(&path).expect("config.toml.autopilot-adaptive should parse");
 
         cfg.validate()

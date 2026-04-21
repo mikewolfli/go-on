@@ -108,6 +108,10 @@
         "title": "Check Go-On Health"
       },
       {
+        "command": "go-on.diagnose",
+        "title": "Diagnose Go-On Runtime"
+      },
+      {
         "command": "go-on.breakerStatus",
         "title": "Check Breaker Status"
       },

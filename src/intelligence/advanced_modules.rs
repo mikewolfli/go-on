@@ -339,7 +339,10 @@ impl WorkflowDiagnostics {
             efficiency_score,
         }
     }
-    // dead_code 检查：本模块所有结构体/方法均有测试覆盖或主流程调用，若后续移除请同步清理�?
+    // All structs/methods in this module are covered by tests or called from the main flow.
+    // If any are removed in future, clean up corresponding test references.
+
+    /// Generate optimization recommendations?
 
     /// Generate optimization recommendations
     pub fn recommend_optimizations(diagnostics: &ExecutionDiagnostics) -> Vec<String> {

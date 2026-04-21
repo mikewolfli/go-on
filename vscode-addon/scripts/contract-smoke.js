@@ -26,6 +26,11 @@ assert.deepEqual(contract.protocol.workflowControlModes, ['manual', 'assisted', 
 assert.deepEqual(contract.protocol.platformModes, ['universal', 'phase_compat']);
 assert.equal(contract.protocol.defaultWorkflowControlMode, 'assisted');
 assert.equal(contract.protocol.defaultPlatformMode, 'phase_compat');
+assert.deepEqual(contract.protocol.workflowProfileFields, [
+    'configured_workflow_type',
+    'effective_workflow_type',
+    'detection_signal',
+]);
 assert.equal(contract.protocol.universalPlatformEnabled, true);
 assert.equal(contract.protocol.phaseCompatMappingEnabled, true);
 assert.equal(contract.protocol.universalExecutionCycleSchemaVersion, 'blue23-universal-cycle-v1');

@@ -5,6 +5,8 @@
 //!   2. Context Layer   — task snapshot, conversation history digest
 //!   3. Task Layer      — concrete instruction for this turn
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 /// Configuration for prompt layer budgets
