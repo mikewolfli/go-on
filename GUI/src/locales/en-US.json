@@ -130,16 +130,67 @@
   },
   "config": {
     "title": "Service Paths",
+    "runtimeGroup": "Runtime",
+    "protocolGroup": "Protocol",
+    "behaviorGroup": "Behavior",
     "executable": "go-on executable",
     "workingDir": "Working directory",
+    "pickFile": "Pick File",
+    "pickDirectory": "Pick Directory",
     "protocolMode": "Protocol mode",
     "protocolModeFromConfig": "from_config (read from config.toml)",
     "protocolModeFromConfigDesc": "Do not pass --protocol-mode. Runtime uses [protocol].mode from config file.",
     "protocolModeFromConfigRecommended": "Recommended when GUI should follow project config without override",
     "monitorOnly": "Monitor only (no auto-start)",
     "monitorOnlyHint": "When enabled, GUI will not auto-start backend and only connects to running instances",
+    "diagnose": "Diagnose",
+    "runDiagnose": "Run Diagnose",
+    "diagnoseResult": "Diagnose Output",
+    "diagnoseCompleted": "Diagnose completed",
+    "summaryHint": "Group settings by runtime, protocol, and behavior. Use the wizard for first-time setup.",
+    "changeSummaryTitle": "Review changes before save",
+    "confirmSave": "Save",
+    "cancelSave": "Cancel",
+    "yes": "Yes",
+    "no": "No",
     "save": "Save Path Config",
-    "saved": "Service path configured"
+    "saved": "Service path configured",
+    "wizard": {
+      "open": "Open Wizard",
+      "title": "Configuration Wizard",
+      "subtitle": "Choose a usage scenario, confirm protocol mode, and save the runtime setup.",
+      "recommended": "Recommended",
+      "cancel": "Cancel",
+      "prev": "Previous",
+      "next": "Next",
+      "finish": "Apply",
+      "step1": {
+        "title": "Scenario",
+        "description": "Select the main usage scenario."
+      },
+      "step2": {
+        "title": "Protocol",
+        "description": "Confirm the protocol mode recommended for that scenario."
+      },
+      "step3": {
+        "title": "Review",
+        "description": "Review the configuration before applying it."
+      },
+      "scenarios": {
+        "local": {
+          "title": "Local Dev",
+          "description": "Single-user daily development on one machine."
+        },
+        "shared": {
+          "title": "Shared Server",
+          "description": "One long-running backend shared across users or tools."
+        },
+        "editor": {
+          "title": "Editor Plugin",
+          "description": "Best when the editor launches go-on as a child process."
+        }
+      }
+    }
   },
   "protocol_mode": {
     "adaptive": {
@@ -442,6 +493,70 @@
     "wuxia": "Wuxia",
     "kitty": "Kitty",
     "switch": "Theme"
+  },
+  "onboarding": {
+    "open": "Get Started",
+    "title": "First-Run Guide",
+    "subtitle": "Connect the runtime, verify health, and move between monitor, config, and chat in one pass.",
+    "runtimeReady": "Runtime Ready",
+    "runtimeNotReady": "Runtime Not Ready",
+    "checklist": {
+      "title": "Before you continue",
+      "executable": "Confirm the backend executable path or let GUI auto-detect it.",
+      "protocol": "Check protocol mode in Config when you need to override project defaults.",
+      "health": "Use Monitor to confirm the runtime is healthy before opening Chat."
+    },
+    "cards": {
+      "monitor": {
+        "title": "Monitor",
+        "body": "Watch health, logs, AI usage, and integration status from one place."
+      },
+      "config": {
+        "title": "Config",
+        "body": "Set backend path, protocol mode, providers, and startup behavior."
+      },
+      "chat": {
+        "title": "Chat",
+        "body": "Open conversation sessions against the local runtime once health is green."
+      }
+    },
+    "steps": {
+      "welcome": {
+        "title": "Overview",
+        "tip": "The GUI is organized into three tabs: monitor, config, and chat."
+      },
+      "connect": {
+        "title": "Connect Runtime",
+        "ready": "The runtime is already running. You can move straight to config or chat.",
+        "notReady": "Start the runtime or configure the executable path before using chat features."
+      },
+      "workflow": {
+        "title": "Daily Workflow",
+        "providersTitle": "Choose provider and model",
+        "providersBody": "Open Providers under Config to confirm model routing and API keys.",
+        "observeTitle": "Verify health and logs",
+        "observeBody": "Use Monitor to inspect endpoint health, recent logs, and integration state.",
+        "chatTitle": "Start a chat session",
+        "chatBody": "Open Chat after the runtime is healthy and send real requests to the local endpoint."
+      },
+      "finish": {
+        "title": "Ready to Work",
+        "body": "You can reopen this guide from the header at any time."
+      }
+    },
+    "actions": {
+      "later": "Later",
+      "previous": "Previous",
+      "next": "Next",
+      "complete": "Complete",
+      "startRuntime": "Start Runtime",
+      "openMonitor": "Open Monitor",
+      "openConfig": "Open Config",
+      "openSetup": "Open Setup",
+      "runSetup": "Run Setup",
+      "openProviders": "Open Providers",
+      "openChat": "Open Chat"
+    }
   },
   "chat": {
     "agents": "Agents",

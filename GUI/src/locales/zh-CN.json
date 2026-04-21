@@ -130,16 +130,67 @@
   },
   "config": {
     "title": "服务路径",
+    "runtimeGroup": "运行时",
+    "protocolGroup": "协议",
+    "behaviorGroup": "行为",
     "executable": "go-on 可执行文件",
     "workingDir": "工作目录",
+    "pickFile": "选择文件",
+    "pickDirectory": "选择目录",
     "protocolMode": "协议模式",
     "protocolModeFromConfig": "from_config（从 config.toml 读取）",
     "protocolModeFromConfigDesc": "不传 --protocol-mode，运行时直接使用配置文件中的 [protocol].mode。",
     "protocolModeFromConfigRecommended": "当 GUI 需要跟随项目配置且不做覆盖时推荐",
     "monitorOnly": "仅监控（不自动启动）",
     "monitorOnlyHint": "开启后 GUI 不会自动拉起后台，仅连接已运行实例",
+    "diagnose": "诊断",
+    "runDiagnose": "运行诊断",
+    "diagnoseResult": "诊断输出",
+    "diagnoseCompleted": "诊断完成",
+    "summaryHint": "按运行时、协议、行为分组展示；首次配置可直接使用向导。",
+    "changeSummaryTitle": "保存前确认变更",
+    "confirmSave": "保存",
+    "cancelSave": "取消",
+    "yes": "是",
+    "no": "否",
     "save": "保存路径配置",
-    "saved": "服务路径已保存"
+    "saved": "服务路径已保存",
+    "wizard": {
+      "open": "打开向导",
+      "title": "配置向导",
+      "subtitle": "先选使用场景，再确认协议模式，最后一键应用运行时配置。",
+      "recommended": "推荐",
+      "cancel": "取消",
+      "prev": "上一步",
+      "next": "下一步",
+      "finish": "应用",
+      "step1": {
+        "title": "场景",
+        "description": "选择主要使用场景。"
+      },
+      "step2": {
+        "title": "协议",
+        "description": "确认该场景下推荐的协议模式。"
+      },
+      "step3": {
+        "title": "确认",
+        "description": "应用前确认本次配置。"
+      },
+      "scenarios": {
+        "local": {
+          "title": "本地开发",
+          "description": "单机单用户的日常开发场景。"
+        },
+        "shared": {
+          "title": "共享服务",
+          "description": "面向多用户或多工具的常驻后端。"
+        },
+        "editor": {
+          "title": "编辑器插件",
+          "description": "适合由编辑器以子进程方式拉起 go-on。"
+        }
+      }
+    }
   },
   "protocol_mode": {
     "adaptive": {
@@ -441,6 +492,70 @@
     "wuxia": "武侠",
     "kitty": "萌猫",
     "switch": "主题"
+  },
+  "onboarding": {
+    "open": "快速上手",
+    "title": "首次使用引导",
+    "subtitle": "一轮完成运行时连接、健康确认，以及监控/配置/对话三条主链路。",
+    "runtimeReady": "运行时已就绪",
+    "runtimeNotReady": "运行时未就绪",
+    "checklist": {
+      "title": "继续前先确认",
+      "executable": "确认 backend 可执行文件路径，或让 GUI 自动探测。",
+      "protocol": "需要覆盖项目默认值时，到配置页检查协议模式。",
+      "health": "进入对话前，先在监控页确认运行时健康为绿色。"
+    },
+    "cards": {
+      "monitor": {
+        "title": "监控",
+        "body": "集中查看健康、日志、AI 用量以及编辑器集成状态。"
+      },
+      "config": {
+        "title": "配置",
+        "body": "设置 backend 路径、协议模式、Provider 和启动行为。"
+      },
+      "chat": {
+        "title": "对话",
+        "body": "运行时健康后，可直接对本地端点发起真实会话。"
+      }
+    },
+    "steps": {
+      "welcome": {
+        "title": "整体概览",
+        "tip": "GUI 已按监控、配置、对话三个主 Tab 组织。"
+      },
+      "connect": {
+        "title": "连接运行时",
+        "ready": "运行时已在运行，可直接继续配置或进入对话。",
+        "notReady": "请先启动运行时，或先配置可执行文件路径后再使用对话功能。"
+      },
+      "workflow": {
+        "title": "日常工作流",
+        "providersTitle": "确认 Provider 与模型",
+        "providersBody": "到配置页的 Providers 子页确认模型路由和 API Key。",
+        "observeTitle": "检查健康与日志",
+        "observeBody": "到监控页查看端点健康、最近日志和编辑器集成状态。",
+        "chatTitle": "开始对话",
+        "chatBody": "运行时健康后打开对话页，直接访问本地接口。"
+      },
+      "finish": {
+        "title": "可以开始工作了",
+        "body": "之后可随时通过顶部按钮重新打开这份引导。"
+      }
+    },
+    "actions": {
+      "later": "稍后",
+      "previous": "上一步",
+      "next": "下一步",
+      "complete": "完成",
+      "startRuntime": "启动运行时",
+      "openMonitor": "打开监控",
+      "openConfig": "打开配置",
+      "openSetup": "打开 Setup",
+      "runSetup": "执行 Setup",
+      "openProviders": "打开 Providers",
+      "openChat": "打开对话"
+    }
   },
   "chat": {
     "agents": "智能体",

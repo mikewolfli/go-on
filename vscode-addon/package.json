@@ -26,6 +26,7 @@
     "onCommand:go-on.openChat",
     "onCommand:go-on.closeChat",
     "onCommand:go-on.openSettings",
+    "onCommand:go-on.openConfigWizard",
     "onCommand:go-on.clearChat",
     "onCommand:go-on.exportChat",
     "onCommand:go-on.newSession",
@@ -145,6 +146,11 @@
         "command": "go-on.openSettings",
         "title": "Open Go-On Settings",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "go-on.openConfigWizard",
+        "title": "Open Go-On Config Wizard",
+        "icon": "$(wand)"
       },
       {
         "command": "go-on.clearChat",

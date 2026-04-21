@@ -30,6 +30,11 @@ Desktop console for go-on built with Tauri 2 + Vue + Vite.
 - Built executable output:
   - `GUI/src-tauri/target/release/go-on-gui.exe`
 
+## First Run
+
+- Open the header action `Get Started` / `快速上手` to launch the in-app onboarding guide.
+- See `../docs/guides/GUI_FIRST_RUN.md` for the documented three-tab workflow.
+
 ## 快速联调
 <!-- BLUE14-P2-2-GUI-QUICKSTART -->
 

@@ -10,6 +10,13 @@
       <span class="monitor-only-config-link" @click="activeMainTab = 'config'">{{ t("app.monitorOnlyConfigLink") }}</span>
     </div>
     <el-container :style="monitorOnly ? 'height: calc(100vh - 36px)' : 'height: 100vh'" direction="vertical">
+      <OnboardingGuide
+        v-model="showOnboarding"
+        :runtime-running="runtime.status.running"
+        @start-service="onStart"
+        @complete="markOnboardingSeen"
+        @navigate="handleGuideNavigate"
+      />
       <!-- Header -->
       <el-header class="app-header">
         <span class="app-title">{{ t("app.name") }}</span>
@@ -22,6 +29,7 @@
         <el-divider direction="vertical" />
         <el-button size="small" @click="onSwitchToMiniWindow">{{ t("app.miniConsole") }}</el-button>
         <el-button size="small" @click="runtime.refreshAll">{{ t("app.refresh") }}</el-button>
+        <el-button size="small" @click="openOnboarding">{{ t("onboarding.open") }}</el-button>
         <el-button size="small" @click="toggleTheme" :title="t('theme.switch')">
           {{ t(themeLabel) }}
         </el-button>
@@ -132,6 +140,7 @@ import AutoTuneView from "./views/AutoTuneView.vue";
 import WorkflowView from "./views/WorkflowView.vue";
 import SecurityView from "./views/SecurityView.vue";
 import ChatView from "./views/ChatView.vue";
+import OnboardingGuide from "./components/OnboardingGuide.vue";
 
 const runtime = useRuntimeStore();
 const route = useRoute();
@@ -142,8 +151,10 @@ const themeLabel = computed(() => currentThemeLabelKey());
 const activeMainTab = ref("monitor");
 const activeMonitorSubTab = ref("dashboard");
 const activeConfigSubTab = ref("setup");
+const showOnboarding = ref(false);
 let previousRunning = runtime.status.running;
 const MONITOR_ONLY_KEY = "goon.gui.monitorOnly";
+const ONBOARDING_SEEN_KEY = "goon.gui.onboardingSeen";
 let stopRunningWatch: (() => void) | undefined;
 
 const monitorOnly = ref(localStorage.getItem(MONITOR_ONLY_KEY) === "true");
@@ -169,6 +180,24 @@ function onLocaleChange(value: string) {
 
 function toggleTheme() {
   toggleThemeFunc();
+}
+
+function openOnboarding() {
+  showOnboarding.value = true;
+}
+
+function markOnboardingSeen() {
+  localStorage.setItem(ONBOARDING_SEEN_KEY, "true");
+}
+
+function handleGuideNavigate(payload: { mainTab: string; subTab?: string }) {
+  activeMainTab.value = payload.mainTab;
+  if (payload.mainTab === "monitor" && payload.subTab) {
+    activeMonitorSubTab.value = payload.subTab;
+  }
+  if (payload.mainTab === "config" && payload.subTab) {
+    activeConfigSubTab.value = payload.subTab;
+  }
 }
 
 async function onSwitchToMiniWindow() {
@@ -241,6 +270,9 @@ onMounted(async () => {
       previousRunning = running;
     },
   );
+  if (localStorage.getItem(ONBOARDING_SEEN_KEY) !== "true") {
+    showOnboarding.value = true;
+  }
   await registerCrashHandler();
 });
 

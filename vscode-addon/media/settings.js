@@ -296,6 +296,13 @@
         });
     }
 
+    const openConfigWizardButton = document.getElementById('openConfigWizard');
+    if (openConfigWizardButton) {
+        openConfigWizardButton.addEventListener('click', () => {
+            vscode.postMessage({ type: 'openConfigWizard' });
+        });
+    }
+
     const applyRulesSettingsButton = document.getElementById('applyRulesSettings');
     if (applyRulesSettingsButton) {
         applyRulesSettingsButton.addEventListener('click', () => {

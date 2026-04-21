@@ -292,6 +292,9 @@ function activate(context) {
     const workflowProvider = new workflowView_1.GoOnWorkflowViewProvider(context.extensionUri, goOnManager, context);
     const processFlowProvider = new processFlowView_1.GoOnProcessFlowViewProvider(context.extensionUri, goOnManager, context);
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(chatView_1.GoOnChatViewProvider.viewType, chatProvider), vscode.window.registerWebviewViewProvider(settingsView_1.GoOnSettingsViewProvider.viewType, settingsProvider), vscode.window.registerWebviewViewProvider(workflowView_1.GoOnWorkflowViewProvider.viewType, workflowProvider), vscode.window.registerWebviewViewProvider(processFlowView_1.GoOnProcessFlowViewProvider.viewType, processFlowProvider));
+    context.subscriptions.push(vscode.commands.registerCommand('go-on.openConfigWizard', async () => {
+        await settingsProvider.showConfigWizard();
+    }));
     vscode.window.registerTreeDataProvider('go-on-status', statusProvider);
     const coreCommands = (0, coreCommandRegistry_1.registerCoreCommands)({
         context,

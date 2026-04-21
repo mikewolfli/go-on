@@ -6,6 +6,7 @@ const fs = require("fs/promises");
 const path = require("path");
 const i18n_1 = require("./i18n");
 const configManager_1 = require("./configManager");
+const protocolContract_1 = require("./protocolContract");
 function escapeRegex(value) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -220,6 +221,7 @@ class GoOnSettingsViewProvider {
         const messageType = String(message.type ?? '');
         const handlers = {
             requestSettings: async (_message) => this._sendCurrentSettings(),
+            openConfigWizard: async () => this.showConfigWizard(),
             updateSetting: async (msg) => this._handleGenericSettingUpdate(String(msg.key ?? ''), msg.value),
             updateRuntimeSetting: async (msg) => this._updateRuntimeSetting(String(msg.key ?? ''), msg.value),
             updateCacheSetting: async (msg) => this._updateCacheSetting(String(msg.key ?? ''), msg.value),
@@ -734,6 +736,215 @@ class GoOnSettingsViewProvider {
     _postMessage(message) {
         this._view?.webview.postMessage(message);
     }
+    async showConfigWizard() {
+        const panel = vscode.window.createWebviewPanel('goOnConfigWizard', i18n_1.i18n.getMessage('configuration.wizard.title'), vscode.ViewColumn.One, { enableScripts: true });
+        panel.webview.html = this._getConfigWizardHtml(panel.webview);
+        panel.webview.onDidReceiveMessage(async (message) => {
+            const command = String(message.command ?? '');
+            if (command === 'cancel') {
+                panel.dispose();
+                return;
+            }
+            if (command !== 'saveConfig') {
+                return;
+            }
+            const payload = (message.config ?? {});
+            const goOnConfig = vscode.workspace.getConfiguration('go-on');
+            const rawProtocolMode = String(payload.protocolMode ?? 'from_config');
+            const protocolMode = rawProtocolMode === 'from_config'
+                ? 'from_config'
+                : (0, protocolContract_1.normalizeProtocolMode)(rawProtocolMode);
+            await Promise.all([
+                goOnConfig.update('configPath', String(payload.configPath ?? './config.toml'), vscode.ConfigurationTarget.Workspace),
+                goOnConfig.update('executablePath', String(payload.executablePath ?? ''), vscode.ConfigurationTarget.Workspace),
+                goOnConfig.update('autoStart', Boolean(payload.autoStart), vscode.ConfigurationTarget.Workspace),
+                goOnConfig.update('runtime.protocolMode', protocolMode, vscode.ConfigurationTarget.Workspace),
+            ]);
+            configManager_1.configManager.setConfigValue('runtime.protocolMode', protocolMode);
+            await configManager_1.configManager.saveToFile();
+            await this._sendCurrentSettings();
+            vscode.window.showInformationMessage(i18n_1.i18n.getMessage('messages.successfullySaved'));
+            panel.dispose();
+        });
+    }
+    _getConfigWizardHtml(webview) {
+        const nonce = getNonce();
+        const config = vscode.workspace.getConfiguration('go-on');
+        const configPath = String(config.get('configPath', './config.toml'));
+        const executablePath = String(config.get('executablePath', ''));
+        const autoStart = Boolean(config.get('autoStart', false));
+        const protocolMode = String(config.get('runtime.protocolMode', 'from_config'));
+        const payload = JSON.stringify({ configPath, executablePath, autoStart, protocolMode })
+            .replace(/</g, '\\u003c');
+        return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${i18n_1.i18n.getMessage('configuration.wizard.title')}</title>
+    <style>
+        body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); padding: 20px; }
+        .header { margin-bottom: 16px; }
+        .title { font-size: 22px; font-weight: 700; }
+        .subtitle { color: var(--vscode-descriptionForeground); margin-top: 6px; }
+        .steps { display: flex; gap: 8px; margin: 18px 0 20px; }
+        .step { flex: 1; border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 10px; color: var(--vscode-descriptionForeground); }
+        .step.active { border-color: var(--vscode-focusBorder); color: var(--vscode-foreground); }
+        .cards, .modes { display: grid; gap: 12px; }
+        .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .card { border: 1px solid var(--vscode-panel-border); border-radius: 10px; padding: 14px; cursor: pointer; background: var(--vscode-sideBar-background); }
+        .card.selected { border-color: var(--vscode-focusBorder); background: var(--vscode-list-activeSelectionBackground); }
+        .card-title { font-weight: 700; margin-bottom: 8px; }
+        .card-desc { color: var(--vscode-descriptionForeground); line-height: 1.6; font-size: 12px; }
+        .recommended { display: inline-block; margin-top: 8px; color: var(--vscode-testing-iconPassed); font-size: 12px; }
+        .review { display: grid; gap: 10px; }
+        .review-item { border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 10px; }
+        .review-label { font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 4px; }
+        .review-value { font-weight: 600; word-break: break-all; }
+        .actions { display: flex; justify-content: space-between; margin-top: 20px; }
+        button { border: none; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+        .ghost { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+        .primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+        @media (max-width: 760px) { .cards, .modes { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="title">${i18n_1.i18n.getMessage('configuration.wizard.title')}</div>
+        <div class="subtitle">${i18n_1.i18n.getMessage('configuration.wizard.subtitle')}</div>
+    </div>
+    <div class="steps">
+        <div class="step active" data-step-indicator="0">${i18n_1.i18n.getMessage('configuration.wizard.step1')}</div>
+        <div class="step" data-step-indicator="1">${i18n_1.i18n.getMessage('configuration.wizard.step2')}</div>
+        <div class="step" data-step-indicator="2">${i18n_1.i18n.getMessage('configuration.wizard.step3')}</div>
+    </div>
+    <div id="step0">
+        <div class="cards">
+            <div class="card selected" data-scenario="local">
+                <div class="card-title">${i18n_1.i18n.getMessage('configuration.wizard.localTitle')}</div>
+                <div class="card-desc">${i18n_1.i18n.getMessage('configuration.wizard.localDesc')}</div>
+            </div>
+            <div class="card" data-scenario="shared">
+                <div class="card-title">${i18n_1.i18n.getMessage('configuration.wizard.sharedTitle')}</div>
+                <div class="card-desc">${i18n_1.i18n.getMessage('configuration.wizard.sharedDesc')}</div>
+            </div>
+            <div class="card" data-scenario="editor">
+                <div class="card-title">${i18n_1.i18n.getMessage('configuration.wizard.editorTitle')}</div>
+                <div class="card-desc">${i18n_1.i18n.getMessage('configuration.wizard.editorDesc')}</div>
+            </div>
+        </div>
+    </div>
+    <div id="step1" hidden>
+        <div class="modes">
+            <div class="card" data-mode="from_config"><div class="card-title">from_config</div><div class="card-desc">Follow project config.toml</div></div>
+            <div class="card selected" data-mode="adaptive"><div class="card-title">adaptive</div><div class="card-desc">${i18n_1.i18n.getMessage('configuration.wizard.adaptiveDesc')}</div><span class="recommended">${i18n_1.i18n.getMessage('configuration.wizard.recommended')}</span></div>
+            <div class="card" data-mode="acp_stdio"><div class="card-title">acp_stdio</div><div class="card-desc">${i18n_1.i18n.getMessage('configuration.wizard.acpStdioDesc')}</div></div>
+            <div class="card" data-mode="acp_http"><div class="card-title">acp_http</div><div class="card-desc">${i18n_1.i18n.getMessage('configuration.wizard.acpHttpDesc')}</div></div>
+            <div class="card" data-mode="mcp_stdio"><div class="card-title">mcp_stdio</div><div class="card-desc">${i18n_1.i18n.getMessage('configuration.wizard.mcpStdioDesc')}</div></div>
+            <div class="card" data-mode="mcp_http"><div class="card-title">mcp_http</div><div class="card-desc">${i18n_1.i18n.getMessage('configuration.wizard.mcpHttpDesc')}</div></div>
+        </div>
+    </div>
+    <div id="step2" hidden>
+        <div class="review">
+            <div class="review-item"><div class="review-label">${i18n_1.i18n.getMessage('configuration.configPath')}</div><div class="review-value" id="review-config-path"></div></div>
+            <div class="review-item"><div class="review-label">${i18n_1.i18n.getMessage('configuration.executablePath')}</div><div class="review-value" id="review-executable-path"></div></div>
+            <div class="review-item"><div class="review-label">${i18n_1.i18n.getMessage('configuration.autoStart')}</div><div class="review-value" id="review-auto-start"></div></div>
+            <div class="review-item"><div class="review-label">${i18n_1.i18n.getMessage('configuration.wizard.protocolMode')}</div><div class="review-value" id="review-protocol-mode"></div></div>
+        </div>
+    </div>
+    <div class="actions">
+        <button class="ghost" id="cancel-btn">${i18n_1.i18n.getMessage(i18n_1.MessageKeys.cancel)}</button>
+        <div>
+            <button class="ghost" id="prev-btn" disabled>${i18n_1.i18n.getMessage('configuration.wizard.previous')}</button>
+            <button class="primary" id="next-btn">${i18n_1.i18n.getMessage('configuration.wizard.next')}</button>
+        </div>
+    </div>
+    <script nonce="${nonce}">
+        const vscode = acquireVsCodeApi();
+        const initial = ${payload};
+        const state = {
+            step: 0,
+            scenario: 'local',
+            configPath: initial.configPath,
+            executablePath: initial.executablePath,
+            autoStart: initial.autoStart,
+            protocolMode: initial.protocolMode || 'adaptive',
+        };
+
+        const recommendations = {
+            local: 'adaptive',
+            shared: 'acp_http',
+            editor: 'acp_stdio',
+        };
+
+        function render() {
+            document.querySelectorAll('[data-step-indicator]').forEach((el, index) => {
+                el.classList.toggle('active', index === state.step);
+            });
+            document.getElementById('step0').hidden = state.step !== 0;
+            document.getElementById('step1').hidden = state.step !== 1;
+            document.getElementById('step2').hidden = state.step !== 2;
+            document.getElementById('prev-btn').disabled = state.step === 0;
+            document.getElementById('next-btn').textContent = state.step === 2 ? '${i18n_1.i18n.getMessage(i18n_1.MessageKeys.save)}' : '${i18n_1.i18n.getMessage('configuration.wizard.next')}';
+            document.querySelectorAll('[data-scenario]').forEach((el) => {
+                el.classList.toggle('selected', el.dataset.scenario === state.scenario);
+            });
+            document.querySelectorAll('[data-mode]').forEach((el) => {
+                el.classList.toggle('selected', el.dataset.mode === state.protocolMode);
+            });
+            document.getElementById('review-config-path').textContent = state.configPath || './config.toml';
+            document.getElementById('review-executable-path').textContent = state.executablePath || '(empty)';
+            document.getElementById('review-auto-start').textContent = state.autoStart ? 'true' : 'false';
+            document.getElementById('review-protocol-mode').textContent = state.protocolMode;
+        }
+
+        document.querySelectorAll('[data-scenario]').forEach((el) => {
+            el.addEventListener('click', () => {
+                state.scenario = el.dataset.scenario;
+                state.protocolMode = recommendations[state.scenario] || 'adaptive';
+                state.autoStart = state.scenario === 'shared';
+                render();
+            });
+        });
+
+        document.querySelectorAll('[data-mode]').forEach((el) => {
+            el.addEventListener('click', () => {
+                state.protocolMode = el.dataset.mode;
+                render();
+            });
+        });
+
+        document.getElementById('cancel-btn').addEventListener('click', () => {
+            vscode.postMessage({ command: 'cancel' });
+        });
+
+        document.getElementById('prev-btn').addEventListener('click', () => {
+            if (state.step > 0) state.step -= 1;
+            render();
+        });
+
+        document.getElementById('next-btn').addEventListener('click', () => {
+            if (state.step < 2) {
+                state.step += 1;
+                render();
+                return;
+            }
+            vscode.postMessage({ command: 'saveConfig', config: state });
+        });
+
+        window.addEventListener('message', (event) => {
+            if (event.data?.command === 'close') {
+                window.close();
+            }
+        });
+
+        render();
+    </script>
+</body>
+</html>`;
+    }
     _getHtmlForWebview(webview) {
         const styleResetUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'reset.css'));
         const styleVSCodeUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'vscode.css'));
@@ -865,6 +1076,7 @@ class GoOnSettingsViewProvider {
                         </div>
                         <div class="action-buttons">
                             <button class="action-button" id="applyDefaultTemplate">Apply As Active config.toml</button>
+                            <button class="action-button" id="openConfigWizard">Open Config Wizard</button>
                         </div>
                     </div>
 

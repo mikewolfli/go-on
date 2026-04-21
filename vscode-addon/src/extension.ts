@@ -401,6 +401,12 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.registerWebviewViewProvider(GoOnProcessFlowViewProvider.viewType, processFlowProvider)
     );
 
+    context.subscriptions.push(
+        vscode.commands.registerCommand('go-on.openConfigWizard', async () => {
+            await settingsProvider.showConfigWizard();
+        })
+    );
+
     vscode.window.registerTreeDataProvider('go-on-status', statusProvider);
 
     const coreCommands = registerCoreCommands({

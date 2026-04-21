@@ -1,20 +1,21 @@
 import { createRouter, createWebHashHistory } from "vue-router";
+import MiniConsoleView from "../views/MiniConsoleView.vue";
 
 const routes = [
     { path: "/", redirect: "/dashboard" },
-    { path: "/dashboard", component: () => import("../views/DashboardView.vue") },
-    { path: "/monitor", component: () => import("../views/MonitorView.vue") },
-    { path: "/setup", component: () => import("../views/SetupView.vue") },
-    { path: "/config", component: () => import("../views/ConfigView.vue") },
-    { path: "/providers", component: () => import("../views/ProvidersView.vue") },
-    { path: "/backend-ops", component: () => import("../views/BackendOpsView.vue") },
-    { path: "/logs", component: () => import("../views/LogsView.vue") },
-    { path: "/ai-usage", component: () => import("../views/AiUsageView.vue") },
-    { path: "/health-breakdown", component: () => import("../views/HealthBreakdownView.vue") },
-    { path: "/autotune", component: () => import("../views/AutoTuneView.vue") },
-    { path: "/workflow", component: () => import("../views/WorkflowView.vue") },
-    { path: "/security", component: () => import("../views/SecurityView.vue") },
-    { path: "/mini", component: () => import("../views/MiniConsoleView.vue") },
+    { path: "/dashboard", redirect: "/" },
+    { path: "/monitor", redirect: "/" },
+    { path: "/setup", redirect: "/" },
+    { path: "/config", redirect: "/" },
+    { path: "/providers", redirect: "/" },
+    { path: "/backend-ops", redirect: "/" },
+    { path: "/logs", redirect: "/" },
+    { path: "/ai-usage", redirect: "/" },
+    { path: "/health-breakdown", redirect: "/" },
+    { path: "/autotune", redirect: "/" },
+    { path: "/workflow", redirect: "/" },
+    { path: "/security", redirect: "/" },
+    { path: "/mini", component: MiniConsoleView },
 ];
 
 export default createRouter({
