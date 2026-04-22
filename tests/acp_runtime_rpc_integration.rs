@@ -5114,7 +5114,11 @@ fn startup_fails_when_cache_vector_paths_are_unavailable() {
         .output()
         .expect("failed to run go-on for startup failure scenario");
 
-    #[cfg(feature = "profile-local")]
+    #[cfg(all(
+        feature = "profile-local",
+        not(feature = "profile-simple-server"),
+        not(feature = "profile-multi-users-server")
+    ))]
     {
         assert!(
             output.status.success(),
@@ -5128,7 +5132,11 @@ fn startup_fails_when_cache_vector_paths_are_unavailable() {
         );
     }
 
-    #[cfg(not(feature = "profile-local"))]
+    #[cfg(not(all(
+        feature = "profile-local",
+        not(feature = "profile-simple-server"),
+        not(feature = "profile-multi-users-server")
+    )))]
     {
         assert!(
             !output.status.success(),

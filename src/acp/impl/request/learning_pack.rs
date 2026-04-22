@@ -998,7 +998,7 @@ pub(super) fn build_rl_alignment_offline_eval_payload(params: &Value) -> Value {
 
     let weights = parse_rl_reward_weights(params);
     let mut samples = collect_rl_offline_eval_samples(window, weights);
-    samples.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+    samples.sort_by_key(|sample| sample.timestamp);
 
     let (baseline_slice, candidate_slice) = if samples.len() < 2 {
         (&samples[..], &samples[..])

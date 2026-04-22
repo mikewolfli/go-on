@@ -342,8 +342,6 @@ impl WorkflowDiagnostics {
     // All structs/methods in this module are covered by tests or called from the main flow.
     // If any are removed in future, clean up corresponding test references.
 
-    /// Generate optimization recommendations?
-
     /// Generate optimization recommendations
     pub fn recommend_optimizations(diagnostics: &ExecutionDiagnostics) -> Vec<String> {
         let mut recommendations = Vec::new();

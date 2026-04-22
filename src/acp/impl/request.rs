@@ -5701,7 +5701,7 @@ fn build_rl_alignment_offline_eval_payload(params: &Value) -> Value {
 
     let weights = parse_rl_reward_weights(params);
     let mut samples = collect_rl_offline_eval_samples(window, weights);
-    samples.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+    samples.sort_by_key(|sample| sample.timestamp);
 
     let (baseline_slice, candidate_slice) = if samples.len() < 2 {
         (&samples[..], &samples[..])
@@ -6715,7 +6715,7 @@ async fn list_checkpoint_records(
         })
         .cloned()
         .collect::<Vec<_>>();
-    checkpoints.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    checkpoints.sort_by_key(|checkpoint| std::cmp::Reverse(checkpoint.created_at));
     if let Some(limit) = limit {
         checkpoints.truncate(limit);
     }
@@ -6765,7 +6765,7 @@ async fn prune_checkpoints(
         })
         .cloned()
         .collect::<Vec<_>>();
-    checkpoints.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    checkpoints.sort_by_key(|checkpoint| std::cmp::Reverse(checkpoint.created_at));
     let retained = checkpoints
         .iter()
         .take(keep)

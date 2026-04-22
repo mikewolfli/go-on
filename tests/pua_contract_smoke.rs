@@ -1,5 +1,6 @@
 #[path = "../src/governance/pua.rs"]
 mod pua;
+#[allow(dead_code)]
 #[path = "../src/orchestration/roles.rs"]
 mod roles;
 

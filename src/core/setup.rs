@@ -759,13 +759,10 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
     write_default_rules(config_path.parent().unwrap_or_else(|| Path::new(".")))?;
 
     let should_store_secrets = match secret_mode {
-        SecretMode::Keyring => {
-            if options.prompt_for_secrets {
-                prompt_yes_no(&t("setup.prompt_store_secrets"), true)?
-            } else {
-                false
-            }
+        SecretMode::Keyring if options.prompt_for_secrets => {
+            prompt_yes_no(&t("setup.prompt_store_secrets"), true)?
         }
+        SecretMode::Keyring => false,
 
         SecretMode::AutoDetect => {
             // Auto-detect mode: ask whether to set up API keys now.

@@ -5,8 +5,6 @@
 //!
 //! S1 (blue35): Added `AgentRole::Custom(String)` + `RoleDefinition` + `RoleRegistry`.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
@@ -28,12 +26,12 @@ impl AgentRole {
     /// Canonical lower-case string representation
     pub fn as_str(&self) -> &str {
         match self {
-            AgentRole::Planner    => "planner",
+            AgentRole::Planner => "planner",
             AgentRole::Researcher => "researcher",
-            AgentRole::Coder      => "coder",
-            AgentRole::Tester     => "tester",
-            AgentRole::Reviewer   => "reviewer",
-            AgentRole::Custom(n)  => n.as_str(),
+            AgentRole::Coder => "coder",
+            AgentRole::Tester => "tester",
+            AgentRole::Reviewer => "reviewer",
+            AgentRole::Custom(n) => n.as_str(),
         }
     }
 }
@@ -91,10 +89,11 @@ pub fn role_registry_count() -> usize {
 }
 
 pub fn role_registry_industry_for(name: &str) -> Option<String> {
-    role_registry()
-        .read()
-        .ok()
-        .and_then(|registry| registry.get(name).map(|definition| definition.industry.clone()))
+    role_registry().read().ok().and_then(|registry| {
+        registry
+            .get(name)
+            .map(|definition| definition.industry.clone())
+    })
 }
 
 pub fn install_role_registry(definitions: HashMap<String, RoleDefinition>) {
@@ -105,7 +104,9 @@ pub fn install_role_registry(definitions: HashMap<String, RoleDefinition>) {
 }
 
 impl RoleRegistry {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn register(&mut self, def: RoleDefinition) {
         self.roles.insert(def.name.clone(), def);
@@ -116,12 +117,15 @@ impl RoleRegistry {
     }
 
     pub fn keywords_for(&self, name: &str) -> Vec<String> {
-        self.roles.get(name)
+        self.roles
+            .get(name)
             .map(|d| d.keywords.clone())
             .unwrap_or_default()
     }
 
-    pub fn contains(&self, name: &str) -> bool { self.roles.contains_key(name) }
+    pub fn contains(&self, name: &str) -> bool {
+        self.roles.contains_key(name)
+    }
 
     pub fn all(&self) -> Vec<&RoleDefinition> {
         let mut v: Vec<_> = self.roles.values().collect();

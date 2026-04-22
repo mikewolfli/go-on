@@ -15,17 +15,14 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 /// Task priority levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskPriority {
     Background = 0,
+    #[default]
     Normal     = 1,
     High       = 2,
     Critical   = 3,
-}
-
-impl Default for TaskPriority {
-    fn default() -> Self { TaskPriority::Normal }
 }
 
 /// A scheduled task entry

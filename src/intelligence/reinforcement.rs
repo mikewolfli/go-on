@@ -2101,7 +2101,7 @@ impl ExperienceKnowledgeBase {
 
     pub fn top_failure_patterns(&self, limit: usize) -> Vec<&FailurePattern> {
         let mut patterns = self.failure_patterns.iter().collect::<Vec<_>>();
-        patterns.sort_by(|a, b| b.frequency.cmp(&a.frequency));
+        patterns.sort_by_key(|pattern| std::cmp::Reverse(pattern.frequency));
         patterns.into_iter().take(limit).collect()
     }
 }

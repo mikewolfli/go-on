@@ -107,7 +107,7 @@ pub async fn list_conversation_checkpoints(
         .collect();
 
     // Sort by creation time (newest first)
-    checkpoints.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    checkpoints.sort_by_key(|checkpoint| std::cmp::Reverse(checkpoint.created_at));
 
     // Apply limit
     if let Some(limit) = limit {

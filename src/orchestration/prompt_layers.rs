@@ -112,11 +112,9 @@ fn truncate_str(s: &str, max_chars: usize) -> &str {
     }
     // Truncate at char boundary
     let mut idx = 0;
-    let mut count = 0;
-    for c in s.chars() {
+    for (count, c) in s.chars().enumerate() {
         if count >= max_chars { break; }
         idx += c.len_utf8();
-        count += 1;
     }
     &s[..idx]
 }
