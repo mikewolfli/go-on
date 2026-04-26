@@ -38,45 +38,6 @@ pub(super) fn pua_feedback_collector() -> &'static PuaFeedbackCollector {
         .get_or_init(|| PuaFeedbackCollector::new(Path::new(".goon").join("learning")))
 }
 
-pub(super) fn build_pua_execution_report(
-    stage: &str,
-    completed_actions: &[String],
-    required_actions: &[String],
-    risk_score: f64,
-) -> PuaExecutionReport {
-    PuaExecutionReport {
-        stage: stage.to_string(),
-        status: if required_actions.iter().all(|required| {
-            completed_actions
-                .iter()
-                .any(|item| item.eq_ignore_ascii_case(required))
-        }) {
-            "pass".to_string()
-        } else {
-            "fail".to_string()
-        },
-        escalation_level: if risk_score >= 0.8 {
-            "L3"
-        } else if risk_score >= 0.6 {
-            "L2"
-        } else {
-            "L1"
-        }
-        .to_string(),
-        required_evidence: required_actions.to_vec(),
-        completed_checks: completed_actions.to_vec(),
-        missing_checks: required_actions
-            .iter()
-            .filter(|required| {
-                !completed_actions
-                    .iter()
-                    .any(|item| item.eq_ignore_ascii_case(required))
-            })
-            .cloned()
-            .collect::<Vec<_>>(),
-    }
-}
-
 pub(super) fn mark_error_response(id: Option<&Value>) {
     let Some(value) = id else {
         return;
@@ -262,7 +223,10 @@ pub(super) fn read_latest_artifact<T: DeserializeOwned>(
 }
 
 /// Create new request trace
-pub(super) fn new_request_trace(_server: &AcpServer, request: &JsonRpcRequest) -> RequestTraceContext {
+pub(super) fn new_request_trace(
+    _server: &AcpServer,
+    request: &JsonRpcRequest,
+) -> RequestTraceContext {
     let request_id = request
         .id
         .as_ref()
@@ -337,7 +301,12 @@ pub(super) fn record_trace_event(
 }
 
 /// Build execution cycle artifact
-pub(super) fn build_execution_cycle(method: &str, action: &str, status: &str, _details: Vec<String>) -> Value {
+pub(super) fn build_execution_cycle(
+    method: &str,
+    action: &str,
+    status: &str,
+    _details: Vec<String>,
+) -> Value {
     let cycle_id = format!(
         "cycle-{}-{}",
         method.replace('.', "-"),

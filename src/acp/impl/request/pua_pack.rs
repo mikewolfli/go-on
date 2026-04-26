@@ -111,3 +111,42 @@ pub(super) fn extract_pua_completed_actions(params: &Option<Value>, method: &str
     }
     completed
 }
+
+pub(super) fn build_pua_execution_report(
+    stage: &str,
+    completed_actions: &[String],
+    required_actions: &[String],
+    risk_score: f64,
+) -> PuaExecutionReport {
+    PuaExecutionReport {
+        stage: stage.to_string(),
+        status: if required_actions.iter().all(|required| {
+            completed_actions
+                .iter()
+                .any(|item| item.eq_ignore_ascii_case(required))
+        }) {
+            "pass".to_string()
+        } else {
+            "fail".to_string()
+        },
+        escalation_level: if risk_score >= 0.8 {
+            "L3"
+        } else if risk_score >= 0.6 {
+            "L2"
+        } else {
+            "L1"
+        }
+        .to_string(),
+        required_evidence: required_actions.to_vec(),
+        completed_checks: completed_actions.to_vec(),
+        missing_checks: required_actions
+            .iter()
+            .filter(|required| {
+                !completed_actions
+                    .iter()
+                    .any(|item| item.eq_ignore_ascii_case(required))
+            })
+            .cloned()
+            .collect::<Vec<_>>(),
+    }
+}

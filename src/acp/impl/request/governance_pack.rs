@@ -861,3 +861,87 @@ pub(crate) fn build_trace_ref(
         "artifact_path": artifact_path.unwrap_or_default(),
     })
 }
+
+/// Universal lazy-load platform profile injection: called by send_result for every response.
+/// Injects `learning_profile` and `knowledge_refinement` if the handler did not already set them.
+/// Handlers that explicitly build these objects retain their richer, task-specific versions.
+pub(crate) fn inject_platform_profiles_if_absent(mut result: Value, method: &str) -> Value {
+    // Only inject into object responses (not notifications / empty)
+    let Some(obj) = result.as_object_mut() else {
+        return result;
+    };
+    // Infrastructure endpoints (metrics, health, shutdown, protocol handshakes, trace, debug)
+    // get a lightweight platform_context marker only — they carry no AI task semantics.
+    let is_infrastructure = matches!(
+        method,
+        "metrics"
+            | "metrics.get"
+            | "metrics.prometheus"
+            | "metrics.reset"
+            | "debug_panel.get"
+            | "debug.panel.get"
+            | "trace.get"
+            | "trace.metrics"
+            | "shutdown"
+            | "health"
+            | "runtime.health"
+            | "health.probes"
+            | "initialize"
+            | "mcp.initialize"
+            | "mcp.tools.list"
+            | "mcp.tools.call"
+            | "tools/list"
+            | "tools/call"
+            | "resources/list"
+            | "resources/read"
+            | "agents/list"
+            | "models/list"
+            | "skill.import"
+            | "skill.enable"
+            | "skill.disable"
+            | "skill.list_imported"
+            | "skill.remove"
+            | "acp.error"
+            | "chat"
+            | "openai.chat.completions"
+            | "responses.api"
+            | "mcp.parse_error"
+            | "mcp.unknown_method"
+            | "phase"
+            | "phase.status"
+    );
+    if is_infrastructure {
+        if !obj.contains_key("platform_context") {
+            obj.insert(
+                "platform_context".to_string(),
+                json!({
+                    "schema_version": "blue24-platform-universal-v1",
+                    "platform": "go-on",
+                    "ai_profiles_active": true,
+                    "method": method,
+                    "profile_class": "infrastructure",
+                }),
+            );
+        }
+        return result;
+    }
+    // All semantic endpoints get full learning_profile + knowledge_refinement if not already present.
+    let empty_params = json!({});
+    if !obj.contains_key("learning_profile") {
+        obj.insert(
+            "learning_profile".to_string(),
+            build_learning_profile(method, "", &empty_params),
+        );
+    }
+    if !obj.contains_key("knowledge_refinement") {
+        let lp = obj
+            .get("learning_profile")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        obj.insert(
+            "knowledge_refinement".to_string(),
+            build_knowledge_refinement_profile(method, "", &empty_params, &lp),
+        );
+    }
+    result
+}

@@ -211,6 +211,7 @@ use self::config_pack::*;
 use self::exec_pack::*;
 pub use self::governance_pack::build_knowledge_refinement_profile;
 pub use self::governance_pack::build_learning_profile;
+pub(crate) use self::governance_pack::inject_platform_profiles_if_absent;
 use self::governance_pack::*;
 use self::hardness_pack::*;
 use self::lifecycle_pack::*;
@@ -220,45 +221,6 @@ use self::protocol_pack::*;
 use self::pua_pack::*;
 use self::tools_pack::*;
 use self::trace_pack::*;
-
-fn build_pua_execution_report(
-    stage: &str,
-    completed_actions: &[String],
-    required_actions: &[String],
-    risk_score: f64,
-) -> PuaExecutionReport {
-    PuaExecutionReport {
-        stage: stage.to_string(),
-        status: if required_actions.iter().all(|required| {
-            completed_actions
-                .iter()
-                .any(|item| item.eq_ignore_ascii_case(required))
-        }) {
-            "pass".to_string()
-        } else {
-            "fail".to_string()
-        },
-        escalation_level: if risk_score >= 0.8 {
-            "L3"
-        } else if risk_score >= 0.6 {
-            "L2"
-        } else {
-            "L1"
-        }
-        .to_string(),
-        required_evidence: required_actions.to_vec(),
-        completed_checks: completed_actions.to_vec(),
-        missing_checks: required_actions
-            .iter()
-            .filter(|required| {
-                !completed_actions
-                    .iter()
-                    .any(|item| item.eq_ignore_ascii_case(required))
-            })
-            .cloned()
-            .collect::<Vec<_>>(),
-    }
-}
 
 fn mark_error_response(id: Option<&Value>) {
     let Some(value) = id else {
@@ -5495,90 +5457,6 @@ async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Re
         None => result,
     };
     crate::acp::r#impl::io::send_result(server, id, result).await
-}
-
-/// Universal lazy-load platform profile injection: called by send_result for every response.
-/// Injects `learning_profile` and `knowledge_refinement` if the handler did not already set them.
-/// Handlers that explicitly build these objects retain their richer, task-specific versions.
-pub(crate) fn inject_platform_profiles_if_absent(mut result: Value, method: &str) -> Value {
-    // Only inject into object responses (not notifications / empty)
-    let Some(obj) = result.as_object_mut() else {
-        return result;
-    };
-    // Infrastructure endpoints (metrics, health, shutdown, protocol handshakes, trace, debug)
-    // get a lightweight platform_context marker only — they carry no AI task semantics.
-    let is_infrastructure = matches!(
-        method,
-        "metrics"
-            | "metrics.get"
-            | "metrics.prometheus"
-            | "metrics.reset"
-            | "debug_panel.get"
-            | "debug.panel.get"
-            | "trace.get"
-            | "trace.metrics"
-            | "shutdown"
-            | "health"
-            | "runtime.health"
-            | "health.probes"
-            | "initialize"
-            | "mcp.initialize"
-            | "mcp.tools.list"
-            | "mcp.tools.call"
-            | "tools/list"
-            | "tools/call"
-            | "resources/list"
-            | "resources/read"
-            | "agents/list"
-            | "models/list"
-            | "skill.import"
-            | "skill.enable"
-            | "skill.disable"
-            | "skill.list_imported"
-            | "skill.remove"
-            | "acp.error"
-            | "chat"
-            | "openai.chat.completions"
-            | "responses.api"
-            | "mcp.parse_error"
-            | "mcp.unknown_method"
-            | "phase"
-            | "phase.status"
-    );
-    if is_infrastructure {
-        if !obj.contains_key("platform_context") {
-            obj.insert(
-                "platform_context".to_string(),
-                json!({
-                    "schema_version": "blue24-platform-universal-v1",
-                    "platform": "go-on",
-                    "ai_profiles_active": true,
-                    "method": method,
-                    "profile_class": "infrastructure",
-                }),
-            );
-        }
-        return result;
-    }
-    // All semantic endpoints get full learning_profile + knowledge_refinement if not already present.
-    let empty_params = json!({});
-    if !obj.contains_key("learning_profile") {
-        obj.insert(
-            "learning_profile".to_string(),
-            build_learning_profile(method, "", &empty_params),
-        );
-    }
-    if !obj.contains_key("knowledge_refinement") {
-        let lp = obj
-            .get("learning_profile")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        obj.insert(
-            "knowledge_refinement".to_string(),
-            build_knowledge_refinement_profile(method, "", &empty_params, &lp),
-        );
-    }
-    result
 }
 
 #[cfg(test)]
