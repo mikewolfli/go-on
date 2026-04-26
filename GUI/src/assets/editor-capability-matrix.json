@@ -1,0 +1,884 @@
+{
+  "version": "2026-04-16-blue15-stagec-r1",
+  "verification": {
+    "generatedBy": "contract-smoke-gates",
+    "generatedAt": "2026-04-18T00:00:00Z",
+    "sourceOfTruth": "main-chain-ci-gates"
+  },
+  "runtime": {
+    "baseUrl": "http://127.0.0.1:8090",
+    "healthPath": "/health"
+  },
+  "protocol": {
+    "supportedModes": [
+      "adaptive",
+      "acp_stdio",
+      "acp_http",
+      "mcp_stdio",
+      "mcp_http"
+    ],
+    "workflowControlModes": [
+      "manual",
+      "assisted",
+      "autonomous"
+    ],
+    "workflowProfileFields": [
+      "configured_workflow_type",
+      "effective_workflow_type",
+      "detection_signal"
+    ],
+    "platformModes": [
+      "universal",
+      "phase_compat"
+    ],
+    "defaultWorkflowControlMode": "assisted",
+    "defaultPlatformMode": "phase_compat",
+    "universalPlatformEnabled": true,
+    "phaseCompatMappingEnabled": true,
+    "universalExecutionCycleSchemaVersion": "blue23-universal-cycle-v1",
+    "universalGateModelCheckedInMainChain": true,
+    "universalResponseSkeletonCheckedInMainChain": true,
+    "universalSandboxProfileCheckedInMainChain": true,
+    "universalApprovalCheckpointCheckedInMainChain": true,
+    "universalCapabilityProfileCheckedInMainChain": true,
+    "blue23MigrationScriptCheckedInMainChain": true,
+    "blue23RollbackScriptCheckedInMainChain": true,
+    "blue23BenchmarkCompareScriptCheckedInMainChain": true,
+    "blue23ScorecardCheckedInMainChain": true,
+    "blue23MultiAgentProtocolCheckedInMainChain": true,
+    "blue23PolicyBundlePublishScriptCheckedInMainChain": true,
+    "blue23OrgPolicyGovernanceViewCheckedInMainChain": true,
+    "blue23UniversalGovernanceProfileCheckedInMainChain": true,
+    "blue23ConfigDualTrackModeCheckedInMainChain": true,
+    "blue23RuntimePlatformModeFromConfigCheckedInMainChain": true,
+    "blue23RepoNativeContextCheckedInMainChain": true,
+    "blue23ApprovalResumeTokenCheckedInMainChain": true,
+    "blue23LearningCognitionProfileCheckedInMainChain": true,
+    "blue23MultiRoundTokenEconomyCheckedInMainChain": true,
+    "blue23KnowledgeRefinementProfileCheckedInMainChain": true,
+    "blue23SelfEvolutionLoopCheckedInMainChain": true,
+    "blue23LearningPackProfileElevatedToMainChain": true,
+    "blue23WorkflowPreChainProfileElevated": true,
+    "blue23RuntimeSelfModelProfileElevated": true,
+    "blue24PlatformProfileUniversalLazyLoad": true,
+    "blue24AllEndpointsConnectedToMainChain": true,
+    "blue24InfrastructureEndpointsGetPlatformContext": true,
+    "defaultMode": "adaptive",
+    "autoModeSupportsAcpAndMcp": true,
+    "protocolCapabilityModel": "capability_plus_transport",
+    "adaptiveSelectionModel": "client_type_routed",
+    "adaptiveStartupTransportStrategy": "http_if_bind_else_stdio",
+    "fixedModesAreConfigDriven": true,
+    "acpInitializeProtocol": "acp",
+    "mcpInitializeProtocolVersion": "2024-11-05",
+    "coexistenceValidatedByRpcIntegration": true,
+    "triPathValidatedByIntegration": true,
+    "httpRootSupportsAcpHttp": true,
+    "httpRootAdvertisesResponsesEndpoints": true,
+    "guiDetectsAutoModeLiteral": true,
+    "guiParsesProtocolModeFromProtocolSection": true,
+    "guiTauriCompileCheckedInMainChain": true,
+    "vscodeAddonCompileCheckedInMainChain": true,
+    "rpcFallbackDegradeCheckedInMainChain": true,
+    "rpcConfigReloadCheckedInMainChain": true,
+    "rpcReviewTimeoutCollisionCheckedInMainChain": true,
+    "rpcInitHealthShutdownCheckedInMainChain": true,
+    "httpStreamSseAndPersistenceCheckedInMainChain": true,
+    "rpcDebugPanelSnapshotCheckedInMainChain": true,
+    "rpcConversationCheckpointCheckedInMainChain": true,
+    "rpcCacheClearAndValidationCheckedInMainChain": true,
+    "rpcRateLimitSaturationCheckedInMainChain": true,
+    "rpcJsonRpcVersionValidationCheckedInMainChain": true,
+    "rpcChatParameterValidationCheckedInMainChain": true,
+    "rpcBreakerStatusAndResetCheckedInMainChain": true,
+    "startupFailureOnMissingDependenciesCheckedInMainChain": true,
+    "rpcLegacyMethodAliasesCompatibilityCheckedInMainChain": true,
+    "rpcActionVectorMaintenanceAndMetricsCheckedInMainChain": true,
+    "rpcUnknownMethodAndConfigReloadCheckedInMainChain": true,
+    "rpcTaskGovernanceRequirementGateCheckedInMainChain": true,
+    "rpcUnifiedGateFacadeCheckedInMainChain": true,
+    "rpcWorkflowResearchConsultGateCheckedInMainChain": true,
+    "rpcWorkflowTaskExecutionCycleCheckedInMainChain": true,
+    "rpcWorkflowTaskChangeBundleCheckedInMainChain": true,
+    "rpcWorkflowTaskStep3ChangeBundleProductFieldsCheckedInMainChain": true,
+    "rpcWorkflowTaskResponseSkeletonCheckedInMainChain": true,
+    "rpcExecutionCycleHistoryAndAutoRepairPlanCheckedInMainChain": true,
+    "rpcExecutionCycleRealRepairIterationHistoryCheckedInMainChain": true,
+    "rpcChangeBundleRollbackCommitCoverageCheckedInMainChain": true,
+    "rpcRuntimeExecutionCyclePatchSetAndRepairPreviewCheckedInMainChain": true,
+    "rpcChangeBundleFileSummaryRiskGateRollbackCommitSuggestionCheckedInMainChain": true,
+    "toolRegistryCapabilityRiskTimeoutRetryFallbackCheckedInMainChain": true,
+    "toolFallbackExecutionChainCheckedInMainChain": true,
+    "rpcWorkflowReviewPolicyAndLearningFeedbackCheckedInMainChain": true,
+    "rpcWorkflowDualReviewAndDecisionsCheckedInMainChain": true,
+    "rpcTaskPlanMemoryGraphRecallCheckedInMainChain": true,
+    "rpcWorkflowTaskRunModeSwitchCheckedInMainChain": true,
+    "rpcLearningSummaryAggregatesMetricsCheckedInMainChain": true,
+    "rpcPrimarySecondaryPolicyArtifactCheckedInMainChain": true,
+    "rpcPrimarySecondaryStabilityFailoverCheckedInMainChain": true,
+    "rpcWorkflowConsultArtifactAndConsensusCheckedInMainChain": true,
+    "rpcWorkflowResearchArtifactAndPlanCheckedInMainChain": true,
+    "rpcConfirmClarificationRoundsCheckedInMainChain": true,
+    "rpcAutotuneResetDefaultStateCheckedInMainChain": true,
+    "rpcWorkflowAutoConsultationConsensusGateCheckedInMainChain": true,
+    "rpcRuntimeSelfModelCheckedInMainChain": true,
+    "rpcProviderStatusCheckedInMainChain": true,
+    "rpcReleaseReadinessCheckedInMainChain": true,
+    "blue22BenchmarkSnapshotScriptCheckedInMainChain": true,
+    "blue22BenchmarkIndicatorsTrackedInMainChain": true,
+    "blue22ReleaseGateRunsBenchmarkSnapshotCheckedInMainChain": true,
+    "acpCoreUnitSuiteCheckedInMainChain": true,
+    "i18nModuleSuiteCheckedInMainChain": true,
+    "coreConfigUnitSuiteCheckedInMainChain": true,
+    "governancePuaUnitSuiteCheckedInMainChain": true,
+    "mcpModuleSuiteCheckedInMainChain": true,
+    "protocolMcpServerSuiteCheckedInMainChain": true,
+    "openaiCompatibleAgentSuiteCheckedInMainChain": true,
+    "memoryCacheSuiteCheckedInMainChain": true,
+    "memoryVectorSuiteCheckedInMainChain": true,
+    "orchestrationTaskRouterSuiteCheckedInMainChain": true,
+    "orchestrationFlowSuiteCheckedInMainChain": true,
+    "orchestrationFlowWithModelsSuiteCheckedInMainChain": true,
+    "orchestrationOrchestratorSuiteCheckedInMainChain": true,
+    "orchestrationToolSuiteCheckedInMainChain": true,
+    "coreErrorSuiteCheckedInMainChain": true,
+    "copilotAgentSuiteCheckedInMainChain": true,
+    "anthropicAgentSuiteCheckedInMainChain": true,
+    "qwenAgentSuiteCheckedInMainChain": true,
+    "wenxinAgentSuiteCheckedInMainChain": true,
+    "deepseekAgentSuiteCheckedInMainChain": true,
+    "optimizationCostSuiteCheckedInMainChain": true,
+    "optimizationSpeedSuiteCheckedInMainChain": true,
+    "optimizationReliabilitySuiteCheckedInMainChain": true,
+    "optimizationFailurePreventionSuiteCheckedInMainChain": true,
+    "intelligenceAdaptiveSelectorSuiteCheckedInMainChain": true,
+    "intelligenceModelSelectorSuiteCheckedInMainChain": true,
+    "intelligenceAdvancedModulesSuiteCheckedInMainChain": true,
+    "intelligenceReinforcementSuiteCheckedInMainChain": true,
+    "coreSetupSuiteCheckedInMainChain": true,
+    "genericAgentSuiteCheckedInMainChain": true,
+    "acpPreludeMetricsSuiteCheckedInMainChain": true,
+    "orchestrationSkillRegistrySuiteCheckedInMainChain": true,
+    "rustAllTargetsFullGateCheckedInMainChain": true,
+    "rpcLockStatusCheckedInMainChain": true,
+    "blue24MetaCognitionProfileInLearningProfile": true,
+    "blue24TokenEconomyDynamicCompression": true,
+    "blue24KnowledgeRefinementCrossRoundDistillation": true,
+    "blue24SelfModelMetaCognitionBlock": true,
+    "blue24LearningProfileSchemaV2": true,
+    "blue24TokenEconomySchemaV2": true,
+    "blue24KnowledgeRefinementSchemaV2": true,
+    "rpcGovernanceStatusMultiUserServerViewCheckedInMainChain": true,
+    "multiUserServerComponentMatrixCheckedInMainChain": true,
+    "multiTenantReleaseGateCheckedInMainChain": true,
+    "rpcReleaseReadinessMultiUserServerGateCheckedInMainChain": true,
+    "rpcReleaseReadinessMultiUserSummaryCheckedInMainChain": true,
+    "rpcGovernanceStatusServerModeInferenceFromDeploymentTargetCheckedInMainChain": true,
+    "rpcReleaseReadinessServerModeInferenceFromDeploymentTargetCheckedInMainChain": true,
+    "rpcGovernanceStatusServerModeInferenceSourceCheckedInMainChain": true,
+    "rpcReleaseReadinessServerModeInferenceSourceCheckedInMainChain": true,
+    "rpcReleaseReadinessBlockedGateNamesCheckedInMainChain": true,
+    "rpcGovernanceStatusSchemaVersionCheckedInMainChain": true,
+    "rpcReleaseReadinessSchemaVersionCheckedInMainChain": true,
+    "artifactSchemaVersionedOutputCheckedInMainChain": true,
+    "adversarialUnknownDeploymentTargetDefaultsSingleUserCheckedInMainChain": true,
+    "adversarialExplicitSingleUserOverridesInferenceCheckedInMainChain": true,
+    "adversarialEmptyParamsReturnValidStructureCheckedInMainChain": true,
+    "adversarialInvalidMethodReturnsJsonRpcErrorCheckedInMainChain": true,
+    "deterministicAdversarialDualTrackGateCheckedInMainChain": true,
+    "blue26S16CiTopLevelGateCheckedInMainChain": true,
+    "blue26S16GateBlocksBuildOnFailureCheckedInMainChain": true,
+    "rpcGovernanceStatusMultiUserLifecycleOpsCheckedInMainChain": true,
+    "rpcReleaseReadinessMultiUserLifecycleOpsCheckedInMainChain": true,
+    "rpcReleaseReadinessMultiUserLifecycleGateCheckedInMainChain": true,
+    "rpcGovernanceStatusDualTrackConsistencyCheckedInMainChain": true,
+    "rpcReleaseReadinessDualTrackConsistencyCheckedInMainChain": true,
+    "rpcReleaseReadinessDualTrackConsistencyGateCheckedInMainChain": true,
+    "multiUserLifecycleDrillScenarioCheckedInMainChain": true,
+    "blue26S11TaskGraphCheckpointResumableCheckedInMainChain": true,
+    "blue26S0TargetFrozenScopeLockedCheckedInMainChain": true,
+    "blue26S1UnifiedExecutionCycleCheckedInMainChain": true,
+    "blue26S2AutoRepairLoopMainChainCheckedInMainChain": true,
+    "blue26S3CodeChangeBundleThreeSurfaceCheckedInMainChain": true,
+    "blue26S4ToolCapabilityMatrixFallbackCheckedInMainChain": true,
+    "blue26S5MemoryGraphDriftProtectionCheckedInMainChain": true,
+    "blue26S6ReviewAdjudicationStructuredCheckedInMainChain": true,
+    "blue26S7ReplayScoringThreeDimensionalCheckedInMainChain": true,
+    "blue26S12ThinkActObserveToolLoopCheckedInMainChain": true,
+    "blue26S13RoleHandoffConflictResolutionCheckedInMainChain": true,
+    "blue26S18ZeroTrustComplianceFrameworkCheckedInMainChain": true,
+    "blue26S19EnterpriseRbacPolicyEngineCheckedInMainChain": true,
+    "blue26S20SlaServiceGovernanceCheckedInMainChain": true,
+    "blue26S21SkillEngineDynamicRegistryLifecycleCheckedInMainChain": true,
+    "blue26S22WorkflowToSkillAutoConversionPipelineCheckedInMainChain": true,
+    "blue26S23WorkflowSkillMainChainAutoRegistrationCheckedInMainChain": true,
+    "blue26S24SkillManagementConsoleUiCheckedInMainChain": true,
+    "blue26S25EnterpriseSkillRbacAuditComplianceCheckedInMainChain": true,
+    "blue26S26ThreeModeCoreConsistencyCheckedInMainChain": true,
+    "blue26S27ThreeModeScenarioAdaptabilityCheckedInMainChain": true,
+    "blue26S28ThreeModeQualityAssuranceCheckedInMainChain": true,
+    "blue26S29ThreeModeIssuePreventionCheckedInMainChain": true,
+    "blue26S30SubagentArchitectureCheckedInMainChain": true,
+    "blue26S31SubagentCollaborationCheckedInMainChain": true,
+    "blue26S32SubagentObservabilityCheckedInMainChain": true,
+    "blue26S33KnowledgeManagementCheckedInMainChain": true,
+    "blue26S34PerformanceOptimizationCheckedInMainChain": true,
+    "blue26S35EnterpriseDeployOpsCheckedInMainChain": true,
+    "blue26S36EcosystemExtensibilityCheckedInMainChain": true,
+    "blue26S37SharedLearningMainChainCheckedInMainChain": true,
+    "blue26S38SelfEvolutionMainChainCheckedInMainChain": true,
+    "blue26S39CapabilityConsistencyMainChainCheckedInMainChain": true,
+    "blue26S40SharedLearningDataFlowCheckedInMainChain": true,
+    "blue26S41SelfEvolutionFlowCheckedInMainChain": true,
+    "blue27S0TaskGraphPersistenceCheckedInMainChain": true,
+    "blue27S1EvaluationHarnessBaselineCheckedInMainChain": true,
+    "blue27S2MemoryWritePolicyCheckedInMainChain": true,
+    "blue27S3TaskRoutingMainChainCheckedInMainChain": true,
+    "blue27S4ToolBudgetEnforcementCheckedInMainChain": true,
+    "blue27S5StateStoreTraitCheckedInMainChain": true,
+    "blue27S6AdversarialVerificationCheckedInMainChain": true,
+    "blue27S7PlannerExecutorSeparationCheckedInMainChain": true,
+    "blue27S8MultiAgentHandoffCheckedInMainChain": true,
+    "blue27S9EvaluationReplayEngineCheckedInMainChain": true,
+    "blue27S10TraceModelAgentGraphCheckedInMainChain": true,
+    "blue27S11DynamicWorkflowOptimizationCheckedInMainChain": true,
+    "blue27S12ThinkActObserveLoopCheckedInMainChain": true,
+    "blue27S13ModelDegradationDetectionCheckedInMainChain": true,
+    "blue27S14TaskDecompositionPipelineCheckedInMainChain": true,
+    "blue27S15OmnipotentModeReadinessCheckedInMainChain": true,
+    "blue27S16SotaGapBenchmarkCheckedInMainChain": true,
+    "blue27S17Blue27ReleaseClosureCheckedInMainChain": true,
+    "blue28S0SchemaMigrationVersioningCheckedInMainChain": true,
+    "blue28S1TenantAuthApiKeyCheckedInMainChain": true,
+    "blue28S2SqlitePostgresMigrationCheckedInMainChain": true,
+    "blue28S3SolutionDiscoveryHubCheckedInMainChain": true,
+    "blue28S4ScenarioMatcherCheckedInMainChain": true,
+    "blue28S5SubaiFactoryCheckedInMainChain": true,
+    "blue28S6TrainingOrchestratorCheckedInMainChain": true,
+    "blue28S7AutoIntegrationRuntimeCheckedInMainChain": true,
+    "blue28S8ReinforcementLoopCheckedInMainChain": true,
+    "blue28S9CoordinatorCouncilCheckedInMainChain": true,
+    "blue28S10WorkerSwarmCheckedInMainChain": true,
+    "blue28S11ConsensusEngineCheckedInMainChain": true,
+    "blue28S12BrainLoopCheckedInMainChain": true,
+    "blue28S13NodeReputationCheckedInMainChain": true,
+    "blue28S14SelfModelCoreCheckedInMainChain": true,
+    "blue28S15MetaCognitionCheckedInMainChain": true,
+    "blue28S16DriftGuardCheckedInMainChain": true,
+    "blue28S17Blue28ReleaseClosureCheckedInMainChain": true,
+    "blue29S0FederatedRlCheckedInMainChain": true,
+    "blue29S1DistributedMemoryBusCheckedInMainChain": true,
+    "blue29S2AdaptiveSwarmOptimizerCheckedInMainChain": true,
+    "blue29S3HyperNodeNetworkCheckedInMainChain": true,
+    "blue29S4WorldModelPipelineCheckedInMainChain": true,
+    "blue29S5ContinualLearningHubCheckedInMainChain": true,
+    "blue29S6Blue29ReleaseClosureCheckedInMainChain": true,
+    "blue30S0MultiChannelMessagingCheckedInMainChain": true,
+    "blue30S1CollaborationGameEngineCheckedInMainChain": true,
+    "blue30S2ConsciousnessProxyMetricsCheckedInMainChain": true,
+    "blue30S3HyperResilienceCheckedInMainChain": true,
+    "blue30S4DualTrackAwakeningParityCheckedInMainChain": true,
+    "blue30S5CicdAwarenessGateCheckedInMainChain": true,
+    "blue30S6Blue30ReleaseClosureCheckedInMainChain": true,
+    "blue31S0AutonomyBoundaryGovernanceCheckedInMainChain": true,
+    "blue31S1EmergencyStopProtocolCheckedInMainChain": true,
+    "blue31S2CollaborationAbEvaluationCheckedInMainChain": true,
+    "blue31S3HypernodeTopologyCheckedInMainChain": true,
+    "blue31S4CrossRegionPriorityRoutingCheckedInMainChain": true,
+    "blue31S5MetaControllerReplanCheckedInMainChain": true,
+    "blue31S6Blue31ReleaseClosureCheckedInMainChain": true,
+    "blue32S0GameTheoryBalancerCheckedInMainChain": true,
+    "blue32S1FederatedRlV2GuardrailCheckedInMainChain": true,
+    "blue32S2ContinuousLearningDistillationCheckedInMainChain": true,
+    "blue32S3DriftAutoTakeoverCheckedInMainChain": true,
+    "blue32S4ByzantineFaultInjectionCheckedInMainChain": true,
+    "blue32S5RecoveryConsistencyRecheckCheckedInMainChain": true,
+    "blue32S6Blue32ReleaseClosureCheckedInMainChain": true,
+    "blue33S0LocalReflectionTrackCheckedInMainChain": true,
+    "blue33S1ServerAwakeningTrackCheckedInMainChain": true,
+    "blue33S2CiGateContinuousGreenCheckedInMainChain": true,
+    "blue33S3StagedRolloutGuardCheckedInMainChain": true,
+    "blue33S4ReleaseTrainFreezeCheckedInMainChain": true,
+    "blue33S5RolloutAuditReplayCheckedInMainChain": true,
+    "blue33S6Blue33ReleaseClosureCheckedInMainChain": true,
+    "blue33S7AutonomyScopeMatrixCheckedInMainChain": true,
+    "blue33S8RedlinePolicyRuntimeCheckedInMainChain": true,
+    "blue33S9HumanApprovalCheckpointCheckedInMainChain": true,
+    "blue33S10SupernodeHotStandbyCheckedInMainChain": true,
+    "blue33S11CrossZoneStateSnapshotCheckedInMainChain": true,
+    "blue33S12FailoverRecoveryDrillCheckedInMainChain": true,
+    "blue33S13Blue33RemainingClosureCheckedInMainChain": true,
+    "blue34S0DualTrackBoundaryFreezeCheckedInMainChain": true,
+    "blue34S1StateVectorStoreTraitUnifiedCheckedInMainChain": true,
+    "blue34S2LocalServerProfileMatrixCheckedInMainChain": true,
+    "blue34S3PostgresPgvectorSchemaVersioningCheckedInMainChain": true,
+    "blue34S4SqliteToPgMigrationDryrunCheckedInMainChain": true,
+    "blue34S5PlannerExecutorTaskgraphResumeCheckedInMainChain": true,
+    "blue34S6ThinkActObserveToolGovernanceCheckedInMainChain": true,
+    "blue34S7RoleHandoffSchemaAndConflictArbiterCheckedInMainChain": true,
+    "blue34S8DeterministicAdversarialDoubleChecksCheckedInMainChain": true,
+    "blue34S9MemoryWritePromotionGcPolicyCheckedInMainChain": true,
+    "blue34S10BenchmarkReplayAnd3dScoringCheckedInMainChain": true,
+    "blue34S11CapabilityDiscoveryRegistryBaselineCheckedInMainChain": true,
+    "blue34S12StagedRolloutCanaryRollbackGateCheckedInMainChain": true,
+    "blue34S13DistributedNodeRegistryHeartbeatCheckedInMainChain": true,
+    "blue34S14ConsensusWithDissentPreservationCheckedInMainChain": true,
+    "blue34S15BrainLoopArtifactAndSafeDegradeCheckedInMainChain": true,
+    "blue34S16FaultInjectionRecoveryRecheckCheckedInMainChain": true,
+    "blue34S17Blue34ReleaseClosureCheckedInMainChain": true,
+    "blue35S1CustomRoleRegistryCheckedInMainChain": true,
+    "blue35S2CustomRoleDynamicMatchingCheckedInMainChain": true,
+    "blue35S3ComplianceAuditMetadataCheckedInMainChain": true,
+    "blue35S4SelfRationalizationGuardCheckedInMainChain": true,
+    "blue35S5StartupContextLoaderCheckedInMainChain": true,
+    "blue35S6LayeredPromptBuilderCheckedInMainChain": true,
+    "blue35S7LayeredTokenTriggerCheckedInMainChain": true,
+    "blue35S8MultiPrioritySchedulerCheckedInMainChain": true,
+    "blue35S9WorkerSchedulerBackpressureCheckedInMainChain": true,
+    "blue35S10ForkIsolationGuardCheckedInMainChain": true,
+    "blue35S11CapabilityGraphCheckedInMainChain": true,
+    "blue35S12ProvenanceLedgerCheckedInMainChain": true,
+    "blue35S13NodeReputationTrackerCheckedInMainChain": true,
+    "blue35S14K8sDeliveryPackCheckedInMainChain": true,
+    "blue35S15SdkMultiLanguageStubCheckedInMainChain": true,
+    "blue35S16WorkflowTypeTriModeCheckedInMainChain": true,
+    "blue35S17Blue35ReleaseClosureCheckedInMainChain": true
+  },
+  "openai": {
+    "modelsPath": "/v1/models",
+    "modelAliasPath": "/v1/model",
+    "chatCompletionsPath": "/v1/chat/completions",
+    "streamDoneMarker": "[DONE]",
+    "commonForwardedFields": [
+      "temperature",
+      "top_p",
+      "max_tokens",
+      "n",
+      "stop",
+      "presence_penalty",
+      "frequency_penalty",
+      "logit_bias",
+      "user",
+      "seed",
+      "response_format",
+      "tools",
+      "tool_choice",
+      "parallel_tool_calls",
+      "function_call",
+      "functions"
+    ],
+    "requiredAssertions": {
+      "modelsDataNonEmpty": true,
+      "chatContentNonEmpty": true,
+      "sseHasDataFrame": true,
+      "sseHasDoneMarker": true
+    }
+  },
+  "statusTerms": {
+    "healthy": "Healthy",
+    "healthCheckFailed": "Health check failed",
+    "running": "Running",
+    "stopped": "Stopped"
+  },
+  "errors": {
+    "providerNotReady": "No runtime-ready AI provider configured.",
+    "setupWizardOpened": "Setup wizard opened.",
+    "setupWizardPrompt": "No runtime-ready AI provider is configured. Opening Go-On setup wizard now.",
+    "runtimeProbePassed": "runtime.health semantic probe passed",
+    "requestErrorKinds": [
+      "PuaViolation",
+      "BudgetExceeded",
+      "SandboxBlocked"
+    ],
+    "requestErrorContextPrefix": "acp.handle_request.dispatch"
+  },
+  "surfaces": {
+    "gui": {
+      "checks": [
+        "health",
+        "models",
+        "runtime.self_model",
+        "provider.status",
+        "release.readiness"
+      ],
+      "supports": {
+        "openAiCompat": true,
+        "responsesNative": false
+      }
+    },
+    "vscodeAddon": {
+      "checks": [
+        "runtime.health",
+        "runtime.self_model",
+        "provider.status",
+        "release.readiness"
+      ],
+      "supports": {
+        "openAiCompat": true,
+        "responsesNative": false
+      }
+    }
+  },
+  "responsesApi": {
+    "path": "/v1/responses",
+    "retrievalPath": "/v1/responses/{id}",
+    "listPath": "/v1/responses",
+    "r1Status": "baseline",
+    "responseRetrievalSupport": true,
+    "responseListSupport": true,
+    "responseListObjectType": "list",
+    "responseListDataContainsResponseObjects": true,
+    "responseListNewestFirst": true,
+    "responseIdsAreUniquePerRequest": true,
+    "responseIdHasTimestampAndSequence": true,
+    "responseStoreTracksCompleted": true,
+    "responseStoreTracksFailed": true,
+    "responseStatusLifecycle": [
+      "queued",
+      "in_progress",
+      "completed",
+      "failed"
+    ],
+    "responseStatusHistoryField": "status_history",
+    "responseHistoryIncludesTransitions": true,
+    "toolCallInitiationSupport": true,
+    "toolChoiceRequiredReturnsIncomplete": true,
+    "toolCallOutputItemSupport": true,
+    "toolResultContinuationSupport": true,
+    "previousResponseIdMustBeNonEmptyString": true,
+    "toolResultRequiresMatchingToolCallId": true,
+    "toolResultOutputItemSupport": true,
+    "failureCodeClasses": [
+      "timeout",
+      "rate_limit",
+      "tool_error",
+      "upstream_error"
+    ],
+    "toolLoopMissingResultUsesToolError": true,
+    "noPendingToolCallUsesToolError": true,
+    "upstreamTimeoutMapped": true,
+    "upstreamRateLimitMapped": true,
+    "retrievalNotFoundUsesResponsesErrorShape": true,
+    "streamSupport": true,
+    "streamEvents": [
+      "response.created",
+      "response.output_text.delta",
+      "response.completed",
+      "response.failed"
+    ],
+    "streamTerminatesWithDone": true,
+    "requestBodyMustBeObject": true,
+    "modelMustBeNonEmptyString": true,
+    "modelMustBeString": true,
+    "acceptedInputTypes": [
+      "string",
+      "array"
+    ],
+    "inputMustProduceMessages": true,
+    "inputMustIncludeUserMessage": true,
+    "maxOutputTokensMin": 1,
+    "maxOutputTokensMustBeInteger": true,
+    "temperatureMustBeNumber": true,
+    "temperatureRange": [
+      0,
+      2
+    ],
+    "metadataMustBeObject": true,
+    "reasoningMustBeObject": true,
+    "toolsMustBeArray": true,
+    "toolsEntriesMustBeObjects": true,
+    "toolsEntriesMustUseFunctionType": true,
+    "toolsEntriesRequireFunctionName": true,
+    "toolsFunctionDescriptionMustBeString": true,
+    "toolsFunctionParametersMustBeObject": true,
+    "toolsFunctionParametersTypeMustBeObject": true,
+    "toolsFunctionParametersPropertiesMustBeObject": true,
+    "toolsFunctionParametersRequiredMustBeStringArray": true,
+    "toolChoiceAllowedTypes": [
+      "string",
+      "object"
+    ],
+    "toolChoiceStringValues": [
+      "auto",
+      "none",
+      "required"
+    ],
+    "toolChoiceRequiredNeedsTools": true,
+    "toolChoiceObjectMustUseFunctionType": true,
+    "toolChoiceObjectRequiresFunctionName": true,
+    "toolChoiceObjectRequiresTools": true,
+    "toolChoiceObjectMustReferenceDeclaredTool": true,
+    "emptyBodyUsesResponsesErrorShape": true,
+    "invalidJsonUsesResponsesErrorShape": true,
+    "requiredFields": [
+      "model",
+      "input"
+    ],
+    "outputObjectType": "response",
+    "errorHasCodeField": true,
+    "goldenCasesImplemented": true,
+    "responseRequiredFields": [
+      "id",
+      "object",
+      "created_at",
+      "model",
+      "status",
+      "output",
+      "usage",
+      "error",
+      "incomplete_details"
+    ],
+    "errorRequiredFields": [
+      "code",
+      "type",
+      "message"
+    ],
+    "streamEventOrder": [
+      "response.created",
+      "response.output_text.delta",
+      "response.completed"
+    ],
+    "rootCapabilitiesPath": "/",
+    "rootCapabilitiesAdvertisesResponsesEndpoints": true,
+    "deleteResponseMethodReturns405": true,
+    "streamSetupUnavailableDegradesToCompleted": true,
+    "streamSetupUnavailableUsesDegradedMessage": true,
+    "streamSetupUnavailableStoredAsCompleted": true,
+    "streamSetupUnavailableRetrievableById": true,
+    "nonStreamSetupUnavailableDegradesToCompleted": true,
+    "nonStreamSetupUnavailableUsesDegradedMessage": true,
+    "nonStreamSetupUnavailableStoredAsCompleted": true,
+    "nonStreamSetupUnavailableRetrievableById": true
+  },
+  "protocolCapabilityMatrix": {
+    "_comment": "Declares which capabilities are available per protocol access mode. Owner = the server module responsible. absent = not exposed on this mode.",
+    "_version": "blue18-batch-a",
+    "capabilities": {
+      "chat": {
+        "acp_stdio": {
+          "supported": true,
+          "method": "chat",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": true,
+          "path": "/chat",
+          "owner": "acp/runtime"
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
+      },
+      "openai_compat": {
+        "acp_stdio": {
+          "supported": false
+        },
+        "acp_http": {
+          "supported": true,
+          "path": "/v1/chat/completions",
+          "owner": "acp/runtime"
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
+      },
+      "responses_api": {
+        "acp_stdio": {
+          "supported": false
+        },
+        "acp_http": {
+          "supported": true,
+          "path": "/v1/responses",
+          "owner": "acp/runtime"
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
+      },
+      "tools_list": {
+        "acp_stdio": {
+          "supported": true,
+          "method": "mcp.tools.list",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": true,
+          "method": "tools/list",
+          "owner": "mcp/handlers"
+        },
+        "mcp_http": {
+          "supported": true,
+          "method": "tools/list",
+          "owner": "mcp/handlers"
+        }
+      },
+      "tools_call": {
+        "acp_stdio": {
+          "supported": true,
+          "method": "mcp.tools.call",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": true,
+          "method": "tools/call",
+          "owner": "mcp/handlers"
+        },
+        "mcp_http": {
+          "supported": true,
+          "method": "tools/call",
+          "owner": "mcp/handlers"
+        }
+      },
+      "skill_import": {
+        "acp_stdio": {
+          "supported": true,
+          "method": "skill.import",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
+      },
+      "skill_enable": {
+        "acp_stdio": {
+          "supported": true,
+          "method": "skill.enable",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
+      },
+      "skill_disable": {
+        "acp_stdio": {
+          "supported": true,
+          "method": "skill.disable",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
+      },
+      "skill_list_imported": {
+        "acp_stdio": {
+          "supported": true,
+          "method": "skill.list_imported",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
+      },
+      "skill_remove": {
+        "acp_stdio": {
+          "supported": true,
+          "method": "skill.remove",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
+      },
+      "health": {
+        "acp_stdio": {
+          "supported": true,
+          "method": "runtime.health",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": true,
+          "path": "/health",
+          "owner": "acp/runtime"
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
+      },
+      "metrics": {
+        "acp_stdio": {
+          "supported": true,
+          "method": "metrics.get",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
+      },
+      "governance": {
+        "acp_stdio": {
+          "supported": true,
+          "method": "governance.status",
+          "owner": "acp/request"
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": false
+        },
+        "mcp_http": {
+          "supported": false
+        }
+      },
+      "models_list": {
+        "acp_stdio": {
+          "supported": false
+        },
+        "acp_http": {
+          "supported": true,
+          "path": "/v1/models",
+          "owner": "acp/runtime"
+        },
+        "mcp_stdio": {
+          "supported": true,
+          "method": "models/list",
+          "owner": "mcp/handlers"
+        },
+        "mcp_http": {
+          "supported": true,
+          "method": "models/list",
+          "owner": "mcp/handlers"
+        }
+      },
+      "agents_list": {
+        "acp_stdio": {
+          "supported": false
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": true,
+          "method": "agents/list",
+          "owner": "mcp/handlers"
+        },
+        "mcp_http": {
+          "supported": true,
+          "method": "agents/list",
+          "owner": "mcp/handlers"
+        }
+      },
+      "resources": {
+        "acp_stdio": {
+          "supported": false
+        },
+        "acp_http": {
+          "supported": false
+        },
+        "mcp_stdio": {
+          "supported": true,
+          "method": "resources/list",
+          "owner": "mcp/handlers"
+        },
+        "mcp_http": {
+          "supported": true,
+          "method": "resources/list",
+          "owner": "mcp/handlers"
+        }
+      }
+    }
+  },
+  "protocolErrorContract": {
+    "_comment": "JSON-RPC error code semantics shared across ACP stdio + MCP stdio/http. ACP HTTP uses HTTP status codes.",
+    "_version": "blue18-batch-c",
+    "jsonRpcCodes": {
+      "-32700": {
+        "name": "PARSE_ERROR",
+        "meaning": "Malformed JSON input"
+      },
+      "-32600": {
+        "name": "INVALID_REQUEST",
+        "meaning": "Not a valid JSON-RPC request object"
+      },
+      "-32601": {
+        "name": "METHOD_NOT_FOUND",
+        "meaning": "Unknown or unsupported method for this mode"
+      },
+      "-32602": {
+        "name": "INVALID_PARAMS",
+        "meaning": "Invalid or missing method parameters"
+      },
+      "-32603": {
+        "name": "INTERNAL_ERROR",
+        "meaning": "Unhandled server-side error"
+      }
+    },
+    "acpExtensions": {
+      "NOT_IMPLEMENTED_EXECUTOR": {
+        "field": "code",
+        "meaning": "Skill imported but no executor registered; executed=false"
+      }
+    },
+    "crossModeConsistency": {
+      "unknownMethod": {
+        "acp_stdio": -32601,
+        "mcp_stdio": -32601,
+        "mcp_http": -32601
+      },
+      "missingParams": {
+        "acp_stdio": -32602,
+        "mcp_stdio": -32602,
+        "mcp_http": -32602
+      },
+      "internalError": {
+        "acp_stdio": -32603,
+        "mcp_stdio": -32603,
+        "mcp_http": -32603
+      }
+    }
+  }
+}

@@ -4,8 +4,8 @@ VS Code extension for operating and interacting with go-on runtime.
 
 ## Version
 
-- Extension: 0.6.1
-- Target runtime: go-on 0.6.1
+- Extension: 0.7.1
+- Target runtime: go-on 0.7.1
 
 ## What Is Implemented (Current)
 
@@ -113,12 +113,12 @@ npm run compile
 ```
 
 ## Quick Start
-<!-- BLUE14-P2-2-VSCODE-QUICKSTART -->
 
-1. 启动 go-on backend（建议 `mode = "adaptive"`）。
-2. 在 VS Code 设置 `go-on.executablePath` 与 `go-on.configPath`。
-3. `adaptive` 表示双栈能力 + 按请求类型路由；若需固定接口，再设置 `go-on.runtime.protocolMode` 为 `acp_stdio` / `acp_http` / `mcp_stdio` / `mcp_http`。
-4. 执行命令 `go-on.start`，并用 `go-on.healthCheck` 验证主链可用。
+1. Start the go-on backend (recommended `mode = "adaptive"`).
+2. Set `go-on.executablePath` and `go-on.configPath` in VS Code settings.
+3. `adaptive` means dual-stack capability with request-type routing; to fix an interface, set `go-on.runtime.protocolMode` to `acp_stdio` / `acp_http` / `mcp_stdio` / `mcp_http`.
+4. Run the `go-on.start` command and verify the main chain with `go-on.healthCheck`.
+
 
 ## Sync Policy
 

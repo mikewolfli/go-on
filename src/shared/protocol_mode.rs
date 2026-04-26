@@ -15,13 +15,8 @@ pub enum ProtocolModeError {
 }
 
 impl ProtocolMode {
-    pub const CANONICAL_MODES: [&'static str; 5] = [
-        "adaptive",
-        "acp_stdio",
-        "acp_http",
-        "mcp_stdio",
-        "mcp_http",
-    ];
+    pub const CANONICAL_MODES: [&'static str; 5] =
+        ["adaptive", "acp_stdio", "acp_http", "mcp_stdio", "mcp_http"];
 
     pub fn from_str(value: &str) -> Result<Self, ProtocolModeError> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -49,8 +44,8 @@ impl ProtocolMode {
             Err(ProtocolModeError::FromConfigNotSupported) => {
                 return Err(ProtocolModeError::FromConfigNotSupported)
             }
-            Err(ProtocolModeError::InvalidValue(_)) => {}
-            Err(ProtocolModeError::AmbiguousPrefix(_)) => unreachable!(),
+            Err(ProtocolModeError::InvalidValue(_))
+            | Err(ProtocolModeError::AmbiguousPrefix(_)) => {}
         }
 
         let mut matched = Self::CANONICAL_MODES
@@ -93,9 +88,18 @@ mod tests {
 
     #[test]
     fn protocol_mode_accepts_legacy_aliases() {
-        assert_eq!(ProtocolMode::from_str("auto").unwrap(), ProtocolMode::Adaptive);
-        assert_eq!(ProtocolMode::from_str("acp").unwrap(), ProtocolMode::AcpStdio);
-        assert_eq!(ProtocolMode::from_str("mcp").unwrap(), ProtocolMode::McpStdio);
+        assert_eq!(
+            ProtocolMode::from_str("auto").unwrap(),
+            ProtocolMode::Adaptive
+        );
+        assert_eq!(
+            ProtocolMode::from_str("acp").unwrap(),
+            ProtocolMode::AcpStdio
+        );
+        assert_eq!(
+            ProtocolMode::from_str("mcp").unwrap(),
+            ProtocolMode::McpStdio
+        );
     }
 
     #[test]
@@ -108,9 +112,18 @@ mod tests {
 
     #[test]
     fn protocol_mode_accepts_unique_prefixes() {
-        assert_eq!(ProtocolMode::from_fuzzy("adap").unwrap(), ProtocolMode::Adaptive);
-        assert_eq!(ProtocolMode::from_fuzzy("mcp-http").unwrap(), ProtocolMode::McpHttp);
-        assert_eq!(ProtocolMode::from_fuzzy("acp_h").unwrap(), ProtocolMode::AcpHttp);
+        assert_eq!(
+            ProtocolMode::from_fuzzy("adap").unwrap(),
+            ProtocolMode::Adaptive
+        );
+        assert_eq!(
+            ProtocolMode::from_fuzzy("mcp-http").unwrap(),
+            ProtocolMode::McpHttp
+        );
+        assert_eq!(
+            ProtocolMode::from_fuzzy("acp_h").unwrap(),
+            ProtocolMode::AcpHttp
+        );
     }
 
     #[test]

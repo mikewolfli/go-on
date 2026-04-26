@@ -2,22 +2,22 @@
   <div v-if="showQuickNav" style="position: fixed; right: 0; top: 0; height: 100vh; width: 80px; background-color: #f5f7fa; border-left: 1px solid #e5e7eb; display: flex; flex-direction: column; z-index: 900;">
     <button
       v-for="item in quickNavItems"
-      :key="item.path"
-      @click="navigate(item.path)"
+      :key="item.tabName"
+      @click="navigate(item.tabName)"
       :title="item.label"
       :style="{
         border: 'none',
-        background: activePath === item.path ? '#1a73e8' : 'transparent',
-        color: activePath === item.path ? '#fff' : '#666',
+        background: activeTab === item.tabName ? '#1a73e8' : 'transparent',
+        color: activeTab === item.tabName ? '#fff' : '#666',
         padding: '12px 8px',
         fontSize: '12px',
         cursor: 'pointer',
         textAlign: 'center',
-        borderLeft: activePath === item.path ? '3px solid #1a73e8' : 'none',
+        borderLeft: activeTab === item.tabName ? '3px solid #1a73e8' : 'none',
         transition: 'all 0.3s',
       }"
       @mouseenter="(e) => (e.target as HTMLElement).style.backgroundColor = '#e8f0fe'"
-      @mouseleave="(e) => (e.target as HTMLElement).style.backgroundColor = activePath === item.path ? '#1a73e8' : 'transparent'"
+      @mouseleave="(e) => (e.target as HTMLElement).style.backgroundColor = activeTab === item.tabName ? '#1a73e8' : 'transparent'"
     >
       <div style="font-size: 20px; margin-bottom: 4px">{{ item.icon }}</div>
       <div style="font-size: 10px; word-break: break-all">{{ item.shortLabel }}</div>
@@ -69,34 +69,43 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 
-const route = useRoute();
-const router = useRouter();
+const props = withDefaults(defineProps<{
+  activeTab?: string;
+}>(), {
+  activeTab: "",
+});
+
+const emit = defineEmits<{
+  (e: "navigate", tabName: string, subTab?: string): void;
+}>();
+
 const { t } = useI18n();
 
 const showQuickNav = ref(true);
-const activePath = computed(() => route.path);
 
 const quickNavItems = [
-  { path: "/dashboard", label: "Dashboard", shortLabel: "Dash", icon: "📊" },
-  { path: "/monitor", label: "Monitor", shortLabel: "Mon", icon: "📈" },
-  { path: "/ai-usage", label: "AI Usage", shortLabel: "AI", icon: "🤖" },
-  { path: "/health-breakdown", label: "Health", shortLabel: "Health", icon: "💚" },
-  { path: "/logs", label: "Logs", shortLabel: "Logs", icon: "📝" },
-  { path: "/setup", label: "Setup", shortLabel: "Setup", icon: "⚙️" },
-  { path: "/config", label: "Config", shortLabel: "Conf", icon: "🔧" },
-  { path: "/providers", label: "Providers", shortLabel: "Prov", icon: "🔑" },
-  { path: "/backend-ops", label: "Ops", shortLabel: "Ops", icon: "🛠️" },
-  { path: "/autotune", label: "AutoTune", shortLabel: "Tune", icon: "⚡" },
-  { path: "/workflow", label: "Workflow", shortLabel: "Flow", icon: "🔄" },
-  { path: "/security", label: "Security", shortLabel: "Sec", icon: "🔒" },
+  { tabName: "dashboard", label: "Dashboard", shortLabel: "Dash", icon: "📊", mainTab: "monitor", subTab: "dashboard" },
+  { tabName: "monitor", label: "Monitor", shortLabel: "Mon", icon: "📈", mainTab: "monitor", subTab: "monitor" },
+  { tabName: "ai-usage", label: "AI Usage", shortLabel: "AI", icon: "🤖", mainTab: "monitor", subTab: "ai-usage" },
+  { tabName: "health-breakdown", label: "Health", shortLabel: "Health", icon: "💚", mainTab: "monitor", subTab: "health" },
+  { tabName: "logs", label: "Logs", shortLabel: "Logs", icon: "📝", mainTab: "monitor", subTab: "logs" },
+  { tabName: "setup", label: "Setup", shortLabel: "Setup", icon: "⚙️", mainTab: "config", subTab: "setup" },
+  { tabName: "config", label: "Config", shortLabel: "Conf", icon: "🔧", mainTab: "config", subTab: "config" },
+  { tabName: "providers", label: "Providers", shortLabel: "Prov", icon: "🔑", mainTab: "config", subTab: "providers" },
+  { tabName: "backend-ops", label: "Ops", shortLabel: "Ops", icon: "🛠️", mainTab: "config", subTab: "backend-ops" },
+  { tabName: "autotune", label: "AutoTune", shortLabel: "Tune", icon: "⚡", mainTab: "config", subTab: "autotune" },
+  { tabName: "workflow", label: "Workflow", shortLabel: "Flow", icon: "🔄", mainTab: "config", subTab: "workflow" },
+  { tabName: "security", label: "Security", shortLabel: "Sec", icon: "🔒", mainTab: "config", subTab: "security" },
 ];
 
-function navigate(path: string) {
-  router.push(path);
+function navigate(tabName: string) {
+  const item = quickNavItems.find(i => i.tabName === tabName);
+  if (item) {
+    emit("navigate", item.mainTab, item.subTab);
+  }
 }
 
 function toggleQuickNav() {

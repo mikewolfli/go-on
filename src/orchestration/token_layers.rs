@@ -1,10 +1,10 @@
+#![allow(dead_code)]
+
 //! S7: Layered Token Trigger Gates
 //!
 //! Defines a chain of token-budget gate stages that are consulted before each
 //! agent turn.  Each gate can block execution, trigger a summary, or pass through.
 //! Gates are checked in-order; the first non-pass verdict wins.
-
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 
@@ -41,12 +41,20 @@ pub struct TokenLayersConfig {
     pub stages: Vec<TokenGateStage>,
 }
 
-fn default_enabled() -> bool { true }
-fn default_budget() -> u32 { 16000 }
+fn default_enabled() -> bool {
+    true
+}
+fn default_budget() -> u32 {
+    16000
+}
 
 impl Default for TokenLayersConfig {
     fn default() -> Self {
-        Self { enabled: true, total_budget: 16000, stages: Vec::new() }
+        Self {
+            enabled: true,
+            total_budget: 16000,
+            stages: Vec::new(),
+        }
     }
 }
 

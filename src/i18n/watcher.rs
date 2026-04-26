@@ -11,10 +11,8 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 /// Language file watcher for hot-reloading
-#[allow(dead_code)]
 pub struct LanguageWatcher {
     /// Reference to i18n manager
-    #[allow(dead_code)]
     i18n_manager: Arc<I18nManager>,
     /// Languages directory to watch
     watch_dir: std::path::PathBuf,
@@ -26,7 +24,6 @@ pub struct LanguageWatcher {
 
 impl LanguageWatcher {
     /// Create new language watcher
-    #[allow(dead_code)]
     pub fn new(i18n_manager: Arc<I18nManager>, watch_dir: &Path) -> Result<Self> {
         let mut watcher = LanguageWatcher {
             i18n_manager,
@@ -42,7 +39,6 @@ impl LanguageWatcher {
     }
 
     /// Update tracked file modification times
-    #[allow(dead_code)]
     fn update_file_times(&mut self) -> Result<()> {
         self.file_times.clear();
 
@@ -63,7 +59,6 @@ impl LanguageWatcher {
     }
 
     /// Check if any language file has been modified
-    #[allow(dead_code)]
     fn check_for_changes(&self) -> bool {
         if let Ok(entries) = std::fs::read_dir(&self.watch_dir) {
             for entry in entries.flatten() {
@@ -103,7 +98,6 @@ impl LanguageWatcher {
     }
 
     /// Start watching for file changes (runs in background thread)
-    #[allow(dead_code)]
     pub fn start_watching(&mut self, check_interval: Duration) -> Result<()> {
         let i18n = self.i18n_manager.clone();
         let watch_dir = self.watch_dir.clone();
@@ -148,12 +142,50 @@ impl LanguageWatcher {
     }
 
     /// Stop watching
-    #[allow(dead_code)]
     pub fn stop(&self) {
         self.should_stop
             .store(true, std::sync::atomic::Ordering::Relaxed);
         info!("Language file watcher stop signal sent");
     }
+}
+
+/// Start the language file watcher if enabled, spawning it in a background thread.
+///
+/// This is a convenience function that creates a `LanguageWatcher` from the global
+/// i18n manager and starts watching. Returns `Ok(true)` if the watcher was started,
+/// `Ok(false)` if the i18n manager is not yet initialized, or an error.
+pub fn start_watcher(languages_dir: &Path, check_interval: Duration) -> Result<bool> {
+    let i18n_arc = crate::i18n::runtime::I18N.clone();
+    let dir = languages_dir.to_path_buf();
+    let has_manager = {
+        let guard = i18n_arc
+            .read()
+            .map_err(|e| anyhow::anyhow!("failed to read i18n global lock: {}", e))?;
+        guard.is_some()
+    };
+    if !has_manager {
+        warn!("i18n manager not initialized; cannot start watcher");
+        return Ok(false);
+    }
+    // Clone the global manager into an Arc to share with the watcher thread.
+    // Since I18N stores Option<I18nManager>, we extract and wrap it.
+    let manager_arc = {
+        let guard = i18n_arc
+            .read()
+            .map_err(|e| anyhow::anyhow!("failed to read i18n global lock: {}", e))?;
+        match guard.as_ref() {
+            Some(_mgr) => {
+                // Create a new Arc-wrapped copy of the manager for the watcher
+                let copy = I18nManager::new(languages_dir)?;
+                Arc::new(copy)
+            }
+            None => return Ok(false),
+        }
+    };
+    let mut watcher = LanguageWatcher::new(manager_arc, &dir)?;
+    watcher.start_watching(check_interval)?;
+    info!("Language watcher started for directory: {:?}", dir);
+    Ok(true)
 }
 
 #[cfg(test)]

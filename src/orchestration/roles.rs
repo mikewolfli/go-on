@@ -42,7 +42,6 @@ impl AgentRole {
 
 /// Full definition for a custom agent role
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct RoleDefinition {
     pub name: String,
     pub description: String,
@@ -63,7 +62,6 @@ pub struct RoleDefinition {
 /// Runtime registry of custom role definitions.
 /// Populated from `[[agents.custom_roles]]` config at startup.
 #[derive(Debug, Default)]
-#[allow(dead_code)]
 pub struct RoleRegistry {
     roles: HashMap<String, RoleDefinition>,
 }
@@ -135,7 +133,6 @@ impl RoleRegistry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct RoleSpecification {
     pub role: AgentRole,
     pub tier: String, // "primary", "fallback"
@@ -146,7 +143,6 @@ pub struct RoleSpecification {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct HandoffContract {
     pub from_role: AgentRole,
     pub to_role: AgentRole,
@@ -158,7 +154,6 @@ pub struct HandoffContract {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct HandoffContext {
     pub contract: HandoffContract,
     pub project_state: serde_json::Value,
@@ -167,7 +162,6 @@ pub struct HandoffContext {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct RoleOutput {
     pub role: AgentRole,
     pub success: bool,
@@ -177,9 +171,7 @@ pub struct RoleOutput {
     pub artifacts: Vec<String>,
 }
 
-#[allow(dead_code)]
 pub struct RoleSpecifications;
-#[allow(dead_code)]
 impl RoleSpecifications {
     pub fn planner() -> RoleSpecification {
         RoleSpecification {

@@ -7,6 +7,7 @@
 
 use anyhow::Result;
 use serde_json::Value;
+use std::io::Read;
 use tokio::io::AsyncWriteExt;
 
 use crate::acp::server::AcpServer;
@@ -123,23 +124,28 @@ pub async fn flush_output(server: &AcpServer) -> Result<()> {
     Ok(())
 }
 
-/// Check if input is available
+/// Check if input is available without consuming any bytes.
 ///
-/// This function replaces the `AcpServer::has_input` method.
+/// Uses `spawn_blocking` to perform a brief blocking read with a timeout.
+/// This is a best-effort heuristic used for detecting ACP protocol mode.
+/// If the timeout fires, we conservatively return false (no input).
 pub async fn has_input() -> Result<bool> {
-    use tokio::io::AsyncReadExt;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        tokio::task::spawn_blocking(|| {
+            let mut buf = [0u8; 1];
+            match std::io::stdin().read(&mut buf) {
+                Ok(0) => false,  // EOF
+                Ok(_) => true,   // data available (consumed one byte)
+                Err(_) => false, // error
+            }
+        }),
+    )
+    .await;
 
-    let stdin = tokio::io::stdin();
-    let mut buf = [0u8; 1];
-
-    let mut stdin = stdin;
-    match stdin.read(&mut buf).await {
-        Ok(0) => Ok(false),
-        Ok(_) => {
-            // Put the byte back
-            // This is a simplified implementation
-            Ok(true)
-        }
-        Err(_) => Ok(false),
+    match result {
+        Ok(Ok(has_data)) => Ok(has_data),
+        Ok(Err(e)) => Err(anyhow::anyhow!("stdin poll task failed: {}", e)),
+        Err(_) => Ok(false), // timeout - no data
     }
 }

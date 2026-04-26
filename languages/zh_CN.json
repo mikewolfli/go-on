@@ -67,6 +67,7 @@
     "error.review_phase_required": "复杂 full_auto 模式需要审阅阶段: {error}",
     "error.config_reload_failed": "配置重载失败: {error}",
     "error.suggestion.invalid_protocol_mode": "请使用以下之一: adaptive, acp_stdio, acp_http, mcp_stdio, mcp_http",
+    "error.parse_error_with_detail": "解析错误: {error}",
     "error.all_agents_failed": "所有候选代理都失败了",
     "error.http_connection": "来自 {address} 的 HTTP 连接错误: {error}",
     "warning.failed_persist_checkpoint": "持久化检查点摘要失败: {error}",

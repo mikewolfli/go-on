@@ -15,6 +15,10 @@ jobs:
         uses: actions/checkout@v4
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+      - name: Create required SQLite databases for CI
+        run: |
+          touch acp_cache.sqlite3
+          touch acp_vector.sqlite3
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

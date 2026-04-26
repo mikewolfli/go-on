@@ -82,7 +82,6 @@ pub use crate::intelligence::adaptive_selector;
 pub use crate::intelligence::advanced_modules;
 pub use crate::intelligence::evaluation;
 pub use crate::intelligence::model_selector;
-pub use crate::intelligence::promotion;
 pub use crate::intelligence::quality_models;
 pub use crate::intelligence::reinforcement;
 pub use crate::intelligence::verification;
@@ -98,7 +97,6 @@ pub use crate::optimization::cost_optimizer;
 pub use crate::optimization::failure_prevention;
 pub use crate::optimization::reliability_optimizer;
 pub use crate::optimization::speed_optimizer;
-pub use crate::optimization::workflow_optimizer;
 pub use crate::orchestration::flow;
 pub use crate::orchestration::flow_with_models;
 pub use crate::orchestration::graph;
@@ -132,7 +130,6 @@ use crate::flow::FlowManager;
 use crate::i18n::runtime::{init_i18n, tf};
 use crate::mcp_server::{McpHttpServer, McpStdioServer};
 use crate::protocol::access_mode::{resolve_access_selection, TransportMode};
-use crate::shared::protocol_mode::{ProtocolMode, ProtocolModeError};
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
     persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger, RuntimeHealthcheckReport,
@@ -142,6 +139,7 @@ use crate::setup::{
     parse_setup_level, parse_setup_profile, recommendation_snapshot_for_config, LocalModelOptions,
     SetupOptions,
 };
+use crate::shared::protocol_mode::{ProtocolMode, ProtocolModeError};
 use crate::tool::ToolRegistry;
 use crate::vector::VectorStore;
 
@@ -1308,6 +1306,15 @@ async fn run() -> Result<()> {
             "i18n system initialized with language directory: {:?}",
             languages_dir
         );
+
+        // Start language file watcher for hot-reloading (best-effort)
+        if let Err(e) =
+            i18n_watcher::start_watcher(&languages_dir, std::time::Duration::from_secs(5))
+        {
+            warn!("Failed to start language file watcher: {}", e);
+        } else {
+            info!("Language file watcher started for hot-reloading");
+        }
     }
 
     // Handle secret management commands
@@ -1451,7 +1458,10 @@ async fn run() -> Result<()> {
             error_count, warn_count, healthy_count
         );
         if error_count > 0 {
-            println!("suggestion: run `go-on --validate-config -c {}`", config_path.display());
+            println!(
+                "suggestion: run `go-on --validate-config -c {}`",
+                config_path.display()
+            );
         } else {
             println!("suggestion: runtime baseline looks healthy");
         }

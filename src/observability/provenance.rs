@@ -64,8 +64,16 @@ impl ProvenanceLedger {
 
     /// Get all entries for a given task_id
     pub fn entries_for_task(&self, task_id: &str) -> Vec<ProvenanceEntry> {
-        self.inner.lock()
-            .map(|inner| inner.entries.iter().filter(|e| e.task_id == task_id).cloned().collect())
+        self.inner
+            .lock()
+            .map(|inner| {
+                inner
+                    .entries
+                    .iter()
+                    .filter(|e| e.task_id == task_id)
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -80,10 +88,15 @@ impl ProvenanceLedger {
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().map(|inner| inner.entries.len()).unwrap_or(0)
+        self.inner
+            .lock()
+            .map(|inner| inner.entries.len())
+            .unwrap_or(0)
     }
 
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Helper to create a provenance entry quickly
@@ -111,12 +124,23 @@ pub fn make_entry(
 }
 
 fn uuid_v4() -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    now_ms().hash(&mut h);
-    std::thread::current().id().hash(&mut h);
-    format!("{:016x}-{:016x}", h.finish(), h.finish().wrapping_mul(0x9e37_79b9_7f4a_7c15))
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let timestamp_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id() as u64;
+    let combined = timestamp_ns ^ (counter << 16) ^ (pid << 48);
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        (combined >> 32) as u32,
+        (combined >> 16) as u16 & 0xffff,
+        (combined & 0xffff) as u16,
+        (counter & 0xffff) as u16,
+        (timestamp_ns & 0xffff_ffff_ffff) as u64
+    )
 }
 
 fn now_ms() -> u64 {

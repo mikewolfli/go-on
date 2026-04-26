@@ -148,6 +148,7 @@
 import { ref, computed, onMounted, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
 import { ElMessage } from "element-plus";
+import DOMPurify from "dompurify";
 import { useRuntimeStore } from "../stores/runtime";
 import { defaultRuntimeBaseUrl } from "../services/protocolContract";
 
@@ -212,8 +213,15 @@ const messages = computed<ChatMessage[]>(() => {
 const isBackendRunning = computed(() => runtime.status.running);
 
 // ── Markdown (basic) ─────────────────────────────────────────────────────────
+function sanitizeHtml(html: string): string {
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ["strong", "em", "code", "br"],
+    ALLOWED_ATTR: [],
+  });
+}
+
 function renderMarkdown(text: string): string {
-  return text
+  const html = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -221,6 +229,7 @@ function renderMarkdown(text: string): string {
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
     .replace(/`(.+?)`/g, "<code>$1</code>")
     .replace(/\n/g, "<br/>");
+  return sanitizeHtml(html);
 }
 
 // ── Send ──────────────────────────────────────────────────────────────────────
@@ -244,9 +253,13 @@ async function sendMessage() {
 
   try {
     const baseUrl = defaultRuntimeBaseUrl;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 120000);
+
     const response = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
         model: selectedAgent.value === "default" ? "adaptive" : (selectedAgent.value ?? "adaptive"),
         messages: session.messages.map(m => ({ role: m.role, content: m.content })),
@@ -254,6 +267,7 @@ async function sendMessage() {
       }),
     });
 
+    window.clearTimeout(timeoutId);
     if (!response.ok) {
       const errText = await response.text();
       throw new Error(`HTTP ${response.status}: ${errText}`);

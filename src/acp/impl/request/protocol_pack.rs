@@ -96,7 +96,7 @@ fn record_mcp_tool_audit(name: &str, arguments: &Value, success: bool, reason: &
     record_tool_call_audit_with_protocol(name, arguments, success, reason, "acp_stdio");
 }
 
-pub(crate) fn record_tool_call_audit_with_protocol(
+pub fn record_tool_call_audit_with_protocol(
     name: &str,
     arguments: &Value,
     success: bool,

@@ -104,12 +104,7 @@
     "title": "Logs",
     "filter": "filter keyword"
   },
-  "common": {
-    "offlineMode": "Offline mode",
-    "offlineModeHint": "Live runtime data is unavailable. The GUI is showing the last known snapshot.",
-    "staleData": "Stale snapshot",
-    "staleDataHint": "Some panels are currently showing cached or previously fetched data instead of a fresh runtime response."
-  },
+
   "setup": {
     "title": "Setup Wizard Shortcut",
     "hint": "Run common setup commands without leaving GUI.",
@@ -287,6 +282,29 @@
     "customParams": "JSON params, e.g. {}",
     "run": "Run",
     "done": "RPC completed"
+  },
+  "backendStartup": {
+    "fileMissing": "Startup failed: backend executable not found, please re-select the path.",
+    "notAFile": "Startup failed: configured path is not an executable file.",
+    "permissionDenied": "Startup failed: permission denied. Please check file permissions or run as administrator.",
+    "exitedEarly": "Startup failed: backend process exited immediately. Please check logs and port usage.",
+    "spawnFailed": "Startup failed: unable to spawn backend process. Please check dependencies and runtime environment.",
+    "startupTimeout": "Startup timeout: backend process did not become ready within 12 seconds. Please check port, config, or dependencies.",
+    "autoLinked": "Automatically detected and linked backend in the local directory.",
+    "executableNotFound": "Backend executable \"go-on\" not found. Please select the directory containing go-on (it will look for root/bin/exec/backend automatically).\nAttempt {attempt}/{maxAttempts}",
+    "selectDirectoryTitle": "Select directory containing go-on",
+    "noDirectorySelected": "No directory selected ({attempt}/{maxAttempts}), please retry.",
+    "pathCannotBeEmpty": "Path cannot be empty, please specify again.",
+    "failedToResolveFromDir": "Failed to resolve backend from directory: {error}",
+    "pathInvalid": "Specified path is invalid or file does not exist, please specify again.",
+    "backendStarted": "Backend started.",
+    "maxRetriesReached": "Maximum retry attempts reached. Please manually set the backend path in the config page.",
+    "alreadyRunningAutoLinked": "Backend detected as already running, automatically linked and saved to config.",
+    "autoLinkFailed": "Backend detected as running, but auto-link failed: {reason}",
+    "monitorOnlyMode": "Currently in monitor-only mode: will not auto-start backend. Please start go-on manually.",
+    "selectDirectory": "Select Directory",
+    "configureBackendPath": "Configure Backend Path",
+    "startupPrefix": "Startup failed: {message}"
   },
   "healthBreakdown": {
     "title": "ACP Health Breakdown",
@@ -479,7 +497,9 @@
     "cancelled": "Cancelled",
     "refreshed": "Refreshed",
     "offlineMode": "Offline Mode",
-    "offlineModeHint": "Service is offline. Showing last known state."
+    "offlineModeHint": "Service is offline. Showing last known state.",
+    "staleData": "Stale snapshot",
+    "staleDataHint": "Some panels are currently showing cached or previously fetched data instead of a fresh runtime response."
   },
   "tab": {
     "monitor": "Monitor",

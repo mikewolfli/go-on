@@ -20,12 +20,12 @@ use anyhow::Result;
 /// Select mode runtime based on mode string
 pub fn select_mode_runtime(mode: &str) -> Box<dyn ModeRuntime> {
     match mode {
-        "ask" => Box::new(AskModeRuntime),
-        "edit" => Box::new(EditModeRuntime),
-        "agent" => Box::new(AgentModeRuntime),
-        "full_auto" => Box::new(FullAutoModeRuntime),
-        "safeguard" => Box::new(SafeGuardModeRuntime),
-        _ => Box::new(AskModeRuntime), // default to ask
+        "ask" => Box::new(AskModeRuntime::default()),
+        "edit" => Box::new(EditModeRuntime::default()),
+        "agent" => Box::new(AgentModeRuntime::default()),
+        "full_auto" => Box::new(FullAutoModeRuntime::default()),
+        "safeguard" => Box::new(SafeGuardModeRuntime::default()),
+        _ => Box::new(AskModeRuntime::default()), // default to ask
     }
 }
 

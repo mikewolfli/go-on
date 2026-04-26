@@ -4,7 +4,7 @@
 //! real-time verification, and knowledge graph integration to improve
 //! success rate by 35-50%.
 
-use crate::quality_models::QualityVerdict;
+use crate::quality_models::{QualitySignal, QualitySignalType, QualityVerdict};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -154,24 +154,280 @@ impl ReliabilityOptimizer {
         strategies
     }
 
-    /// Verify result and suggest repair if needed
+    /// Verify result using multiple signal analysis, confidence scoring,
+    /// and pattern-based verification for different content types.
+    ///
+    /// Runs a set of deterministic checks to produce a `QualityVerdict` based on:
+    /// - Error/failure signal detection (keyword-based)
+    /// - Content type classification (code vs text vs structured data)
+    /// - Pattern matching for structured outputs (JSON, test results, etc.)
+    /// - Confidence scoring based on signal strength
     pub fn verify_result(&self, result: &str) -> QualityVerdict {
         if !self.verification_enabled {
             return QualityVerdict::Valid;
         }
 
-        // Simple verification: check for error indicators
+        // Build signals from multiple analyses
+        let signals = self.analyze_signals(result);
+
+        // Aggregate signals into a verdict
+        if signals.is_empty() {
+            return QualityVerdict::Inconclusive;
+        }
+
+        let pass_count = signals.iter().filter(|s| s.passed).count();
+        let total_count = signals.len();
+        let pass_rate = pass_count as f64 / total_count as f64;
+
+        // Compute average confidence of passing signals
+        let avg_confidence: f32 = signals
+            .iter()
+            .filter(|s| s.passed)
+            .map(|s| s.confidence)
+            .sum::<f32>()
+            .max(1.0)
+            / pass_count.max(1) as f32;
+
+        // High-confidence pass
+        if pass_rate >= 0.8 && avg_confidence >= 0.7 {
+            return QualityVerdict::Valid;
+        }
+
+        // Medium-confidence pass with caveats
+        if pass_rate >= 0.6 && avg_confidence >= 0.5 {
+            return QualityVerdict::Inconclusive;
+        }
+
+        // Check for repair signals
+        let has_repair_indication = signals
+            .iter()
+            .any(|s| !s.passed && s.signal_type == QualitySignalType::RuntimeVerification);
+
+        if has_repair_indication && pass_rate >= 0.4 {
+            return QualityVerdict::RequiresRepair;
+        }
+
+        QualityVerdict::Invalid
+    }
+
+    /// Run multiple signal analyses on the result content.
+    ///
+    /// Detects the content type (code, text, structured data) and applies
+    /// appropriate verification patterns for each type.
+    fn analyze_signals(&self, result: &str) -> Vec<QualitySignal> {
+        let mut signals = Vec::new();
         let lowercase = result.to_lowercase();
-        if lowercase.contains("error") || lowercase.contains("failed") {
-            if lowercase.contains("retry") || lowercase.contains("fallback available") {
-                QualityVerdict::RequiresRepair
-            } else {
-                QualityVerdict::Invalid
-            }
-        } else if lowercase.contains("warning") {
-            QualityVerdict::Inconclusive
+
+        // Signal 1: Error/failure keyword detection
+        signals.push(self.check_error_keywords(&lowercase));
+
+        // Signal 2: Warning keyword detection (inconclusive, not failure)
+        signals.push(self.check_warning_keywords(&lowercase));
+
+        // Signal 3: Content-type specific validation
+        signals.push(self.check_content_type(result));
+
+        // Signal 4: Structured data validation (JSON, etc.)
+        signals.push(self.check_structured_data(result));
+
+        signals
+    }
+
+    /// Check for error/failure keyword patterns.
+    fn check_error_keywords(&self, lowercase: &str) -> QualitySignal {
+        // High-confidence error indicators
+        let hard_errors = [
+            "error",
+            "failed",
+            "exception",
+            "stack trace",
+            "traceback",
+            "syntaxerror",
+            "typeerror",
+            "runtimeerror",
+            "nullpointerexception",
+        ];
+
+        // Lower-confidence indicators (may indicate soft failures)
+        let soft_errors = [
+            "unexpected token",
+            "unexpected error",
+            "cannot find",
+            "not found",
+            "permission denied",
+            "connection refused",
+            "timeout",
+        ];
+
+        let has_hard_error = hard_errors.iter().any(|e| lowercase.contains(e));
+        let has_soft_error = soft_errors.iter().any(|e| lowercase.contains(e));
+
+        // Check for recovery/retry context
+        let is_recoverable = lowercase.contains("retry")
+            || lowercase.contains("fallback")
+            || lowercase.contains("recovered");
+
+        let passed = !has_hard_error && !(has_soft_error && !is_recoverable);
+
+        let confidence = if has_hard_error {
+            0.95
+        } else if has_soft_error {
+            0.6
         } else {
-            QualityVerdict::Valid
+            0.9
+        };
+
+        QualitySignal {
+            signal_type: QualitySignalType::RuntimeVerification,
+            passed,
+            confidence,
+            details: if !passed {
+                Some("error/failure keywords detected in output".to_string())
+            } else {
+                None
+            },
+        }
+    }
+
+    /// Check for warning keyword patterns.
+    fn check_warning_keywords(&self, lowercase: &str) -> QualitySignal {
+        let has_warning = lowercase.contains("warning") || lowercase.contains("deprecated");
+
+        QualitySignal {
+            signal_type: QualitySignalType::Policy,
+            passed: !has_warning,
+            confidence: if has_warning { 0.5 } else { 0.8 },
+            details: if has_warning {
+                Some("warning/deprecation keywords detected".to_string())
+            } else {
+                None
+            },
+        }
+    }
+
+    /// Validate content based on detected type (code vs text vs structured data).
+    fn check_content_type(&self, result: &str) -> QualitySignal {
+        let trimmed = result.trim();
+
+        // Empty or very short results are suspicious
+        if trimmed.is_empty() || trimmed.len() < 10 {
+            return QualitySignal {
+                signal_type: QualitySignalType::Syntax,
+                passed: false,
+                confidence: 0.8,
+                details: Some("result is too short or empty".to_string()),
+            };
+        }
+
+        // Detect code content (has language-specific markers)
+        let has_code_markers = trimmed.contains("fn ")
+            || trimmed.contains("impl ")
+            || trimmed.contains("def ")
+            || trimmed.contains("class ")
+            || trimmed.contains("pub ")
+            || trimmed.contains("let ")
+            || trimmed.contains("import ")
+            || trimmed.contains("use ");
+        // Detect structured data
+        let has_structured_markers = trimmed.starts_with('{')
+            || trimmed.starts_with('[')
+            || trimmed.starts_with('<')
+            || trimmed.contains("---");
+
+        if has_code_markers {
+            // Check for common code issues
+            let has_unbalanced_braces = {
+                let opens = trimmed.matches('{').count();
+                let closes = trimmed.matches('}').count();
+                opens != closes
+            };
+            let has_unbalanced_parens = {
+                let opens = trimmed.matches('(').count();
+                let closes = trimmed.matches(')').count();
+                opens != closes
+            };
+
+            let passed = !has_unbalanced_braces && !has_unbalanced_parens;
+            let mut details = Vec::new();
+            if has_unbalanced_braces {
+                details.push("unbalanced braces".to_string());
+            }
+            if has_unbalanced_parens {
+                details.push("unbalanced parentheses".to_string());
+            }
+
+            return QualitySignal {
+                signal_type: QualitySignalType::Syntax,
+                passed,
+                confidence: if passed { 0.8 } else { 0.7 },
+                details: if details.is_empty() {
+                    None
+                } else {
+                    Some(format!("code syntax issues: {}", details.join("; ")))
+                },
+            };
+        }
+
+        if has_structured_markers {
+            // Content appears to be structured data; validated separately
+            return QualitySignal {
+                signal_type: QualitySignalType::Syntax,
+                passed: true,
+                confidence: 0.6,
+                details: Some("content appears to be structured data".to_string()),
+            };
+        }
+
+        // Plain text content - check for completeness signals
+        let ends_properly = trimmed.ends_with('.')
+            || trimmed.ends_with('!')
+            || trimmed.ends_with('?')
+            || trimmed.ends_with('\n')
+            || trimmed.ends_with('`')
+            || trimmed.ends_with('"')
+            || trimmed.ends_with(')')
+            || trimmed.ends_with('}');
+
+        QualitySignal {
+            signal_type: QualitySignalType::Syntax,
+            passed: ends_properly,
+            confidence: if ends_properly { 0.5 } else { 0.3 },
+            details: if !ends_properly {
+                Some("text content appears truncated".to_string())
+            } else {
+                None
+            },
+        }
+    }
+
+    /// Validate structured data (JSON, YAML, etc.) for correctness.
+    fn check_structured_data(&self, result: &str) -> QualitySignal {
+        let trimmed = result.trim();
+
+        // Only validate if content appears to be JSON
+        if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
+            return QualitySignal {
+                signal_type: QualitySignalType::Lint,
+                passed: true,
+                confidence: 1.0,
+                details: None,
+            };
+        }
+
+        // Attempt JSON parsing
+        match serde_json::from_str::<serde_json::Value>(trimmed) {
+            Ok(_) => QualitySignal {
+                signal_type: QualitySignalType::Lint,
+                passed: true,
+                confidence: 0.95,
+                details: None,
+            },
+            Err(e) => QualitySignal {
+                signal_type: QualitySignalType::Lint,
+                passed: false,
+                confidence: 0.9,
+                details: Some(format!("invalid JSON structure: {}", e)),
+            },
         }
     }
 
@@ -252,6 +508,48 @@ mod tests {
     fn test_verification() {
         let optimizer = ReliabilityOptimizer::new();
         let result = optimizer.verify_result("Error occurred");
+        assert_eq!(result, QualityVerdict::Invalid);
+    }
+
+    #[test]
+    fn test_verification_valid_result_passes() {
+        let optimizer = ReliabilityOptimizer::new();
+        let result = optimizer.verify_result("Task completed successfully with all tests passing.");
+        assert_eq!(result, QualityVerdict::Valid);
+    }
+
+    #[test]
+    fn test_verification_empty_result_is_invalid() {
+        let optimizer = ReliabilityOptimizer::new();
+        let result = optimizer.verify_result("");
+        assert_eq!(result, QualityVerdict::Invalid);
+    }
+
+    #[test]
+    fn test_verification_json_valid() {
+        let optimizer = ReliabilityOptimizer::new();
+        let result = optimizer.verify_result(r#"{"status": "ok", "data": [1, 2, 3]}"#);
+        assert_eq!(result, QualityVerdict::Valid);
+    }
+
+    #[test]
+    fn test_verification_json_invalid() {
+        let optimizer = ReliabilityOptimizer::new();
+        let result = optimizer.verify_result(r#"{status: broken}"#);
+        assert_eq!(result, QualityVerdict::Invalid);
+    }
+
+    #[test]
+    fn test_verification_repair_indication() {
+        let optimizer = ReliabilityOptimizer::new();
+        let result = optimizer.verify_result("Error: something went wrong but retry may help");
+        assert_eq!(result, QualityVerdict::RequiresRepair);
+    }
+
+    #[test]
+    fn test_verification_code_with_unbalanced_braces() {
+        let optimizer = ReliabilityOptimizer::new();
+        let result = optimizer.verify_result("fn main() { let x = 1; ");
         assert_eq!(result, QualityVerdict::Invalid);
     }
 

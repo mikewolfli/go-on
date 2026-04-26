@@ -4,6 +4,10 @@
 //!   1. Identity Layer  — who is this agent and what are its invariants
 //!   2. Context Layer   — task snapshot, conversation history digest
 //!   3. Task Layer      — concrete instruction for this turn
+//!
+//! NOTE: This is an intentional architecture framework (S6, Phase 0-9).
+//! Kept as a stable extension point for future prompt layering integration.
+//! Main chain prompt assembly uses direct formatting in the Agent trait.
 
 #![allow(dead_code)]
 
@@ -26,10 +30,18 @@ pub struct PromptLayerConfig {
     pub enabled: bool,
 }
 
-fn default_identity_max_chars() -> usize { 400 }
-fn default_context_max_chars() -> usize { 800 }
-fn default_task_max_chars() -> usize { 4000 }
-fn default_enabled() -> bool { true }
+fn default_identity_max_chars() -> usize {
+    400
+}
+fn default_context_max_chars() -> usize {
+    800
+}
+fn default_task_max_chars() -> usize {
+    4000
+}
+fn default_enabled() -> bool {
+    true
+}
 
 impl Default for PromptLayerConfig {
     fn default() -> Self {
@@ -77,7 +89,14 @@ impl LayeredPromptBuilder {
         if !self.config.enabled {
             let task = layers.task.clone();
             let chars = task.len();
-            return (task, PromptBuildStats { task_chars: chars, total_chars: chars, ..Default::default() });
+            return (
+                task,
+                PromptBuildStats {
+                    task_chars: chars,
+                    total_chars: chars,
+                    ..Default::default()
+                },
+            );
         }
 
         let identity = truncate_str(&layers.identity, self.config.identity_max_chars);
@@ -88,9 +107,15 @@ impl LayeredPromptBuilder {
         let task_truncated = task.len() < layers.task.len();
 
         let mut parts = Vec::new();
-        if !identity.is_empty() { parts.push(identity.to_string()); }
-        if !context.is_empty() { parts.push(context.to_string()); }
-        if !task.is_empty() { parts.push(task.to_string()); }
+        if !identity.is_empty() {
+            parts.push(identity.to_string());
+        }
+        if !context.is_empty() {
+            parts.push(context.to_string());
+        }
+        if !task.is_empty() {
+            parts.push(task.to_string());
+        }
         let composed = parts.join("\n\n");
 
         let stats = PromptBuildStats {
@@ -113,7 +138,9 @@ fn truncate_str(s: &str, max_chars: usize) -> &str {
     // Truncate at char boundary
     let mut idx = 0;
     for (count, c) in s.chars().enumerate() {
-        if count >= max_chars { break; }
+        if count >= max_chars {
+            break;
+        }
         idx += c.len_utf8();
     }
     &s[..idx]

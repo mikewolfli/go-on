@@ -5,7 +5,6 @@ pub mod graph;
 pub mod mode;
 pub mod orchestrator;
 pub mod prompt_layers;
-#[allow(dead_code)]
 pub mod roles;
 pub mod scheduler;
 pub mod skill;

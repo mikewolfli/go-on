@@ -93,13 +93,13 @@
               {{ cacheStatus.text }}
             </el-descriptions-item>
             <el-descriptions-item :label="t('healthBreakdown.hitRate')">
-              {{ cacheStatus.hitRate }}%
+              {{ cacheStatus.hitRate !== null ? cacheStatus.hitRate + '%' : '-' }}
             </el-descriptions-item>
             <el-descriptions-item :label="t('healthBreakdown.size')">
-              {{ cacheStatus.size }}
+              {{ cacheStatus.size ?? '-' }}
             </el-descriptions-item>
             <el-descriptions-item :label="t('healthBreakdown.lastUpdate')">
-              {{ cacheStatus.lastUpdate }}
+              {{ cacheStatus.lastUpdate ?? '-' }}
             </el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -117,13 +117,13 @@
               {{ vectorStatus.text }}
             </el-descriptions-item>
             <el-descriptions-item :label="t('healthBreakdown.dimensions')">
-              {{ vectorStatus.dimensions }}
+              {{ vectorStatus.dimensions ?? '-' }}
             </el-descriptions-item>
             <el-descriptions-item :label="t('healthBreakdown.vectors')">
-              {{ vectorStatus.vectors }}
+              {{ vectorStatus.vectors ?? '-' }}
             </el-descriptions-item>
             <el-descriptions-item :label="t('healthBreakdown.lastUpdate')">
-              {{ vectorStatus.lastUpdate }}
+              {{ vectorStatus.lastUpdate ?? '-' }}
             </el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -153,7 +153,7 @@
               {{ breakerStatus.degradedCount }}
             </el-descriptions-item>
             <el-descriptions-item :label="t('healthBreakdown.recoveryAdvice')">
-              {{ breakerStatus.recoveryAdvice }}
+              {{ breakerStatus.recoveryAdvice ?? '-' }}
             </el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -201,14 +201,14 @@ const { t } = useI18n();
 const loading = ref(false);
 
 const liveness = reactive({
-  type: "warning",
+  type: "info",
   text: "unknown",
   ok: false,
   uptimeSeconds: 0,
 });
 
 const readiness = reactive({
-  type: "warning",
+  type: "info",
   text: "unknown",
   ok: false,
   generatedAt: 0,
@@ -217,9 +217,9 @@ const readiness = reactive({
 const cacheStatus = reactive({
   type: "success",
   text: "Healthy",
-  hitRate: 78,
-  size: "256MB",
-  lastUpdate: "2s ago",
+  hitRate: null as number | null,
+  size: null as string | null,
+  lastUpdate: null as string | null,
 });
 
 const lockStatus = reactive({
@@ -244,9 +244,9 @@ const timeoutStatus = reactive({
 const vectorStatus = reactive({
   type: "success",
   text: "Healthy",
-  dimensions: 1536,
-  vectors: 45230,
-  lastUpdate: "5s ago",
+  dimensions: null as number | null,
+  vectors: null as number | null,
+  lastUpdate: null as string | null,
 });
 
 const breakerStatus = reactive({
@@ -256,23 +256,23 @@ const breakerStatus = reactive({
   lastTrip: "Never",
   recoveryTime: 30,
   degradedCount: 0,
-  recoveryAdvice: "observe",
+  recoveryAdvice: null as string | null,
 });
 
 const rateLimiterStatus = reactive({
   type: "success",
   text: "Normal",
-  currentRate: 42,
-  limit: 100,
+  currentRate: 0,
+  limit: 0,
   rejectedCount: 0,
 });
 
 const overallScore = computed(() => {
   const scores = [
-    cacheStatus.type === "success" ? 100 : 50,
-    vectorStatus.type === "success" ? 100 : 50,
-    breakerStatus.type === "success" ? 100 : 50,
-    rateLimiterStatus.type === "success" ? 100 : 50,
+    cacheStatus.type === "success" ? 100 : cacheStatus.type === "warning" ? 70 : 40,
+    vectorStatus.type === "success" ? 100 : vectorStatus.type === "warning" ? 70 : 40,
+    breakerStatus.type === "success" ? 100 : breakerStatus.type === "warning" ? 70 : 40,
+    rateLimiterStatus.type === "success" ? 100 : rateLimiterStatus.type === "warning" ? 70 : 40,
     lockStatus.type === "success" ? 100 : lockStatus.type === "warning" ? 70 : 40,
     timeoutStatus.type === "success" ? 100 : timeoutStatus.type === "warning" ? 70 : 40,
   ];

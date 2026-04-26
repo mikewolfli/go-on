@@ -28,6 +28,7 @@ pub struct ToolInput {
     pub constraints: Option<String>,
     pub evidence: Option<String>,
     pub payload: serde_json::Value,
+    pub allowed_base_dir: Option<PathBuf>,
 }
 
 /// Tool output envelope
@@ -271,6 +272,35 @@ impl Default for ToolRegistry {
     }
 }
 
+/// Sanitize and validate a file path against the allowed base directory.
+///
+/// 1. Resolves the path relative to the current working directory.
+/// 2. Canonicalizes (or normalizes) the resolved path.
+/// 3. If `allowed_base_dir` is set, verifies the resolved path starts with it.
+fn sanitize_path(input: &ToolInput, path: &str) -> Result<PathBuf> {
+    let resolved = PathBuf::from(path);
+    let canonical = if resolved.is_absolute() {
+        std::fs::canonicalize(&resolved).unwrap_or_else(|_| resolved)
+    } else {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let joined = cwd.join(&resolved);
+        std::fs::canonicalize(&joined).unwrap_or_else(|_| joined)
+    };
+
+    if let Some(ref base_dir) = input.allowed_base_dir {
+        let base_canonical = std::fs::canonicalize(base_dir).unwrap_or_else(|_| base_dir.clone());
+        if !canonical.starts_with(&base_canonical) {
+            anyhow::bail!(
+                "path traversal denied: '{}' is outside the allowed base directory '{}'",
+                path,
+                base_dir.display()
+            );
+        }
+    }
+
+    Ok(canonical)
+}
+
 pub struct ReadFileTool;
 impl Tool for ReadFileTool {
     fn name(&self) -> &'static str {
@@ -280,13 +310,14 @@ impl Tool for ReadFileTool {
         let path = input.payload["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing path"))?;
-        let content = std::fs::read_to_string(path)?;
+        let validated_path = sanitize_path(input, path)?;
+        let content = std::fs::read_to_string(&validated_path)?;
         Ok(ToolOutput {
             success: true,
             result: Some(serde_json::json!({"content": content})),
             error: None,
             verification: Some("file_read".to_string()),
-            audit_log: Some(format!("Read file: {}", path)),
+            audit_log: Some(format!("Read file: {}", validated_path.display())),
             pua_report: Some(tool_execution_report("read_file", Some("file_read"))),
         })
     }
@@ -305,7 +336,7 @@ impl Tool for WriteFileTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing content"))?;
         let mode = input.payload["mode"].as_str().unwrap_or("overwrite");
-        let path_buf = PathBuf::from(path);
+        let path_buf = sanitize_path(input, path)?;
         if let Some(parent) = path_buf.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent)?;
@@ -333,7 +364,7 @@ impl Tool for WriteFileTool {
             result: Some(serde_json::json!({"path": path, "mode": mode})),
             error: None,
             verification: Some("file_written".to_string()),
-            audit_log: Some(format!("Wrote file: {} ({})", path, mode)),
+            audit_log: Some(format!("Wrote file: {} ({})", path_buf.display(), mode)),
             pua_report: Some(tool_execution_report("write_file", Some("file_written"))),
         })
     }
@@ -349,7 +380,7 @@ impl Tool for SearchFilesTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing pattern"))?;
         let directory = input.payload["directory"].as_str().unwrap_or(".");
-        let root = PathBuf::from(directory);
+        let root = sanitize_path(input, directory)?;
         let matcher = Pattern::new(pattern)?;
         let mut files = Vec::new();
         collect_matching_files(&root, &root, &matcher, &mut files)?;
@@ -361,7 +392,8 @@ impl Tool for SearchFilesTool {
             verification: Some("search_done".to_string()),
             audit_log: Some(format!(
                 "Search files completed for pattern '{}' in '{}'",
-                pattern, directory
+                pattern,
+                root.display()
             )),
             pua_report: Some(tool_execution_report("search_files", Some("search_done"))),
         })
@@ -437,6 +469,10 @@ impl Tool for ApplyPatchTool {
     }
 }
 
+const ALLOWED_TEST_COMMANDS: &[&str] = &[
+    "cargo", "npm", "yarn", "pnpm", "make", "go", "python", "pytest", "mvn", "gradle",
+];
+
 pub struct RunTestsTool;
 impl Tool for RunTestsTool {
     fn name(&self) -> &'static str {
@@ -444,6 +480,12 @@ impl Tool for RunTestsTool {
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let command_name = input.payload["command"].as_str().unwrap_or("cargo");
+        if !ALLOWED_TEST_COMMANDS.contains(&command_name) {
+            anyhow::bail!(
+                "command '{}' is not in the allowed test commands whitelist",
+                command_name
+            );
+        }
         let args = input.payload["args"]
             .as_array()
             .map(|values| {
@@ -593,6 +635,7 @@ mod tests {
             constraints: None,
             evidence: None,
             payload,
+            allowed_base_dir: None,
         }
     }
 

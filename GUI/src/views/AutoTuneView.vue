@@ -146,18 +146,7 @@ const tuningHistory = ref([
   { time: "10m ago", type: "info", adjustment: "cache_ttl: 60→300", result: "Hit rate +5%" },
 ]);
 
-const recommendations = reactive([
-  {
-    type: "success",
-    title: t("autoTune.recommendation1"),
-    description: t("autoTune.recommendationDesc1"),
-  },
-  {
-    type: "warning",
-    title: t("autoTune.recommendation2"),
-    description: t("autoTune.recommendationDesc2"),
-  },
-]);
+const recommendations = ref<Array<{ type: string; title: string; description: string }>>([]);
 
 const rawOutput = ref("");
 
@@ -180,6 +169,14 @@ async function refreshStatus() {
 
       if (data.history && Array.isArray(data.history)) {
         tuningHistory.value = data.history;
+      }
+
+      if (data.recommendations && Array.isArray(data.recommendations)) {
+        recommendations.value = data.recommendations.map((rec: any) => ({
+          type: rec.type || "info",
+          title: rec.title || "",
+          description: rec.description || "",
+        }));
       }
     }
 

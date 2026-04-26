@@ -1,9 +1,9 @@
+#![allow(dead_code)]
+
 //! S13: Node Reputation Tracker
 //!
 //! Maintains an EMA-based reliability score per agent/node.  Scores feed the
 //! router's ranking to downweight consistently failing agents.
-
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -51,10 +51,18 @@ pub struct ReputationConfig {
     pub exclusion_threshold: f64,
 }
 
-fn default_enabled() -> bool { true }
-fn default_alpha() -> f64 { 0.2 }
-fn default_degraded() -> f64 { 0.65 }
-fn default_excluded() -> f64 { 0.30 }
+fn default_enabled() -> bool {
+    true
+}
+fn default_alpha() -> f64 {
+    0.2
+}
+fn default_degraded() -> f64 {
+    0.65
+}
+fn default_excluded() -> f64 {
+    0.30
+}
 
 impl Default for ReputationConfig {
     fn default() -> Self {
@@ -76,11 +84,16 @@ pub struct ReputationStore {
 
 impl ReputationStore {
     pub fn new(config: ReputationConfig) -> Self {
-        Self { config, records: HashMap::new() }
+        Self {
+            config,
+            records: HashMap::new(),
+        }
     }
 
     fn record(&mut self, agent: &str) -> &mut ReputationRecord {
-        self.records.entry(agent.to_string()).or_insert_with(|| ReputationRecord::new(agent))
+        self.records
+            .entry(agent.to_string())
+            .or_insert_with(|| ReputationRecord::new(agent))
     }
 
     /// Record a task outcome for an agent
@@ -115,11 +128,17 @@ impl ReputationStore {
 
     pub fn snapshot(&self) -> Vec<ReputationRecord> {
         let mut v: Vec<_> = self.records.values().cloned().collect();
-        v.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        v.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         v
     }
 
-    pub fn tracked_agent_count(&self) -> usize { self.records.len() }
+    pub fn tracked_agent_count(&self) -> usize {
+        self.records.len()
+    }
 }
 
 fn now_ms() -> u64 {

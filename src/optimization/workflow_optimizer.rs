@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Workflow optimization extension interface.
 //!
 //! The runtime currently uses reinforcement-driven planning + execution-path

@@ -5,7 +5,9 @@ const child_process_1 = require("child_process");
 const vscode = require("vscode");
 const protocolContract_1 = require("./protocolContract");
 function asRecord(value) {
-    return typeof value === 'object' && value !== null ? value : {};
+    return typeof value === "object" && value !== null
+        ? value
+        : {};
 }
 class GoOnManager {
     /** Connect a VS Code OutputChannel so Go-On process output is visible to users. */
@@ -14,27 +16,28 @@ class GoOnManager {
     }
     classifyRpcErrorKind(message, data) {
         const details = asRecord(data);
-        const explicit = typeof details.kind === 'string' ? details.kind : undefined;
+        const explicit = typeof details.kind === "string" ? details.kind : undefined;
         if (explicit && explicit.trim().length > 0) {
             return explicit;
         }
-        const lower = String(message || '').toLowerCase();
-        if (lower.includes('pua'))
-            return 'PuaViolation';
-        if (lower.includes('budget'))
-            return 'BudgetExceeded';
-        if (lower.includes('hardening policy denied') || lower.includes('sandbox')) {
-            return 'SandboxBlocked';
+        const lower = String(message || "").toLowerCase();
+        if (lower.includes("pua"))
+            return "PuaViolation";
+        if (lower.includes("budget"))
+            return "BudgetExceeded";
+        if (lower.includes("hardening policy denied") ||
+            lower.includes("sandbox")) {
+            return "SandboxBlocked";
         }
-        return 'GeneralError';
+        return "GeneralError";
     }
     formatRpcError(error) {
         const kind = this.classifyRpcErrorKind(error.message, error.data);
         const errorData = asRecord(error.data);
-        const detail = typeof errorData.detail === 'string' ? errorData.detail : '';
+        const detail = typeof errorData.detail === "string" ? errorData.detail : "";
         const context = detail.includes(protocolContract_1.protocolContract.errors.requestErrorContextPrefix)
             ? protocolContract_1.protocolContract.errors.requestErrorContextPrefix
-            : 'none';
+            : "none";
         return `rpc_error:${error.code}:${kind}:${error.message} (context=${context})`;
     }
     constructor() {
@@ -48,37 +51,37 @@ class GoOnManager {
     }
     async start(configPath, executablePath, cwd, protocolMode) {
         if (this.process) {
-            throw new Error('Go-On is already running');
+            throw new Error("Go-On is already running");
         }
         return new Promise((resolve, reject) => {
             let resolved = false;
-            let stderrBuffer = '';
-            const args = ['--config', configPath, '--verbose'];
-            const normalizedProtocolMode = (0, protocolContract_1.normalizeProtocolMode)(protocolMode || 'from_config');
+            let stderrBuffer = "";
+            const args = ["--config", configPath, "--verbose"];
+            const normalizedProtocolMode = (0, protocolContract_1.normalizeProtocolMode)(protocolMode || "from_config");
             if (!(0, protocolContract_1.isAllowedProtocolMode)(normalizedProtocolMode)) {
-                reject(new Error(`Invalid protocol mode '${protocolMode}'. Allowed values: from_config, ${protocolContract_1.protocolContract.protocol.supportedModes.join(', ')}`));
+                reject(new Error(`Invalid protocol mode '${protocolMode}'. Allowed values: from_config, ${protocolContract_1.protocolContract.protocol.supportedModes.join(", ")}`));
                 return;
             }
-            if (normalizedProtocolMode !== 'from_config') {
-                args.push('--protocol-mode', normalizedProtocolMode);
+            if (normalizedProtocolMode !== "from_config") {
+                args.push("--protocol-mode", normalizedProtocolMode);
             }
             this.process = (0, child_process_1.spawn)(executablePath, args, {
                 cwd,
                 env: {
                     ...process.env,
-                    ...this.runtimeEnvOverrides
+                    ...this.runtimeEnvOverrides,
                 },
-                stdio: ['pipe', 'pipe', 'pipe']
+                stdio: ["pipe", "pipe", "pipe"],
             });
             let startupTimeout = setTimeout(() => {
                 this.process?.kill();
-                reject(new Error('Go-On startup timeout'));
+                reject(new Error("Go-On startup timeout"));
             }, 10000);
-            this.process.stdout?.on('data', (data) => {
+            this.process.stdout?.on("data", (data) => {
                 const output = data.toString();
                 this._outputChannel?.appendLine(output.trimEnd());
                 try {
-                    const lines = output.trim().split('\n');
+                    const lines = output.trim().split("\n");
                     for (const line of lines) {
                         if (!line.trim()) {
                             continue;
@@ -106,15 +109,15 @@ class GoOnManager {
                     resolve();
                 }
             });
-            this.process.stderr?.on('data', (data) => {
+            this.process.stderr?.on("data", (data) => {
                 const text = data.toString();
                 stderrBuffer += text;
                 if (stderrBuffer.length > 4000) {
                     stderrBuffer = stderrBuffer.slice(-4000);
                 }
-                this._outputChannel?.appendLine('[stderr] ' + text.trimEnd());
+                this._outputChannel?.appendLine("[stderr] " + text.trimEnd());
             });
-            this.process.on('close', (code) => {
+            this.process.on("close", (code) => {
                 this._outputChannel?.appendLine(`[exit] code ${code}`);
                 const failedBeforeStartup = !resolved;
                 this.process = null;
@@ -125,10 +128,10 @@ class GoOnManager {
                 }
                 if (failedBeforeStartup) {
                     const details = stderrBuffer.trim();
-                    reject(new Error(`Go-On exited before startup (code ${code}). ${details || 'No stderr output.'}`));
+                    reject(new Error(`Go-On exited before startup (code ${code}). ${details || "No stderr output."}`));
                 }
             });
-            this.process.on('error', (error) => {
+            this.process.on("error", (error) => {
                 this._outputChannel?.appendLine(`[error] ${error}`);
                 this.process = null;
                 reject(error);
@@ -148,12 +151,12 @@ class GoOnManager {
     setRuntimeEnvOverrides(overrides) {
         this.runtimeEnvOverrides = {
             ...this.runtimeEnvOverrides,
-            ...overrides
+            ...overrides,
         };
     }
     async sendRequest(method, params, options) {
         if (!this.process) {
-            throw new Error('Go-On is not running');
+            throw new Error("Go-On is not running");
         }
         if (!options?.skipProviderGuard && this.requiresAiProvider(method)) {
             const ready = await this.isAnyAiProviderReady();
@@ -164,40 +167,46 @@ class GoOnManager {
         }
         const id = ++this.requestId;
         const request = {
-            jsonrpc: '2.0',
+            jsonrpc: "2.0",
             id,
             method,
-            params
+            params,
         };
         return new Promise((resolve, reject) => {
             this.pendingRequests.set(id, { resolve, reject });
-            const requestStr = JSON.stringify(request) + '\n';
+            const requestStr = JSON.stringify(request) + "\n";
+            if (!this.process || !this.process.stdin) {
+                reject(new Error("Go-On process not available or stdin not connected"));
+                this.pendingRequests.delete(id);
+                return;
+            }
             this.process.stdin.write(requestStr);
             setTimeout(() => {
                 if (this.pendingRequests.has(id)) {
                     this.pendingRequests.delete(id);
-                    reject(new Error('Request timeout'));
+                    reject(new Error("Request timeout"));
                 }
             }, 30000);
         });
     }
     requiresAiProvider(method) {
         return new Set([
-            'chat',
-            'workflow.execute',
-            'task.plan',
-            'task.execute',
-            'learning.summary',
-            'primary_secondary.summary'
+            "chat",
+            "workflow.execute",
+            "task.plan",
+            "task.execute",
+            "learning.summary",
+            "primary_secondary.summary",
         ]).has(method);
     }
     async isAnyAiProviderReady() {
         const now = Date.now();
-        if (this.providerReadyCache && now - this.providerReadyCache.checkedAt < 5000) {
+        if (this.providerReadyCache &&
+            now - this.providerReadyCache.checkedAt < 5000) {
             return this.providerReadyCache.ready;
         }
         try {
-            const report = asRecord(await this.sendRequest('runtime.health', undefined, {
+            const report = asRecord(await this.sendRequest("runtime.health", undefined, {
                 skipProviderGuard: true,
             }));
             const componentsValue = Array.isArray(report.components)
@@ -207,7 +216,7 @@ class GoOnManager {
                     : [];
             const providerComponent = componentsValue
                 .map((component) => asRecord(component))
-                .find((component) => component.name === 'provider_dependencies');
+                .find((component) => component.name === "provider_dependencies");
             if (!providerComponent) {
                 this.providerReadyCache = { checkedAt: now, ready: false };
                 return false;
@@ -231,14 +240,14 @@ class GoOnManager {
         }
         this.lastWizardPromptAt = now;
         await vscode.window.showWarningMessage(protocolContract_1.protocolContract.errors.setupWizardPrompt);
-        await vscode.commands.executeCommand('go-on.openSettings');
+        await vscode.commands.executeCommand("go-on.openSettings");
     }
     updateStatus() {
         this.statusItems = [
-            new vscode.TreeItem(`Status: ${this.isRunning() ? 'Running' : 'Stopped'}`, vscode.TreeItemCollapsibleState.None)
+            new vscode.TreeItem(`Status: ${this.isRunning() ? "Running" : "Stopped"}`, vscode.TreeItemCollapsibleState.None),
         ];
-        vscode.commands.executeCommand('go-on-status.refresh');
-        vscode.commands.executeCommand('go-on.refreshStatusMonitor');
+        vscode.commands.executeCommand("go-on-status.refresh");
+        vscode.commands.executeCommand("go-on.refreshStatusMonitor");
     }
     getStatusItems() {
         return this.statusItems;

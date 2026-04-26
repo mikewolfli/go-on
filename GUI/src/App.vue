@@ -4,7 +4,10 @@
   </template>
   <template v-else>
     <OfflineIndicator />
-    <QuickNavigator />
+    <QuickNavigator
+      :activeTab="activeMainTab"
+      @navigate="handleQuickNavigate"
+    />
     <div v-if="monitorOnly" class="monitor-only-banner">
       ⚠️ {{ t("app.monitorOnlyBanner") }}
       <span class="monitor-only-config-link" @click="activeMainTab = 'config'">{{ t("app.monitorOnlyConfigLink") }}</span>
@@ -200,12 +203,23 @@ function handleGuideNavigate(payload: { mainTab: string; subTab?: string }) {
   }
 }
 
+function handleQuickNavigate(mainTab: string, subTab?: string) {
+  activeMainTab.value = mainTab;
+  if (mainTab === "monitor" && subTab) {
+    activeMonitorSubTab.value = subTab;
+  }
+  if (mainTab === "config" && subTab) {
+    activeConfigSubTab.value = subTab;
+  }
+}
+
 async function onSwitchToMiniWindow() {
   try {
     await switchToMiniWindow();
   } catch {
     // In browser preview fallback to in-window mini route.
-    window.location.hash = "#/mini";
+    const { useRouter } = await import("vue-router");
+    useRouter().push("/mini");
   }
 }
 

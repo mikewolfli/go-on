@@ -3,6 +3,9 @@
 //! Detects forked execution branches and enforces that shared mutable state
 //! is not accessed cross-fork.  Provides a lightweight join contract that
 //! validates outputs before merging.
+//!
+//! This module is an architectural framework for Phase 0-9 multi-branch
+//! conversation support. Kept as a stable extension point.
 
 #![allow(dead_code)]
 
@@ -49,10 +52,18 @@ pub struct ForkRegistry {
 }
 
 impl ForkRegistry {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Register a new fork branch
-    pub fn register(&mut self, parent_id: Option<&str>, task_id: &str, phase: &str, agent: &str) -> ForkSnapshot {
+    pub fn register(
+        &mut self,
+        parent_id: Option<&str>,
+        task_id: &str,
+        phase: &str,
+        agent: &str,
+    ) -> ForkSnapshot {
         let branch_id = format!("fork-{}", now_ms());
         let snap = ForkSnapshot {
             branch_id: branch_id.clone(),
@@ -62,7 +73,8 @@ impl ForkRegistry {
             agent: agent.to_string(),
             created_at_ms: now_ms(),
         };
-        self.branches.insert(branch_id, (snap.clone(), BranchStatus::Running));
+        self.branches
+            .insert(branch_id, (snap.clone(), BranchStatus::Running));
         snap
     }
 
@@ -81,7 +93,9 @@ impl ForkRegistry {
         let parent_id = snap.parent_id.clone();
 
         // Check whether any sibling branch is writing the same keys
-        let sibling_writes: Vec<String> = self.branches.iter()
+        let sibling_writes: Vec<String> = self
+            .branches
+            .iter()
             .filter(|(id, (s, st))| {
                 *id != branch_id
                     && s.parent_id == parent_id
@@ -115,11 +129,17 @@ impl ForkRegistry {
     }
 
     pub fn active_count(&self) -> usize {
-        self.branches.values().filter(|(_, s)| *s == BranchStatus::Running).count()
+        self.branches
+            .values()
+            .filter(|(_, s)| *s == BranchStatus::Running)
+            .count()
     }
 
     pub fn conflict_count(&self) -> usize {
-        self.branches.values().filter(|(_, s)| *s == BranchStatus::Conflict).count()
+        self.branches
+            .values()
+            .filter(|(_, s)| *s == BranchStatus::Conflict)
+            .count()
     }
 }
 

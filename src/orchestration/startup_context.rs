@@ -2,6 +2,9 @@
 //!
 //! Asynchronously loads project-level context (README, build commands, recent commits,
 //! style rules) once per process startup. Uses OnceLock to prevent redundant loads.
+//!
+//! NOTE: This is an intentional architecture framework (Phase 0-9).
+//! Kept as a stable extension point for future startup context integration.
 
 #![allow(dead_code)]
 
@@ -40,8 +43,12 @@ pub struct StartupContextConfig {
     pub recent_commits: usize,
 }
 
-fn default_readme_max_chars() -> usize { 2000 }
-fn default_recent_commits() -> usize { 5 }
+fn default_readme_max_chars() -> usize {
+    2000
+}
+fn default_recent_commits() -> usize {
+    5
+}
 
 impl Default for StartupContextConfig {
     fn default() -> Self {
@@ -59,10 +66,20 @@ pub async fn load(cfg: &StartupContextConfig) -> StartupContext {
         return StartupContext::default();
     }
 
-    let mut ctx = StartupContext { loaded: true, ..Default::default() };
+    let mut ctx = StartupContext {
+        loaded: true,
+        ..Default::default()
+    };
 
     // Detect code-repo fingerprint files
-    let fingerprint_files = ["Cargo.toml", "package.json", "go.mod", "pom.xml", "pyproject.toml", "setup.py"];
+    let fingerprint_files = [
+        "Cargo.toml",
+        "package.json",
+        "go.mod",
+        "pom.xml",
+        "pyproject.toml",
+        "setup.py",
+    ];
     let cwd = std::env::current_dir().unwrap_or_default();
     ctx.has_code_repo = fingerprint_files.iter().any(|f| cwd.join(f).exists());
 
@@ -115,7 +132,10 @@ pub async fn load(cfg: &StartupContextConfig) -> StartupContext {
 pub fn summary_text(ctx: &StartupContext) -> String {
     let mut parts = Vec::new();
     if !ctx.readme_excerpt.is_empty() {
-        parts.push(format!("README: {}", ctx.readme_excerpt.chars().take(400).collect::<String>()));
+        parts.push(format!(
+            "README: {}",
+            ctx.readme_excerpt.chars().take(400).collect::<String>()
+        ));
     }
     if !ctx.build_commands.is_empty() {
         parts.push(format!("Build: {}", ctx.build_commands.join(", ")));

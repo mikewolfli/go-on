@@ -156,24 +156,103 @@ pub fn init_telemetry(config: &TelemetryConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Initialize metrics collection
+/// Initialize metrics collection using OpenTelemetry.
+///
+/// Sets up a meter provider with stdout exporter for development/demo use.
+/// In production, configure an OTLP endpoint to send metrics to a backend
+/// such as Prometheus, Datadog, or New Relic.
 fn init_metrics(config: &TelemetryConfig) -> anyhow::Result<()> {
-    // Simplified metrics initialization
-    // In production, you would set up proper OpenTelemetry metrics
-    tracing::info!(
-        "Metrics collection configured for service: {} v{}",
-        config.service_name,
-        config.service_version
+    use opentelemetry::global;
+    use opentelemetry::KeyValue;
+    use opentelemetry_sdk::metrics::{MeterProviderBuilder, PeriodicReader};
+    use opentelemetry_sdk::resource::Resource;
+    use tracing::info;
+
+    // Build resource with service metadata
+    let resource = Resource::builder()
+        .with_attribute(KeyValue::new("service.name", config.service_name.clone()))
+        .with_attribute(KeyValue::new(
+            "service.version",
+            config.service_version.clone(),
+        ))
+        .build();
+
+    // Create a periodic reader with stdout exporter
+    let exporter = opentelemetry_stdout::MetricExporter::default();
+    let reader = PeriodicReader::builder(exporter)
+        .with_interval(std::time::Duration::from_secs(config.metrics_interval_secs))
+        .build();
+
+    // Create a meter provider with the configured reader
+    let meter_provider = MeterProviderBuilder::default()
+        .with_resource(resource)
+        .with_reader(reader)
+        .build();
+
+    // Set as the global meter provider
+    global::set_meter_provider(meter_provider);
+
+    info!(
+        service_name = config.service_name,
+        service_version = config.service_version,
+        interval_secs = config.metrics_interval_secs,
+        "OpenTelemetry metrics initialized with stdout exporter"
     );
-    tracing::info!("Metrics interval: {} seconds", config.metrics_interval_secs);
+
     Ok(())
 }
 
-/// Initialize distributed tracing
-fn init_tracing(_config: &TelemetryConfig) -> anyhow::Result<()> {
-    // Note: This requires an OTLP endpoint to be configured
-    // For now, we'll just log that tracing is enabled but not configured
-    warn!("distributed tracing is enabled but requires OTLP endpoint configuration");
+/// Initialize distributed tracing using OpenTelemetry OTLP.
+///
+/// Requires an OTLP-compatible endpoint (e.g., Jaeger, Grafana Tempo, Datadog Agent).
+/// If the endpoint is not configured via `OTEL_EXPORTER_OTLP_ENDPOINT` environment
+/// variable, tracing is initialized but logs a warning.
+fn init_tracing(config: &TelemetryConfig) -> anyhow::Result<()> {
+    use opentelemetry::global;
+    use opentelemetry::KeyValue;
+    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_sdk::resource::Resource;
+    // TracerProvider is constructed via SdkTracerProvider::builder()
+
+    use tracing::warn;
+
+    // Check if an OTLP endpoint is configured
+    let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+
+    if let Some(endpoint) = otlp_endpoint {
+        let resource = Resource::builder()
+            .with_attribute(KeyValue::new("service.name", config.service_name.clone()))
+            .with_attribute(KeyValue::new(
+                "service.version",
+                config.service_version.clone(),
+            ))
+            .build();
+
+        let exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(&endpoint)
+            .build()
+            .map_err(|e| anyhow::anyhow!("failed to build OTLP span exporter: {}", e))?;
+
+        let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_resource(resource)
+            .with_batch_exporter(exporter)
+            .build();
+
+        global::set_tracer_provider(tracer_provider);
+
+        info!(
+            service_name = config.service_name,
+            otlp_endpoint = endpoint,
+            "OpenTelemetry tracing initialized with OTLP exporter"
+        );
+    } else {
+        warn!(
+            "distributed tracing is enabled but OTEL_EXPORTER_OTLP_ENDPOINT is not set; \
+             traces will not be exported. Set the environment variable or disable tracing."
+        );
+    }
+
     Ok(())
 }
 

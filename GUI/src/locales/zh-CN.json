@@ -104,12 +104,6 @@
     "title": "日志",
     "filter": "过滤关键字"
   },
-  "common": {
-    "offlineMode": "离线模式",
-    "offlineModeHint": "当前无法拿到实时运行时数据，GUI 正在展示最后一次成功获取的快照。",
-    "staleData": "陈旧快照",
-    "staleDataHint": "部分面板当前展示的是缓存值或上一次成功拉取的数据，而不是最新的运行时响应。"
-  },
   "setup": {
     "title": "引导命令快捷入口",
     "hint": "无需离开 GUI 即可执行常用初始化与检查命令。",
@@ -333,6 +327,29 @@
     "timeoutTotal": "超时总数",
     "overallScore": "综合健康评分"
   },
+  "backendStartup": {
+    "fileMissing": "启动失败：找不到后端可执行文件，请重新选择路径。",
+    "notAFile": "启动失败：配置的路径不是可执行文件。",
+    "permissionDenied": "启动失败：权限不足。请检查文件权限或以管理员身份运行。",
+    "exitedEarly": "启动失败：后端进程立即退出。请检查日志和端口占用。",
+    "spawnFailed": "启动失败：无法启动后端进程。请检查依赖和运行时环境。",
+    "startupTimeout": "启动超时：后端进程未在 12 秒内就绪。请检查端口、配置或依赖。",
+    "autoLinked": "已自动检测并链接本地目录中的后端。",
+    "executableNotFound": "未找到后端可执行文件 \"go-on\"。请选择包含 go-on 的目录（将自动查找 root/bin/exec/backend）。\n第 {attempt}/{maxAttempts} 次",
+    "selectDirectoryTitle": "选择包含 go-on 的目录",
+    "noDirectorySelected": "未选择目录（第 {attempt}/{maxAttempts} 次），请重试。",
+    "pathCannotBeEmpty": "路径不能为空，请重新指定。",
+    "failedToResolveFromDir": "无法从目录解析后端：{error}",
+    "pathInvalid": "指定路径无效或文件不存在，请重新指定。",
+    "backendStarted": "后端已启动。",
+    "maxRetriesReached": "已达到最大重试次数。请在配置页面手动设置后端路径。",
+    "alreadyRunningAutoLinked": "检测到后端已在运行，已自动链接并保存到配置。",
+    "autoLinkFailed": "检测到后端正在运行，但自动链接失败：{reason}",
+    "monitorOnlyMode": "当前为仅监控模式：不会自动启动后端。请手动启动 go-on。",
+    "selectDirectory": "选择目录",
+    "configureBackendPath": "配置后端路径",
+    "startupPrefix": "启动失败：{message}"
+  },
   "autoTune": {
     "title": "自动调优可视化",
     "hint": "监控自动驾驶参数自动调优的效果与调整历史。",
@@ -479,7 +496,8 @@
     "cancelled": "已取消",
     "refreshed": "已刷新",
     "offlineMode": "离线模式",
-    "offlineModeHint": "服务离线中。显示最后已知的状态。"  },
+    "offlineModeHint": "服务离线中。显示最后已知的状态。"
+  },
   "tab": {
     "monitor": "监控",
     "config": "配置",
@@ -588,5 +606,6 @@
     "workflowAuto": "自动",
     "workflowDev": "开发",
     "workflowGeneral": "通用",
-    "workflowCustom": "自定义"  }
+    "workflowCustom": "自定义"
+  }
 }

@@ -98,7 +98,6 @@ impl FromStr for Language {
 
 /// Translation message
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct Message {
     /// Message key
     pub key: String,
@@ -196,7 +195,6 @@ impl I18nManager {
     }
 
     /// Set current language
-    #[allow(dead_code)]
     pub fn set_language(&self, language: Language) {
         let mut current = write_guard(&self.current_language, "i18n.current_language");
         *current = language;
@@ -256,7 +254,6 @@ impl I18nManager {
     }
 
     /// Hot reload language files (monitors for changes)
-    #[allow(dead_code)]
     pub fn hot_reload(&self) -> Result<()> {
         self.load_all_languages()?;
         info!("Languages reloaded");
@@ -264,7 +261,6 @@ impl I18nManager {
     }
 
     /// Export translatable keys (for translation work)
-    #[allow(dead_code)]
     pub fn export_keys(&self) -> Result<Vec<String>> {
         let translations = read_guard(&self.translations, "i18n.translations");
 
@@ -276,7 +272,6 @@ impl I18nManager {
     }
 
     /// Get available languages
-    #[allow(dead_code)]
     pub fn available_languages(&self) -> Vec<(Language, usize)> {
         let translations = read_guard(&self.translations, "i18n.translations");
 
@@ -330,7 +325,6 @@ pub fn tf(key: &str, args: &[(&str, &str)]) -> String {
 }
 
 /// Set global language
-#[allow(dead_code)]
 pub fn set_language(language: Language) {
     let i18n = read_guard(&I18N, "i18n.global");
     if let Some(manager) = i18n.as_ref() {
@@ -339,7 +333,6 @@ pub fn set_language(language: Language) {
 }
 
 /// Get current global language
-#[allow(dead_code)]
 pub fn current_language() -> Language {
     let i18n = read_guard(&I18N, "i18n.global");
     if let Some(manager) = i18n.as_ref() {

@@ -86,7 +86,8 @@ pub fn resolve_access_selection(
     configured_mode: Option<&str>,
     http_bind: Option<&str>,
 ) -> AccessSelection {
-    match canonical_configured_mode(configured_mode) {
+    let resolved = canonical_configured_mode(configured_mode);
+    match resolved {
         "adaptive" => {
             if has_http_bind(http_bind) {
                 AccessSelection {
@@ -140,7 +141,17 @@ pub fn resolve_access_selection(
             transport_strategy: "fixed_from_config",
             selection_reason: "configured_explicit_mode",
         },
-        _ => unreachable!(),
+        other => {
+            tracing::warn!(configured_mode = %other, "unknown protocol mode resolved, falling back to adaptive");
+            AccessSelection {
+                configured_mode: other.to_string(),
+                protocol_capability: ProtocolCapability::DualStack,
+                request_dispatch_mode: RequestDispatchMode::Auto,
+                startup_transport: TransportMode::Http,
+                transport_strategy: "fallback_unknown_mode",
+                selection_reason: "unknown_mode_fallback",
+            }
+        }
     }
 }
 

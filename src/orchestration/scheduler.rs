@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! S8+S9: Multi-priority Dual Scheduler
 //!
 //! Provides a scheduler that routes tasks into prioritized queues and a
@@ -7,12 +9,11 @@
 //! - `TaskScheduler`      — producer side (enqueue, priority assignment)
 //! - `WorkerScheduler`    — consumer side (dequeue, deadline enforcement)
 
-#![allow(dead_code)]
-
-use std::collections::BinaryHeap;
-use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
+use std::collections::BinaryHeap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 /// Task priority levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
@@ -20,9 +21,9 @@ use std::time::{Duration, Instant};
 pub enum TaskPriority {
     Background = 0,
     #[default]
-    Normal     = 1,
-    High       = 2,
-    Critical   = 3,
+    Normal = 1,
+    High = 2,
+    Critical = 3,
 }
 
 /// A scheduled task entry
@@ -36,7 +37,9 @@ pub struct ScheduledTask {
 
 // Ord impl so BinaryHeap gives highest priority first
 impl PartialEq for ScheduledTask {
-    fn eq(&self, other: &Self) -> bool { self.priority == other.priority }
+    fn eq(&self, other: &Self) -> bool {
+        self.priority == other.priority
+    }
 }
 impl Eq for ScheduledTask {}
 impl PartialOrd for ScheduledTask {
@@ -66,13 +69,24 @@ pub struct SchedulerConfig {
     pub worker_slots: usize,
 }
 
-fn default_enabled() -> bool { true }
-fn default_max_queue() -> usize { 1000 }
-fn default_workers() -> usize { 4 }
+fn default_enabled() -> bool {
+    true
+}
+fn default_max_queue() -> usize {
+    1000
+}
+fn default_workers() -> usize {
+    4
+}
 
 impl Default for SchedulerConfig {
     fn default() -> Self {
-        Self { enabled: true, max_queue_depth: 1000, default_deadline_seconds: 0, worker_slots: 4 }
+        Self {
+            enabled: true,
+            max_queue_depth: 1000,
+            default_deadline_seconds: 0,
+            worker_slots: 4,
+        }
     }
 }
 
@@ -84,17 +98,23 @@ pub struct TaskScheduler {
 
 impl TaskScheduler {
     pub fn new(config: SchedulerConfig) -> Self {
-        Self { config, queue: Arc::new(Mutex::new(BinaryHeap::new())) }
+        Self {
+            config,
+            queue: Arc::new(Mutex::new(BinaryHeap::new())),
+        }
     }
 
     /// Enqueue a task.  Returns Err if the queue is at capacity.
-    pub fn enqueue(&self, mut task: ScheduledTask) -> Result<(), &'static str> {
-        if !self.config.enabled { return Err("scheduler_disabled"); }
+    pub async fn enqueue(&self, mut task: ScheduledTask) -> Result<(), &'static str> {
+        if !self.config.enabled {
+            return Err("scheduler_disabled");
+        }
         // Set default deadline from config if not provided
         if task.deadline.is_none() && self.config.default_deadline_seconds > 0 {
-            task.deadline = Some(Instant::now() + Duration::from_secs(self.config.default_deadline_seconds));
+            task.deadline =
+                Some(Instant::now() + Duration::from_secs(self.config.default_deadline_seconds));
         }
-        let mut q = self.queue.lock().map_err(|_| "lock_poisoned")?;
+        let mut q = self.queue.lock().await;
         if self.config.max_queue_depth > 0 && q.len() >= self.config.max_queue_depth {
             return Err("queue_at_capacity");
         }
@@ -102,8 +122,8 @@ impl TaskScheduler {
         Ok(())
     }
 
-    pub fn queue_depth(&self) -> usize {
-        self.queue.lock().map(|q| q.len()).unwrap_or(0)
+    pub async fn queue_depth(&self) -> usize {
+        self.queue.lock().await.len()
     }
 
     pub fn queue_handle(&self) -> Arc<Mutex<BinaryHeap<ScheduledTask>>> {
@@ -130,14 +150,15 @@ impl WorkerScheduler {
 
     /// Dequeue the highest-priority non-expired task.
     /// Returns None when queue is empty or all workers are occupied.
-    pub fn dequeue(&self) -> Option<ScheduledTask> {
-        let active = self.active.lock().ok()?;
-        if *active >= self.config.worker_slots as u32 {
-            return None; // backpressure
+    pub async fn dequeue(&self) -> Option<ScheduledTask> {
+        {
+            let active = self.active.lock().await;
+            if *active >= self.config.worker_slots as u32 {
+                return None; // backpressure
+            }
         }
-        drop(active);
 
-        let mut q = self.queue.lock().ok()?;
+        let mut q = self.queue.lock().await;
         let now = Instant::now();
         // Drain expired tasks
         while let Some(top) = q.peek() {
@@ -150,18 +171,17 @@ impl WorkerScheduler {
             break;
         }
         let task = q.pop()?;
-        *self.active.lock().ok()? += 1;
+        *self.active.lock().await += 1;
         Some(task)
     }
 
     /// Signal that a worker has completed its task
-    pub fn complete(&self) {
-        if let Ok(mut active) = self.active.lock() {
-            *active = active.saturating_sub(1);
-        }
+    pub async fn complete(&self) {
+        let mut active = self.active.lock().await;
+        *active = active.saturating_sub(1);
     }
 
-    pub fn active_count(&self) -> u32 {
-        self.active.lock().map(|a| *a).unwrap_or(0)
+    pub async fn active_count(&self) -> u32 {
+        *self.active.lock().await
     }
 }

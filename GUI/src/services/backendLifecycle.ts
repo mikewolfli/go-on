@@ -16,24 +16,26 @@ export function classifyStartupError(error: unknown): string {
   const message = normalizeErrorMessage(error);
   const raw = message.toLowerCase();
   if (raw.includes("startup_error:file_missing")) {
-    return "启动失败：未找到后台可执行文件，请重新选择路径。";
+    return "Startup failed: backend executable not found, please re-select the path.";
   }
   if (raw.includes("startup_error:not_a_file")) {
-    return "启动失败：配置路径不是可执行文件。";
+    return "Startup failed: configured path is not an executable file.";
   }
   if (raw.includes("startup_error:permission_denied")) {
-    return "启动失败：没有执行权限，请检查文件权限或以管理员身份运行。";
+    return "Startup failed: permission denied. Please check file permissions or run as administrator.";
   }
   if (raw.includes("startup_error:exited_early")) {
-    return "启动失败：后台进程启动后立即退出，请检查日志和端口占用。";
+    return "Startup failed: backend process exited immediately. Please check logs and port usage.";
   }
   if (raw.includes("startup_error:spawn_failed")) {
-    return "启动失败：无法拉起后台进程，请检查依赖与运行环境。";
+    return "Startup failed: unable to spawn backend process. Please check dependencies and runtime environment.";
   }
-  return `启动失败：${message}`;
+  return `Startup failed: ${message}`;
 }
 
-export async function waitForBackendHealthy(timeoutMs = 12000): Promise<boolean> {
+export async function waitForBackendHealthy(
+  timeoutMs = 12000,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -61,7 +63,9 @@ export async function startBackendWithChecks() {
 
   const healthy = await waitForBackendHealthy();
   if (!healthy) {
-    throw new Error("启动超时：后台进程未在 12 秒内就绪，请检查端口、配置或依赖。");
+    throw new Error(
+      "Startup timeout: backend process did not become ready within 12 seconds. Please check port, config, or dependencies.",
+    );
   }
 }
 
@@ -69,7 +73,9 @@ export async function ensureBackendAndStart() {
   const localAuto = await autoConfigureBackendPath();
   if (localAuto.linked) {
     await startBackendWithChecks();
-    ElMessage.success("已在本地目录自动探测并关联后台。");
+    ElMessage.success(
+      "Automatically detected and linked backend in the local directory.",
+    );
     return;
   }
 
@@ -81,10 +87,10 @@ export async function ensureBackendAndStart() {
     }
 
     await ElMessageBox.alert(
-      `未找到后台程序 go-on，请选择包含 go-on 的目录（将自动查找 root/bin/exec/backend）。\n尝试 ${attempt}/${MAX_BACKEND_CONFIGURE_ATTEMPTS}`,
-      "配置后台路径",
+      `Backend executable "go-on" not found. Please select the directory containing go-on (it will look for root/bin/exec/backend automatically).\nAttempt ${attempt}/${MAX_BACKEND_CONFIGURE_ATTEMPTS}`,
+      "Configure Backend Path",
       {
-        confirmButtonText: "选择目录",
+        confirmButtonText: "Select Directory",
         closeOnClickModal: false,
         closeOnPressEscape: false,
       },
@@ -93,39 +99,47 @@ export async function ensureBackendAndStart() {
     const picked = await openDialog({
       multiple: false,
       directory: true,
-      title: "选择包含 go-on 的目录",
+      title: "Select directory containing go-on",
     });
 
     if (!picked) {
-      ElMessage.warning(`未选择目录（${attempt}/${MAX_BACKEND_CONFIGURE_ATTEMPTS}），请重试。`);
+      ElMessage.warning(
+        `No directory selected (${attempt}/${MAX_BACKEND_CONFIGURE_ATTEMPTS}), please retry.`,
+      );
       continue;
     }
 
     const inputPath = Array.isArray(picked) ? picked[0] : picked;
     if (!inputPath || !String(inputPath).trim()) {
-      ElMessage.warning("路径不能为空，请重新指定。");
+      ElMessage.warning("Path cannot be empty, please specify again.");
       continue;
     }
 
     try {
       await configureServiceByDirectory(String(inputPath));
     } catch (error) {
-      ElMessage.error(`目录解析后台失败：${normalizeErrorMessage(error)}`);
+      ElMessage.error(
+        `Failed to resolve backend from directory: ${normalizeErrorMessage(error)}`,
+      );
       continue;
     }
 
     const configuredExists = await backendExecutableExists();
     if (!configuredExists) {
-      ElMessage.error("指定路径无效或文件不存在，请重新指定。");
+      ElMessage.error(
+        "Specified path is invalid or file does not exist, please specify again.",
+      );
       continue;
     }
 
     await startBackendWithChecks();
-    ElMessage.success("后台已启动。");
+    ElMessage.success("Backend started.");
     return;
   }
 
-  throw new Error("已达到最大重试次数，请在配置页手动设置 backend 路径后重试。");
+  throw new Error(
+    "Maximum retry attempts reached. Please manually set the backend path in the config page.",
+  );
 }
 
 export async function bootstrapBackend(monitorOnly: boolean) {
@@ -139,17 +153,23 @@ export async function bootstrapBackend(monitorOnly: boolean) {
     if (health.ok) {
       const result = await autoConfigureBackendPath();
       if (result.linked) {
-        ElMessage.success("检测到后台已运行，已自动关联并写入配置。");
+        ElMessage.success(
+          "Backend detected as already running, automatically linked and saved to config.",
+        );
         return;
       }
-      ElMessage.warning(`检测到后台在运行，但自动关联失败：${result.reason}`);
+      ElMessage.warning(
+        `Backend detected as running, but auto-link failed: ${result.reason}`,
+      );
     }
   } catch {
     // Ignore health probe failures and continue to manual path flow.
   }
 
   if (monitorOnly) {
-    ElMessage.warning("当前为仅监控模式：不会自动启动后台，请先手动启动 go-on。");
+    ElMessage.warning(
+      "Currently in monitor-only mode: will not auto-start backend. Please start go-on manually.",
+    );
     return;
   }
 

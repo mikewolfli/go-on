@@ -37,7 +37,9 @@ pub struct CapabilityGraph {
 }
 
 impl CapabilityGraph {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn register_agent(&mut self, agent: &str, decls: Vec<CapabilityDecl>) {
         self.capabilities.insert(agent.to_string(), decls);
@@ -49,15 +51,21 @@ impl CapabilityGraph {
 
     /// Find the best handoff target from `from_agent` that supports `capability`.
     pub fn best_handoff(&self, from_agent: &str, capability: &str) -> Option<&str> {
-        self.edges.iter()
+        self.edges
+            .iter()
             .filter(|e| e.from_agent == from_agent && e.capability == capability)
-            .max_by(|a, b| a.weight.partial_cmp(&b.weight).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|a, b| {
+                a.weight
+                    .partial_cmp(&b.weight)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .map(|e| e.to_agent.as_str())
     }
 
     /// Return all agents that declare a given capability tag
     pub fn agents_with_tag(&self, tag: &str) -> Vec<&str> {
-        self.capabilities.iter()
+        self.capabilities
+            .iter()
             .filter(|(_, decls)| decls.iter().any(|d| d.tags.contains(&tag.to_string())))
             .map(|(agent, _)| agent.as_str())
             .collect()
@@ -65,15 +73,23 @@ impl CapabilityGraph {
 
     /// All declared capabilities for an agent
     pub fn agent_capabilities(&self, agent: &str) -> Vec<&CapabilityDecl> {
-        self.capabilities.get(agent).map(|v| v.iter().collect()).unwrap_or_default()
+        self.capabilities
+            .get(agent)
+            .map(|v| v.iter().collect())
+            .unwrap_or_default()
     }
 
-    pub fn total_agents(&self) -> usize { self.capabilities.len() }
-    pub fn total_edges(&self) -> usize { self.edges.len() }
+    pub fn total_agents(&self) -> usize {
+        self.capabilities.len()
+    }
+    pub fn total_edges(&self) -> usize {
+        self.edges.len()
+    }
 
     /// Set of all declared capability names across all agents
     pub fn all_capability_names(&self) -> HashSet<&str> {
-        self.capabilities.values()
+        self.capabilities
+            .values()
             .flat_map(|decls| decls.iter().map(|d| d.name.as_str()))
             .collect()
     }

@@ -1,456 +1,546 @@
-import * as vscode from 'vscode';
-import { spawn } from 'child_process';
-import { RuntimeManagerLike } from './managerTypes';
+import * as vscode from "vscode";
+import { spawn } from "child_process";
+import * as path from "path";
+import { RuntimeManagerLike } from "./managerTypes";
 
-type ChatRole = 'user' | 'assistant' | 'error';
+type ChatRole = "user" | "assistant" | "error";
 
 interface ChatMessage {
-    role: ChatRole;
-    content: string;
-    timestamp: string;
+  role: ChatRole;
+  content: string;
+  timestamp: string;
 }
 
 export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
-    public static readonly viewType = 'go-on-chat';
-    private _view?: vscode.WebviewView;
-    private _messageSubscription?: vscode.Disposable;
-    private readonly _executionOutput = vscode.window.createOutputChannel('Go-On Code Execution');
-    private _currentSession: string = 'default';
-    private _sessions: Map<string, ChatMessage[]> = new Map();
+  public static readonly viewType = "go-on-chat";
+  private _view?: vscode.WebviewView;
+  private _messageSubscription?: vscode.Disposable;
+  private readonly _executionOutput = vscode.window.createOutputChannel(
+    "Go-On Code Execution",
+  );
+  private _currentSession: string = "default";
+  private _sessions: Map<string, ChatMessage[]> = new Map();
 
-    private readonly manager: RuntimeManagerLike;
-    private readonly context: vscode.ExtensionContext;
-    private readonly onViewResolved?: () => void | Promise<void>;
+  private readonly manager: RuntimeManagerLike;
+  private readonly context: vscode.ExtensionContext;
+  private readonly onViewResolved?: () => void | Promise<void>;
 
-    constructor(
-        private readonly _extensionUri: vscode.Uri,
-        _manager: RuntimeManagerLike,
-        _context: vscode.ExtensionContext,
-        _onViewResolved?: () => void | Promise<void>
-    ) {
-        this.manager = _manager;
-        this.context = _context;
-        this.onViewResolved = _onViewResolved;
-        this._loadSessions();
-        this.context.subscriptions.push(new vscode.Disposable(() => this._messageSubscription?.dispose()));
+  constructor(
+    private readonly _extensionUri: vscode.Uri,
+    _manager: RuntimeManagerLike,
+    _context: vscode.ExtensionContext,
+    _onViewResolved?: () => void | Promise<void>,
+  ) {
+    this.manager = _manager;
+    this.context = _context;
+    this.onViewResolved = _onViewResolved;
+    this._loadSessions();
+    this.context.subscriptions.push(
+      new vscode.Disposable(() => this._messageSubscription?.dispose()),
+    );
+  }
+
+  private _loadSessions() {
+    const storedSessions = this.context.globalState.get<
+      Record<string, unknown>
+    >("go-on-chat-sessions", {});
+    for (const [sessionName, messages] of Object.entries(storedSessions)) {
+      this._sessions.set(
+        sessionName,
+        Array.isArray(messages) ? (messages as ChatMessage[]) : [],
+      );
     }
-
-    private _loadSessions() {
-        const storedSessions = this.context.globalState.get<Record<string, unknown>>('go-on-chat-sessions', {});
-        for (const [sessionName, messages] of Object.entries(storedSessions)) {
-            this._sessions.set(sessionName, Array.isArray(messages) ? (messages as ChatMessage[]) : []);
-        }
-        // Ensure default session exists
-        if (!this._sessions.has('default')) {
-            this._sessions.set('default', []);
-        }
+    // Ensure default session exists
+    if (!this._sessions.has("default")) {
+      this._sessions.set("default", []);
     }
+  }
 
-    private _saveSessions() {
-        const sessionsObject: Record<string, ChatMessage[]> = {};
-        for (const [sessionName, messages] of this._sessions) {
-            sessionsObject[sessionName] = messages;
-        }
-        this.context.globalState.update('go-on-chat-sessions', sessionsObject);
+  private _saveSessions() {
+    const sessionsObject: Record<string, ChatMessage[]> = {};
+    for (const [sessionName, messages] of this._sessions) {
+      sessionsObject[sessionName] = messages;
     }
+    this.context.globalState.update("go-on-chat-sessions", sessionsObject);
+  }
 
-    private _getCurrentSessionMessages(): ChatMessage[] {
-        return this._sessions.get(this._currentSession) || [];
+  private _getCurrentSessionMessages(): ChatMessage[] {
+    return this._sessions.get(this._currentSession) || [];
+  }
+
+  private _addMessageToCurrentSession(message: ChatMessage) {
+    const messages = this._getCurrentSessionMessages();
+    messages.push(message);
+    this._sessions.set(this._currentSession, messages);
+    this._saveSessions();
+  }
+
+  private _extractResponseText(result: unknown): string | undefined {
+    if (!result || typeof result !== "object") {
+      return undefined;
     }
+    const candidate = (result as { response?: unknown }).response;
+    return typeof candidate === "string" ? candidate : undefined;
+  }
 
-    private _addMessageToCurrentSession(message: ChatMessage) {
-        const messages = this._getCurrentSessionMessages();
-        messages.push(message);
-        this._sessions.set(this._currentSession, messages);
-        this._saveSessions();
-    }
+  private _getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
 
-    private _extractResponseText(result: unknown): string | undefined {
-        if (!result || typeof result !== 'object') {
-            return undefined;
-        }
-        const candidate = (result as { response?: unknown }).response;
-        return typeof candidate === 'string' ? candidate : undefined;
-    }
+  public resolveWebviewView(
+    webviewView: vscode.WebviewView,
+    _context: vscode.WebviewViewResolveContext,
+    _token: vscode.CancellationToken,
+  ) {
+    this._view = webviewView;
 
-    private _getErrorMessage(error: unknown): string {
-        return error instanceof Error ? error.message : String(error);
-    }
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this._extensionUri],
+    };
 
-    public resolveWebviewView(
-        webviewView: vscode.WebviewView,
-        _context: vscode.WebviewViewResolveContext,
-        _token: vscode.CancellationToken,
-    ) {
-        this._view = webviewView;
+    webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
-        webviewView.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [
-                this._extensionUri
-            ]
-        };
-
-        webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
-
-        if (this.onViewResolved) {
-            Promise.resolve(this.onViewResolved()).catch((error) => {
-                void vscode.window.showWarningMessage(`Go-On: Failed to initialize runtime: ${error instanceof Error ? error.message : String(error)}`);
-            });
-        }
-
-        this._messageSubscription?.dispose();
-        this._messageSubscription = webviewView.webview.onDidReceiveMessage(
-            async (message) => {
-                switch (message.type) {
-                    case 'sendMessage':
-                        await this._handleSendMessage(message.text);
-                        break;
-                    case 'clearChat':
-                        this._clearCurrentSession();
-                        break;
-                    case 'exportChat':
-                        this._exportCurrentSession();
-                        break;
-                    case 'runCode':
-                        await this._handleRunCode(message.code, message.language);
-                        break;
-                    case 'newSession':
-                        this._createNewSession(message.sessionName);
-                        break;
-                    case 'switchSession':
-                        this._switchSession(message.sessionName);
-                        break;
-                    case 'getSessions':
-                        this._sendSessionsList();
-                        break;
-                }
-            },
-            undefined
+    if (this.onViewResolved) {
+      Promise.resolve(this.onViewResolved()).catch((error) => {
+        void vscode.window.showWarningMessage(
+          `Go-On: Failed to initialize runtime: ${error instanceof Error ? error.message : String(error)}`,
         );
+      });
     }
 
-    private async _handleSendMessage(text: string) {
-        if (!this._view) return;
-
-        try {
-            // Add user message to current session
-            const userMessage = {
-                role: 'user',
-                content: text,
-                timestamp: new Date().toISOString()
-            } as ChatMessage;
-            this._addMessageToCurrentSession(userMessage);
-
-            // Send message to UI
-            this._view.webview.postMessage({
-                type: 'addMessage',
-                ...userMessage
-            });
-
-            // Send to Go-On
-            const result = await this.manager.sendRequest('chat', {
-                messages: [{ role: 'user', content: text }]
-            });
-            const responseText = this._extractResponseText(result);
-
-            // Add response to current session
-            const assistantMessage = {
-                role: 'assistant',
-                content: responseText || JSON.stringify(result),
-                timestamp: new Date().toISOString()
-            } as ChatMessage;
-            this._addMessageToCurrentSession(assistantMessage);
-
-            // Send response to UI
-            this._view.webview.postMessage({
-                type: 'addMessage',
-                ...assistantMessage
-            });
-        } catch (error: unknown) {
-            const errorMessage = {
-                role: 'error',
-                content: `Error: ${this._getErrorMessage(error)}`,
-                timestamp: new Date().toISOString()
-            } as ChatMessage;
-            this._addMessageToCurrentSession(errorMessage);
-
-            this._view.webview.postMessage({
-                type: 'addMessage',
-                ...errorMessage
-            });
+    this._messageSubscription?.dispose();
+    this._messageSubscription = webviewView.webview.onDidReceiveMessage(
+      async (message) => {
+        switch (message.type) {
+          case "sendMessage":
+            await this._handleSendMessage(message.text);
+            break;
+          case "clearChat":
+            this._clearCurrentSession();
+            break;
+          case "exportChat":
+            this._exportCurrentSession();
+            break;
+          case "runCode":
+            await this._handleRunCode(message.code, message.language);
+            break;
+          case "newSession":
+            this._createNewSession(message.sessionName);
+            break;
+          case "switchSession":
+            this._switchSession(message.sessionName);
+            break;
+          case "getSessions":
+            this._sendSessionsList();
+            break;
         }
+      },
+      undefined,
+    );
+  }
+
+  private async _handleSendMessage(text: string) {
+    if (!this._view) return;
+
+    try {
+      // Add user message to current session
+      const userMessage = {
+        role: "user",
+        content: text,
+        timestamp: new Date().toISOString(),
+      } as ChatMessage;
+      this._addMessageToCurrentSession(userMessage);
+
+      // Send message to UI
+      this._view.webview.postMessage({
+        type: "addMessage",
+        ...userMessage,
+      });
+
+      // Send to Go-On
+      const result = await this.manager.sendRequest("chat", {
+        messages: [{ role: "user", content: text }],
+      });
+      const responseText = this._extractResponseText(result);
+
+      // Add response to current session
+      const assistantMessage = {
+        role: "assistant",
+        content: responseText || JSON.stringify(result),
+        timestamp: new Date().toISOString(),
+      } as ChatMessage;
+      this._addMessageToCurrentSession(assistantMessage);
+
+      // Send response to UI
+      this._view.webview.postMessage({
+        type: "addMessage",
+        ...assistantMessage,
+      });
+    } catch (error: unknown) {
+      const errorMessage = {
+        role: "error",
+        content: `Error: ${this._getErrorMessage(error)}`,
+        timestamp: new Date().toISOString(),
+      } as ChatMessage;
+      this._addMessageToCurrentSession(errorMessage);
+
+      this._view.webview.postMessage({
+        type: "addMessage",
+        ...errorMessage,
+      });
     }
+  }
 
-    public postMessage(message: unknown) {
-        this._view?.webview.postMessage(message);
-    }
+  public postMessage(message: unknown) {
+    this._view?.webview.postMessage(message);
+  }
 
-    public createNewSession(sessionName: string) {
-        this.postMessage({
-            type: 'newSession',
-            sessionName
-        });
-    }
+  public createNewSession(sessionName: string) {
+    this.postMessage({
+      type: "newSession",
+      sessionName,
+    });
+  }
 
-    public switchSession(sessionName: string) {
-        this.postMessage({
-            type: 'switchSession',
-            sessionName
-        });
-    }
+  public switchSession(sessionName: string) {
+    this.postMessage({
+      type: "switchSession",
+      sessionName,
+    });
+  }
 
-    private async _handleRunCode(code: string, language: string) {
-        if (!this._view) return;
+  private async _handleRunCode(code: string, language: string) {
+    if (!this._view) return;
 
-        try {
-            let result = '';
+    try {
+      let result = "";
 
-            const approved = await this._confirmCodeExecution(code, language);
-            if (!approved) {
-                this._executionOutput.appendLine(`[blocked] ${new Date().toISOString()} language=${language}`);
-                this._view.webview.postMessage({
-                    type: 'codeResult',
-                    result: 'Execution canceled by user.'
-                });
-                return;
-            }
-
-            switch (language) {
-                case 'javascript':
-                    try {
-                        const blockedReason = this._validateJavaScriptSnippet(code);
-                        if (blockedReason) {
-                            result = `Blocked by safety policy: ${blockedReason}`;
-                            break;
-                        }
-
-                        // Keep compatibility with current behavior but guard dangerous globals.
-                        result = String(new Function('return (' + code + ')()')());
-                    } catch (e: unknown) {
-                        result = `Error: ${this._getErrorMessage(e)}`;
-                    }
-                    break;
-                case 'python':
-                    result = await this._executePythonCode(code);
-                    break;
-                case 'bash':
-                case 'shell':
-                    result = await this._executeShellCode(code);
-                    break;
-                default:
-                    result = `Code execution not supported for ${language}`;
-            }
-
-            this._executionOutput.appendLine(`[exec] ${new Date().toISOString()} language=${language}`);
-            this._executionOutput.appendLine(`[code] ${code.substring(0, 240)}`);
-            this._executionOutput.appendLine(`[result] ${result.substring(0, 240)}`);
-
-            this._view.webview.postMessage({
-                type: 'codeResult',
-                result: result
-            });
-        } catch (error: unknown) {
-            this._view.webview.postMessage({
-                type: 'codeResult',
-                result: `Execution failed: ${this._getErrorMessage(error)}`
-            });
-            this._executionOutput.appendLine(`[error] ${new Date().toISOString()} ${this._getErrorMessage(error)}`);
-        }
-    }
-
-    private async _confirmCodeExecution(code: string, language: string): Promise<boolean> {
-        const preview = code.trim().replace(/\s+/g, ' ').slice(0, 120);
-        const executeOption = 'Execute';
-        const cancelOption = 'Cancel';
-        const choice = await vscode.window.showWarningMessage(
-            `Go-On is about to execute local ${language} code. Preview: ${preview || '<empty>'}`,
-            { modal: true },
-            executeOption,
-            cancelOption
+      const approved = await this._confirmCodeExecution(code, language);
+      if (!approved) {
+        this._executionOutput.appendLine(
+          `[blocked] ${new Date().toISOString()} language=${language}`,
         );
+        this._view.webview.postMessage({
+          type: "codeResult",
+          result: "Execution canceled by user.",
+        });
+        return;
+      }
 
-        return choice === executeOption;
-    }
-
-    private _validateJavaScriptSnippet(code: string): string | null {
-        const dangerousPatterns: Array<{ pattern: RegExp; reason: string }> = [
-            { pattern: /\brequire\s*\(/i, reason: 'require() is not allowed.' },
-            { pattern: /\bimport\s+/i, reason: 'import is not allowed.' },
-            { pattern: /\bprocess\b/i, reason: 'process access is not allowed.' },
-            { pattern: /\bglobal\b/i, reason: 'global access is not allowed.' },
-            { pattern: /\beval\s*\(/i, reason: 'eval() is not allowed.' },
-            { pattern: /\bFunction\s*\(/i, reason: 'nested Function constructor is not allowed.' },
-            { pattern: /\bchild_process\b/i, reason: 'child process modules are not allowed.' }
-        ];
-
-        for (const { pattern, reason } of dangerousPatterns) {
-            if (pattern.test(code)) {
-                return reason;
+      switch (language) {
+        case "javascript":
+          try {
+            const blockedReason = this._validateJavaScriptSnippet(code);
+            if (blockedReason) {
+              result = `Blocked by safety policy: ${blockedReason}`;
+              break;
             }
+
+            // Keep compatibility with current behavior but guard dangerous globals.
+            result = String(new Function("return (" + code + ")()")());
+          } catch (e: unknown) {
+            result = `Error: ${this._getErrorMessage(e)}`;
+          }
+          break;
+        case "python":
+          result = await this._executePythonCode(code);
+          break;
+        case "bash":
+        case "shell":
+          result = await this._executeShellCode(code);
+          break;
+        default:
+          result = `Code execution not supported for ${language}`;
+      }
+
+      this._executionOutput.appendLine(
+        `[exec] ${new Date().toISOString()} language=${language}`,
+      );
+      this._executionOutput.appendLine(`[code] ${code.substring(0, 240)}`);
+      this._executionOutput.appendLine(`[result] ${result.substring(0, 240)}`);
+
+      this._view.webview.postMessage({
+        type: "codeResult",
+        result: result,
+      });
+    } catch (error: unknown) {
+      this._view.webview.postMessage({
+        type: "codeResult",
+        result: `Execution failed: ${this._getErrorMessage(error)}`,
+      });
+      this._executionOutput.appendLine(
+        `[error] ${new Date().toISOString()} ${this._getErrorMessage(error)}`,
+      );
+    }
+  }
+
+  private async _confirmCodeExecution(
+    code: string,
+    language: string,
+  ): Promise<boolean> {
+    const preview = code.trim().replace(/\s+/g, " ").slice(0, 120);
+    const executeOption = "Execute";
+    const cancelOption = "Cancel";
+    const choice = await vscode.window.showWarningMessage(
+      `Go-On is about to execute local ${language} code. Preview: ${preview || "<empty>"}`,
+      { modal: true },
+      executeOption,
+      cancelOption,
+    );
+
+    return choice === executeOption;
+  }
+
+  private _validateJavaScriptSnippet(code: string): string | null {
+    const dangerousPatterns: Array<{ pattern: RegExp; reason: string }> = [
+      { pattern: /\brequire\s*\(/i, reason: "require() is not allowed." },
+      { pattern: /\bimport\s+/i, reason: "import is not allowed." },
+      { pattern: /\bprocess\b/i, reason: "process access is not allowed." },
+      { pattern: /\bglobal\b/i, reason: "global access is not allowed." },
+      { pattern: /\beval\s*\(/i, reason: "eval() is not allowed." },
+      {
+        pattern: /\bFunction\s*\(/i,
+        reason: "nested Function constructor is not allowed.",
+      },
+      {
+        pattern: /\bchild_process\b/i,
+        reason: "child process modules are not allowed.",
+      },
+      { pattern: /\bfs\b/i, reason: "filesystem access is not allowed." },
+      { pattern: /\bexec\s*\(/i, reason: "exec() is not allowed." },
+      { pattern: /\bspawn\s*\(/i, reason: "spawn() is not allowed." },
+      { pattern: /\bfork\s*\(/i, reason: "fork() is not allowed." },
+      { pattern: /\b__dirname\b/i, reason: "__dirname access is not allowed." },
+      {
+        pattern: /\b__filename\b/i,
+        reason: "__filename access is not allowed.",
+      },
+      { pattern: /\bmodule\b/i, reason: "module access is not allowed." },
+      { pattern: /\bexports\b/i, reason: "exports access is not allowed." },
+      { pattern: /\bReflect\b/i, reason: "Reflect API is not allowed." },
+      { pattern: /\bProxy\b/i, reason: "Proxy is not allowed." },
+    ];
+
+    for (const { pattern, reason } of dangerousPatterns) {
+      if (pattern.test(code)) {
+        return reason;
+      }
+    }
+
+    return null;
+  }
+
+  private _getExecutionConfig() {
+    const config = vscode.workspace.getConfiguration("go-on");
+    return {
+      pythonPath: config.get<string>("pythonPath", "python"),
+      executionTimeout: config.get<number>("execution.timeout", 30000),
+      allowedShellPaths: config.get<string[]>(
+        "execution.allowedShellPaths",
+        [],
+      ),
+    };
+  }
+
+  private _isPathAllowed(shellPath: string): boolean {
+    const { allowedShellPaths } = this._getExecutionConfig();
+    if (allowedShellPaths.length === 0) {
+      return true;
+    }
+    return allowedShellPaths.some((allowed) => shellPath.startsWith(allowed));
+  }
+
+  private async _executePythonCode(code: string): Promise<string> {
+    const { pythonPath, executionTimeout } = this._getExecutionConfig();
+    return new Promise((resolve) => {
+      const pythonProcess = spawn(pythonPath, ["-c", code], {
+        cwd: this.context.extensionUri.fsPath,
+      });
+
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+      const timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        pythonProcess.kill("SIGTERM");
+      }, executionTimeout);
+
+      pythonProcess.stdout.on("data", (data: Buffer) => {
+        stdout += data.toString();
+      });
+
+      pythonProcess.stderr.on("data", (data: Buffer) => {
+        stderr += data.toString();
+      });
+
+      pythonProcess.on("close", (code: number) => {
+        clearTimeout(timeoutHandle);
+        if (timedOut) {
+          resolve(
+            `Python execution timed out after ${executionTimeout / 1000} seconds`,
+          );
+          return;
         }
-
-        return null;
-    }
-
-    private async _executePythonCode(code: string): Promise<string> {
-        return new Promise((resolve) => {
-            const pythonPath = 'python'; // Could be configurable
-
-            const pythonProcess = spawn(pythonPath, ['-c', code], {
-                cwd: this.context.extensionUri.fsPath
-            });
-
-            let stdout = '';
-            let stderr = '';
-
-            pythonProcess.stdout.on('data', (data: Buffer) => {
-                stdout += data.toString();
-            });
-
-            pythonProcess.stderr.on('data', (data: Buffer) => {
-                stderr += data.toString();
-            });
-
-            pythonProcess.on('close', (code: number) => {
-                if (code === 0) {
-                    resolve(stdout || 'Code executed successfully (no output)');
-                } else {
-                    resolve(`Error (exit code ${code}):\n${stderr || stdout}`);
-                }
-            });
-
-            pythonProcess.on('error', (error: Error) => {
-                resolve(`Failed to execute Python: ${error.message}\nMake sure Python is installed and in your PATH.`);
-            });
-
-            // Timeout after 10 seconds
-            setTimeout(() => {
-                pythonProcess.kill();
-                resolve('Python execution timed out after 10 seconds');
-            }, 10000);
-        });
-    }
-
-    private async _executeShellCode(code: string): Promise<string> {
-        return new Promise((resolve) => {
-            const shell = process.platform === 'win32' ? 'cmd' : 'bash';
-            const shellArg = process.platform === 'win32' ? '/c' : '-c';
-
-            const shellProcess = spawn(shell, [shellArg, code], {
-                cwd: this.context.extensionUri.fsPath
-            });
-
-            let stdout = '';
-            let stderr = '';
-
-            shellProcess.stdout.on('data', (data: Buffer) => {
-                stdout += data.toString();
-            });
-
-            shellProcess.stderr.on('data', (data: Buffer) => {
-                stderr += data.toString();
-            });
-
-            shellProcess.on('close', (code: number) => {
-                if (code === 0) {
-                    resolve(stdout || 'Command executed successfully (no output)');
-                } else {
-                    resolve(`Error (exit code ${code}):\n${stderr || stdout}`);
-                }
-            });
-
-            shellProcess.on('error', (error: Error) => {
-                resolve(`Failed to execute shell command: ${error.message}`);
-            });
-
-            // Timeout after 15 seconds for shell commands
-            setTimeout(() => {
-                shellProcess.kill();
-                resolve('Shell execution timed out after 15 seconds');
-            }, 15000);
-        });
-    }
-
-    private _createNewSession(sessionName: string) {
-        if (this._sessions.has(sessionName)) {
-            this._view?.webview.postMessage({
-                type: 'error',
-                message: `Session "${sessionName}" already exists`
-            });
-            return;
+        if (code === 0) {
+          resolve(stdout || "Code executed successfully (no output)");
+        } else {
+          resolve(`Error (exit code ${code}):\n${stderr || stdout}`);
         }
+      });
 
-        this._sessions.set(sessionName, []);
-        this._saveSessions();
-        this._switchSession(sessionName);
-    }
+      pythonProcess.on("error", (error: Error) => {
+        clearTimeout(timeoutHandle);
+        resolve(
+          `Failed to execute Python: ${error.message}\nMake sure Python is installed and in your PATH.`,
+        );
+      });
+    });
+  }
 
-    private _switchSession(sessionName: string) {
-        if (!this._sessions.has(sessionName)) {
-            this._view?.webview.postMessage({
-                type: 'error',
-                message: `Session "${sessionName}" does not exist`
-            });
-            return;
+  private async _executeShellCode(code: string): Promise<string> {
+    const { executionTimeout } = this._getExecutionConfig();
+    return new Promise((resolve) => {
+      const shell = process.platform === "win32" ? "cmd" : "bash";
+      const shellPath = process.platform === "win32" ? "cmd.exe" : "/bin/bash";
+      const shellArg = process.platform === "win32" ? "/c" : "-c";
+
+      if (!this._isPathAllowed(shellPath)) {
+        resolve(
+          `Blocked: shell path '${shellPath}' is not in the allowed paths list.`,
+        );
+        return;
+      }
+
+      const shellProcess = spawn(shell, [shellArg, code], {
+        cwd: this.context.extensionUri.fsPath,
+      });
+
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+      const timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        shellProcess.kill("SIGTERM");
+      }, executionTimeout);
+
+      shellProcess.stdout.on("data", (data: Buffer) => {
+        stdout += data.toString();
+      });
+
+      shellProcess.stderr.on("data", (data: Buffer) => {
+        stderr += data.toString();
+      });
+
+      shellProcess.on("close", (code: number) => {
+        clearTimeout(timeoutHandle);
+        if (timedOut) {
+          resolve(
+            `Shell execution timed out after ${executionTimeout / 1000} seconds`,
+          );
+          return;
         }
+        if (code === 0) {
+          resolve(stdout || "Command executed successfully (no output)");
+        } else {
+          resolve(`Error (exit code ${code}):\n${stderr || stdout}`);
+        }
+      });
 
-        this._currentSession = sessionName;
-        const messages = this._getCurrentSessionMessages();
+      shellProcess.on("error", (error: Error) => {
+        clearTimeout(timeoutHandle);
+        resolve(`Failed to execute shell command: ${error.message}`);
+      });
+    });
+  }
 
-        this._view?.webview.postMessage({
-            type: 'switchSession',
-            sessionName,
-            messages
-        });
+  private _createNewSession(sessionName: string) {
+    if (this._sessions.has(sessionName)) {
+      this._view?.webview.postMessage({
+        type: "error",
+        message: `Session "${sessionName}" already exists`,
+      });
+      return;
     }
 
-    private _clearCurrentSession() {
-        this._sessions.set(this._currentSession, []);
-        this._saveSessions();
+    this._sessions.set(sessionName, []);
+    this._saveSessions();
+    this._switchSession(sessionName);
+  }
 
-        this._view?.webview.postMessage({
-            type: 'clearChat'
-        });
+  private _switchSession(sessionName: string) {
+    if (!this._sessions.has(sessionName)) {
+      this._view?.webview.postMessage({
+        type: "error",
+        message: `Session "${sessionName}" does not exist`,
+      });
+      return;
     }
 
-    private _exportCurrentSession() {
-        const messages = this._getCurrentSessionMessages();
-        const exportData = {
-            session: this._currentSession,
-            timestamp: new Date().toISOString(),
-            messages
-        };
+    this._currentSession = sessionName;
+    const messages = this._getCurrentSessionMessages();
 
-        vscode.workspace.openTextDocument({
-            content: JSON.stringify(exportData, null, 2),
-            language: 'json'
-        }).then(doc => {
-            vscode.window.showTextDocument(doc);
-        });
-    }
+    this._view?.webview.postMessage({
+      type: "switchSession",
+      sessionName,
+      messages,
+    });
+  }
 
-    private _sendSessionsList() {
-        const sessions = Array.from(this._sessions.keys());
-        this._view?.webview.postMessage({
-            type: 'sessionsList',
-            sessions,
-            currentSession: this._currentSession
-        });
-    }
+  private _clearCurrentSession() {
+    this._sessions.set(this._currentSession, []);
+    this._saveSessions();
 
-    private _getHtmlForWebview(webview: vscode.Webview) {
-        const styleResetUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'reset.css'));
-        const styleVSCodeUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'vscode.css'));
-        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'chat.js'));
+    this._view?.webview.postMessage({
+      type: "clearChat",
+    });
+  }
 
-        const nonce = getNonce();
+  private _exportCurrentSession() {
+    const messages = this._getCurrentSessionMessages();
+    const exportData = {
+      session: this._currentSession,
+      timestamp: new Date().toISOString(),
+      messages,
+    };
 
-        return `<!DOCTYPE html>
+    vscode.workspace
+      .openTextDocument({
+        content: JSON.stringify(exportData, null, 2),
+        language: "json",
+      })
+      .then((doc) => {
+        vscode.window.showTextDocument(doc);
+      });
+  }
+
+  private _sendSessionsList() {
+    const sessions = Array.from(this._sessions.keys());
+    this._view?.webview.postMessage({
+      type: "sessionsList",
+      sessions,
+      currentSession: this._currentSession,
+    });
+  }
+
+  private _getHtmlForWebview(webview: vscode.Webview) {
+    const styleResetUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, "media", "reset.css"),
+    );
+    const styleVSCodeUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, "media", "vscode.css"),
+    );
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, "media", "chat.js"),
+    );
+
+    const nonce = getNonce();
+
+    return `<!DOCTYPE html>
             <html lang="en">
             <head>
                 <meta charset="UTF-8">
-                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <link href="${styleResetUri}" rel="stylesheet">
                 <link href="${styleVSCodeUri}" rel="stylesheet">
@@ -626,7 +716,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
             <body>
                 <div class="chat-container">
                     <div class="status-bar" id="status">
-                        ${this.manager.isRunning() ? '🟢 Go-On Connected' : '🔴 Go-On Disconnected'}
+                        ${this.manager.isRunning() ? "🟢 Go-On Connected" : "🔴 Go-On Disconnected"}
                     </div>
                     <div class="session-controls">
                         <select class="session-select" id="sessionSelect">
@@ -645,14 +735,15 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                 <script nonce="${nonce}" src="${scriptUri}"></script>
             </body>
             </html>`;
-    }
+  }
 }
 
 function getNonce() {
-    let text = '';
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    for (let i = 0; i < 32; i++) {
-        text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
-    return text;
+  let text = "";
+  const possible =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let i = 0; i < 32; i++) {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  }
+  return text;
 }

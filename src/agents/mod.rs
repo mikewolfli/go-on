@@ -10,7 +10,6 @@ pub mod cohere;
 pub mod copilot;
 pub mod deepquest;
 pub mod deepseek;
-pub mod doubao;
 pub mod facewall;
 pub mod fireworks;
 pub mod gemini;

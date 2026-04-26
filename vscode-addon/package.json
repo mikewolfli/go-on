@@ -6,82 +6,17 @@
   "engines": {
     "vscode": "^1.74.0"
   },
+  "extensionKind": [
+    "ui"
+  ],
   "categories": [
     "Other"
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:go-on.start",
-    "onCommand:go-on.stop",
-    "onCommand:go-on.sendRequest",
-    "onCommand:go-on.healthCheck",
-    "onCommand:go-on.breakerStatus",
-    "onCommand:go-on.cacheClear",
-    "onCommand:go-on.vectorClear",
-    "onCommand:go-on.configReload",
-    "onCommand:go-on.shutdown",
     "onView:go-on-status",
     "onView:go-on-chat",
     "onView:go-on-settings",
-    "onCommand:go-on.openChat",
-    "onCommand:go-on.closeChat",
-    "onCommand:go-on.openSettings",
-    "onCommand:go-on.openConfigWizard",
-    "onCommand:go-on.clearChat",
-    "onCommand:go-on.exportChat",
-    "onCommand:go-on.newSession",
-    "onCommand:go-on.switchSession",
-    "onCommand:go-on.createWorkflow",
-    "onCommand:go-on.runWorkflow",
-    "onCommand:go-on.editCode",
-    "onCommand:go-on.refactorCode",
-    "onCommand:go-on.showProcessFlow",
-    "onCommand:go-on.workflowExecute",
-    "onCommand:go-on.taskPlan",
-    "onCommand:go-on.taskExecute",
-    "onCommand:go-on.learningSummary",
-    "onCommand:go-on.learningGuardrail",
-    "onCommand:go-on.learningReplay",
-    "onCommand:go-on.knowledgeDistill",
-    "onCommand:go-on.rlAlignmentEval",
-    "onCommand:go-on.hardnessStatus",
-    "onCommand:go-on.costStatus",
-    "onCommand:go-on.configBaseline",
-    "onCommand:go-on.errorContract",
-    "onCommand:go-on.buildRepro",
-    "onCommand:go-on.dataLifecycle",
-    "onCommand:go-on.optimizationPeak",
-    "onCommand:go-on.runtimeSelfModel",
-    "onCommand:go-on.providerStatus",
-    "onCommand:go-on.releaseReadiness",
-    "onCommand:go-on.runtimeStability",
-    "onCommand:go-on.governancePlanGet",
-    "onCommand:go-on.governanceAuditRecent",
-    "onCommand:go-on.skillListImported",
-    "onCommand:go-on.skillImportLocal",
-    "onCommand:go-on.skillToggle",
-    "onCommand:go-on.lockStatus",
-    "onCommand:go-on.autotuneStatus",
-    "onCommand:go-on.selectorStatus",
-    "onCommand:go-on.autotuneGet",
-    "onCommand:go-on.autotuneReset",
-    "onCommand:go-on.metricsGet",
-    "onCommand:go-on.metricsReset",
-    "onCommand:go-on.traceMetrics",
-    "onCommand:go-on.qualityBaseline",
-    "onCommand:go-on.harnessStatus",
-    "onCommand:go-on.traceGet",
-    "onCommand:go-on.observabilityAlerts",
-    "onCommand:go-on.securityBaseline",
-    "onCommand:go-on.breakerReset",
-    "onCommand:go-on.breakerRecovery",
-    "onCommand:go-on.maintenanceGc",
-    "onCommand:go-on.checkpointCreate",
-    "onCommand:go-on.checkpointList",
-    "onCommand:go-on.conversationRollback",
-    "onCommand:go-on.primarySecondarySummary",
-    "onCommand:go-on.debugPanelGet",
-    "onCommand:go-on.actionCheck",
     "onView:go-on-workflow",
     "onView:go-on-process-flow"
   ],
@@ -621,8 +556,8 @@
         "go-on.chat.temperature": {
           "type": "number",
           "default": 0.7,
-          "minimum": 0.0,
-          "maximum": 2.0,
+          "minimum": 0,
+          "maximum": 2,
           "description": "Temperature for chat responses (0.0 = deterministic, 2.0 = very random)"
         },
         "go-on.chat.maxTokens": {
@@ -685,14 +620,29 @@
           "type": "boolean",
           "default": true,
           "description": "Default behavior to show diff view after advanced edits or refactoring"
+        },
+        "go-on.language": {
+          "type": "string",
+          "default": "en",
+          "enum": [
+            "en",
+            "zh_CN",
+            "zh_TW"
+          ],
+          "enumDescriptions": [
+            "English",
+            "Simplified Chinese",
+            "Traditional Chinese"
+          ],
+          "description": "Language used for the Go-On runtime interface"
         }
       }
     }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "node ./node_modules/typescript/bin/tsc -p ./",
-    "watch": "node ./node_modules/typescript/bin/tsc -watch -p ./",
+    "compile": "npx tsc -p ./",
+    "watch": "npx tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "check": "npm run compile && npm run lint",
     "test:contract": "node ./scripts/contract-smoke.js",
@@ -710,7 +660,6 @@
   },
   "dependencies": {
     "adm-zip": "^0.5.16",
-    "child_process": "^1.0.2",
     "tar": "^6.2.1"
   },
   "keywords": [],

@@ -11,7 +11,7 @@ use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
-use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
+use crate::agents::{option_f64, principles_to_text, stream_sse_events, SseEventAction};
 
 pub struct GeminiAgent {
     api_key_env: String,
@@ -103,9 +103,33 @@ impl GeminiAgent {
             anyhow::bail!("gemini chat request failed with {status}: {body}");
         }
 
-        // Note: Gemini API uses a different streaming format, so we need to handle it specially
-        // For now, we'll use the same stream_sse_to_sender function, but it may need adjustments
-        stream_sse_to_sender(response, sender).await
+        // Parse Gemini streaming response which uses `candidates[0].content.parts[0].text`
+        // format instead of OpenAI's `choices[0].delta.content`.
+        stream_sse_events(response, move |data| {
+            if data.trim() == "[DONE]" {
+                return Ok(SseEventAction::Stop);
+            }
+
+            if let Ok(json) = serde_json::from_str::<Value>(data) {
+                // Gemini streaming format: candidates[0].content.parts[0].text
+                if let Some(token) = json
+                    .get("candidates")
+                    .and_then(|c| c.get(0))
+                    .and_then(|c| c.get("content"))
+                    .and_then(|c| c.get("parts"))
+                    .and_then(|c| c.get(0))
+                    .and_then(|c| c.get("text"))
+                    .and_then(|c| c.as_str())
+                {
+                    if sender.send(token.to_string()).is_err() {
+                        return Ok(SseEventAction::Stop);
+                    }
+                }
+            }
+
+            Ok(SseEventAction::Continue)
+        })
+        .await
     }
 }
 

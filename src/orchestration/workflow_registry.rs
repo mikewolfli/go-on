@@ -3,14 +3,17 @@
 //! Defines `WorkflowType` (auto / dev / general / free / custom) and a registry of
 //! named workflow presets.  `WorkflowDetector` infers the type from the current
 //! config and runtime context.
+//!
+//! NOTE: This is an intentional architecture framework (S16, Phase 0-9).
+//! Kept as a stable extension point for future workflow preset management.
 
 #![allow(dead_code)]
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use crate::config::WorkflowType;
 use crate::orchestration::roles::{role_registry_industry_for, AgentRole};
 use crate::orchestration::startup_context::StartupContext;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// A named preset that maps to a WorkflowType and default phase list
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,19 +42,35 @@ impl WorkflowRegistry {
             WorkflowPreset {
                 name: "autopilot".to_string(),
                 workflow_type: WorkflowType::Auto,
-                phases: vec!["planning".to_string(), "coding".to_string(), "review".to_string(), "delivery".to_string()],
+                phases: vec![
+                    "planning".to_string(),
+                    "coding".to_string(),
+                    "review".to_string(),
+                    "delivery".to_string(),
+                ],
                 description: "Full autopilot: Planner→Coder→Tester→Reviewer chain".to_string(),
             },
             WorkflowPreset {
                 name: "dev".to_string(),
                 workflow_type: WorkflowType::Dev,
-                phases: vec!["planning".to_string(), "coding".to_string(), "review".to_string(), "delivery".to_string()],
+                phases: vec![
+                    "planning".to_string(),
+                    "coding".to_string(),
+                    "review".to_string(),
+                    "delivery".to_string(),
+                ],
                 description: "Development workflow preset".to_string(),
             },
             WorkflowPreset {
                 name: "general".to_string(),
                 workflow_type: WorkflowType::General,
-                phases: vec!["gathering".to_string(), "thinking".to_string(), "executing".to_string(), "validating".to_string(), "closing".to_string()],
+                phases: vec![
+                    "gathering".to_string(),
+                    "thinking".to_string(),
+                    "executing".to_string(),
+                    "validating".to_string(),
+                    "closing".to_string(),
+                ],
                 description: "Cross-industry general workflow preset".to_string(),
             },
             WorkflowPreset {
@@ -61,7 +80,9 @@ impl WorkflowRegistry {
                 description: "Freestyle single-turn (mode=ask, no gating)".to_string(),
             },
         ];
-        for p in defaults { self.presets.insert(p.name.clone(), p); }
+        for p in defaults {
+            self.presets.insert(p.name.clone(), p);
+        }
     }
 
     pub fn register(&mut self, preset: WorkflowPreset) {
@@ -95,8 +116,8 @@ impl WorkflowDetector {
                 "free" | "ask" => return WorkflowType::Free,
                 "dev" | "manual" => return WorkflowType::Dev,
                 "general" => return WorkflowType::General,
-                "auto"         => return WorkflowType::Auto,
-                "custom"       => return WorkflowType::Custom,
+                "auto" => return WorkflowType::Auto,
+                "custom" => return WorkflowType::Custom,
                 _ => {}
             }
         }
@@ -112,7 +133,10 @@ impl WorkflowDetector {
                     }
                 }
 
-                if matches!(role, Some(AgentRole::Coder | AgentRole::Tester | AgentRole::Reviewer)) {
+                if matches!(
+                    role,
+                    Some(AgentRole::Coder | AgentRole::Tester | AgentRole::Reviewer)
+                ) {
                     return WorkflowType::Dev;
                 }
 
@@ -132,7 +156,10 @@ impl WorkflowDetector {
 
     /// True when the workflow type requires phase gating
     pub fn requires_phase_gate(wf: &WorkflowType) -> bool {
-        matches!(wf, WorkflowType::Auto | WorkflowType::Dev | WorkflowType::General | WorkflowType::Custom)
+        matches!(
+            wf,
+            WorkflowType::Auto | WorkflowType::Dev | WorkflowType::General | WorkflowType::Custom
+        )
     }
 
     /// True when review-gate is mandatory

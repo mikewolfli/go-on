@@ -6,9 +6,9 @@ go-on is a Rust runtime for ACP/MCP-oriented agent orchestration, governance, an
 
 ## Version
 
-- Core runtime: 0.6.1
-- GUI desktop: 0.6.1
-- VS Code addon: 0.6.1
+- Core runtime: 0.7.1
+- GUI desktop: 0.7.1
+- VS Code addon: 0.7.1
 - Default feature: `local-acp-sqlite`
 - Optional feature scaffold: `server-mcp-postgres`
 

@@ -152,6 +152,7 @@ impl McpServer {
             constraints: None,
             evidence: None,
             payload: tool_input.clone(),
+            allowed_base_dir: None,
         })?;
 
         info!("MCP: Tool '{}' returned: {:?}", tool_name, result);

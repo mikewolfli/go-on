@@ -6,8 +6,8 @@ const child_process_1 = require("child_process");
 class GoOnChatViewProvider {
     constructor(_extensionUri, _manager, _context, _onViewResolved) {
         this._extensionUri = _extensionUri;
-        this._executionOutput = vscode.window.createOutputChannel('Go-On Code Execution');
-        this._currentSession = 'default';
+        this._executionOutput = vscode.window.createOutputChannel("Go-On Code Execution");
+        this._currentSession = "default";
         this._sessions = new Map();
         this.manager = _manager;
         this.context = _context;
@@ -16,13 +16,13 @@ class GoOnChatViewProvider {
         this.context.subscriptions.push(new vscode.Disposable(() => this._messageSubscription?.dispose()));
     }
     _loadSessions() {
-        const storedSessions = this.context.globalState.get('go-on-chat-sessions', {});
+        const storedSessions = this.context.globalState.get("go-on-chat-sessions", {});
         for (const [sessionName, messages] of Object.entries(storedSessions)) {
             this._sessions.set(sessionName, Array.isArray(messages) ? messages : []);
         }
         // Ensure default session exists
-        if (!this._sessions.has('default')) {
-            this._sessions.set('default', []);
+        if (!this._sessions.has("default")) {
+            this._sessions.set("default", []);
         }
     }
     _saveSessions() {
@@ -30,7 +30,7 @@ class GoOnChatViewProvider {
         for (const [sessionName, messages] of this._sessions) {
             sessionsObject[sessionName] = messages;
         }
-        this.context.globalState.update('go-on-chat-sessions', sessionsObject);
+        this.context.globalState.update("go-on-chat-sessions", sessionsObject);
     }
     _getCurrentSessionMessages() {
         return this._sessions.get(this._currentSession) || [];
@@ -42,11 +42,11 @@ class GoOnChatViewProvider {
         this._saveSessions();
     }
     _extractResponseText(result) {
-        if (!result || typeof result !== 'object') {
+        if (!result || typeof result !== "object") {
             return undefined;
         }
         const candidate = result.response;
-        return typeof candidate === 'string' ? candidate : undefined;
+        return typeof candidate === "string" ? candidate : undefined;
     }
     _getErrorMessage(error) {
         return error instanceof Error ? error.message : String(error);
@@ -55,9 +55,7 @@ class GoOnChatViewProvider {
         this._view = webviewView;
         webviewView.webview.options = {
             enableScripts: true,
-            localResourceRoots: [
-                this._extensionUri
-            ]
+            localResourceRoots: [this._extensionUri],
         };
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
         if (this.onViewResolved) {
@@ -68,25 +66,25 @@ class GoOnChatViewProvider {
         this._messageSubscription?.dispose();
         this._messageSubscription = webviewView.webview.onDidReceiveMessage(async (message) => {
             switch (message.type) {
-                case 'sendMessage':
+                case "sendMessage":
                     await this._handleSendMessage(message.text);
                     break;
-                case 'clearChat':
+                case "clearChat":
                     this._clearCurrentSession();
                     break;
-                case 'exportChat':
+                case "exportChat":
                     this._exportCurrentSession();
                     break;
-                case 'runCode':
+                case "runCode":
                     await this._handleRunCode(message.code, message.language);
                     break;
-                case 'newSession':
+                case "newSession":
                     this._createNewSession(message.sessionName);
                     break;
-                case 'switchSession':
+                case "switchSession":
                     this._switchSession(message.sessionName);
                     break;
-                case 'getSessions':
+                case "getSessions":
                     this._sendSessionsList();
                     break;
             }
@@ -98,44 +96,44 @@ class GoOnChatViewProvider {
         try {
             // Add user message to current session
             const userMessage = {
-                role: 'user',
+                role: "user",
                 content: text,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
             };
             this._addMessageToCurrentSession(userMessage);
             // Send message to UI
             this._view.webview.postMessage({
-                type: 'addMessage',
-                ...userMessage
+                type: "addMessage",
+                ...userMessage,
             });
             // Send to Go-On
-            const result = await this.manager.sendRequest('chat', {
-                messages: [{ role: 'user', content: text }]
+            const result = await this.manager.sendRequest("chat", {
+                messages: [{ role: "user", content: text }],
             });
             const responseText = this._extractResponseText(result);
             // Add response to current session
             const assistantMessage = {
-                role: 'assistant',
+                role: "assistant",
                 content: responseText || JSON.stringify(result),
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
             };
             this._addMessageToCurrentSession(assistantMessage);
             // Send response to UI
             this._view.webview.postMessage({
-                type: 'addMessage',
-                ...assistantMessage
+                type: "addMessage",
+                ...assistantMessage,
             });
         }
         catch (error) {
             const errorMessage = {
-                role: 'error',
+                role: "error",
                 content: `Error: ${this._getErrorMessage(error)}`,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
             };
             this._addMessageToCurrentSession(errorMessage);
             this._view.webview.postMessage({
-                type: 'addMessage',
-                ...errorMessage
+                type: "addMessage",
+                ...errorMessage,
             });
         }
     }
@@ -144,32 +142,32 @@ class GoOnChatViewProvider {
     }
     createNewSession(sessionName) {
         this.postMessage({
-            type: 'newSession',
-            sessionName
+            type: "newSession",
+            sessionName,
         });
     }
     switchSession(sessionName) {
         this.postMessage({
-            type: 'switchSession',
-            sessionName
+            type: "switchSession",
+            sessionName,
         });
     }
     async _handleRunCode(code, language) {
         if (!this._view)
             return;
         try {
-            let result = '';
+            let result = "";
             const approved = await this._confirmCodeExecution(code, language);
             if (!approved) {
                 this._executionOutput.appendLine(`[blocked] ${new Date().toISOString()} language=${language}`);
                 this._view.webview.postMessage({
-                    type: 'codeResult',
-                    result: 'Execution canceled by user.'
+                    type: "codeResult",
+                    result: "Execution canceled by user.",
                 });
                 return;
             }
             switch (language) {
-                case 'javascript':
+                case "javascript":
                     try {
                         const blockedReason = this._validateJavaScriptSnippet(code);
                         if (blockedReason) {
@@ -177,17 +175,17 @@ class GoOnChatViewProvider {
                             break;
                         }
                         // Keep compatibility with current behavior but guard dangerous globals.
-                        result = String(new Function('return (' + code + ')()')());
+                        result = String(new Function("return (" + code + ")()")());
                     }
                     catch (e) {
                         result = `Error: ${this._getErrorMessage(e)}`;
                     }
                     break;
-                case 'python':
+                case "python":
                     result = await this._executePythonCode(code);
                     break;
-                case 'bash':
-                case 'shell':
+                case "bash":
+                case "shell":
                     result = await this._executeShellCode(code);
                     break;
                 default:
@@ -197,34 +195,53 @@ class GoOnChatViewProvider {
             this._executionOutput.appendLine(`[code] ${code.substring(0, 240)}`);
             this._executionOutput.appendLine(`[result] ${result.substring(0, 240)}`);
             this._view.webview.postMessage({
-                type: 'codeResult',
-                result: result
+                type: "codeResult",
+                result: result,
             });
         }
         catch (error) {
             this._view.webview.postMessage({
-                type: 'codeResult',
-                result: `Execution failed: ${this._getErrorMessage(error)}`
+                type: "codeResult",
+                result: `Execution failed: ${this._getErrorMessage(error)}`,
             });
             this._executionOutput.appendLine(`[error] ${new Date().toISOString()} ${this._getErrorMessage(error)}`);
         }
     }
     async _confirmCodeExecution(code, language) {
-        const preview = code.trim().replace(/\s+/g, ' ').slice(0, 120);
-        const executeOption = 'Execute';
-        const cancelOption = 'Cancel';
-        const choice = await vscode.window.showWarningMessage(`Go-On is about to execute local ${language} code. Preview: ${preview || '<empty>'}`, { modal: true }, executeOption, cancelOption);
+        const preview = code.trim().replace(/\s+/g, " ").slice(0, 120);
+        const executeOption = "Execute";
+        const cancelOption = "Cancel";
+        const choice = await vscode.window.showWarningMessage(`Go-On is about to execute local ${language} code. Preview: ${preview || "<empty>"}`, { modal: true }, executeOption, cancelOption);
         return choice === executeOption;
     }
     _validateJavaScriptSnippet(code) {
         const dangerousPatterns = [
-            { pattern: /\brequire\s*\(/i, reason: 'require() is not allowed.' },
-            { pattern: /\bimport\s+/i, reason: 'import is not allowed.' },
-            { pattern: /\bprocess\b/i, reason: 'process access is not allowed.' },
-            { pattern: /\bglobal\b/i, reason: 'global access is not allowed.' },
-            { pattern: /\beval\s*\(/i, reason: 'eval() is not allowed.' },
-            { pattern: /\bFunction\s*\(/i, reason: 'nested Function constructor is not allowed.' },
-            { pattern: /\bchild_process\b/i, reason: 'child process modules are not allowed.' }
+            { pattern: /\brequire\s*\(/i, reason: "require() is not allowed." },
+            { pattern: /\bimport\s+/i, reason: "import is not allowed." },
+            { pattern: /\bprocess\b/i, reason: "process access is not allowed." },
+            { pattern: /\bglobal\b/i, reason: "global access is not allowed." },
+            { pattern: /\beval\s*\(/i, reason: "eval() is not allowed." },
+            {
+                pattern: /\bFunction\s*\(/i,
+                reason: "nested Function constructor is not allowed.",
+            },
+            {
+                pattern: /\bchild_process\b/i,
+                reason: "child process modules are not allowed.",
+            },
+            { pattern: /\bfs\b/i, reason: "filesystem access is not allowed." },
+            { pattern: /\bexec\s*\(/i, reason: "exec() is not allowed." },
+            { pattern: /\bspawn\s*\(/i, reason: "spawn() is not allowed." },
+            { pattern: /\bfork\s*\(/i, reason: "fork() is not allowed." },
+            { pattern: /\b__dirname\b/i, reason: "__dirname access is not allowed." },
+            {
+                pattern: /\b__filename\b/i,
+                reason: "__filename access is not allowed.",
+            },
+            { pattern: /\bmodule\b/i, reason: "module access is not allowed." },
+            { pattern: /\bexports\b/i, reason: "exports access is not allowed." },
+            { pattern: /\bReflect\b/i, reason: "Reflect API is not allowed." },
+            { pattern: /\bProxy\b/i, reason: "Proxy is not allowed." },
         ];
         for (const { pattern, reason } of dangerousPatterns) {
             if (pattern.test(code)) {
@@ -233,76 +250,109 @@ class GoOnChatViewProvider {
         }
         return null;
     }
+    _getExecutionConfig() {
+        const config = vscode.workspace.getConfiguration("go-on");
+        return {
+            pythonPath: config.get("pythonPath", "python"),
+            executionTimeout: config.get("execution.timeout", 30000),
+            allowedShellPaths: config.get("execution.allowedShellPaths", []),
+        };
+    }
+    _isPathAllowed(shellPath) {
+        const { allowedShellPaths } = this._getExecutionConfig();
+        if (allowedShellPaths.length === 0) {
+            return true;
+        }
+        return allowedShellPaths.some((allowed) => shellPath.startsWith(allowed));
+    }
     async _executePythonCode(code) {
+        const { pythonPath, executionTimeout } = this._getExecutionConfig();
         return new Promise((resolve) => {
-            const pythonPath = 'python'; // Could be configurable
-            const pythonProcess = (0, child_process_1.spawn)(pythonPath, ['-c', code], {
-                cwd: this.context.extensionUri.fsPath
+            const pythonProcess = (0, child_process_1.spawn)(pythonPath, ["-c", code], {
+                cwd: this.context.extensionUri.fsPath,
             });
-            let stdout = '';
-            let stderr = '';
-            pythonProcess.stdout.on('data', (data) => {
+            let stdout = "";
+            let stderr = "";
+            let timedOut = false;
+            const timeoutHandle = setTimeout(() => {
+                timedOut = true;
+                pythonProcess.kill("SIGTERM");
+            }, executionTimeout);
+            pythonProcess.stdout.on("data", (data) => {
                 stdout += data.toString();
             });
-            pythonProcess.stderr.on('data', (data) => {
+            pythonProcess.stderr.on("data", (data) => {
                 stderr += data.toString();
             });
-            pythonProcess.on('close', (code) => {
+            pythonProcess.on("close", (code) => {
+                clearTimeout(timeoutHandle);
+                if (timedOut) {
+                    resolve(`Python execution timed out after ${executionTimeout / 1000} seconds`);
+                    return;
+                }
                 if (code === 0) {
-                    resolve(stdout || 'Code executed successfully (no output)');
+                    resolve(stdout || "Code executed successfully (no output)");
                 }
                 else {
                     resolve(`Error (exit code ${code}):\n${stderr || stdout}`);
                 }
             });
-            pythonProcess.on('error', (error) => {
+            pythonProcess.on("error", (error) => {
+                clearTimeout(timeoutHandle);
                 resolve(`Failed to execute Python: ${error.message}\nMake sure Python is installed and in your PATH.`);
             });
-            // Timeout after 10 seconds
-            setTimeout(() => {
-                pythonProcess.kill();
-                resolve('Python execution timed out after 10 seconds');
-            }, 10000);
         });
     }
     async _executeShellCode(code) {
+        const { executionTimeout } = this._getExecutionConfig();
         return new Promise((resolve) => {
-            const shell = process.platform === 'win32' ? 'cmd' : 'bash';
-            const shellArg = process.platform === 'win32' ? '/c' : '-c';
+            const shell = process.platform === "win32" ? "cmd" : "bash";
+            const shellPath = process.platform === "win32" ? "cmd.exe" : "/bin/bash";
+            const shellArg = process.platform === "win32" ? "/c" : "-c";
+            if (!this._isPathAllowed(shellPath)) {
+                resolve(`Blocked: shell path '${shellPath}' is not in the allowed paths list.`);
+                return;
+            }
             const shellProcess = (0, child_process_1.spawn)(shell, [shellArg, code], {
-                cwd: this.context.extensionUri.fsPath
+                cwd: this.context.extensionUri.fsPath,
             });
-            let stdout = '';
-            let stderr = '';
-            shellProcess.stdout.on('data', (data) => {
+            let stdout = "";
+            let stderr = "";
+            let timedOut = false;
+            const timeoutHandle = setTimeout(() => {
+                timedOut = true;
+                shellProcess.kill("SIGTERM");
+            }, executionTimeout);
+            shellProcess.stdout.on("data", (data) => {
                 stdout += data.toString();
             });
-            shellProcess.stderr.on('data', (data) => {
+            shellProcess.stderr.on("data", (data) => {
                 stderr += data.toString();
             });
-            shellProcess.on('close', (code) => {
+            shellProcess.on("close", (code) => {
+                clearTimeout(timeoutHandle);
+                if (timedOut) {
+                    resolve(`Shell execution timed out after ${executionTimeout / 1000} seconds`);
+                    return;
+                }
                 if (code === 0) {
-                    resolve(stdout || 'Command executed successfully (no output)');
+                    resolve(stdout || "Command executed successfully (no output)");
                 }
                 else {
                     resolve(`Error (exit code ${code}):\n${stderr || stdout}`);
                 }
             });
-            shellProcess.on('error', (error) => {
+            shellProcess.on("error", (error) => {
+                clearTimeout(timeoutHandle);
                 resolve(`Failed to execute shell command: ${error.message}`);
             });
-            // Timeout after 15 seconds for shell commands
-            setTimeout(() => {
-                shellProcess.kill();
-                resolve('Shell execution timed out after 15 seconds');
-            }, 15000);
         });
     }
     _createNewSession(sessionName) {
         if (this._sessions.has(sessionName)) {
             this._view?.webview.postMessage({
-                type: 'error',
-                message: `Session "${sessionName}" already exists`
+                type: "error",
+                message: `Session "${sessionName}" already exists`,
             });
             return;
         }
@@ -313,24 +363,24 @@ class GoOnChatViewProvider {
     _switchSession(sessionName) {
         if (!this._sessions.has(sessionName)) {
             this._view?.webview.postMessage({
-                type: 'error',
-                message: `Session "${sessionName}" does not exist`
+                type: "error",
+                message: `Session "${sessionName}" does not exist`,
             });
             return;
         }
         this._currentSession = sessionName;
         const messages = this._getCurrentSessionMessages();
         this._view?.webview.postMessage({
-            type: 'switchSession',
+            type: "switchSession",
             sessionName,
-            messages
+            messages,
         });
     }
     _clearCurrentSession() {
         this._sessions.set(this._currentSession, []);
         this._saveSessions();
         this._view?.webview.postMessage({
-            type: 'clearChat'
+            type: "clearChat",
         });
     }
     _exportCurrentSession() {
@@ -338,33 +388,35 @@ class GoOnChatViewProvider {
         const exportData = {
             session: this._currentSession,
             timestamp: new Date().toISOString(),
-            messages
+            messages,
         };
-        vscode.workspace.openTextDocument({
+        vscode.workspace
+            .openTextDocument({
             content: JSON.stringify(exportData, null, 2),
-            language: 'json'
-        }).then(doc => {
+            language: "json",
+        })
+            .then((doc) => {
             vscode.window.showTextDocument(doc);
         });
     }
     _sendSessionsList() {
         const sessions = Array.from(this._sessions.keys());
         this._view?.webview.postMessage({
-            type: 'sessionsList',
+            type: "sessionsList",
             sessions,
-            currentSession: this._currentSession
+            currentSession: this._currentSession,
         });
     }
     _getHtmlForWebview(webview) {
-        const styleResetUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'reset.css'));
-        const styleVSCodeUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'vscode.css'));
-        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'chat.js'));
+        const styleResetUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "reset.css"));
+        const styleVSCodeUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "vscode.css"));
+        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "chat.js"));
         const nonce = getNonce();
         return `<!DOCTYPE html>
             <html lang="en">
             <head>
                 <meta charset="UTF-8">
-                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <link href="${styleResetUri}" rel="stylesheet">
                 <link href="${styleVSCodeUri}" rel="stylesheet">
@@ -540,7 +592,7 @@ class GoOnChatViewProvider {
             <body>
                 <div class="chat-container">
                     <div class="status-bar" id="status">
-                        ${this.manager.isRunning() ? '🟢 Go-On Connected' : '🔴 Go-On Disconnected'}
+                        ${this.manager.isRunning() ? "🟢 Go-On Connected" : "🔴 Go-On Disconnected"}
                     </div>
                     <div class="session-controls">
                         <select class="session-select" id="sessionSelect">
@@ -562,10 +614,10 @@ class GoOnChatViewProvider {
     }
 }
 exports.GoOnChatViewProvider = GoOnChatViewProvider;
-GoOnChatViewProvider.viewType = 'go-on-chat';
+GoOnChatViewProvider.viewType = "go-on-chat";
 function getNonce() {
-    let text = '';
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let text = "";
+    const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     for (let i = 0; i < 32; i++) {
         text += possible.charAt(Math.floor(Math.random() * possible.length));
     }
