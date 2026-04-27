@@ -616,6 +616,11 @@ impl AgentRegistry {
 
         result
     }
+
+    /// Returns a reference to the capability graph used for agent routing
+    pub fn get_capability_graph(&self) -> Arc<Mutex<CapabilityGraph>> {
+        Arc::clone(&self.capability_graph)
+    }
 }
 
 impl Default for AgentRegistry {

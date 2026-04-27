@@ -6,8 +6,6 @@
 //! NOTE: This is an intentional architecture framework (Phase 0-9).
 //! Kept as a stable extension point for future startup context integration.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use tracing::debug;
@@ -33,6 +31,7 @@ pub fn get() -> Option<&'static StartupContext> {
 }
 
 /// Configuration knobs for startup context loading
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartupContextConfig {
     #[serde(default)]
@@ -43,13 +42,16 @@ pub struct StartupContextConfig {
     pub recent_commits: usize,
 }
 
+#[allow(dead_code)]
 fn default_readme_max_chars() -> usize {
     2000
 }
+#[allow(dead_code)]
 fn default_recent_commits() -> usize {
     5
 }
 
+#[allow(dead_code)]
 impl Default for StartupContextConfig {
     fn default() -> Self {
         Self {
@@ -61,6 +63,7 @@ impl Default for StartupContextConfig {
 }
 
 /// Load startup context (non-blocking: call with tokio::spawn)
+#[allow(dead_code)]
 pub async fn load(cfg: &StartupContextConfig) -> StartupContext {
     if !cfg.enabled {
         return StartupContext::default();
@@ -129,6 +132,7 @@ pub async fn load(cfg: &StartupContextConfig) -> StartupContext {
 }
 
 /// Build a summary string suitable for injection into AgentTaskEnvelope.evidence
+#[allow(dead_code)]
 pub fn summary_text(ctx: &StartupContext) -> String {
     let mut parts = Vec::new();
     if !ctx.readme_excerpt.is_empty() {

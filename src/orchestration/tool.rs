@@ -14,7 +14,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::pua::{tool_execution_report, PuaExecutionReport};
 
@@ -601,6 +601,413 @@ fn collect_matching_files(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Think-Act-Observe tool execution loop (F-GAP-01)
+// ---------------------------------------------------------------------------
+//
+// Full Think → Act → Observe orchestration loop:
+//
+// 1. Think:   Analyze task context, select the best tool candidate
+// 2. Act:     Execute tool call with fallback-chain support
+// 3. Observe: Validate output, decide next action (continue / retry /
+//             switch tool / complete / escalate)
+//
+// Loop termination:
+// - Tool succeeds and output verification passes
+// - All tool candidates exhausted (retry + fallback limits reached)
+// - Maximum iteration count reached
+
+/// Stage label for a single Think-Act-Observe iteration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopStage {
+    Think,
+    Act,
+    Observe,
+}
+
+/// Outcome of a single Observe phase.
+#[derive(Debug, Clone)]
+pub enum LoopDecision {
+    /// Continue to the next Think-Act-Observe cycle.
+    Continue,
+    /// Retry the same tool.
+    Retry { tool: String, reason: String },
+    /// Switch to a different tool candidate.
+    SwitchTool {
+        from: String,
+        to: String,
+        reason: String,
+    },
+    /// Loop completed successfully.
+    Complete(ToolOutput),
+    /// All candidates exhausted – final failure.
+    Failed {
+        reason: String,
+        last_output: Option<ToolOutput>,
+    },
+    /// Escalate to human review.
+    Escalate { reason: String, output: ToolOutput },
+}
+
+/// Configuration for the Think-Act-Observe loop.
+#[derive(Debug, Clone)]
+pub struct LoopConfig {
+    /// Maximum number of iterations (Think→Act→Observe cycles).
+    pub max_iterations: u32,
+    /// Maximum retries per tool before switching.
+    pub max_retries_per_tool: u32,
+    /// Whether to enable fallback-chain execution.
+    pub enable_fallback: bool,
+    /// Optional output-verification function.
+    pub verify_output: Option<fn(&ToolOutput) -> bool>,
+}
+
+impl Default for LoopConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: 5,
+            max_retries_per_tool: 2,
+            enable_fallback: true,
+            verify_output: None,
+        }
+    }
+}
+
+/// A single trace entry for one loop iteration.
+#[derive(Debug, Clone, Serialize)]
+pub struct LoopIteration {
+    pub stage: String,
+    pub tool: String,
+    pub success: bool,
+    pub duration_ms: u64,
+    pub detail: String,
+}
+
+/// Full execution trace of a Think-Act-Observe loop.
+#[derive(Debug, Clone, Serialize)]
+pub struct LoopTrace {
+    pub iterations: Vec<LoopIteration>,
+    pub final_decision: String,
+    pub total_duration_ms: u64,
+}
+
+/// Think phase result: which tool to run and why.
+#[derive(Debug, Clone)]
+struct ThinkResult {
+    tool: String,
+    confidence: f64,
+    rationale: String,
+}
+
+/// Run the Think-Act-Observe loop for a given task.
+///
+/// # Arguments
+///
+/// * `task` - Human-readable task description (used for logging / tracing).
+/// * `registry` - Tool registry holding all available tools.
+/// * `input` - Input envelope passed to each tool.
+/// * `preferred_tools` - Ordered list of tool names to try first.
+/// * `config` - Loop configuration (iterations, retries, verification).
+///
+/// # Returns
+///
+/// A tuple of `(LoopDecision, LoopTrace)` where the decision conveys the
+/// final outcome and the trace records every iteration for observability.
+pub fn execute_loop(
+    task: &str,
+    registry: &ToolRegistry,
+    input: &ToolInput,
+    preferred_tools: &[String],
+    config: &LoopConfig,
+) -> (LoopDecision, LoopTrace) {
+    let start = std::time::Instant::now();
+    let mut trace = LoopTrace {
+        iterations: Vec::new(),
+        final_decision: String::new(),
+        total_duration_ms: 0,
+    };
+
+    // Build the candidate list with retry bookkeeping.
+    let tool_candidates: Vec<String> = if preferred_tools.is_empty() {
+        registry.names().iter().map(|&n| n.to_string()).collect()
+    } else {
+        preferred_tools.to_vec()
+    };
+    let mut retry_counts: HashMap<String, u32> = HashMap::new();
+
+    for iteration in 0..config.max_iterations {
+        // ── Think ────────────────────────────────────────────────
+        // Select the best tool candidate based on retry history.
+        let think_result = think(task, &tool_candidates, &retry_counts, config);
+
+        let Some(tr) = think_result else {
+            let decision = LoopDecision::Failed {
+                reason: "no available tool candidates after think phase".to_string(),
+                last_output: None,
+            };
+            trace.final_decision = "failed_no_candidates".to_string();
+            trace.total_duration_ms = start.elapsed().as_millis() as u64;
+            warn!(task, iteration, "TAO: no candidates – failed");
+            return (decision, trace);
+        };
+
+        trace.iterations.push(LoopIteration {
+            stage: "think".to_string(),
+            tool: tr.tool.clone(),
+            success: true,
+            duration_ms: 0,
+            detail: format!(
+                "confidence={:.2}, rationale={}",
+                tr.confidence, tr.rationale
+            ),
+        });
+
+        // ── Act ──────────────────────────────────────────────────
+        // Execute the selected tool (with fallback if enabled).
+        let act_start = std::time::Instant::now();
+        let output = if config.enable_fallback {
+            registry
+                .run_with_fallback(&tr.tool, input)
+                .unwrap_or_else(|e| ToolOutput {
+                    success: false,
+                    result: None,
+                    error: Some(format!("tool '{}' error: {}", tr.tool, e)),
+                    verification: None,
+                    audit_log: None,
+                    pua_report: None,
+                })
+        } else {
+            registry.get(&tr.tool).map_or_else(
+                || ToolOutput {
+                    success: false,
+                    result: None,
+                    error: Some(format!("tool '{}' not found", tr.tool)),
+                    verification: None,
+                    audit_log: None,
+                    pua_report: None,
+                },
+                |tool| {
+                    tool.run(input).unwrap_or_else(|e| ToolOutput {
+                        success: false,
+                        result: None,
+                        error: Some(format!("{}", e)),
+                        verification: None,
+                        audit_log: None,
+                        pua_report: None,
+                    })
+                },
+            )
+        };
+        let act_duration_ms = act_start.elapsed().as_millis() as u64;
+
+        trace.iterations.push(LoopIteration {
+            stage: "act".to_string(),
+            tool: tr.tool.clone(),
+            success: output.success,
+            duration_ms: act_duration_ms,
+            detail: if output.success {
+                "execution ok".to_string()
+            } else {
+                output
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "unknown error".to_string())
+            },
+        });
+
+        // ── Observe ──────────────────────────────────────────────
+        let observe_decision = observe(
+            &output,
+            &tr.tool,
+            &mut retry_counts,
+            config,
+            |tool, reason| {
+                trace.iterations.push(LoopIteration {
+                    stage: "observe".to_string(),
+                    tool,
+                    success: false,
+                    duration_ms: 0,
+                    detail: reason,
+                });
+            },
+        );
+
+        match observe_decision {
+            LoopDecision::Continue => {
+                // Move to next iteration
+                trace.iterations.push(LoopIteration {
+                    stage: "think".to_string(),
+                    tool: tr.tool.clone(),
+                    success: true,
+                    duration_ms: 0,
+                    detail: "output ok, continuing".to_string(),
+                });
+                continue;
+            }
+            LoopDecision::Retry { tool, reason } => {
+                trace.iterations.push(LoopIteration {
+                    stage: "think".to_string(),
+                    tool: tool.clone(),
+                    success: false,
+                    duration_ms: 0,
+                    detail: format!("retry: {}", reason),
+                });
+                continue;
+            }
+            LoopDecision::SwitchTool { from, to, reason } => {
+                debug!(from, to, reason, "TAO: switching tool");
+                trace.iterations.push(LoopIteration {
+                    stage: "think".to_string(),
+                    tool: from,
+                    success: false,
+                    duration_ms: 0,
+                    detail: format!("switch to '{}': {}", to, reason),
+                });
+                continue;
+            }
+            LoopDecision::Complete(output) => {
+                trace.final_decision = "success".to_string();
+                trace.total_duration_ms = start.elapsed().as_millis() as u64;
+                info!(
+                    task,
+                    tool = tr.tool,
+                    iterations = iteration + 1,
+                    "TAO: completed"
+                );
+                return (LoopDecision::Complete(output), trace);
+            }
+            LoopDecision::Failed {
+                reason,
+                last_output,
+            } => {
+                trace.final_decision = "failed".to_string();
+                trace.total_duration_ms = start.elapsed().as_millis() as u64;
+                warn!(task, reason, "TAO: failed");
+                return (
+                    LoopDecision::Failed {
+                        reason,
+                        last_output,
+                    },
+                    trace,
+                );
+            }
+            LoopDecision::Escalate { reason, output } => {
+                trace.final_decision = "escalated".to_string();
+                trace.total_duration_ms = start.elapsed().as_millis() as u64;
+                warn!(task, reason, "TAO: escalated");
+                return (LoopDecision::Escalate { reason, output }, trace);
+            }
+        }
+    }
+
+    // Exhausted maximum iterations.
+    let decision = LoopDecision::Failed {
+        reason: format!("max iterations ({}) reached", config.max_iterations),
+        last_output: None,
+    };
+    trace.final_decision = "failed_max_iterations".to_string();
+    trace.total_duration_ms = start.elapsed().as_millis() as u64;
+    warn!(
+        task,
+        max_iterations = config.max_iterations,
+        "TAO: max iterations reached"
+    );
+    (decision, trace)
+}
+
+/// Think phase: select the best tool candidate.
+///
+/// Picks the tool with the fewest retries; if all have been retried to the
+/// limit, returns `None` to signal exhaustion.
+fn think(
+    _task: &str,
+    candidates: &[String],
+    retry_counts: &HashMap<String, u32>,
+    config: &LoopConfig,
+) -> Option<ThinkResult> {
+    let best = candidates
+        .iter()
+        .filter(|t| retry_counts.get(*t).copied().unwrap_or(0) < config.max_retries_per_tool)
+        .min_by_key(|t| retry_counts.get(*t).copied().unwrap_or(0))?;
+
+    let retries = retry_counts.get(best).copied().unwrap_or(0);
+    let confidence = 1.0 - (retries as f64 / config.max_retries_per_tool as f64).min(1.0);
+
+    Some(ThinkResult {
+        tool: best.clone(),
+        confidence,
+        rationale: format!(
+                "retries={}/{} candidates_remaining={}",
+                retries,
+                config.max_retries_per_tool,
+                candidates
+                    .iter()
+                    .filter(|t| retry_counts.get(*t).copied().unwrap_or(0)
+                        < config.max_retries_per_tool)
+                    .count(),
+            ),
+    })
+}
+
+/// Observe phase: evaluate the output and decide the next action.
+fn observe(
+    output: &ToolOutput,
+    tool: &str,
+    retry_counts: &mut HashMap<String, u32>,
+    config: &LoopConfig,
+    mut on_fail: impl FnMut(String, String),
+) -> LoopDecision {
+    if output.success {
+        // Optional verification check.
+        if let Some(verify) = config.verify_output {
+            if !verify(output) {
+                let rc = retry_counts.entry(tool.to_string()).or_insert(0);
+                *rc += 1;
+                on_fail(tool.to_string(), "output verification failed".to_string());
+                if *rc < config.max_retries_per_tool {
+                    return LoopDecision::Retry {
+                        tool: tool.to_string(),
+                        reason: "verification failed".to_string(),
+                    };
+                }
+                return LoopDecision::SwitchTool {
+                    from: tool.to_string(),
+                    to: "next_candidate".to_string(),
+                    reason: "verification failed, retries exhausted".to_string(),
+                };
+            }
+        }
+        return LoopDecision::Complete(output.clone());
+    }
+
+    // Execution failed — increment retry count.
+    let rc = retry_counts.entry(tool.to_string()).or_insert(0);
+    *rc += 1;
+
+    let error_msg = output
+        .error
+        .clone()
+        .unwrap_or_else(|| "no error detail".to_string());
+    on_fail(tool.to_string(), format!("execution failed: {}", error_msg));
+
+    if *rc < config.max_retries_per_tool {
+        return LoopDecision::Retry {
+            tool: tool.to_string(),
+            reason: format!(
+                "attempt {}/{} failed: {}",
+                rc, config.max_retries_per_tool, error_msg
+            ),
+        };
+    }
+
+    // Retries exhausted for this tool — try another candidate.
+    LoopDecision::SwitchTool {
+        from: tool.to_string(),
+        to: "next_candidate".to_string(),
+        reason: format!("retries exhausted for '{}': {}", tool, error_msg),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -795,5 +1202,165 @@ mod tests {
         assert!(output.success);
         let audit_log = output.audit_log.unwrap_or_default();
         assert!(audit_log.contains("fallback"));
+    }
+
+    // ── Think-Act-Observe loop tests ─────────────────────────────
+
+    #[test]
+    fn tao_loop_completes_on_first_tool_success() {
+        let mut registry = ToolRegistry::new();
+        registry.register(AlwaysPassTool);
+
+        let input = tool_input(serde_json::json!({"test": true}));
+        let config = LoopConfig::default();
+
+        let (decision, trace) = execute_loop(
+            "test success",
+            &registry,
+            &input,
+            &["always_pass".to_string()],
+            &config,
+        );
+
+        match decision {
+            LoopDecision::Complete(output) => {
+                assert!(output.success);
+                assert_eq!(
+                    trace.final_decision, "success",
+                    "trace should record success"
+                );
+                assert!(!trace.iterations.is_empty(), "trace must have entries");
+            }
+            other => panic!("expected Complete, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn tao_loop_retries_on_failure_then_switches_tool() {
+        let mut registry = ToolRegistry::new();
+        registry.register(AlwaysFailTool);
+        registry.register(AlwaysPassTool);
+
+        let input = tool_input(serde_json::json!({"test": true}));
+        let config = LoopConfig {
+            max_iterations: 10,
+            max_retries_per_tool: 1,
+            enable_fallback: true,
+            verify_output: None,
+        };
+
+        let (decision, trace) = execute_loop(
+            "test fail then pass",
+            &registry,
+            &input,
+            &["always_fail".to_string(), "always_pass".to_string()],
+            &config,
+        );
+
+        match decision {
+            LoopDecision::Complete(output) => {
+                assert!(output.success);
+                assert_eq!(trace.final_decision, "success");
+                // Should have attempted always_fail at least once
+                let fail_attempts: Vec<_> = trace
+                    .iterations
+                    .iter()
+                    .filter(|i| i.tool == "always_fail")
+                    .collect();
+                assert!(!fail_attempts.is_empty(), "must have attempted always_fail");
+            }
+            other => panic!("expected Complete, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn tao_loop_exhausts_all_candidates_and_fails() {
+        let mut registry = ToolRegistry::new();
+        registry.register(AlwaysFailTool);
+
+        let input = tool_input(serde_json::json!({"test": true}));
+        let config = LoopConfig {
+            max_iterations: 5,
+            max_retries_per_tool: 1,
+            enable_fallback: false,
+            verify_output: None,
+        };
+
+        let (decision, trace) = execute_loop(
+            "test all fail",
+            &registry,
+            &input,
+            &["always_fail".to_string()],
+            &config,
+        );
+
+        match decision {
+            LoopDecision::Failed { reason, .. } => {
+                assert!(!reason.is_empty(), "failure reason must be non-empty");
+            }
+            other => panic!("expected Failed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn tao_loop_respects_custom_verify_function() {
+        let mut registry = ToolRegistry::new();
+        registry.register(AlwaysPassTool);
+
+        // A verify function that always rejects the output.
+        fn reject_always(_: &ToolOutput) -> bool {
+            false
+        }
+
+        let input = tool_input(serde_json::json!({"test": true}));
+        let config = LoopConfig {
+            max_iterations: 3,
+            max_retries_per_tool: 1,
+            enable_fallback: false,
+            verify_output: Some(reject_always),
+        };
+
+        let (decision, _trace) = execute_loop(
+            "test verify reject",
+            &registry,
+            &input,
+            &["always_pass".to_string()],
+            &config,
+        );
+
+        // Tool succeeds but verification fails → should switch or fail.
+        match decision {
+            LoopDecision::SwitchTool { .. } | LoopDecision::Failed { .. } => {}
+            other => panic!("expected SwitchTool or Failed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn tao_loop_with_empty_preferred_tools_falls_back_to_registry_and_completes() {
+        // When preferred_tools is empty, execute_loop falls back to registry.names().
+        // The default ToolRegistry has built-in tools — one of them (e.g. inspect_git_diff)
+        // will succeed on the test input, so the loop completes.
+        let registry = ToolRegistry::new();
+        let input = tool_input(serde_json::json!({"directory": ".", "test": true}));
+        let config = LoopConfig::default();
+
+        let (decision, trace) = execute_loop(
+            "test fallback to registry",
+            &registry,
+            &input,
+            &[], // no preferred tools — falls back to registry.names()
+            &config,
+        );
+
+        match decision {
+            LoopDecision::Complete(output) => {
+                assert!(output.success);
+                assert_eq!(trace.final_decision, "success");
+            }
+            other => panic!(
+                "expected Complete (fallback to registry tools), got {:?}",
+                other
+            ),
+        }
     }
 }

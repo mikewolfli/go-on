@@ -3,8 +3,6 @@
 //! Maintains an EMA-based reliability score per agent/node.  Scores feed the
 //! router's ranking to downweight consistently failing agents.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

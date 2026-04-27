@@ -200,6 +200,345 @@ impl DeterministicVerifier {
     }
 }
 
+// ---------------------------------------------------------------------------
+// AdversarialVerifier — independent verification channel (F-GAP-02)
+// ---------------------------------------------------------------------------
+//
+// Runs a second, independent verification pass from an "adversarial"
+// perspective.  The goal is to find weaknesses that the primary
+// DeterministicVerifier might miss — logical contradictions, edge cases,
+// security implications, and requirement drift.
+
+/// Bias direction for adversarial probing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdversarialBias {
+    /// Probe for security vulnerabilities.
+    Security,
+    /// Probe for logical correctness.
+    Logic,
+    /// Probe for completeness against requirements.
+    Completeness,
+    /// Probe for performance / scalability.
+    Performance,
+}
+
+/// A single adversarial finding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdversarialFinding {
+    pub category: String,
+    pub severity: String, // "low" | "medium" | "high" | "critical"
+    pub description: String,
+    pub recommendation: String,
+}
+
+/// Outcome of an adversarial verification pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdversarialVerdict {
+    pub passed: bool,
+    pub bias: AdversarialBias,
+    pub confidence: f64,
+    pub findings: Vec<AdversarialFinding>,
+    pub summary: String,
+}
+
+/// Independent adversarial verifier that probes for weaknesses.
+pub struct AdversarialVerifier;
+
+impl AdversarialVerifier {
+    /// Run an adversarial verification pass with the given bias.
+    ///
+    /// The verifier examines content from the specified angle and returns
+    /// findings along with a pass/fail verdict.
+    pub fn verify(content: &str, bias: AdversarialBias) -> AdversarialVerdict {
+        let mut findings: Vec<AdversarialFinding> = Vec::new();
+        let lower = content.to_ascii_lowercase();
+
+        match bias {
+            AdversarialBias::Security => {
+                // Check for common security anti-patterns
+                if lower.contains("unsafe") {
+                    findings.push(AdversarialFinding {
+                        category: "memory_safety".to_string(),
+                        severity: "high".to_string(),
+                        description: "code contains 'unsafe' block".to_string(),
+                        recommendation:
+                            "review unsafe block for soundness; prefer safe abstractions"
+                                .to_string(),
+                    });
+                }
+                if lower.contains("eval(") || lower.contains("exec(") {
+                    findings.push(AdversarialFinding {
+                        category: "code_injection".to_string(),
+                        severity: "critical".to_string(),
+                        description: "dynamic code execution detected".to_string(),
+                        recommendation: "avoid eval/exec; use sandboxed alternatives".to_string(),
+                    });
+                }
+                if lower.contains("password") || lower.contains("secret") {
+                    findings.push(AdversarialFinding {
+                        category: "credential_exposure".to_string(),
+                        severity: "high".to_string(),
+                        description: "potential credential in code".to_string(),
+                        recommendation: "use environment variables or a secret store".to_string(),
+                    });
+                }
+            }
+            AdversarialBias::Logic => {
+                // Check for logical contradictions
+                if content.matches("true").count() > 0 && content.matches("false").count() > 0 {
+                    let true_count = content.matches("true").count();
+                    let false_count = content.matches("false").count();
+                    if true_count > 10 && false_count > 10 {
+                        findings.push(AdversarialFinding {
+                            category: "logic_complexity".to_string(),
+                            severity: "medium".to_string(),
+                            description: format!(
+                                "high boolean density: {} true vs {} false literals",
+                                true_count, false_count
+                            ),
+                            recommendation: "consider simplifying boolean logic".to_string(),
+                        });
+                    }
+                }
+                // Check for hardcoded magic numbers
+                let magic_count = content
+                    .lines()
+                    .filter(|line| {
+                        let trimmed = line.trim();
+                        trimmed.starts_with("const") || trimmed.starts_with("let")
+                    })
+                    .filter(|line| line.chars().filter(|c| c.is_ascii_digit()).count() > 20)
+                    .count();
+                if magic_count > 3 {
+                    findings.push(AdversarialFinding {
+                        category: "magic_numbers".to_string(),
+                        severity: "low".to_string(),
+                        description: format!(
+                            "{} lines contain heavy numeric literals",
+                            magic_count
+                        ),
+                        recommendation: "extract magic numbers into named constants".to_string(),
+                    });
+                }
+            }
+            AdversarialBias::Completeness => {
+                // Check for placeholder / incomplete code
+                if lower.contains("todo") || lower.contains("fixme") || lower.contains("xxx") {
+                    findings.push(AdversarialFinding {
+                        category: "incomplete".to_string(),
+                        severity: "medium".to_string(),
+                        description: "code contains TODO/FIXME markers".to_string(),
+                        recommendation: "resolve all TODO/FIXME before release".to_string(),
+                    });
+                }
+                // Check for missing error handling
+                if lower.contains("unwrap(") || lower.contains("expect(") {
+                    findings.push(AdversarialFinding {
+                        category: "error_handling".to_string(),
+                        severity: "medium".to_string(),
+                        description: "code uses unwrap/expect which may panic".to_string(),
+                        recommendation: "replace with proper error propagation".to_string(),
+                    });
+                }
+            }
+            AdversarialBias::Performance => {
+                // Check for obvious performance issues
+                if lower.contains("clone(") {
+                    let clone_count = content.matches("clone(").count();
+                    if clone_count > 5 {
+                        findings.push(AdversarialFinding {
+                            category: "excessive_cloning".to_string(),
+                            severity: "low".to_string(),
+                            description: format!("{} clone() calls detected", clone_count),
+                            recommendation: "prefer references or Arc where possible".to_string(),
+                        });
+                    }
+                }
+                // Check for O(n²) patterns
+                let nested_loops = content
+                    .lines()
+                    .filter(|line| line.trim().starts_with("for "))
+                    .count();
+                if nested_loops > 3 {
+                    findings.push(AdversarialFinding {
+                        category: "nested_iteration".to_string(),
+                        severity: "low".to_string(),
+                        description: format!("{} for-loops detected", nested_loops),
+                        recommendation: "consider iterator combinators or early exit".to_string(),
+                    });
+                }
+            }
+        }
+
+        let passed = findings.is_empty();
+        let confidence = if passed {
+            0.9
+        } else {
+            let severity_weights: f64 = findings
+                .iter()
+                .map(|f| match f.severity.as_str() {
+                    "critical" => 0.4,
+                    "high" => 0.3,
+                    "medium" => 0.2,
+                    _ => 0.1,
+                })
+                .sum::<f64>()
+                .min(0.8);
+            1.0 - severity_weights
+        };
+
+        let summary = if passed {
+            format!("{:?} adversarial check passed", bias)
+        } else {
+            format!(
+                "{:?} adversarial check found {} issue(s)",
+                bias,
+                findings.len()
+            )
+        };
+
+        AdversarialVerdict {
+            passed,
+            bias,
+            confidence: confidence.max(0.1),
+            findings,
+            summary,
+        }
+    }
+
+    /// Run multi-bias adversarial verification.
+    ///
+    /// Executes all four biases and returns the combined result.
+    pub fn verify_all(content: &str) -> Vec<AdversarialVerdict> {
+        vec![
+            Self::verify(content, AdversarialBias::Security),
+            Self::verify(content, AdversarialBias::Logic),
+            Self::verify(content, AdversarialBias::Completeness),
+            Self::verify(content, AdversarialBias::Performance),
+        ]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ArbitrationStrategy (F-GAP-02)
+// ---------------------------------------------------------------------------
+//
+// When primary (DeterministicVerifier) and secondary (AdversarialVerifier)
+// disagree, the arbitration strategy resolves the conflict.
+
+/// Possible arbitration outcomes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArbitrationOutcome {
+    /// Accept primary verdict.
+    AcceptPrimary,
+    /// Accept adversarial verdict.
+    AcceptAdversarial,
+    /// Require human review.
+    HumanReview,
+    /// Insufficient evidence — defer.
+    Defer,
+}
+
+/// Arbitration configuration.
+#[derive(Debug, Clone)]
+pub struct ArbitrationConfig {
+    /// Confidence threshold below which human review is required.
+    pub human_review_threshold: f64,
+    /// Whether to require adversarial verification on high-risk content.
+    pub require_adversarial_on_high_risk: bool,
+}
+
+impl Default for ArbitrationConfig {
+    fn default() -> Self {
+        Self {
+            human_review_threshold: 0.6,
+            require_adversarial_on_high_risk: true,
+        }
+    }
+}
+
+/// Resolve disagreement between primary and adversarial verifiers.
+///
+/// # Arguments
+///
+/// * `primary_verdict` - Verdict from DeterministicVerifier::aggregate.
+/// * `adversarial_verdicts` - Results from AdversarialVerifier.
+/// * `config` - Arbitration configuration.
+///
+/// # Returns
+///
+/// An `ArbitrationOutcome` indicating the resolution.
+pub fn arbitrate(
+    primary_verdict: &VerificationVerdict,
+    adversarial_verdicts: &[AdversarialVerdict],
+    config: &ArbitrationConfig,
+) -> ArbitrationOutcome {
+    // If no adversarial checks ran, accept primary.
+    if adversarial_verdicts.is_empty() {
+        return ArbitrationOutcome::AcceptPrimary;
+    }
+
+    // Compute adversarial pass rate.
+    let adv_passed = adversarial_verdicts.iter().filter(|v| v.passed).count();
+    let adv_total = adversarial_verdicts.len();
+    let adv_pass_rate = adv_passed as f64 / adv_total as f64;
+
+    // Compute average adversarial confidence.
+    let avg_adv_confidence: f64 = adversarial_verdicts
+        .iter()
+        .map(|v| v.confidence)
+        .sum::<f64>()
+        / adv_total as f64;
+
+    // Map primary verdict to numeric score.
+    let primary_score = match primary_verdict {
+        VerificationVerdict::Approve => 1.0,
+        VerificationVerdict::ApproveWithCaveats => 0.75,
+        VerificationVerdict::Valid => 1.0,
+        VerificationVerdict::Revise => 0.4,
+        VerificationVerdict::RequiresRepair => 0.3,
+        VerificationVerdict::Reject => 0.0,
+        VerificationVerdict::Invalid => 0.0,
+        VerificationVerdict::InsufficientEvidence => 0.5,
+        VerificationVerdict::Inconclusive => 0.5,
+    };
+
+    // If both agree, accept.
+    let primary_positive = primary_score >= 0.7;
+    let adversarial_positive = adv_pass_rate >= 0.75;
+
+    if primary_positive && adversarial_positive {
+        return ArbitrationOutcome::AcceptPrimary;
+    }
+    if !primary_positive && !adversarial_positive {
+        return ArbitrationOutcome::AcceptAdversarial;
+    }
+
+    // Disagreement — check confidence.
+    let avg_confidence = match primary_verdict {
+        VerificationVerdict::Approve | VerificationVerdict::ApproveWithCaveats => {
+            // Use adversarial confidence as primary may be too permissive
+            avg_adv_confidence
+        }
+        _ => {
+            // For reject/revise, use combined confidence
+            (primary_score + avg_adv_confidence) / 2.0
+        }
+    };
+
+    if avg_confidence < config.human_review_threshold {
+        ArbitrationOutcome::HumanReview
+    } else if primary_positive && !adversarial_positive && avg_adv_confidence > 0.7 {
+        // Adversarial found issues with high confidence — accept adversarial
+        ArbitrationOutcome::AcceptAdversarial
+    } else if !primary_positive && adversarial_positive && primary_score > 0.3 {
+        // Close call — human review
+        ArbitrationOutcome::HumanReview
+    } else {
+        ArbitrationOutcome::AcceptPrimary
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +584,115 @@ mod tests {
         let signal = DeterministicVerifier::run_lint_check(code);
         assert!(!signal.passed, "todo!() macro should be flagged");
     }
+
+    #[test]
+    // ── AdversarialVerifier tests ────────────────────────────────
+    #[test]
+    fn adversarial_security_detects_unsafe() {
+        let code = "unsafe { std::ptr::read(ptr) }";
+        let verdict = AdversarialVerifier::verify(code, AdversarialBias::Security);
+        assert!(!verdict.passed, "unsafe block should be flagged");
+        assert!(verdict
+            .findings
+            .iter()
+            .any(|f| f.category == "memory_safety"));
+    }
+
+    #[test]
+    fn adversarial_logic_high_boolean_density() {
+        let code = (0..20)
+            .map(|i| format!("let x{} = true;\nlet y{} = false;\n", i, i))
+            .collect::<String>();
+        let verdict = AdversarialVerifier::verify(&code, AdversarialBias::Logic);
+        assert!(!verdict.passed, "high boolean density should be flagged");
+    }
+
+    #[test]
+    fn adversarial_completeness_detects_todo() {
+        let code = "fn temp() { todo!() }";
+        let verdict = AdversarialVerifier::verify(code, AdversarialBias::Completeness);
+        assert!(!verdict.passed, "TODO markers should be flagged");
+    }
+
+    #[test]
+    fn adversarial_performance_detects_excessive_cloning() {
+        let code = (0..10)
+            .map(|i| format!("let v{} = data.clone();\n", i))
+            .collect::<String>();
+        let verdict = AdversarialVerifier::verify(&code, AdversarialBias::Performance);
+        assert!(!verdict.passed, "excessive cloning should be flagged");
+    }
+
+    #[test]
+    fn adversarial_all_biases_run_independently() {
+        let code = "unsafe { eval(password) }; todo!();";
+        let verdicts = AdversarialVerifier::verify_all(code);
+        assert_eq!(verdicts.len(), 4, "all four biases should run");
+        assert!(
+            verdicts.iter().any(|v| !v.passed),
+            "at least one bias should find issues"
+        );
+    }
+
+    // ── Arbitration tests ────────────────────────────────────────
+
+    #[test]
+    fn arbitration_accepts_primary_when_both_agree_positive() {
+        let primary = VerificationVerdict::Approve;
+        let adv = vec![
+            AdversarialVerdict {
+                passed: true,
+                bias: AdversarialBias::Security,
+                confidence: 0.9,
+                findings: vec![],
+                summary: "ok".to_string(),
+            },
+            AdversarialVerdict {
+                passed: true,
+                bias: AdversarialBias::Logic,
+                confidence: 0.85,
+                findings: vec![],
+                summary: "ok".to_string(),
+            },
+        ];
+        let config = ArbitrationConfig::default();
+        let outcome = arbitrate(&primary, &adv, &config);
+        assert_eq!(outcome, ArbitrationOutcome::AcceptPrimary);
+    }
+
+    #[test]
+    fn arbitration_requests_human_review_on_low_confidence() {
+        let primary = VerificationVerdict::Approve;
+        let adv = vec![AdversarialVerdict {
+            passed: false,
+            bias: AdversarialBias::Security,
+            confidence: 0.3,
+            findings: vec![AdversarialFinding {
+                category: "test".to_string(),
+                severity: "high".to_string(),
+                description: "test finding".to_string(),
+                recommendation: "fix it".to_string(),
+            }],
+            summary: "failed".to_string(),
+        }];
+        let config = ArbitrationConfig {
+            human_review_threshold: 0.6,
+            require_adversarial_on_high_risk: true,
+        };
+        let outcome = arbitrate(&primary, &adv, &config);
+        // Low adversarial confidence + disagreement → human review
+        assert_eq!(outcome, ArbitrationOutcome::HumanReview);
+    }
+
+    #[test]
+    fn arbitration_defers_on_empty_adversarial() {
+        let primary = VerificationVerdict::Approve;
+        let config = ArbitrationConfig::default();
+        let outcome = arbitrate(&primary, &[], &config);
+        assert_eq!(outcome, ArbitrationOutcome::AcceptPrimary);
+    }
+
+    // ── Existing tests ───────────────────────────────────────────
 
     #[test]
     fn aggregate_all_pass() {

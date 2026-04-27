@@ -21,7 +21,6 @@ pub mod helpers;
 pub mod r#impl;
 #[allow(dead_code)]
 pub mod prelude;
-#[allow(dead_code)]
 pub mod server;
 
 // Re-export for convenience

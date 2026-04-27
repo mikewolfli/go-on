@@ -33,6 +33,7 @@ use crate::flow::FlowManager;
 use crate::i18n::runtime::tf;
 use crate::intelligence::token_cache::ContextLengthClass;
 use crate::orchestration::task_router::{TaskRouter, TaskType};
+use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
 use crate::pua::PuaEnforcementPlan;
 
 use crate::intelligence::verification::{
@@ -719,6 +720,24 @@ pub(crate) async fn process_chat_request(
         ),
     );
 
+    // ── StartupContext injection ───────────────────────────────────────
+    // If the startup context has been loaded (non-blocking, once per process),
+    // append its summary to the first system message so every agent receives
+    // project-level context (README excerpt, build commands, recent commits).
+    let agent_messages = {
+        if let Some(ctx) = crate::orchestration::startup_context::get() {
+            let summary = crate::orchestration::startup_context::summary_text(ctx);
+            if !summary.is_empty() {
+                let startup_msg = format!("[startup context]\n{}", summary);
+                merge_context_into_messages(&agent_messages, Some(startup_msg))
+            } else {
+                agent_messages
+            }
+        } else {
+            agent_messages
+        }
+    };
+
     let mut selected_agent = String::new();
     let mut response_text = String::new();
     let mut last_err: Option<anyhow::Error> = None;
@@ -1121,30 +1140,85 @@ pub(crate) async fn process_chat_request(
                     // Extract task description
                     let task_description = extract_task_description(&params.messages);
 
-                    // Run tool execution loop
-                    let tool_result = run_tool_execution_loop(&task_description, "primary", 0);
-                    if !tool_result.is_empty() {
-                        tool_execution_results.push(json!({
-                            "tool_loop": "executed",
-                            "result": tool_result,
-                            "task": task_description
-                        }));
-                    }
+                    // Build a ToolInput from the task context
+                    let tool_input = ToolInput {
+                        task_id: "chat".to_string(),
+                        phase: phase.phase_name.clone(),
+                        agent_role: selected_agent.clone(),
+                        objective: task_description.clone(),
+                        constraints: None,
+                        evidence: None,
+                        payload: serde_json::json!({
+                            "task": task_description,
+                            "phase": phase.phase_name,
+                        }),
+                        allowed_base_dir: None,
+                    };
 
-                    // Also check for tool calls in the response
-                    let tool_calls = extract_tool_calls_from_response(&response_text, 3);
-                    if !tool_calls.is_empty() {
-                        let tool_observations = execute_tool_calls(
-                            &task_description,
-                            "model_tool_calls",
-                            0,
-                            &tool_calls,
-                        );
-                        tool_execution_results.push(json!({
-                            "model_tool_calls": tool_calls.len(),
-                            "observations": tool_observations
-                        }));
-                    }
+                    // Create a ToolRegistry (reuses built-in tools)
+                    let tool_registry = ToolRegistry::new();
+
+                    // Determine preferred tools from agent response hints
+                    let preferred_tools: Vec<String> = {
+                        let calls = extract_tool_calls_from_response(&response_text, 5);
+                        if calls.is_empty() {
+                            // No explicit tool calls — let execute_loop discover
+                            vec!["read_file".to_string(), "search_files".to_string()]
+                        } else {
+                            calls
+                        }
+                    };
+
+                    // Run the Think-Act-Observe loop
+                    let tao_config = LoopConfig::default();
+                    let (tao_decision, tao_trace) = execute_loop(
+                        &task_description,
+                        &tool_registry,
+                        &tool_input,
+                        &preferred_tools,
+                        &tao_config,
+                    );
+
+                    // Record the loop outcome
+                    let tool_result = match &tao_decision {
+                        LoopDecision::Complete(output) => {
+                            serde_json::json!({
+                                "status": "complete",
+                                "success": output.success,
+                                "result": output.result,
+                                "iterations": tao_trace.iterations.len(),
+                                "duration_ms": tao_trace.total_duration_ms,
+                            })
+                        }
+                        LoopDecision::Failed { reason, .. } => {
+                            serde_json::json!({
+                                "status": "failed",
+                                "reason": reason,
+                                "iterations": tao_trace.iterations.len(),
+                                "duration_ms": tao_trace.total_duration_ms,
+                            })
+                        }
+                        LoopDecision::Escalate { reason, .. } => {
+                            serde_json::json!({
+                                "status": "escalated",
+                                "reason": reason,
+                                "iterations": tao_trace.iterations.len(),
+                                "duration_ms": tao_trace.total_duration_ms,
+                            })
+                        }
+                        _ => serde_json::json!({
+                            "status": "incomplete",
+                            "iterations": tao_trace.iterations.len(),
+                            "duration_ms": tao_trace.total_duration_ms,
+                        }),
+                    };
+
+                    tool_execution_results.push(json!({
+                        "tool_loop": "tao_executed",
+                        "decision": tool_result,
+                        "trace": serde_json::to_value(&tao_trace).unwrap_or_default(),
+                        "task": task_description
+                    }));
                 }
             }
             Err(err) => {
@@ -1218,83 +1292,126 @@ pub(crate) async fn process_chat_request(
     };
 
     // Task graph execution engine integration
-    let task_graph_result = if params.mode.eq_ignore_ascii_case("full_auto") {
-        // Create task graph for this execution
-        let task_description = extract_task_description(&params.messages);
-        let root_node = TaskNode {
-            id: format!("chat-{}-root", conversation_id),
-            kind: "chat_request".to_string(),
-            state: "done".to_string(),
-            input: json!({
-                "task": task_description,
-                "mode": params.mode,
-                "phase": phase.phase_name
-            }),
-            output: Some(json!({
-                "response": response_text,
-                "duration_ms": started.elapsed().as_millis() as u64
-            })),
-            dependencies: HashSet::new(),
-            retries: 0,
-        };
-
-        let mut task_graph = TaskGraph::new(root_node);
-
-        // Add tool execution as a child node if tool execution was performed
-        if !tool_execution_results.is_empty() {
-            let tool_node = TaskNode {
-                id: format!("chat-{}-tools", conversation_id),
-                kind: "tool_execution".to_string(),
+    let (task_graph_result, _saved_graph_id, _saved_checkpoint_id) =
+        if params.mode.eq_ignore_ascii_case("full_auto") {
+            // Create task graph for this execution
+            let task_description = extract_task_description(&params.messages);
+            let root_node = TaskNode {
+                id: format!("chat-{}-root", conversation_id),
+                kind: "chat_request".to_string(),
                 state: "done".to_string(),
                 input: json!({
                     "task": task_description,
-                    "mode": "full_auto"
+                    "mode": params.mode,
+                    "phase": phase.phase_name
                 }),
                 output: Some(json!({
-                    "results": tool_execution_results,
-                    "count": tool_execution_results.len()
+                    "response": response_text,
+                    "duration_ms": started.elapsed().as_millis() as u64
                 })),
-                dependencies: HashSet::from([format!("chat-{}-root", conversation_id)]),
+                dependencies: HashSet::new(),
                 retries: 0,
             };
-            task_graph.add_node(tool_node);
-            task_graph.add_edge(
-                format!("chat-{}-root", conversation_id),
-                format!("chat-{}-tools", conversation_id),
-            );
-        }
 
-        // Add memory promotion as a child node if memory promotion was performed
-        if let Some(memory_result) = &memory_promotion_result {
-            let memory_node = TaskNode {
-                id: format!("chat-{}-memory", conversation_id),
-                kind: "memory_promotion".to_string(),
-                state: "done".to_string(),
-                input: json!({
-                    "task": task_description
-                }),
-                output: Some(memory_result.clone()),
-                dependencies: HashSet::from([format!("chat-{}-root", conversation_id)]),
-                retries: 0,
-            };
-            task_graph.add_node(memory_node);
-            task_graph.add_edge(
-                format!("chat-{}-root", conversation_id),
-                format!("chat-{}-memory", conversation_id),
-            );
-        }
+            let mut task_graph = TaskGraph::new(root_node);
 
-        Some(json!({
-            "task_graph": {
-                "node_count": task_graph.nodes.len(),
-                "edge_count": task_graph.edges.len(),
-                "root": task_graph.root,
-                "execution_complete": true
+            // Add tool execution as a child node if tool execution was performed
+            if !tool_execution_results.is_empty() {
+                let tool_node = TaskNode {
+                    id: format!("chat-{}-tools", conversation_id),
+                    kind: "tool_execution".to_string(),
+                    state: "done".to_string(),
+                    input: json!({
+                        "task": task_description,
+                        "mode": "full_auto"
+                    }),
+                    output: Some(json!({
+                        "results": tool_execution_results,
+                        "count": tool_execution_results.len()
+                    })),
+                    dependencies: HashSet::from([format!("chat-{}-root", conversation_id)]),
+                    retries: 0,
+                };
+                task_graph.add_node(tool_node);
+                task_graph.add_edge(
+                    format!("chat-{}-root", conversation_id),
+                    format!("chat-{}-tools", conversation_id),
+                );
             }
-        }))
-    } else {
-        None
-    };
+
+            // Add memory promotion as a child node if memory promotion was performed
+            if let Some(memory_result) = &memory_promotion_result {
+                let memory_node = TaskNode {
+                    id: format!("chat-{}-memory", conversation_id),
+                    kind: "memory_promotion".to_string(),
+                    state: "done".to_string(),
+                    input: json!({
+                        "task": task_description
+                    }),
+                    output: Some(memory_result.clone()),
+                    dependencies: HashSet::from([format!("chat-{}-root", conversation_id)]),
+                    retries: 0,
+                };
+                task_graph.add_node(memory_node);
+                task_graph.add_edge(
+                    format!("chat-{}-root", conversation_id),
+                    format!("chat-{}-memory", conversation_id),
+                );
+            }
+
+            // Persist the task graph and checkpoint to the store
+            let graph_id = format!("graph-{}", conversation_id);
+            let checkpoint_id = format!("ckpt-{}", crate::acp::prelude::now_ts());
+            if let Some(ref store) = server.task_graph_store {
+                if let Err(e) = store.save_graph(&graph_id, &task_graph) {
+                    tracing::warn!(target: "task_graph", "failed to save graph: {e}");
+                }
+                // Build subtask records from graph nodes (excluding root)
+                let subtask_records: Vec<crate::orchestration::task_graph::PlannedSubtaskRecord> =
+                    task_graph
+                        .nodes
+                        .values()
+                        .filter(|n| n.id != task_graph.root)
+                        .map(|n| crate::orchestration::task_graph::PlannedSubtaskRecord {
+                            subtask_id: n.id.clone(),
+                            description: n
+                                .input
+                                .get("task")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            phase: n.kind.clone(),
+                            outcome: Some(if n.state == "done" {
+                                "completed".to_string()
+                            } else {
+                                n.state.clone()
+                            }),
+                            result_summary: n.output.as_ref().map(|o| o.to_string()),
+                        })
+                        .collect();
+                let checkpoint = task_graph.snapshot(&task_description, 1, subtask_records);
+                if let Err(e) = store.save_checkpoint(&checkpoint, &graph_id) {
+                    tracing::warn!(target: "task_graph", "failed to save checkpoint: {e}");
+                }
+            }
+
+            (
+                Some(json!({
+                    "task_graph": {
+                        "node_count": task_graph.nodes.len(),
+                        "edge_count": task_graph.edges.len(),
+                        "root": task_graph.root,
+                        "execution_complete": true,
+                        "graph_id": graph_id,
+                        "checkpoint_id": checkpoint_id,
+                    }
+                })),
+                Some(graph_id),
+                Some(checkpoint_id),
+            )
+        } else {
+            (None, None, None)
+        };
 
     // Role-based agent routing integration
     let role_routing_result = if params.mode.eq_ignore_ascii_case("full_auto") {
@@ -3374,6 +3491,116 @@ mod tests {
 
         assert!(summary.chars().count() <= 12);
         assert!(!summary.is_empty());
+    }
+
+    #[cfg(not(feature = "backend-postgres"))]
+    #[tokio::test]
+    async fn process_chat_request_wires_harness_and_capability_bus_closed_loop() {
+        let temp = tempfile::tempdir().expect("tempdir should exist");
+        let vector_path = temp.path().join("e2e_vector.sqlite3");
+        let vector_store = Arc::new(
+            VectorStore::new(&vector_path, 32, 128).expect("vector store should initialize"),
+        );
+        vector_store
+            .upsert("coding", "rust e2e test", "E2E dual bus integration test")
+            .expect("seed vector entry");
+
+        let seen_messages = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = AgentRegistry::new();
+        registry.register_arc(
+            "test-agent",
+            Arc::new(RecordingAgent {
+                seen_messages: Arc::clone(&seen_messages),
+                output: "e2e dual bus answer".to_string(),
+            }),
+        );
+
+        let mut config = test_config();
+        config.reputation = Some(crate::config::ReputationConfig {
+            enabled: true,
+            ema_alpha: 0.3,
+            exclusion_threshold: 0.1,
+            degraded_threshold: 0.3,
+        });
+        let config = Arc::new(config);
+        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
+
+        let harness_bus = Arc::new(crate::governance::harness_bus::default_harness_bus(None));
+        let workflow_registry = Arc::new(std::sync::Mutex::new(
+            crate::orchestration::workflow_registry::WorkflowRegistry::new(),
+        ));
+        let capability_bus = Arc::new(
+            crate::intelligence::capability_bus::core::CapabilityBus::new_default(
+                Arc::clone(&harness_bus),
+                Some(Arc::clone(&workflow_registry)),
+            ),
+        );
+
+        let mut server = ServerBuilder::new().build().expect("server should build");
+        server.flow_manager = Some(flow);
+        server.agent_registry = Some(Arc::new(registry));
+        server.cache.vector_store = Some(Arc::clone(&vector_store));
+        server.vector_config = config.vector.clone();
+        server.harness_bus = Some(Arc::clone(&harness_bus));
+        server.capability_bus = Some(Arc::clone(&capability_bus));
+        let config_path = temp.path().join("e2e_config.toml");
+        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
+        server.config_path = Some(config_path.display().to_string());
+
+        let params = ChatParams {
+            mode: "ask".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: "Test dual bus closed loop integration".to_string(),
+            }],
+            conversation_id: Some("e2e-conv".to_string()),
+            branch_id: Some("e2e-branch".to_string()),
+            phase: Some("coding".to_string()),
+            options: None,
+            requirement_contract: None,
+            plan: None,
+            vector_hits: None,
+            execution_decision_candidate: None,
+        };
+
+        let trace = chat_trace_context(&Some(json!(1)), "chat.e2e");
+        let result = process_chat_request(&server, &params, None, &trace, None)
+            .await
+            .expect("e2e dual bus chat request should succeed");
+
+        // Phase 0: HarnessBus evaluate() was called during request
+        let hp = harness_bus.governance_profile();
+        assert!(
+            hp.total_evaluations >= 1,
+            "HarnessBus evaluate() must be called"
+        );
+        assert!(
+            hp.allow_count + hp.deny_count + hp.escalate_count + hp.review_count >= 1,
+            "HarnessBus must produce at least one verdict"
+        );
+
+        // Phase 1: CapabilityBus sense/decide was called during request
+        let cp = capability_bus.capability_bus_profile();
+        assert!(
+            cp.routing_count >= 1,
+            "CapabilityBus must route at least once"
+        );
+
+        // Verify response content
+        assert_eq!(result["branch_id"], "e2e-branch");
+        assert_eq!(result["response"], "e2e dual bus answer");
+
+        // Verify vector context was injected
+        let captured = seen_messages.lock().expect("messages lock").clone();
+        assert_eq!(
+            captured.first().map(|msg| msg.role.as_str()),
+            Some("system")
+        );
+        let system_text = &captured.first().expect("system message expected").content;
+        assert!(
+            system_text.contains("E2E dual bus integration test"),
+            "vector context must be injected into system message"
+        );
     }
 }
 

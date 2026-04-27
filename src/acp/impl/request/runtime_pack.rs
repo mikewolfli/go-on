@@ -162,7 +162,7 @@ pub(super) async fn handle_debug_panel_get(
     send_result(server, request_id, build_debug_panel_payload(server).await).await
 }
 
-async fn build_debug_panel_payload(server: &AcpServer) -> Value {
+pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
     let state = server.conversation_state.lock().await;
     let conversation_count = state
         .checkpoints
@@ -198,7 +198,7 @@ pub(super) async fn handle_trace_get(
     send_result(server, request_id, build_trace_payload(&params)).await
 }
 
-fn build_trace_payload(params: &Value) -> Value {
+pub(super) fn build_trace_payload(params: &Value) -> Value {
     let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
 
     let trace_events = trace_events()
@@ -504,7 +504,7 @@ pub(super) async fn handle_health_probes(
     send_result(server, request_id, build_health_probes_payload(server)?).await
 }
 
-fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
+pub(super) fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
     let _metrics = server.observability.metrics.snapshot();
     let config_path = server.config_path.as_deref().map(Path::new);
@@ -857,7 +857,7 @@ fn build_runtime_self_model_payload(server: &AcpServer, params: &Value) -> Resul
     }))
 }
 
-fn build_provider_status_payload(server: &AcpServer) -> Result<Value> {
+pub(super) fn build_provider_status_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
@@ -2917,6 +2917,10 @@ pub(super) async fn handle_governance_status(
                 "capability_graph_agents": p.capability_graph_agents,
                 "knowledge_insights_count": p.knowledge_insights_count,
                 "last_route_duration_ms": p.last_route_duration_ms,
+                "q_learning_table_size": p.q_learning_table_size,
+                "experience_case_count": p.experience_case_count,
+                "event_history_len": p.event_history_len,
+                "workflow_presets_count": p.workflow_presets_count,
             })
         })
         .unwrap_or_else(|| {
@@ -2928,8 +2932,59 @@ pub(super) async fn handle_governance_status(
                 "capability_graph_agents": 0u32,
                 "knowledge_insights_count": 0u32,
                 "last_route_duration_ms": 0u64,
+                "q_learning_table_size": 0u32,
+                "experience_case_count": 0u32,
+                "event_history_len": 0u32,
+                "workflow_presets_count": 0u32,
             })
         });
+
+    // REAL DATA: capability graph edge count from CapabilityBus
+    let capability_graph_edge_count: u64 = server
+        .capability_bus
+        .as_ref()
+        .and_then(|cb| cb.capability_graph.lock().ok())
+        .map(|g| g.total_edges() as u64)
+        .unwrap_or(0);
+
+    // REAL DATA: reputation top/bottom agents from CapabilityBus
+    let (reputation_top_agent, reputation_bottom_agent) = server
+        .capability_bus
+        .as_ref()
+        .and_then(|cb| cb.reputation.lock().ok())
+        .map(|r| {
+            let snapshot = r.snapshot();
+            let top = snapshot
+                .first()
+                .map(|rec| {
+                    serde_json::json!({
+                        "agent": rec.agent,
+                        "score": rec.score,
+                        "total_tasks": rec.total_tasks,
+                        "success_count": rec.success_count,
+                        "failure_count": rec.failure_count,
+                        "consecutive_failures": rec.consecutive_failures,
+                        "last_updated_ms": rec.last_updated_ms,
+                    })
+                })
+                .unwrap_or(serde_json::Value::Null);
+            let bottom = snapshot
+                .last()
+                .map(|rec| {
+                    serde_json::json!({
+                        "agent": rec.agent,
+                        "score": rec.score,
+                        "total_tasks": rec.total_tasks,
+                        "success_count": rec.success_count,
+                        "failure_count": rec.failure_count,
+                        "consecutive_failures": rec.consecutive_failures,
+                        "last_updated_ms": rec.last_updated_ms,
+                    })
+                })
+                .unwrap_or(serde_json::Value::Null);
+            (top, bottom)
+        })
+        .unwrap_or((serde_json::Value::Null, serde_json::Value::Null));
 
     send_result(
         server,
@@ -3354,21 +3409,26 @@ pub(super) async fn handle_governance_status(
                         .harness_bus
                         .as_ref()
                         .map(|hb| {
-                            hb.governance_profile()
+                            hb.self_rationalization_profile(self_rationalization_guard_ready)
                         })
-                        .map(|p| serde_json::json!({
-                            "enabled": p.enabled,
-                            "confidence_threshold": 0.6,
-                            "reexamine_triggered_count": 0u64,
-                            "weak_evidence_blocked_count": 0u64,
-                        }))
                         .unwrap_or_else(|| serde_json::json!({
-                            "enabled": false,
+                            "enabled": self_rationalization_guard_ready,
                             "confidence_threshold": 0.6,
                             "reexamine_triggered_count": 0u64,
                             "weak_evidence_blocked_count": 0u64,
                         })),
                 },
+                "startup_context": startup_context.as_ref().map(|ctx| serde_json::json!({
+                    "ready": true,
+                    "loaded": ctx.loaded,
+                    "has_code_repo": ctx.has_code_repo,
+                    "readme_chars": ctx.readme_chars,
+                    "build_commands": ctx.build_commands,
+                    "recent_commits_count": ctx.recent_commits.len(),
+                })).unwrap_or_else(|| serde_json::json!({
+                    "ready": false,
+                    "loaded": false,
+                })),
                 "startup_context_loader": startup_context_profile,
                 "layered_prompt_builder": {
                     "ready": layered_prompt_builder_ready,
@@ -3430,7 +3490,7 @@ pub(super) async fn handle_governance_status(
                     "capability_graph_profile": {
                         "enabled": capability_graph_ready,
                         "node_count": registered_agent_total as u64,
-                        "edge_count": 0u64,
+                        "edge_count": capability_graph_edge_count,
                         "high_risk_node_count": 0u64,
                         "deprecated_node_count": 0u64,
                     },
@@ -3449,8 +3509,8 @@ pub(super) async fn handle_governance_status(
                     "node_reputation_profile": {
                         "enabled": node_reputation_tracker_ready,
                         "tracked_agent_count": registered_agent_total as u64,
-                        "top_agent": serde_json::Value::Null,
-                        "bottom_agent": serde_json::Value::Null,
+                        "top_agent": reputation_top_agent,
+                        "bottom_agent": reputation_bottom_agent,
                         "min_samples_required": 5u32,
                     },
                 },

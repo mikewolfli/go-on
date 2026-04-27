@@ -7,8 +7,6 @@
 //! NOTE: This is an intentional architecture framework (S16, Phase 0-9).
 //! Kept as a stable extension point for future workflow preset management.
 
-#![allow(dead_code)]
-
 use crate::config::WorkflowType;
 use crate::orchestration::roles::{role_registry_industry_for, AgentRole};
 use crate::orchestration::startup_context::StartupContext;
@@ -155,6 +153,7 @@ impl WorkflowDetector {
     }
 
     /// True when the workflow type requires phase gating
+    #[allow(dead_code)]
     pub fn requires_phase_gate(wf: &WorkflowType) -> bool {
         matches!(
             wf,
@@ -163,6 +162,7 @@ impl WorkflowDetector {
     }
 
     /// True when review-gate is mandatory
+    #[allow(dead_code)]
     pub fn requires_review_gate(wf: &WorkflowType) -> bool {
         matches!(wf, WorkflowType::Auto | WorkflowType::Dev)
     }

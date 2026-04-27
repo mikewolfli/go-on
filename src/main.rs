@@ -79,7 +79,7 @@ pub use crate::governance::runtime_controls;
 pub use crate::i18n::runtime;
 pub use crate::i18n::watcher as i18n_watcher;
 pub use crate::intelligence::adaptive_selector;
-pub use crate::intelligence::advanced_modules;
+
 pub use crate::intelligence::evaluation;
 pub use crate::intelligence::model_selector;
 pub use crate::intelligence::quality_models;
@@ -93,13 +93,11 @@ pub use crate::observability::observability as observability_module;
 pub use crate::observability::performance;
 pub use crate::observability::telemetry;
 pub use crate::observability::telemetry_enhanced;
-pub use crate::optimization::cost_optimizer;
+
 pub use crate::optimization::failure_prevention;
-pub use crate::optimization::reliability_optimizer;
-pub use crate::optimization::speed_optimizer;
+
 pub use crate::orchestration::flow;
 pub use crate::orchestration::flow_with_models;
-pub use crate::orchestration::graph;
 pub use crate::orchestration::mode;
 pub use crate::orchestration::orchestrator;
 pub use crate::orchestration::roles;
@@ -1577,6 +1575,15 @@ async fn start_server(
         }
     }
 
+    // Initialize StartupContext (load project context once per process)
+    let startup_cfg = crate::orchestration::startup_context::StartupContextConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    tokio::spawn(async move {
+        crate::orchestration::startup_context::load(&startup_cfg).await;
+    });
+
     let (cache, vector_store, (autotune_state, autotune_config, autotune_state_path)) = tokio::try_join!(
         initialize_cache(config_path.to_path_buf(), config.cache.clone()),
         initialize_vector_store(config_path.to_path_buf(), config.vector.clone()),
@@ -1680,6 +1687,7 @@ async fn start_server(
                 runtime_config,
                 Some(http_client),
                 cli.verbose > 0,
+                Some(Arc::clone(&config)),
             );
             if matches!(access_selection.startup_transport, TransportMode::Stdio) {
                 run_acp_server(&mut server).await
@@ -1703,6 +1711,7 @@ async fn start_server(
                 runtime_config,
                 Some(http_client),
                 cli.verbose > 0,
+                Some(Arc::clone(&config)),
             );
             run_acp_http_server(Arc::new(server), bind_addr).await
         }
@@ -1721,6 +1730,7 @@ async fn start_server(
                 runtime_config,
                 Some(http_client),
                 cli.verbose > 0,
+                Some(Arc::clone(&config)),
             ));
             let shutdown_notify = Arc::clone(&acp_server.shutdown_notify);
             if let Err(e) = start_background_tasks(&acp_server, Arc::clone(&shutdown_notify)).await
@@ -1752,6 +1762,7 @@ async fn start_server(
                 runtime_config,
                 Some(http_client),
                 cli.verbose > 0,
+                Some(Arc::clone(&config)),
             ));
             let shutdown_notify = Arc::clone(&acp_server.shutdown_notify);
             if let Err(e) = start_background_tasks(&acp_server, shutdown_notify).await {

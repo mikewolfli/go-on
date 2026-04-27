@@ -9,7 +9,7 @@
 
 use crate::orchestration::workflow_registry::WorkflowRegistry;
 use crate::pua::{build_enforcement_plan, PuaEnforcementPlan};
-use crate::roles::{AgentRole, RoleSpecification, RoleSpecifications};
+use crate::roles::{role_registry, AgentRole, RoleSpecification, RoleSpecifications};
 use serde::{Deserialize, Serialize};
 
 /// Task characteristics extracted from request
@@ -313,7 +313,26 @@ impl TaskRouter {
                 AgentRole::Coder => RoleSpecifications::coder(),
                 AgentRole::Tester => RoleSpecifications::tester(),
                 AgentRole::Reviewer => RoleSpecifications::reviewer(),
-                AgentRole::Custom(_) => RoleSpecifications::coder(), // default spec for custom roles
+                AgentRole::Custom(name) => {
+                    // Try RoleRegistry first; fall back to default coder spec
+                    let registry = role_registry();
+                    if let Ok(guard) = registry.read() {
+                        if let Some(def) = guard.get(name) {
+                            RoleSpecification {
+                                role: AgentRole::Custom(name.clone()),
+                                tier: "primary".to_string(),
+                                allowed_tools: def.allowed_tools.clone(),
+                                max_tool_calls: def.max_tool_calls,
+                                token_budget: def.token_budget,
+                                timeout_seconds: def.timeout_seconds,
+                            }
+                        } else {
+                            RoleSpecifications::coder()
+                        }
+                    } else {
+                        RoleSpecifications::coder()
+                    }
+                }
             })
             .collect()
     }

@@ -24,10 +24,8 @@ use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_ab
 
 use crate::acp::server::{AcpServer, CacheLayer, ObservabilityLayer};
 use crate::adaptive_selector::AdaptiveModelSelector;
-use crate::advanced_modules::{DynamicParameterTuner, ResourceAllocator};
 use crate::agent::AgentRegistry;
 use crate::config::{AutoTuneConfig, AutoTuneState, RuntimeConfig, VectorConfig};
-use crate::cost_optimizer::CostOptimizer;
 use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
 use crate::flow_with_models::FlowModelSelector;
@@ -63,6 +61,7 @@ pub fn new_acp_server(
     runtime_config: RuntimeConfig,
     _http_client: Option<reqwest::Client>,
     _verbose: bool,
+    app_config: Option<Arc<crate::config::AppConfig>>,
 ) -> AcpServer {
     // Use ServerBuilder to create the server with correct field names and types
     use crate::acp::server::ServerBuilder;
@@ -93,14 +92,25 @@ pub fn new_acp_server(
         let storage_path = config_path_ref
             .and_then(|p| p.parent())
             .map(|p| p.join("governance"));
-        Arc::new(crate::governance::harness_bus::default_harness_bus(
-            storage_path,
-        ))
+        if let Some(ref cfg) = app_config {
+            Arc::new(crate::governance::harness_bus::config_aware_harness_bus(
+                cfg.as_ref(),
+                storage_path,
+            ))
+        } else {
+            Arc::new(crate::governance::harness_bus::default_harness_bus(
+                storage_path,
+            ))
+        }
     };
+    let workflow_registry = Arc::new(std::sync::Mutex::new(
+        crate::orchestration::workflow_registry::WorkflowRegistry::new(),
+    ));
     let capability_bus = Arc::new(
-        crate::intelligence::capability_bus::core::CapabilityBus::new_default(Arc::clone(
-            &harness_bus,
-        )),
+        crate::intelligence::capability_bus::core::CapabilityBus::new_default(
+            Arc::clone(&harness_bus),
+            Some(workflow_registry),
+        ),
     );
 
     match builder.build() {
@@ -183,9 +193,6 @@ pub fn new_acp_server(
                     fail_on_timeout: false,
                 })),
                 adaptive_model_selector: Arc::new(StdMutex::new(AdaptiveModelSelector::new())),
-                dynamic_parameter_tuner: Arc::new(StdMutex::new(DynamicParameterTuner::default())),
-                resource_allocator: Arc::new(StdMutex::new(ResourceAllocator {})),
-                cost_optimizer: Arc::new(StdMutex::new(CostOptimizer::new())),
                 failure_prevention: Arc::new(StdMutex::new(failure_prevention_state)),
                 flow_model_selector: Arc::new(StdMutex::new(FlowModelSelector {})),
                 memory_store: Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default()))),
@@ -208,6 +215,8 @@ pub fn new_acp_server(
                 output: Arc::new(Mutex::new(tokio::io::stdout())),
                 shutdown_notify: Arc::new(Notify::new()),
                 responses_api_store: Arc::new(StdMutex::new(std::collections::HashMap::new())),
+                task_graph_store: None,
+                scheduler: None,
             };
 
             // Wire the token cache into the agent registry for the fallback path too.

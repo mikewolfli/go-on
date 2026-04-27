@@ -11,11 +11,11 @@ use tokio::sync::{Mutex, Notify};
 
 use crate::acp::prelude::RuntimeMetrics;
 use crate::adaptive_selector::AdaptiveModelSelector;
-use crate::advanced_modules::{DynamicParameterTuner, ResourceAllocator};
+
 use crate::agent::AgentRegistry;
 use crate::cache::ResponseCache;
 use crate::config::{AutoTuneConfig, AutoTuneState, RuntimeConfig, VectorConfig};
-use crate::cost_optimizer::CostOptimizer;
+
 use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
 use crate::flow_with_models::FlowModelSelector;
@@ -25,7 +25,9 @@ use crate::intelligence::token_cache::TokenMultiLevelCache;
 use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::memory_response_cache::MemoryResponseCache;
 use crate::observability::telemetry::TelemetryRuntime;
+use crate::orchestration::scheduler::AgentWorkerScheduler;
 use crate::orchestration::skill::SkillRegistry;
+use crate::orchestration::task_graph_store::TaskGraphStore;
 use crate::reinforcement::ArtifactLedger;
 use crate::vector::VectorStore;
 
@@ -101,12 +103,6 @@ pub struct AcpServer {
     pub review_timeout_policy: Arc<StdMutex<ReviewTimeoutPolicy>>,
     /// Adaptive model selector
     pub adaptive_model_selector: Arc<StdMutex<AdaptiveModelSelector>>,
-    /// Dynamic parameter tuner
-    pub dynamic_parameter_tuner: Arc<StdMutex<DynamicParameterTuner>>,
-    /// Resource allocator
-    pub resource_allocator: Arc<StdMutex<ResourceAllocator>>,
-    /// Cost optimizer
-    pub cost_optimizer: Arc<StdMutex<CostOptimizer>>,
     /// Failure prevention system
     pub failure_prevention: Arc<StdMutex<FailurePrevention>>,
     /// Flow model selector
@@ -131,6 +127,12 @@ pub struct AcpServer {
     pub shutdown_notify: Arc<Notify>,
     /// In-memory registry for Responses API objects
     pub responses_api_store: Arc<StdMutex<HashMap<String, serde_json::Value>>>,
+    /// Persistent task graph store for checkpoints and recovery
+    #[allow(dead_code)]
+    pub task_graph_store: Option<Arc<TaskGraphStore>>,
+    /// Dual-level task scheduler for priority queue and worker pool
+    #[allow(dead_code)]
+    pub scheduler: Option<Arc<AgentWorkerScheduler>>,
 }
 
 impl AcpServer {
@@ -320,6 +322,8 @@ pub struct ServerBuilder {
     verbose: bool,
     harness_bus: Option<Arc<HarnessBus>>,
     capability_bus: Option<Arc<CapabilityBus>>,
+    task_graph_store: Option<Arc<TaskGraphStore>>,
+    scheduler: Option<Arc<AgentWorkerScheduler>>,
 }
 
 impl ServerBuilder {
@@ -336,6 +340,8 @@ impl ServerBuilder {
             verbose: false,
             harness_bus: None,
             capability_bus: None,
+            task_graph_store: None,
+            scheduler: None,
         }
     }
 
@@ -376,6 +382,7 @@ impl ServerBuilder {
     }
 
     /// Set the memory response cache
+    #[allow(dead_code)]
     pub fn with_memory_response_cache(
         mut self,
         memory_response_cache: MemoryResponseCache,
@@ -385,20 +392,37 @@ impl ServerBuilder {
     }
 
     /// Set verbose mode
+    #[allow(dead_code)]
     pub fn verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
     }
 
     /// Set the harness bus
+    #[allow(dead_code)]
     pub fn with_harness_bus(mut self, harness_bus: Arc<HarnessBus>) -> Self {
         self.harness_bus = Some(harness_bus);
         self
     }
 
     /// Set the capability bus
+    #[allow(dead_code)]
     pub fn with_capability_bus(mut self, capability_bus: Arc<CapabilityBus>) -> Self {
         self.capability_bus = Some(capability_bus);
+        self
+    }
+
+    /// Set the task graph store
+    #[allow(dead_code)]
+    pub fn with_task_graph_store(mut self, store: Arc<TaskGraphStore>) -> Self {
+        self.task_graph_store = Some(store);
+        self
+    }
+
+    /// Set the dual-level task scheduler
+    #[allow(dead_code)]
+    pub fn with_scheduler(mut self, scheduler: Arc<AgentWorkerScheduler>) -> Self {
+        self.scheduler = Some(scheduler);
         self
     }
 
@@ -424,9 +448,6 @@ impl ServerBuilder {
         }));
 
         let adaptive_model_selector = Arc::new(StdMutex::new(AdaptiveModelSelector::default()));
-        let dynamic_parameter_tuner = Arc::new(StdMutex::new(DynamicParameterTuner::default()));
-        let resource_allocator = Arc::new(StdMutex::new(ResourceAllocator {}));
-        let cost_optimizer = Arc::new(StdMutex::new(CostOptimizer::new()));
         let mut failure_prevention_state = FailurePrevention::new();
         if let Some(agent_registry) = &self.agent_registry {
             for name in agent_registry.names() {
@@ -494,9 +515,7 @@ impl ServerBuilder {
             phase_rate_limiter,
             review_timeout_policy,
             adaptive_model_selector,
-            dynamic_parameter_tuner,
-            resource_allocator,
-            cost_optimizer,
+
             failure_prevention,
             flow_model_selector,
             memory_store,
@@ -509,6 +528,8 @@ impl ServerBuilder {
             output: Arc::new(Mutex::new(tokio::io::stdout())),
             shutdown_notify: Arc::new(Notify::new()),
             responses_api_store,
+            task_graph_store: self.task_graph_store,
+            scheduler: self.scheduler,
         })
     }
 }

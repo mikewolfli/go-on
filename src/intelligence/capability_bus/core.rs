@@ -8,8 +8,6 @@
 //! to all sub-bus components and orchestrates the sensing → decision → action →
 //! feedback → evolution loop.
 
-#![allow(dead_code, unused_variables)]
-
 use crate::governance::harness_bus::{AgentExecutionPolicy, HarnessBus, PolicyVerdict};
 use crate::governance::pua::TaskContext;
 use crate::intelligence::capability_graph::CapabilityGraph;
@@ -17,6 +15,7 @@ use crate::intelligence::reinforcement::learning::{
     ExperienceKnowledgeBase, QLearningAgent, RewardFunction, RlTaskExecutionMetrics, SuccessCase,
 };
 use crate::intelligence::reputation::ReputationStore;
+use crate::orchestration::workflow_registry::WorkflowRegistry;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -161,6 +160,10 @@ pub struct CapabilityBusProfile {
     pub capability_graph_agents: usize,
     pub knowledge_insights_count: usize,
     pub last_route_duration_ms: u64,
+    pub q_learning_table_size: usize,
+    pub experience_case_count: usize,
+    pub event_history_len: usize,
+    pub workflow_presets_count: usize,
 }
 
 impl Default for CapabilityBusProfile {
@@ -173,6 +176,10 @@ impl Default for CapabilityBusProfile {
             capability_graph_agents: 0,
             knowledge_insights_count: 0,
             last_route_duration_ms: 0,
+            q_learning_table_size: 0,
+            experience_case_count: 0,
+            event_history_len: 0,
+            workflow_presets_count: 0,
         }
     }
 }
@@ -210,6 +217,9 @@ pub struct CapabilityBus {
     /// Capability bus profile (for governance.status)
     pub profile: Arc<Mutex<CapabilityBusProfile>>,
 
+    /// Workflow registry — named workflow presets for workflow-based routing
+    workflow_registry: Option<Arc<Mutex<WorkflowRegistry>>>,
+
     max_event_history: usize,
 }
 
@@ -233,19 +243,31 @@ impl CapabilityBus {
             reward_fn: Arc::new(Mutex::new(reward_fn)),
             event_history: Arc::new(Mutex::new(VecDeque::new())),
             profile: Arc::new(Mutex::new(CapabilityBusProfile::default())),
+            workflow_registry: None,
             max_event_history: 500,
         }
     }
 
-    pub fn new_default(harness: Arc<HarnessBus>) -> Self {
-        Self::new(
+    pub fn new_default(
+        harness: Arc<HarnessBus>,
+        workflow_registry: Option<Arc<Mutex<WorkflowRegistry>>>,
+    ) -> Self {
+        let mut bus = Self::new(
             harness,
             ReputationStore::new(crate::intelligence::reputation::ReputationConfig::default()),
             CapabilityGraph::new(),
             QLearningAgent::default(),
             ExperienceKnowledgeBase::default(),
             RewardFunction::default(),
-        )
+        );
+        bus.workflow_registry = workflow_registry;
+        bus
+    }
+
+    /// Attach a WorkflowRegistry to an existing CapabilityBus
+    pub fn with_workflow_registry(mut self, registry: Arc<Mutex<WorkflowRegistry>>) -> Self {
+        self.workflow_registry = Some(registry);
+        self
     }
 
     // ------------------------------------------------------------------
@@ -381,6 +403,32 @@ impl CapabilityBus {
             .unwrap_or_default();
 
         let selected_agent = self.select_best_agent(&candidate_agents, sensing);
+
+        // Step B2: Consult WorkflowRegistry for workflow-based routing metadata
+        let workflow_preset = self.workflow_registry.as_ref().and_then(|wr| {
+            wr.lock().ok().and_then(|registry| {
+                let task_type_str = format!("{:?}", task.task_type).to_lowercase();
+                let mapped_name = match task_type_str.as_str() {
+                    "bugfix" | "featureadd" | "refactor" | "securitypatch" => "dev",
+                    _ => "general",
+                };
+                registry.get(mapped_name).cloned()
+            })
+        });
+
+        if let Some(ref preset) = workflow_preset {
+            self.record_event(
+                "decision",
+                selected_agent.clone(),
+                None,
+                "workflow_matched",
+                serde_json::json!({
+                    "preset_name": preset.name,
+                    "workflow_type": format!("{:?}", preset.workflow_type),
+                    "phases": preset.phases,
+                }),
+            );
+        }
 
         // Step C: build agent execution policy from HarnessBus
         let agent_policy = Some(self.harness.get_agent_policy(
@@ -573,6 +621,23 @@ impl CapabilityBus {
                 .knowledge_bus
                 .lock()
                 .map(|kb| kb.snapshot().len())
+                .unwrap_or(0);
+            p.q_learning_table_size = self
+                .q_learning
+                .lock()
+                .map(|ql| ql.q_table.values().map(|m| m.len()).sum())
+                .unwrap_or(0);
+            p.experience_case_count = self
+                .experience
+                .lock()
+                .map(|exp| exp.success_cases.len() + exp.failure_patterns.len())
+                .unwrap_or(0);
+            p.event_history_len = self.event_history.lock().map(|h| h.len()).unwrap_or(0);
+            p.workflow_presets_count = self
+                .workflow_registry
+                .as_ref()
+                .and_then(|wr| wr.lock().ok())
+                .map(|r| r.list().len())
                 .unwrap_or(0);
             p.clone()
         } else {

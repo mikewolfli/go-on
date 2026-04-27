@@ -4,8 +4,6 @@
 //! Complete implementation ready for CapabilityBus integration (ARCH-13).
 //! Currently zero-call — all items are intentionally public for future wiring.
 
-#![allow(dead_code)]
-
 use std::collections::{HashMap, VecDeque};
 
 const ONLINE_CONTROLLER_WINDOW: usize = 64;
@@ -283,7 +281,7 @@ impl OnlineControllerState {
             .collect()
     }
 
-    fn failure_rate(&self) -> f64 {
+    pub(crate) fn failure_rate(&self) -> f64 {
         if self.recent_failures.is_empty() {
             return 0.0;
         }
@@ -295,13 +293,40 @@ impl OnlineControllerState {
         failures as f64 / self.recent_failures.len() as f64
     }
 
-    fn latency_p95_ms(&self) -> u64 {
+    pub(crate) fn latency_p95_ms(&self) -> u64 {
         if self.recent_latency_ms.is_empty() {
             return 0;
         }
         let mut samples = self.recent_latency_ms.iter().copied().collect::<Vec<_>>();
         samples.sort_unstable();
         percentile(&samples, 95.0)
+    }
+
+    /// Derive a human-readable control mode string from the current state.
+    pub(crate) fn control_mode(&self) -> String {
+        let fail_rate = self.failure_rate();
+        let p95 = self.latency_p95_ms();
+        if fail_rate >= 0.50 || p95 >= 30_000 {
+            "critical".to_string()
+        } else if fail_rate >= ONLINE_CONTROLLER_FAILURE_ESCALATION
+            || p95 >= ONLINE_CONTROLLER_P95_LATENCY_MS_ESCALATION
+        {
+            "elevated".to_string()
+        } else {
+            "normal".to_string()
+        }
+    }
+
+    /// Derive a violation trend string from the current state.
+    pub(crate) fn violation_trend(&self) -> String {
+        let fail_rate = self.failure_rate();
+        if fail_rate >= 0.40 {
+            "degrading".to_string()
+        } else if fail_rate >= 0.20 {
+            "unstable".to_string()
+        } else {
+            "stable".to_string()
+        }
     }
 
     pub(crate) fn should_escalate(&self) -> bool {
