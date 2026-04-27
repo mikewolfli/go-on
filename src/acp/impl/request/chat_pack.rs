@@ -1,7 +1,7 @@
 use super::*;
 
 /// Handle chat request
-async fn handle_chat(
+pub(super) async fn handle_chat(
     server: &AcpServer,
     params: Value,
     request_id: Option<Value>,
@@ -31,7 +31,7 @@ async fn handle_chat(
 }
 
 /// Handle phase request
-async fn handle_phase(
+pub(super) async fn handle_phase(
     server: &AcpServer,
     _params: Value,
     request_id: Option<Value>,
@@ -69,7 +69,7 @@ async fn handle_phase(
 }
 
 /// Handle primary/secondary summary
-async fn handle_primary_secondary_summary(
+pub(super) async fn handle_primary_secondary_summary(
     server: &AcpServer,
     params: Value,
     request_id: Option<Value>,
@@ -156,7 +156,7 @@ async fn handle_primary_secondary_summary(
     .await
 }
 
-fn parse_messages(params: &Value) -> Option<Vec<Message>> {
+pub(super) fn parse_messages(params: &Value) -> Option<Vec<Message>> {
     if let Some(messages) = params.get("messages") {
         return serde_json::from_value(messages.clone()).ok();
     }
@@ -182,7 +182,7 @@ fn parse_messages(params: &Value) -> Option<Vec<Message>> {
 }
 
 /// Send error response
-async fn send_error(
+pub(super) async fn send_error(
     server: &AcpServer,
     id: Option<Value>,
     code: i64,
@@ -202,7 +202,7 @@ async fn send_error(
 }
 
 /// Send result response
-async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Result<()> {
+pub(super) async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Result<()> {
     let method = DISPATCH_REQUEST_METHOD
         .try_with(|m| m.clone())
         .unwrap_or_default();

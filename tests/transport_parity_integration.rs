@@ -653,58 +653,63 @@ async fn mcp_http_method_not_allowed_has_platform_context() {
 
 #[test]
 fn acp_http_route_inventory_changes_require_transport_gate_update() {
-    let _guard = lock_suite_guard();
-    use std::collections::BTreeSet;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = lock_suite_guard();
+        use std::collections::BTreeSet;
 
-    let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime.rs");
-    let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
-    let start = source
-        .find("async fn handle_http_connection(")
-        .expect("handle_http_connection marker must exist");
-    let end = source[start..]
-        .find("fn infer_adaptive_signal(")
-        .map(|offset| start + offset)
-        .expect("infer_adaptive_signal marker must exist");
-    let section = &source[start..end];
+        let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime.rs");
+        let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
+        let start = source
+            .find("async fn handle_http_connection(")
+            .expect("handle_http_connection marker must exist");
+        let end = source[start..]
+            .find("fn infer_adaptive_signal(")
+            .map(|offset| start + offset)
+            .expect("infer_adaptive_signal marker must exist");
+        let section = &source[start..end];
 
-    let mut discovered = BTreeSet::new();
-    let bytes = section.as_bytes();
-    let mut idx = 0usize;
-    while idx < bytes.len() {
-        if bytes[idx] == b'"' {
-            let rest = &section[idx + 1..];
-            if let Some(close) = rest.find('"') {
-                let candidate = &rest[..close];
-                if candidate.starts_with('/')
-                    && !candidate.contains('{')
-                    && !candidate.contains(' ')
-                    && !candidate.contains("\\r")
-                {
-                    discovered.insert(candidate.to_string());
+        let mut discovered = BTreeSet::new();
+        let bytes = section.as_bytes();
+        let mut idx = 0usize;
+        while idx < bytes.len() {
+            if bytes[idx] == b'"' {
+                let rest = &section[idx + 1..];
+                if let Some(close) = rest.find('"') {
+                    let candidate = &rest[..close];
+                    if candidate.starts_with('/')
+                        && !candidate.contains('{')
+                        && !candidate.contains(' ')
+                        && !candidate.contains("\\r")
+                    {
+                        discovered.insert(candidate.to_string());
+                    }
+                    idx += close + 2;
+                    continue;
                 }
-                idx += close + 2;
-                continue;
             }
+            idx += 1;
         }
-        idx += 1;
+
+        let expected = BTreeSet::from([
+            "/".to_string(),
+            "/chat".to_string(),
+            "/chat/chat/completions".to_string(),
+            "/chat/completions".to_string(),
+            "/chat/stream".to_string(),
+            "/health".to_string(),
+            "/models".to_string(),
+            "/v1/chat/completions".to_string(),
+            "/v1/model".to_string(),
+            "/v1/models".to_string(),
+            "/v1/responses".to_string(),
+        ]);
+
+        assert_eq!(
+            discovered, expected,
+            "ACP HTTP route inventory changed. Update transport parity coverage and this gate before adding new endpoints. discovered={discovered:?} expected={expected:?}"
+        );
+    }));
+    if let Err(e) = result {
+        panic!("acp_http_route_inventory_changes_require_transport_gate_update panicked: {:?}", e);
     }
-
-    let expected = BTreeSet::from([
-        "/".to_string(),
-        "/chat".to_string(),
-        "/chat/chat/completions".to_string(),
-        "/chat/completions".to_string(),
-        "/chat/stream".to_string(),
-        "/health".to_string(),
-        "/models".to_string(),
-        "/v1/chat/completions".to_string(),
-        "/v1/model".to_string(),
-        "/v1/models".to_string(),
-        "/v1/responses".to_string(),
-    ]);
-
-    assert_eq!(
-        discovered, expected,
-        "ACP HTTP route inventory changed. Update transport parity coverage and this gate before adding new endpoints. discovered={discovered:?} expected={expected:?}"
-    );
 }

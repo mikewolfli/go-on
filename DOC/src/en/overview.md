@@ -41,7 +41,7 @@ That split matters for the three clients:
 - `GUI/`: Tauri desktop console.
 - `vscode-addon/`: VS Code extension.
 - `config.toml` and `config.toml.autopilot-adaptive`: runtime configuration baseline.
-- `requests/`: request and benchmark fixtures.
+- `tests/requests/`: request and benchmark fixtures.
 - `scripts/`: support scripts.
 
 ## Recommended operator flow

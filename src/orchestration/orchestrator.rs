@@ -6,7 +6,7 @@
 //!
 //! Phase 10+: Model selection integration for automatic model discovery and selection.
 
-use crate::agent::{AgentTaskEnvelope, ModelInfo};
+use crate::agent::{AgentTaskEnvelope, AgentTaskResult, ModelInfo};
 #[allow(unused_imports)]
 use crate::mode::{
     AgentModeRuntime, AskModeRuntime, EditModeRuntime, FullAutoModeRuntime, ModeKind, ModeRuntime,
@@ -30,12 +30,9 @@ pub fn select_mode_runtime(mode: &str) -> Box<dyn ModeRuntime> {
 }
 
 /// Execute task using selected mode
-pub fn execute_with_mode(mode: &str, task: AgentTaskEnvelope) -> Result<String> {
+pub fn execute_with_mode(mode: &str, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
     let runtime = select_mode_runtime(mode);
-    match runtime.run(task) {
-        Ok(result) => Ok(format!("Executed in {:?} mode: {:?}", mode, result)),
-        Err(e) => Err(e),
-    }
+    runtime.run(task)
 }
 
 /// Select best model from available models based on task characteristics

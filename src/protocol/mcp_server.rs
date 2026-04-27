@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
@@ -231,7 +232,9 @@ async fn handle_http_connection(
     let mut body_bytes = body_initial_part.as_bytes().to_vec();
     if body_bytes.len() < content_length {
         let mut remaining = vec![0u8; content_length - body_bytes.len()];
-        socket.read_exact(&mut remaining).await?;
+        tokio::time::timeout(Duration::from_secs(30), socket.read_exact(&mut remaining))
+            .await
+            .map_err(|_| anyhow::anyhow!("HTTP body read timed out after 30s"))??;
         body_bytes.extend_from_slice(&remaining);
     }
     body_bytes.truncate(content_length);

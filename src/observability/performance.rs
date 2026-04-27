@@ -421,6 +421,13 @@ pub struct CacheStats {
 /// Get memory usage in bytes for the current process.
 ///
 /// Falls back to `0` when platform-specific APIs are unavailable.
+///
+/// ## Windows dependency
+/// This function uses the `windows-sys` crate (version 0.59) through the
+/// `Win32_System_ProcessStatus` and `Win32_System_Threading` features.
+/// The dependency is declared in `Cargo.toml` under
+/// `[target.'cfg(target_os = "windows")'.dependencies]` so it is only
+/// compiled on Windows targets.
 #[cfg(target_os = "windows")]
 fn get_memory_usage() -> u64 {
     use std::mem::{size_of, zeroed};

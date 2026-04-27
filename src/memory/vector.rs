@@ -4,6 +4,10 @@
 //! - `backend-sqlite` (profile-local, profile-simple-server): rusqlite-backed, sync API
 //! - `backend-postgres` (profile-multi-users-server): postgres + pgvector-backed sync API
 
+// Ensure features are mutually exclusive
+#[cfg(all(feature = "backend-sqlite", feature = "backend-postgres"))]
+compile_error!("features 'backend-sqlite' and 'backend-postgres' cannot be enabled simultaneously");
+
 #[cfg(not(feature = "backend-postgres"))]
 use std::path::Path;
 use std::sync::Mutex;

@@ -156,7 +156,14 @@ async function refreshStatus() {
     const result = await invokeRuntimeRpc("autotune.get", "{}");
     rawOutput.value = result;
 
-    const data = JSON.parse(result);
+    let data: any;
+    try {
+      data = JSON.parse(result);
+    } catch {
+      ElMessage.error(`Invalid JSON response: ${result?.slice(0, 200)}`);
+      rawOutput.value = result;
+      return;
+    }
     if (data.ok) {
       tuningEnabled.value = data.enabled || true;
       tuningUptime.value = data.uptime_hours || 0;

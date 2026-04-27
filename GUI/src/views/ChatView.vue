@@ -156,6 +156,11 @@ const { t } = useI18n();
 const runtime = useRuntimeStore();
 
 // ── State ─────────────────────────────────────────────────────────────────────
+// ⚠ DESIGN NOTE: `activeMessages` (derived from `sessions`) is component-local state.
+//   Messages are lost on navigation because ChatView unmounts.
+//   To preserve messages across routes, either:
+//   - Wrap <ChatView /> with <keep-alive> in the parent router-view/tabs, or
+//   - Migrate session/message state to a Pinia store (e.g. `useChatStore`).
 const inputText = ref("");
 const loading = ref(false);
 const messageAreaRef = ref<HTMLElement | null>(null);

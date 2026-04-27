@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! S7: Layered Token Trigger Gates
 //!
 //! Defines a chain of token-budget gate stages that are consulted before each

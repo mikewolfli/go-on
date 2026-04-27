@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! S8+S9: Multi-priority Dual Scheduler
 //!
 //! Provides a scheduler that routes tasks into prioritized queues and a

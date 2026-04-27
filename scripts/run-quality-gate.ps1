@@ -16,8 +16,8 @@ cargo test run_scenario_file_executes_quality_benchmark_requests -- --nocapture
 cargo test ndjson_scenario_files_all_pass -- --nocapture
 
 $cargoList = cargo --list
-if ($cargoList -match "\saudit$|\starpaulin$") {
-    if ($cargoList -match "\starpaulin$") {
+if ($cargoList -match "\baudit\b|\btarpaulin\b") {
+    if ($cargoList -match "\btarpaulin\b") {
         Write-Host "=== Optional coverage gate (tarpaulin) ==="
         cargo tarpaulin --out Stdout --fail-under 70
     }

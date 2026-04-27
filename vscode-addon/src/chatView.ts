@@ -210,6 +210,14 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  public clearChat() {
+    this._clearCurrentSession();
+  }
+
+  public exportChat() {
+    this._exportCurrentSession();
+  }
+
   private async _handleRunCode(code: string, language: string) {
     if (!this._view) return;
 

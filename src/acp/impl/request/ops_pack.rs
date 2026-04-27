@@ -41,8 +41,8 @@ pub(super) async fn handle_observability_alerts(
         .clamp(1, 200);
 
     let status = server.get_status();
-    let metrics = server.metrics.snapshot();
-    let lock_components = server.lock_monitor.snapshot();
+    let metrics = server.observability.metrics.snapshot();
+    let lock_components = server.observability.lock_monitor.snapshot();
     let lock_summary = summarize_lock_health(&lock_components);
     let degraded_services = collect_degraded_services(server);
     let open_breakers = status
@@ -183,7 +183,7 @@ pub(super) async fn handle_lock_status(
         .unwrap_or(3)
         .clamp(1, 20);
 
-    let mut components = server.lock_monitor.snapshot();
+    let mut components = server.observability.lock_monitor.snapshot();
     let summary = summarize_lock_health(&components);
 
     components.sort_by(|left, right| {
@@ -349,7 +349,7 @@ pub(super) async fn handle_release_readiness(
     request_id: Option<Value>,
 ) -> Result<()> {
     let status = server.get_status();
-    let metrics = server.metrics.snapshot();
+    let metrics = server.observability.metrics.snapshot();
 
     let stability_payload = super::build_runtime_stability_payload(server)?;
     let provider_payload = super::build_provider_status_payload(server)?;
@@ -357,7 +357,7 @@ pub(super) async fn handle_release_readiness(
     let reproducibility =
         super::repro_pack::reproducible_build_summary(server.config_path.as_deref());
 
-    let lock_components = server.lock_monitor.snapshot();
+    let lock_components = server.observability.lock_monitor.snapshot();
     let lock_summary = summarize_lock_health(&lock_components);
     let degraded_services = collect_degraded_services(server);
     let open_breakers = status
@@ -4204,7 +4204,7 @@ pub(super) async fn handle_harness_status(
     }
 
     let scenario_total = smoke.len() + regression.len() + adversarial.len() + long_chain.len();
-    let metrics = server.metrics.snapshot();
+    let metrics = server.observability.metrics.snapshot();
     send_result(
         server,
         request_id,
@@ -4458,11 +4458,12 @@ pub(super) async fn handle_cache_clear(
     request_id: Option<Value>,
 ) -> Result<()> {
     let memory_removed = server
+        .cache
         .memory_response_cache
         .lock()
         .map(|cache| cache.clear_all())
         .unwrap_or(0);
-    let persistent_removed = if let Some(cache) = server.response_cache.clone() {
+    let persistent_removed = if let Some(cache) = server.cache.response_cache.clone() {
         cache_clear(server, cache).await?
     } else {
         0
@@ -4485,7 +4486,7 @@ pub(super) async fn handle_vector_clear(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let (memory_removed, summary_removed) = if let Some(store) = server.vector_store.clone() {
+    let (memory_removed, summary_removed) = if let Some(store) = server.cache.vector_store.clone() {
         store.clear_all()?
     } else {
         (0, 0)

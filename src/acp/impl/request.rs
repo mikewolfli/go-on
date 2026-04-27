@@ -114,7 +114,6 @@ use base64::Engine;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::time::Duration;
 use tracing::{debug, info};
@@ -125,9 +124,7 @@ tokio::task_local! {
 }
 
 use crate::acp::background::run_maintenance_cycle;
-use crate::acp::helpers::context::{
-    probe_agent_runtime_readiness, run_with_optional_timeout, AgentRuntimeReadiness,
-};
+
 use crate::acp::helpers::metrics::{
     build_prometheus_metrics, CircuitBreakerSnapshot as PrometheusCircuitBreakerSnapshot,
     LifecycleSnapshot as PrometheusLifecycleSnapshot,
@@ -212,13 +209,16 @@ use self::exec_pack::*;
 pub use self::governance_pack::build_knowledge_refinement_profile;
 pub use self::governance_pack::build_learning_profile;
 pub(crate) use self::governance_pack::inject_platform_profiles_if_absent;
+pub(crate) use self::checkpoint_pack::create_checkpoint_record;
+pub(crate) use self::checkpoint_pack::persist_checkpoint_metacognitive_loop;
 use self::governance_pack::*;
 use self::hardness_pack::*;
 use self::lifecycle_pack::*;
 use self::ops_pack::*;
 pub use self::protocol_pack::record_tool_call_audit_with_protocol;
-use self::protocol_pack::*;
 use self::pua_pack::*;
+use self::learning_pack::*;
+use self::runtime_pack::*;
 use self::tools_pack::*;
 use self::trace_pack::*;
 
@@ -360,9 +360,9 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
     }
 
     let started = Instant::now();
-    server.metrics.inc_active_requests();
+    server.observability.metrics.inc_active_requests();
     let trace = new_request_trace(server, &request);
-    let _request_span = if let Ok(telemetry_guard) = server.telemetry_runtime.lock() {
+    let _request_span = if let Ok(telemetry_guard) = server.observability.telemetry_runtime.lock() {
         telemetry_guard.start_root_span(
             "acp.request",
             &format!("{}:{}", trace.method, trace.request_id),
@@ -795,9 +795,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
     let success = result.is_ok() && !take_error_response_mark(&trace.request_id);
     let status = if success { "success" } else { "error" };
     server
+        .observability
         .metrics
         .record_request_outcome(success, duration_ms as f64);
-    server.metrics.dec_active_requests();
+    server.observability.metrics.dec_active_requests();
 
     record_trace_event(
         server,
@@ -985,7 +986,7 @@ async fn handle_metrics(server: &AcpServer, request_id: Option<Value>) -> Result
 }
 
 async fn handle_metrics_get(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    let snapshot = serde_json::to_value(server.metrics.snapshot())?;
+    let snapshot = serde_json::to_value(server.observability.metrics.snapshot())?;
     // Keep flat fields for backward compat AND add wrapper keys for new consumers
     let mut result = snapshot.clone();
     if let Value::Object(ref mut map) = result {
@@ -996,7 +997,7 @@ async fn handle_metrics_get(server: &AcpServer, request_id: Option<Value>) -> Re
 }
 
 async fn handle_metrics_prometheus(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    let metrics = server.metrics.snapshot();
+    let metrics = server.observability.metrics.snapshot();
     let gauges = build_runtime_gauge_snapshot(server);
     let breaker_snapshot = server
         .circuit_breakers
@@ -1111,7 +1112,7 @@ async fn handle_metrics_prometheus(server: &AcpServer, request_id: Option<Value>
 }
 
 async fn handle_metrics_reset(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    server.metrics.reset_all();
+    server.observability.metrics.reset_all();
     send_result(
         server,
         request_id,
@@ -1151,7 +1152,7 @@ async fn build_debug_panel_payload(server: &AcpServer) -> Value {
             "review_outcomes": [],
             "runtime_health": {"ok": true},
             "review_gate": {
-                "total": server.metrics.snapshot().review_gate_total,
+                "total": server.observability.metrics.snapshot().review_gate_total,
             },
             "conversations": {
                 "count": conversation_count,
@@ -1216,7 +1217,7 @@ async fn handle_shutdown(server: &AcpServer, request_id: Option<Value>) -> Resul
 /// Handle health request
 async fn handle_health(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     let status = server.get_status();
-    let metrics = server.metrics.snapshot();
+    let metrics = server.observability.metrics.snapshot();
     send_result(
         server,
         request_id,
@@ -1257,13 +1258,13 @@ fn check_status_label(value: CheckStatus) -> &'static str {
 
 fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
-    let metrics = server.metrics.snapshot();
+    let metrics = server.observability.metrics.snapshot();
 
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
         config_path,
-        server.response_cache.as_deref(),
-        server.vector_store.as_deref(),
+        server.cache.response_cache.as_deref(),
+        server.cache.vector_store.as_deref(),
     )?;
 
     let healthy_count = report
@@ -1315,7 +1316,7 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
         .collect::<Vec<_>>();
 
     let rate_limiter_buckets = with_acp_lock(
-        server.lock_monitor.as_ref(),
+        server.observability.lock_monitor.as_ref(),
         ACP_LOCK_PHASE_RATE_LIMITER,
         server.phase_rate_limiter.as_ref(),
         |guard| {
@@ -1334,7 +1335,7 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
         },
     );
 
-    let lock_components = server.lock_monitor.snapshot();
+    let lock_components = server.observability.lock_monitor.snapshot();
     let lock_summary = summarize_lock_health(&lock_components);
     let timeout_status = if metrics.agent_timeout_failures_total > 0
         || metrics.review_gate_timeout_total > 0
@@ -1441,12 +1442,12 @@ async fn handle_health_probes(server: &AcpServer, request_id: Option<Value>) -> 
 
 fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
-    let _metrics = server.metrics.snapshot();
+    let _metrics = server.observability.metrics.snapshot();
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
         config_path,
-        server.response_cache.as_deref(),
-        server.vector_store.as_deref(),
+        server.cache.response_cache.as_deref(),
+        server.cache.vector_store.as_deref(),
     )?;
 
     // Load config to check for warnings and production-strict violations.
@@ -1732,8 +1733,8 @@ fn build_provider_status_payload(server: &AcpServer) -> Result<Value> {
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
         config_path,
-        server.response_cache.as_deref(),
-        server.vector_store.as_deref(),
+        server.cache.response_cache.as_deref(),
+        server.cache.vector_store.as_deref(),
     )?;
 
     let provider_component = report
@@ -1827,7 +1828,7 @@ async fn handle_governance_status(
     request_id: Option<Value>,
 ) -> Result<()> {
     let status = server.get_status();
-    let runtime_snapshot = server.metrics.snapshot();
+    let runtime_snapshot = server.observability.metrics.snapshot();
 
     let pua_plan = server
         .pua_enforcement_plan
@@ -1845,7 +1846,7 @@ async fn handle_governance_status(
     let config_summary = config_pack::governance_config_summary(server.config_path.as_deref());
 
     let entry_rate_snapshot = with_acp_lock(
-        server.lock_monitor.as_ref(),
+        server.observability.lock_monitor.as_ref(),
         ACP_LOCK_PHASE_RATE_LIMITER,
         server.phase_rate_limiter.as_ref(),
         |guard| guard.snapshot(),

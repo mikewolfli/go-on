@@ -6,8 +6,6 @@
 //! NOTE: This is an intentional architecture framework (Phase 0-9).
 //! Kept as a stable extension point for future startup context integration.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use tracing::debug;

@@ -56,11 +56,13 @@ pub(super) fn take_error_response_mark(request_id: &str) -> bool {
 
 pub(super) fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSnapshot {
     let memory_cache_entries = server
+        .cache
         .memory_response_cache
         .lock()
         .map(|cache| cache.active_entries() as u64)
         .unwrap_or(0);
     let sqlite_cache_entries = server
+        .cache
         .response_cache
         .as_ref()
         .and_then(|cache| cache.entry_count().ok())
@@ -181,7 +183,7 @@ pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
         .lock()
         .map(|guard| guard.sampling_rate())
         .unwrap_or(0.0);
-    let metrics = server.metrics.snapshot();
+    let metrics = server.observability.metrics.snapshot();
     json!({
         "sampling_rate": sampling_rate,
         "buffered_events": events.len(),

@@ -1,6 +1,9 @@
-/// Step 2.4: Three-Endpoint Contract Consistency Validation
-/// Tests that repair_readiness and repair_history contracts are consistent
+/// Step 2.4: Three-Endpoint Contract Structure Validation
+/// Validates that repair_readiness and repair_history contract structures are consistent
 /// across backend (Rust), addon (TypeScript), and GUI (Tauri) endpoints
+///
+/// NOTE: These tests validate contract structure only, not actual RPC calls.
+/// Full RPC contract tests are performed in the integration test suite.
 #[cfg(test)]
 mod three_endpoint_contract_tests {
     use serde_json::{json, Value};

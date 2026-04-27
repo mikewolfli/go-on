@@ -96,14 +96,7 @@ impl FromStr for Language {
     }
 }
 
-/// Translation message
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Message {
-    /// Message key
-    pub key: String,
-    /// Message content
-    pub content: String,
-}
+
 
 /// Language translations for a single language
 #[derive(Debug, Clone, Serialize, Deserialize)]

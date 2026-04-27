@@ -44,6 +44,16 @@ export class GoOnManager {
   private providerReadyCache?: { checkedAt: number; ready: boolean };
   private lastWizardPromptAt = 0;
   private _outputChannel?: vscode.OutputChannel;
+  private stdoutBuffer = "";
+  private _reconnectAttempts = 0;
+  private readonly maxReconnectAttempts = 3;
+  private _shutdownInProgress = false;
+  private _startupConfig?: {
+    configPath: string;
+    executablePath: string;
+    cwd: string;
+    protocolMode: string;
+  };
 
   /** Connect a VS Code OutputChannel so Go-On process output is visible to users. */
   setOutputChannel(channel: vscode.OutputChannel): void {
@@ -100,6 +110,9 @@ export class GoOnManager {
       throw new Error("Go-On is already running");
     }
 
+    // Store config for potential reconnection
+    this._startupConfig = { configPath, executablePath, cwd, protocolMode };
+
     return new Promise((resolve, reject) => {
       let resolved = false;
       let stderrBuffer = "";
@@ -139,13 +152,19 @@ export class GoOnManager {
         const output = data.toString();
         this._outputChannel?.appendLine(output.trimEnd());
 
-        try {
-          const lines = output.trim().split("\n");
-          for (const line of lines) {
-            if (!line.trim()) {
-              continue;
-            }
-            const response: JsonRpcResponse = JSON.parse(line);
+        // Buffered line-frame protocol: accumulate data and split by newlines
+        this.stdoutBuffer += output;
+        const lines = this.stdoutBuffer.split("\n");
+        // Keep the last (potentially incomplete) fragment in the buffer
+        this.stdoutBuffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) {
+            continue;
+          }
+          try {
+            const response: JsonRpcResponse = JSON.parse(trimmed);
             const pending = this.pendingRequests.get(response.id);
             if (pending) {
               this.pendingRequests.delete(response.id);
@@ -155,9 +174,9 @@ export class GoOnManager {
                 pending.resolve(response.result);
               }
             }
+          } catch {
+            // Not a complete JSON-RPC response yet, wait for more data.
           }
-        } catch {
-          // Not a JSON-RPC response, ignore.
         }
 
         if (startupTimeout) {
@@ -195,6 +214,9 @@ export class GoOnManager {
               `Go-On exited before startup (code ${code}). ${details || "No stderr output."}`,
             ),
           );
+        } else if (!this._shutdownInProgress && this._startupConfig) {
+          // Attempt reconnection when process crashes unexpectedly
+          void this.attemptReconnect();
         }
       });
 
@@ -207,15 +229,84 @@ export class GoOnManager {
   }
 
   stop(): void {
+    this._shutdownInProgress = true;
+    this._reconnectAttempts = 0;
+    this._startupConfig = undefined;
+
     if (this.process) {
-      this.process.kill();
+      // Graceful shutdown: send SIGTERM first
+      this.process.kill("SIGTERM");
+
+      // If process doesn't exit within 5 seconds, force kill
+      const forceKillTimer = setTimeout(() => {
+        if (this.process) {
+          this._outputChannel?.appendLine(
+            "[shutdown] SIGTERM timeout, sending SIGKILL",
+          );
+          this.process.kill("SIGKILL");
+        }
+      }, 5000);
+
+      this.process.on("close", () => {
+        clearTimeout(forceKillTimer);
+      });
       this.process = null;
     }
     this.updateStatus();
+    this._shutdownInProgress = false;
+  }
+
+  private async attemptReconnect(): Promise<void> {
+    if (this._shutdownInProgress || !this._startupConfig) {
+      return;
+    }
+    this._reconnectAttempts++;
+    if (this._reconnectAttempts > this.maxReconnectAttempts) {
+      this._outputChannel?.appendLine(
+        `[reconnect] Max reconnect attempts (${this.maxReconnectAttempts}) reached, giving up.`,
+      );
+      void vscode.window.showWarningMessage(
+        `Go-On: Backend process crashed and ${this.maxReconnectAttempts} reconnect attempts failed. Please restart manually.`,
+      );
+      this._reconnectAttempts = 0;
+      return;
+    }
+
+    this._outputChannel?.appendLine(
+      `[reconnect] Attempt ${this._reconnectAttempts}/${this.maxReconnectAttempts} in 2 seconds...`,
+    );
+
+    // Wait before reconnecting
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    try {
+      await this.start(
+        this._startupConfig.configPath,
+        this._startupConfig.executablePath,
+        this._startupConfig.cwd,
+        this._startupConfig.protocolMode,
+      );
+      this._outputChannel?.appendLine(
+        `[reconnect] Reconnect attempt ${this._reconnectAttempts} succeeded.`,
+      );
+      this._reconnectAttempts = 0;
+    } catch (error) {
+      this._outputChannel?.appendLine(
+        `[reconnect] Attempt ${this._reconnectAttempts} failed: ${error}`,
+      );
+    }
   }
 
   isRunning(): boolean {
     return this.process !== null;
+  }
+
+  /** Expose reconnect state for diagnostics. */
+  getReconnectState(): { attempts: number; maxAttempts: number } {
+    return {
+      attempts: this._reconnectAttempts,
+      maxAttempts: this.maxReconnectAttempts,
+    };
   }
 
   setRuntimeEnvOverrides(overrides: Record<string, string>): void {

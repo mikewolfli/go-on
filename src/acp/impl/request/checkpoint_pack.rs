@@ -1,6 +1,7 @@
 use super::*;
+use crate::acp::prelude::ConversationCheckpoint;
 
-async fn list_checkpoint_records(
+pub(super) async fn list_checkpoint_records(
     server: &AcpServer,
     conversation_id: &str,
     branch_id: Option<&str>,
@@ -25,7 +26,7 @@ async fn list_checkpoint_records(
     checkpoints
 }
 
-async fn find_checkpoint(
+pub(super) async fn find_checkpoint(
     server: &AcpServer,
     conversation_id: &str,
     checkpoint_id: &str,
@@ -41,7 +42,7 @@ async fn find_checkpoint(
         .cloned()
 }
 
-async fn get_branch_head_id(
+pub(super) async fn get_branch_head_id(
     server: &AcpServer,
     conversation_id: &str,
     branch_id: &str,
@@ -53,7 +54,7 @@ async fn get_branch_head_id(
         .cloned()
 }
 
-async fn prune_checkpoints(
+pub(super) async fn prune_checkpoints(
     server: &AcpServer,
     conversation_id: &str,
     branch_id: &str,
@@ -96,14 +97,14 @@ async fn prune_checkpoints(
     (removed, repaired_heads, 0)
 }
 
-fn params_task(params: &Value) -> Option<String> {
+pub(super) fn params_task(params: &Value) -> Option<String> {
     params
         .get("task")
         .and_then(Value::as_str)
         .map(str::to_string)
 }
 
-fn session_id_for_task(task: &str) -> String {
+pub(super) fn session_id_for_task(task: &str) -> String {
     let compact = task
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
@@ -117,4 +118,74 @@ fn session_id_for_task(task: &str) -> String {
             compact.as_str()
         }
     )
+}
+
+/// Create a checkpoint record and store it in the server's conversation state.
+///
+/// Called from chat.rs and conversation.rs modules after a response is produced.
+pub async fn create_checkpoint_record(
+    server: &AcpServer,
+    conversation_id: &str,
+    branch_id: &str,
+    messages: Vec<Message>,
+    note: Option<String>,
+    parent_checkpoint_id: Option<String>,
+) -> ConversationCheckpoint {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let checkpoint_id = format!(
+        "cp-{}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        messages.len()
+    );
+
+    let checkpoint = ConversationCheckpoint {
+        checkpoint_id,
+        conversation_id: conversation_id.to_string(),
+        branch_id: branch_id.to_string(),
+        parent_checkpoint_id,
+        created_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64,
+        note,
+        metacognitive_loop: None,
+        messages,
+    };
+
+    let mut state = server.conversation_state.lock().await;
+    let branch_key = format!("{}:{}", conversation_id, branch_id);
+    // Update branch head to this checkpoint
+    state
+        .branch_heads
+        .insert(branch_key, checkpoint.checkpoint_id.clone());
+    state.checkpoints.push(checkpoint.clone());
+    // Enforce capacity by removing oldest excess checkpoints
+    enforce_checkpoint_capacity(&mut state, 1, Some(&checkpoint.checkpoint_id));
+    checkpoint
+}
+
+/// Persist a metacognitive loop state into the most recent checkpoint.
+///
+/// Called from chat.rs after a response completes to track reflection/agent selection state.
+/// Returns the loop_state so callers can store it alongside the checkpoint.
+pub async fn persist_checkpoint_metacognitive_loop(
+    server: &AcpServer,
+    conversation_id: &str,
+    branch_id: &str,
+    checkpoint_id: &str,
+    loop_state: Value,
+) -> Value {
+    let mut state = server.conversation_state.lock().await;
+    if let Some(checkpoint) = state
+        .checkpoints
+        .iter_mut()
+        .find(|cp| cp.checkpoint_id == checkpoint_id && cp.conversation_id == conversation_id && cp.branch_id == branch_id)
+    {
+        checkpoint.metacognitive_loop = Some(loop_state.clone());
+    }
+    loop_state
 }

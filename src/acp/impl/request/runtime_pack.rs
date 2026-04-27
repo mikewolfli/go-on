@@ -17,7 +17,7 @@ pub(super) async fn handle_metrics_get(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let snapshot = serde_json::to_value(server.metrics.snapshot())?;
+    let snapshot = serde_json::to_value(server.observability.metrics.snapshot())?;
     let mut result = snapshot.clone();
     if let Value::Object(ref mut map) = result {
         map.insert("ok".to_string(), json!(true));
@@ -30,7 +30,7 @@ pub(super) async fn handle_metrics_prometheus(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let metrics = server.metrics.snapshot();
+    let metrics = server.observability.metrics.snapshot();
     let gauges = build_runtime_gauge_snapshot(server);
     let breaker_snapshot = server
         .circuit_breakers
@@ -141,7 +141,7 @@ pub(super) async fn handle_metrics_reset(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
-    server.metrics.reset_all();
+    server.observability.metrics.reset_all();
     send_result(
         server,
         request_id,
@@ -180,7 +180,7 @@ async fn build_debug_panel_payload(server: &AcpServer) -> Value {
             "review_outcomes": [],
             "runtime_health": {"ok": true},
             "review_gate": {
-                "total": server.metrics.snapshot().review_gate_total,
+                "total": server.observability.metrics.snapshot().review_gate_total,
             },
             "conversations": {
                 "count": conversation_count,
@@ -245,7 +245,7 @@ pub(super) async fn handle_shutdown(server: &AcpServer, request_id: Option<Value
 
 pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     let status = server.get_status();
-    let metrics = server.metrics.snapshot();
+    let metrics = server.observability.metrics.snapshot();
     send_result(
         server,
         request_id,
@@ -286,13 +286,13 @@ fn check_status_label(value: CheckStatus) -> &'static str {
 
 fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
-    let metrics = server.metrics.snapshot();
+    let metrics = server.observability.metrics.snapshot();
 
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
         config_path,
-        server.response_cache.as_deref(),
-        server.vector_store.as_deref(),
+        server.cache.response_cache.as_deref(),
+        server.cache.vector_store.as_deref(),
     )?;
 
     let healthy_count = report
@@ -344,7 +344,7 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
         .collect::<Vec<_>>();
 
     let rate_limiter_buckets = with_acp_lock(
-        server.lock_monitor.as_ref(),
+        server.observability.lock_monitor.as_ref(),
         ACP_LOCK_PHASE_RATE_LIMITER,
         server.phase_rate_limiter.as_ref(),
         |guard| {
@@ -363,7 +363,7 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
         },
     );
 
-    let lock_components = server.lock_monitor.snapshot();
+    let lock_components = server.observability.lock_monitor.snapshot();
     let lock_summary = summarize_lock_health(&lock_components);
     let timeout_status = if metrics.agent_timeout_failures_total > 0
         || metrics.review_gate_timeout_total > 0
@@ -473,12 +473,12 @@ pub(super) async fn handle_health_probes(
 
 fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
-    let _metrics = server.metrics.snapshot();
+    let _metrics = server.observability.metrics.snapshot();
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
         config_path,
-        server.response_cache.as_deref(),
-        server.vector_store.as_deref(),
+        server.cache.response_cache.as_deref(),
+        server.cache.vector_store.as_deref(),
     )?;
 
     let mut config_warnings = Vec::new();
@@ -829,8 +829,8 @@ fn build_provider_status_payload(server: &AcpServer) -> Result<Value> {
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
         config_path,
-        server.response_cache.as_deref(),
-        server.vector_store.as_deref(),
+        server.cache.response_cache.as_deref(),
+        server.cache.vector_store.as_deref(),
     )?;
 
     let provider_component = report
@@ -924,7 +924,7 @@ pub(super) async fn handle_governance_status(
     request_id: Option<Value>,
 ) -> Result<()> {
     let status = server.get_status();
-    let runtime_snapshot = server.metrics.snapshot();
+    let runtime_snapshot = server.observability.metrics.snapshot();
 
     let pua_plan = server
         .pua_enforcement_plan
@@ -1061,7 +1061,7 @@ pub(super) async fn handle_governance_status(
     });
 
     let entry_rate_snapshot = with_acp_lock(
-        server.lock_monitor.as_ref(),
+        server.observability.lock_monitor.as_ref(),
         ACP_LOCK_PHASE_RATE_LIMITER,
         server.phase_rate_limiter.as_ref(),
         |guard| guard.snapshot(),
@@ -3384,7 +3384,7 @@ pub(super) async fn handle_optimization_peak(
     request_id: Option<Value>,
 ) -> Result<()> {
     let status = server.get_status();
-    let runtime_snapshot = server.metrics.snapshot();
+    let runtime_snapshot = server.observability.metrics.snapshot();
     let config_summary = config_pack::governance_config_summary(server.config_path.as_deref());
     let repro_summary = repro_pack::reproducible_build_summary(server.config_path.as_deref());
     let pua_learning = pua_feedback_collector()
@@ -3641,7 +3641,7 @@ const GOVERNANCE_AUDIT_DIR: &str = ".goon/governance";
 const GOVERNANCE_AUDIT_FILE: &str = "audit.ndjson";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct GovernanceAuditEvent {
+pub(super) struct GovernanceAuditEvent {
     timestamp: u64,
     action: String,
     actor: String,
@@ -3662,7 +3662,7 @@ fn append_governance_audit_event(event: &GovernanceAuditEvent) -> Result<()> {
     Ok(())
 }
 
-fn load_governance_audit_events(limit: usize) -> Result<Vec<GovernanceAuditEvent>> {
+pub(super) fn load_governance_audit_events(limit: usize) -> Result<Vec<GovernanceAuditEvent>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
@@ -4285,7 +4285,7 @@ pub(super) async fn handle_cost_status(
         .or_else(|| params.get("objective").and_then(Value::as_str))
         .unwrap_or("");
     let hardness = summarize_hardness(task, &params);
-    let cost = summarize_token_cost_governance(task, &params, hardness, &server.metrics.snapshot());
+    let cost = summarize_token_cost_governance(task, &params, hardness, &server.observability.metrics.snapshot());
 
     send_result(server, request_id, json!({ "ok": true, "cost": cost })).await
 }

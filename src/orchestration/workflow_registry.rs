@@ -7,8 +7,6 @@
 //! NOTE: This is an intentional architecture framework (S16, Phase 0-9).
 //! Kept as a stable extension point for future workflow preset management.
 
-#![allow(dead_code)]
-
 use crate::config::WorkflowType;
 use crate::orchestration::roles::{role_registry_industry_for, AgentRole};
 use crate::orchestration::startup_context::StartupContext;

@@ -779,7 +779,7 @@ pub fn build_knowledge_refinement_profile(
     method: &str,
     task: &str,
     params: &Value,
-    learning_profile: &Value,
+    _learning_profile: &Value,
 ) -> Value {
     let distill_scope = params
         .get("distill_scope")

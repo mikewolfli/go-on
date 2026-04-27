@@ -9,6 +9,9 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::net::{lookup_host, TcpStream};
 
+/// Prefix for keyring secret references
+const KEYRING_PREFIX: &str = "keyring://";
+
 use crate::config::{AppConfig, PhaseOptions};
 
 /// Get request timeout from phase options
@@ -76,7 +79,7 @@ pub async fn probe_agent_runtime_readiness(
         let Some(key_name) = key else {
             continue;
         };
-        if key_name.starts_with("keyring://") {
+        if key_name.starts_with(KEYRING_PREFIX) {
             continue;
         }
         if std::env::var(key_name).is_err() {

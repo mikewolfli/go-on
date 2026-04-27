@@ -137,7 +137,7 @@ echo -e "${YELLOW}Measuring compilation time...${NC}"
 COMPILE_START=$(date +%s.%N)
 cargo check --quiet
 COMPILE_END=$(date +%s.%N)
-COMPILE_TIME=$(echo "$COMPILE_END - $COMPILE_START" | bc)
+COMPILE_TIME=$(awk "BEGIN { printf \"%.2f\", $COMPILE_END - $COMPILE_START }")
 print_status 0 "Compilation time: ${COMPILE_TIME}s"
 
 # Check 10: Binary size
@@ -147,7 +147,7 @@ if [ -f "target/release/go-on.exe" ] || [ -f "target/release/go-on" ]; then
     else
         BINARY_SIZE=$(stat -f%z "target/release/go-on" 2>/dev/null || stat -c%s "target/release/go-on")
     fi
-    BINARY_SIZE_MB=$(echo "scale=2; $BINARY_SIZE / 1024 / 1024" | bc)
+    BINARY_SIZE_MB=$(awk "BEGIN { printf \"%.2f\", $BINARY_SIZE / 1024 / 1024 }")
     print_status 0 "Binary size: ${BINARY_SIZE_MB}MB"
 else
     print_status 1 "Binary not found for size check"

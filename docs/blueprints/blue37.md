@@ -660,12 +660,18 @@
 | 问题 | 文件 | 修复内容 |
 |------|------|----------|
 | H-SRC-01 | `src/acp/impl/io.rs` | has_input() 改用 Interest::READABLE 不消耗字节 |
+| H-SRC-05 | `src/acp/background.rs` | 创建 BackgroundContext 结构体，消除 12 参数函数签名 |
 | H-SRC-06 | `src/shared/tool_descriptors.rs` | 创建共享模块消除与 mcp/tools.rs 的冗余 |
 | H-SRC-11 | `src/orchestration/mode.rs` | 5 个 ModeRuntime::run() 使用真实 agent 执行 |
 | H-SRC-17 | `src/observability/telemetry_enhanced.rs` | init_tracing 添加 OTLP 初始化 |
 | M-SRC-07 | `src/orchestration/scheduler.rs` | std::sync::Mutex → tokio::sync::Mutex |
 | M-SRC-09/10 | `src/i18n/watcher.rs` + `runtime.rs` | LanguageWatcher 接入 init_i18n，移除 #[allow(dead_code)] |
 | 死代码 | `src/orchestration/roles.rs` | 移除 `#[allow(dead_code)]` 使模块 pub 导出 |
+| 编译修复 | `src/acp/impl/request/` | 修复 15 个编译错误：修正函数可见性 (pub(super))，添加缺失函数 (create_checkpoint_record, persist_checkpoint_metacognitive_loop, run_agent_chat_collecting, run_lazy_tool_loop, filter_unavailable_agents, extract_model_tool_calls, execute_model_tool_calls)，补全 learning_pack/runtime_pack/repro_pack/workflow_pack 的 use 导入 |
+| 编译修复 | `src/acp/impl/request/exec_pack.rs` | 添加 5 个缺失的工具执行辅助函数 |
+| 编译修复 | `src/acp/impl/request/checkpoint_pack.rs` | 添加 create_checkpoint_record 和 persist_checkpoint_metacognitive_loop 函数，修正 enforce_checkpoint_capacity 调用签名 |
+| 警告清理 | `src/acp/impl/request.rs` | 移除未使用的导入 (probe_agent_runtime_readiness, repro_pack, workflow_pack) |
+| 警告清理 | `src/acp/impl/request/governance_pack.rs` | 修复未使用变量 learning_profile |
 
 ### GUI 前端修复项
 | 问题 | 文件 | 修复内容 |
@@ -695,6 +701,19 @@
 |------|----------|
 | `zh_TW.json` | 补齐 2 个缺失键：`error.invalid_setup_level`、`error.invalid_provider_selection` |
 | `zh_CN.json` | 确认完整无缺失 |
+
+### SDK 修复项
+| 问题 | 文件 | 修复内容 |
+|------|------|----------|
+| M-CONF-14 | `sdk/python/go_on_sdk/client.py` | 添加 GoOnClientError 异常类和 JSON 解析 try/except 保护 |
+| M-CONF-15 | `sdk/rust/Cargo.toml` | 添加 default-features = false 避免 reqwest native-tls/rustls-tls 冲突 |
+
+### 验证状态（本轮修复后）
+| 验证项 | 状态 | 日期 |
+|--------|------|------|
+| cargo check (default) | ✅ 通过 (0 warning) | 2026-06-04 |
+| cargo check --all-features | ✅ 通过 (0 warning) | 2026-06-04 |
+| 修复项总数 | 35+ 项 | 全部闭合 |
 
 ---
 

@@ -50,11 +50,6 @@ recommended_phase_max_inflight = 32
 recommended_global_max_inflight = 128
 
 
-recommended_cache_enabled = true
-recommended_vector_enabled = true
-recommended_phase_max_inflight = 32
-recommended_global_max_inflight = 128
-
 
 [[providers]]
 name = "wenxin"

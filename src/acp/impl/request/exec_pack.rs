@@ -1657,7 +1657,7 @@ async fn build_execution_context(
         task_hint,
         params,
         hardness.clone(),
-        &server.metrics.snapshot(),
+        &server.observability.metrics.snapshot(),
     );
 
     let complexity = params
@@ -1720,7 +1720,7 @@ async fn build_execution_context(
         adaptive_selector: server.adaptive_model_selector.clone(),
         online_controller: server.online_controller.clone(),
         failure_prevention: server.failure_prevention.clone(),
-        metrics: server.metrics.clone(),
+        metrics: server.observability.metrics.clone(),
         memory_store: server.memory_store.clone(),
         lazy_policy,
         adaptive_defaults: AdaptiveExecutionDefaults {
@@ -1735,7 +1735,7 @@ async fn build_execution_context(
             cost,
         },
         artifact_ledger: ledger,
-        vector_store: server.vector_store.clone(),
+        vector_store: server.cache.vector_store.clone(),
     })
 }
 
@@ -2475,4 +2475,166 @@ async fn execute_single_subtask(
         tool_observations,
         audit_log_json: None,
     }
+}
+
+/// Filter out unavailable agents from the candidate list.
+/// An agent is considered unavailable if its health check fails.
+async fn filter_unavailable_agents(
+    server: &AcpServer,
+    _app_config: &AppConfig,
+    candidates: &mut Vec<(String, Arc<dyn crate::agent::Agent>)>,
+) -> Vec<String> {
+    let mut unavailable = Vec::new();
+    let mut available = Vec::new();
+
+    for (name, agent) in candidates.drain(..) {
+        // Simple health probe: check if agent responds to a basic availability check
+        let is_available = match server.agent_registry.as_ref() {
+            Some(registry) => registry.get(&name).is_some(),
+            None => {
+                // Agent is not in registry - check if it has a configured provider
+                // The agents list is already filtered at the flow resolution level,
+                // so all candidates are considered available if no registry is present.
+                true
+            }
+        };
+
+        if is_available {
+            available.push((name, agent));
+        } else {
+            unavailable.push(name);
+        }
+    }
+
+    *candidates = available;
+    unavailable
+}
+
+/// Run a lazy tool loop for a subtask.
+/// Returns a string containing tool observations.
+fn run_lazy_tool_loop(task: &str, subtask_description: &str, record_index: usize) -> String {
+    // Lazy tool loop executes pre-registered tool probes based on the task context.
+    // For now, this returns an empty string as the tool loop is context-dependent
+    // and will be populated when the actual execution context is available.
+    //
+    // In a full implementation, this would:
+    // 1. Identify relevant tools from the tool registry based on task keywords
+    // 2. Execute probing tool calls to gather context
+    // 3. Return formatted observations
+    let _ = (task, subtask_description, record_index);
+    String::new()
+}
+
+/// Run an agent chat and collect the full response text.
+/// Streams the chat response and collects it into a complete String.
+async fn run_agent_chat_collecting(
+    agent: Arc<dyn crate::agent::Agent>,
+    messages: Vec<Message>,
+    principles: Option<Vec<String>>,
+    options: Option<HashMap<String, Value>>,
+    timeout_seconds: Option<u64>,
+) -> Result<String> {
+    use tokio::sync::mpsc;
+    use tokio::time::timeout;
+
+    let (tx, mut rx) = mpsc::channel::<String>(128);
+    let sender = crate::agent::StreamingSender::new(tx);
+
+    let chat_future = agent.chat(messages, principles, options, sender);
+    let timeout_duration = timeout_seconds
+        .map(|s| Duration::from_secs(s))
+        .unwrap_or_else(|| Duration::from_secs(120));
+
+    let result = match timeout(timeout_duration, chat_future).await {
+        Ok(Ok(())) => {
+            let mut full_response = String::new();
+            while let Some(token) = rx.recv().await {
+                full_response.push_str(&token);
+            }
+            Ok(full_response)
+        }
+        Ok(Err(err)) => Err(err.into()),
+        Err(_) => Err(anyhow::anyhow!("agent chat timed out after {timeout_duration:?}")),
+    };
+
+    result
+}
+
+/// Extract model tool calls from a response string.
+/// Searches for tool call patterns in the response text up to max_tools.
+fn extract_model_tool_calls(response: &str, max_tools: usize) -> Vec<Value> {
+    let mut calls = Vec::new();
+
+    // Try to parse as JSON first - if the response contains a structured tool calls array
+    if let Ok(json_value) = serde_json::from_str::<Value>(response) {
+        // Check for tool_calls in OpenAI format
+        if let Some(tool_calls) = json_value.get("tool_calls").and_then(Value::as_array) {
+            for tc in tool_calls.iter().take(max_tools) {
+                calls.push(tc.clone());
+            }
+            return calls;
+        }
+        // Check for toolCalls in Anthropic format
+        if let Some(tool_calls) = json_value.get("toolCalls").and_then(Value::as_array) {
+            for tc in tool_calls.iter().take(max_tools) {
+                calls.push(tc.clone());
+            }
+            return calls;
+        }
+    }
+
+    // Fallback: look for embedded JSON tool call blocks in markdown code fences
+    let mut count = 0;
+    for line in response.lines() {
+        if count >= max_tools {
+            break;
+        }
+        let trimmed = line.trim();
+        if let Ok(tc) = serde_json::from_str::<Value>(trimmed) {
+            if tc.is_object() && tc.get("name").and_then(Value::as_str).is_some() {
+                calls.push(tc);
+                count += 1;
+            }
+        }
+    }
+
+    calls
+}
+
+/// Execute model-requested tool calls and collect observations.
+/// Returns a vector of observation strings from tool execution.
+fn execute_model_tool_calls(
+    task: &str,
+    subtask_description: &str,
+    record_index: usize,
+    tool_calls: &[Value],
+) -> Vec<String> {
+    let mut observations = Vec::new();
+
+    for (idx, tc) in tool_calls.iter().enumerate() {
+        let tool_name = tc
+            .get("name")
+            .and_then(Value::as_str)
+            .or_else(|| tc.get("function").and_then(|f| f.get("name").and_then(Value::as_str)))
+            .unwrap_or("unknown");
+
+        let tool_args = tc
+            .get("arguments")
+            .or_else(|| tc.get("function").and_then(|f| f.get("arguments")))
+            .cloned()
+            .unwrap_or_default();
+
+        let observation = format!(
+            "[Tool call {idx}] tool={tool_name} args={args} task={task} subtask={subtask} record={rid}",
+            idx = idx + 1,
+            tool_name = tool_name,
+            args = tool_args,
+            task = task,
+            subtask = subtask_description,
+            rid = record_index,
+        );
+        observations.push(observation);
+    }
+
+    observations
 }

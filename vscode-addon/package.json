@@ -482,6 +482,11 @@
           "default": false,
           "description": "Automatically start Go-On when workspace opens"
         },
+        "go-on.autoOpenChat": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open the Chat panel on first activation (may steal focus)"
+        },
         "go-on.runtime.protocolMode": {
           "type": "string",
           "default": "from_config",

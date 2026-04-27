@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! S13: Node Reputation Tracker
 //!
 //! Maintains an EMA-based reliability score per agent/node.  Scores feed the

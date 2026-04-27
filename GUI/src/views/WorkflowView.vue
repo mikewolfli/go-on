@@ -11,7 +11,7 @@
           <template #header>
             <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
               <span>{{ t("workflow.availableTasks") }}</span>
-              <el-button size="small" :loading="loadingTasks" @click="loadTasks">
+              <el-button size="small" :loading="loadingTasks" @click="loadTasks(tasks, executionHistory)">
                 {{ t("common.refresh") }}
               </el-button>
             </div>
@@ -23,12 +23,12 @@
             <el-table-column prop="estimated_duration" :label="t('workflow.estimatedDuration')" width="120" />
             <el-table-column :label="t('common.action')" width="150">
               <template #default="{ row }">
-                <el-button size="small" @click="planTask(row.id)">{{ t("workflow.plan") }}</el-button>
+                <el-button size="small" @click="planTask(row.id, tasks)">{{ t("workflow.plan") }}</el-button>
                 <el-button
                   size="small"
                   type="primary"
                   :loading="executingId === row.id"
-                  @click="executeTask(row.id)"
+                  @click="executeTask(row.id, tasks, executionHistory)"
                 >
                   {{ t("workflow.execute") }}
                 </el-button>
@@ -44,7 +44,7 @@
           </template>
           <el-space direction="vertical" fill style="width: 100%">
             <el-input v-model="planOutput" type="textarea" :rows="8" readonly />
-            <el-button type="primary" @click="confirmExecutePlan" :loading="executingPlan">
+            <el-button type="primary" @click="confirmExecutePlan(tasks, executionHistory)" :loading="executingPlan">
               {{ t("workflow.confirmExecute") }}
             </el-button>
           </el-space>
@@ -170,15 +170,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from "vue";
-import { ElMessage } from "element-plus";
+import { ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { invokeRuntimeRpc } from "../services/bridge";
+import { useWorkflow } from "../composables/useWorkflow";
 
 const { t } = useI18n();
-const loadingTasks = ref(false);
-const executingId = ref("");
-const executingPlan = ref(false);
 
 const tasks = ref([
   {
@@ -228,189 +224,34 @@ const executionHistory = ref([
   },
 ]);
 
-const planOutput = ref("");
-const rawOutput = ref("");
-const plannedTask = ref("");
-const activeWorkflows = ref(0);
-const totalExecuted = ref(3);
-const successCount = ref(2);
-const failureCount = ref(1);
-const latestCycleTimeline = ref<Array<{ iteration: number; status: string; next_action: string; patch_set_size: number; test_gate_result: string }>>([]);
-const latestGates = ref<Record<string, unknown>>({});
-const latestAutoRepair = ref<Record<string, unknown>>({});
-const latestRunMode = ref("assisted");
-const loadingPeak = ref(false);
-const peakIndicators = reactive({
-  taskSuccessRate: 0,
-  firstPassRate: 0,
-  meanRepairIterations: 0,
-  humanInterventionRate: 0,
-  regressionRate: 0,
-});
+const {
+  loadingTasks,
+  executingId,
+  executingPlan,
+  loadingPeak,
+  planOutput,
+  rawOutput,
+  plannedTask,
+  activeWorkflows,
+  totalExecuted,
+  successCount,
+  failureCount,
+  latestCycleTimeline,
+  latestRunMode,
+  peakIndicators,
 
-function hydrateExecutionInsights(payload: any) {
-  const result = payload?.result ?? payload ?? {};
-  latestRunMode.value = String(result?.run_mode || "assisted");
-  latestGates.value = (result?.gates || {}) as Record<string, unknown>;
-
-  const cycle = result?.execution_cycle || {};
-  latestAutoRepair.value = (cycle?.auto_repair || {}) as Record<string, unknown>;
-  const cycles = Array.isArray(cycle?.cycles) ? cycle.cycles : [];
-  latestCycleTimeline.value = cycles.map((item: any) => ({
-    iteration: Number(item?.iteration || 0),
-    status: String(item?.status || "unknown"),
-    next_action: String(item?.next_action || "-"),
-    patch_set_size: Number(item?.patch_set_size || 0),
-    test_gate_result: String(item?.test_gate_result || "not_run"),
-  }));
-}
-
-function requirementGateStatus() {
-  const gate = latestGates.value as Record<string, any>;
-  return String(gate?.requirement?.status || gate?.gate || "-");
-}
-
-function reviewGateStatus() {
-  const gate = latestGates.value as Record<string, any>;
-  return String(gate?.status2 || "-");
-}
-
-function repairStatusText() {
-  const repair = latestAutoRepair.value as Record<string, any>;
-  return String(repair?.status || "-");
-}
-
-function repairTargetCount() {
-  const repair = latestAutoRepair.value as Record<string, any>;
-  const targets = Array.isArray(repair?.target_subtasks) ? repair.target_subtasks : [];
-  return Number(targets.length || 0);
-}
-
-async function refreshPeakIndicators() {
-  loadingPeak.value = true;
-  try {
-    const result = await invokeRuntimeRpc("optimization.peak", "{}");
-    const payload = JSON.parse(result);
-    const indicators = payload?.result?.peak?.indicators || {};
-    peakIndicators.taskSuccessRate = Number(indicators.task_success_rate || 0);
-    peakIndicators.firstPassRate = Number(indicators.first_pass_rate || 0);
-    peakIndicators.meanRepairIterations = Number(indicators.mean_repair_iterations || 0);
-    peakIndicators.humanInterventionRate = Number(indicators.human_intervention_rate || 0);
-    peakIndicators.regressionRate = Number(indicators.regression_rate || 0);
-  } catch (err) {
-    ElMessage.error(`Error: ${err}`);
-  } finally {
-    loadingPeak.value = false;
-  }
-}
-
-function taskTextById(taskId: string) {
-  const task = tasks.value.find((item) => item.id === taskId);
-  if (!task) {
-    return taskId;
-  }
-  return `${task.name}: ${task.description}`;
-}
-
-async function loadTasks() {
-  loadingTasks.value = true;
-  try {
-    const result = await invokeRuntimeRpc("debug_panel.get", "{}");
-    rawOutput.value = result;
-
-    const data = JSON.parse(result);
-    if (data?.panel) {
-      const conversations = data.panel.conversations;
-      if (conversations) {
-        activeWorkflows.value = Number(conversations.count || 0);
-        totalExecuted.value = Number(conversations.checkpoints || totalExecuted.value);
-      }
-    }
-    ElMessage.success(t("common.loaded"));
-  } catch (err) {
-    ElMessage.error(`Error: ${err}`);
-  } finally {
-    loadingTasks.value = false;
-  }
-}
-
-async function planTask(taskId: string) {
-  try {
-    const task = taskTextById(taskId);
-    plannedTask.value = task;
-    const params = JSON.stringify({ task });
-    const result = await invokeRuntimeRpc("task.plan", params);
-    planOutput.value = result;
-    hydrateExecutionInsights(JSON.parse(result));
-    ElMessage.success(t("workflow.planGenerated"));
-  } catch (err) {
-    ElMessage.error(`Error: ${err}`);
-  }
-}
-
-async function executeTask(taskId: string) {
-  executingId.value = taskId;
-  try {
-    const task = taskTextById(taskId);
-    const params = JSON.stringify({ task, requirement_confirmed: true });
-    const result = await invokeRuntimeRpc("task.execute", params);
-    rawOutput.value = result;
-
-    const data = JSON.parse(result);
-    hydrateExecutionInsights(data);
-    if (data.ok) {
-      ElMessage.success(t("workflow.taskStarted"));
-      // Add to history
-      const task = tasks.value.find((t) => t.id === taskId);
-      if (task) {
-        executionHistory.value.unshift({
-          time: new Date().toLocaleString(),
-          task_id: taskId,
-          task_name: task.name,
-          status: "running",
-          duration: "-",
-          result: "Executing...",
-        });
-      }
-    }
-  } catch (err) {
-    ElMessage.error(`Error: ${err}`);
-  } finally {
-    executingId.value = "";
-  }
-}
-
-async function confirmExecutePlan() {
-  if (!planOutput.value) {
-    ElMessage.warning(t("workflow.noPlan"));
-    return;
-  }
-
-  executingPlan.value = true;
-  try {
-    const task = plannedTask.value || tasks.value[0]?.name || "workflow task";
-    const params = JSON.stringify({
-      task,
-      requirement_confirmed: true,
-      plan: planOutput.value,
-    });
-    const result = await invokeRuntimeRpc("workflow.execute", params);
-    rawOutput.value = result;
-
-    const data = JSON.parse(result);
-    hydrateExecutionInsights(data);
-    if (data.ok) {
-      ElMessage.success(t("workflow.workflowStarted"));
-      planOutput.value = "";
-    }
-  } catch (err) {
-    ElMessage.error(`Error: ${err}`);
-  } finally {
-    executingPlan.value = false;
-  }
-}
+  requirementGateStatus,
+  reviewGateStatus,
+  repairStatusText,
+  repairTargetCount,
+  refreshPeakIndicators,
+  loadTasks,
+  planTask,
+  executeTask,
+  confirmExecutePlan,
+} = useWorkflow();
 
 // Initialize
-loadTasks();
+loadTasks(tasks, executionHistory);
 refreshPeakIndicators();
 </script>

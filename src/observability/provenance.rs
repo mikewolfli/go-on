@@ -3,7 +3,6 @@
 //! Appends an immutable provenance record for every tool call, showing the
 //! data lineage chain: input → tool → output → consumer.
 
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -124,22 +123,45 @@ pub fn make_entry(
 }
 
 fn uuid_v4() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let timestamp_ns = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id() as u64;
-    let combined = timestamp_ns ^ (counter << 16) ^ (pid << 48);
+    use std::cell::RefCell;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    thread_local! {
+        static RNG: RefCell<u64> = {
+            let seed = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0);
+            RefCell::new(seed)
+        };
+    }
+
+    let rand_a: u64 = RNG.with(|rng| {
+        let mut state = rng.borrow_mut();
+        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *state
+    });
+
+    let rand_b: u64 = RNG.with(|rng| {
+        let mut state = rng.borrow_mut();
+        *state = state.wrapping_mul(2862933555777941757).wrapping_add(3037000493);
+        *state
+    });
+
+    let time_low = (rand_a & 0xffff_ffff) as u32;
+    let time_mid = ((rand_a >> 32) & 0xffff) as u16;
+    let time_hi_and_version = ((rand_a >> 48) as u16 & 0x0fff) | 0x4000;
+    let clock_seq_hi = ((rand_b >> 32) as u8 & 0x3f) | 0x80;
+    let clock_seq_low = (rand_b >> 24) as u8;
+    let node_low = (rand_b & 0xffff_ffff_ffff) as u64;
     format!(
-        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-        (combined >> 32) as u32,
-        (combined >> 16) as u16 & 0xffff,
-        (combined & 0xffff) as u16,
-        (counter & 0xffff) as u16,
-        (timestamp_ns & 0xffff_ffff_ffff) as u64
+        "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:012x}",
+        time_low,
+        time_mid,
+        time_hi_and_version,
+        clock_seq_hi,
+        clock_seq_low,
+        node_low
     )
 }
 

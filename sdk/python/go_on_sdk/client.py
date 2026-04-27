@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Dict
 
 import httpx
+
+
+class GoOnClientError(Exception):
+    """Custom exception for go-on SDK client errors."""
 
 
 @dataclass
@@ -27,7 +32,12 @@ class GoOnClient:
         }
         resp = await self._client.post(f"{self.base_url}/v1/responses", json=payload)
         resp.raise_for_status()
-        data = resp.json()
+        try:
+            data = resp.json()
+        except json.JSONDecodeError:
+            raise GoOnClientError(
+                f"Server returned non-JSON response: {resp.text[:500]}"
+            ) from None
         result = data.get("result", {})
         return GovernanceStatusResponse(
             ok=bool(result.get("ok", False)),

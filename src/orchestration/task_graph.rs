@@ -4,6 +4,29 @@ use std::collections::{HashMap, HashSet};
 /// Task node ID
 type NodeId = String;
 
+// Local type aliases to break direct dependency on crate::reinforcement.
+// These mirror the types from the reinforcement module.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlannedSubtaskRecord {
+    pub subtask_id: String,
+    pub description: String,
+    pub phase: String,
+    pub outcome: Option<String>,
+    pub result_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskGraphCheckpointArtifact {
+    pub checkpoint_id: String,
+    pub schema_version: String,
+    pub created_at: i64,
+    pub task: String,
+    pub phases_completed: usize,
+    pub subtask_records: Vec<PlannedSubtaskRecord>,
+    pub resume_eligible: bool,
+    pub resume_reason: Option<String>,
+}
+
 /// Task graph node
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskNode {
@@ -71,8 +94,8 @@ impl TaskGraph {
         &self,
         task: &str,
         phases_completed: usize,
-        subtask_records: Vec<crate::reinforcement::PlannedSubtaskRecord>,
-    ) -> crate::reinforcement::TaskGraphCheckpointArtifact {
+        subtask_records: Vec<PlannedSubtaskRecord>,
+    ) -> TaskGraphCheckpointArtifact {
         let failed_count = subtask_records
             .iter()
             .filter(|r| r.outcome.as_deref() == Some("failed"))
@@ -86,7 +109,7 @@ impl TaskGraph {
         } else {
             None
         };
-        crate::reinforcement::TaskGraphCheckpointArtifact {
+        TaskGraphCheckpointArtifact {
             checkpoint_id: format!("ckpt-{}", crate::acp::prelude::now_ts()),
             schema_version: "blue26-taskgraph-checkpoint-v1".to_string(),
             created_at: crate::acp::prelude::now_ts(),

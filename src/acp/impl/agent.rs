@@ -78,10 +78,11 @@ pub async fn run_dual_review_gate(
     pipeline_trace: &RequestTraceContext,
 ) -> Result<ReviewGateOutcome> {
     let started = Instant::now();
-    server.metrics.inc_review_gate();
+    server.observability.metrics.inc_review_gate();
 
     let review_span = parent_span.and_then(|parent| {
         server
+            .observability
             .telemetry_runtime
             .lock()
             .ok()
@@ -232,29 +233,30 @@ pub async fn run_dual_review_gate(
     if let Some(deadline) = gate_deadline {
         if Instant::now() > deadline {
             let timeout_duration_ms = started.elapsed().as_millis() as u64;
-            server.metrics.inc_review_gate_timeout();
+            server.observability.metrics.inc_review_gate_timeout();
             server
+                .observability
                 .metrics
                 .record_review_latency(timeout_duration_ms as f64);
             if timeout_policy.fail_on_timeout {
-                server.metrics.inc_review_gate_rejected();
+                server.observability.metrics.inc_review_gate_rejected();
                 return Err(anyhow::anyhow!("{}", tf("error.review_gate_timeout", &[])));
             } else {
-                server.metrics.inc_review_gate_degraded();
+                server.observability.metrics.inc_review_gate_degraded();
                 match result {
                     Ok((mut outcome, _timeout_detected)) => {
                         outcome
                             .comments
                             .push(tf("warning.review_timeout_continue", &[]));
                         if outcome.passed {
-                            server.metrics.inc_review_gate_approved();
+                            server.observability.metrics.inc_review_gate_approved();
                         } else {
-                            server.metrics.inc_review_gate_rejected();
+                            server.observability.metrics.inc_review_gate_rejected();
                         }
                         return Ok(outcome);
                     }
                     Err(_err) => {
-                        server.metrics.inc_review_gate_invalid_response();
+                        server.observability.metrics.inc_review_gate_invalid_response();
                         return Ok(ReviewGateOutcome {
                             passed: true,
                             comments: vec![tf("warning.review_timeout_continue", &[])],
@@ -270,24 +272,25 @@ pub async fn run_dual_review_gate(
     match result {
         Ok((outcome, timeout_detected)) => {
             if timeout_detected {
-                server.metrics.inc_review_gate_timeout();
+                server.observability.metrics.inc_review_gate_timeout();
                 if !timeout_policy.fail_on_timeout {
-                    server.metrics.inc_review_gate_degraded();
+                    server.observability.metrics.inc_review_gate_degraded();
                 }
             }
             server
+                .observability
                 .metrics
                 .record_review_latency(outcome.duration_ms as f64);
             if outcome.passed {
-                server.metrics.inc_review_gate_approved();
+                server.observability.metrics.inc_review_gate_approved();
             } else {
-                server.metrics.inc_review_gate_rejected();
+                server.observability.metrics.inc_review_gate_rejected();
             }
             Ok(outcome)
         }
         Err(err) => {
-            server.metrics.inc_review_gate_invalid_response();
-            server.metrics.inc_review_gate_rejected();
+            server.observability.metrics.inc_review_gate_invalid_response();
+            server.observability.metrics.inc_review_gate_rejected();
             Err(err)
         }
     }

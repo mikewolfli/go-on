@@ -274,7 +274,7 @@ pub async fn handle_chat(
     let duration_ms = started.elapsed().as_millis() as u64;
     let status = if result.is_ok() { "success" } else { "error" };
 
-    server.metrics.record_chat_latency(duration_ms as f64);
+    server.observability.metrics.record_chat_latency(duration_ms as f64);
     record_trace_event(
         server,
         &pipeline_trace,
@@ -350,7 +350,7 @@ async fn filter_runtime_ready_agents(
         match readiness {
             AgentRuntimeReadiness::Ready => retained.push((name, agent)),
             AgentRuntimeReadiness::EndpointTimedOut => {
-                server.metrics.inc_runtime_probe_timeout();
+                server.observability.metrics.inc_runtime_probe_timeout();
                 unavailable.push(name);
             }
             AgentRuntimeReadiness::MissingSecret | AgentRuntimeReadiness::EndpointUnavailable => {
@@ -910,7 +910,7 @@ pub(crate) async fn process_chat_request(
 
     let mut reviews = Vec::new();
     let mut tool_execution_results = Vec::new();
-    
+
     if params.mode.eq_ignore_ascii_case("full_auto") {
         match crate::acp::r#impl::agent::run_dual_review_gate(
             server,
@@ -934,7 +934,7 @@ pub(crate) async fn process_chat_request(
                 if outcome.passed {
                     // Extract task description
                     let task_description = extract_task_description(&params.messages);
-                    
+
                     // Run tool execution loop
                     let tool_result = run_tool_execution_loop(&task_description, "primary", 0);
                     if !tool_result.is_empty() {
@@ -1001,11 +1001,11 @@ pub(crate) async fn process_chat_request(
 
         // Get or create memory store
         let mut memory_store = MemoryStore::new(MemoryPolicy::default());
-        
+
         // Add entry and promote
         memory_store.store(memory_entry);
         let promotion_report = memory_store.promote();
-        
+
         Some(json!({
             "memory_promotion": {
                 "promoted_count": promotion_report.promoted_count,
@@ -1101,9 +1101,9 @@ pub(crate) async fn process_chat_request(
         // Determine appropriate roles based on task type
         let task_description = extract_task_description(&params.messages);
         let task_lower = task_description.to_lowercase();
-        
+
         let mut suggested_roles = Vec::new();
-        
+
         // Analyze task and suggest appropriate roles
         if task_lower.contains("plan") || task_lower.contains("design") || task_lower.contains("architecture") {
             suggested_roles.push(AgentRole::Planner);
@@ -1120,7 +1120,7 @@ pub(crate) async fn process_chat_request(
         if task_lower.contains("review") || task_lower.contains("check") || task_lower.contains("audit") {
             suggested_roles.push(AgentRole::Reviewer);
         }
-        
+
         // If no specific roles detected, use default roles
         if suggested_roles.is_empty() {
             suggested_roles = vec![
@@ -1133,7 +1133,7 @@ pub(crate) async fn process_chat_request(
         // Get role registry
         let role_registry = RoleRegistry::new();
         let role_definitions = role_registry.all();
-        
+
         Some(json!({
             "role_routing": {
                 "suggested_roles": suggested_roles.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
@@ -1151,27 +1151,27 @@ pub(crate) async fn process_chat_request(
     let verification_result = if params.mode.eq_ignore_ascii_case("full_auto") {
         // Run enhanced verification checks
         let mut verification_signals = Vec::new();
-        
+
         // Run syntax check on response
         let syntax_signal = DeterministicVerifier::run_syntax_check(&response_text);
         verification_signals.push(syntax_signal);
-        
+
         // Run test check if response contains test-related content
         if response_text.to_lowercase().contains("test") || response_text.contains("assert") {
             let test_signal = DeterministicVerifier::run_test_check(&response_text);
             verification_signals.push(test_signal);
         }
-        
+
         // Run lint check if response contains code
         if response_text.contains("fn ") || response_text.contains("let ") || response_text.contains("pub ") {
             let lint_signal = DeterministicVerifier::run_lint_check(&response_text);
             verification_signals.push(lint_signal);
         }
-        
+
         // Run adversarial check (using test check as fallback)
         let adversarial_signal = DeterministicVerifier::run_test_check(&response_text);
         verification_signals.push(adversarial_signal);
-        
+
         // Create structured review
         let passed_count = verification_signals.iter().filter(|s| s.passed).count();
         let total_count = verification_signals.len();
@@ -1180,7 +1180,7 @@ pub(crate) async fn process_chat_request(
         } else {
             1.0
         };
-        
+
         let structured_review = StructuredReview {
             verdict: if confidence >= 0.8 {
                 VerificationVerdict::Approve
@@ -1207,7 +1207,7 @@ pub(crate) async fn process_chat_request(
             pua_report: None,
             audit_log: None,
         };
-        
+
         Some(json!({
             "enhanced_verification": {
                 "verdict": format!("{:?}", structured_review.verdict),
@@ -1326,7 +1326,7 @@ async fn run_agent_collecting(
     .await
     .inspect_err(|err| {
         if err.to_string().to_ascii_lowercase().contains("timed out") {
-            server.metrics.inc_agent_timeout_failure();
+            server.observability.metrics.inc_agent_timeout_failure();
         }
     })
 }
@@ -1691,7 +1691,7 @@ async fn load_vector_context(
         };
     }
 
-    let Some(store) = server.vector_store.clone() else {
+    let Some(store) = server.cache.vector_store.clone() else {
         return VectorContext {
             hits: Vec::new(),
             summary,
@@ -1707,7 +1707,7 @@ async fn load_vector_context(
         settings.max_snippet_chars,
     ) {
         Ok((hits, feedback)) => {
-            server.metrics.record_vector_search(hits.len());
+            server.observability.metrics.record_vector_search(hits.len());
             apply_autotune_feedback(
                 server,
                 phase_options,
@@ -1938,7 +1938,7 @@ async fn persist_vector_memory(
     let Some(settings) = effective_vector_settings(server, phase_options).await else {
         return;
     };
-    let Some(store) = server.vector_store.clone() else {
+    let Some(store) = server.cache.vector_store.clone() else {
         return;
     };
     let Some(query_text) = latest_user_message(&params.messages) else {
@@ -1948,7 +1948,7 @@ async fn persist_vector_memory(
     if let Err(err) = store.upsert(phase_name, query_text, response_text) {
         warn!(phase = phase_name, error = %err, "vector upsert failed");
     } else {
-        server.metrics.record_vector_store();
+        server.observability.metrics.record_vector_store();
     }
 
     if settings.summary_enabled && params.messages.len() >= settings.summary_trigger_messages {
@@ -1969,7 +1969,7 @@ async fn persist_vector_memory(
             if let Err(err) = store.upsert_phase_summary(phase_name, &summary_text) {
                 warn!(phase = phase_name, error = %err, "phase summary upsert failed");
             } else {
-                server.metrics.record_summary_store();
+                server.observability.metrics.record_summary_store();
             }
         }
     }
@@ -2081,11 +2081,11 @@ async fn load_phase_summary(
         return None;
     }
 
-    let store = server.vector_store.clone()?;
+    let store = server.cache.vector_store.clone()?;
 
     match store.get_phase_summary(phase_name) {
         Ok(summary) => {
-            server.metrics.record_summary_read(summary.is_some());
+            server.observability.metrics.record_summary_read(summary.is_some());
             summary
         }
         Err(err) => {
@@ -2520,7 +2520,7 @@ async fn persist_chat_knowledge(
     }
 
     let mut vector_memory_written = false;
-    if let Some(vector_store) = server.vector_store.clone() {
+    if let Some(vector_store) = server.cache.vector_store.clone() {
         let vector_payload = format!(
             "Task: {}\nInsights:\n{}\nVerification:\n{}\nAnswer:\n{}",
             request_excerpt,
@@ -2536,7 +2536,7 @@ async fn persist_chat_knowledge(
             )
             .is_ok()
         {
-            server.metrics.record_vector_store();
+            server.observability.metrics.record_vector_store();
             vector_memory_written = true;
         }
     }
@@ -3001,7 +3001,7 @@ mod tests {
         let mut server = ServerBuilder::new().build().expect("server should build");
         server.flow_manager = Some(flow);
         server.agent_registry = Some(Arc::new(registry));
-        server.vector_store = Some(Arc::clone(&vector_store));
+        server.cache.vector_store = Some(Arc::clone(&vector_store));
         server.vector_config = config.vector.clone();
         let config_path = temp.path().join("config.toml");
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
@@ -3144,5 +3144,3 @@ fn execute_tool_calls(task: &str, subtask: &str, record_index: usize, calls: &[S
         format!("Executed {} for task {} (subtask: {}, index: {})", call, task, subtask, record_index)
     }).collect()
 }
-
-

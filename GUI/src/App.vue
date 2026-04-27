@@ -105,7 +105,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
 import {
@@ -218,7 +218,6 @@ async function onSwitchToMiniWindow() {
     await switchToMiniWindow();
   } catch {
     // In browser preview fallback to in-window mini route.
-    const { useRouter } = await import("vue-router");
     useRouter().push("/mini");
   }
 }

@@ -1317,6 +1317,29 @@ async fn run() -> Result<()> {
         }
     }
 
+    // Handle secret management commands, local model setup, and onboarding
+    if handle_secret_commands(&cli, &config_path)? {
+        return Ok(());
+    }
+
+    // Load, validate configuration, and handle validation-only modes
+    let config = match handle_validation_mode(&cli, &config_path)? {
+        Some(config) => config,
+        None => return Ok(()),
+    };
+
+    // Start the server
+    start_server(
+        config,
+        &cli,
+        &config_path,
+    ).await
+}
+
+/// Handle secret management commands, local model setup, recommended config, setup wizard, and AI onboarding.
+///
+/// Returns `true` if a command was handled and `run()` should return early.
+fn handle_secret_commands(cli: &Cli, config_path: &std::path::Path) -> Result<bool> {
     // Handle secret management commands
     if let Some(action) = cli.secret.as_deref() {
         let action = parse_secret_action(action)?;
@@ -1325,12 +1348,12 @@ async fn run() -> Result<()> {
             cli.secret_name.as_deref(),
             cli.secret_value.as_deref(),
         )?;
-        return Ok(());
+        return Ok(true);
     }
 
     if cli.add_local_model {
         add_local_model(
-            &config_path,
+            config_path,
             LocalModelOptions {
                 name: cli.local_model_name.clone(),
                 url: cli.local_model_url.clone(),
@@ -1341,12 +1364,12 @@ async fn run() -> Result<()> {
                 apply_to_phases: !cli.local_model_register_only,
             },
         )?;
-        return Ok(());
+        return Ok(true);
     }
 
     if cli.apply_recommended {
-        apply_recommended_to_config(&config_path)?;
-        return Ok(());
+        apply_recommended_to_config(config_path)?;
+        return Ok(true);
     }
 
     // Handle setup wizard
@@ -1370,30 +1393,38 @@ async fn run() -> Result<()> {
             force: cli.force,
             prompt_for_secrets: cli.setup_profile.is_none() && cli.setup_secrets.is_none(),
         };
-        setup::run_setup_with_options(&config_path, options)?;
-        return Ok(());
+        setup::run_setup_with_options(config_path, options)?;
+        return Ok(true);
     }
 
-    if maybe_prompt_ai_onboarding(&cli, &config_path)? {
-        return Ok(());
+    if maybe_prompt_ai_onboarding(cli, config_path)? {
+        return Ok(true);
     }
 
+    Ok(false)
+}
+
+/// Load and validate configuration, then handle validation-only modes (--validate-config, --diagnose).
+///
+/// Returns `Some(config)` if validation passed and the server should start,
+/// or `None` if a validation-only command was handled and `run()` should return.
+fn handle_validation_mode(cli: &Cli, config_path: &std::path::Path) -> Result<Option<Arc<AppConfig>>> {
     // Load and validate configuration
     info!("loading config from {}", config_path.display());
-    let config = Arc::new(AppConfig::load(&config_path)?);
+    let config = Arc::new(AppConfig::load(config_path)?);
 
     // Perform enhanced configuration validation
-    let validation_result = config_validation::validate_config_file(&config_path)?;
+    let validation_result = config_validation::validate_config_file(config_path)?;
 
     // Also run legacy validation for compatibility
-    let health_report = validate_runtime_readiness(&config_path, &config)?;
+    let health_report = validate_runtime_readiness(config_path, &config)?;
     emit_config_warnings(&health_report.warnings, cli.validate_config);
 
     // If only validating config, exit after validation
     if cli.validate_config {
         // Enhanced validation report
         let validation_report =
-            config_validation::ConfigValidator::new(&config_path, config.as_ref().clone())
+            config_validation::ConfigValidator::new(config_path, config.as_ref().clone())
                 .generate_report(&validation_result);
 
         info!("configuration validation completed\n{}", validation_report);
@@ -1424,14 +1455,14 @@ async fn run() -> Result<()> {
 
         if !validation_result.is_valid {
             error!("Configuration validation failed");
-            return Ok(());
+            return Ok(None);
         }
 
-        return Ok(());
+        return Ok(None);
     }
 
     if cli.diagnose {
-        let report = build_runtime_healthcheck_report(Some(&config_path), None, None)?;
+        let report = build_runtime_healthcheck_report(Some(config_path), None, None)?;
         let error_count = report
             .components
             .iter()
@@ -1465,13 +1496,13 @@ async fn run() -> Result<()> {
         } else {
             println!("suggestion: runtime baseline looks healthy");
         }
-        return Ok(());
+        return Ok(None);
     }
 
     // Check if configuration is valid before proceeding
     if !validation_result.is_valid {
         error!("Configuration validation failed. Cannot start server.");
-        let report = config_validation::ConfigValidator::new(&config_path, config.as_ref().clone())
+        let report = config_validation::ConfigValidator::new(config_path, config.as_ref().clone())
             .generate_report(&validation_result);
         error!("Validation report:\n{}", report);
 
@@ -1511,6 +1542,15 @@ async fn run() -> Result<()> {
         }
     }
 
+    Ok(Some(config))
+}
+
+/// Start the server with the given configuration and CLI options.
+async fn start_server(
+    config: Arc<AppConfig>,
+    cli: &Cli,
+    config_path: &std::path::Path,
+) -> Result<()> {
     // Create HTTP client with timeout
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
@@ -1534,12 +1574,12 @@ async fn run() -> Result<()> {
     }
 
     let (cache, vector_store, (autotune_state, autotune_config, autotune_state_path)) = tokio::try_join!(
-        initialize_cache(config_path.clone(), config.cache.clone()),
-        initialize_vector_store(config_path.clone(), config.vector.clone()),
-        initialize_autotune(config_path.clone(), config.autotune.clone()),
+        initialize_cache(config_path.to_path_buf(), config.cache.clone()),
+        initialize_vector_store(config_path.to_path_buf(), config.vector.clone()),
+        initialize_autotune(config_path.to_path_buf(), config.autotune.clone()),
     )?;
 
-    let ledger = ArtifactLedger::new(Some(&config_path));
+    let ledger = ArtifactLedger::new(Some(config_path));
 
     if let Some(task) = cli.plan_task.as_deref() {
         let plan = build_task_plan(task);
@@ -1554,7 +1594,7 @@ async fn run() -> Result<()> {
 
     if cli.healthcheck {
         let report = build_runtime_healthcheck_report(
-            Some(&config_path),
+            Some(config_path),
             cache.as_deref(),
             vector_store.as_deref(),
         )?;
@@ -1569,11 +1609,11 @@ async fn run() -> Result<()> {
 
     if cli.status {
         let report = build_runtime_healthcheck_report(
-            Some(&config_path),
+            Some(config_path),
             cache.as_deref(),
             vector_store.as_deref(),
         )?;
-        print_runtime_status(&config_path, &report);
+        print_runtime_status(config_path, &report);
         print_completeness_report(config.as_ref(), &report);
         return Ok(());
     }
@@ -1599,7 +1639,7 @@ async fn run() -> Result<()> {
         .clone()
         .unwrap_or_else(RuntimeConfig::default);
     // Read [protocol].mode (supports 5 options with adaptive default)
-    if let Ok(config_str) = std::fs::read_to_string(&config_path) {
+    if let Ok(config_str) = std::fs::read_to_string(config_path) {
         if let Ok(toml_value) = config_str.parse::<toml::Value>() {
             if let Some(protocol_section) = toml_value.get("protocol") {
                 if let Some(mode) = protocol_section.get("mode").and_then(|v| v.as_str()) {

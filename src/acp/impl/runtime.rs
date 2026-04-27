@@ -300,7 +300,7 @@ pub fn routing_handles(server: &AcpServer) -> Result<(Arc<FlowManager>, Arc<Agen
 
 /// Get cache handle
 pub fn cache_handle(server: &AcpServer) -> Option<Arc<crate::cache::ResponseCache>> {
-    server.response_cache.clone()
+    server.cache.response_cache.clone()
 }
 
 /// Get artifact ledger
@@ -318,7 +318,7 @@ pub fn artifact_ledger(_server: &AcpServer) -> crate::reinforcement::ArtifactLed
 
 /// Get vector store handle
 pub fn vector_store_handle(server: &AcpServer) -> Option<Arc<VectorStore>> {
-    server.vector_store.clone()
+    server.cache.vector_store.clone()
 }
 
 /// Get vector configuration snapshot
@@ -1292,23 +1292,20 @@ fn responses_input_to_messages(input: &serde_json::Value) -> Vec<crate::agent::M
     vec![]
 }
 
-/// Handle POST /v1/responses — Responses API Phase R1 baseline.
-///
-/// Accepts the Responses API request schema, maps internally to chat_params,
-/// and returns a structured `response` object (not a chat.completion object).
-async fn handle_responses_api(
+/// Validate and deserialize a Responses API POST request.
+/// On error, writes the error to the socket and returns `Err(())` so the caller can bail.
+async fn validate_responses_post_request(
     socket: &mut TcpStream,
-    server: Arc<AcpServer>,
-    body: serde_json::Value,
-) -> Result<()> {
+    body: &serde_json::Value,
+) -> Result<ResponsesApiRequest, ()> {
     if !body.is_object() {
         let payload = build_responses_error(
             "invalid_request_error",
             "invalid_request_error",
             "request body must be a JSON object",
         );
-        write_responses_api_error(socket, payload).await?;
-        return Ok(());
+        let _ = write_responses_api_error(socket, payload).await;
+        return Err(());
     }
 
     // Validate required fields before deserialization.
@@ -1319,16 +1316,16 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "model must be a string",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
         let payload = build_responses_error(
             "missing_required_field",
             "invalid_request_error",
             "model is required",
         );
-        write_responses_api_error(socket, payload).await?;
-        return Ok(());
+        let _ = write_responses_api_error(socket, payload).await;
+        return Err(());
     }
     match body.get("input") {
         None => {
@@ -1337,8 +1334,8 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "input is required",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
         Some(value) if value.is_null() || (!value.is_string() && !value.is_array()) => {
             let payload = build_responses_error(
@@ -1346,8 +1343,8 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "input must be a string or an array of input messages",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
         Some(_) => {}
     }
@@ -1358,8 +1355,8 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "max_output_tokens must be a positive integer",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
     }
     if let Some(v) = body.get("temperature") {
@@ -1369,8 +1366,8 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "temperature must be a number",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         };
         if !(0.0..=2.0).contains(&value) {
             let payload = build_responses_error(
@@ -1378,8 +1375,8 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "temperature must be between 0 and 2",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
     }
     if let Some(v) = body.get("metadata") {
@@ -1389,8 +1386,8 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "metadata must be an object",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
     }
     if let Some(v) = body.get("reasoning") {
@@ -1400,8 +1397,8 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "reasoning must be an object",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
     }
     if let Some(v) = body.get("tools") {
@@ -1411,8 +1408,8 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "tools must be an array",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
         if v.as_array()
             .is_some_and(|items| items.iter().any(|item| !item.is_object()))
@@ -1422,16 +1419,16 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "tools entries must be objects",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
         if let Some(reason) = v
             .as_array()
             .and_then(|items| items.iter().find_map(validate_responses_tool))
         {
             let payload = build_responses_error("invalid_input", "invalid_request_error", reason);
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
     }
     if let Some(v) = body.get("tool_choice") {
@@ -1441,8 +1438,8 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "tool_choice must be a string or object",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
         if v.is_string() && !is_supported_responses_tool_choice(v) {
             let payload = build_responses_error(
@@ -1450,13 +1447,13 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "tool_choice string must be one of: auto, none, required",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
         if let Some(reason) = v.as_object().and_then(|_| validate_responses_tool(v)) {
             let payload = build_responses_error("invalid_input", "invalid_request_error", reason);
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
     }
     if let Some(v) = body.get("previous_response_id") {
@@ -1466,12 +1463,12 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "previous_response_id must be a non-empty string",
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
     }
 
-    let req: ResponsesApiRequest = match serde_json::from_value(body) {
+    let req: ResponsesApiRequest = match serde_json::from_value(body.clone()) {
         Ok(r) => r,
         Err(err) => {
             let payload = build_responses_error(
@@ -1479,9 +1476,25 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 format!("invalid responses request: {err}"),
             );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
+            let _ = write_responses_api_error(socket, payload).await;
+            return Err(());
         }
+    };
+    Ok(req)
+}
+
+/// Handle POST /v1/responses — Responses API Phase R1 baseline.
+///
+/// Accepts the Responses API request schema, maps internally to chat_params,
+/// and returns a structured `response` object (not a chat.completion object).
+async fn handle_responses_api(
+    socket: &mut TcpStream,
+    server: Arc<AcpServer>,
+    body: serde_json::Value,
+) -> Result<()> {
+    let req = match validate_responses_post_request(socket, &body).await {
+        Ok(r) => r,
+        Err(()) => return Ok(()),
     };
 
     let raw_model = req.model.clone().unwrap_or_default();
@@ -1605,69 +1618,113 @@ async fn handle_responses_api(
         &build_responses_api_in_progress_response(&request_id, &model),
     );
 
+    // Tool-result path: continuing a previous conversation with a tool result.
     if let Some(previous_response_id) = previous_response_id.as_deref() {
-        let Some(previous_response) =
-            load_responses_api_payload(server.as_ref(), previous_response_id)
-        else {
-            let payload = build_responses_error(
-                "not_found",
-                "invalid_request_error",
-                "previous_response_id not found",
-            );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
-        };
-
-        let Some(tool_call_id) = pending_tool_call_id(&previous_response) else {
-            let payload = build_responses_error(
-                "tool_error",
-                "tool_error",
-                "previous_response_id has no pending tool_call",
-            );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
-        };
-
-        let Some(tool_result_text) = extract_tool_result_for_call(input, tool_call_id) else {
-            let payload = build_responses_error(
-                "tool_error",
-                "tool_error",
-                "input must include a tool result with matching tool_call_id",
-            );
-            write_responses_api_error(socket, payload).await?;
-            return Ok(());
-        };
-
-        let payload = build_responses_api_tool_result_response(
-            &request_id,
-            &model,
-            previous_response_id,
-            tool_call_id,
-            &tool_result_text,
-        );
-        store_responses_api_payload(server.as_ref(), &payload);
-        write_http_json_response(socket, 200, payload).await?;
-        return Ok(());
+        return handle_response_tool_result(
+            socket, &server, &request_id, &model, input, previous_response_id,
+        )
+        .await;
     }
 
+    // Tool-call path: tool_choice=required, immediately produce a tool call.
     if matches!(
         req.tool_choice.as_ref().and_then(|v| v.as_str()),
         Some("required")
     ) {
-        let tool_name = req
-            .tools
-            .as_ref()
-            .and_then(|value| value.as_array())
-            .and_then(|items| items.iter().find_map(responses_tool_name))
-            .unwrap_or("tool");
-        let tool_call_id = next_responses_api_id("call");
-        let payload =
-            build_responses_api_tool_call_response(&request_id, &model, &tool_call_id, tool_name);
-        store_responses_api_payload(server.as_ref(), &payload);
-        write_http_json_response(socket, 200, payload).await?;
-        return Ok(());
+        return handle_response_required_tool_call(
+            socket, &server, &request_id, &model, &req,
+        )
+        .await;
     }
 
+    // Normal create path (possibly streaming).
+    handle_response_create(socket, server, &request_id, &model, req, messages).await
+}
+
+/// Handle tool result (previous_response_id) — stores and writes tool result response.
+async fn handle_response_tool_result(
+    socket: &mut TcpStream,
+    server: &Arc<AcpServer>,
+    request_id: &str,
+    model: &str,
+    input: &serde_json::Value,
+    previous_response_id: &str,
+) -> Result<()> {
+    let Some(previous_response) =
+        load_responses_api_payload(server.as_ref(), previous_response_id)
+    else {
+        let payload = build_responses_error(
+            "not_found",
+            "invalid_request_error",
+            "previous_response_id not found",
+        );
+        write_responses_api_error(socket, payload).await?;
+        return Ok(());
+    };
+
+    let Some(tool_call_id) = pending_tool_call_id(&previous_response) else {
+        let payload = build_responses_error(
+            "tool_error",
+            "tool_error",
+            "previous_response_id has no pending tool_call",
+        );
+        write_responses_api_error(socket, payload).await?;
+        return Ok(());
+    };
+
+    let Some(tool_result_text) = extract_tool_result_for_call(input, tool_call_id) else {
+        let payload = build_responses_error(
+            "tool_error",
+            "tool_error",
+            "input must include a tool result with matching tool_call_id",
+        );
+        write_responses_api_error(socket, payload).await?;
+        return Ok(());
+    };
+
+    let payload = build_responses_api_tool_result_response(
+        request_id,
+        model,
+        previous_response_id,
+        tool_call_id,
+        &tool_result_text,
+    );
+    store_responses_api_payload(server.as_ref(), &payload);
+    write_http_json_response(socket, 200, payload).await?;
+    Ok(())
+}
+
+/// Handle tool_choice=required — immediately produce a tool call response.
+async fn handle_response_required_tool_call(
+    socket: &mut TcpStream,
+    server: &Arc<AcpServer>,
+    request_id: &str,
+    model: &str,
+    req: &ResponsesApiRequest,
+) -> Result<()> {
+    let tool_name = req
+        .tools
+        .as_ref()
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.iter().find_map(responses_tool_name))
+        .unwrap_or("tool");
+    let tool_call_id = next_responses_api_id("call");
+    let payload =
+        build_responses_api_tool_call_response(request_id, model, &tool_call_id, tool_name);
+    store_responses_api_payload(server.as_ref(), &payload);
+    write_http_json_response(socket, 200, payload).await?;
+    Ok(())
+}
+
+/// Handle normal create path (non-tool, non-stream) for POST /v1/responses.
+async fn handle_response_create(
+    socket: &mut TcpStream,
+    server: Arc<AcpServer>,
+    request_id: &str,
+    model: &str,
+    req: ResponsesApiRequest,
+    messages: Vec<crate::agent::Message>,
+) -> Result<()> {
     let mut extra = req.extra.clone();
     extra.remove("previous_response_id");
     extra.insert("model".to_string(), serde_json::json!(model));
@@ -1713,8 +1770,7 @@ async fn handle_responses_api(
     let trace = http_trace_context("responses.api");
 
     if req.stream {
-        return handle_responses_api_stream(socket, server, &request_id, &model, params, &trace)
-            .await;
+        return handle_response_stream(socket, server, request_id, model, params, &trace).await;
     }
 
     let result = crate::acp::r#impl::chat::process_chat_request(
@@ -1732,8 +1788,8 @@ async fn handle_responses_api(
             if is_setup_or_upstream_unavailable(&err) {
                 let payload = attach_responses_token_economy(
                     build_responses_api_response(
-                        &request_id,
-                        &model,
+                        request_id,
+                        model,
                         &degraded_openai_message(&err),
                     ),
                     &params.messages,
@@ -1774,7 +1830,7 @@ async fn handle_responses_api(
         .and_then(|v| v.as_str())
         .unwrap_or_default();
     let payload = attach_responses_token_economy(
-        build_responses_api_response(&request_id, &model, response_text),
+        build_responses_api_response(request_id, model, response_text),
         &params.messages,
         response_text,
     );
@@ -1784,9 +1840,33 @@ async fn handle_responses_api(
     Ok(())
 }
 
+/// Handle GET /v1/responses/{id} — retrieve a single response by its ID.
+async fn handle_response_get(
+    socket: &mut TcpStream,
+    server: &AcpServer,
+    response_id: &str,
+) -> Result<()> {
+    if let Some(payload) = load_responses_api_payload(server, response_id) {
+        write_http_json_response_with_context(socket, 200, payload, "responses.api").await?;
+    } else {
+        write_http_json_response_with_context(
+            socket,
+            404,
+            build_responses_error(
+                "not_found",
+                "invalid_request_error",
+                "response id not found",
+            ),
+            "responses.api",
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// Streaming (SSE) path for POST /v1/responses when stream=true.
 /// Sends: response.created → response.output_text.delta → response.completed, then [DONE].
-async fn handle_responses_api_stream(
+async fn handle_response_stream(
     socket: &mut TcpStream,
     server: Arc<AcpServer>,
     request_id: &str,
@@ -1966,18 +2046,17 @@ async fn handle_responses_api_stream(
     Ok(())
 }
 
-async fn handle_http_connection(
-    socket: &mut TcpStream,
-    server: Arc<AcpServer>,
-    peer_addr: SocketAddr,
-) -> Result<()> {
-    let mut buffer = vec![0u8; 64 * 1024];
-    let bytes_read = socket.read(&mut buffer).await?;
-    if bytes_read == 0 {
-        return Ok(());
-    }
+/// Parse the raw HTTP request text into method, path, header_part, body_initial_part,
+/// and adaptive_signal.
+struct ParsedHttpRequest<'a> {
+    method: &'a str,
+    path: &'a str,
+    header_part: &'a str,
+    body_initial_part: &'a str,
+    adaptive_signal: &'static str,
+}
 
-    let request_text = String::from_utf8_lossy(&buffer[..bytes_read]);
+fn parse_http_request(request_text: &str) -> Result<ParsedHttpRequest<'_>> {
     let header_end = request_text
         .find("\r\n\r\n")
         .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing header terminator"))?;
@@ -1997,104 +2076,102 @@ async fn handle_http_connection(
         .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing path"))?;
     let adaptive_signal = infer_adaptive_signal(method, path, header_part);
 
-    if apply_entry_guards(
-        socket,
-        server.as_ref(),
-        header_part,
+    Ok(ParsedHttpRequest {
         method,
         path,
-        peer_addr,
-    )
-    .await?
-    {
-        return Ok(());
-    }
+        header_part,
+        body_initial_part,
+        adaptive_signal,
+    })
+}
 
-    if method == "GET" {
-        match path {
-            "/health" => {
-                write_http_json_response_with_context(
-                    socket,
-                    200,
-                    serde_json::to_value(server.get_status())?,
-                    "health",
-                )
-                .await?;
-            }
-            "/v1/responses" => {
-                let data = list_responses_api_payloads(server.as_ref());
-                write_http_json_response_with_context(
-                    socket,
-                    200,
-                    serde_json::json!({
-                        "object": "list",
-                        "data": data,
-                    }),
-                    "responses.api",
-                )
-                .await?;
-            }
-            "/v1/models" | "/v1/model" | "/models" => {
-                write_http_json_response_with_context(
-                    socket,
-                    200,
-                    build_openai_models_response(),
-                    "openai.chat.completions",
-                )
-                .await?;
-            }
-            "/" => {
-                write_http_json_response_with_context(
-                    socket,
-                    200,
-                    build_root_capabilities_response(),
-                    "initialize",
-                )
-                .await?;
-            }
-            _ if extract_response_id_from_path(path).is_some() => {
-                let response_id = extract_response_id_from_path(path).expect("checked response id");
-                if let Some(payload) = load_responses_api_payload(server.as_ref(), response_id) {
-                    write_http_json_response_with_context(socket, 200, payload, "responses.api")
-                        .await?;
-                } else {
-                    write_http_json_response_with_context(
-                        socket,
-                        404,
-                        build_responses_error(
-                            "not_found",
-                            "invalid_request_error",
-                            "response id not found",
-                        ),
-                        "responses.api",
-                    )
-                    .await?;
-                }
-            }
-            _ => {
-                write_http_json_response_with_context(
-                    socket,
-                    404,
-                    serde_json::json!({"error": "not found"}),
-                    "chat",
-                )
-                .await?;
-            }
+/// Apply entry guards and return `true` if the request was rejected (response already written).
+async fn http_entry_guard(
+    socket: &mut TcpStream,
+    server: &AcpServer,
+    header_part: &str,
+    method: &str,
+    path: &str,
+    peer_addr: SocketAddr,
+) -> Result<bool> {
+    apply_entry_guards(socket, server, header_part, method, path, peer_addr).await
+}
+
+/// Route an HTTP GET request based on the path and write the response back to the socket.
+async fn route_http_get(
+    socket: &mut TcpStream,
+    server: &AcpServer,
+    path: &str,
+) -> Result<()> {
+    match path {
+        "/health" => {
+            write_http_json_response_with_context(
+                socket,
+                200,
+                serde_json::to_value(server.get_status())?,
+                "health",
+            )
+            .await?;
         }
-        return Ok(());
+        "/v1/responses" => {
+            let data = list_responses_api_payloads(server);
+            write_http_json_response_with_context(
+                socket,
+                200,
+                serde_json::json!({
+                    "object": "list",
+                    "data": data,
+                }),
+                "responses.api",
+            )
+            .await?;
+        }
+        "/v1/models" | "/v1/model" | "/models" => {
+            write_http_json_response_with_context(
+                socket,
+                200,
+                build_openai_models_response(),
+                "openai.chat.completions",
+            )
+            .await?;
+        }
+        "/" => {
+            write_http_json_response_with_context(
+                socket,
+                200,
+                build_root_capabilities_response(),
+                "initialize",
+            )
+            .await?;
+        }
+        _ if extract_response_id_from_path(path).is_some() => {
+            let response_id = extract_response_id_from_path(path).expect("checked response id");
+            handle_response_get(socket, server, response_id).await?;
+        }
+        _ => {
+            write_http_json_response_with_context(
+                socket,
+                404,
+                serde_json::json!({"error": "not found"}),
+                "chat",
+            )
+            .await?;
+        }
     }
+    Ok(())
+}
 
-    if method != "POST" {
-        write_http_json_response_with_context(
-            socket,
-            405,
-            serde_json::json!({"error": "method not allowed"}),
-            "chat",
-        )
-        .await?;
-        return Ok(());
-    }
-
+/// Route a POST request — reads body, dispatches to the appropriate handler,
+/// and writes the response to the socket. Returns the path label for logging.
+///
+/// `body_initial_part` is the portion of the body already in the initial buffer read.
+async fn route_http_post(
+    socket: &mut TcpStream,
+    server: Arc<AcpServer>,
+    path: &str,
+    header_part: &str,
+    body_initial_part: &str,
+) -> Result<String> {
     let responses_path = path == "/v1/responses";
     let content_length = extract_content_length(header_part).unwrap_or(0);
     if content_length == 0 {
@@ -2119,7 +2196,7 @@ async fn handle_http_connection(
             )
             .await?;
         }
-        return Ok(());
+        return Ok(path.to_string());
     }
 
     let mut body_bytes = body_initial_part.as_bytes().to_vec();
@@ -2153,11 +2230,10 @@ async fn handle_http_connection(
                 )
                 .await?;
             }
-            return Ok(());
+            return Ok(path.to_string());
         }
     };
 
-    let path_label = path.to_string();
     let (dispatch_result, duration) =
         crate::observability::performance::utils::measure_time_async(move || async move {
             match path {
@@ -2270,17 +2346,85 @@ async fn handle_http_connection(
         })
         .await;
 
+    let path_label = path.to_string();
     let success = dispatch_result.is_ok();
     crate::observability::performance::record_global_operation(
         success,
         duration.as_secs_f64() * 1000.0,
     );
     info!(
-        "HTTP {} completed in {:?} (ok={}, adaptive_signal={})",
-        path_label, duration, success, adaptive_signal
+        "HTTP {} completed in {:?} (ok={})",
+        path_label, duration, success,
     );
 
-    dispatch_result
+    if let Err(e) = dispatch_result {
+        return Err(e);
+    }
+    Ok(path_label)
+}
+
+/// Write a standard HTTP JSON response. Thin wrapper for consistency.
+async fn write_http_response(
+    socket: &mut TcpStream,
+    status: u16,
+    body: serde_json::Value,
+) -> Result<()> {
+    write_http_json_response(socket, status, body).await
+}
+
+/// Main HTTP connection handler — parses, guards, routes, and times the request.
+async fn handle_http_connection(
+    socket: &mut TcpStream,
+    server: Arc<AcpServer>,
+    peer_addr: SocketAddr,
+) -> Result<()> {
+    let mut buffer = vec![0u8; 64 * 1024];
+    let bytes_read = socket.read(&mut buffer).await?;
+    if bytes_read == 0 {
+        return Ok(());
+    }
+
+    let request_text = String::from_utf8_lossy(&buffer[..bytes_read]);
+    let parsed = parse_http_request(&request_text)?;
+
+    if http_entry_guard(
+        socket,
+        server.as_ref(),
+        parsed.header_part,
+        parsed.method,
+        parsed.path,
+        peer_addr,
+    )
+    .await?
+    {
+        return Ok(());
+    }
+
+    if parsed.method == "GET" {
+        return route_http_get(socket, server.as_ref(), parsed.path).await;
+    }
+
+    if parsed.method != "POST" {
+        write_http_json_response_with_context(
+            socket,
+            405,
+            serde_json::json!({"error": "method not allowed"}),
+            "chat",
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let _path_label = route_http_post(
+        socket,
+        server,
+        parsed.path,
+        parsed.header_part,
+        parsed.body_initial_part,
+    )
+    .await?;
+
+    Ok(())
 }
 
 fn infer_adaptive_signal(method: &str, path: &str, headers: &str) -> &'static str {

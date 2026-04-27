@@ -41,29 +41,34 @@ pub struct MaintenanceCycleResult {
     pub vector_vacuumed: bool,
 }
 
+/// Shared context for background maintenance operations.
+///
+/// Groups all shared state handles needed by the background maintenance loop
+/// into a single struct, eliminating the previous 12-parameter function signature.
+pub struct BackgroundContext {
+    pub lock_monitor: Arc<AcpLockMonitor>,
+    pub runtime_config: Arc<std::sync::Mutex<RuntimeConfig>>,
+    pub memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
+    pub memory_store: Arc<std::sync::Mutex<MemoryStore>>,
+    pub cache: Arc<std::sync::Mutex<Option<Arc<ResponseCache>>>>,
+    pub vector_store: Arc<std::sync::Mutex<Option<Arc<VectorStore>>>>,
+    pub maintenance: Arc<std::sync::Mutex<MaintenanceTracker>>,
+    pub lifecycle: Arc<std::sync::Mutex<LifecycleState>>,
+    pub circuit_breakers: Arc<std::sync::Mutex<CircuitBreakerRegistry>>,
+    pub phase_rate_limiter: Arc<std::sync::Mutex<PhaseRateLimiter>>,
+    pub inflight_limiter: Arc<std::sync::Mutex<InflightLimiter>>,
+    pub shutdown_notify: Arc<Notify>,
+}
+
 /// Run background maintenance loop
 ///
 /// This function runs periodic maintenance tasks including cache cleanup,
 /// health checks, and system monitoring.
-#[allow(clippy::too_many_arguments)]
-pub async fn run_background_maintenance_loop(
-    lock_monitor: Arc<AcpLockMonitor>,
-    runtime_config: Arc<std::sync::Mutex<RuntimeConfig>>,
-    memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
-    memory_store: Arc<std::sync::Mutex<MemoryStore>>,
-    cache: Arc<std::sync::Mutex<Option<Arc<ResponseCache>>>>,
-    vector_store: Arc<std::sync::Mutex<Option<Arc<VectorStore>>>>,
-    maintenance: Arc<std::sync::Mutex<MaintenanceTracker>>,
-    lifecycle: Arc<std::sync::Mutex<LifecycleState>>,
-    circuit_breakers: Arc<std::sync::Mutex<CircuitBreakerRegistry>>,
-    phase_rate_limiter: Arc<std::sync::Mutex<PhaseRateLimiter>>,
-    inflight_limiter: Arc<std::sync::Mutex<InflightLimiter>>,
-    shutdown_notify: Arc<Notify>,
-) {
+pub async fn run_background_maintenance_loop(ctx: BackgroundContext) {
     let config = with_acp_lock(
-        lock_monitor.as_ref(),
+        ctx.lock_monitor.as_ref(),
         ACP_LOCK_RUNTIME_CONFIG,
-        runtime_config.as_ref(),
+        ctx.runtime_config.as_ref(),
         |guard| guard.clone(),
     );
 
@@ -75,27 +80,36 @@ pub async fn run_background_maintenance_loop(
     maintenance_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     health_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
+    let max_iterations: u64 = 1000;
+    let mut iteration_count: u64 = 0;
+
     loop {
+        if iteration_count >= max_iterations {
+            info!("background maintenance loop reached max iterations ({})", max_iterations);
+            break;
+        }
+        iteration_count += 1;
+
         tokio::select! {
-            _ = shutdown_notify.notified() => break,
+            _ = ctx.shutdown_notify.notified() => break,
             _ = maintenance_interval.tick() => {
                 if with_acp_lock(
-                    lock_monitor.as_ref(),
+                    ctx.lock_monitor.as_ref(),
                     ACP_LOCK_LIFECYCLE,
-                    lifecycle.as_ref(),
+                    ctx.lifecycle.as_ref(),
                     |guard| guard.is_shutting_down(),
                 ) {
                     break;
                 }
 
                 if let Err(err) = perform_maintenance_cycle(
-                    Arc::clone(&lock_monitor),
-                    Arc::clone(&memory_cache),
-                    Arc::clone(&memory_store),
-                    Arc::clone(&cache),
-                    Arc::clone(&vector_store),
-                    Arc::clone(&maintenance),
-                    Arc::clone(&runtime_config),
+                    ctx.lock_monitor.clone(),
+                    ctx.memory_cache.clone(),
+                    ctx.memory_store.clone(),
+                    ctx.cache.clone(),
+                    ctx.vector_store.clone(),
+                    ctx.maintenance.clone(),
+                    ctx.runtime_config.clone(),
                     "background",
                 ).await {
                     warn!("background maintenance cycle failed: {}", err);
@@ -103,24 +117,24 @@ pub async fn run_background_maintenance_loop(
             }
             _ = health_interval.tick() => {
                 if with_acp_lock(
-                    lock_monitor.as_ref(),
+                    ctx.lock_monitor.as_ref(),
                     ACP_LOCK_LIFECYCLE,
-                    lifecycle.as_ref(),
+                    ctx.lifecycle.as_ref(),
                     |guard| guard.is_shutting_down(),
                 ) {
                     break;
                 }
 
                 if let Err(err) = perform_health_check_cycle(
-                    Arc::clone(&lock_monitor),
-                    Arc::clone(&memory_cache),
-                    Arc::clone(&cache),
-                    Arc::clone(&vector_store),
-                    Arc::clone(&circuit_breakers),
-                    Arc::clone(&phase_rate_limiter),
-                    Arc::clone(&inflight_limiter),
-                    Arc::clone(&lifecycle),
-                    Arc::clone(&maintenance),
+                    ctx.lock_monitor.clone(),
+                    ctx.memory_cache.clone(),
+                    ctx.cache.clone(),
+                    ctx.vector_store.clone(),
+                    ctx.circuit_breakers.clone(),
+                    ctx.phase_rate_limiter.clone(),
+                    ctx.inflight_limiter.clone(),
+                    ctx.lifecycle.clone(),
+                    ctx.maintenance.clone(),
                 ).await {
                     warn!("health check cycle failed: {}", err);
                 }
@@ -398,13 +412,13 @@ pub async fn start_background_tasks(
     server: &super::server::AcpServer,
     shutdown_notify: Arc<Notify>,
 ) -> Result<()> {
-    let lock_monitor = Arc::clone(&server.lock_monitor);
+    let lock_monitor = Arc::clone(&server.observability.lock_monitor);
     let runtime_config = Arc::new(std::sync::Mutex::new(server.runtime_config.clone()));
-    let memory_cache = Arc::clone(&server.memory_response_cache);
+    let memory_cache = Arc::clone(&server.cache.memory_response_cache);
     let memory_store = Arc::clone(&server.memory_store);
 
-    let cache = Arc::new(std::sync::Mutex::new(server.response_cache.clone()));
-    let vector_store = Arc::new(std::sync::Mutex::new(server.vector_store.clone()));
+    let cache = Arc::new(std::sync::Mutex::new(server.cache.response_cache.clone()));
+    let vector_store = Arc::new(std::sync::Mutex::new(server.cache.vector_store.clone()));
 
     let maintenance = Arc::clone(&server.maintenance_tracker);
     let lifecycle = Arc::clone(&server.lifecycle_state);
@@ -414,7 +428,7 @@ pub async fn start_background_tasks(
     let inflight_limiter = Arc::clone(&server.inflight_limiter);
 
     tokio::spawn(async move {
-        run_background_maintenance_loop(
+        let bg_ctx = BackgroundContext {
             lock_monitor,
             runtime_config,
             memory_cache,
@@ -427,8 +441,8 @@ pub async fn start_background_tasks(
             phase_rate_limiter,
             inflight_limiter,
             shutdown_notify,
-        )
-        .await;
+        };
+        run_background_maintenance_loop(bg_ctx).await;
     });
 
     Ok(())
@@ -443,13 +457,13 @@ pub async fn stop_background_tasks(shutdown_notify: Arc<Notify>) {
 pub async fn run_maintenance_cycle(
     server: &super::server::AcpServer,
 ) -> Result<MaintenanceCycleResult> {
-    let lock_monitor = Arc::clone(&server.lock_monitor);
+    let lock_monitor = Arc::clone(&server.observability.lock_monitor);
     let runtime_config = Arc::new(std::sync::Mutex::new(server.runtime_config.clone()));
-    let memory_cache = Arc::clone(&server.memory_response_cache);
+    let memory_cache = Arc::clone(&server.cache.memory_response_cache);
     let memory_store = Arc::clone(&server.memory_store);
 
-    let cache = Arc::new(std::sync::Mutex::new(server.response_cache.clone()));
-    let vector_store = Arc::new(std::sync::Mutex::new(server.vector_store.clone()));
+    let cache = Arc::new(std::sync::Mutex::new(server.cache.response_cache.clone()));
+    let vector_store = Arc::new(std::sync::Mutex::new(server.cache.vector_store.clone()));
 
     let maintenance = Arc::clone(&server.maintenance_tracker);
 
@@ -468,11 +482,11 @@ pub async fn run_maintenance_cycle(
 
 /// Run a single health check on demand
 pub async fn run_health_check(server: &super::server::AcpServer) -> Result<()> {
-    let lock_monitor = Arc::clone(&server.lock_monitor);
-    let memory_cache = Arc::clone(&server.memory_response_cache);
+    let lock_monitor = Arc::clone(&server.observability.lock_monitor);
+    let memory_cache = Arc::clone(&server.cache.memory_response_cache);
 
-    let cache = Arc::new(std::sync::Mutex::new(server.response_cache.clone()));
-    let vector_store = Arc::new(std::sync::Mutex::new(server.vector_store.clone()));
+    let cache = Arc::new(std::sync::Mutex::new(server.cache.response_cache.clone()));
+    let vector_store = Arc::new(std::sync::Mutex::new(server.cache.vector_store.clone()));
 
     let circuit_breakers = Arc::clone(&server.circuit_breakers);
     let lifecycle = Arc::clone(&server.lifecycle_state);

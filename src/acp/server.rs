@@ -32,6 +32,26 @@ use super::prelude::{
     ReviewTimeoutPolicy, ACP_LOCK_CIRCUIT_BREAKERS, ACP_LOCK_LIFECYCLE, ACP_LOCK_MAINTENANCE,
 };
 
+/// Cache-related subsystems grouped together
+pub struct CacheLayer {
+    /// Response cache (SQLite-based)
+    pub response_cache: Option<Arc<ResponseCache>>,
+    /// Memory response cache
+    pub memory_response_cache: Arc<StdMutex<MemoryResponseCache>>,
+    /// Vector store for similarity search and memory
+    pub vector_store: Option<Arc<VectorStore>>,
+}
+
+/// Observability-related subsystems grouped together
+pub struct ObservabilityLayer {
+    /// Runtime metrics collection
+    pub metrics: Arc<RuntimeMetrics>,
+    /// ACP lock monitoring and poison recovery telemetry
+    pub lock_monitor: Arc<AcpLockMonitor>,
+    /// Telemetry runtime
+    pub telemetry_runtime: Arc<StdMutex<TelemetryRuntime>>,
+}
+
 /// Main ACP server structure
 ///
 /// This struct represents the core ACP server that handles incoming requests,
@@ -41,10 +61,8 @@ pub struct AcpServer {
     pub flow_manager: Option<Arc<FlowManager>>,
     /// Agent registry for managing available agents
     pub agent_registry: Option<Arc<AgentRegistry>>,
-    /// Response cache (SQLite-based)
-    pub response_cache: Option<Arc<ResponseCache>>,
-    /// Vector store for similarity search and memory
-    pub vector_store: Option<Arc<VectorStore>>,
+    /// Cache-related subsystems
+    pub cache: CacheLayer,
     /// Vector store configuration
     pub vector_config: Option<VectorConfig>,
     /// Autotune state for adaptive configuration
@@ -57,10 +75,8 @@ pub struct AcpServer {
     pub runtime_config: RuntimeConfig,
     /// Loaded config file path if available
     pub config_path: Option<String>,
-    /// Runtime metrics collection
-    pub metrics: Arc<RuntimeMetrics>,
-    /// ACP lock monitoring and poison recovery telemetry
-    pub lock_monitor: Arc<AcpLockMonitor>,
+    /// Observability-related subsystems
+    pub observability: ObservabilityLayer,
     /// Online controller for adaptive strategy from live outcomes
     pub online_controller: Arc<StdMutex<OnlineControllerState>>,
     /// Circuit breaker registry for failure prevention
@@ -89,14 +105,10 @@ pub struct AcpServer {
     pub failure_prevention: Arc<StdMutex<FailurePrevention>>,
     /// Flow model selector
     pub flow_model_selector: Arc<StdMutex<FlowModelSelector>>,
-    /// Memory response cache
-    pub memory_response_cache: Arc<StdMutex<MemoryResponseCache>>,
     /// Cross-request memory policy store
     pub memory_store: Arc<StdMutex<MemoryStore>>,
     /// Registry for MCP skills
     pub skill_registry: Arc<StdMutex<SkillRegistry>>,
-    /// Telemetry runtime
-    pub telemetry_runtime: Arc<StdMutex<TelemetryRuntime>>,
     /// PUA enforcement plan
     pub pua_enforcement_plan: Arc<StdMutex<crate::pua::PuaEnforcementPlan>>,
     /// Artifact ledger
@@ -124,27 +136,27 @@ impl AcpServer {
 
     /// Get the response cache handle
     pub fn response_cache(&self) -> Option<Arc<ResponseCache>> {
-        self.response_cache.clone()
+        self.cache.response_cache.clone()
     }
 
     /// Get the vector store handle
     pub fn vector_store(&self) -> Option<Arc<VectorStore>> {
-        self.vector_store.clone()
+        self.cache.vector_store.clone()
     }
 
     /// Get total requests count
     pub fn total_requests(&self) -> u64 {
-        self.metrics.total_requests()
+        self.observability.metrics.total_requests()
     }
 
     /// Get server status
     pub fn get_status(&self) -> crate::acp::prelude::ServerStatus {
         use crate::acp::prelude::{MetricsSnapshot, ServerStatus};
 
-        let mut total_requests = self.metrics.total_requests();
-        let mut successful_requests = self.metrics.successful_requests();
-        let mut failed_requests = self.metrics.failed_requests();
-        let mut avg_request_duration_ms = self.metrics.avg_request_duration_ms();
+        let mut total_requests = self.observability.metrics.total_requests();
+        let mut successful_requests = self.observability.metrics.successful_requests();
+        let mut failed_requests = self.observability.metrics.failed_requests();
+        let mut avg_request_duration_ms = self.observability.metrics.avg_request_duration_ms();
 
         if let Some(snapshot) = crate::observability::performance::global_metrics_snapshot() {
             total_requests = total_requests.max(snapshot.total_ops);
@@ -160,10 +172,10 @@ impl AcpServer {
             successful_requests,
             failed_requests,
             avg_request_duration_ms,
-            active_requests: self.metrics.active_requests(),
+            active_requests: self.observability.metrics.active_requests(),
             cache_hit_rate: 0.0,
             circuit_breaker_open_count: with_acp_lock(
-                self.lock_monitor.as_ref(),
+                self.observability.lock_monitor.as_ref(),
                 ACP_LOCK_CIRCUIT_BREAKERS,
                 self.circuit_breakers.as_ref(),
                 |guard| guard.open_count(),
@@ -172,7 +184,7 @@ impl AcpServer {
             cpu_usage_percent: 0.0,
             ..MetricsSnapshot::default()
         };
-        let runtime_snapshot = self.metrics.snapshot();
+        let runtime_snapshot = self.observability.metrics.snapshot();
         metrics.chat_requests_total = runtime_snapshot.chat_requests_total;
         metrics.vector_search_total = runtime_snapshot.vector_search_total;
         metrics.vector_hit_total = runtime_snapshot.vector_hit_total;
@@ -189,21 +201,21 @@ impl AcpServer {
             runtime_snapshot.review_gate_invalid_response_total;
 
         let lifecycle = with_acp_lock(
-            self.lock_monitor.as_ref(),
+            self.observability.lock_monitor.as_ref(),
             ACP_LOCK_LIFECYCLE,
             self.lifecycle_state.as_ref(),
             |guard| guard.snapshot(),
         );
 
         let circuit_breakers = with_acp_lock(
-            self.lock_monitor.as_ref(),
+            self.observability.lock_monitor.as_ref(),
             ACP_LOCK_CIRCUIT_BREAKERS,
             self.circuit_breakers.as_ref(),
             |guard| guard.snapshots(),
         );
 
         let maintenance = with_acp_lock(
-            self.lock_monitor.as_ref(),
+            self.observability.lock_monitor.as_ref(),
             ACP_LOCK_MAINTENANCE,
             self.maintenance_tracker.as_ref(),
             |guard| guard.snapshot(),
@@ -221,7 +233,7 @@ impl AcpServer {
     /// Check if server is healthy
     pub fn is_healthy(&self) -> bool {
         with_acp_lock(
-            self.lock_monitor.as_ref(),
+            self.observability.lock_monitor.as_ref(),
             ACP_LOCK_LIFECYCLE,
             self.lifecycle_state.as_ref(),
             |guard| guard.is_healthy(),
@@ -231,7 +243,7 @@ impl AcpServer {
     /// Check if shutdown has been requested
     pub fn shutdown_requested(&self) -> bool {
         with_acp_lock(
-            self.lock_monitor.as_ref(),
+            self.observability.lock_monitor.as_ref(),
             ACP_LOCK_LIFECYCLE,
             self.lifecycle_state.as_ref(),
             |guard| guard.shutdown_requested(),
@@ -241,7 +253,7 @@ impl AcpServer {
     /// Begin shutdown process
     pub fn begin_shutdown(&self) {
         with_acp_lock(
-            self.lock_monitor.as_ref(),
+            self.observability.lock_monitor.as_ref(),
             ACP_LOCK_LIFECYCLE,
             self.lifecycle_state.as_ref(),
             |guard| guard.begin_shutdown(),
@@ -260,7 +272,7 @@ impl AcpServer {
 
     /// Get metrics reference
     pub fn metrics(&self) -> &Arc<RuntimeMetrics> {
-        &self.metrics
+        &self.observability.metrics
     }
 
     /// Get the artifact ledger handle
@@ -273,8 +285,8 @@ impl AcpServer {
 
     /// Increment the request counter and return the new value
     pub fn increment_request_counter(&self) -> u64 {
-        self.metrics.inc_successful_requests();
-        self.metrics.total_requests()
+        self.observability.metrics.inc_successful_requests();
+        self.observability.metrics.total_requests()
     }
 
     pub fn register_skill(&self, skill: Arc<dyn crate::orchestration::skill::Skill>) {
@@ -426,16 +438,22 @@ impl ServerBuilder {
         Ok(AcpServer {
             flow_manager: self.flow_manager,
             agent_registry: self.agent_registry,
-            response_cache: self.response_cache,
-            vector_store: self.vector_store,
+            cache: CacheLayer {
+                response_cache: self.response_cache,
+                memory_response_cache,
+                vector_store: self.vector_store,
+            },
             vector_config: None,
             autotune: None,
             autotune_config: None,
             autotune_state_path: None,
             runtime_config: RuntimeConfig::default(),
             config_path: self.config_path,
-            metrics,
-            lock_monitor,
+            observability: ObservabilityLayer {
+                metrics,
+                lock_monitor,
+                telemetry_runtime,
+            },
             online_controller,
             circuit_breakers,
             maintenance_tracker,
@@ -450,10 +468,8 @@ impl ServerBuilder {
             cost_optimizer,
             failure_prevention,
             flow_model_selector,
-            memory_response_cache,
             memory_store,
             skill_registry,
-            telemetry_runtime,
             pua_enforcement_plan,
             artifact_ledger,
             verbose: self.verbose,

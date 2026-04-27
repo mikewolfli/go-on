@@ -1,342 +1,423 @@
-import * as vscode from 'vscode';
-import { spawn } from 'child_process';
-import * as path from 'path';
-import * as fsPromises from 'fs/promises';
-import { GoOnChatViewProvider } from './chatView';
-import { GoOnSettingsViewProvider } from './settingsView';
-import { StatusMonitor } from './statusMonitor';
-import { GoOnWorkflowViewProvider } from './workflowView';
-import { GoOnProcessFlowViewProvider } from './processFlowView';
-import { GoOnAdvancedEditProvider } from './advancedEdit';
-import { i18n } from './i18n';
-import { configManager } from './configManager';
-import { revealGoOnView } from './viewRouter';
-import { registerViewCommands } from './commandRegistry';
-import { registerRpcCommands } from './rpcCommandRegistry';
-import { registerCoreCommands } from './coreCommandRegistry';
-import { GoOnManager, GoOnStatusProvider } from './runtimeManager';
+import * as vscode from "vscode";
+import { spawn } from "child_process";
+import * as path from "path";
+import * as fsPromises from "fs/promises";
+import { GoOnChatViewProvider } from "./chatView";
+import { GoOnSettingsViewProvider } from "./settingsView";
+import { StatusMonitor } from "./statusMonitor";
+import { GoOnWorkflowViewProvider } from "./workflowView";
+import { GoOnProcessFlowViewProvider } from "./processFlowView";
+import { GoOnAdvancedEditProvider } from "./advancedEdit";
+import { i18n } from "./i18n";
+import { configManager } from "./configManager";
+import { revealGoOnView } from "./viewRouter";
+import { registerViewCommands } from "./commandRegistry";
+import { registerRpcCommands } from "./rpcCommandRegistry";
+import { registerCoreCommands } from "./coreCommandRegistry";
+import { GoOnManager, GoOnStatusProvider } from "./runtimeManager";
 import {
-    ensureGoOnBinary,
-    ensureProvidersTomlForConfig,
-    pathExists,
-    resolveConfigPath,
-} from './runtimeBinaryService';
+  ensureGoOnBinary,
+  ensureProvidersTomlForConfig,
+  pathExists,
+  resolveConfigPath,
+} from "./runtimeBinaryService";
 import {
-    buildPlaceholderEnvValues,
-    parseMissingEnvVariableNames,
-    prepareRuntimeAndStartFromChat,
-    RuntimeBootstrapDeps,
-} from './runtimeBootstrap';
+  buildPlaceholderEnvValues,
+  parseMissingEnvVariableNames,
+  prepareRuntimeAndStartFromChat,
+  RuntimeBootstrapDeps,
+} from "./runtimeBootstrap";
 
 async function runGoOnSecretCommand(
-    context: vscode.ExtensionContext,
-    action: 'set' | 'get' | 'delete' | 'list',
-    secretName?: string,
-    secretValue?: string
+  context: vscode.ExtensionContext,
+  action: "set" | "get" | "delete" | "list",
+  secretName?: string,
+  secretValue?: string,
 ): Promise<string> {
-    const config = vscode.workspace.getConfiguration('go-on');
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const runtime = await ensureGoOnBinary(workspaceRoot, config, context);
+  const config = vscode.workspace.getConfiguration("go-on");
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const runtime = await ensureGoOnBinary(workspaceRoot, config, context);
 
-    const args: string[] = ['--secret', action];
-    if (secretName) {
-        args.push('--secret-name', secretName);
-    }
-    if (secretValue !== undefined) {
-        args.push('--secret-value', secretValue);
-    }
+  const args: string[] = ["--secret", action];
+  if (secretName) {
+    args.push("--secret-name", secretName);
+  }
+  if (secretValue !== undefined) {
+    args.push("--secret-value", secretValue);
+  }
 
-    return new Promise<string>((resolve, reject) => {
-        const proc = spawn(runtime.executablePath, args, {
-            cwd: workspaceRoot || runtime.runtimeDir,
-            stdio: ['ignore', 'pipe', 'pipe']
-        });
-
-        let stdout = '';
-        let stderr = '';
-
-        proc.stdout?.on('data', (chunk: Buffer) => {
-            stdout += chunk.toString();
-        });
-
-        proc.stderr?.on('data', (chunk: Buffer) => {
-            stderr += chunk.toString();
-        });
-
-        proc.on('error', reject);
-        proc.on('close', (code) => {
-            if (code === 0) {
-                resolve(stdout.trim());
-                return;
-            }
-            const details = (stderr || stdout || `exit code ${code}`).trim();
-            reject(new Error(`go-on secret command failed: ${details}`));
-        });
+  return new Promise<string>((resolve, reject) => {
+    const proc = spawn(runtime.executablePath, args, {
+      cwd: workspaceRoot || runtime.runtimeDir,
+      stdio: ["ignore", "pipe", "pipe"],
     });
+
+    let stdout = "";
+    let stderr = "";
+
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve(stdout.trim());
+        return;
+      }
+      const details = (stderr || stdout || `exit code ${code}`).trim();
+      reject(new Error(`go-on secret command failed: ${details}`));
+    });
+  });
 }
 
 function escapeRegex(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function formatTomlStringList(items: string[]): string {
-    return `[${items.map((item) => `"${item}"`).join(', ')}]`;
+  return `[${items.map((item) => `"${item}"`).join(", ")}]`;
 }
 
 function formatTomlMultilineStringList(items: string[]): string {
-    const lines = items.map((item) => `    "${item.replace(/"/g, '\\"')}"`);
-    return `[
-${lines.join(',\n')}
+  const lines = items.map((item) => `    "${item.replace(/"/g, '\\"')}"`);
+  return `[
+${lines.join(",\n")}
 ]`;
 }
 
-function upsertSectionLine(section: string, lineRegex: RegExp, line: string): string {
-    if (lineRegex.test(section)) {
-        return section.replace(lineRegex, line);
-    }
-    const lines = section.split('\n');
-    lines.splice(1, 0, line);
-    return lines.join('\n');
+function upsertSectionLine(
+  section: string,
+  lineRegex: RegExp,
+  line: string,
+): string {
+  if (lineRegex.test(section)) {
+    return section.replace(lineRegex, line);
+  }
+  const lines = section.split("\n");
+  lines.splice(1, 0, line);
+  return lines.join("\n");
 }
 
-function upsertTopLevelString(content: string, key: string, value: string): string {
-    const regex = new RegExp(`^${escapeRegex(key)}\\s*=\\s*".*"\\s*$`, 'm');
-    const replacement = `${key} = "${value}"`;
-    if (regex.test(content)) {
-        return content.replace(regex, replacement);
-    }
-    return `${replacement}\n${content}`;
+function upsertTopLevelString(
+  content: string,
+  key: string,
+  value: string,
+): string {
+  const regex = new RegExp(`^${escapeRegex(key)}\\s*=\\s*".*"\\s*$`, "m");
+  const replacement = `${key} = "${value}"`;
+  if (regex.test(content)) {
+    return content.replace(regex, replacement);
+  }
+  return `${replacement}\n${content}`;
 }
 
 function upsertFlowPhases(content: string, phases: string[]): string {
-    const flowSectionRegex = /\[flow\][\s\S]*?(?=\n\[[^\]]+\]|$)/;
-    const phasesLine = `phases = ${formatTomlStringList(phases)}`;
-    if (flowSectionRegex.test(content)) {
-        return content.replace(flowSectionRegex, (section) => {
-            const phasesRegex = /^phases\s*=\s*\[[^\]]*\]\s*$/m;
-            if (phasesRegex.test(section)) {
-                return section.replace(phasesRegex, phasesLine);
-            }
-            const trimmed = section.trimEnd();
-            return `${trimmed}\n${phasesLine}\n`;
-        });
-    }
+  const flowSectionRegex = /\[flow\][\s\S]*?(?=\n\[[^\]]+\]|$)/;
+  const phasesLine = `phases = ${formatTomlStringList(phases)}`;
+  if (flowSectionRegex.test(content)) {
+    return content.replace(flowSectionRegex, (section) => {
+      const phasesRegex = /^phases\s*=\s*\[[^\]]*\]\s*$/m;
+      if (phasesRegex.test(section)) {
+        return section.replace(phasesRegex, phasesLine);
+      }
+      const trimmed = section.trimEnd();
+      return `${trimmed}\n${phasesLine}\n`;
+    });
+  }
 
-    return `${content.trimEnd()}\n\n[flow]\nname = "Configured Flow"\n${phasesLine}\n`;
+  return `${content.trimEnd()}\n\n[flow]\nname = "Configured Flow"\n${phasesLine}\n`;
 }
 
-function upsertPhaseAgents(content: string, phase: string, agents: string[]): string {
-    const header = `[phases.${phase}]`;
-    const escapedHeader = escapeRegex(header);
-    const sectionRegex = new RegExp(`^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, 'm');
-    const agentsLine = `agents = ${formatTomlStringList(agents)}`;
+function upsertPhaseAgents(
+  content: string,
+  phase: string,
+  agents: string[],
+): string {
+  const header = `[phases.${phase}]`;
+  const escapedHeader = escapeRegex(header);
+  const sectionRegex = new RegExp(
+    `^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`,
+    "m",
+  );
+  const agentsLine = `agents = ${formatTomlStringList(agents)}`;
 
-    if (sectionRegex.test(content)) {
-        return content.replace(sectionRegex, (section) => {
-            const agentsRegex = /^agents\s*=\s*\[[^\]]*\]\s*$/m;
-            if (agentsRegex.test(section)) {
-                return section.replace(agentsRegex, agentsLine);
-            }
-            const lines = section.split('\n');
-            lines.splice(1, 0, agentsLine);
-            return lines.join('\n');
-        });
-    }
+  if (sectionRegex.test(content)) {
+    return content.replace(sectionRegex, (section) => {
+      const agentsRegex = /^agents\s*=\s*\[[^\]]*\]\s*$/m;
+      if (agentsRegex.test(section)) {
+        return section.replace(agentsRegex, agentsLine);
+      }
+      const lines = section.split("\n");
+      lines.splice(1, 0, agentsLine);
+      return lines.join("\n");
+    });
+  }
 
-    return `${content.trimEnd()}\n\n${header}\ndescription = "${phase} phase"\n${agentsLine}\nfallback = true\n`;
+  return `${content.trimEnd()}\n\n${header}\ndescription = "${phase} phase"\n${agentsLine}\nfallback = true\n`;
 }
 
-function upsertPhaseFallback(content: string, phase: string, fallback: boolean): string {
-    const header = `[phases.${phase}]`;
-    const escapedHeader = escapeRegex(header);
-    const sectionRegex = new RegExp(`^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, 'm');
-    const fallbackLine = `fallback = ${fallback ? 'true' : 'false'}`;
+function upsertPhaseFallback(
+  content: string,
+  phase: string,
+  fallback: boolean,
+): string {
+  const header = `[phases.${phase}]`;
+  const escapedHeader = escapeRegex(header);
+  const sectionRegex = new RegExp(
+    `^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`,
+    "m",
+  );
+  const fallbackLine = `fallback = ${fallback ? "true" : "false"}`;
 
-    if (sectionRegex.test(content)) {
-        return content.replace(sectionRegex, (section) =>
-            upsertSectionLine(section, /^fallback\s*=\s*(true|false)\s*$/m, fallbackLine)
-        );
-    }
+  if (sectionRegex.test(content)) {
+    return content.replace(sectionRegex, (section) =>
+      upsertSectionLine(
+        section,
+        /^fallback\s*=\s*(true|false)\s*$/m,
+        fallbackLine,
+      ),
+    );
+  }
 
-    return `${content.trimEnd()}\n\n${header}\ndescription = "${phase} phase"\nagents = ["copilot"]\n${fallbackLine}\n`;
+  return `${content.trimEnd()}\n\n${header}\ndescription = "${phase} phase"\nagents = ["copilot"]\n${fallbackLine}\n`;
 }
 
-function upsertPhasePrinciples(content: string, phase: string, principles: string[]): string {
-    const header = `[phases.${phase}]`;
-    const escapedHeader = escapeRegex(header);
-    const sectionRegex = new RegExp(`^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, 'm');
-    const principlesLine = `principles = ${formatTomlMultilineStringList(principles)}`;
+function upsertPhasePrinciples(
+  content: string,
+  phase: string,
+  principles: string[],
+): string {
+  const header = `[phases.${phase}]`;
+  const escapedHeader = escapeRegex(header);
+  const sectionRegex = new RegExp(
+    `^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`,
+    "m",
+  );
+  const principlesLine = `principles = ${formatTomlMultilineStringList(principles)}`;
 
-    if (sectionRegex.test(content)) {
-        return content.replace(sectionRegex, (section) => {
-            const principlesRegex = /^principles\s*=\s*\[[\s\S]*?\]\s*$/m;
-            if (principlesRegex.test(section)) {
-                return section.replace(principlesRegex, principlesLine);
-            }
-            return upsertSectionLine(section, /^principles\s*=\s*\[[\s\S]*?\]\s*$/m, principlesLine);
-        });
-    }
+  if (sectionRegex.test(content)) {
+    return content.replace(sectionRegex, (section) => {
+      const principlesRegex = /^principles\s*=\s*\[[\s\S]*?\]\s*$/m;
+      if (principlesRegex.test(section)) {
+        return section.replace(principlesRegex, principlesLine);
+      }
+      return upsertSectionLine(
+        section,
+        /^principles\s*=\s*\[[\s\S]*?\]\s*$/m,
+        principlesLine,
+      );
+    });
+  }
 
-    return `${content.trimEnd()}\n\n${header}\ndescription = "${phase} phase"\nagents = ["copilot"]\nfallback = true\n${principlesLine}\n`;
+  return `${content.trimEnd()}\n\n${header}\ndescription = "${phase} phase"\nagents = ["copilot"]\nfallback = true\n${principlesLine}\n`;
 }
 
-function upsertPhaseOptionNumber(content: string, phase: string, optionKey: string, value: number): string {
-    const optionHeader = `[phases.${phase}.options]`;
-    const escapedOptionHeader = escapeRegex(optionHeader);
-    const optionSectionRegex = new RegExp(`^${escapedOptionHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, 'm');
-    const optionLine = `${optionKey} = ${value}`;
-    const keyRegex = new RegExp(`^${escapeRegex(optionKey)}\\s*=\\s*\\d+\\s*$`, 'm');
+function upsertPhaseOptionNumber(
+  content: string,
+  phase: string,
+  optionKey: string,
+  value: number,
+): string {
+  const optionHeader = `[phases.${phase}.options]`;
+  const escapedOptionHeader = escapeRegex(optionHeader);
+  const optionSectionRegex = new RegExp(
+    `^${escapedOptionHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`,
+    "m",
+  );
+  const optionLine = `${optionKey} = ${value}`;
+  const keyRegex = new RegExp(
+    `^${escapeRegex(optionKey)}\\s*=\\s*\\d+\\s*$`,
+    "m",
+  );
 
-    if (optionSectionRegex.test(content)) {
-        return content.replace(optionSectionRegex, (section) => upsertSectionLine(section, keyRegex, optionLine));
-    }
+  if (optionSectionRegex.test(content)) {
+    return content.replace(optionSectionRegex, (section) =>
+      upsertSectionLine(section, keyRegex, optionLine),
+    );
+  }
 
-    return `${content.trimEnd()}\n\n${optionHeader}\n${optionLine}\n`;
+  return `${content.trimEnd()}\n\n${optionHeader}\n${optionLine}\n`;
 }
 
 async function resolveConfigFilePath(
-    context: vscode.ExtensionContext,
-    configuredConfigPath?: string
+  context: vscode.ExtensionContext,
+  configuredConfigPath?: string,
 ): Promise<{ workspaceRoot: string; configPath: string; runtimeDir: string }> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!workspaceRoot) {
-        throw new Error('No workspace folder open.');
-    }
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!workspaceRoot) {
+    throw new Error("No workspace folder open.");
+  }
 
-    const config = vscode.workspace.getConfiguration('go-on');
-    const runtime = await ensureGoOnBinary(workspaceRoot, config, context);
-    const settingPath = configuredConfigPath || config.get<string>('configPath', './config.toml');
-    const configPath = await resolveConfigPath(workspaceRoot, settingPath, runtime.runtimeDir);
-    return { workspaceRoot, configPath, runtimeDir: runtime.runtimeDir };
+  const config = vscode.workspace.getConfiguration("go-on");
+  const runtime = await ensureGoOnBinary(workspaceRoot, config, context);
+  const settingPath =
+    configuredConfigPath || config.get<string>("configPath", "./config.toml");
+  const configPath = await resolveConfigPath(
+    workspaceRoot,
+    settingPath,
+    runtime.runtimeDir,
+  );
+  return { workspaceRoot, configPath, runtimeDir: runtime.runtimeDir };
 }
 
 async function applyDefaultConfigTemplate(
-    context: vscode.ExtensionContext,
-    templateFile: string
+  context: vscode.ExtensionContext,
+  templateFile: string,
 ): Promise<string> {
-    const { workspaceRoot, configPath, runtimeDir } = await resolveConfigFilePath(context);
-    const candidates = [
-        path.resolve(workspaceRoot, templateFile),
-        path.join(runtimeDir, templateFile)
-    ];
+  const { workspaceRoot, configPath, runtimeDir } =
+    await resolveConfigFilePath(context);
+  const candidates = [
+    path.resolve(workspaceRoot, templateFile),
+    path.join(runtimeDir, templateFile),
+  ];
 
-    let sourcePath: string | undefined;
-    for (const candidate of candidates) {
-        if (await pathExists(candidate)) {
-            sourcePath = candidate;
-            break;
-        }
+  let sourcePath: string | undefined;
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      sourcePath = candidate;
+      break;
     }
+  }
 
-    if (!sourcePath) {
-        throw new Error(`Template not found: ${templateFile}`);
-    }
+  if (!sourcePath) {
+    throw new Error(`Template not found: ${templateFile}`);
+  }
 
-    await fsPromises.copyFile(sourcePath, configPath);
-    await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, configPath);
-    return configPath;
+  await fsPromises.copyFile(sourcePath, configPath);
+  await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, configPath);
+  return configPath;
 }
 
 async function updateWorkflowMappingConfig(
-    context: vscode.ExtensionContext,
-    mapping: {
-        defaultPhase?: string;
-        phases?: Record<
-            string,
-            {
-                agents: string[];
-                fallback?: boolean;
-                principles?: string[];
-                switchRules?: {
-                    circuitBreakerFailures?: number;
-                    circuitBreakerOpenSeconds?: number;
-                };
-            }
-        >;
-    }
+  context: vscode.ExtensionContext,
+  mapping: {
+    defaultPhase?: string;
+    phases?: Record<
+      string,
+      {
+        agents: string[];
+        fallback?: boolean;
+        principles?: string[];
+        switchRules?: {
+          circuitBreakerFailures?: number;
+          circuitBreakerOpenSeconds?: number;
+        };
+      }
+    >;
+  },
 ): Promise<string> {
-    const { configPath } = await resolveConfigFilePath(context);
-    let content = await fsPromises.readFile(configPath, 'utf8');
+  const { configPath } = await resolveConfigFilePath(context);
+  let content = await fsPromises.readFile(configPath, "utf8");
 
-    const phaseEntries = Object.entries(mapping.phases || {})
-        .map(([phase, config]) => {
-            const phaseName = phase.trim();
-            const agents = (config?.agents || []).map((a) => a.trim()).filter(Boolean);
-            const principles = (config?.principles || []).map((p) => p.trim()).filter(Boolean);
-            return [phaseName, { ...config, agents, principles }] as const;
-        })
-        .filter(([phase, config]) => phase.length > 0 && config.agents.length > 0);
+  const phaseEntries = Object.entries(mapping.phases || {})
+    .map(([phase, config]) => {
+      const phaseName = phase.trim();
+      const agents = (config?.agents || [])
+        .map((a) => a.trim())
+        .filter(Boolean);
+      const principles = (config?.principles || [])
+        .map((p) => p.trim())
+        .filter(Boolean);
+      return [phaseName, { ...config, agents, principles }] as const;
+    })
+    .filter(([phase, config]) => phase.length > 0 && config.agents.length > 0);
 
-    if (mapping.defaultPhase && mapping.defaultPhase.trim().length > 0) {
-        content = upsertTopLevelString(content, 'default_phase', mapping.defaultPhase.trim());
-    }
+  if (mapping.defaultPhase && mapping.defaultPhase.trim().length > 0) {
+    content = upsertTopLevelString(
+      content,
+      "default_phase",
+      mapping.defaultPhase.trim(),
+    );
+  }
 
-    if (phaseEntries.length > 0) {
-        const phaseNames = phaseEntries.map(([phase]) => phase);
-        content = upsertFlowPhases(content, phaseNames);
-        for (const [phase, phaseConfig] of phaseEntries) {
-            content = upsertPhaseAgents(content, phase, phaseConfig.agents);
-            if (typeof phaseConfig.fallback === 'boolean') {
-                content = upsertPhaseFallback(content, phase, phaseConfig.fallback);
-            }
-            if (phaseConfig.principles && phaseConfig.principles.length > 0) {
-                content = upsertPhasePrinciples(content, phase, phaseConfig.principles);
-            }
+  if (phaseEntries.length > 0) {
+    const phaseNames = phaseEntries.map(([phase]) => phase);
+    content = upsertFlowPhases(content, phaseNames);
+    for (const [phase, phaseConfig] of phaseEntries) {
+      content = upsertPhaseAgents(content, phase, phaseConfig.agents);
+      if (typeof phaseConfig.fallback === "boolean") {
+        content = upsertPhaseFallback(content, phase, phaseConfig.fallback);
+      }
+      if (phaseConfig.principles && phaseConfig.principles.length > 0) {
+        content = upsertPhasePrinciples(content, phase, phaseConfig.principles);
+      }
 
-            const switchRules = phaseConfig.switchRules;
-            if (switchRules) {
-                if (typeof switchRules.circuitBreakerFailures === 'number' && switchRules.circuitBreakerFailures > 0) {
-                    content = upsertPhaseOptionNumber(content, phase, 'circuit_breaker_failures', Math.floor(switchRules.circuitBreakerFailures));
-                }
-                if (typeof switchRules.circuitBreakerOpenSeconds === 'number' && switchRules.circuitBreakerOpenSeconds > 0) {
-                    content = upsertPhaseOptionNumber(content, phase, 'circuit_breaker_open_seconds', Math.floor(switchRules.circuitBreakerOpenSeconds));
-                }
-            }
+      const switchRules = phaseConfig.switchRules;
+      if (switchRules) {
+        if (
+          typeof switchRules.circuitBreakerFailures === "number" &&
+          switchRules.circuitBreakerFailures > 0
+        ) {
+          content = upsertPhaseOptionNumber(
+            content,
+            phase,
+            "circuit_breaker_failures",
+            Math.floor(switchRules.circuitBreakerFailures),
+          );
         }
+        if (
+          typeof switchRules.circuitBreakerOpenSeconds === "number" &&
+          switchRules.circuitBreakerOpenSeconds > 0
+        ) {
+          content = upsertPhaseOptionNumber(
+            content,
+            phase,
+            "circuit_breaker_open_seconds",
+            Math.floor(switchRules.circuitBreakerOpenSeconds),
+          );
+        }
+      }
     }
+  }
 
-    await fsPromises.writeFile(configPath, content, 'utf8');
-    return configPath;
+  await fsPromises.writeFile(configPath, content, "utf8");
+  return configPath;
 }
 
 async function updateRulesMarkdownFiles(
-    context: vscode.ExtensionContext,
-    payload: {
-        globalRules?: string[];
-        commonRules?: string[];
-        phaseRules?: Record<string, string[]>;
-    }
+  context: vscode.ExtensionContext,
+  payload: {
+    globalRules?: string[];
+    commonRules?: string[];
+    phaseRules?: Record<string, string[]>;
+  },
 ): Promise<string> {
-    const { configPath } = await resolveConfigFilePath(context);
-    const configDir = path.dirname(configPath);
-    const rulesDir = path.join(configDir, 'RULES');
-    await fsPromises.mkdir(rulesDir, { recursive: true });
+  const { configPath } = await resolveConfigFilePath(context);
+  const configDir = path.dirname(configPath);
+  const rulesDir = path.join(configDir, "RULES");
+  await fsPromises.mkdir(rulesDir, { recursive: true });
 
-    const writeRulesFile = async (filePath: string, rules: string[]) => {
-        const normalized = rules.map((item) => item.trim()).filter(Boolean);
-        const content = normalized.length > 0
-            ? normalized.map((item) => `- ${item}`).join('\n') + '\n'
-            : '# Empty rules\n';
-        await fsPromises.writeFile(filePath, content, 'utf8');
-    };
+  const writeRulesFile = async (filePath: string, rules: string[]) => {
+    const normalized = rules.map((item) => item.trim()).filter(Boolean);
+    const content =
+      normalized.length > 0
+        ? normalized.map((item) => `- ${item}`).join("\n") + "\n"
+        : "# Empty rules\n";
+    await fsPromises.writeFile(filePath, content, "utf8");
+  };
 
-    if (payload.globalRules) {
-        await writeRulesFile(path.join(rulesDir, 'global.md'), payload.globalRules);
+  if (payload.globalRules) {
+    await writeRulesFile(path.join(rulesDir, "global.md"), payload.globalRules);
+  }
+  if (payload.commonRules) {
+    await writeRulesFile(path.join(rulesDir, "common.md"), payload.commonRules);
+  }
+  if (payload.phaseRules) {
+    for (const [phase, rules] of Object.entries(payload.phaseRules)) {
+      const phaseName = phase.trim();
+      if (!phaseName) {
+        continue;
+      }
+      await writeRulesFile(path.join(rulesDir, `${phaseName}.md`), rules || []);
     }
-    if (payload.commonRules) {
-        await writeRulesFile(path.join(rulesDir, 'common.md'), payload.commonRules);
-    }
-    if (payload.phaseRules) {
-        for (const [phase, rules] of Object.entries(payload.phaseRules)) {
-            const phaseName = phase.trim();
-            if (!phaseName) {
-                continue;
-            }
-            await writeRulesFile(path.join(rulesDir, `${phaseName}.md`), rules || []);
-        }
-    }
+  }
 
-    return rulesDir;
+  return rulesDir;
 }
 
 let goOnManager: GoOnManager;
@@ -344,203 +425,275 @@ let statusProvider: GoOnStatusProvider;
 let goOnOutput: vscode.OutputChannel;
 
 export function activate(context: vscode.ExtensionContext) {
-    goOnOutput = vscode.window.createOutputChannel('Go-On');
-    context.subscriptions.push(goOnOutput);
-    goOnOutput.appendLine('Go-On extension activated');
+  goOnOutput = vscode.window.createOutputChannel("Go-On");
+  context.subscriptions.push(goOnOutput);
+  goOnOutput.appendLine("Go-On extension activated");
 
-    // Initialize i18n system
-    const currentLanguage = i18n.getCurrentLanguage();
-    goOnOutput.appendLine(`UI Language: ${currentLanguage}`);
+  // Initialize i18n system
+  const currentLanguage = i18n.getCurrentLanguage();
+  goOnOutput.appendLine(`UI Language: ${currentLanguage}`);
 
-    // Initialize config manager
-    const config = vscode.workspace.getConfiguration('go-on');
-    const configPath = config.get<string>('configPath', './config.toml');
-    configManager.initialize(configPath).catch(err => {
-        goOnOutput.appendLine(`warn: config manager init failed: ${err}`);
-        void vscode.window.showWarningMessage(
-            `Go-On: configuration initialization failed: ${err instanceof Error ? err.message : String(err)}`
-        );
-    });
-
-    // Sync VS Code language to app configuration
-    syncLanguageToApp(currentLanguage);
-
-    goOnManager = new GoOnManager();
-    goOnManager.setOutputChannel(goOnOutput);
-    statusProvider = new GoOnStatusProvider(goOnManager);
-    const runtimeBootstrapDeps: RuntimeBootstrapDeps = {
-        ensureBinary: ensureGoOnBinary,
-        isRunning: () => goOnManager.isRunning(),
-        startCommandId: 'go-on.start'
-    };
-
-    // Initialize status monitor
-    const statusMonitor = new StatusMonitor(goOnManager);
-    context.subscriptions.push(statusMonitor);
-
-    // Initialize advanced edit provider
-    const _advancedEditProvider = new GoOnAdvancedEditProvider(goOnManager, context);
-
-    // Register webview providers
-    const chatProvider = new GoOnChatViewProvider(
-        context.extensionUri,
-        goOnManager,
-        context,
-        async () => {
-            await prepareRuntimeAndStartFromChat(context, runtimeBootstrapDeps);
-        }
+  // Initialize config manager
+  const config = vscode.workspace.getConfiguration("go-on");
+  const configPath = config.get<string>("configPath", "./config.toml");
+  configManager.initialize(configPath).catch((err) => {
+    goOnOutput.appendLine(`warn: config manager init failed: ${err}`);
+    void vscode.window.showWarningMessage(
+      `Go-On: configuration initialization failed: ${err instanceof Error ? err.message : String(err)}`,
     );
-    const settingsProvider = new GoOnSettingsViewProvider(context.extensionUri, goOnManager, context);
-    const workflowProvider = new GoOnWorkflowViewProvider(context.extensionUri, goOnManager, context);
-    const processFlowProvider = new GoOnProcessFlowViewProvider(context.extensionUri, goOnManager, context);
+  });
 
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider(GoOnChatViewProvider.viewType, chatProvider),
-        vscode.window.registerWebviewViewProvider(GoOnSettingsViewProvider.viewType, settingsProvider),
-        vscode.window.registerWebviewViewProvider(GoOnWorkflowViewProvider.viewType, workflowProvider),
-        vscode.window.registerWebviewViewProvider(GoOnProcessFlowViewProvider.viewType, processFlowProvider)
-    );
+  // Sync VS Code language to app configuration
+  syncLanguageToApp(currentLanguage);
 
-    context.subscriptions.push(
-        vscode.commands.registerCommand('go-on.openConfigWizard', async () => {
-            await settingsProvider.showConfigWizard();
-        })
-    );
+  goOnManager = new GoOnManager();
+  goOnManager.setOutputChannel(goOnOutput);
+  statusProvider = new GoOnStatusProvider(goOnManager);
+  const runtimeBootstrapDeps: RuntimeBootstrapDeps = {
+    ensureBinary: ensureGoOnBinary,
+    isRunning: () => goOnManager.isRunning(),
+    startCommandId: "go-on.start",
+  };
 
-    vscode.window.registerTreeDataProvider('go-on-status', statusProvider);
+  // Initialize status monitor
+  const statusMonitor = new StatusMonitor(goOnManager);
+  context.subscriptions.push(statusMonitor);
 
-    const coreCommands = registerCoreCommands({
-        context,
-        ensureBinary: ensureGoOnBinary,
-        resolveConfigPath,
-        parseMissingEnvVariableNames,
-        buildPlaceholderEnvValues,
-        start: (configPath: string, executablePath: string, cwd: string, protocolMode: string) =>
-            goOnManager.start(configPath, executablePath, cwd, protocolMode),
-        stop: () => goOnManager.stop(),
-        isRunning: () => goOnManager.isRunning(),
-        sendRequest: (method: string, params?: unknown) => goOnManager.sendRequest(method, params),
-        setRuntimeEnvOverrides: (overrides: Record<string, string>) => goOnManager.setRuntimeEnvOverrides(overrides),
-    });
+  // Initialize advanced edit provider
+  const _advancedEditProvider = new GoOnAdvancedEditProvider(
+    goOnManager,
+    context,
+  );
 
-    const viewCommands = registerViewCommands({
-        revealGoOnView,
-        ensureBinaryReady: async () => {
-            const config = vscode.workspace.getConfiguration('go-on');
-            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-            await ensureGoOnBinary(workspaceRoot, config, context);
-        },
-        prepareRuntimeAfterChatOpen: async () => prepareRuntimeAndStartFromChat(context, runtimeBootstrapDeps),
-        isRunning: () => goOnManager.isRunning(),
-        stop: () => goOnManager.stop(),
-        createSession: (sessionName: string) => chatProvider.createNewSession(sessionName),
-        switchSession: (sessionName: string) => chatProvider.switchSession(sessionName),
-    });
-    const rpcCommands = registerRpcCommands({
-        isRunning: () => goOnManager.isRunning(),
-        sendRequest: (method: string, params?: unknown) => goOnManager.sendRequest(method, params),
-    });
+  // Register webview providers
+  const chatProvider = new GoOnChatViewProvider(
+    context.extensionUri,
+    goOnManager,
+    context,
+    async () => {
+      await prepareRuntimeAndStartFromChat(context, runtimeBootstrapDeps);
+    },
+  );
+  const settingsProvider = new GoOnSettingsViewProvider(
+    context.extensionUri,
+    goOnManager,
+    context,
+  );
+  const workflowProvider = new GoOnWorkflowViewProvider(
+    context.extensionUri,
+    goOnManager,
+    context,
+  );
+  const processFlowProvider = new GoOnProcessFlowViewProvider(
+    context.extensionUri,
+    goOnManager,
+    context,
+  );
 
-    // Refresh status monitor command
-    let refreshStatusMonitorCommand = vscode.commands.registerCommand('go-on.refreshStatusMonitor', () => {
-        statusMonitor.refresh();
-    });
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      GoOnChatViewProvider.viewType,
+      chatProvider,
+    ),
+    vscode.window.registerWebviewViewProvider(
+      GoOnSettingsViewProvider.viewType,
+      settingsProvider,
+    ),
+    vscode.window.registerWebviewViewProvider(
+      GoOnWorkflowViewProvider.viewType,
+      workflowProvider,
+    ),
+    vscode.window.registerWebviewViewProvider(
+      GoOnProcessFlowViewProvider.viewType,
+      processFlowProvider,
+    ),
+  );
 
-    let keyringSetCommand = vscode.commands.registerCommand('go-on.keyringSet', async (payload?: { name?: string; value?: string }) => {
-        const name = payload?.name;
-        const value = payload?.value;
-        if (!name || value === undefined) {
-            throw new Error('keyring set requires name and value');
+  context.subscriptions.push(
+    vscode.commands.registerCommand("go-on.openConfigWizard", async () => {
+      await settingsProvider.showConfigWizard();
+    }),
+  );
+
+  vscode.window.registerTreeDataProvider("go-on-status", statusProvider);
+
+  const coreCommands = registerCoreCommands({
+    context,
+    ensureBinary: ensureGoOnBinary,
+    resolveConfigPath,
+    parseMissingEnvVariableNames,
+    buildPlaceholderEnvValues,
+    start: (
+      configPath: string,
+      executablePath: string,
+      cwd: string,
+      protocolMode: string,
+    ) => goOnManager.start(configPath, executablePath, cwd, protocolMode),
+    stop: () => goOnManager.stop(),
+    isRunning: () => goOnManager.isRunning(),
+    sendRequest: (method: string, params?: unknown) =>
+      goOnManager.sendRequest(method, params),
+    setRuntimeEnvOverrides: (overrides: Record<string, string>) =>
+      goOnManager.setRuntimeEnvOverrides(overrides),
+  });
+
+  const viewCommands = registerViewCommands({
+    revealGoOnView,
+    ensureBinaryReady: async () => {
+      const config = vscode.workspace.getConfiguration("go-on");
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      await ensureGoOnBinary(workspaceRoot, config, context);
+    },
+    prepareRuntimeAfterChatOpen: async () =>
+      prepareRuntimeAndStartFromChat(context, runtimeBootstrapDeps),
+    isRunning: () => goOnManager.isRunning(),
+    stop: () => goOnManager.stop(),
+    createSession: (sessionName: string) =>
+      chatProvider.createNewSession(sessionName),
+    switchSession: (sessionName: string) =>
+      chatProvider.switchSession(sessionName),
+    clearChat: () => chatProvider.clearChat(),
+    exportChat: () => chatProvider.exportChat(),
+  });
+  const rpcCommands = registerRpcCommands({
+    isRunning: () => goOnManager.isRunning(),
+    sendRequest: (method: string, params?: unknown) =>
+      goOnManager.sendRequest(method, params),
+  });
+
+  // Refresh status monitor command
+  let refreshStatusMonitorCommand = vscode.commands.registerCommand(
+    "go-on.refreshStatusMonitor",
+    () => {
+      statusMonitor.refresh();
+    },
+  );
+
+  let keyringSetCommand = vscode.commands.registerCommand(
+    "go-on.keyringSet",
+    async (payload?: { name?: string; value?: string }) => {
+      const name = payload?.name;
+      const value = payload?.value;
+      if (!name || value === undefined) {
+        throw new Error("keyring set requires name and value");
+      }
+      await runGoOnSecretCommand(context, "set", name, value);
+    },
+  );
+
+  let keyringGetCommand = vscode.commands.registerCommand(
+    "go-on.keyringGet",
+    async (payload?: { name?: string }) => {
+      const name = payload?.name;
+      if (!name) {
+        throw new Error("keyring get requires name");
+      }
+      return await runGoOnSecretCommand(context, "get", name);
+    },
+  );
+
+  let keyringDeleteCommand = vscode.commands.registerCommand(
+    "go-on.keyringDelete",
+    async (payload?: { name?: string }) => {
+      const name = payload?.name;
+      if (!name) {
+        throw new Error("keyring delete requires name");
+      }
+      await runGoOnSecretCommand(context, "delete", name);
+    },
+  );
+
+  let keyringListCommand = vscode.commands.registerCommand(
+    "go-on.keyringList",
+    async () => {
+      return await runGoOnSecretCommand(context, "list");
+    },
+  );
+
+  let applyDefaultConfigCommand = vscode.commands.registerCommand(
+    "go-on.applyDefaultConfigTemplate",
+    async (payload?: { template?: string }) => {
+      const template = payload?.template;
+      if (!template) {
+        throw new Error("template is required");
+      }
+      const configPath = await applyDefaultConfigTemplate(context, template);
+      return configPath;
+    },
+  );
+
+  let updateWorkflowMappingCommand = vscode.commands.registerCommand(
+    "go-on.updateWorkflowMapping",
+    async (payload?: {
+      defaultPhase?: string;
+      phases?: Record<
+        string,
+        {
+          agents: string[];
+          fallback?: boolean;
+          principles?: string[];
+          switchRules?: {
+            circuitBreakerFailures?: number;
+            circuitBreakerOpenSeconds?: number;
+          };
         }
-        await runGoOnSecretCommand(context, 'set', name, value);
-    });
-
-    let keyringGetCommand = vscode.commands.registerCommand('go-on.keyringGet', async (payload?: { name?: string }) => {
-        const name = payload?.name;
-        if (!name) {
-            throw new Error('keyring get requires name');
-        }
-        return await runGoOnSecretCommand(context, 'get', name);
-    });
-
-    let keyringDeleteCommand = vscode.commands.registerCommand('go-on.keyringDelete', async (payload?: { name?: string }) => {
-        const name = payload?.name;
-        if (!name) {
-            throw new Error('keyring delete requires name');
-        }
-        await runGoOnSecretCommand(context, 'delete', name);
-    });
-
-    let keyringListCommand = vscode.commands.registerCommand('go-on.keyringList', async () => {
-        return await runGoOnSecretCommand(context, 'list');
-    });
-
-    let applyDefaultConfigCommand = vscode.commands.registerCommand('go-on.applyDefaultConfigTemplate', async (payload?: { template?: string }) => {
-        const template = payload?.template;
-        if (!template) {
-            throw new Error('template is required');
-        }
-        const configPath = await applyDefaultConfigTemplate(context, template);
-        return configPath;
-    });
-
-    let updateWorkflowMappingCommand = vscode.commands.registerCommand('go-on.updateWorkflowMapping', async (payload?: {
-        defaultPhase?: string;
-        phases?: Record<string, {
-            agents: string[];
-            fallback?: boolean;
-            principles?: string[];
-            switchRules?: {
-                circuitBreakerFailures?: number;
-                circuitBreakerOpenSeconds?: number;
-            };
-        }>;
+      >;
     }) => {
-        if (!payload) {
-            throw new Error('workflow mapping payload is required');
-        }
-        return await updateWorkflowMappingConfig(context, payload);
-    });
+      if (!payload) {
+        throw new Error("workflow mapping payload is required");
+      }
+      return await updateWorkflowMappingConfig(context, payload);
+    },
+  );
 
-    let updateRulesCommand = vscode.commands.registerCommand('go-on.updateRules', async (payload?: {
-        globalRules?: string[];
-        commonRules?: string[];
-        phaseRules?: Record<string, string[]>;
+  let updateRulesCommand = vscode.commands.registerCommand(
+    "go-on.updateRules",
+    async (payload?: {
+      globalRules?: string[];
+      commonRules?: string[];
+      phaseRules?: Record<string, string[]>;
     }) => {
-        if (!payload) {
-            throw new Error('rules payload is required');
-        }
-        return await updateRulesMarkdownFiles(context, payload);
-    });
+      if (!payload) {
+        throw new Error("rules payload is required");
+      }
+      return await updateRulesMarkdownFiles(context, payload);
+    },
+  );
 
-    // Runtime download/start is intentionally deferred until the Chat view is opened.
+  // Runtime download/start is intentionally deferred until the Chat view is opened.
 
-    context.subscriptions.push(
-        ...coreCommands,
-        ...viewCommands,
-        ...rpcCommands,
-        refreshStatusMonitorCommand,
-        keyringSetCommand,
-        keyringGetCommand,
-        keyringDeleteCommand,
-        keyringListCommand,
-        applyDefaultConfigCommand,
-        updateWorkflowMappingCommand,
-        updateRulesCommand,
-    );
+  context.subscriptions.push(
+    ...coreCommands,
+    ...viewCommands,
+    ...rpcCommands,
+    refreshStatusMonitorCommand,
+    keyringSetCommand,
+    keyringGetCommand,
+    keyringDeleteCommand,
+    keyringListCommand,
+    applyDefaultConfigCommand,
+    updateWorkflowMappingCommand,
+    updateRulesCommand,
+  );
 
-    // Open chat automatically only once to avoid intrusive focus switching on every startup.
-    const hasOpenedChat = context.globalState.get<boolean>('go-on.hasOpenedChatOnce', false);
-    if (!hasOpenedChat) {
-        setTimeout(() => {
-            void vscode.commands.executeCommand('go-on.openChat');
-        }, 300);
-        void context.globalState.update('go-on.hasOpenedChatOnce', true);
-    }
+  // Open chat automatically only once (controlled by go-on.autoOpenChat config).
+  const autoOpenChat = vscode.workspace
+    .getConfiguration("go-on")
+    .get<boolean>("autoOpenChat", true);
+  const hasOpenedChat = context.globalState.get<boolean>(
+    "go-on.hasOpenedChatOnce",
+    false,
+  );
+  if (autoOpenChat && !hasOpenedChat) {
+    setTimeout(() => {
+      void vscode.commands.executeCommand("go-on.openChat");
+    }, 300);
+    void context.globalState.update("go-on.hasOpenedChatOnce", true);
+  }
 }
 
 export function deactivate() {
-    if (goOnManager) goOnManager.stop();
+  if (goOnManager) goOnManager.stop();
 }
 
 /**
@@ -548,21 +701,27 @@ export function deactivate() {
  * This ensures the app uses the same language as VS Code
  */
 async function syncLanguageToApp(language: string): Promise<void> {
-    try {
-        const config = vscode.workspace.getConfiguration('go-on');
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  try {
+    const config = vscode.workspace.getConfiguration("go-on");
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
 
-        if (!workspaceFolder) {
-            return;
-        }
-
-        // Create a language configuration object for the app
-        // Store language preference in app settings
-        await config.update('language', language, vscode.ConfigurationTarget.Global);
-
-        // Log successful sync
-        goOnOutput.appendLine(`Language synchronized: VS Code ${language} -> App ${language}`);
-    } catch (error) {
-        goOnOutput.appendLine(`warn: language sync failed: ${error}`);
+    if (!workspaceFolder) {
+      return;
     }
+
+    // Create a language configuration object for the app
+    // Store language preference in app settings
+    await config.update(
+      "language",
+      language,
+      vscode.ConfigurationTarget.Global,
+    );
+
+    // Log successful sync
+    goOnOutput.appendLine(
+      `Language synchronized: VS Code ${language} -> App ${language}`,
+    );
+  } catch (error) {
+    goOnOutput.appendLine(`warn: language sync failed: ${error}`);
+  }
 }
