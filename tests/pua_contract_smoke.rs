@@ -1,7 +1,7 @@
-#[path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/governance/pua.rs")]
+#[path = "../src/governance/pua.rs"]
 mod pua;
 #[allow(dead_code)]
-#[path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/orchestration/roles.rs")]
+#[path = "../src/orchestration/roles.rs"]
 mod roles;
 
 use pua::{quality_compass, PuaEnforcementPlan};

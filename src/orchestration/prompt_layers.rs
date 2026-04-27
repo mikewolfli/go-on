@@ -9,6 +9,8 @@
 //! Kept as a stable extension point for future prompt layering integration.
 //! Main chain prompt assembly uses direct formatting in the Agent trait.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 /// Configuration for prompt layer budgets

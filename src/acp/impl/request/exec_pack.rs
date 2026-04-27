@@ -343,10 +343,7 @@ fn build_multi_agent_sessions(task: &str, source: &str, report: &RuntimeExecutio
                 "subtask_session_id": format!("subtask-session-{}-{}", record.phase_index, record.task_index),
                 "subtask_id": record.subtask_id,
                 "phase_index": record.phase_index,
-                "assigned_role": record
-                    .desired_role
-                    .clone()
-                    .unwrap_or_else(|| "implementer".to_string()),
+                "assigned_role": record.desired_role.clone(),
                 "selected_agent": record.effective_executor,
                 "status": if record.failover_applied { "rerouted" } else { "completed" },
             })
@@ -903,7 +900,7 @@ pub(super) async fn handle_workflow_execute(
         selected_agents: execution_report
             .assignment_records
             .iter()
-            .filter_map(|record| record.effective_executor.clone())
+            .map(|record| record.effective_executor.clone())
             .collect::<HashSet<_>>()
             .into_iter()
             .collect(),
@@ -1355,7 +1352,7 @@ pub(super) async fn handle_task_execute(
 
     let repair_history = build_repair_history_response(&repair_context);
     // B26-S11: persist task graph checkpoint for breakpoint resume
-    let tg_checkpoint = {
+    let tg_checkpoint: crate::reinforcement::TaskGraphCheckpointArtifact = {
         use crate::orchestration::task_graph::{TaskGraph, TaskNode};
         use std::collections::HashSet;
         let root_node = TaskNode {
@@ -1372,11 +1369,43 @@ pub(super) async fn handle_task_execute(
             retries: 0,
         };
         let tg = TaskGraph::new(root_node);
-        tg.snapshot(
-            task,
-            execution_report.phases_executed,
-            summary.records.clone(),
-        )
+        let graph_records: Vec<crate::orchestration::task_graph::PlannedSubtaskRecord> = summary
+            .records
+            .iter()
+            .map(|r| crate::orchestration::task_graph::PlannedSubtaskRecord {
+                subtask_id: r.id.clone(),
+                description: r.description.clone(),
+                phase: format!("phase-{}", r.phase_index + 1),
+                outcome: r.outcome.clone(),
+                result_summary: None,
+            })
+            .collect();
+        let ckpt = tg.snapshot(task, execution_report.phases_executed, graph_records);
+        crate::reinforcement::TaskGraphCheckpointArtifact {
+            checkpoint_id: ckpt.checkpoint_id,
+            schema_version: ckpt.schema_version,
+            created_at: ckpt.created_at,
+            task: ckpt.task,
+            phases_completed: ckpt.phases_completed,
+            subtask_records: ckpt
+                .subtask_records
+                .into_iter()
+                .map(|r| crate::reinforcement::PlannedSubtaskRecord {
+                    id: r.subtask_id,
+                    description: r.description,
+                    status: r.outcome.clone().unwrap_or_else(|| "unknown".to_string()),
+                    phase_index: 0,
+                    retry_count: 0,
+                    start_ts: None,
+                    stop_ts: None,
+                    duration_ms: None,
+                    outcome: r.outcome,
+                    executor: None,
+                })
+                .collect(),
+            resume_eligible: ckpt.resume_eligible,
+            resume_reason: ckpt.resume_reason,
+        }
     };
     let tg_checkpoint_path = persist_task_graph_checkpoint(&ledger, &tg_checkpoint)?;
     let gates = build_gate_matrix(
@@ -2024,14 +2053,14 @@ async fn execute_runtime_subtasks(
                     .map(|record| record.phase_index)
                     .unwrap_or(phase_idx),
                 task_index: result.record_index,
-                desired_role: result.desired_role,
-                selected_agent: Some(result.executor.clone()),
+                desired_role: result.desired_role.unwrap_or_default(),
+                selected_agent: result.executor.clone(),
                 selection_reason: "runtime_execution".to_string(),
                 candidate_scores: result.candidate_scores,
                 dependency_blocked: false,
-                node_primary_agent: Some(context.primary_agent.clone()),
+                node_primary_agent: context.primary_agent.clone(),
                 node_secondary_agents: context.secondary_agents.clone(),
-                effective_executor: Some(result.executor),
+                effective_executor: result.executor,
                 failover_applied: result.failover_applied,
                 failover_reason: result.failover_reason,
             });
@@ -2542,8 +2571,8 @@ async fn run_agent_chat_collecting(
 
     let chat_future = agent.chat(messages, principles, options, sender);
     let timeout_duration = timeout_seconds
-        .map(|s| Duration::from_secs(s))
-        .unwrap_or_else(|| Duration::from_secs(120));
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(120));
 
     let result = match timeout(timeout_duration, chat_future).await {
         Ok(Ok(())) => {
@@ -2554,7 +2583,9 @@ async fn run_agent_chat_collecting(
             Ok(full_response)
         }
         Ok(Err(err)) => Err(err.into()),
-        Err(_) => Err(anyhow::anyhow!("agent chat timed out after {timeout_duration:?}")),
+        Err(_) => Err(anyhow::anyhow!(
+            "agent chat timed out after {timeout_duration:?}"
+        )),
     };
 
     result
@@ -2615,7 +2646,10 @@ fn execute_model_tool_calls(
         let tool_name = tc
             .get("name")
             .and_then(Value::as_str)
-            .or_else(|| tc.get("function").and_then(|f| f.get("name").and_then(Value::as_str)))
+            .or_else(|| {
+                tc.get("function")
+                    .and_then(|f| f.get("name").and_then(Value::as_str))
+            })
             .unwrap_or("unknown");
 
         let tool_args = tc

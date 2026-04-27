@@ -984,7 +984,7 @@ impl MaintenanceTracker {
 }
 
 /// Online controller state - real implementation from governance module
-pub(crate) use crate::governance::runtime_controls::OnlineControllerState;
+pub use crate::governance::runtime_controls::OnlineControllerState;
 
 /// Phase rate limiter for phase-level throttling
 #[derive(Debug, Default)]

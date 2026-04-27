@@ -3,6 +3,7 @@
 //! Appends an immutable provenance record for every tool call, showing the
 //! data lineage chain: input → tool → output → consumer.
 
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -138,13 +139,17 @@ fn uuid_v4() -> String {
 
     let rand_a: u64 = RNG.with(|rng| {
         let mut state = rng.borrow_mut();
-        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         *state
     });
 
     let rand_b: u64 = RNG.with(|rng| {
         let mut state = rng.borrow_mut();
-        *state = state.wrapping_mul(2862933555777941757).wrapping_add(3037000493);
+        *state = state
+            .wrapping_mul(2862933555777941757)
+            .wrapping_add(3037000493);
         *state
     });
 
@@ -153,15 +158,10 @@ fn uuid_v4() -> String {
     let time_hi_and_version = ((rand_a >> 48) as u16 & 0x0fff) | 0x4000;
     let clock_seq_hi = ((rand_b >> 32) as u8 & 0x3f) | 0x80;
     let clock_seq_low = (rand_b >> 24) as u8;
-    let node_low = (rand_b & 0xffff_ffff_ffff) as u64;
+    let node_low = rand_b & 0xffff_ffff_ffff;
     format!(
         "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:012x}",
-        time_low,
-        time_mid,
-        time_hi_and_version,
-        clock_seq_hi,
-        clock_seq_low,
-        node_low
+        time_low, time_mid, time_hi_and_version, clock_seq_hi, clock_seq_low, node_low
     )
 }
 

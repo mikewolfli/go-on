@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use crate::task_decomposer::{TaskDecomposer, TaskDecomposition};
 use crate::task_router::{RoutingDecision, TaskCharacteristics, TaskRouter};
 
 use super::ArtifactLedger;
-use super::health::{now_ts, CheckStatus};
+use super::health::now_ts;
 
 // ── Subtask tracking ──────────────────────────────────────────────────────
 

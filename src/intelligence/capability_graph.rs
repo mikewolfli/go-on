@@ -4,6 +4,8 @@
 //! "agent A can hand off to agent B for capability C".
 //! Used by the router to pick the best next agent in a chain.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 

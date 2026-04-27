@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::cache::ResponseCache;
-use crate::config::{validate_runtime_readiness, AgentConfig, AppConfig};
+use crate::config::{validate_runtime_readiness, AppConfig};
 use crate::vector::VectorStore;
 
 use super::ArtifactLedger;
@@ -236,7 +236,7 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
     let mut found_vendor = false;
     for agent_config in config.agents.values() {
         for (vendor_name, env_var) in &provider_api_map {
-            if agent_config.provider == *vendor_name {
+            if agent_config.agent_type == *vendor_name {
                 found_vendor = true;
                 match std::env::var(env_var) {
                     Ok(_) => {
@@ -279,15 +279,12 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
 fn secret_pool_status(config: &AppConfig) -> Value {
     let mut secrets = Vec::new();
     for agent_config in config.agents.values() {
-        if let Some(api_key) = &agent_config.api_key {
-            if api_key.starts_with("keyring:") {
-                let name = api_key.trim_start_matches("keyring://").to_string();
-                let exists = crate::agent::inspect_secret_pool(&name);
-                secrets.push(json!({
-                    "secret_name": name,
-                    "resolved": exists,
-                }));
-            }
+        if let Some(env_var) = &agent_config.api_key_env {
+            let exists = crate::agent::inspect_secret_pool(env_var, "api_key_env").is_ok();
+            secrets.push(json!({
+                "secret_name": env_var,
+                "resolved": exists,
+            }));
         }
     }
     json!(secrets)
@@ -296,12 +293,12 @@ fn secret_pool_status(config: &AppConfig) -> Value {
 fn missing_envs_for_agent(config: &AppConfig) -> Vec<Value> {
     let mut missing = Vec::new();
     for agent_config in config.agents.values() {
-        if let Some(api_key) = &agent_config.api_key {
-            if api_key.starts_with("env://") {
-                let env_var = api_key.trim_start_matches("env://");
+        if let Some(api_key_env) = &agent_config.api_key_env {
+            if api_key_env.starts_with("env://") {
+                let env_var = api_key_env.trim_start_matches("env://");
                 if std::env::var(env_var).is_err() {
                     missing.push(json!({
-                        "agent": agent_config.provider,
+                        "agent": agent_config.agent_type,
                         "expected_env": env_var,
                         "hint": "set the environment variable or use keyring://"
                     }));
@@ -312,6 +309,7 @@ fn missing_envs_for_agent(config: &AppConfig) -> Vec<Value> {
     missing
 }
 
+#[allow(dead_code)]
 fn probe_local_endpoint(url: &str, timeout_secs: u64) -> CheckStatus {
     let (host, port) = extract_host_port(url);
     let addr: SocketAddr = match format!("{}:{}", host, port).to_socket_addrs() {
@@ -327,8 +325,11 @@ fn probe_local_endpoint(url: &str, timeout_secs: u64) -> CheckStatus {
     }
 }
 
+#[allow(dead_code)]
 fn extract_host_port(url: &str) -> (String, u16) {
-    let url = url.trim_start_matches("http://").trim_start_matches("https://");
+    let url = url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
     let without_path = url.split('/').next().unwrap_or(url);
     if let Some((host, port_str)) = without_path.rsplit_once(':') {
         if let Ok(port) = port_str.parse::<u16>() {
@@ -338,7 +339,7 @@ fn extract_host_port(url: &str) -> (String, u16) {
     (without_path.to_string(), 443)
 }
 
-fn now_ts() -> i64 {
+pub fn now_ts() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

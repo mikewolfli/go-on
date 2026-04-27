@@ -12,6 +12,7 @@
 
 pub mod adaptive_selector;
 pub mod advanced_modules;
+pub mod capability_bus;
 pub mod capability_graph;
 pub mod evaluation;
 pub mod model_selector;
@@ -19,4 +20,5 @@ pub mod promotion;
 pub mod quality_models;
 pub mod reinforcement;
 pub mod reputation;
+pub mod token_cache;
 pub mod verification;

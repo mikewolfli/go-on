@@ -152,6 +152,12 @@ class GoOnChatViewProvider {
             sessionName,
         });
     }
+    clearChat() {
+        this._clearCurrentSession();
+    }
+    exportChat() {
+        this._exportCurrentSession();
+    }
     async _handleRunCode(code, language) {
         if (!this._view)
             return;

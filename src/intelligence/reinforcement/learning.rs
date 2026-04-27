@@ -6,12 +6,11 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::pua::{append_learning_record, LearningRecord, PuaLearningRecord};
+use crate::pua::{append_learning_record, LearningRecord};
 
-use super::ArtifactLedger;
 use super::health::now_ts;
+use super::ArtifactLedger;
 
 // ── Learning events ────────────────────────────────────────────────────────
 
@@ -393,12 +392,16 @@ impl ExperienceKnowledgeBase {
                     .contains(&objective_lower)
                     || objective_lower.contains(&case.objective.to_ascii_lowercase())
             })
-            .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|a, b| {
+                a.confidence
+                    .partial_cmp(&b.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     }
 
     pub fn top_failure_patterns(&self, n: usize) -> Vec<&FailurePattern> {
         let mut sorted: Vec<_> = self.failure_patterns.iter().collect();
-        sorted.sort_by(|a, b| b.frequency.cmp(&a.frequency));
+        sorted.sort_by_key(|a| std::cmp::Reverse(a.frequency));
         sorted.into_iter().take(n).collect()
     }
 }
@@ -436,11 +439,10 @@ impl Default for QLearningAgent {
 
 impl QLearningAgent {
     pub fn choose_action(&self, state: &(String, String), actions: &[String]) -> Option<String> {
-        if self.exploration_rate > rand::random::<f64>() {
-            // Explore: pick a random action
-            let mut rng = rand::thread_rng();
-            use rand::seq::SliceRandom;
-            actions.choose(&mut rng).cloned()
+        if self.exploration_rate > simple_random_f64() {
+            // Explore: pick a random action using simple hash-based approach
+            let idx = (simple_random_u64() as usize) % actions.len();
+            actions.get(idx).cloned()
         } else {
             // Exploit: pick action with highest Q-value
             let state_q = self.q_table.get(state);
@@ -473,12 +475,15 @@ impl QLearningAgent {
         let max_future_q = self
             .q_table
             .get(next_state)
-            .and_then(|m| m.values().max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)))
+            .and_then(|m| {
+                m.values()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            })
             .copied()
             .unwrap_or(0.0);
 
-        let new_q =
-            current_q + self.learning_rate * (reward + self.discount_factor * max_future_q - current_q);
+        let new_q = current_q
+            + self.learning_rate * (reward + self.discount_factor * max_future_q - current_q);
 
         self.q_table
             .entry(state.clone())
@@ -527,4 +532,32 @@ impl RewardFunction {
             + self.token_saving_weight * token_reward
     }
 }
-```Now let me create the mod.rs for the reinforcement submodule and update the main reinforcement.rs to be a re-export facade:
+
+/// Simple deterministic "random" value based on hashing the current timestamp.
+/// Used to avoid adding a `rand` dependency for exploration in Q-learning.
+fn simple_random_f64() -> f64 {
+    use std::hash::{Hash, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    nanos.hash(&mut hasher);
+    let hash = hasher.finish();
+    (hash as f64) / (u64::MAX as f64)
+}
+
+fn simple_random_u64() -> u64 {
+    use std::hash::{Hash, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    nanos.hash(&mut hasher);
+    hasher.finish()
+}

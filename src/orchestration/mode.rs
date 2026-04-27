@@ -122,21 +122,13 @@ fn build_chat_messages(task: &AgentTaskEnvelope) -> Vec<Message> {
 /// AskModeRuntime: single-turn Q&A, no tools, user approval required.
 ///
 /// Uses `Agent::chat()` to produce a direct answer.
+#[derive(Default)]
 pub struct AskModeRuntime {
     /// Optional agent registry to pick a default chat agent.
     /// If not provided, run() falls back to a stub response.
     pub agent_registry: Option<Arc<AgentRegistry>>,
     /// Name of the agent to use for chat (defaults to first available).
     pub agent_name: Option<String>,
-}
-
-impl Default for AskModeRuntime {
-    fn default() -> Self {
-        Self {
-            agent_registry: None,
-            agent_name: None,
-        }
-    }
 }
 
 impl AskModeRuntime {
@@ -238,18 +230,10 @@ impl ModeRuntime for AskModeRuntime {
 /// EditModeRuntime: constrained edit with plan/patch/verify, user approval required.
 ///
 /// Uses `Agent::run_task()` to execute the edit as a structured task.
+#[derive(Default)]
 pub struct EditModeRuntime {
     pub agent_registry: Option<Arc<AgentRegistry>>,
     pub agent_name: Option<String>,
-}
-
-impl Default for EditModeRuntime {
-    fn default() -> Self {
-        Self {
-            agent_registry: None,
-            agent_name: None,
-        }
-    }
 }
 
 impl EditModeRuntime {
@@ -344,18 +328,10 @@ impl ModeRuntime for EditModeRuntime {
 ///
 /// Uses `Agent::run_task()` with multi-tool iteration.
 /// Fails on high-risk operations unless approval is given.
+#[derive(Default)]
 pub struct AgentModeRuntime {
     pub agent_registry: Option<Arc<AgentRegistry>>,
     pub agent_name: Option<String>,
-}
-
-impl Default for AgentModeRuntime {
-    fn default() -> Self {
-        Self {
-            agent_registry: None,
-            agent_name: None,
-        }
-    }
 }
 
 impl AgentModeRuntime {
@@ -481,18 +457,10 @@ impl ModeRuntime for AgentModeRuntime {
 /// FullAutoModeRuntime: fully automatic with review gate and recovery policy.
 ///
 /// Uses `Agent::run_task()` with full autonomy — no approval gates.
+#[derive(Default)]
 pub struct FullAutoModeRuntime {
     pub agent_registry: Option<Arc<AgentRegistry>>,
     pub agent_name: Option<String>,
-}
-
-impl Default for FullAutoModeRuntime {
-    fn default() -> Self {
-        Self {
-            agent_registry: None,
-            agent_name: None,
-        }
-    }
 }
 
 impl FullAutoModeRuntime {
@@ -594,18 +562,10 @@ impl ModeRuntime for FullAutoModeRuntime {
 ///
 /// Mode Hierarchy (by automation level):
 ///   Ask (0) < Edit (5) < Agent (20) < SafeGuard (30) < FullAuto (50)
+#[derive(Default)]
 pub struct SafeGuardModeRuntime {
     pub agent_registry: Option<Arc<AgentRegistry>>,
     pub agent_name: Option<String>,
-}
-
-impl Default for SafeGuardModeRuntime {
-    fn default() -> Self {
-        Self {
-            agent_registry: None,
-            agent_name: None,
-        }
-    }
 }
 
 impl SafeGuardModeRuntime {

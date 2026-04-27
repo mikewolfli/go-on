@@ -7,6 +7,8 @@
 //! - `TaskScheduler`      — producer side (enqueue, priority assignment)
 //! - `WorkerScheduler`    — consumer side (dequeue, deadline enforcement)
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::BinaryHeap;
 use std::sync::Arc;

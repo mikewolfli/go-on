@@ -312,6 +312,7 @@ async fn run_single_review(
 
     let _review_span = parent_span.and_then(|parent| {
         server
+            .observability
             .telemetry_runtime
             .lock()
             .ok()

@@ -2,6 +2,11 @@
 /**
  * Configuration Manager for Go-On
  *
+ * @deprecated This module is no longer actively used by the extension.
+ * All configuration is managed through VS Code's workspace configuration
+ * and the Go-On binary's own config.toml. This file is kept for reference
+ * but may be removed in a future release.
+ *
  * Handles all configuration management including:
  * - Reading/writing TOML configuration
  * - Syncing with Go-On application
@@ -15,7 +20,7 @@ const os = require("os");
 class ConfigManager {
     constructor() {
         this.config = null;
-        this.configPath = '';
+        this.configPath = "";
     }
     static getInstance() {
         if (!ConfigManager.instance) {
@@ -45,22 +50,22 @@ class ConfigManager {
      */
     async getDefaultConfigPath() {
         const homeDir = os.homedir();
-        const configDir = path.join(homeDir, '.go-on');
+        const configDir = path.join(homeDir, ".go-on");
         try {
             await fs.mkdir(configDir, { recursive: true });
         }
         catch {
             // Return fallback path if directory creation fails
-            return path.join(homeDir, 'config.toml');
+            return path.join(homeDir, "config.toml");
         }
-        return path.join(configDir, 'config.toml');
+        return path.join(configDir, "config.toml");
     }
     /**
      * Load configuration from TOML file
      */
     async loadFromFile(filePath) {
         try {
-            const content = await fs.readFile(filePath, 'utf-8');
+            const content = await fs.readFile(filePath, "utf-8");
             this.config = this.parseTOML(content);
         }
         catch {
@@ -77,21 +82,21 @@ class ConfigManager {
             agents: {},
             phases: {},
         };
-        let currentSection = '';
-        const lines = content.split('\n');
+        let currentSection = "";
+        const lines = content.split("\n");
         for (const line of lines) {
             const trimmed = line.trim();
             // Skip comments and empty lines
-            if (!trimmed || trimmed.startsWith('#'))
+            if (!trimmed || trimmed.startsWith("#"))
                 continue;
             // Section header
-            if (trimmed.startsWith('[')) {
+            if (trimmed.startsWith("[")) {
                 currentSection = trimmed.slice(1, -1);
-                const parts = currentSection.split('.');
-                if (parts[0] === 'agents') {
+                const parts = currentSection.split(".");
+                if (parts[0] === "agents") {
                     config.agents[parts[1]] = {};
                 }
-                else if (parts[0] === 'phases') {
+                else if (parts[0] === "phases") {
                     config.phases[parts[1]] = {};
                 }
                 else {
@@ -111,24 +116,24 @@ class ConfigManager {
                 if (rawValue.startsWith('"') && rawValue.endsWith('"')) {
                     value = rawValue.slice(1, -1);
                 }
-                else if (rawValue === 'true') {
+                else if (rawValue === "true") {
                     value = true;
                 }
-                else if (rawValue === 'false') {
+                else if (rawValue === "false") {
                     value = false;
                 }
                 else if (!isNaN(Number(rawValue))) {
                     value = Number(rawValue);
                 }
-                else if (rawValue.startsWith('[')) {
+                else if (rawValue.startsWith("[")) {
                     // Simple array parsing
                     value = JSON.parse(rawValue.replace(/'/g, '"'));
                 }
-                const parts = currentSection.split('.');
-                if (parts[0] === 'agents' && parts[1]) {
+                const parts = currentSection.split(".");
+                if (parts[0] === "agents" && parts[1]) {
                     config.agents[parts[1]][key] = value;
                 }
-                else if (parts[0] === 'phases' && parts[1]) {
+                else if (parts[0] === "phases" && parts[1]) {
                     config.phases[parts[1]][key] = value;
                 }
                 else if (parts[0]) {
@@ -137,7 +142,7 @@ class ConfigManager {
                     }
                     const section = config[parts[0]];
                     if (parts.length > 1) {
-                        if (!section[parts[1]] || typeof section[parts[1]] !== 'object') {
+                        if (!section[parts[1]] || typeof section[parts[1]] !== "object") {
                             section[parts[1]] = {};
                         }
                         section[parts[1]][key] = value;
@@ -158,17 +163,17 @@ class ConfigManager {
      */
     createDefaultConfig() {
         this.config = {
-            default_phase: 'coding',
+            default_phase: "coding",
             cache: {
                 enabled: true,
-                path: 'acp_cache.sqlite3',
+                path: "acp_cache.sqlite3",
                 default_ttl_seconds: 3600,
                 max_entries: 5000,
             },
             vector: {
                 enabled: true,
                 auto_mode: true,
-                path: 'acp_vector.sqlite3',
+                path: "acp_vector.sqlite3",
                 dimensions: 192,
                 min_query_chars: 80,
                 top_k: 2,
@@ -188,7 +193,7 @@ class ConfigManager {
                 max_top_k: 4,
                 low_precision_threshold: 0.35,
                 high_precision_threshold: 0.75,
-                state_path: 'acp_autotune_state.json',
+                state_path: "acp_autotune_state.json",
                 cooldown_windows: 2,
                 min_vector_searches: 5,
                 summary_trigger_min: 3,
@@ -201,56 +206,52 @@ class ConfigManager {
             },
             agents: {
                 copilot: {
-                    type: 'copilot',
-                    url: 'http://127.0.0.1:8080',
-                    api_key_env: 'GITHUB_COPILOT_TOKEN',
-                    region: 'us',
+                    type: "copilot",
+                    url: "http://127.0.0.1:8080",
+                    api_key_env: "GITHUB_COPILOT_TOKEN",
+                    region: "us",
                 },
                 deepseek: {
-                    type: 'deepseek',
-                    api_key_env: 'DEEPSEEK_API_KEY',
-                    model: 'deepseek-chat',
-                    region: 'cn',
+                    type: "deepseek",
+                    api_key_env: "DEEPSEEK_API_KEY",
+                    model: "deepseek-chat",
+                    region: "cn",
                 },
             },
             flow: {
-                name: 'Explicit Software Development Flow',
-                phases: ['planning', 'coding', 'review', 'delivery'],
+                name: "Explicit Software Development Flow",
+                phases: ["planning", "coding", "review", "delivery"],
             },
             phases: {
                 planning: {
-                    description: 'Planning phase',
-                    agents: ['deepseek', 'copilot'],
+                    description: "Planning phase",
+                    agents: ["deepseek", "copilot"],
                     fallback: true,
                     principles: [
-                        'Break the task into explicit milestones before editing code',
-                        'Identify risky files, compatibility constraints, and rollback points early',
+                        "Break the task into explicit milestones before editing code",
+                        "Identify risky files, compatibility constraints, and rollback points early",
                     ],
                 },
                 coding: {
-                    description: 'Coding phase',
-                    agents: ['copilot', 'deepseek'],
+                    description: "Coding phase",
+                    agents: ["copilot", "deepseek"],
                     fallback: true,
                     principles: [
-                        'Use meaningful variable names',
-                        'Each function should be no more than 50 lines',
+                        "Use meaningful variable names",
+                        "Each function should be no more than 50 lines",
                     ],
                 },
                 review: {
-                    description: 'Review phase',
-                    agents: ['deepseek'],
+                    description: "Review phase",
+                    agents: ["deepseek"],
                     fallback: true,
-                    principles: [
-                        'Only return APPROVE when the implementation is safe',
-                    ],
+                    principles: ["Only return APPROVE when the implementation is safe"],
                 },
                 delivery: {
-                    description: 'Delivery phase',
-                    agents: ['copilot'],
+                    description: "Delivery phase",
+                    agents: ["copilot"],
                     fallback: false,
-                    principles: [
-                        'Deploy the approved changes',
-                    ],
+                    principles: ["Deploy the approved changes"],
                 },
             },
         };
@@ -263,7 +264,7 @@ class ConfigManager {
             this.createDefaultConfig();
         }
         if (!this.config) {
-            throw new Error('Configuration could not be loaded or created.');
+            throw new Error("Configuration could not be loaded or created.");
         }
         return this.config;
     }
@@ -274,10 +275,12 @@ class ConfigManager {
         if (!this.config) {
             return defaultValue;
         }
-        const parts = path.split('.');
+        const parts = path.split(".");
         let value = this.config;
         for (const part of parts) {
-            if (value && typeof value === 'object' && part in value) {
+            if (value &&
+                typeof value === "object" &&
+                part in value) {
                 value = value[part];
             }
             else {
@@ -293,11 +296,13 @@ class ConfigManager {
         if (!this.config) {
             this.createDefaultConfig();
         }
-        const parts = path.split('.');
+        const parts = path.split(".");
         const lastPart = parts.pop();
         let current = this.config;
         for (const part of parts) {
-            if (!(part in current) || typeof current[part] !== 'object' || current[part] === null) {
+            if (!(part in current) ||
+                typeof current[part] !== "object" ||
+                current[part] === null) {
                 current[part] = {};
             }
             current = current[part];
@@ -309,11 +314,11 @@ class ConfigManager {
      */
     async saveToFile() {
         if (!this.config || !this.configPath) {
-            throw new Error('Configuration not initialized');
+            throw new Error("Configuration not initialized");
         }
         try {
             const content = this.toTOML(this.config);
-            await fs.writeFile(this.configPath, content, 'utf-8');
+            await fs.writeFile(this.configPath, content, "utf-8");
         }
         catch (error) {
             throw new Error(`Failed to save configuration: ${error}`);
@@ -323,14 +328,14 @@ class ConfigManager {
      * Convert configuration to TOML format
      */
     toTOML(config) {
-        let result = '';
+        let result = "";
         // Root level properties
         if (config.default_phase) {
             result += `default_phase = "${config.default_phase}"\n\n`;
         }
         // Cache section
         if (config.cache) {
-            result += '[cache]\n';
+            result += "[cache]\n";
             result += `enabled = ${config.cache.enabled}\n`;
             result += `path = "${config.cache.path}"\n`;
             result += `default_ttl_seconds = ${config.cache.default_ttl_seconds}\n`;
@@ -338,7 +343,7 @@ class ConfigManager {
         }
         // Vector section
         if (config.vector) {
-            result += '[vector]\n';
+            result += "[vector]\n";
             result += `enabled = ${config.vector.enabled}\n`;
             result += `auto_mode = ${config.vector.auto_mode}\n`;
             result += `path = "${config.vector.path}"\n`;
@@ -357,19 +362,19 @@ class ConfigManager {
             for (const [agentName, agentConfig] of Object.entries(config.agents)) {
                 result += `[agents.${agentName}]\n`;
                 for (const [key, value] of Object.entries(agentConfig)) {
-                    if (typeof value === 'string') {
+                    if (typeof value === "string") {
                         result += `${key} = "${value}"\n`;
                     }
                     else {
                         result += `${key} = ${JSON.stringify(value)}\n`;
                     }
                 }
-                result += '\n';
+                result += "\n";
             }
         }
         // Autotune section
         if (config.autotune) {
-            result += '[autotune]\n';
+            result += "[autotune]\n";
             result += `enabled = ${config.autotune.enabled}\n`;
             result += `evaluate_interval = ${config.autotune.evaluate_interval}\n`;
             result += `min_query_chars_step = ${config.autotune.min_query_chars_step}\n`;
@@ -386,14 +391,14 @@ class ConfigManager {
         }
         // Runtime section
         if (config.runtime) {
-            result += '[runtime]\n';
+            result += "[runtime]\n";
             result += `maintenance_interval_seconds = ${config.runtime.maintenance_interval_seconds}\n`;
             result += `health_interval_seconds = ${config.runtime.health_interval_seconds}\n`;
             result += `shutdown_drain_seconds = ${config.runtime.shutdown_drain_seconds}\n\n`;
         }
         // Flow section
         if (config.flow) {
-            result += '[flow]\n';
+            result += "[flow]\n";
             result += `name = "${config.flow.name}"\n`;
             result += `phases = ${JSON.stringify(config.flow.phases)}\n\n`;
         }
@@ -405,18 +410,19 @@ class ConfigManager {
                     if (Array.isArray(value)) {
                         result += `${key} = ${JSON.stringify(value)}\n`;
                     }
-                    else if (typeof value === 'string') {
+                    else if (typeof value === "string") {
                         result += `${key} = "${value}"\n`;
                     }
                     else {
                         result += `${key} = ${JSON.stringify(value)}\n`;
                     }
                 }
-                result += '\n';
+                result += "\n";
             }
         }
         return result;
     }
 }
+/** @deprecated Not actively used by the extension anymore. Kept for reference. */
 exports.configManager = ConfigManager.getInstance();
 //# sourceMappingURL=configManager.js.map

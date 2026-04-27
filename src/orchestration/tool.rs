@@ -280,11 +280,11 @@ impl Default for ToolRegistry {
 fn sanitize_path(input: &ToolInput, path: &str) -> Result<PathBuf> {
     let resolved = PathBuf::from(path);
     let canonical = if resolved.is_absolute() {
-        std::fs::canonicalize(&resolved).unwrap_or_else(|_| resolved)
+        std::fs::canonicalize(&resolved).unwrap_or(resolved)
     } else {
         let cwd = std::env::current_dir().unwrap_or_default();
         let joined = cwd.join(&resolved);
-        std::fs::canonicalize(&joined).unwrap_or_else(|_| joined)
+        std::fs::canonicalize(&joined).unwrap_or(joined)
     };
 
     if let Some(ref base_dir) = input.allowed_base_dir {
@@ -470,7 +470,7 @@ impl Tool for ApplyPatchTool {
 }
 
 const ALLOWED_TEST_COMMANDS: &[&str] = &[
-    "cargo", "npm", "yarn", "pnpm", "make", "go", "python", "pytest", "mvn", "gradle",
+    "cargo", "npm", "yarn", "pnpm", "make", "go", "python", "pytest", "mvn", "gradle", "git",
 ];
 
 pub struct RunTestsTool;

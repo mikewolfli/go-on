@@ -148,7 +148,6 @@
 import { ref, computed, onMounted, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
 import { ElMessage } from "element-plus";
-import DOMPurify from "dompurify";
 import { useRuntimeStore } from "../stores/runtime";
 import { defaultRuntimeBaseUrl } from "../services/protocolContract";
 
@@ -219,10 +218,10 @@ const isBackendRunning = computed(() => runtime.status.running);
 
 // ── Markdown (basic) ─────────────────────────────────────────────────────────
 function sanitizeHtml(html: string): string {
-  return DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: ["strong", "em", "code", "br"],
-    ALLOWED_ATTR: [],
-  });
+  const allowed = new Set(["strong", "em", "code", "br"]);
+  return html.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/g, (match, tag) =>
+    allowed.has(tag.toLowerCase()) ? match : ""
+  );
 }
 
 function renderMarkdown(text: string): string {

@@ -113,21 +113,22 @@ pub use crate::protocol::rpc_protocol;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand};
 use tracing::{error, info, warn};
 
+use crate::acp::background::start_background_tasks;
 use crate::acp::r#impl::{new_acp_server, run_acp_http_server, run_acp_server};
 use crate::agent::AgentRegistry;
 use crate::cache::ResponseCache;
 use crate::config::{
     is_agent_env_ready, validate_runtime_readiness, AppConfig, AutoTuneState, ConfigWarning,
-    RuntimeConfig,
 };
 use crate::flow::FlowManager;
 use crate::i18n::runtime::{init_i18n, tf};
+use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::mcp_server::{McpHttpServer, McpStdioServer};
 use crate::protocol::access_mode::{resolve_access_selection, TransportMode};
 use crate::reinforcement::{
@@ -1329,11 +1330,7 @@ async fn run() -> Result<()> {
     };
 
     // Start the server
-    start_server(
-        config,
-        &cli,
-        &config_path,
-    ).await
+    start_server(config, &cli, &config_path).await
 }
 
 /// Handle secret management commands, local model setup, recommended config, setup wizard, and AI onboarding.
@@ -1408,7 +1405,10 @@ fn handle_secret_commands(cli: &Cli, config_path: &std::path::Path) -> Result<bo
 ///
 /// Returns `Some(config)` if validation passed and the server should start,
 /// or `None` if a validation-only command was handled and `run()` should return.
-fn handle_validation_mode(cli: &Cli, config_path: &std::path::Path) -> Result<Option<Arc<AppConfig>>> {
+fn handle_validation_mode(
+    cli: &Cli,
+    config_path: &std::path::Path,
+) -> Result<Option<Arc<AppConfig>>> {
     // Load and validate configuration
     info!("loading config from {}", config_path.display());
     let config = Arc::new(AppConfig::load(config_path)?);
@@ -1556,10 +1556,14 @@ async fn start_server(
         .timeout(std::time::Duration::from_secs(120))
         .build()?;
 
+    // Initialize capability graph for agent capability-based routing
+    let capability_graph = Arc::new(Mutex::new(CapabilityGraph::new()));
+
     // Initialize agent registry and flow manager
     let registry = Arc::new(AgentRegistry::from_config(
         Arc::clone(&config),
         http_client.clone(),
+        Arc::clone(&capability_graph),
     )?);
     let flow = Arc::new(FlowManager::new(Arc::clone(&config), cli.phase.clone()));
 
@@ -1634,10 +1638,7 @@ async fn start_server(
     }
 
     // Get runtime configuration
-    let mut runtime_config = config
-        .runtime
-        .clone()
-        .unwrap_or_else(RuntimeConfig::default);
+    let mut runtime_config = config.runtime.clone().unwrap_or_default();
     // Read [protocol].mode (supports 5 options with adaptive default)
     if let Ok(config_str) = std::fs::read_to_string(config_path) {
         if let Ok(toml_value) = config_str.parse::<toml::Value>() {
@@ -1707,23 +1708,62 @@ async fn start_server(
         }
         "mcp_stdio" => {
             let tool_registry = Arc::new(ToolRegistry::new());
-            let server = McpStdioServer::new(
+            let acp_server = Arc::new(new_acp_server(
+                flow,
+                registry.clone(),
+                cache,
+                vector_store,
+                config.vector.clone(),
+                autotune_state,
+                autotune_config,
+                autotune_state_path,
+                Some(config_path.to_string_lossy().to_string()),
+                runtime_config,
+                Some(http_client),
+                cli.verbose > 0,
+            ));
+            let shutdown_notify = Arc::clone(&acp_server.shutdown_notify);
+            if let Err(e) = start_background_tasks(&acp_server, Arc::clone(&shutdown_notify)).await
+            {
+                error!("Failed to start MCP background tasks: {}", e);
+            }
+            let server = McpStdioServer::new_with_acp(
                 registry,
                 tool_registry,
                 "go-on".to_string(),
                 env!("CARGO_PKG_VERSION").to_string(),
+                Some(acp_server),
             );
             server.run().await
         }
         "mcp_http" => {
             let bind_addr = acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string());
             let tool_registry = Arc::new(ToolRegistry::new());
-            let server = McpHttpServer::new(
+            let acp_server = Arc::new(new_acp_server(
+                flow,
+                registry.clone(),
+                cache,
+                vector_store,
+                config.vector.clone(),
+                autotune_state,
+                autotune_config,
+                autotune_state_path,
+                Some(config_path.to_string_lossy().to_string()),
+                runtime_config,
+                Some(http_client),
+                cli.verbose > 0,
+            ));
+            let shutdown_notify = Arc::clone(&acp_server.shutdown_notify);
+            if let Err(e) = start_background_tasks(&acp_server, shutdown_notify).await {
+                error!("Failed to start MCP HTTP background tasks: {}", e);
+            }
+            let server = McpHttpServer::new_with_acp(
                 registry,
                 tool_registry,
                 "go-on".to_string(),
                 env!("CARGO_PKG_VERSION").to_string(),
                 bind_addr,
+                Some(acp_server),
             );
             server.run().await
         }

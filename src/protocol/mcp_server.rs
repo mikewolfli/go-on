@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
+use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
 use crate::i18n::runtime::{t, tf};
 use crate::mcp::{JsonRpcRequest, JsonRpcResponse, McpServer};
@@ -31,6 +32,26 @@ impl McpStdioServer {
         server_version: String,
     ) -> Self {
         let mcp_server = McpServer::new(agent_registry, tool_registry, server_name, server_version);
+        Self {
+            mcp_server: Arc::new(mcp_server),
+        }
+    }
+
+    /// Create a new MCP stdio server with an optional AcpServer reference
+    pub fn new_with_acp(
+        agent_registry: Arc<AgentRegistry>,
+        tool_registry: Arc<ToolRegistry>,
+        server_name: String,
+        server_version: String,
+        acp_server: Option<Arc<AcpServer>>,
+    ) -> Self {
+        let mcp_server = McpServer::new_with_acp(
+            agent_registry,
+            tool_registry,
+            server_name,
+            server_version,
+            acp_server,
+        );
         Self {
             mcp_server: Arc::new(mcp_server),
         }
@@ -123,6 +144,28 @@ impl McpHttpServer {
         bind_addr: String,
     ) -> Self {
         let mcp_server = McpServer::new(agent_registry, tool_registry, server_name, server_version);
+        Self {
+            mcp_server: Arc::new(mcp_server),
+            bind_addr,
+        }
+    }
+
+    /// Create a new MCP HTTP server with an optional AcpServer reference
+    pub fn new_with_acp(
+        agent_registry: Arc<AgentRegistry>,
+        tool_registry: Arc<ToolRegistry>,
+        server_name: String,
+        server_version: String,
+        bind_addr: String,
+        acp_server: Option<Arc<AcpServer>>,
+    ) -> Self {
+        let mcp_server = McpServer::new_with_acp(
+            agent_registry,
+            tool_registry,
+            server_name,
+            server_version,
+            acp_server,
+        );
         Self {
             mcp_server: Arc::new(mcp_server),
             bind_addr,

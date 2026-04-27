@@ -7,7 +7,10 @@
 //! into the execution flow once orchestration logic is implemented.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+
+use crate::intelligence::capability_graph::{CapabilityDecl, CapabilityGraph};
+use crate::intelligence::token_cache::{CachedAgentWrapper, TokenMultiLevelCache as TokenCache};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -257,6 +260,7 @@ pub(crate) fn inspect_secret_pool(secret_ref: &str, field_name: &str) -> Result<
     Ok(candidates)
 }
 
+#[allow(dead_code)]
 fn mask_secret(secret: &str) -> String {
     let chars: Vec<char> = secret.chars().collect();
     let len = chars.len();
@@ -269,6 +273,7 @@ fn mask_secret(secret: &str) -> String {
     format!("{}...{}", prefix, suffix)
 }
 
+#[allow(dead_code)]
 pub(crate) fn secret_pool_fingerprints(secret_ref: &str, field_name: &str) -> Result<Vec<String>> {
     inspect_secret_pool(secret_ref, field_name).map(|values| {
         values
@@ -412,6 +417,11 @@ pub trait Agent: Send + Sync {
 pub struct AgentRegistry {
     /// Map of agent names to agent instances
     agents: HashMap<String, Arc<dyn Agent>>,
+    /// Optional multi-level token cache — when set, all agents returned
+    /// via `get()` are automatically wrapped with `CachedAgentWrapper`.
+    token_cache: RwLock<Option<Arc<TokenCache>>>,
+    /// Capability graph for capability-based agent routing
+    capability_graph: Arc<Mutex<CapabilityGraph>>,
 }
 
 impl AgentRegistry {
@@ -422,6 +432,16 @@ impl AgentRegistry {
     pub fn new() -> Self {
         Self {
             agents: HashMap::new(),
+            token_cache: RwLock::new(None),
+            capability_graph: Arc::new(Mutex::new(CapabilityGraph::new())),
+        }
+    }
+
+    /// Create an agent registry with an external capability graph
+    pub fn with_capability_graph(self, graph: Arc<Mutex<CapabilityGraph>>) -> Self {
+        Self {
+            capability_graph: graph,
+            ..self
         }
     }
 
@@ -433,19 +453,66 @@ impl AgentRegistry {
     ///
     /// # Returns
     /// * `Result<Self>` - Returns Ok(Self) if the registry is created successfully, or an error if something goes wrong
-    pub fn from_config(config: Arc<AppConfig>, client: reqwest::Client) -> Result<Self> {
+    pub fn from_config(
+        config: Arc<AppConfig>,
+        client: reqwest::Client,
+        capability_graph: Arc<Mutex<CapabilityGraph>>,
+    ) -> Result<Self> {
         let mut agents: HashMap<String, Arc<dyn Agent>> = HashMap::new();
 
         for (name, agent_cfg) in &config.agents {
             let agent = build_agent(agent_cfg, client.clone())
                 .with_context(|| format!("failed to build agent '{}'", name))?;
             agents.insert(name.clone(), agent);
+
+            // Register agent in capability graph with inferred tags
+            let mut tags = vec![agent_cfg.agent_type.clone()];
+            let name_lower = name.to_lowercase();
+            if name_lower.contains("primary")
+                || name_lower.contains("coder")
+                || name_lower.contains("developer")
+            {
+                tags.push("coding".to_string());
+                tags.push("general".to_string());
+            }
+            if name_lower.contains("review") || name_lower.contains("reviewer") {
+                tags.push("review".to_string());
+                tags.push("qa".to_string());
+            }
+            if name_lower.contains("test") {
+                tags.push("testing".to_string());
+                tags.push("qa".to_string());
+            }
+            if name_lower.contains("vendor") || name_lower.contains("external") {
+                tags.push("vendor".to_string());
+            }
+            if name_lower.contains("fallback") {
+                tags.push("fallback".to_string());
+            }
+
+            // Register with capability graph
+            let decl = CapabilityDecl {
+                name: name.clone(),
+                description: format!("Agent {} of type {}", name, agent_cfg.agent_type),
+                tags: tags.clone(),
+            };
+            if let Ok(mut graph) = capability_graph.lock() {
+                graph.register_agent(name, vec![decl]);
+            }
         }
 
-        Ok(Self { agents })
+        Ok(Self {
+            agents,
+            token_cache: RwLock::new(None),
+            capability_graph,
+        })
     }
 
     /// Get an agent by name
+    ///
+    /// When a `token_cache` is configured, the returned agent is automatically
+    /// wrapped with `CachedAgentWrapper` so that every `chat()` call goes
+    /// through the multi-level token cache first.
     ///
     /// # Arguments
     /// * `name` - Agent name
@@ -453,7 +520,30 @@ impl AgentRegistry {
     /// # Returns
     /// * `Option<Arc<dyn Agent>>` - Returns Some(agent) if found, or None if not found
     pub fn get(&self, name: &str) -> Option<Arc<dyn Agent>> {
-        self.agents.get(name).cloned()
+        let agent = self.agents.get(name).cloned()?;
+        if let Ok(guard) = self.token_cache.read() {
+            if let Some(ref cache) = *guard {
+                return Some(Arc::new(CachedAgentWrapper::new(agent, Arc::clone(cache))));
+            }
+        }
+        Some(agent)
+    }
+
+    /// Attach a multi-level token cache so that all agents returned by `get()`
+    /// are automatically wrapped with `CachedAgentWrapper`.
+    pub fn with_token_cache(self, cache: Arc<TokenCache>) -> Self {
+        if let Ok(mut guard) = self.token_cache.write() {
+            *guard = Some(cache);
+        }
+        self
+    }
+
+    /// Set (or clear) the token cache on an existing registry (works with &self,
+    /// uses internal RwLock).
+    pub fn set_token_cache(&self, cache: Option<Arc<TokenCache>>) {
+        if let Ok(mut guard) = self.token_cache.write() {
+            *guard = cache;
+        }
     }
 
     pub fn register_arc(&mut self, name: impl Into<String>, agent: Arc<dyn Agent>) {
@@ -1025,8 +1115,9 @@ mod tests {
     use super::*;
     use crate::config::{AgentConfig, AppConfig, FlowConfig, PhaseConfig, RuntimeConfig};
     use crate::core::error::{AppError, NetworkError};
+    use crate::intelligence::capability_graph::CapabilityGraph;
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     fn build_agent_config(agent_type: &str) -> AgentConfig {
         AgentConfig {
@@ -1094,7 +1185,11 @@ mod tests {
             role_registry: HashMap::new(),
         };
 
-        let registry = AgentRegistry::from_config(Arc::new(app_config), reqwest::Client::new());
+        let registry = AgentRegistry::from_config(
+            Arc::new(app_config),
+            reqwest::Client::new(),
+            Arc::new(Mutex::new(CapabilityGraph::new())),
+        );
         assert!(
             registry.is_ok(),
             "AgentRegistry should build all supported types"

@@ -244,7 +244,7 @@ pub fn decide_work_grade(
         } else {
             0.0
         }
-        + ((1.0 - plan.routing.predicted_success_rate as f64).clamp(0.0, 1.0)) * 0.2
+        + ((1.0_f64 - plan.routing.predicted_success_rate as f64).clamp(0.0, 1.0)) * 0.2
         + if runtime_healthy { 0.0 } else { 0.1 })
     .clamp(0.0, 1.0);
 

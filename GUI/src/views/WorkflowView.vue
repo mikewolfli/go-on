@@ -11,7 +11,7 @@
           <template #header>
             <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
               <span>{{ t("workflow.availableTasks") }}</span>
-              <el-button size="small" :loading="loadingTasks" @click="loadTasks(tasks, executionHistory)">
+              <el-button size="small" :loading="loadingTasks" @click="onLoadTasks">
                 {{ t("common.refresh") }}
               </el-button>
             </div>
@@ -23,12 +23,12 @@
             <el-table-column prop="estimated_duration" :label="t('workflow.estimatedDuration')" width="120" />
             <el-table-column :label="t('common.action')" width="150">
               <template #default="{ row }">
-                <el-button size="small" @click="planTask(row.id, tasks)">{{ t("workflow.plan") }}</el-button>
+                <el-button size="small" @click="onPlanTask(row.id)">{{ t("workflow.plan") }}</el-button>
                 <el-button
                   size="small"
                   type="primary"
                   :loading="executingId === row.id"
-                  @click="executeTask(row.id, tasks, executionHistory)"
+                  @click="onExecuteTask(row.id)"
                 >
                   {{ t("workflow.execute") }}
                 </el-button>
@@ -44,7 +44,7 @@
           </template>
           <el-space direction="vertical" fill style="width: 100%">
             <el-input v-model="planOutput" type="textarea" :rows="8" readonly />
-            <el-button type="primary" @click="confirmExecutePlan(tasks, executionHistory)" :loading="executingPlan">
+            <el-button type="primary" @click="onConfirmExecutePlan" :loading="executingPlan">
               {{ t("workflow.confirmExecute") }}
             </el-button>
           </el-space>
@@ -250,6 +250,20 @@ const {
   executeTask,
   confirmExecutePlan,
 } = useWorkflow();
+
+// Wrappers to pass refs correctly (template auto-unwraps refs to plain arrays)
+function onLoadTasks() {
+  loadTasks(tasks, executionHistory);
+}
+function onPlanTask(id: string) {
+  planTask(id, tasks);
+}
+function onExecuteTask(id: string) {
+  executeTask(id, tasks, executionHistory);
+}
+function onConfirmExecutePlan() {
+  confirmExecutePlan(tasks, executionHistory);
+}
 
 // Initialize
 loadTasks(tasks, executionHistory);

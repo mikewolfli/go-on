@@ -68,6 +68,7 @@ pub(super) fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSn
         .and_then(|cache| cache.entry_count().ok())
         .unwrap_or(0);
     let (vector_memory_entries, vector_summary_entries) = server
+        .cache
         .vector_store
         .as_ref()
         .map(|store| {
@@ -179,6 +180,7 @@ pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
     }
 
     let sampling_rate = server
+        .observability
         .telemetry_runtime
         .lock()
         .map(|guard| guard.sampling_rate())

@@ -5,6 +5,8 @@
 //! plugin contract so advanced optimizers can be integrated without reshaping
 //! the main-chain API.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

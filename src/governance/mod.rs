@@ -1,9 +1,12 @@
+//! Governance module — policy enforcement, runtime controls, and strategy engine.
+//!
+//! All governance components are wired through the `HarnessBus` strategy engine
+//! which provides a single evaluate/validate/verify entry point for CapabilityBus.
+
 pub mod audit;
 pub mod hardening;
+pub mod harness_bus;
 pub mod pua;
-#[allow(dead_code)]
 pub mod rationalization;
-#[allow(dead_code)]
 pub mod review_controls;
-#[allow(dead_code)]
 pub mod runtime_controls;

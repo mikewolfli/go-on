@@ -246,6 +246,11 @@ pub(super) async fn handle_shutdown(server: &AcpServer, request_id: Option<Value
 pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     let status = server.get_status();
     let metrics = server.observability.metrics.snapshot();
+
+    // Snapshot token cache statistics for observability.
+    let token_cache_stats = server.cache.token_cache.stats.read().await;
+    let token_cache_report = token_cache_stats.to_json();
+
     send_result(
         server,
         request_id,
@@ -269,6 +274,7 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
                 "review_gate_total": metrics.review_gate_timeout_total,
                 "runtime_probe_total": metrics.runtime_probe_timeout_total,
             },
+            "token_cache": token_cache_report,
             "timestamp": status.timestamp,
         }),
     )
@@ -294,6 +300,14 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
         server.cache.response_cache.as_deref(),
         server.cache.vector_store.as_deref(),
     )?;
+
+    let token_cache_stats = match server.cache.token_cache.stats.try_read() {
+        Ok(guard) => guard.clone(),
+        Err(_) => {
+            tracing::warn!("token cache stats lock contended, using empty stats");
+            Default::default()
+        }
+    };
 
     let healthy_count = report
         .components
@@ -458,6 +472,25 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
                 "agent_request_total": metrics.agent_timeout_failures_total,
                 "review_gate_total": metrics.review_gate_timeout_total,
                 "runtime_probe_total": metrics.runtime_probe_timeout_total,
+            },
+            "token_cache": {
+                "l1": {
+                    "hits": token_cache_stats.l1_hits,
+                    "misses": token_cache_stats.l1_misses,
+                },
+                "l2": {
+                    "hits": token_cache_stats.l2_hits,
+                    "misses": token_cache_stats.l2_misses,
+                },
+                "l3": {
+                    "hits": token_cache_stats.l3_hits,
+                    "misses": token_cache_stats.l3_misses,
+                },
+                "overall": {
+                    "hit_rate": token_cache_stats.hit_rate(),
+                    "total_tokens_saved": token_cache_stats.total_tokens_saved,
+                    "total_entries": token_cache_stats.total_entries,
+                },
             },
             "timestamp": status.timestamp,
         }
@@ -1567,11 +1600,13 @@ pub(super) async fn handle_governance_status(
     let custom_role_registry_ready = blue34_release_closure_ready && status.lifecycle.is_healthy;
     let custom_role_dynamic_matching_ready = custom_role_registry_ready && reconciliation_ok;
     let compliance_audit_metadata_ready = custom_role_dynamic_matching_ready && strict_component_ok;
-    let self_rationalization_guard_ready = compliance_audit_metadata_ready && !pua_learning.is_empty();
+    let self_rationalization_guard_ready =
+        compliance_audit_metadata_ready && !pua_learning.is_empty();
     let startup_context_loader_ready = self_rationalization_guard_ready;
     let layered_prompt_builder_ready = startup_context_loader_ready && status.lifecycle.is_healthy;
     let layered_token_trigger_ready = layered_prompt_builder_ready && reconciliation_ok;
-    let multi_priority_scheduler_ready = layered_token_trigger_ready && dual_track_consistency_ready;
+    let multi_priority_scheduler_ready =
+        layered_token_trigger_ready && dual_track_consistency_ready;
     let worker_scheduler_backpressure_ready = multi_priority_scheduler_ready && quota_component_ok;
     let fork_isolation_guard_ready = worker_scheduler_backpressure_ready && breaker_open_count == 0;
     let capability_graph_ready = fork_isolation_guard_ready && registered_agent_total > 0;
@@ -1579,10 +1614,10 @@ pub(super) async fn handle_governance_status(
     let node_reputation_tracker_ready = provenance_ledger_ready && reconciliation_ok;
     let k8s_delivery_pack_ready = node_reputation_tracker_ready && lifecycle_ops_ready;
     let sdk_multi_language_stub_ready = k8s_delivery_pack_ready && status.lifecycle.is_healthy;
-    let workflow_type_tri_mode_ready = sdk_multi_language_stub_ready && dual_track_consistency_ready;
-    let blue35_release_closure_ready = workflow_type_tri_mode_ready
-        && sdk_multi_language_stub_ready
-        && k8s_delivery_pack_ready;
+    let workflow_type_tri_mode_ready =
+        sdk_multi_language_stub_ready && dual_track_consistency_ready;
+    let blue35_release_closure_ready =
+        workflow_type_tri_mode_ready && sdk_multi_language_stub_ready && k8s_delivery_pack_ready;
     let skill_management_console_profile = json!({
         "ready": skill_management_console_ready,
         "graphical_management": true,
@@ -2823,6 +2858,79 @@ pub(super) async fn handle_governance_status(
         },
     });
 
+    // BLUE38 ARCH-13: HarnessBus strategy engine profile
+    let harness_bus_profile = server
+        .harness_bus
+        .as_ref()
+        .map(|hb| {
+            let p = hb.governance_profile();
+            serde_json::json!({
+                "enabled": p.enabled,
+                "total_evaluations": p.total_evaluations,
+                "allow_count": p.allow_count,
+                "deny_count": p.deny_count,
+                "escalate_count": p.escalate_count,
+                "review_count": p.review_count,
+                "red_line_blocks": p.red_line_blocks,
+                "budget_violations": p.budget_violations,
+                "sandbox_denials": p.sandbox_denials,
+                "idempotency_hits": p.idempotency_hits,
+                "audit_entries_total": p.audit_entries_total,
+                "current_active_policies": p.current_active_policies,
+                "current_escalation_level": p.current_escalation_level,
+                "runtime_control_mode": p.runtime_control_mode,
+                "policy_violation_trend": p.policy_violation_trend,
+                "last_evaluation_ms": p.last_evaluation_ms,
+            })
+        })
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "enabled": false,
+                "total_evaluations": 0u64,
+                "allow_count": 0u64,
+                "deny_count": 0u64,
+                "escalate_count": 0u64,
+                "review_count": 0u64,
+                "red_line_blocks": 0u64,
+                "budget_violations": 0u64,
+                "sandbox_denials": 0u64,
+                "idempotency_hits": 0u64,
+                "audit_entries_total": 0u64,
+                "current_active_policies": 0u32,
+                "current_escalation_level": "none".to_string(),
+                "runtime_control_mode": "none".to_string(),
+                "policy_violation_trend": "stable".to_string(),
+                "last_evaluation_ms": 0u64,
+            })
+        });
+    // BLUE38 ARCH-13: CapabilityBus scheduling coordinator profile
+    let capability_bus_profile = server
+        .capability_bus
+        .as_ref()
+        .map(|cb| {
+            let p = cb.capability_bus_profile();
+            serde_json::json!({
+                "enabled": p.enabled,
+                "routing_count": p.routing_count,
+                "learning_events_count": p.learning_events_count,
+                "reputation_agents_count": p.reputation_agents_count,
+                "capability_graph_agents": p.capability_graph_agents,
+                "knowledge_insights_count": p.knowledge_insights_count,
+                "last_route_duration_ms": p.last_route_duration_ms,
+            })
+        })
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "enabled": false,
+                "routing_count": 0u64,
+                "learning_events_count": 0u32,
+                "reputation_agents_count": 0u32,
+                "capability_graph_agents": 0u32,
+                "knowledge_insights_count": 0u32,
+                "last_route_duration_ms": 0u64,
+            })
+        });
+
     send_result(
         server,
         request_id,
@@ -3242,12 +3350,24 @@ pub(super) async fn handle_governance_status(
                 },
                 "self_rationalization_guard": {
                     "ready": self_rationalization_guard_ready,
-                    "self_rationalization_guard_profile": {
-                        "enabled": self_rationalization_guard_ready,
-                        "confidence_threshold": 0.6,
-                        "reexamine_triggered_count": 0u64,
-                        "weak_evidence_blocked_count": 0u64,
-                    },
+                    "self_rationalization_guard_profile": server
+                        .harness_bus
+                        .as_ref()
+                        .map(|hb| {
+                            hb.governance_profile()
+                        })
+                        .map(|p| serde_json::json!({
+                            "enabled": p.enabled,
+                            "confidence_threshold": 0.6,
+                            "reexamine_triggered_count": 0u64,
+                            "weak_evidence_blocked_count": 0u64,
+                        }))
+                        .unwrap_or_else(|| serde_json::json!({
+                            "enabled": false,
+                            "confidence_threshold": 0.6,
+                            "reexamine_triggered_count": 0u64,
+                            "weak_evidence_blocked_count": 0u64,
+                        })),
                 },
                 "startup_context_loader": startup_context_profile,
                 "layered_prompt_builder": {
@@ -3371,6 +3491,8 @@ pub(super) async fn handle_governance_status(
                     "gate_threshold": 0.7,
                     "last_gate_passed": true,
                 },
+                "harness_bus": harness_bus_profile,
+                "capability_bus": capability_bus_profile,
                 "timestamp": status.timestamp,
             }
         }),
@@ -4285,7 +4407,12 @@ pub(super) async fn handle_cost_status(
         .or_else(|| params.get("objective").and_then(Value::as_str))
         .unwrap_or("");
     let hardness = summarize_hardness(task, &params);
-    let cost = summarize_token_cost_governance(task, &params, hardness, &server.observability.metrics.snapshot());
+    let cost = summarize_token_cost_governance(
+        task,
+        &params,
+        hardness,
+        &server.observability.metrics.snapshot(),
+    );
 
     send_result(server, request_id, json!({ "ok": true, "cost": cost })).await
 }

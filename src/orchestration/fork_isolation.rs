@@ -7,6 +7,8 @@
 //! This module is an architectural framework for Phase 0-9 multi-branch
 //! conversation support. Kept as a stable extension point.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

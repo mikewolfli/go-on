@@ -22,7 +22,7 @@ use crate::acp::background::start_background_tasks;
 use crate::acp::r#impl::io::send_error;
 use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
 
-use crate::acp::server::AcpServer;
+use crate::acp::server::{AcpServer, CacheLayer, ObservabilityLayer};
 use crate::adaptive_selector::AdaptiveModelSelector;
 use crate::advanced_modules::{DynamicParameterTuner, ResourceAllocator};
 use crate::agent::AgentRegistry;
@@ -87,6 +87,22 @@ pub fn new_acp_server(
 
     // Note: ServerBuilder doesn't have methods for all parameters yet
     // For now, we'll build with defaults and let the caller set additional fields
+    // Create HarnessBus and CapabilityBus to wire into the server
+    let harness_bus = {
+        let config_path_ref = config_path.as_deref().map(Path::new);
+        let storage_path = config_path_ref
+            .and_then(|p| p.parent())
+            .map(|p| p.join("governance"));
+        Arc::new(crate::governance::harness_bus::default_harness_bus(
+            storage_path,
+        ))
+    };
+    let capability_bus = Arc::new(
+        crate::intelligence::capability_bus::core::CapabilityBus::new_default(Arc::clone(
+            &harness_bus,
+        )),
+    );
+
     match builder.build() {
         Ok(mut server) => {
             // Set fields that aren't available in ServerBuilder yet
@@ -97,10 +113,17 @@ pub fn new_acp_server(
             server.config_path = config_path;
             server.runtime_config = runtime_config;
             server.verbose = _verbose;
+            server.harness_bus = Some(harness_bus);
+            server.capability_bus = Some(capability_bus);
 
             if server.runtime_config.skills_enabled {
                 server.register_skill(Arc::new(crate::orchestration::skill::EchoSkill));
             }
+
+            // Wire the token cache into the agent registry so that all
+            // agents returned by registry.get() are automatically wrapped
+            // with CachedAgentWrapper.
+            registry.set_token_cache(Some(Arc::clone(&server.cache.token_cache)));
 
             server
         }
@@ -120,19 +143,34 @@ pub fn new_acp_server(
                 failure_prevention_state.register_service(&name);
             }
 
-            AcpServer {
+            let fallback_server = AcpServer {
                 flow_manager: Some(flow.clone()),
                 agent_registry: Some(registry.clone()),
-                response_cache: cache.clone(),
-                vector_store: vector_store.clone(),
+                cache: CacheLayer {
+                    response_cache: cache.clone(),
+                    memory_response_cache: Arc::new(StdMutex::new(MemoryResponseCache::default())),
+                    vector_store: vector_store.clone(),
+                    token_cache: Arc::new(
+                        crate::intelligence::token_cache::TokenMultiLevelCache::new(
+                            500,
+                            200,
+                            ".goon/token_cache",
+                        ),
+                    ),
+                },
                 vector_config,
                 autotune,
                 autotune_config,
                 autotune_state_path,
                 config_path: config_path.clone(),
                 runtime_config: runtime_config.clone(),
-                metrics: Arc::new(RuntimeMetrics::new()),
-                lock_monitor: Arc::new(AcpLockMonitor::default()),
+                observability: ObservabilityLayer {
+                    metrics: Arc::new(RuntimeMetrics::new()),
+                    lock_monitor: Arc::new(AcpLockMonitor::default()),
+                    telemetry_runtime: Arc::new(StdMutex::new(TelemetryRuntime::new(
+                        &runtime_config,
+                    ))),
+                },
                 online_controller: Arc::new(StdMutex::new(OnlineControllerState::default())),
                 circuit_breakers: Arc::new(StdMutex::new(CircuitBreakerRegistry::new())),
                 maintenance_tracker: Arc::new(StdMutex::new(MaintenanceTracker::new())),
@@ -150,10 +188,8 @@ pub fn new_acp_server(
                 cost_optimizer: Arc::new(StdMutex::new(CostOptimizer::new())),
                 failure_prevention: Arc::new(StdMutex::new(failure_prevention_state)),
                 flow_model_selector: Arc::new(StdMutex::new(FlowModelSelector {})),
-                memory_response_cache: Arc::new(StdMutex::new(MemoryResponseCache::default())),
                 memory_store: Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default()))),
                 skill_registry: Arc::new(StdMutex::new(SkillRegistry::default())),
-                telemetry_runtime: Arc::new(StdMutex::new(TelemetryRuntime::new(&runtime_config))),
                 pua_enforcement_plan: Arc::new(StdMutex::new(crate::pua::PuaEnforcementPlan {
                     escalation_level: String::new(),
                     mandatory_roles: Vec::new(),
@@ -167,10 +203,17 @@ pub fn new_acp_server(
                     config_path.as_deref().map(Path::new),
                 ))),
                 verbose: _verbose,
+                harness_bus: Some(Arc::clone(&harness_bus)),
+                capability_bus: Some(Arc::clone(&capability_bus)),
                 output: Arc::new(Mutex::new(tokio::io::stdout())),
                 shutdown_notify: Arc::new(Notify::new()),
                 responses_api_store: Arc::new(StdMutex::new(std::collections::HashMap::new())),
-            }
+            };
+
+            // Wire the token cache into the agent registry for the fallback path too.
+            registry.set_token_cache(Some(Arc::clone(&fallback_server.cache.token_cache)));
+
+            fallback_server
         }
     }
 }
@@ -1621,7 +1664,12 @@ async fn handle_responses_api(
     // Tool-result path: continuing a previous conversation with a tool result.
     if let Some(previous_response_id) = previous_response_id.as_deref() {
         return handle_response_tool_result(
-            socket, &server, &request_id, &model, input, previous_response_id,
+            socket,
+            &server,
+            &request_id,
+            &model,
+            input,
+            previous_response_id,
         )
         .await;
     }
@@ -1631,10 +1679,8 @@ async fn handle_responses_api(
         req.tool_choice.as_ref().and_then(|v| v.as_str()),
         Some("required")
     ) {
-        return handle_response_required_tool_call(
-            socket, &server, &request_id, &model, &req,
-        )
-        .await;
+        return handle_response_required_tool_call(socket, &server, &request_id, &model, &req)
+            .await;
     }
 
     // Normal create path (possibly streaming).
@@ -1650,8 +1696,7 @@ async fn handle_response_tool_result(
     input: &serde_json::Value,
     previous_response_id: &str,
 ) -> Result<()> {
-    let Some(previous_response) =
-        load_responses_api_payload(server.as_ref(), previous_response_id)
+    let Some(previous_response) = load_responses_api_payload(server.as_ref(), previous_response_id)
     else {
         let payload = build_responses_error(
             "not_found",
@@ -1787,11 +1832,7 @@ async fn handle_response_create(
         Err(err) => {
             if is_setup_or_upstream_unavailable(&err) {
                 let payload = attach_responses_token_economy(
-                    build_responses_api_response(
-                        request_id,
-                        model,
-                        &degraded_openai_message(&err),
-                    ),
+                    build_responses_api_response(request_id, model, &degraded_openai_message(&err)),
                     &params.messages,
                     &degraded_openai_message(&err),
                 );
@@ -2098,11 +2139,7 @@ async fn http_entry_guard(
 }
 
 /// Route an HTTP GET request based on the path and write the response back to the socket.
-async fn route_http_get(
-    socket: &mut TcpStream,
-    server: &AcpServer,
-    path: &str,
-) -> Result<()> {
+async fn route_http_get(socket: &mut TcpStream, server: &AcpServer, path: &str) -> Result<()> {
     match path {
         "/health" => {
             write_http_json_response_with_context(
@@ -2165,6 +2202,7 @@ async fn route_http_get(
 /// and writes the response to the socket. Returns the path label for logging.
 ///
 /// `body_initial_part` is the portion of the body already in the initial buffer read.
+#[allow(clippy::question_mark)]
 async fn route_http_post(
     socket: &mut TcpStream,
     server: Arc<AcpServer>,

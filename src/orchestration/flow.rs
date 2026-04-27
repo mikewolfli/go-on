@@ -121,7 +121,12 @@ impl FlowManager {
 
         // S16 free mode guard: unknown phase should silently fall back to default
         if workflow_type == WorkflowType::Free
-            && !self.config.flow.phases.iter().any(|name| name == &phase_name)
+            && !self
+                .config
+                .flow
+                .phases
+                .iter()
+                .any(|name| name == &phase_name)
         {
             phase_name = self.config.default_phase.clone();
         }
@@ -217,7 +222,7 @@ fn build_phase(flow_name: &str, name: &str, cfg: &PhaseConfig) -> ResolvedPhase 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use serde_json::json;
 
@@ -225,8 +230,18 @@ mod tests {
     use crate::config::{
         AgentConfig, AppConfig, FlowConfig, PhaseConfig, PhaseOptions, RuntimeConfig,
     };
+    use crate::intelligence::capability_graph::CapabilityGraph;
 
     use super::FlowManager;
+
+    fn make_registry(config: Arc<AppConfig>) -> AgentRegistry {
+        AgentRegistry::from_config(
+            Arc::clone(&config),
+            reqwest::Client::new(),
+            Arc::new(Mutex::new(CapabilityGraph::new())),
+        )
+        .expect("registry should build")
+    }
 
     fn test_agent(agent_type: &str, url: Option<&str>) -> AgentConfig {
         AgentConfig {
@@ -316,8 +331,7 @@ mod tests {
     #[test]
     fn resolve_uses_default_phase_and_keeps_fallback_agents() {
         let config = Arc::new(build_test_config(Some(true)));
-        let registry = AgentRegistry::from_config(Arc::clone(&config), reqwest::Client::new())
-            .expect("registry should build");
+        let registry = make_registry(Arc::clone(&config));
         let flow = FlowManager::new(Arc::clone(&config), None);
 
         let resolved = flow.resolve(None, &registry).expect("phase should resolve");
@@ -331,8 +345,7 @@ mod tests {
     #[test]
     fn resolve_without_fallback_only_returns_first_agent() {
         let config = Arc::new(build_test_config(Some(false)));
-        let registry = AgentRegistry::from_config(Arc::clone(&config), reqwest::Client::new())
-            .expect("registry should build");
+        let registry = make_registry(Arc::clone(&config));
         let flow = FlowManager::new(Arc::clone(&config), None);
 
         let resolved = flow.resolve(None, &registry).expect("phase should resolve");
@@ -344,8 +357,7 @@ mod tests {
     #[test]
     fn resolve_unknown_phase_fails() {
         let config = Arc::new(build_test_config(Some(true)));
-        let registry = AgentRegistry::from_config(Arc::clone(&config), reqwest::Client::new())
-            .expect("registry should build");
+        let registry = make_registry(Arc::clone(&config));
         let flow = FlowManager::new(Arc::clone(&config), None);
 
         let result = flow.resolve(Some("delivery".to_string()), &registry);
@@ -371,8 +383,7 @@ mod tests {
     #[test]
     fn resolve_requested_phase_returns_review_metadata() {
         let config = Arc::new(build_test_config(Some(true)));
-        let registry = AgentRegistry::from_config(Arc::clone(&config), reqwest::Client::new())
-            .expect("registry should build");
+        let registry = make_registry(Arc::clone(&config));
         let flow = FlowManager::new(Arc::clone(&config), None);
 
         let resolved = flow
@@ -407,8 +418,7 @@ mod tests {
     #[test]
     fn forced_phase_overrides_requested_phase() {
         let config = Arc::new(build_test_config(Some(true)));
-        let registry = AgentRegistry::from_config(Arc::clone(&config), reqwest::Client::new())
-            .expect("registry should build");
+        let registry = make_registry(Arc::clone(&config));
         let flow = FlowManager::new(Arc::clone(&config), Some("review".to_string()));
 
         let resolved = flow
@@ -423,8 +433,7 @@ mod tests {
     #[test]
     fn phase_without_explicit_fallback_defaults_to_true() {
         let config = Arc::new(build_test_config(Some(false)));
-        let registry = AgentRegistry::from_config(Arc::clone(&config), reqwest::Client::new())
-            .expect("registry should build");
+        let registry = make_registry(Arc::clone(&config));
         let flow = FlowManager::new(Arc::clone(&config), None);
 
         let resolved = flow
@@ -447,8 +456,7 @@ mod tests {
             .agents = vec![];
 
         let config = Arc::new(config);
-        let registry = AgentRegistry::from_config(Arc::clone(&config), reqwest::Client::new())
-            .expect("registry should build");
+        let registry = make_registry(Arc::clone(&config));
         let flow = FlowManager::new(Arc::clone(&config), None);
 
         let resolved = flow

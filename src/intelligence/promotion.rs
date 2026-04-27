@@ -8,6 +8,7 @@
 //! NOTE: This is an intentional architecture framework (Phase 0-9).
 //! Kept as a stable extension point for future memory-promotion pipelines.
 
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 

@@ -188,20 +188,23 @@ impl ReliabilityOptimizer {
             .max(1.0)
             / pass_count.max(1) as f32;
 
-        // High-confidence pass
-        if pass_rate >= 0.8 && avg_confidence >= 0.7 {
+        // All signals pass → Valid
+        if pass_rate >= 1.0 && avg_confidence >= 0.7 {
             return QualityVerdict::Valid;
         }
 
-        // Medium-confidence pass with caveats
-        if pass_rate >= 0.6 && avg_confidence >= 0.5 {
+        // Majority pass but some issues → Inconclusive
+        if pass_rate >= 0.80 && avg_confidence >= 0.5 {
             return QualityVerdict::Inconclusive;
         }
 
-        // Check for repair signals
+        // Check for repair signals only when the result explicitly mentions retry/recovery.
         let has_repair_indication = signals
             .iter()
-            .any(|s| !s.passed && s.signal_type == QualitySignalType::RuntimeVerification);
+            .any(|s| !s.passed && s.signal_type == QualitySignalType::RuntimeVerification)
+            && (result.to_lowercase().contains("retry")
+                || result.to_lowercase().contains("recovered")
+                || result.to_lowercase().contains("fallback"));
 
         if has_repair_indication && pass_rate >= 0.4 {
             return QualityVerdict::RequiresRepair;
@@ -267,7 +270,7 @@ impl ReliabilityOptimizer {
             || lowercase.contains("fallback")
             || lowercase.contains("recovered");
 
-        let passed = !has_hard_error && !(has_soft_error && !is_recoverable);
+        let passed = !has_hard_error && (!has_soft_error || is_recoverable);
 
         let confidence = if has_hard_error {
             0.95

@@ -21,31 +21,31 @@ const runtimeManager_1 = require("./runtimeManager");
 const runtimeBinaryService_1 = require("./runtimeBinaryService");
 const runtimeBootstrap_1 = require("./runtimeBootstrap");
 async function runGoOnSecretCommand(context, action, secretName, secretValue) {
-    const config = vscode.workspace.getConfiguration('go-on');
+    const config = vscode.workspace.getConfiguration("go-on");
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const runtime = await (0, runtimeBinaryService_1.ensureGoOnBinary)(workspaceRoot, config, context);
-    const args = ['--secret', action];
+    const args = ["--secret", action];
     if (secretName) {
-        args.push('--secret-name', secretName);
+        args.push("--secret-name", secretName);
     }
     if (secretValue !== undefined) {
-        args.push('--secret-value', secretValue);
+        args.push("--secret-value", secretValue);
     }
     return new Promise((resolve, reject) => {
         const proc = (0, child_process_1.spawn)(runtime.executablePath, args, {
             cwd: workspaceRoot || runtime.runtimeDir,
-            stdio: ['ignore', 'pipe', 'pipe']
+            stdio: ["ignore", "pipe", "pipe"],
         });
-        let stdout = '';
-        let stderr = '';
-        proc.stdout?.on('data', (chunk) => {
+        let stdout = "";
+        let stderr = "";
+        proc.stdout?.on("data", (chunk) => {
             stdout += chunk.toString();
         });
-        proc.stderr?.on('data', (chunk) => {
+        proc.stderr?.on("data", (chunk) => {
             stderr += chunk.toString();
         });
-        proc.on('error', reject);
-        proc.on('close', (code) => {
+        proc.on("error", reject);
+        proc.on("close", (code) => {
             if (code === 0) {
                 resolve(stdout.trim());
                 return;
@@ -56,27 +56,27 @@ async function runGoOnSecretCommand(context, action, secretName, secretValue) {
     });
 }
 function escapeRegex(value) {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function formatTomlStringList(items) {
-    return `[${items.map((item) => `"${item}"`).join(', ')}]`;
+    return `[${items.map((item) => `"${item}"`).join(", ")}]`;
 }
 function formatTomlMultilineStringList(items) {
     const lines = items.map((item) => `    "${item.replace(/"/g, '\\"')}"`);
     return `[
-${lines.join(',\n')}
+${lines.join(",\n")}
 ]`;
 }
 function upsertSectionLine(section, lineRegex, line) {
     if (lineRegex.test(section)) {
         return section.replace(lineRegex, line);
     }
-    const lines = section.split('\n');
+    const lines = section.split("\n");
     lines.splice(1, 0, line);
-    return lines.join('\n');
+    return lines.join("\n");
 }
 function upsertTopLevelString(content, key, value) {
-    const regex = new RegExp(`^${escapeRegex(key)}\\s*=\\s*".*"\\s*$`, 'm');
+    const regex = new RegExp(`^${escapeRegex(key)}\\s*=\\s*".*"\\s*$`, "m");
     const replacement = `${key} = "${value}"`;
     if (regex.test(content)) {
         return content.replace(regex, replacement);
@@ -101,7 +101,7 @@ function upsertFlowPhases(content, phases) {
 function upsertPhaseAgents(content, phase, agents) {
     const header = `[phases.${phase}]`;
     const escapedHeader = escapeRegex(header);
-    const sectionRegex = new RegExp(`^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, 'm');
+    const sectionRegex = new RegExp(`^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, "m");
     const agentsLine = `agents = ${formatTomlStringList(agents)}`;
     if (sectionRegex.test(content)) {
         return content.replace(sectionRegex, (section) => {
@@ -109,9 +109,9 @@ function upsertPhaseAgents(content, phase, agents) {
             if (agentsRegex.test(section)) {
                 return section.replace(agentsRegex, agentsLine);
             }
-            const lines = section.split('\n');
+            const lines = section.split("\n");
             lines.splice(1, 0, agentsLine);
-            return lines.join('\n');
+            return lines.join("\n");
         });
     }
     return `${content.trimEnd()}\n\n${header}\ndescription = "${phase} phase"\n${agentsLine}\nfallback = true\n`;
@@ -119,8 +119,8 @@ function upsertPhaseAgents(content, phase, agents) {
 function upsertPhaseFallback(content, phase, fallback) {
     const header = `[phases.${phase}]`;
     const escapedHeader = escapeRegex(header);
-    const sectionRegex = new RegExp(`^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, 'm');
-    const fallbackLine = `fallback = ${fallback ? 'true' : 'false'}`;
+    const sectionRegex = new RegExp(`^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, "m");
+    const fallbackLine = `fallback = ${fallback ? "true" : "false"}`;
     if (sectionRegex.test(content)) {
         return content.replace(sectionRegex, (section) => upsertSectionLine(section, /^fallback\s*=\s*(true|false)\s*$/m, fallbackLine));
     }
@@ -129,7 +129,7 @@ function upsertPhaseFallback(content, phase, fallback) {
 function upsertPhasePrinciples(content, phase, principles) {
     const header = `[phases.${phase}]`;
     const escapedHeader = escapeRegex(header);
-    const sectionRegex = new RegExp(`^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, 'm');
+    const sectionRegex = new RegExp(`^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, "m");
     const principlesLine = `principles = ${formatTomlMultilineStringList(principles)}`;
     if (sectionRegex.test(content)) {
         return content.replace(sectionRegex, (section) => {
@@ -145,9 +145,9 @@ function upsertPhasePrinciples(content, phase, principles) {
 function upsertPhaseOptionNumber(content, phase, optionKey, value) {
     const optionHeader = `[phases.${phase}.options]`;
     const escapedOptionHeader = escapeRegex(optionHeader);
-    const optionSectionRegex = new RegExp(`^${escapedOptionHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, 'm');
+    const optionSectionRegex = new RegExp(`^${escapedOptionHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`, "m");
     const optionLine = `${optionKey} = ${value}`;
-    const keyRegex = new RegExp(`^${escapeRegex(optionKey)}\\s*=\\s*\\d+\\s*$`, 'm');
+    const keyRegex = new RegExp(`^${escapeRegex(optionKey)}\\s*=\\s*\\d+\\s*$`, "m");
     if (optionSectionRegex.test(content)) {
         return content.replace(optionSectionRegex, (section) => upsertSectionLine(section, keyRegex, optionLine));
     }
@@ -156,11 +156,11 @@ function upsertPhaseOptionNumber(content, phase, optionKey, value) {
 async function resolveConfigFilePath(context, configuredConfigPath) {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!workspaceRoot) {
-        throw new Error('No workspace folder open.');
+        throw new Error("No workspace folder open.");
     }
-    const config = vscode.workspace.getConfiguration('go-on');
+    const config = vscode.workspace.getConfiguration("go-on");
     const runtime = await (0, runtimeBinaryService_1.ensureGoOnBinary)(workspaceRoot, config, context);
-    const settingPath = configuredConfigPath || config.get('configPath', './config.toml');
+    const settingPath = configuredConfigPath || config.get("configPath", "./config.toml");
     const configPath = await (0, runtimeBinaryService_1.resolveConfigPath)(workspaceRoot, settingPath, runtime.runtimeDir);
     return { workspaceRoot, configPath, runtimeDir: runtime.runtimeDir };
 }
@@ -168,7 +168,7 @@ async function applyDefaultConfigTemplate(context, templateFile) {
     const { workspaceRoot, configPath, runtimeDir } = await resolveConfigFilePath(context);
     const candidates = [
         path.resolve(workspaceRoot, templateFile),
-        path.join(runtimeDir, templateFile)
+        path.join(runtimeDir, templateFile),
     ];
     let sourcePath;
     for (const candidate of candidates) {
@@ -186,24 +186,28 @@ async function applyDefaultConfigTemplate(context, templateFile) {
 }
 async function updateWorkflowMappingConfig(context, mapping) {
     const { configPath } = await resolveConfigFilePath(context);
-    let content = await fsPromises.readFile(configPath, 'utf8');
+    let content = await fsPromises.readFile(configPath, "utf8");
     const phaseEntries = Object.entries(mapping.phases || {})
         .map(([phase, config]) => {
         const phaseName = phase.trim();
-        const agents = (config?.agents || []).map((a) => a.trim()).filter(Boolean);
-        const principles = (config?.principles || []).map((p) => p.trim()).filter(Boolean);
+        const agents = (config?.agents || [])
+            .map((a) => a.trim())
+            .filter(Boolean);
+        const principles = (config?.principles || [])
+            .map((p) => p.trim())
+            .filter(Boolean);
         return [phaseName, { ...config, agents, principles }];
     })
         .filter(([phase, config]) => phase.length > 0 && config.agents.length > 0);
     if (mapping.defaultPhase && mapping.defaultPhase.trim().length > 0) {
-        content = upsertTopLevelString(content, 'default_phase', mapping.defaultPhase.trim());
+        content = upsertTopLevelString(content, "default_phase", mapping.defaultPhase.trim());
     }
     if (phaseEntries.length > 0) {
         const phaseNames = phaseEntries.map(([phase]) => phase);
         content = upsertFlowPhases(content, phaseNames);
         for (const [phase, phaseConfig] of phaseEntries) {
             content = upsertPhaseAgents(content, phase, phaseConfig.agents);
-            if (typeof phaseConfig.fallback === 'boolean') {
+            if (typeof phaseConfig.fallback === "boolean") {
                 content = upsertPhaseFallback(content, phase, phaseConfig.fallback);
             }
             if (phaseConfig.principles && phaseConfig.principles.length > 0) {
@@ -211,35 +215,37 @@ async function updateWorkflowMappingConfig(context, mapping) {
             }
             const switchRules = phaseConfig.switchRules;
             if (switchRules) {
-                if (typeof switchRules.circuitBreakerFailures === 'number' && switchRules.circuitBreakerFailures > 0) {
-                    content = upsertPhaseOptionNumber(content, phase, 'circuit_breaker_failures', Math.floor(switchRules.circuitBreakerFailures));
+                if (typeof switchRules.circuitBreakerFailures === "number" &&
+                    switchRules.circuitBreakerFailures > 0) {
+                    content = upsertPhaseOptionNumber(content, phase, "circuit_breaker_failures", Math.floor(switchRules.circuitBreakerFailures));
                 }
-                if (typeof switchRules.circuitBreakerOpenSeconds === 'number' && switchRules.circuitBreakerOpenSeconds > 0) {
-                    content = upsertPhaseOptionNumber(content, phase, 'circuit_breaker_open_seconds', Math.floor(switchRules.circuitBreakerOpenSeconds));
+                if (typeof switchRules.circuitBreakerOpenSeconds === "number" &&
+                    switchRules.circuitBreakerOpenSeconds > 0) {
+                    content = upsertPhaseOptionNumber(content, phase, "circuit_breaker_open_seconds", Math.floor(switchRules.circuitBreakerOpenSeconds));
                 }
             }
         }
     }
-    await fsPromises.writeFile(configPath, content, 'utf8');
+    await fsPromises.writeFile(configPath, content, "utf8");
     return configPath;
 }
 async function updateRulesMarkdownFiles(context, payload) {
     const { configPath } = await resolveConfigFilePath(context);
     const configDir = path.dirname(configPath);
-    const rulesDir = path.join(configDir, 'RULES');
+    const rulesDir = path.join(configDir, "RULES");
     await fsPromises.mkdir(rulesDir, { recursive: true });
     const writeRulesFile = async (filePath, rules) => {
         const normalized = rules.map((item) => item.trim()).filter(Boolean);
         const content = normalized.length > 0
-            ? normalized.map((item) => `- ${item}`).join('\n') + '\n'
-            : '# Empty rules\n';
-        await fsPromises.writeFile(filePath, content, 'utf8');
+            ? normalized.map((item) => `- ${item}`).join("\n") + "\n"
+            : "# Empty rules\n";
+        await fsPromises.writeFile(filePath, content, "utf8");
     };
     if (payload.globalRules) {
-        await writeRulesFile(path.join(rulesDir, 'global.md'), payload.globalRules);
+        await writeRulesFile(path.join(rulesDir, "global.md"), payload.globalRules);
     }
     if (payload.commonRules) {
-        await writeRulesFile(path.join(rulesDir, 'common.md'), payload.commonRules);
+        await writeRulesFile(path.join(rulesDir, "common.md"), payload.commonRules);
     }
     if (payload.phaseRules) {
         for (const [phase, rules] of Object.entries(payload.phaseRules)) {
@@ -256,16 +262,16 @@ let goOnManager;
 let statusProvider;
 let goOnOutput;
 function activate(context) {
-    goOnOutput = vscode.window.createOutputChannel('Go-On');
+    goOnOutput = vscode.window.createOutputChannel("Go-On");
     context.subscriptions.push(goOnOutput);
-    goOnOutput.appendLine('Go-On extension activated');
+    goOnOutput.appendLine("Go-On extension activated");
     // Initialize i18n system
     const currentLanguage = i18n_1.i18n.getCurrentLanguage();
     goOnOutput.appendLine(`UI Language: ${currentLanguage}`);
     // Initialize config manager
-    const config = vscode.workspace.getConfiguration('go-on');
-    const configPath = config.get('configPath', './config.toml');
-    configManager_1.configManager.initialize(configPath).catch(err => {
+    const config = vscode.workspace.getConfiguration("go-on");
+    const configPath = config.get("configPath", "./config.toml");
+    configManager_1.configManager.initialize(configPath).catch((err) => {
         goOnOutput.appendLine(`warn: config manager init failed: ${err}`);
         void vscode.window.showWarningMessage(`Go-On: configuration initialization failed: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -277,7 +283,7 @@ function activate(context) {
     const runtimeBootstrapDeps = {
         ensureBinary: runtimeBinaryService_1.ensureGoOnBinary,
         isRunning: () => goOnManager.isRunning(),
-        startCommandId: 'go-on.start'
+        startCommandId: "go-on.start",
     };
     // Initialize status monitor
     const statusMonitor = new statusMonitor_1.StatusMonitor(goOnManager);
@@ -292,10 +298,10 @@ function activate(context) {
     const workflowProvider = new workflowView_1.GoOnWorkflowViewProvider(context.extensionUri, goOnManager, context);
     const processFlowProvider = new processFlowView_1.GoOnProcessFlowViewProvider(context.extensionUri, goOnManager, context);
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(chatView_1.GoOnChatViewProvider.viewType, chatProvider), vscode.window.registerWebviewViewProvider(settingsView_1.GoOnSettingsViewProvider.viewType, settingsProvider), vscode.window.registerWebviewViewProvider(workflowView_1.GoOnWorkflowViewProvider.viewType, workflowProvider), vscode.window.registerWebviewViewProvider(processFlowView_1.GoOnProcessFlowViewProvider.viewType, processFlowProvider));
-    context.subscriptions.push(vscode.commands.registerCommand('go-on.openConfigWizard', async () => {
+    context.subscriptions.push(vscode.commands.registerCommand("go-on.openConfigWizard", async () => {
         await settingsProvider.showConfigWizard();
     }));
-    vscode.window.registerTreeDataProvider('go-on-status', statusProvider);
+    vscode.window.registerTreeDataProvider("go-on-status", statusProvider);
     const coreCommands = (0, coreCommandRegistry_1.registerCoreCommands)({
         context,
         ensureBinary: runtimeBinaryService_1.ensureGoOnBinary,
@@ -311,7 +317,7 @@ function activate(context) {
     const viewCommands = (0, commandRegistry_1.registerViewCommands)({
         revealGoOnView: viewRouter_1.revealGoOnView,
         ensureBinaryReady: async () => {
-            const config = vscode.workspace.getConfiguration('go-on');
+            const config = vscode.workspace.getConfiguration("go-on");
             const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
             await (0, runtimeBinaryService_1.ensureGoOnBinary)(workspaceRoot, config, context);
         },
@@ -320,69 +326,74 @@ function activate(context) {
         stop: () => goOnManager.stop(),
         createSession: (sessionName) => chatProvider.createNewSession(sessionName),
         switchSession: (sessionName) => chatProvider.switchSession(sessionName),
+        clearChat: () => chatProvider.clearChat(),
+        exportChat: () => chatProvider.exportChat(),
     });
     const rpcCommands = (0, rpcCommandRegistry_1.registerRpcCommands)({
         isRunning: () => goOnManager.isRunning(),
         sendRequest: (method, params) => goOnManager.sendRequest(method, params),
     });
     // Refresh status monitor command
-    let refreshStatusMonitorCommand = vscode.commands.registerCommand('go-on.refreshStatusMonitor', () => {
+    let refreshStatusMonitorCommand = vscode.commands.registerCommand("go-on.refreshStatusMonitor", () => {
         statusMonitor.refresh();
     });
-    let keyringSetCommand = vscode.commands.registerCommand('go-on.keyringSet', async (payload) => {
+    let keyringSetCommand = vscode.commands.registerCommand("go-on.keyringSet", async (payload) => {
         const name = payload?.name;
         const value = payload?.value;
         if (!name || value === undefined) {
-            throw new Error('keyring set requires name and value');
+            throw new Error("keyring set requires name and value");
         }
-        await runGoOnSecretCommand(context, 'set', name, value);
+        await runGoOnSecretCommand(context, "set", name, value);
     });
-    let keyringGetCommand = vscode.commands.registerCommand('go-on.keyringGet', async (payload) => {
+    let keyringGetCommand = vscode.commands.registerCommand("go-on.keyringGet", async (payload) => {
         const name = payload?.name;
         if (!name) {
-            throw new Error('keyring get requires name');
+            throw new Error("keyring get requires name");
         }
-        return await runGoOnSecretCommand(context, 'get', name);
+        return await runGoOnSecretCommand(context, "get", name);
     });
-    let keyringDeleteCommand = vscode.commands.registerCommand('go-on.keyringDelete', async (payload) => {
+    let keyringDeleteCommand = vscode.commands.registerCommand("go-on.keyringDelete", async (payload) => {
         const name = payload?.name;
         if (!name) {
-            throw new Error('keyring delete requires name');
+            throw new Error("keyring delete requires name");
         }
-        await runGoOnSecretCommand(context, 'delete', name);
+        await runGoOnSecretCommand(context, "delete", name);
     });
-    let keyringListCommand = vscode.commands.registerCommand('go-on.keyringList', async () => {
-        return await runGoOnSecretCommand(context, 'list');
+    let keyringListCommand = vscode.commands.registerCommand("go-on.keyringList", async () => {
+        return await runGoOnSecretCommand(context, "list");
     });
-    let applyDefaultConfigCommand = vscode.commands.registerCommand('go-on.applyDefaultConfigTemplate', async (payload) => {
+    let applyDefaultConfigCommand = vscode.commands.registerCommand("go-on.applyDefaultConfigTemplate", async (payload) => {
         const template = payload?.template;
         if (!template) {
-            throw new Error('template is required');
+            throw new Error("template is required");
         }
         const configPath = await applyDefaultConfigTemplate(context, template);
         return configPath;
     });
-    let updateWorkflowMappingCommand = vscode.commands.registerCommand('go-on.updateWorkflowMapping', async (payload) => {
+    let updateWorkflowMappingCommand = vscode.commands.registerCommand("go-on.updateWorkflowMapping", async (payload) => {
         if (!payload) {
-            throw new Error('workflow mapping payload is required');
+            throw new Error("workflow mapping payload is required");
         }
         return await updateWorkflowMappingConfig(context, payload);
     });
-    let updateRulesCommand = vscode.commands.registerCommand('go-on.updateRules', async (payload) => {
+    let updateRulesCommand = vscode.commands.registerCommand("go-on.updateRules", async (payload) => {
         if (!payload) {
-            throw new Error('rules payload is required');
+            throw new Error("rules payload is required");
         }
         return await updateRulesMarkdownFiles(context, payload);
     });
     // Runtime download/start is intentionally deferred until the Chat view is opened.
     context.subscriptions.push(...coreCommands, ...viewCommands, ...rpcCommands, refreshStatusMonitorCommand, keyringSetCommand, keyringGetCommand, keyringDeleteCommand, keyringListCommand, applyDefaultConfigCommand, updateWorkflowMappingCommand, updateRulesCommand);
-    // Open chat automatically only once to avoid intrusive focus switching on every startup.
-    const hasOpenedChat = context.globalState.get('go-on.hasOpenedChatOnce', false);
-    if (!hasOpenedChat) {
+    // Open chat automatically only once (controlled by go-on.autoOpenChat config).
+    const autoOpenChat = vscode.workspace
+        .getConfiguration("go-on")
+        .get("autoOpenChat", true);
+    const hasOpenedChat = context.globalState.get("go-on.hasOpenedChatOnce", false);
+    if (autoOpenChat && !hasOpenedChat) {
         setTimeout(() => {
-            void vscode.commands.executeCommand('go-on.openChat');
+            void vscode.commands.executeCommand("go-on.openChat");
         }, 300);
-        void context.globalState.update('go-on.hasOpenedChatOnce', true);
+        void context.globalState.update("go-on.hasOpenedChatOnce", true);
     }
 }
 exports.activate = activate;
@@ -397,14 +408,14 @@ exports.deactivate = deactivate;
  */
 async function syncLanguageToApp(language) {
     try {
-        const config = vscode.workspace.getConfiguration('go-on');
+        const config = vscode.workspace.getConfiguration("go-on");
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (!workspaceFolder) {
             return;
         }
         // Create a language configuration object for the app
         // Store language preference in app settings
-        await config.update('language', language, vscode.ConfigurationTarget.Global);
+        await config.update("language", language, vscode.ConfigurationTarget.Global);
         // Log successful sync
         goOnOutput.appendLine(`Language synchronized: VS Code ${language} -> App ${language}`);
     }

@@ -11,7 +11,7 @@ pub(crate) struct MemoryCachedResponse {
 }
 
 #[derive(Default)]
-pub(crate) struct MemoryResponseCache {
+pub struct MemoryResponseCache {
     inner: StdMutex<HashMap<String, MemoryCachedResponse>>,
 }
 

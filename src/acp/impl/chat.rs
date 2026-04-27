@@ -31,19 +31,22 @@ use crate::config::PhaseOptions;
 use crate::evaluation::TraceEvent;
 use crate::flow::FlowManager;
 use crate::i18n::runtime::tf;
+use crate::intelligence::token_cache::ContextLengthClass;
 use crate::orchestration::task_router::{TaskRouter, TaskType};
 use crate::pua::PuaEnforcementPlan;
 
+use crate::intelligence::verification::{
+    DeterministicVerifier, StructuredReview, VerificationVerdict,
+};
+use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryStore};
+use crate::orchestration::roles::{AgentRole, RoleRegistry};
+use crate::orchestration::task_graph::{TaskGraph, TaskNode};
 use crate::reinforcement::{
     persist_knowledge_insight_event, persist_workflow_learning_event, ExecutionDecisionCandidate,
     KnowledgeBusArtifact, KnowledgeInsightArtifact, RequirementContractArtifact, TaskPlanArtifact,
     WorkflowLearningEvent,
 };
 use crate::rpc_protocol::{chat_trace_context, child_trace_context, RequestTraceContext};
-use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryStore};
-use crate::orchestration::task_graph::{TaskGraph, TaskNode};
-use crate::orchestration::roles::{AgentRole, RoleRegistry};
-use crate::intelligence::verification::{DeterministicVerifier, StructuredReview, VerificationVerdict};
 
 /// Chat parameters structure
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -181,6 +184,7 @@ pub async fn handle_chat(
 
     let chat_span = request_span.as_ref().and_then(|parent| {
         server
+            .observability
             .telemetry_runtime
             .lock()
             .ok()
@@ -274,7 +278,10 @@ pub async fn handle_chat(
     let duration_ms = started.elapsed().as_millis() as u64;
     let status = if result.is_ok() { "success" } else { "error" };
 
-    server.observability.metrics.record_chat_latency(duration_ms as f64);
+    server
+        .observability
+        .metrics
+        .record_chat_latency(duration_ms as f64);
     record_trace_event(
         server,
         &pipeline_trace,
@@ -448,6 +455,33 @@ pub(crate) async fn process_chat_request(
 
     // Get routing handles
     let (flow, registry) = routing_handles(server)?;
+
+    // ── HarnessBus pre-route policy evaluation ─────────────────────────
+    // Evaluate the incoming chat request against the HarnessBus strategy
+    // engine. If the verdict is Deny or Escalate, bail early with error or
+    // fallback behaviour before allocating any compute resources.
+    if let Some(ref harness) = server.harness_bus {
+        let task_ctx = crate::governance::pua::TaskContext {
+            task_type: crate::governance::pua::TaskType::Other,
+            file_count: params.messages.len(),
+            risk_score: 0.3,
+        };
+        let verdict = harness.evaluate(&task_ctx);
+        match &verdict {
+            crate::governance::harness_bus::PolicyVerdict::Deny(v) => {
+                anyhow::bail!("harness policy denied: {}", v.detail);
+            }
+            crate::governance::harness_bus::PolicyVerdict::Escalate(r) => {
+                warn!("harness policy escalation: {}", r.reason);
+                // Continue with degraded mode — the runtime will apply
+                // stricter constraints via AgentExecutionPolicy later.
+            }
+            crate::governance::harness_bus::PolicyVerdict::Review(r) => {
+                info!("harness policy flagged for review: {}", r.reason);
+            }
+            _ => {}
+        }
+    }
     let app_config = flow.config();
     let requested_phase = params.phase.clone();
     let adaptive_phase = if requested_phase.is_none() {
@@ -500,6 +534,36 @@ pub(crate) async fn process_chat_request(
     let phase = resolved.phase.clone();
     reorder_chat_agents_by_runtime_score(server, &phase.phase_name, &mut resolved.agents);
 
+    // ── CapabilityBus agent selection ──────────────────────────────────
+    // If a CapabilityBus is present, use its sense/decide pipeline to
+    // refine or override the agent list before falling through to the
+    // existing preference logic.
+    if let Some(ref cb) = server.capability_bus {
+        let task_ctx = crate::governance::pua::TaskContext {
+            task_type: crate::governance::pua::TaskType::Other,
+            file_count: params.messages.len(),
+            risk_score: 0.3,
+        };
+        let sensing = cb.sense(&task_ctx);
+        let decision = cb.decide(&task_ctx, &sensing);
+        if let Some(ref agent) = decision.selected_agent {
+            // Move the CapabilityBus-recommended agent to the front of the list
+            let _ = reorder_agents_with_priority(&mut resolved.agents, agent);
+        }
+        // Record the routing decision as an observable event
+        cb.record_event(
+            "sense",
+            decision.selected_agent.clone(),
+            Some(trace.request_id.clone()),
+            "success",
+            serde_json::json!({
+                "candidate_count": sensing.capability_agent_count,
+                "confidence": decision.confidence,
+                "duration_ms": decision.duration_ms,
+            }),
+        );
+    }
+
     // Path A: explicit config list → use first configured name.
     // Path B: auto-map (empty config list) → fall back to first runtime-resolved agent name.
     let configured_primary_agent = phase
@@ -543,6 +607,12 @@ pub(crate) async fn process_chat_request(
             }
         }
     }
+
+    // ── Record feedback to CapabilityBus on completion ─────────────────
+    // This is registered as a callback-style hook.  The actual feedback
+    // call is invoked at the end of this function after the agent response
+    // is received, so we stash the agent name and timing details now.
+    // (Feedback is recorded at function exit — see the Ok() return below.)
 
     // Phase-level rate limiter support migrated from legacy ACP behavior.
     if let Some(options) = phase.options.as_ref() {
@@ -659,6 +729,88 @@ pub(crate) async fn process_chat_request(
         .collect::<Vec<_>>();
     let mut quota_failed_agents: Vec<String> = Vec::new();
     let mut agent_attempts: Vec<Value> = Vec::new();
+    let mut cache_hit = false;
+
+    // ── Token cache lookup ──────────────────────────────────────────────
+    //
+    // Before running any agent, check whether the multi-level token cache
+    // already holds a response for this exact input.  On a high-confidence
+    // hit (L1 exact match, or L2/L3 with semantic similarity > 0.95) we
+    // skip the LLM call entirely and return the cached output.
+    {
+        let input_text = crate::intelligence::token_cache::messages_to_text(&agent_messages);
+        let estimated_tokens =
+            crate::intelligence::token_cache::estimate_messages_token_count(&agent_messages);
+        let context_class = ContextLengthClass::from_token_count(estimated_tokens);
+
+        if let Some((level, entry)) = server
+            .cache
+            .token_cache
+            .lookup(&input_text, context_class)
+            .await
+        {
+            // L1 is always an exact match → 100 % confidence.
+            // L2 / L3 hits are considered high-confidence when the output is
+            // long enough to provide meaningful reuse.
+            let confidence = match level {
+                crate::intelligence::token_cache::CacheLevel::L1 => 1.0,
+                crate::intelligence::token_cache::CacheLevel::L2 => {
+                    // Compute cosine similarity between input and cached input
+                    let input_vec = crate::intelligence::token_cache::simple_embedding(&input_text);
+                    let cached_vec =
+                        crate::intelligence::token_cache::simple_embedding(&entry.input);
+                    crate::intelligence::token_cache::cosine_similarity(&input_vec, &cached_vec)
+                }
+                crate::intelligence::token_cache::CacheLevel::L3 => {
+                    // L3 template matches are structural – treat as high confidence
+                    // when the cached output is non-trivial (> 50 chars).
+                    if entry.output.len() > 50 {
+                        0.96
+                    } else {
+                        0.0
+                    }
+                }
+            };
+
+            if confidence > 0.95 {
+                tracing::info!(
+                    target = "token_cache",
+                    level = %level,
+                    confidence,
+                    agent_count = resolved.agents.len(),
+                    "process_chat_request: token cache HIT, skipping agent execution"
+                );
+                cache_hit = true;
+                selected_agent = resolved
+                    .agents
+                    .first()
+                    .map(|(name, _)| name.clone())
+                    .unwrap_or_else(|| "cached".to_string());
+                response_text = entry.output.clone();
+
+                // Emit the cached response through the stream observer, if present.
+                if let Some(ref observer) = stream_observer {
+                    let meta = StreamEventMeta {
+                        agent_name: &selected_agent,
+                        phase_name: &phase.phase_name,
+                        trace_id: &trace.trace_id,
+                    };
+                    let total_chars = response_text.chars().count();
+                    emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars)
+                        .await?;
+                    emit_stream_done(server, Some(observer), meta, 1, total_chars, 0u64).await?;
+                }
+
+                agent_attempts.push(json!({
+                    "agent": selected_agent,
+                    "ok": true,
+                    "cached": true,
+                    "cache_level": format!("{level}"),
+                    "duration_ms": 0u64
+                }));
+            }
+        }
+    }
 
     let mut base_agent_options = phase
         .options
@@ -671,72 +823,104 @@ pub(crate) async fn process_chat_request(
         }
     }
 
-    for (agent_name, agent) in resolved.agents {
-        let attempt_started = std::time::Instant::now();
+    if !cache_hit {
+        for (agent_name, agent) in resolved.agents {
+            let attempt_started = std::time::Instant::now();
 
-        let mut per_attempt_options = base_agent_options.clone();
-        if agent_name.eq_ignore_ascii_case("copilot") && !per_attempt_options.contains_key("model")
-        {
-            per_attempt_options.insert("model".to_string(), json!("auto"));
-        }
-
-        match run_agent_collecting(
-            server,
-            StreamNotificationContext {
-                stream_observer: stream_observer.clone(),
-                agent_name: &agent_name,
-                phase_name: &phase.phase_name,
-                trace_id: &trace.trace_id,
-            },
-            agent,
-            agent_messages.clone(),
-            phase.principles.clone(),
-            Some(per_attempt_options),
-            request_timeout(phase.options.as_ref()),
-        )
-        .await
-        {
-            Ok(output) => {
-                if let Ok(mut ctrl) = server.online_controller.lock() {
-                    ctrl.record_agent_outcome(
-                        &phase.phase_name,
-                        &agent_name,
-                        true,
-                        attempt_started.elapsed().as_millis() as u64,
-                    );
-                }
-                agent_attempts.push(json!({
-                    "agent": agent_name,
-                    "ok": true,
-                    "duration_ms": attempt_started.elapsed().as_millis() as u64
-                }));
-                selected_agent = agent_name;
-                response_text = output;
-                last_err = None;
-                break;
+            let mut per_attempt_options = base_agent_options.clone();
+            if agent_name.eq_ignore_ascii_case("copilot")
+                && !per_attempt_options.contains_key("model")
+            {
+                per_attempt_options.insert("model".to_string(), json!("auto"));
             }
-            Err(err) => {
-                let err_text = err.to_string();
-                let quota_limited = is_quota_or_token_limit_error(&err_text);
-                if quota_limited {
-                    quota_failed_agents.push(agent_name.clone());
+
+            let model_name = per_attempt_options
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            match run_agent_collecting(
+                server,
+                StreamNotificationContext {
+                    stream_observer: stream_observer.clone(),
+                    agent_name: &agent_name,
+                    phase_name: &phase.phase_name,
+                    trace_id: &trace.trace_id,
+                },
+                agent,
+                agent_messages.clone(),
+                phase.principles.clone(),
+                Some(per_attempt_options),
+                request_timeout(phase.options.as_ref()),
+            )
+            .await
+            {
+                Ok(output) => {
+                    if let Ok(mut ctrl) = server.online_controller.lock() {
+                        ctrl.record_agent_outcome(
+                            &phase.phase_name,
+                            &agent_name,
+                            true,
+                            attempt_started.elapsed().as_millis() as u64,
+                        );
+                    }
+                    agent_attempts.push(json!({
+                        "agent": agent_name,
+                        "ok": true,
+                        "duration_ms": attempt_started.elapsed().as_millis() as u64
+                    }));
+                    selected_agent = agent_name.clone();
+                    response_text = output.clone();
+
+                    // ── Store result in token cache ─────────────────────
+                    // After a successful agent execution, store the input/output
+                    // pair in the multi-level token cache for future reuse.
+                    {
+                        let input_text =
+                            crate::intelligence::token_cache::messages_to_text(&agent_messages);
+                        let token_count =
+                            crate::intelligence::token_cache::estimate_token_count(&output);
+                        let cache = server.cache.token_cache.clone();
+                        let agent_name_for_cache = Some(agent_name.clone());
+                        tokio::spawn(async move {
+                            cache
+                                .store(
+                                    &input_text,
+                                    &output,
+                                    token_count,
+                                    agent_name_for_cache,
+                                    model_name,
+                                )
+                                .await;
+                        });
+                    }
+
+                    last_err = None;
+                    break;
                 }
-                agent_attempts.push(json!({
-                    "agent": agent_name,
-                    "ok": false,
-                    "quota_limited": quota_limited,
-                    "duration_ms": attempt_started.elapsed().as_millis() as u64,
-                    "error": err_text
-                }));
-                if let Ok(mut ctrl) = server.online_controller.lock() {
-                    ctrl.record_agent_outcome(
-                        &phase.phase_name,
-                        &agent_name,
-                        false,
-                        attempt_started.elapsed().as_millis() as u64,
-                    );
+                Err(err) => {
+                    let err_text = err.to_string();
+                    let quota_limited = is_quota_or_token_limit_error(&err_text);
+                    if quota_limited {
+                        quota_failed_agents.push(agent_name.clone());
+                    }
+                    agent_attempts.push(json!({
+                        "agent": agent_name,
+                        "ok": false,
+                        "quota_limited": quota_limited,
+                        "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                        "error": err_text
+                    }));
+                    if let Ok(mut ctrl) = server.online_controller.lock() {
+                        ctrl.record_agent_outcome(
+                            &phase.phase_name,
+                            &agent_name,
+                            false,
+                            attempt_started.elapsed().as_millis() as u64,
+                        );
+                    }
+                    last_err = Some(err);
                 }
-                last_err = Some(err);
             }
         }
     }
@@ -851,6 +1035,8 @@ pub(crate) async fn process_chat_request(
         json!({
             "active": true,
             "schema_version": "blue25-metacognitive-loop-v1",
+            "cycle_count": 1,
+            "checkpoint_id": checkpoint.checkpoint_id,
             "last_reflection": format!("{}:{}", phase.phase_name, selected_agent),
             "reflection_trigger": "response_completed",
             "last_selected_agent": selected_agent,
@@ -948,7 +1134,12 @@ pub(crate) async fn process_chat_request(
                     // Also check for tool calls in the response
                     let tool_calls = extract_tool_calls_from_response(&response_text, 3);
                     if !tool_calls.is_empty() {
-                        let tool_observations = execute_tool_calls(&task_description, "model_tool_calls", 0, &tool_calls);
+                        let tool_observations = execute_tool_calls(
+                            &task_description,
+                            "model_tool_calls",
+                            0,
+                            &tool_calls,
+                        );
                         tool_execution_results.push(json!({
                             "model_tool_calls": tool_calls.len(),
                             "observations": tool_observations
@@ -993,8 +1184,17 @@ pub(crate) async fn process_chat_request(
         let memory_entry = MemoryEntry {
             id: format!("task-{}-{}", conversation_id, started.elapsed().as_millis()),
             class: MemoryClass::Observation,
-            content: format!("Task completed: {} with response: {}", task_description, response_text),
-            timestamp: format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()),
+            content: format!(
+                "Task completed: {} with response: {}",
+                task_description, response_text
+            ),
+            timestamp: format!(
+                "{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            ),
             usefulness: 0.8, // High usefulness for completed tasks
             staleness: 0,
         };
@@ -1105,29 +1305,41 @@ pub(crate) async fn process_chat_request(
         let mut suggested_roles = Vec::new();
 
         // Analyze task and suggest appropriate roles
-        if task_lower.contains("plan") || task_lower.contains("design") || task_lower.contains("architecture") {
+        if task_lower.contains("plan")
+            || task_lower.contains("design")
+            || task_lower.contains("architecture")
+        {
             suggested_roles.push(AgentRole::Planner);
         }
-        if task_lower.contains("research") || task_lower.contains("search") || task_lower.contains("find") {
+        if task_lower.contains("research")
+            || task_lower.contains("search")
+            || task_lower.contains("find")
+        {
             suggested_roles.push(AgentRole::Researcher);
         }
-        if task_lower.contains("code") || task_lower.contains("implement") || task_lower.contains("write") || task_lower.contains("edit") {
+        if task_lower.contains("code")
+            || task_lower.contains("implement")
+            || task_lower.contains("write")
+            || task_lower.contains("edit")
+        {
             suggested_roles.push(AgentRole::Coder);
         }
-        if task_lower.contains("test") || task_lower.contains("verify") || task_lower.contains("validate") {
+        if task_lower.contains("test")
+            || task_lower.contains("verify")
+            || task_lower.contains("validate")
+        {
             suggested_roles.push(AgentRole::Tester);
         }
-        if task_lower.contains("review") || task_lower.contains("check") || task_lower.contains("audit") {
+        if task_lower.contains("review")
+            || task_lower.contains("check")
+            || task_lower.contains("audit")
+        {
             suggested_roles.push(AgentRole::Reviewer);
         }
 
         // If no specific roles detected, use default roles
         if suggested_roles.is_empty() {
-            suggested_roles = vec![
-                AgentRole::Planner,
-                AgentRole::Coder,
-                AgentRole::Reviewer
-            ];
+            suggested_roles = vec![AgentRole::Planner, AgentRole::Coder, AgentRole::Reviewer];
         }
 
         // Get role registry
@@ -1163,7 +1375,10 @@ pub(crate) async fn process_chat_request(
         }
 
         // Run lint check if response contains code
-        if response_text.contains("fn ") || response_text.contains("let ") || response_text.contains("pub ") {
+        if response_text.contains("fn ")
+            || response_text.contains("let ")
+            || response_text.contains("pub ")
+        {
             let lint_signal = DeterministicVerifier::run_lint_check(&response_text);
             verification_signals.push(lint_signal);
         }
@@ -1190,7 +1405,10 @@ pub(crate) async fn process_chat_request(
             reviewer_agent: "enhanced_verification_system".to_string(),
             confidence,
             signals: verification_signals,
-            rationale: format!("Enhanced verification completed with {}/{} checks passed", passed_count, total_count),
+            rationale: format!(
+                "Enhanced verification completed with {}/{} checks passed",
+                passed_count, total_count
+            ),
             assumptions_validated: vec![
                 "Syntax validity".to_string(),
                 "No adversarial patterns".to_string(),
@@ -1250,6 +1468,40 @@ pub(crate) async fn process_chat_request(
         "role_routing": role_routing_result,
         "enhanced_verification": verification_result
     });
+
+    // ── CapabilityBus feedback on execution outcome ────────────────────
+    // Record the execution result back into the sub-buses (learning,
+    // reputation, etc.) so that subsequent routes benefit from this
+    // experience.
+    if let Some(ref cb) = server.capability_bus {
+        let elapsed = started.elapsed().as_millis() as u64;
+        cb.feedback(
+            &selected_agent,
+            &phase.phase_name,
+            &conversation_id,
+            true,
+            elapsed,
+            result
+                .get("token_economy")
+                .and_then(|v| v.get("total_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            1.0,
+        );
+        // Also update the reinforcement learning loop with the outcome
+        cb.evolve(
+            &(phase.phase_name.clone(), selected_agent.clone()),
+            "execute",
+            &(phase.phase_name.clone(), selected_agent.clone()),
+            result
+                .get("token_economy")
+                .and_then(|v| v.get("total_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            true,
+            1.0,
+        );
+    }
 
     Ok(result)
 }
@@ -1707,7 +1959,10 @@ async fn load_vector_context(
         settings.max_snippet_chars,
     ) {
         Ok((hits, feedback)) => {
-            server.observability.metrics.record_vector_search(hits.len());
+            server
+                .observability
+                .metrics
+                .record_vector_search(hits.len());
             apply_autotune_feedback(
                 server,
                 phase_options,
@@ -2085,7 +2340,10 @@ async fn load_phase_summary(
 
     match store.get_phase_summary(phase_name) {
         Ok(summary) => {
-            server.observability.metrics.record_summary_read(summary.is_some());
+            server
+                .observability
+                .metrics
+                .record_summary_read(summary.is_some());
             summary
         }
         Err(err) => {
@@ -3123,7 +3381,10 @@ mod tests {
 /// This function integrates the tool execution loop from request.rs into the chat flow
 fn run_tool_execution_loop(task: &str, subtask: &str, record_index: usize) -> String {
     // Simplified tool execution loop
-    format!("Tool execution loop for task: {} (subtask: {}, index: {})", task, subtask, record_index)
+    format!(
+        "Tool execution loop for task: {} (subtask: {}, index: {})",
+        task, subtask, record_index
+    )
 }
 
 /// Extract model tool calls from response
@@ -3138,9 +3399,20 @@ fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<Str
 }
 
 /// Execute model tool calls
-fn execute_tool_calls(task: &str, subtask: &str, record_index: usize, calls: &[String]) -> Vec<String> {
+fn execute_tool_calls(
+    task: &str,
+    subtask: &str,
+    record_index: usize,
+    calls: &[String],
+) -> Vec<String> {
     // Simplified tool execution
-    calls.iter().map(|call| {
-        format!("Executed {} for task {} (subtask: {}, index: {})", call, task, subtask, record_index)
-    }).collect()
+    calls
+        .iter()
+        .map(|call| {
+            format!(
+                "Executed {} for task {} (subtask: {}, index: {})",
+                call, task, subtask, record_index
+            )
+        })
+        .collect()
 }

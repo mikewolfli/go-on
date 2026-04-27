@@ -1,3 +1,11 @@
+//! Review controls — verdict parsing, timeout policy, gate outcomes.
+//!
+//! # Status
+//! Complete implementation ready for CapabilityBus integration (ARCH-13).
+//! Currently zero-call — all items are intentionally public for future wiring.
+
+#![allow(dead_code)]
+
 use std::time::Duration;
 
 use serde::Serialize;

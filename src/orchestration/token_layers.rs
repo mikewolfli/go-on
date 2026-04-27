@@ -4,6 +4,8 @@
 //! agent turn.  Each gate can block execution, trigger a summary, or pass through.
 //! Gates are checked in-order; the first non-pass verdict wins.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 /// Verdict returned by a token gate

@@ -261,7 +261,7 @@ pub(super) async fn handle_workflow_confirm(
         round_index: params
             .get("round_index")
             .and_then(Value::as_u64)
-            .unwrap_or(1) as u32,
+            .unwrap_or(1) as usize,
         lead_clarifier: "local_echo".to_string(),
         assistant_clarifiers: Vec::new(),
         user_feedback: String::new(),
@@ -308,7 +308,7 @@ pub(super) async fn handle_workflow_clarify(
         round_index: params
             .get("round_index")
             .and_then(Value::as_u64)
-            .unwrap_or(1) as u32,
+            .unwrap_or(1) as usize,
         lead_clarifier: "local_echo".to_string(),
         assistant_clarifiers: if params
             .get("clarify_collaboration_mode")

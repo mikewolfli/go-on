@@ -2,14 +2,12 @@
 //!
 //! Extracted from the original monolithic `reinforcement.rs`.
 
-use std::path::PathBuf;
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::ArtifactLedger;
 use super::health::CheckStatus;
+use super::ArtifactLedger;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -260,7 +258,7 @@ fn check_json_artifact(
 
     let missing: Vec<&str> = expected_fields
         .iter()
-        .filter(|field| !parsed.get(field.to_string()).map_or(false, |v| !v.is_null()))
+        .filter(|field| parsed.get(field.to_string()).is_none_or(|v| v.is_null()))
         .copied()
         .collect();
 
@@ -290,4 +288,3 @@ fn now_ts() -> i64 {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
-```Now let's create `task_plan.rs`:

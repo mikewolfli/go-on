@@ -7,7 +7,6 @@
 
 use anyhow::Result;
 use serde_json::Value;
-use std::io::Read;
 use tokio::io::AsyncWriteExt;
 
 use crate::acp::server::AcpServer;
@@ -126,26 +125,24 @@ pub async fn flush_output(server: &AcpServer) -> Result<()> {
 
 /// Check if input is available without consuming any bytes.
 ///
-/// Uses `spawn_blocking` to perform a brief blocking read with a timeout.
-/// This is a best-effort heuristic used for detecting ACP protocol mode.
+/// Uses `tokio::io::Interest::READABLE` with `std::os::fd::AsRawFd`
+/// to check stdin readability without reading any data.
+/// This is a best-effort heuristic used for detecting ACP protocol mode
+/// in auto/adaptive mode.
 /// If the timeout fires, we conservatively return false (no input).
 pub async fn has_input() -> Result<bool> {
-    let result = tokio::time::timeout(
-        std::time::Duration::from_millis(50),
-        tokio::task::spawn_blocking(|| {
-            let mut buf = [0u8; 1];
-            match std::io::stdin().read(&mut buf) {
-                Ok(0) => false,  // EOF
-                Ok(_) => true,   // data available (consumed one byte)
-                Err(_) => false, // error
-            }
-        }),
-    )
-    .await;
+    use std::os::unix::io::AsRawFd;
 
-    match result {
-        Ok(Ok(has_data)) => Ok(has_data),
-        Ok(Err(e)) => Err(anyhow::anyhow!("stdin poll task failed: {}", e)),
-        Err(_) => Ok(false), // timeout - no data
+    let fd = std::io::stdin().as_raw_fd();
+    let async_fd = tokio::io::unix::AsyncFd::new(fd)
+        .map_err(|e| anyhow::anyhow!("failed to create AsyncFd for stdin: {}", e))?;
+
+    let poll_ready =
+        tokio::time::timeout(std::time::Duration::from_millis(50), async_fd.readable()).await;
+
+    match poll_ready {
+        Ok(Ok(_guard)) => Ok(true), // stdin readable, no bytes consumed
+        Ok(Err(e)) => Err(anyhow::anyhow!("stdin readable poll failed: {}", e)),
+        Err(_) => Ok(false), // timeout — no input available
     }
 }

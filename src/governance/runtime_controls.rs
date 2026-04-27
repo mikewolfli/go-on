@@ -1,3 +1,11 @@
+//! Runtime controls — online adaptive control, sliding window, bandit-based phase selection.
+//!
+//! # Status
+//! Complete implementation ready for CapabilityBus integration (ARCH-13).
+//! Currently zero-call — all items are intentionally public for future wiring.
+
+#![allow(dead_code)]
+
 use std::collections::{HashMap, VecDeque};
 
 const ONLINE_CONTROLLER_WINDOW: usize = 64;
@@ -97,7 +105,7 @@ impl AgentSignalWindow {
 }
 
 #[derive(Debug, Default, Clone)]
-pub(crate) struct OnlineControllerState {
+pub struct OnlineControllerState {
     recent_failures: VecDeque<bool>,
     recent_latency_ms: VecDeque<u64>,
     agent_windows: HashMap<String, AgentSignalWindow>,

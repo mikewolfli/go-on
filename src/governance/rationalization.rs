@@ -2,6 +2,12 @@
 //!
 //! Detects low-confidence outputs with weak evidence and flags them for re-examination.
 //! In full_auto mode, blocks and triggers a single re-question cycle (token-budget controlled).
+//!
+//! # Status
+//! Complete implementation ready for CapabilityBus integration (ARCH-13).
+//! Currently zero-call — all items are intentionally public for future wiring.
+
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 
@@ -51,7 +57,12 @@ impl SelfRationalizationGuard {
 
     /// Evaluate annotation at the given confidence level.
     /// Returns true if the output should be blocked (full_auto re-question).
-    pub fn evaluate(&mut self, annotation: &mut RationalizationAnnotation, confidence: f32, is_full_auto: bool) -> bool {
+    pub fn evaluate(
+        &mut self,
+        annotation: &mut RationalizationAnnotation,
+        confidence: f32,
+        is_full_auto: bool,
+    ) -> bool {
         // Flag assumptions without evidence support
         if confidence < self.confidence_threshold && annotation.evidence_refs.is_empty() {
             for assumption in &annotation.assumptions {
@@ -61,7 +72,9 @@ impl SelfRationalizationGuard {
             }
             // If no assumptions declared, add a synthetic flag
             if annotation.assumptions.is_empty() && annotation.weak_evidence_flags.is_empty() {
-                annotation.weak_evidence_flags.push("low_confidence_no_evidence".to_string());
+                annotation
+                    .weak_evidence_flags
+                    .push("low_confidence_no_evidence".to_string());
             }
         }
 

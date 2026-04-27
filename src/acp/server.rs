@@ -19,6 +19,9 @@ use crate::cost_optimizer::CostOptimizer;
 use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
 use crate::flow_with_models::FlowModelSelector;
+use crate::governance::harness_bus::HarnessBus;
+use crate::intelligence::capability_bus::core::CapabilityBus;
+use crate::intelligence::token_cache::TokenMultiLevelCache;
 use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::memory_response_cache::MemoryResponseCache;
 use crate::observability::telemetry::TelemetryRuntime;
@@ -40,6 +43,8 @@ pub struct CacheLayer {
     pub memory_response_cache: Arc<StdMutex<MemoryResponseCache>>,
     /// Vector store for similarity search and memory
     pub vector_store: Option<Arc<VectorStore>>,
+    /// Multi-level token cache for Agent output reuse (L1 exact, L2 semantic, L3 template)
+    pub token_cache: Arc<TokenMultiLevelCache>,
 }
 
 /// Observability-related subsystems grouped together
@@ -62,6 +67,7 @@ pub struct AcpServer {
     /// Agent registry for managing available agents
     pub agent_registry: Option<Arc<AgentRegistry>>,
     /// Cache-related subsystems
+    /// Cache-related subsystems (response cache, vector store, token cache)
     pub cache: CacheLayer,
     /// Vector store configuration
     pub vector_config: Option<VectorConfig>,
@@ -113,6 +119,10 @@ pub struct AcpServer {
     pub pua_enforcement_plan: Arc<StdMutex<crate::pua::PuaEnforcementPlan>>,
     /// Artifact ledger
     pub artifact_ledger: Arc<StdMutex<ArtifactLedger>>,
+    /// HarnessBus strategy engine (BLUE38 ARCH-13)
+    pub harness_bus: Option<Arc<HarnessBus>>,
+    /// CapabilityBus scheduling coordinator (BLUE38 ARCH-13)
+    pub capability_bus: Option<Arc<CapabilityBus>>,
     /// Verbose logging flag
     pub verbose: bool,
     /// Output stream for responses
@@ -308,6 +318,8 @@ pub struct ServerBuilder {
     memory_response_cache: Option<MemoryResponseCache>,
     config_path: Option<String>,
     verbose: bool,
+    harness_bus: Option<Arc<HarnessBus>>,
+    capability_bus: Option<Arc<CapabilityBus>>,
 }
 
 impl ServerBuilder {
@@ -322,6 +334,8 @@ impl ServerBuilder {
             memory_response_cache: None,
             config_path: None,
             verbose: false,
+            harness_bus: None,
+            capability_bus: None,
         }
     }
 
@@ -373,6 +387,18 @@ impl ServerBuilder {
     /// Set verbose mode
     pub fn verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
+        self
+    }
+
+    /// Set the harness bus
+    pub fn with_harness_bus(mut self, harness_bus: Arc<HarnessBus>) -> Self {
+        self.harness_bus = Some(harness_bus);
+        self
+    }
+
+    /// Set the capability bus
+    pub fn with_capability_bus(mut self, capability_bus: Arc<CapabilityBus>) -> Self {
+        self.capability_bus = Some(capability_bus);
         self
     }
 
@@ -442,6 +468,11 @@ impl ServerBuilder {
                 response_cache: self.response_cache,
                 memory_response_cache,
                 vector_store: self.vector_store,
+                token_cache: Arc::new(crate::intelligence::token_cache::TokenMultiLevelCache::new(
+                    500,
+                    200,
+                    ".goon/token_cache",
+                )),
             },
             vector_config: None,
             autotune: None,
@@ -472,6 +503,8 @@ impl ServerBuilder {
             skill_registry,
             pua_enforcement_plan,
             artifact_ledger,
+            harness_bus: self.harness_bus,
+            capability_bus: self.capability_bus,
             verbose: self.verbose,
             output: Arc::new(Mutex::new(tokio::io::stdout())),
             shutdown_notify: Arc::new(Notify::new()),

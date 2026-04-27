@@ -7,6 +7,7 @@
 //! Phase 10 enhancement: Takes the existing role definitions and makes them
 //! automatically-selected based on task characteristics.
 
+use crate::orchestration::workflow_registry::WorkflowRegistry;
 use crate::pua::{build_enforcement_plan, PuaEnforcementPlan};
 use crate::roles::{AgentRole, RoleSpecification, RoleSpecifications};
 use serde::{Deserialize, Serialize};
@@ -315,6 +316,42 @@ impl TaskRouter {
                 AgentRole::Custom(_) => RoleSpecifications::coder(), // default spec for custom roles
             })
             .collect()
+    }
+
+    /// Route a task using a WorkflowRegistry preset lookup.
+    /// If a matching preset is found (by name or by task type match),
+    /// its phases override the default routing decision's role selection.
+    pub fn route_task_with_workflow(
+        characteristics: &TaskCharacteristics,
+        workflow_registry: &WorkflowRegistry,
+    ) -> RoutingDecision {
+        let mut decision = Self::route_task(characteristics);
+
+        // Try to match task characteristics to a workflow preset
+        let task_type_str = format!("{:?}", characteristics.task_type).to_lowercase();
+        let preset = workflow_registry.get(&task_type_str);
+
+        if let Some(p) = preset {
+            decision.recommended_safeguards.push(format!(
+                "workflow_preset:{} ({} phases)",
+                p.name,
+                p.phases.len()
+            ));
+        } else {
+            // Fallback: check all presets for a general-purpose one
+            for preset in workflow_registry.list() {
+                if preset.name == "general" || preset.name == "autopilot" {
+                    decision.recommended_safeguards.push(format!(
+                        "workflow_fallback:{} ({} phases)",
+                        preset.name,
+                        preset.phases.len()
+                    ));
+                    break;
+                }
+            }
+        }
+
+        decision
     }
 
     // ==================== Private Helper Methods ====================
