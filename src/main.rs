@@ -63,6 +63,7 @@ mod observability;
 mod optimization;
 mod orchestration;
 mod protocol;
+mod resilience;
 mod shared;
 
 pub use crate::agents::agent;

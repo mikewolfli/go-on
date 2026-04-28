@@ -1,0 +1,977 @@
+//! BLUE38 F-GAP-22: Metacognitive Controller (M6 "元认知控制器")
+//!
+//! Provides a reflection/self-correction loop that monitors execution quality and
+//! triggers corrective actions.  All mutable state is guarded behind
+//! `Arc<Mutex<>>` for thread-safe concurrent access.
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
+
+// ── Reflection level ────────────────────────────────────────────────────────
+
+/// Depth of reflection applied when assessing execution quality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReflectionLevel {
+    /// No reflection has been performed.
+    None,
+    /// Quick surface-level scan of recent observations.
+    Surface,
+    /// Deeper analysis of execution patterns and root causes.
+    Deep,
+    /// Critical reflection requiring immediate corrective action.
+    Critical,
+}
+
+// ── Corrective status ───────────────────────────────────────────────────────
+
+/// Lifecycle status of a proposed corrective action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CorrectiveStatus {
+    /// Action proposed but not yet being executed.
+    Pending,
+    /// Action is currently being executed.
+    InProgress,
+    /// Action completed successfully.
+    Completed,
+    /// Action failed during execution.
+    Failed,
+    /// Action was skipped (e.g. superseded by another action).
+    Skipped,
+}
+
+// ── Core data structures ────────────────────────────────────────────────────
+
+/// An observation of execution quality at a point in time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionObservation {
+    /// Unique observation identifier.
+    pub id: String,
+    /// The task this observation relates to.
+    pub task_id: String,
+    /// The agent or component that produced the observation.
+    pub agent: String,
+    /// Type of observation, e.g. "latency_spike", "error", "low_confidence".
+    pub observation_type: String,
+    /// Severity of the observation (e.g. "low", "medium", "high", "critical").
+    pub severity: String,
+    /// Human-readable description of what was observed.
+    pub description: String,
+    /// Unix-millisecond timestamp when the observation was recorded.
+    pub timestamp_ms: u64,
+    /// Whether the observation has been resolved.
+    pub is_resolved: bool,
+}
+
+/// A corrective action proposed in response to an observation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorrectiveAction {
+    /// Unique action identifier.
+    pub id: String,
+    /// The observation this action addresses.
+    pub observation_id: String,
+    /// Type of action, e.g. "retry", "reroute", "escalate", "fallback".
+    pub action_type: String,
+    /// Human-readable description of the action to take.
+    pub description: String,
+    /// Current lifecycle status of this action.
+    pub status: CorrectiveStatus,
+    /// Unix-millisecond timestamp when the action was created.
+    pub created_ms: u64,
+    /// Unix-millisecond timestamp when the action was resolved (completed /
+    /// failed / skipped).  Zero until resolved.
+    pub resolved_ms: u64,
+}
+
+/// A reflection report summarising observations and actions taken for a task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReflectionReport {
+    /// Unique report identifier.
+    pub id: String,
+    /// The task the report covers.
+    pub task_id: String,
+    /// Observations included in this report.
+    pub observations: Vec<ExecutionObservation>,
+    /// Corrective actions taken for the observations.
+    pub actions_taken: Vec<CorrectiveAction>,
+    /// Overall assessment text (e.g. "Execution quality degraded due to latency
+    /// spikes; two actions triggered, one pending.").
+    pub overall_assessment: String,
+    /// Aggregate confidence score for the task execution [0.0, 1.0].
+    pub confidence_score: f64,
+    /// Depth of analysis performed for this report.
+    pub reflection_level: ReflectionLevel,
+    /// Unix-millisecond timestamp when the report was generated.
+    pub created_ms: u64,
+}
+
+/// Configuration for the metacognitive controller.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetacognitiveConfig {
+    /// Whether automatic reflection is enabled.
+    #[serde(default = "default_enable_auto_reflection")]
+    pub enable_auto_reflection: bool,
+    /// Minimum number of unresolved observations before auto-reflection.
+    #[serde(default = "default_min_observations_for_reflection")]
+    pub min_observations_for_reflection: u32,
+    /// Maximum number of observations retained in history.
+    #[serde(default = "default_max_observations")]
+    pub max_observations: usize,
+    /// Maximum number of corrective actions retained.
+    #[serde(default = "default_max_actions")]
+    pub max_actions: usize,
+}
+
+fn default_enable_auto_reflection() -> bool {
+    true
+}
+fn default_min_observations_for_reflection() -> u32 {
+    3
+}
+fn default_max_observations() -> usize {
+    200
+}
+fn default_max_actions() -> usize {
+    100
+}
+
+impl Default for MetacognitiveConfig {
+    fn default() -> Self {
+        Self {
+            enable_auto_reflection: true,
+            min_observations_for_reflection: 3,
+            max_observations: 200,
+            max_actions: 100,
+        }
+    }
+}
+
+/// Runtime metrics snapshot of the metacognitive controller.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetacognitiveProfile {
+    /// Total number of observations recorded.
+    pub total_observations: usize,
+    /// Number of observations that are still unresolved.
+    pub unresolved_observations: usize,
+    /// Total number of corrective actions taken (all statuses except Pending).
+    pub total_actions_taken: usize,
+    /// Number of successful (Completed) actions.
+    pub successful_actions: usize,
+    /// Total number of reflection reports generated.
+    pub total_reports: usize,
+    /// Average confidence score across all reports (0.0 if no reports).
+    pub avg_confidence: f64,
+}
+
+// ── Internal state ──────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+struct Inner {
+    config: MetacognitiveConfig,
+    observations: Vec<ExecutionObservation>,
+    actions: Vec<CorrectiveAction>,
+    reports: Vec<ReflectionReport>,
+    next_id: u64,
+}
+
+// ── Public API ──────────────────────────────────────────────────────────────
+
+/// Thread-safe controller that monitors execution quality and triggers
+/// corrective actions through a reflection/self-correction loop.
+#[derive(Debug, Clone)]
+pub struct MetacognitiveController {
+    inner: Arc<Mutex<Inner>>,
+}
+
+impl MetacognitiveController {
+    /// Create a new metacognitive controller with the given configuration.
+    pub fn new(config: MetacognitiveConfig) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                config,
+                observations: Vec::new(),
+                actions: Vec::new(),
+                reports: Vec::new(),
+                next_id: 1,
+            })),
+        }
+    }
+
+    // ── Observation management ──────────────────────────────────────────
+
+    /// Record a new execution observation and return its id.
+    ///
+    /// Old observations beyond `max_observations` are evicted (FIFO).
+    pub fn record_observation(
+        &self,
+        task_id: &str,
+        agent: &str,
+        observation_type: &str,
+        severity: &str,
+        description: &str,
+    ) -> Result<String> {
+        let mut inner = self.inner.lock().unwrap();
+        let id = format!("obs-{}", inner.next_id);
+        inner.next_id += 1;
+
+        let obs = ExecutionObservation {
+            id: id.clone(),
+            task_id: task_id.to_string(),
+            agent: agent.to_string(),
+            observation_type: observation_type.to_string(),
+            severity: severity.to_string(),
+            description: description.to_string(),
+            timestamp_ms: now_ms(),
+            is_resolved: false,
+        };
+
+        inner.observations.push(obs);
+
+        let max = inner.config.max_observations;
+        while inner.observations.len() > max {
+            inner.observations.remove(0);
+        }
+
+        Ok(id)
+    }
+
+    /// Get a single observation by id.
+    pub fn get_observation(&self, id: &str) -> Result<ExecutionObservation> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .observations
+            .iter()
+            .find(|o| o.id == id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("observation '{}' not found", id))
+    }
+
+    /// List all observations, optionally filtered to unresolved ones only.
+    pub fn list_observations(&self, unresolved_only: bool) -> Vec<ExecutionObservation> {
+        let inner = self.inner.lock().unwrap();
+        if unresolved_only {
+            inner
+                .observations
+                .iter()
+                .filter(|o| !o.is_resolved)
+                .cloned()
+                .collect()
+        } else {
+            inner.observations.clone()
+        }
+    }
+
+    /// Mark an observation as resolved.
+    pub fn resolve_observation(&self, id: &str) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let obs = inner
+            .observations
+            .iter_mut()
+            .find(|o| o.id == id)
+            .ok_or_else(|| anyhow::anyhow!("observation '{}' not found", id))?;
+        obs.is_resolved = true;
+        Ok(())
+    }
+
+    // ── Action management ───────────────────────────────────────────────
+
+    /// Propose a new corrective action for the given observation.
+    ///
+    /// Returns an error if the observation does not exist.
+    /// Old actions beyond `max_actions` are evicted (FIFO).
+    pub fn propose_action(
+        &self,
+        observation_id: &str,
+        action_type: &str,
+        description: &str,
+    ) -> Result<String> {
+        let mut inner = self.inner.lock().unwrap();
+
+        // Validate that the observation exists.
+        if !inner.observations.iter().any(|o| o.id == observation_id) {
+            anyhow::bail!("observation '{}' not found", observation_id);
+        }
+
+        let id = format!("action-{}", inner.next_id);
+        inner.next_id += 1;
+
+        let action = CorrectiveAction {
+            id: id.clone(),
+            observation_id: observation_id.to_string(),
+            action_type: action_type.to_string(),
+            description: description.to_string(),
+            status: CorrectiveStatus::Pending,
+            created_ms: now_ms(),
+            resolved_ms: 0,
+        };
+
+        inner.actions.push(action);
+
+        let max = inner.config.max_actions;
+        while inner.actions.len() > max {
+            inner.actions.remove(0);
+        }
+
+        Ok(id)
+    }
+
+    /// Transition a Pending action to InProgress.
+    pub fn execute_action(&self, action_id: &str) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let action = inner
+            .actions
+            .iter_mut()
+            .find(|a| a.id == action_id)
+            .ok_or_else(|| anyhow::anyhow!("action '{}' not found", action_id))?;
+
+        if action.status != CorrectiveStatus::Pending {
+            anyhow::bail!(
+                "action '{}' is {:?}, expected Pending",
+                action_id,
+                action.status
+            );
+        }
+
+        action.status = CorrectiveStatus::InProgress;
+        Ok(())
+    }
+
+    /// Mark an action as Completed.
+    pub fn complete_action(&self, action_id: &str) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let action = inner
+            .actions
+            .iter_mut()
+            .find(|a| a.id == action_id)
+            .ok_or_else(|| anyhow::anyhow!("action '{}' not found", action_id))?;
+
+        if action.status != CorrectiveStatus::InProgress {
+            anyhow::bail!(
+                "action '{}' is {:?}, expected InProgress",
+                action_id,
+                action.status
+            );
+        }
+
+        action.status = CorrectiveStatus::Completed;
+        action.resolved_ms = now_ms();
+        Ok(())
+    }
+
+    /// Mark an action as Failed with an error reason stored in the description.
+    pub fn fail_action(&self, action_id: &str, reason: &str) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let action = inner
+            .actions
+            .iter_mut()
+            .find(|a| a.id == action_id)
+            .ok_or_else(|| anyhow::anyhow!("action '{}' not found", action_id))?;
+
+        if action.status != CorrectiveStatus::InProgress {
+            anyhow::bail!(
+                "action '{}' is {:?}, expected InProgress",
+                action_id,
+                action.status
+            );
+        }
+
+        action.status = CorrectiveStatus::Failed;
+        action.resolved_ms = now_ms();
+        // Append failure reason to the description for traceability.
+        action.description = format!("{} (FAILED: {})", action.description, reason);
+        Ok(())
+    }
+
+    /// Skip a Pending action without executing it.
+    pub fn skip_action(&self, action_id: &str) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let action = inner
+            .actions
+            .iter_mut()
+            .find(|a| a.id == action_id)
+            .ok_or_else(|| anyhow::anyhow!("action '{}' not found", action_id))?;
+
+        if action.status != CorrectiveStatus::Pending {
+            anyhow::bail!(
+                "action '{}' is {:?}, expected Pending",
+                action_id,
+                action.status
+            );
+        }
+
+        action.status = CorrectiveStatus::Skipped;
+        action.resolved_ms = now_ms();
+        Ok(())
+    }
+
+    /// List actions, optionally filtered by status.
+    pub fn list_actions(&self, status_filter: Option<CorrectiveStatus>) -> Vec<CorrectiveAction> {
+        let inner = self.inner.lock().unwrap();
+        match status_filter {
+            Some(status) => inner
+                .actions
+                .iter()
+                .filter(|a| a.status == status)
+                .cloned()
+                .collect(),
+            None => inner.actions.clone(),
+        }
+    }
+
+    // ── Reflection reports ──────────────────────────────────────────────
+
+    /// Generate a reflection report for the given task, collecting all
+    /// observations and their associated actions.
+    ///
+    /// The `reflection_level` is auto-detected based on how many observations
+    /// and actions exist for the task.
+    pub fn generate_reflection_report(&self, task_id: &str) -> Result<String> {
+        let mut inner = self.inner.lock().unwrap();
+
+        let report_id = format!("report-{}", inner.next_id);
+        inner.next_id += 1;
+
+        // Collect observations for this task.
+        let task_observations: Vec<ExecutionObservation> = inner
+            .observations
+            .iter()
+            .filter(|o| o.task_id == task_id)
+            .cloned()
+            .collect();
+
+        // Collect actions tied to those observations.
+        let obs_ids: Vec<&str> = task_observations.iter().map(|o| o.id.as_str()).collect();
+        let task_actions: Vec<CorrectiveAction> = inner
+            .actions
+            .iter()
+            .filter(|a| obs_ids.contains(&a.observation_id.as_str()))
+            .cloned()
+            .collect();
+
+        // Determine reflection level based on volume and severity.
+        let num_critical = task_observations
+            .iter()
+            .filter(|o| o.severity.eq_ignore_ascii_case("critical"))
+            .count();
+        let reflection_level = if num_critical > 0 {
+            ReflectionLevel::Critical
+        } else if task_observations.len() >= 10 {
+            ReflectionLevel::Deep
+        } else if task_observations.len() >= 3 {
+            ReflectionLevel::Surface
+        } else {
+            ReflectionLevel::None
+        };
+
+        // Compute average severity-based confidence score.
+        // Each observation contributes: 1.0 - penalty(severity)
+        //   low      → 0.0 penalty
+        //   medium   → 0.2 penalty
+        //   high     → 0.4 penalty
+        //   critical → 0.7 penalty
+        //   unknown  → 0.1 penalty
+        let total = task_observations.len();
+        let confidence_score = if total == 0 {
+            0.0
+        } else {
+            let sum: f64 = task_observations
+                .iter()
+                .map(|o| {
+                    let penalty = match o.severity.to_lowercase().as_str() {
+                        "low" => 0.0,
+                        "medium" => 0.2,
+                        "high" => 0.4,
+                        "critical" => 0.7,
+                        _ => 0.1,
+                    };
+                    f64::max(1.0 - penalty, 0.0)
+                })
+                .sum();
+            sum / total as f64
+        };
+
+        // Build an overall assessment sentence.
+        let unresolved_count = task_observations.iter().filter(|o| !o.is_resolved).count();
+        let action_count = task_actions.len();
+        let completed_actions = task_actions
+            .iter()
+            .filter(|a| a.status == CorrectiveStatus::Completed)
+            .count();
+        let pending_actions = task_actions
+            .iter()
+            .filter(|a| a.status == CorrectiveStatus::Pending)
+            .count();
+
+        let overall_assessment = format!(
+            "Task '{}': {} observations ({} unresolved, {} actions taken, {} completed, {} pending). Confidence: {:.2}.",
+            task_id, total, unresolved_count, action_count, completed_actions, pending_actions, confidence_score
+        );
+
+        let report = ReflectionReport {
+            id: report_id.clone(),
+            task_id: task_id.to_string(),
+            observations: task_observations.clone(),
+            actions_taken: task_actions.clone(),
+            overall_assessment,
+            confidence_score,
+            reflection_level,
+            created_ms: now_ms(),
+        };
+
+        inner.reports.push(report);
+        Ok(report_id)
+    }
+
+    /// Get a single reflection report by id.
+    pub fn get_report(&self, id: &str) -> Result<ReflectionReport> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .reports
+            .iter()
+            .find(|r| r.id == id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("report '{}' not found", id))
+    }
+
+    /// List all generated reflection reports.
+    pub fn list_reports(&self) -> Vec<ReflectionReport> {
+        let inner = self.inner.lock().unwrap();
+        inner.reports.clone()
+    }
+
+    // ── Auto-reflection ─────────────────────────────────────────────────
+
+    /// Automatically trigger reflection if there are enough unresolved
+    /// observations across all tasks (based on `min_observations_for_reflection`
+    /// and only when `enable_auto_reflection` is true).
+    ///
+    /// Returns the list of report ids generated (one per affected task).
+    pub fn autoreflect(&self) -> Vec<String> {
+        let inner = self.inner.lock().unwrap();
+
+        if !inner.config.enable_auto_reflection {
+            return Vec::new();
+        }
+
+        let unresolved_count = inner
+            .observations
+            .iter()
+            .filter(|o| !o.is_resolved)
+            .count();
+
+        if (unresolved_count as u32) < inner.config.min_observations_for_reflection {
+            return Vec::new();
+        }
+
+        // Collect distinct task ids that have at least one unresolved
+        // observation.
+        let tasks: Vec<String> = {
+            let mut seen = std::collections::HashSet::new();
+            let mut result = Vec::new();
+            for obs in &inner.observations {
+                if !obs.is_resolved && seen.insert(obs.task_id.clone()) {
+                    result.push(obs.task_id.clone());
+                }
+            }
+            result
+        };
+        // We need to release the lock before calling generate_reflection_report.
+        drop(inner);
+
+        let mut report_ids = Vec::new();
+        for task_id in tasks {
+            if let Ok(id) = self.generate_reflection_report(&task_id) {
+                report_ids.push(id);
+            }
+        }
+        report_ids
+    }
+
+    // ── Profile ─────────────────────────────────────────────────────────
+
+    /// Return a snapshot of the controller's runtime metrics.
+    pub fn profile(&self) -> MetacognitiveProfile {
+        let inner = self.inner.lock().unwrap();
+
+        let total_observations = inner.observations.len();
+        let unresolved_observations = inner.observations.iter().filter(|o| !o.is_resolved).count();
+
+        let total_actions_taken = inner
+            .actions
+            .iter()
+            .filter(|a| a.status != CorrectiveStatus::Pending)
+            .count();
+
+        let successful_actions = inner
+            .actions
+            .iter()
+            .filter(|a| a.status == CorrectiveStatus::Completed)
+            .count();
+
+        let total_reports = inner.reports.len();
+        let avg_confidence = if total_reports == 0 {
+            0.0
+        } else {
+            inner.reports.iter().map(|r| r.confidence_score).sum::<f64>() / total_reports as f64
+        };
+
+        MetacognitiveProfile {
+            total_observations,
+            unresolved_observations,
+            total_actions_taken,
+            successful_actions,
+            total_reports,
+            avg_confidence,
+        }
+    }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_config() -> MetacognitiveConfig {
+        MetacognitiveConfig {
+            enable_auto_reflection: true,
+            min_observations_for_reflection: 3,
+            max_observations: 200,
+            max_actions: 100,
+        }
+    }
+
+    // ── 1. Fresh controller is empty ─────────────────────────────────────
+    #[test]
+    fn test_new_controller_empty() {
+        let ctrl = MetacognitiveController::new(base_config());
+        assert!(ctrl.list_observations(false).is_empty());
+        assert!(ctrl.list_actions(None).is_empty());
+        assert!(ctrl.list_reports().is_empty());
+        let p = ctrl.profile();
+        assert_eq!(p.total_observations, 0);
+        assert_eq!(p.unresolved_observations, 0);
+        assert_eq!(p.total_actions_taken, 0);
+        assert_eq!(p.successful_actions, 0);
+        assert_eq!(p.total_reports, 0);
+        assert!((p.avg_confidence - 0.0).abs() < 1e-9);
+    }
+
+    // ── 2. Record an observation and verify fields ──────────────────────
+    #[test]
+    fn test_record_observation() {
+        let ctrl = MetacognitiveController::new(base_config());
+        let id = ctrl
+            .record_observation("task-1", "agent-a", "latency_spike", "high", "Latency exceeded 5s")
+            .unwrap();
+
+        assert!(id.starts_with("obs-"));
+
+        let obs = ctrl.get_observation(&id).unwrap();
+        assert_eq!(obs.task_id, "task-1");
+        assert_eq!(obs.agent, "agent-a");
+        assert_eq!(obs.observation_type, "latency_spike");
+        assert_eq!(obs.severity, "high");
+        assert_eq!(obs.description, "Latency exceeded 5s");
+        assert!(!obs.is_resolved);
+        assert!(obs.timestamp_ms > 0);
+
+        // Record a second observation to confirm id uniqueness.
+        let id2 = ctrl
+            .record_observation("task-1", "agent-b", "error", "critical", "Null pointer")
+            .unwrap();
+        assert_ne!(id, id2);
+    }
+
+    // ── 3. List observations with and without unresolved filter ──────────
+    #[test]
+    fn test_list_observations() {
+        let ctrl = MetacognitiveController::new(base_config());
+        let id1 = ctrl
+            .record_observation("task-1", "agent-a", "latency_spike", "high", "Slow")
+            .unwrap();
+        let id2 = ctrl
+            .record_observation("task-2", "agent-b", "error", "critical", "Crash")
+            .unwrap();
+
+        // Both visible in full list.
+        assert_eq!(ctrl.list_observations(false).len(), 2);
+
+        // Resolve the first one.
+        ctrl.resolve_observation(&id1).unwrap();
+
+        // unresolved_only = true should only return the unresolved id2.
+        let unresolved = ctrl.list_observations(true);
+        assert_eq!(unresolved.len(), 1);
+        assert_eq!(unresolved[0].id, id2);
+
+        // Full list still contains both.
+        assert_eq!(ctrl.list_observations(false).len(), 2);
+    }
+
+    // ── 4. Resolve an observation ───────────────────────────────────────
+    #[test]
+    fn test_resolve_observation() {
+        let ctrl = MetacognitiveController::new(base_config());
+        let id = ctrl
+            .record_observation("task-1", "agent-a", "low_confidence", "medium", "Score 0.3")
+            .unwrap();
+
+        assert!(!ctrl.get_observation(&id).unwrap().is_resolved);
+
+        ctrl.resolve_observation(&id).unwrap();
+        assert!(ctrl.get_observation(&id).unwrap().is_resolved);
+
+        // Resolving a non-existent observation fails.
+        assert!(ctrl.resolve_observation("obs-9999").is_err());
+    }
+
+    // ── 5. Propose and execute an action ────────────────────────────────
+    #[test]
+    fn test_propose_and_execute_action() {
+        let ctrl = MetacognitiveController::new(base_config());
+        let obs_id = ctrl
+            .record_observation("task-1", "agent-a", "error", "high", "Timeout")
+            .unwrap();
+
+        let action_id = ctrl
+            .propose_action(&obs_id, "retry", "Retry the request with backoff")
+            .unwrap();
+        assert!(action_id.starts_with("action-"));
+
+        // Action starts as Pending.
+        let actions = ctrl.list_actions(None);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].status, CorrectiveStatus::Pending);
+
+        // Execute transitions to InProgress.
+        ctrl.execute_action(&action_id).unwrap();
+        let actions = ctrl.list_actions(Some(CorrectiveStatus::InProgress));
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].id, action_id);
+
+        // Executing an already-executed action fails.
+        assert!(ctrl.execute_action(&action_id).is_err());
+    }
+
+    // ── 6. Complete an action ───────────────────────────────────────────
+    #[test]
+    fn test_complete_action() {
+        let ctrl = MetacognitiveController::new(base_config());
+        let obs_id = ctrl
+            .record_observation("task-1", "agent-a", "error", "medium", "Parse failure")
+            .unwrap();
+        let action_id = ctrl
+            .propose_action(&obs_id, "fallback", "Use fallback parser")
+            .unwrap();
+
+        // Can't complete a Pending action.
+        assert!(ctrl.complete_action(&action_id).is_err());
+
+        ctrl.execute_action(&action_id).unwrap();
+        ctrl.complete_action(&action_id).unwrap();
+
+        let action = ctrl
+            .list_actions(Some(CorrectiveStatus::Completed))
+            .pop()
+            .unwrap();
+        assert_eq!(action.id, action_id);
+        assert!(action.resolved_ms > 0);
+
+        // Completing again fails.
+        assert!(ctrl.complete_action(&action_id).is_err());
+    }
+
+    // ── 7. Fail an action ───────────────────────────────────────────────
+    #[test]
+    fn test_fail_action() {
+        let ctrl = MetacognitiveController::new(base_config());
+        let obs_id = ctrl
+            .record_observation("task-1", "agent-a", "error", "high", "Disk full")
+            .unwrap();
+        let action_id = ctrl
+            .propose_action(&obs_id, "retry", "Retry after cleanup")
+            .unwrap();
+
+        // Can't fail a Pending action.
+        assert!(ctrl.fail_action(&action_id, "timeout").is_err());
+
+        ctrl.execute_action(&action_id).unwrap();
+        ctrl.fail_action(&action_id, "out of retries").unwrap();
+
+        let action = ctrl
+            .list_actions(Some(CorrectiveStatus::Failed))
+            .pop()
+            .unwrap();
+        assert_eq!(action.id, action_id);
+        assert!(action.resolved_ms > 0);
+        assert!(action.description.contains("out of retries"));
+
+        // Skipping an already failed action fails.
+        assert!(ctrl.skip_action(&action_id).is_err());
+    }
+
+    // ── 8. List actions by status ───────────────────────────────────────
+    #[test]
+    fn test_list_actions_by_status() {
+        let ctrl = MetacognitiveController::new(base_config());
+
+        // Create three actions with different final statuses.
+        let obs = ctrl
+            .record_observation("task-1", "a", "error", "low", "E1")
+            .unwrap();
+        let a1 = ctrl.propose_action(&obs, "retry", "R1").unwrap();
+        let a2 = ctrl.propose_action(&obs, "retry", "R2").unwrap();
+        let a3 = ctrl.propose_action(&obs, "escalate", "E1").unwrap();
+
+        ctrl.execute_action(&a1).unwrap();
+        ctrl.complete_action(&a1).unwrap();
+
+        ctrl.execute_action(&a2).unwrap();
+        ctrl.fail_action(&a2, "n/a").unwrap();
+
+        ctrl.skip_action(&a3).unwrap();
+
+        assert_eq!(
+            ctrl.list_actions(Some(CorrectiveStatus::Completed)).len(),
+            1
+        );
+        assert_eq!(ctrl.list_actions(Some(CorrectiveStatus::Failed)).len(), 1);
+        assert_eq!(ctrl.list_actions(Some(CorrectiveStatus::Skipped)).len(), 1);
+        assert_eq!(ctrl.list_actions(Some(CorrectiveStatus::Pending)).len(), 0);
+        assert_eq!(ctrl.list_actions(None).len(), 3);
+    }
+
+    // ── 9. Generate a reflection report ─────────────────────────────────
+    #[test]
+    fn test_generate_reflection_report() {
+        let ctrl = MetacognitiveController::new(base_config());
+
+        // Record observations for two different tasks.
+        ctrl.record_observation("task-1", "agent-a", "latency_spike", "high", "Slow #1")
+            .unwrap();
+        ctrl.record_observation("task-1", "agent-a", "error", "critical", "Critical error")
+            .unwrap();
+        ctrl.record_observation("task-2", "agent-b", "low_confidence", "low", "Score 0.6")
+            .unwrap();
+
+        let report_id = ctrl.generate_reflection_report("task-1").unwrap();
+        assert!(report_id.starts_with("report-"));
+
+        let report = ctrl.get_report(&report_id).unwrap();
+        assert_eq!(report.task_id, "task-1");
+        assert_eq!(report.observations.len(), 2);
+        assert_eq!(report.reflection_level, ReflectionLevel::Critical); // has critical severity
+        assert!(report.confidence_score > 0.0);
+        assert!(!report.overall_assessment.is_empty());
+        assert!(report.created_ms > 0);
+    }
+
+    // ── 10. Auto-reflection triggers when enough unresolved obs ──────────
+    #[test]
+    fn test_autoreflect() {
+        // Use config with low threshold so auto-reflection triggers easily.
+        let config = MetacognitiveConfig {
+            enable_auto_reflection: true,
+            min_observations_for_reflection: 2,
+            max_observations: 200,
+            max_actions: 100,
+        };
+        let ctrl = MetacognitiveController::new(config);
+
+        // No reports yet.
+        assert!(ctrl.list_reports().is_empty());
+
+        // Auto-reflect with zero observations → nothing.
+        assert!(ctrl.autoreflect().is_empty());
+
+        // Add one observation (below threshold of 2) → still nothing.
+        ctrl.record_observation("task-1", "agent-a", "latency_spike", "medium", "Spike")
+            .unwrap();
+        assert!(ctrl.autoreflect().is_empty());
+
+        // Add a second observation → should trigger reflection.
+        ctrl.record_observation("task-1", "agent-a", "error", "high", "Error")
+            .unwrap();
+        let ids = ctrl.autoreflect();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ctrl.list_reports().len(), 1);
+
+        // Verify the generated report.
+        let report = ctrl.get_report(&ids[0]).unwrap();
+        assert_eq!(report.task_id, "task-1");
+        assert_eq!(report.observations.len(), 2);
+
+        // Auto-reflect again while still having unresolved observations
+        // should generate another report for the same task.
+        let ids2 = ctrl.autoreflect();
+        assert_eq!(ids2.len(), 1);
+        assert_eq!(ctrl.list_reports().len(), 2);
+    }
+
+    // ── 11. Get report ──────────────────────────────────────────────────
+    #[test]
+    fn test_get_report() {
+        let ctrl = MetacognitiveController::new(base_config());
+        ctrl.record_observation("task-1", "a", "error", "low", "Minor").unwrap();
+
+        let id = ctrl.generate_reflection_report("task-1").unwrap();
+        let report = ctrl.get_report(&id).unwrap();
+        assert_eq!(report.id, id);
+
+        // Non-existent report.
+        assert!(ctrl.get_report("report-9999").is_err());
+    }
+
+    // ── 12. Profile reflects state accurately ────────────────────────────
+    #[test]
+    fn test_profile_reflects_state() {
+        let ctrl = MetacognitiveController::new(base_config());
+
+        // Record some observations.
+        ctrl.record_observation("task-1", "a", "latency_spike", "high", "Slow")
+            .unwrap();
+        let obs2 = ctrl
+            .record_observation("task-1", "b", "error", "critical", "Critical")
+            .unwrap();
+        ctrl.record_observation("task-2", "c", "low_confidence", "low", "Conf")
+            .unwrap();
+
+        // Resolve one.
+        ctrl.resolve_observation(&obs2).unwrap();
+
+        // Propose and complete one action.
+        let aid = ctrl.propose_action(&obs2, "retry", "Retry").unwrap();
+        ctrl.execute_action(&aid).unwrap();
+        ctrl.complete_action(&aid).unwrap();
+
+        // Propose and fail another action.
+        let obs3 = ctrl
+            .record_observation("task-1", "a", "error", "medium", "M")
+            .unwrap();
+        let aid2 = ctrl.propose_action(&obs3, "fallback", "Fallback").unwrap();
+        ctrl.execute_action(&aid2).unwrap();
+        ctrl.fail_action(&aid2, "no fallback available").unwrap();
+
+        // Generate two reports.
+        ctrl.generate_reflection_report("task-1").unwrap();
+        ctrl.generate_reflection_report("task-2").unwrap();
+
+        let p = ctrl.profile();
+        assert_eq!(p.total_observations, 4);
+        assert_eq!(p.unresolved_observations, 3); // obs2 resolved, the other 3 are not
+        assert_eq!(p.total_actions_taken, 2); // both left Pending state
+        assert_eq!(p.successful_actions, 1); // one Completed
+        assert_eq!(p.total_reports, 2);
+        assert!(p.avg_confidence > 0.0);
+    }
+}

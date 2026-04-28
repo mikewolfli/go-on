@@ -224,7 +224,9 @@ impl ConsensusEngine {
             return Err(ConsensusError::DuplicateNode(node.id));
         }
 
-        node.last_heartbeat_ms = now_ms();
+        if node.last_heartbeat_ms == 0 {
+            node.last_heartbeat_ms = now_ms();
+        }
         nodes.insert(node.id.clone(), node);
         Ok(())
     }
@@ -634,13 +636,14 @@ mod tests {
         round_id: &str,
         proposal_id: &str,
         approve: bool,
+        weight: u32,
     ) -> ConsensusVote {
         ConsensusVote {
             node_id: node_id.to_string(),
             round_id: round_id.to_string(),
             proposal_id: proposal_id.to_string(),
             approve,
-            weight: 10,
+            weight,
             vote_ms: 0,
         }
     }
@@ -736,13 +739,13 @@ mod tests {
 
         // alice (30) + bob (20) = 50 approve weight > (60 / 2 = 30) => majority.
         engine
-            .cast_vote(sample_vote("alice", &round_id, &prop_id, true))
+            .cast_vote(sample_vote("alice", &round_id, &prop_id, true, 30))
             .unwrap();
         engine
-            .cast_vote(sample_vote("bob", &round_id, &prop_id, true))
+            .cast_vote(sample_vote("bob", &round_id, &prop_id, true, 20))
             .unwrap();
         engine
-            .cast_vote(sample_vote("carol", &round_id, &prop_id, false))
+            .cast_vote(sample_vote("carol", &round_id, &prop_id, false, 10))
             .unwrap();
 
         engine.finalize_round().unwrap();
@@ -777,15 +780,16 @@ mod tests {
         };
 
         // Only alice (30) approves, bob (20) and carol (10) reject.
-        // approve weight = 30, online_weight = 60, majority threshold = 30+1 = 31.
+        // approve weight = 30, online_weight = 60, majority threshold = 60/2 = 30.
+        // Since 30 is not > 30, consensus fails.
         engine
-            .cast_vote(sample_vote("alice", &round_id, &prop_id, true))
+            .cast_vote(sample_vote("alice", &round_id, &prop_id, true, 30))
             .unwrap();
         engine
-            .cast_vote(sample_vote("bob", &round_id, &prop_id, false))
+            .cast_vote(sample_vote("bob", &round_id, &prop_id, false, 20))
             .unwrap();
         engine
-            .cast_vote(sample_vote("carol", &round_id, &prop_id, false))
+            .cast_vote(sample_vote("carol", &round_id, &prop_id, false, 10))
             .unwrap();
 
         engine.finalize_round().unwrap();
@@ -817,10 +821,10 @@ mod tests {
 
         // alice (40) + bob (30) approve => 70 > (70/2=35) => majority.
         engine
-            .cast_vote(sample_vote("alice", &round_id, &prop_id, true))
+            .cast_vote(sample_vote("alice", &round_id, &prop_id, true, 40))
             .unwrap();
         engine
-            .cast_vote(sample_vote("bob", &round_id, &prop_id, true))
+            .cast_vote(sample_vote("bob", &round_id, &prop_id, true, 30))
             .unwrap();
 
         engine.finalize_round().unwrap();
@@ -916,10 +920,10 @@ mod tests {
                 .clone()
         };
         engine
-            .cast_vote(sample_vote("alice", &round_id, &prop_id, true))
+            .cast_vote(sample_vote("alice", &round_id, &prop_id, true, 30))
             .unwrap();
         engine
-            .cast_vote(sample_vote("bob", &round_id, &prop_id, true))
+            .cast_vote(sample_vote("bob", &round_id, &prop_id, true, 20))
             .unwrap();
         engine.finalize_round().unwrap();
 

@@ -22,14 +22,90 @@
 //!   full peer set and shared‑entry machinery is active.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+// ---------------------------------------------------------------------------
+// Transport data types
+// ---------------------------------------------------------------------------
+
+/// Configuration for the HTTP-based memory transport.
+#[derive(Debug, Clone)]
+pub struct MemoryTransportConfig {
+    /// Address to listen on for incoming sync requests.
+    /// Default: "127.0.0.1:0" (OS-assigned port).
+    pub listen_addr: String,
+    /// Timeout in milliseconds for outbound connect attempts.
+    /// Default: 5000.
+    pub connect_timeout_ms: u64,
+    /// Interval in milliseconds between background sync cycles.
+    /// Default: 30000.
+    pub sync_interval_ms: u64,
+    /// Maximum payload size in bytes for a single sync request.
+    /// Default: 1_048_576 (1 MiB).
+    pub max_payload_bytes: usize,
+}
+
+impl Default for MemoryTransportConfig {
+    fn default() -> Self {
+        Self {
+            listen_addr: "127.0.0.1:0".to_string(),
+            connect_timeout_ms: 5000,
+            sync_interval_ms: 30000,
+            max_payload_bytes: 1_048_576,
+        }
+    }
+}
+
+/// Represents the current status of a sync operation.
+#[derive(Debug, Clone)]
+pub enum SyncStatus {
+    /// No sync operation is in progress.
+    Idle,
+    /// A sync operation is currently running.
+    Syncing,
+    /// The last sync operation failed with the given error message.
+    Failed(String),
+    /// The last sync operation completed successfully.
+    Completed {
+        /// Number of entries that were synced.
+        entries_synced: usize,
+        /// Duration of the sync operation in milliseconds.
+        duration_ms: u64,
+    },
+}
+
+impl Default for SyncStatus {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+/// Statistics collected by the transport layer.
+#[derive(Debug, Clone, Default)]
+pub struct TransportStats {
+    /// Total number of sync operations sent to peers.
+    pub total_syncs_sent: u64,
+    /// Total number of sync operations received from peers.
+    pub total_syncs_received: u64,
+    /// Total number of transport-level errors encountered.
+    pub total_errors: u64,
+    /// Status of the last sync operation.
+    pub last_sync_status: SyncStatus,
+    /// Total bytes sent over the transport.
+    pub bytes_sent: u64,
+    /// Total bytes received over the transport.
+    pub bytes_received: u64,
+}
 
 // ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
 
 /// A single memory entry that originated on some node.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryBusEntry {
     /// Unique identifier (e.g. UUID or ULID).
     pub id: String,
@@ -50,7 +126,7 @@ pub struct MemoryBusEntry {
 }
 
 /// A memory entry that was synced from a remote peer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SharedMemoryEntry {
     /// The original entry data.
     pub entry: MemoryBusEntry,
@@ -77,6 +153,12 @@ pub struct DistributedMemoryBusProfile {
     pub total_syncs: u64,
     /// Total entries removed by pruning.
     pub entries_pruned: u64,
+    /// Whether the transport layer is running.
+    pub transport_running: bool,
+    /// Number of reachable transport peers.
+    pub transport_peers_reachable: u32,
+    /// Total bytes synced over the transport layer.
+    pub total_bytes_synced: u64,
 }
 
 impl Default for DistributedMemoryBusProfile {
@@ -88,6 +170,9 @@ impl Default for DistributedMemoryBusProfile {
             shared_entries: 0,
             total_syncs: 0,
             entries_pruned: 0,
+            transport_running: false,
+            transport_peers_reachable: 0,
+            total_bytes_synced: 0,
         }
     }
 }
@@ -111,6 +196,14 @@ pub struct DistributedMemoryBus {
     max_entries: usize,
     /// Profile / metrics snapshot.
     profile: Arc<Mutex<DistributedMemoryBusProfile>>,
+    /// Transport running flag.
+    transport_running: Arc<AtomicBool>,
+    /// Transport configuration.
+    transport_config: Arc<Mutex<Option<MemoryTransportConfig>>>,
+    /// Transport statistics.
+    transport_stats: Arc<Mutex<TransportStats>>,
+    /// Handle for the background sync thread.
+    sync_thread: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl DistributedMemoryBus {
@@ -130,6 +223,10 @@ impl DistributedMemoryBus {
             shared_entries: Arc::new(Mutex::new(VecDeque::with_capacity(max))),
             max_entries: max,
             profile: Arc::new(Mutex::new(DistributedMemoryBusProfile::default())),
+            transport_running: Arc::new(AtomicBool::new(false)),
+            transport_config: Arc::new(Mutex::new(None)),
+            transport_stats: Arc::new(Mutex::new(TransportStats::default())),
+            sync_thread: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -427,6 +524,321 @@ impl DistributedMemoryBus {
             local.pop_front();
         }
     }
+
+    // ------------------------------------------------------------------
+    // Transport layer
+    // ------------------------------------------------------------------
+
+    /// Start the background transport sync thread.
+    ///
+    /// This spawns a thread that periodically serialises local entries and
+    /// pushes them to all known peers via the simulated HTTP transport.
+    #[cfg(feature = "profile-multi-users-server")]
+    pub fn start_transport(&self, config: MemoryTransportConfig) -> anyhow::Result<()> {
+        if self.transport_running.load(Ordering::SeqCst) {
+            anyhow::bail!("Transport is already running");
+        }
+
+        // Store config
+        {
+            let mut cfg = self.transport_config.lock().expect("transport_config lock");
+            *cfg = Some(config.clone());
+        }
+
+        self.transport_running.store(true, Ordering::SeqCst);
+
+        // Clone Arcs for the background thread
+        let running = Arc::clone(&self.transport_running);
+        let transport_config = Arc::clone(&self.transport_config);
+        let local_entries = Arc::clone(&self.local_entries);
+        let remote_peers = Arc::clone(&self.remote_peers);
+        let shared_entries = Arc::clone(&self.shared_entries);
+        let profile = Arc::clone(&self.profile);
+        let stats = Arc::clone(&self.transport_stats);
+
+        let handle = thread::Builder::new()
+            .name("dmb-transport".into())
+            .spawn(move || {
+                let interval = {
+                    let cfg = transport_config.lock().expect("transport_config lock");
+                    cfg.as_ref().map(|c| c.sync_interval_ms).unwrap_or(30_000)
+                };
+
+                while running.load(Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(interval));
+
+                    if !running.load(Ordering::SeqCst) {
+                        break;
+                    }
+
+                    // Perform sync
+                    let result = Self::do_sync(
+                        &local_entries,
+                        &remote_peers,
+                        &shared_entries,
+                        &profile,
+                        &stats,
+                    );
+
+                    // Update profile with transport state
+                    if let Ok(mut p) = profile.lock() {
+                        let peers_ok = remote_peers
+                            .read()
+                            .map(|r| r.len() as u32)
+                            .unwrap_or(0);
+                        p.transport_running = true;
+                        p.transport_peers_reachable = peers_ok;
+                    }
+
+                    if let Err(e) = result {
+                        eprintln!("[dmb-transport] Sync error: {}", e);
+                        if let Ok(mut s) = stats.lock() {
+                            s.total_errors = s.total_errors.wrapping_add(1);
+                            s.last_sync_status = SyncStatus::Failed(e.to_string());
+                        }
+                    }
+                }
+            })?;
+
+        *self.sync_thread.lock().expect("sync_thread lock") = Some(handle);
+
+        // Update profile
+        if let Ok(mut p) = self.profile.lock() {
+            p.transport_running = true;
+        }
+
+        Ok(())
+    }
+
+    /// Non‑multi‑user stub: transport is a no‑op.
+    #[cfg(not(feature = "profile-multi-users-server"))]
+    pub fn start_transport(&self, _config: MemoryTransportConfig) -> anyhow::Result<()> {
+        anyhow::bail!("Transport is not available in single-node mode");
+    }
+
+    /// Stop the background transport sync thread.
+    #[cfg(feature = "profile-multi-users-server")]
+    pub fn stop_transport(&self) -> anyhow::Result<()> {
+        if !self.transport_running.load(Ordering::SeqCst) {
+            anyhow::bail!("Transport is not running");
+        }
+
+        self.transport_running.store(false, Ordering::SeqCst);
+
+        // Join the background thread
+        if let Some(handle) = self.sync_thread.lock().expect("sync_thread lock").take() {
+            let _ = handle.join();
+        }
+
+        // Update profile
+        if let Ok(mut p) = self.profile.lock() {
+            p.transport_running = false;
+        }
+
+        Ok(())
+    }
+
+    /// Non‑multi‑user stub.
+    #[cfg(not(feature = "profile-multi-users-server"))]
+    pub fn stop_transport(&self) -> anyhow::Result<()> {
+        anyhow::bail!("Transport is not available in single-node mode");
+    }
+
+    /// Trigger an immediate sync operation.
+    ///
+    /// Returns the [`SyncStatus`] of the operation.
+    #[cfg(feature = "profile-multi-users-server")]
+    pub fn sync_now(&self) -> anyhow::Result<SyncStatus> {
+        Self::do_sync(
+            &self.local_entries,
+            &self.remote_peers,
+            &self.shared_entries,
+            &self.profile,
+            &self.transport_stats,
+        )?;
+
+        let status = self
+            .transport_stats
+            .lock()
+            .map(|s| s.last_sync_status.clone())
+            .unwrap_or(SyncStatus::Idle);
+
+        Ok(status)
+    }
+
+    /// Non‑multi‑user stub.
+    #[cfg(not(feature = "profile-multi-users-server"))]
+    pub fn sync_now(&self) -> anyhow::Result<SyncStatus> {
+        anyhow::bail!("Transport is not available in single-node mode");
+    }
+
+    /// Return a snapshot of the current transport statistics.
+    pub fn transport_stats(&self) -> TransportStats {
+        self.transport_stats
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default()
+    }
+
+    /// Simulate receiving shared entries from a remote peer.
+    ///
+    /// Deserialises the JSON payload and stores the entries as shared entries
+    /// on this node.
+    #[cfg(feature = "profile-multi-users-server")]
+    pub fn ingest_shared(&self, entries_json: &str) -> anyhow::Result<usize> {
+        let entries: Vec<MemoryBusEntry> = serde_json::from_str(entries_json)?;
+
+        let count = entries.len();
+        let now = now_ms();
+
+        let mut guard = self.shared_entries.lock().expect("shared_entries lock");
+        for entry in entries {
+            let shared = SharedMemoryEntry {
+                entry,
+                synced_ms: now,
+                source_node: "remote".to_string(),
+                sync_count: 1,
+            };
+            guard.push_back(shared);
+        }
+        let shared_len = guard.len();
+        drop(guard);
+
+        // Evict from local if over capacity
+        if let Ok(mut local) = self.local_entries.lock() {
+            let total = local.len() + shared_len;
+            if total > self.max_entries {
+                let to_remove = total - self.max_entries;
+                for _ in 0..to_remove {
+                    local.pop_front();
+                }
+            }
+        }
+
+        // Update profile
+        if let Ok(mut p) = self.profile.lock() {
+            p.shared_entries = shared_len as u32;
+            p.total_syncs = p.total_syncs.wrapping_add(1);
+        }
+
+        Ok(count)
+    }
+
+    /// Non‑multi‑user stub.
+    #[cfg(not(feature = "profile-multi-users-server"))]
+    pub fn ingest_shared(&self, _entries_json: &str) -> anyhow::Result<usize> {
+        anyhow::bail!("ingest_shared is not available in single-node mode");
+    }
+
+    // ------------------------------------------------------------------
+    // Internal transport helpers
+    // ------------------------------------------------------------------
+
+    /// Perform a single sync cycle: collect local entries and push them
+    /// to all known peers via the simulated transport.
+    #[cfg(feature = "profile-multi-users-server")]
+    fn do_sync(
+        local_entries: &Arc<Mutex<VecDeque<MemoryBusEntry>>>,
+        remote_peers: &Arc<RwLock<HashMap<String, String>>>,
+        shared_entries: &Arc<Mutex<VecDeque<SharedMemoryEntry>>>,
+        profile: &Arc<Mutex<DistributedMemoryBusProfile>>,
+        stats: &Arc<Mutex<TransportStats>>,
+    ) -> anyhow::Result<SyncStatus> {
+        let start = Instant::now();
+
+        // Collect local entries that haven't been synced yet
+        let entries_to_sync: Vec<MemoryBusEntry> = {
+            let guard = local_entries.lock().expect("local_entries lock");
+            guard.iter().cloned().collect()
+        };
+
+        if entries_to_sync.is_empty() {
+            let mut s = stats.lock().expect("stats lock");
+            s.last_sync_status = SyncStatus::Idle;
+            return Ok(SyncStatus::Idle);
+        }
+
+        // Serialise all entries to JSON
+        let payload = serde_json::to_string(&entries_to_sync)?;
+        let payload_bytes = payload.len();
+
+        // Get current peers
+        let peers: HashMap<String, String> = remote_peers
+            .read()
+            .map(|r| r.clone())
+            .unwrap_or_default();
+
+        if peers.is_empty() {
+            // No peers to sync to — still track as completed
+            let duration = start.elapsed().as_millis() as u64;
+            let status = SyncStatus::Completed {
+                entries_synced: 0,
+                duration_ms: duration,
+            };
+            let mut s = stats.lock().expect("stats lock");
+            s.last_sync_status = status.clone();
+            return Ok(status);
+        }
+
+        let mut total_entries_synced = 0usize;
+        let mut total_bytes_sent = 0u64;
+
+        // Simulate sending to each peer
+        for (node_id, address) in &peers {
+            // Simulated HTTP POST of JSON payload
+            eprintln!(
+                "[dmb-transport] SYNC to peer {} @ {}: {} entries, {} bytes",
+                node_id,
+                address,
+                entries_to_sync.len(),
+                payload_bytes
+            );
+
+            // Simulate successful transmission: ingest the entries as if the
+            // peer received them. In a real implementation this would be an
+            // actual HTTP call. Here we simulate by storing locally as shared.
+            {
+                let mut guard = shared_entries.lock().expect("shared_entries lock");
+                let now = now_ms();
+                for entry in &entries_to_sync {
+                    let shared = SharedMemoryEntry {
+                        entry: entry.clone(),
+                        synced_ms: now,
+                        source_node: node_id.clone(),
+                        sync_count: 1,
+                    };
+                    guard.push_back(shared);
+                }
+            }
+
+            total_entries_synced += entries_to_sync.len();
+            total_bytes_sent += payload_bytes as u64;
+        }
+
+        let duration = start.elapsed().as_millis() as u64;
+        let status = SyncStatus::Completed {
+            entries_synced: total_entries_synced,
+            duration_ms: duration,
+        };
+
+        // Update stats
+        {
+            let mut s = stats.lock().expect("stats lock");
+            s.total_syncs_sent = s.total_syncs_sent.wrapping_add(1);
+            s.total_syncs_received = s.total_syncs_received.wrapping_add(peers.len() as u64);
+            s.bytes_sent = s.bytes_sent.wrapping_add(total_bytes_sent);
+            s.last_sync_status = status.clone();
+        }
+
+        // Update profile
+        if let Ok(mut p) = profile.lock() {
+            p.total_syncs = p.total_syncs.wrapping_add(1);
+            p.transport_peers_reachable = peers.len() as u32;
+            p.total_bytes_synced = p.total_bytes_synced.wrapping_add(total_bytes_sent);
+        }
+
+        Ok(status)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -647,5 +1059,203 @@ mod tests {
             "oldest entry 'a' should have been evicted"
         );
         assert_eq!(bus.find_by_key("d").len(), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // Transport tests
+    // ------------------------------------------------------------------
+
+    #[cfg(feature = "profile-multi-users-server")]
+    fn make_bus_with_peers(max: usize) -> DistributedMemoryBus {
+        let bus = DistributedMemoryBus::new(max);
+        bus.register_peer("peer-alpha", "10.0.0.1:9001");
+        bus.register_peer("peer-beta", "10.0.0.2:9002");
+        bus
+    }
+
+    #[test]
+    #[cfg(feature = "profile-multi-users-server")]
+    fn test_transport_start_stop() {
+        let bus = make_bus(100);
+        let config = MemoryTransportConfig::default();
+
+        // Start transport
+        assert!(bus.start_transport(config.clone()).is_ok());
+        // Starting again should fail
+        assert!(bus.start_transport(config.clone()).is_err());
+
+        // Stop transport
+        assert!(bus.stop_transport().is_ok());
+        // Stopping again should fail
+        assert!(bus.stop_transport().is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "profile-multi-users-server")]
+    fn test_sync_now_returns_status() {
+        let bus = make_bus_with_peers(100);
+        bus.store_local("alpha", "value-1", vec![], 0.9, 0);
+
+        let status = bus.sync_now().expect("sync_now should succeed");
+        match status {
+            SyncStatus::Completed {
+                entries_synced,
+                duration_ms: _,
+            } => {
+                assert!(
+                    entries_synced > 0,
+                    "expected entries to be synced"
+                );
+            }
+            other => panic!("expected Completed status, got {:?}", other),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "profile-multi-users-server")]
+    fn test_ingest_shared_entries() {
+        let bus = make_bus(100);
+
+        let entries = vec![
+            MemoryBusEntry {
+                id: "id-1".into(),
+                node_id: "remote-node".into(),
+                key: "shared-key".into(),
+                value: "shared-val".into(),
+                tags: vec!["tag-a".into()],
+                confidence: 0.85,
+                created_ms: 1000,
+                ttl_ms: 0,
+            },
+        ];
+
+        let json = serde_json::to_string(&entries).unwrap();
+        let count = bus.ingest_shared(&json).expect("ingest_shared should succeed");
+        assert_eq!(count, 1, "expected 1 ingested entry");
+
+        let results = bus.find_by_key("shared-key");
+        assert_eq!(results.len(), 1, "should find the ingested entry");
+        assert_eq!(results[0].value, "shared-val");
+    }
+
+    #[test]
+    #[cfg(feature = "profile-multi-users-server")]
+    fn test_ingest_shared_invalid_json() {
+        let bus = make_bus(100);
+        let result = bus.ingest_shared("this is not valid json");
+        assert!(result.is_err(), "invalid JSON should return an error");
+    }
+
+    #[test]
+    fn test_transport_config_defaults() {
+        let config = MemoryTransportConfig::default();
+        assert_eq!(config.listen_addr, "127.0.0.1:0");
+        assert_eq!(config.connect_timeout_ms, 5000);
+        assert_eq!(config.sync_interval_ms, 30000);
+        assert_eq!(config.max_payload_bytes, 1_048_576);
+    }
+
+    #[test]
+    #[cfg(feature = "profile-multi-users-server")]
+    fn test_transport_stats() {
+        let bus = make_bus_with_peers(100);
+        bus.store_local("stats-key", "stats-val", vec![], 0.7, 0);
+
+        // Initial stats
+        let stats = bus.transport_stats();
+        assert_eq!(stats.total_syncs_sent, 0);
+        assert_eq!(stats.total_errors, 0);
+
+        // After sync
+        let _ = bus.sync_now();
+        let stats = bus.transport_stats();
+        assert_eq!(stats.total_syncs_sent, 1, "should have one sync sent");
+        assert!(stats.bytes_sent > 0, "should have sent some bytes");
+    }
+
+    #[test]
+    #[cfg(feature = "profile-multi-users-server")]
+    fn test_ingested_entries_are_findable() {
+        let bus = make_bus(100);
+
+        // Ingest an entry via simulated peer sync
+        let entries = vec![
+            MemoryBusEntry {
+                id: "remote-id-1".into(),
+                node_id: "peer-node".into(),
+                key: "remote-findable".into(),
+                value: "found-me".into(),
+                tags: vec!["discoverable".into()],
+                confidence: 0.95,
+                created_ms: 2000,
+                ttl_ms: 0,
+            },
+        ];
+
+        let json = serde_json::to_string(&entries).unwrap();
+        bus.ingest_shared(&json).unwrap();
+
+        // Query by key
+        let by_key = bus.find_by_key("remote-findable");
+        assert_eq!(by_key.len(), 1, "should find by key");
+        assert_eq!(by_key[0].value, "found-me");
+
+        // Query by tags
+        let by_tags = bus.find_by_tags(&["discoverable".to_string()]);
+        assert_eq!(by_tags.len(), 1, "should find by tags");
+        assert_eq!(by_tags[0].key, "remote-findable");
+    }
+
+    #[test]
+    #[cfg(feature = "profile-multi-users-server")]
+    fn test_transport_profile_includes_transport() {
+        let bus = make_bus(100);
+        let config = MemoryTransportConfig::default();
+
+        // Start transport
+        bus.start_transport(config).unwrap();
+
+        let p = bus.profile();
+        assert!(p.transport_running, "transport should be running");
+
+        // Stop and verify
+        bus.stop_transport().unwrap();
+        let p = bus.profile();
+        assert!(!p.transport_running, "transport should be stopped");
+    }
+
+    /// Test that sync_now with no entries returns Idle status.
+    #[test]
+    #[cfg(feature = "profile-multi-users-server")]
+    fn test_sync_now_empty_entries() {
+        let bus = make_bus_with_peers(100);
+        // No entries stored
+        let status = bus.sync_now().expect("sync_now should succeed");
+        match status {
+            SyncStatus::Idle => {} // expected
+            other => panic!("expected Idle status with no entries, got {:?}", other),
+        }
+    }
+
+    /// Test that sync_now with no peers returns Completed with zero entries.
+    #[test]
+    #[cfg(feature = "profile-multi-users-server")]
+    fn test_sync_now_no_peers() {
+        let bus = make_bus(100); // no peers registered
+        bus.store_local("orphan", "alone", vec![], 0.5, 0);
+
+        let status = bus.sync_now().expect("sync_now should succeed");
+        match status {
+            SyncStatus::Completed {
+                entries_synced,
+                duration_ms: _,
+            } => {
+                assert_eq!(
+                    entries_synced, 0,
+                    "no peers means no entries should be synced"
+                );
+            }
+            other => panic!("expected Completed status, got {:?}", other),
+        }
     }
 }

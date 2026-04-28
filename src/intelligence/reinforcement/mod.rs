@@ -5,6 +5,7 @@
 //! compatibility for paths like `crate::reinforcement::*`.
 
 pub mod action_check;
+pub mod federated;
 pub mod health;
 pub mod learning;
 pub mod task_plan;
@@ -92,6 +93,10 @@ fn now_ts() -> i64 {
 
 pub use action_check::{
     run_action_check, ActionCheckItem, ActionCheckKind, ActionCheckReport, FinalSummaryArtifact,
+};
+pub use federated::{
+    AggregationMethod, ContributionWeight, FederatedClientState, FederatedConfig,
+    FederatedLearning, FederatedProfile, FederatedRound, ModelWeights, SharedFederatedLearning,
 };
 pub use health::{
     aggregate_status, build_runtime_healthcheck_report, persist_runtime_healthcheck, CheckStatus,

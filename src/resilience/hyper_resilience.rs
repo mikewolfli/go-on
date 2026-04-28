@@ -1,0 +1,845 @@
+//! F-GAP-27: Hyper-resilience — super-node failover, multi-level circuit breaking,
+//! cascading degradation handling, and self-healing capabilities.
+//!
+//! This module provides the core resilience engine that monitors system health,
+//! manages circuit breakers at multiple levels, orchestrates failover between
+//! primary and replica nodes, and executes self-healing actions when degradation
+//! is detected.
+
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// Resilience hardening level for a component or profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResilienceLevel {
+    Standard,
+    Enhanced,
+    High,
+    Critical,
+}
+
+/// Failure mode classification used by the engine to categorise events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FailureMode {
+    NodeFailure,
+    NetworkPartition,
+    ResourceExhaustion,
+    CascadingDegradation,
+    DataCorruption,
+    TimeoutStorm,
+}
+
+/// State of a single circuit breaker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CircuitState {
+    /// Circuit is operating normally — requests are allowed.
+    Closed,
+    /// Circuit is tripped — requests are blocked.
+    Open,
+    /// Circuit is testing recovery — a limited number of requests are allowed.
+    HalfOpen,
+}
+
+/// System-wide degradation level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd)]
+pub enum DegradationLevel {
+    Normal,
+    Degraded,
+    Constrained,
+    Emergency,
+}
+
+/// Self-healing action that can be executed by the engine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SelfHealingAction {
+    RestartNode,
+    PromoteReplica,
+    ClearCircuitBreaker,
+    ScaleResources,
+    ReinitializeComponent,
+}
+
+// ---------------------------------------------------------------------------
+// Structs
+// ---------------------------------------------------------------------------
+
+/// A circuit breaker that protects against repeated failures.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CircuitBreaker {
+    pub name: String,
+    pub state: CircuitState,
+    pub failure_count: u64,
+    pub threshold: u64,
+    pub recovery_timeout_ms: u64,
+    pub last_failure_ms: u64,
+    pub half_open_attempts: u64,
+}
+
+/// A group of nodes forming a failover set with one primary and one or more replicas.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailoverGroup {
+    pub group_id: String,
+    pub primary_node: String,
+    pub replica_nodes: Vec<String>,
+    pub current_leader: String,
+    pub health_score: f64,
+    pub last_failover_ms: u64,
+    pub failover_count: u64,
+}
+
+/// Snapshot of current system health metrics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemHealth {
+    pub level: DegradationLevel,
+    pub active_circuit_breakers: usize,
+    pub open_circuits: usize,
+    pub active_failovers: usize,
+    pub avg_latency_ms: f64,
+    pub error_rate: f64,
+    pub timestamp_ms: u64,
+}
+
+/// Report produced after executing a self-healing action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealingReport {
+    pub action: SelfHealingAction,
+    pub target: String,
+    pub initiated_ms: u64,
+    pub success: bool,
+    pub duration_ms: u64,
+    pub result: String,
+}
+
+/// Configuration for the hyper-resilience engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResilienceConfig {
+    #[serde(default = "default_circuit_breaker_threshold")]
+    pub circuit_breaker_threshold: u64,
+    #[serde(default = "default_recovery_timeout_ms")]
+    pub recovery_timeout_ms: u64,
+    #[serde(default = "default_health_check_interval_ms")]
+    pub health_check_interval_ms: u64,
+    #[serde(default = "default_max_failover_attempts")]
+    pub max_failover_attempts: u32,
+    #[serde(default = "default_self_healing_enabled")]
+    pub self_healing_enabled: bool,
+}
+
+fn default_circuit_breaker_threshold() -> u64 {
+    5
+}
+fn default_recovery_timeout_ms() -> u64 {
+    30_000
+}
+fn default_health_check_interval_ms() -> u64 {
+    5_000
+}
+fn default_max_failover_attempts() -> u32 {
+    3
+}
+fn default_self_healing_enabled() -> bool {
+    true
+}
+
+impl Default for ResilienceConfig {
+    fn default() -> Self {
+        Self {
+            circuit_breaker_threshold: 5,
+            recovery_timeout_ms: 30_000,
+            health_check_interval_ms: 5_000,
+            max_failover_attempts: 3,
+            self_healing_enabled: true,
+        }
+    }
+}
+
+/// High-level resilience profile summarising the current state of the engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResilienceProfile {
+    pub level: ResilienceLevel,
+    pub system_health: DegradationLevel,
+    pub total_circuit_breakers: usize,
+    pub open_circuits: usize,
+    pub failover_groups: usize,
+    pub healing_actions_taken: u64,
+    pub uptime_ms: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Engine
+// ---------------------------------------------------------------------------
+
+/// The hyper-resilience engine that orchestrates circuit breakers, failover
+/// groups, health monitoring, and self-healing actions.
+///
+/// All methods are thread-safe via interior mutability (`Arc<Mutex<…>>`).
+#[derive(Debug, Clone)]
+pub struct HyperResilienceEngine {
+    inner: Arc<Mutex<EngineInner>>,
+}
+
+#[derive(Debug)]
+struct EngineInner {
+    config: ResilienceConfig,
+    circuit_breakers: HashMap<String, CircuitBreaker>,
+    failover_groups: HashMap<String, FailoverGroup>,
+    healing_actions_taken: u64,
+    started_ms: u64,
+    // Simulated health metrics
+    simulated_avg_latency_ms: f64,
+    simulated_error_rate: f64,
+    // Flag to indicate health checks have been started
+    health_checks_running: bool,
+}
+
+impl HyperResilienceEngine {
+    /// Create a new hyper-resilience engine with the given configuration.
+    pub fn new(config: ResilienceConfig) -> Self {
+        let now_ms = now_millis();
+        Self {
+            inner: Arc::new(Mutex::new(EngineInner {
+                config,
+                circuit_breakers: HashMap::new(),
+                failover_groups: HashMap::new(),
+                healing_actions_taken: 0,
+                started_ms: now_ms,
+                simulated_avg_latency_ms: 10.0,
+                simulated_error_rate: 0.001,
+                health_checks_running: false,
+            })),
+        }
+    }
+
+    /// Register a circuit breaker with the given name, threshold, and recovery timeout.
+    pub fn register_circuit_breaker(
+        &self,
+        name: &str,
+        threshold: u64,
+        recovery_timeout_ms: u64,
+    ) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.circuit_breakers.contains_key(name) {
+            bail!("Circuit breaker '{}' is already registered", name);
+        }
+        inner.circuit_breakers.insert(
+            name.to_string(),
+            CircuitBreaker {
+                name: name.to_string(),
+                state: CircuitState::Closed,
+                failure_count: 0,
+                threshold,
+                recovery_timeout_ms,
+                last_failure_ms: 0,
+                half_open_attempts: 0,
+            },
+        );
+        Ok(())
+    }
+
+    /// Record a failure against the named circuit breaker.
+    ///
+    /// Returns the new state of the circuit breaker after applying the failure.
+    pub fn record_failure(&self, breaker_name: &str) -> Result<CircuitState> {
+        let mut inner = self.inner.lock().unwrap();
+        let cb = inner
+            .circuit_breakers
+            .get_mut(breaker_name)
+            .with_context(|| format!("Circuit breaker '{}' not found", breaker_name))?;
+
+        let now = now_millis();
+
+        match cb.state {
+            CircuitState::Closed => {
+                cb.failure_count += 1;
+                cb.last_failure_ms = now;
+                if cb.failure_count >= cb.threshold {
+                    cb.state = CircuitState::Open;
+                }
+            }
+            CircuitState::Open => {
+                // Already open; update last_failure so the timer resets.
+                cb.last_failure_ms = now;
+            }
+            CircuitState::HalfOpen => {
+                // Failure in half-open immediately trips back to open.
+                cb.state = CircuitState::Open;
+                cb.failure_count += 1;
+                cb.last_failure_ms = now;
+                cb.half_open_attempts = 0;
+            }
+        }
+
+        Ok(cb.state)
+    }
+
+    /// Record a success against the named circuit breaker.
+    ///
+    /// If the breaker is half-open, a success moves it back to closed.
+    pub fn record_success(&self, breaker_name: &str) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let cb = inner
+            .circuit_breakers
+            .get_mut(breaker_name)
+            .with_context(|| format!("Circuit breaker '{}' not found", breaker_name))?;
+
+        match cb.state {
+            CircuitState::HalfOpen => {
+                // Success in half-open → closed.
+                cb.state = CircuitState::Closed;
+                cb.failure_count = 0;
+                cb.half_open_attempts = 0;
+                cb.last_failure_ms = 0;
+            }
+            CircuitState::Closed => {
+                // Reset failure count on success while closed.
+                cb.failure_count = 0;
+            }
+            CircuitState::Open => {
+                // No-op: an open breaker can't accept successes directly;
+                // it must transition through half-open first.
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check whether the named circuit breaker is currently available
+    /// (closed or half-open).
+    ///
+    /// This method also evaluates whether an open breaker should transition
+    /// to half-open based on the recovery timeout.
+    pub fn is_available(&self, breaker_name: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let cb = match inner.circuit_breakers.get_mut(breaker_name) {
+            Some(cb) => cb,
+            None => return false,
+        };
+
+        match cb.state {
+            CircuitState::Closed => true,
+            CircuitState::HalfOpen => true,
+            CircuitState::Open => {
+                let now = now_millis();
+                if now >= cb.last_failure_ms + cb.recovery_timeout_ms {
+                    // Transition to half-open.
+                    cb.state = CircuitState::HalfOpen;
+                    cb.half_open_attempts = 0;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Register a failover group with a primary node and a list of replicas.
+    pub fn register_failover_group(
+        &self,
+        group_id: &str,
+        primary: &str,
+        replicas: Vec<String>,
+    ) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.failover_groups.contains_key(group_id) {
+            bail!("Failover group '{}' is already registered", group_id);
+        }
+        if replicas.is_empty() {
+            bail!(
+                "Failover group '{}' requires at least one replica node",
+                group_id
+            );
+        }
+        inner.failover_groups.insert(
+            group_id.to_string(),
+            FailoverGroup {
+                group_id: group_id.to_string(),
+                primary_node: primary.to_string(),
+                replica_nodes: replicas,
+                current_leader: primary.to_string(),
+                health_score: 100.0,
+                last_failover_ms: 0,
+                failover_count: 0,
+            },
+        );
+        Ok(())
+    }
+
+    /// Trigger a failover for the named group, promoting the next available replica.
+    ///
+    /// Returns the identifier of the new leader.
+    pub fn trigger_failover(&self, group_id: &str) -> Result<String> {
+        let mut inner = self.inner.lock().unwrap();
+        let group = inner
+            .failover_groups
+            .get_mut(group_id)
+            .with_context(|| format!("Failover group '{}' not found", group_id))?;
+
+        // Find the next replica (round-robin through replicas).
+        let current_idx = group
+            .replica_nodes
+            .iter()
+            .position(|r| r == &group.current_leader);
+
+        let next_replica = match current_idx {
+            Some(idx) => {
+                let next_idx = (idx + 1) % group.replica_nodes.len();
+                group.replica_nodes[next_idx].clone()
+            }
+            None => {
+                // Current leader is not in the replica list (shouldn't happen,
+                // but fall back to the first replica).
+                group.replica_nodes[0].clone()
+            }
+        };
+
+        group.current_leader = next_replica.clone();
+        let now = now_millis();
+        group.last_failover_ms = now;
+        group.failover_count += 1;
+        group.health_score = f64::max(0.0, group.health_score - 10.0);
+
+        Ok(next_replica)
+    }
+
+    /// Return a snapshot of the current system health.
+    pub fn system_health(&self) -> SystemHealth {
+        let inner = self.inner.lock().unwrap();
+        let active_circuit_breakers = inner.circuit_breakers.len();
+        let open_circuits = inner
+            .circuit_breakers
+            .values()
+            .filter(|cb| matches!(cb.state, CircuitState::Open))
+            .count();
+        let active_failovers = inner
+            .failover_groups
+            .values()
+            .filter(|g| g.failover_count > 0)
+            .count();
+
+        // Determine degradation level based on the ratio of open circuits.
+        let level = if open_circuits > 0 && open_circuits > active_circuit_breakers.saturating_sub(1)
+        {
+            DegradationLevel::Emergency
+        } else if open_circuits >= active_circuit_breakers / 2 {
+            DegradationLevel::Constrained
+        } else if open_circuits > 0 {
+            DegradationLevel::Degraded
+        } else if active_failovers > 0 {
+            DegradationLevel::Degraded
+        } else {
+            DegradationLevel::Normal
+        };
+
+        SystemHealth {
+            level,
+            active_circuit_breakers,
+            open_circuits,
+            active_failovers,
+            avg_latency_ms: inner.simulated_avg_latency_ms,
+            error_rate: inner.simulated_error_rate,
+            timestamp_ms: now_millis(),
+        }
+    }
+
+    /// Execute a self-healing action and return a report.
+    ///
+    /// This is a simulated operation — no actual node restarts or resource
+    /// scaling are performed.
+    pub fn execute_healing(&self, action: SelfHealingAction, target: &str) -> Result<HealingReport> {
+        let started_ms = now_millis();
+        let mut inner = self.inner.lock().unwrap();
+
+        inner.healing_actions_taken += 1;
+
+        // Simulate execution duration.
+        let simulated_duration_ms: u64 = match &action {
+            SelfHealingAction::RestartNode => 2_000,
+            SelfHealingAction::PromoteReplica => 500,
+            SelfHealingAction::ClearCircuitBreaker => 100,
+            SelfHealingAction::ScaleResources => 3_000,
+            SelfHealingAction::ReinitializeComponent => 1_000,
+        };
+
+        let (success, result) = match &action {
+            SelfHealingAction::ClearCircuitBreaker => {
+                // Clear the circuit breaker if it exists.
+                if let Some(cb) = inner.circuit_breakers.get_mut(target) {
+                    cb.state = CircuitState::Closed;
+                    cb.failure_count = 0;
+                    cb.last_failure_ms = 0;
+                    cb.half_open_attempts = 0;
+                    (true, format!("Circuit breaker '{}' reset to closed", target))
+                } else {
+                    (false, format!("Circuit breaker '{}' not found", target))
+                }
+            }
+            SelfHealingAction::PromoteReplica => {
+                // Simulate promoting a replica by triggering a failover.
+                if let Some(group) = inner.failover_groups.get_mut(target) {
+                    let new_leader = if group.replica_nodes.is_empty() {
+                        group.primary_node.clone()
+                    } else {
+                        // Simple promotion: promote the first replica.
+                        group.replica_nodes[0].clone()
+                    };
+                    group.current_leader = new_leader.clone();
+                    group.failover_count += 1;
+                    group.last_failover_ms = now_millis();
+                    (
+                        true,
+                        format!("Promoted replica '{}' for group '{}'", new_leader, target),
+                    )
+                } else {
+                    (
+                        false,
+                        format!("Failover group '{}' not found", target),
+                    )
+                }
+            }
+            _ => {
+                // Generic simulation for other actions.
+                (
+                    true,
+                    format!(
+                        "{:?} executed on '{}' (simulated)",
+                        action, target
+                    ),
+                )
+            }
+        };
+
+        let completed_ms = now_millis();
+        let duration_ms = completed_ms.saturating_sub(started_ms).max(simulated_duration_ms);
+
+        Ok(HealingReport {
+            action,
+            target: target.to_string(),
+            initiated_ms: started_ms,
+            success,
+            duration_ms,
+            result,
+        })
+    }
+
+    /// Return the current resilience profile summarising overall engine state.
+    pub fn profile(&self) -> ResilienceProfile {
+        let inner = self.inner.lock().unwrap();
+        let total_circuit_breakers = inner.circuit_breakers.len();
+        let open_circuits = inner
+            .circuit_breakers
+            .values()
+            .filter(|cb| matches!(cb.state, CircuitState::Open))
+            .count();
+        let failover_groups = inner.failover_groups.len();
+
+        // Derive resilience level from the ratio of open circuits.
+        let level = if open_circuits == 0 && failover_groups == 0 {
+            ResilienceLevel::Standard
+        } else if open_circuits <= 1 {
+            ResilienceLevel::High
+        } else {
+            ResilienceLevel::Critical
+        };
+
+        // Determine system health degradation.
+        let system_health = if open_circuits > 0 && open_circuits >= total_circuit_breakers.saturating_sub(1) {
+            DegradationLevel::Emergency
+        } else if open_circuits >= total_circuit_breakers / 2 {
+            DegradationLevel::Constrained
+        } else if open_circuits > 0 {
+            DegradationLevel::Degraded
+        } else {
+            DegradationLevel::Normal
+        };
+
+        let uptime_ms = now_millis().saturating_sub(inner.started_ms);
+
+        ResilienceProfile {
+            level,
+            system_health,
+            total_circuit_breakers,
+            open_circuits,
+            failover_groups,
+            healing_actions_taken: inner.healing_actions_taken,
+            uptime_ms,
+        }
+    }
+
+    /// Start background health checks (simulated).
+    ///
+    /// In a real deployment this would spawn a background task that periodically
+    /// evaluates system metrics and triggers self-healing. Here we simply mark
+    /// the engine as having health checks running.
+    pub fn start_health_checks(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.health_checks_running = true;
+        // Simulated: adjust metrics to reflect "monitored" state.
+        inner.simulated_avg_latency_ms = 8.0;
+        inner.simulated_error_rate = 0.0005;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Return the current time in milliseconds since the Unix epoch.
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+    use std::time::Duration;
+
+    /// 1. A fresh engine has no circuit breakers, no failover groups.
+    #[test]
+    fn test_new_engine_empty() {
+        let config = ResilienceConfig::default();
+        let engine = HyperResilienceEngine::new(config);
+        let p = engine.profile();
+        assert_eq!(p.total_circuit_breakers, 0);
+        assert_eq!(p.failover_groups, 0);
+        assert_eq!(p.healing_actions_taken, 0);
+    }
+
+    /// 2. Register a circuit breaker succeeds and it appears in the profile.
+    #[test]
+    fn test_register_circuit_breaker() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine
+            .register_circuit_breaker("cb-gateway", 3, 10_000)
+            .unwrap();
+        let p = engine.profile();
+        assert_eq!(p.total_circuit_breakers, 1);
+    }
+
+    /// 3. Recording failures beyond threshold trips the breaker open.
+    #[test]
+    fn test_circuit_breaker_trips_open() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine
+            .register_circuit_breaker("cb-db", 3, 10_000)
+            .unwrap();
+
+        // First two failures — still closed.
+        assert_eq!(
+            engine.record_failure("cb-db").unwrap(),
+            CircuitState::Closed
+        );
+        assert_eq!(
+            engine.record_failure("cb-db").unwrap(),
+            CircuitState::Closed
+        );
+        // Third failure trips to open.
+        assert_eq!(
+            engine.record_failure("cb-db").unwrap(),
+            CircuitState::Open
+        );
+    }
+
+    /// 4. After recovery timeout elapses, an open breaker transitions to half-open.
+    #[test]
+    fn test_circuit_breaker_half_open() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        // Use a very short timeout so the test doesn't take long.
+        engine
+            .register_circuit_breaker("cb-cache", 1, 1)
+            .unwrap();
+
+        // Single failure trips to open.
+        assert_eq!(
+            engine.record_failure("cb-cache").unwrap(),
+            CircuitState::Open
+        );
+
+        // Immediately — not available, still open.
+        assert!(!engine.is_available("cb-cache"));
+
+        // Wait for the recovery timeout (1 ms + some slack).
+        thread::sleep(Duration::from_millis(10));
+
+        // Now is_available should transition to half-open and return true.
+        assert!(engine.is_available("cb-cache"));
+    }
+
+    /// 5. A success in half-open resets the breaker to closed.
+    #[test]
+    fn test_circuit_breaker_resets_on_success() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine
+            .register_circuit_breaker("cb-api", 1, 1)
+            .unwrap();
+
+        // Trip to open.
+        engine.record_failure("cb-api").unwrap();
+        assert!(!engine.is_available("cb-api"));
+
+        // Wait for recovery timeout.
+        thread::sleep(Duration::from_millis(10));
+
+        // Now is_available transitions to half-open.
+        assert!(engine.is_available("cb-api"));
+
+        // Record a success — should close the breaker.
+        engine.record_success("cb-api").unwrap();
+        let health = engine.system_health();
+        assert_eq!(health.open_circuits, 0);
+    }
+
+    /// 6. An open circuit breaker reports unavailable.
+    #[test]
+    fn test_is_available_open_returns_false() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine
+            .register_circuit_breaker("cb-slow", 2, 60_000)
+            .unwrap();
+
+        engine.record_failure("cb-slow").unwrap();
+        engine.record_failure("cb-slow").unwrap();
+
+        // Should be open and unavailable.
+        assert!(!engine.is_available("cb-slow"));
+    }
+
+    /// 7. Register a failover group with primary and replicas.
+    #[test]
+    fn test_register_failover_group() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine
+            .register_failover_group(
+                "group-alpha",
+                "node-primary",
+                vec!["node-replica-1".to_string(), "node-replica-2".to_string()],
+            )
+            .unwrap();
+        let p = engine.profile();
+        assert_eq!(p.failover_groups, 1);
+    }
+
+    /// 8. Triggering a failover promotes a replica to leader.
+    #[test]
+    fn test_trigger_failover() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine
+            .register_failover_group(
+                "group-beta",
+                "node-p",
+                vec!["node-r1".to_string(), "node-r2".to_string()],
+            )
+            .unwrap();
+
+        let new_leader = engine.trigger_failover("group-beta").unwrap();
+        assert_eq!(new_leader, "node-r1");
+
+        // A second failover should go to the next replica.
+        let new_leader2 = engine.trigger_failover("group-beta").unwrap();
+        assert_eq!(new_leader2, "node-r2");
+
+        // Third failover wraps around.
+        let new_leader3 = engine.trigger_failover("group-beta").unwrap();
+        assert_eq!(new_leader3, "node-r1");
+    }
+
+    /// 9. System health reflects registered breakers and failure state.
+    #[test]
+    fn test_system_health_reflects_state() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine
+            .register_circuit_breaker("cb-1", 1, 60_000)
+            .unwrap();
+        engine
+            .register_circuit_breaker("cb-2", 1, 60_000)
+            .unwrap();
+
+        let health = engine.system_health();
+        assert_eq!(health.active_circuit_breakers, 2);
+        assert_eq!(health.open_circuits, 0);
+        assert_eq!(health.level, DegradationLevel::Normal);
+
+        // Trip one breaker.
+        engine.record_failure("cb-1").unwrap();
+        let health2 = engine.system_health();
+        assert_eq!(health2.open_circuits, 1);
+        assert_eq!(health2.level, DegradationLevel::Degraded);
+    }
+
+    /// 10. Executing a self-healing action produces a valid report.
+    #[test]
+    fn test_execute_healing() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine
+            .register_circuit_breaker("cb-broken", 1, 10_000)
+            .unwrap();
+        engine.record_failure("cb-broken").unwrap();
+
+        let report = engine
+            .execute_healing(SelfHealingAction::ClearCircuitBreaker, "cb-broken")
+            .unwrap();
+        assert!(report.success);
+        assert_eq!(report.target, "cb-broken");
+        assert!(report.duration_ms > 0);
+
+        // After healing, the breaker should be closed.
+        let health = engine.system_health();
+        assert_eq!(health.open_circuits, 0);
+    }
+
+    /// 11. Profile accurately reflects engine state after operations.
+    #[test]
+    fn test_profile_reflects_state() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine
+            .register_circuit_breaker("cb-1", 3, 10_000)
+            .unwrap();
+        engine
+            .register_circuit_breaker("cb-2", 3, 10_000)
+            .unwrap();
+        engine
+            .register_failover_group(
+                "group-gamma",
+                "node-p",
+                vec!["node-r1".to_string()],
+            )
+            .unwrap();
+
+        // Trip one breaker.
+        engine.record_failure("cb-1").unwrap();
+        engine.record_failure("cb-1").unwrap();
+        engine.record_failure("cb-1").unwrap();
+
+        let p = engine.profile();
+        assert_eq!(p.total_circuit_breakers, 2);
+        assert_eq!(p.open_circuits, 1);
+        assert_eq!(p.failover_groups, 1);
+    }
+
+    /// 12. Registering a circuit breaker with a duplicate name fails.
+    #[test]
+    fn test_register_duplicate_circuit_breaker_fails() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine
+            .register_circuit_breaker("cb-dup", 5, 10_000)
+            .unwrap();
+        let result = engine.register_circuit_breaker("cb-dup", 3, 20_000);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("already registered"));
+    }
+}

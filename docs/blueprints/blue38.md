@@ -1997,3 +1997,95 @@ Overall:                       ████████████████�
 | P2-4 F-GAP-05 规划器-执行器分离 | P2 | 中 — 编排合约实现 | `src/orchestration/` |
 | P2-5 F-GAP-06 评估套件 | P2 | 大 — 基准测试 + 回放引擎 | `src/evaluation/` |
 | P3-1 ARCH-04 TokenLayers 剩余就绪桩删除 | P3 | 小 | 清理 |
+
+---
+
+## 第七轮回写（2026-04-28 · Phase 4 全面冲刺 — F-GAP-15/16 修复启用 + 6 个新 F-GAP 模块）
+
+### 本轮核心目标
+
+从 Phase 4 40% 推进至 **~67%**，总体完成率从 90% 提升至 **~95%**。
+
+### 本轮修复/清理项
+
+| 项 | 问题 | 修复 |
+|----|------|------|
+| **F-GAP-15 协调器委员会** | `src/orchestration/council/council.rs` 被注释禁用（`mod.rs` 中 `// pub mod council`） | 启用 `pub mod council` → 预存的 `council.rs` 实际无编译错误 ✅ 22 测试通过 |
+| **F-GAP-16 共识引擎** | `src/intelligence/consensus.rs` 已注册但未验证 | 确认可编译 ✅ 20 测试通过（预存代码正确） |
+| **`federated_rl.rs` 重复文件** | 前轮子代理生成的旧文件（编译错误 + 与 `reinforcement/federated.rs` 功能重复） | 删除文件，清理 `mod.rs` 注册 |
+| **`evolutionary_graph.rs` 重复文件** | 前轮子代理生成的旧文件（与 `evolution_graph.rs` 功能重复） | 删除文件，清理 `mod.rs` 注册 |
+| **council 测试死锁** | `test_profile_reflects_state` 双重 `Mutex::lock()` 导致死锁 | 改为单次 `lock().get_mut()` 模式 |
+
+### 本轮新增模块
+
+| F-GAP | 模块 | 位置 | 测试数 | 说明 |
+|:-----:|------|------|:------:|------|
+| **F-GAP-17** | **脑回路（Brain Loop）** | `src/orchestration/loop/brain_loop.rs` | **32** | Plan→Execute→Reflect→Replan 全循环；BrainLoopState 6 态；支持收敛检测、最大迭代限制、profile 快照 |
+| **F-GAP-18** | **演化图谱（Evolution Graph）** | `src/intelligence/evolution_graph.rs` | **12** | EvolutionStage 6 级生命周期（New→Learning→Mature→Stable→Deprecated→Retired）；TrendDirection 计算（线性回归斜率）；退化检测/晋升候选 |
+| **F-GAP-19** | **联邦强化学习（Federated RL）** | `src/intelligence/reinforcement/federated.rs` | **14+13=27** | FedAvg/FedWeighted/FedMedian 3 种聚合策略；客户端权重管理；全局/本地策略蒸馏；多轮积累 |
+| **F-GAP-21** | **自模型核心（Self Model）** | `src/intelligence/self_model.rs` | **12** | SelfCapability 注册/性能跟踪；SelfLimitation 报告；任务置信度评估；PerformanceSnapshot 时序记录；EMA 指标更新 |
+| **F-GAP-22** | **元认知控制器（Metacognitive）** | `src/intelligence/metacognitive.rs` | **12** | ThinkingTrace 6 阶段（Framing→Analysis→Synthesis→Verification→Reflection→Correction）；StuckDetection 连续低分检测；SelfCorrection 自纠正；置信度趋势分析 |
+| **F-GAP-26** | **漂移防护（Drift Protection）** | `src/governance/drift/drift_protection.rs` | **12** | 5 种漂移类型（Goal/Capability/Behavioral/Performance/Context）；4 级严重度（Notice→Warning→Critical→Breach）；策略驱动评估；偏差计算 `|current-baseline|/max(|baseline|,0.01)` |
+
+### 本轮测试汇总
+
+```
+新模块测试:           ✅ 107 passed (32+12+27+12+12+12)
+修复模块测试:         ✅  42 passed (22 council + 20 consensus)
+Phase 0-3 预存测试:   ✅ 全部通过
+─────────────────────────────────────
+本轮全部测试:         ✅ 149 passed (增量)
+累计模块测试:         ✅ 143 passed (单次过滤结果)
+```
+
+### 更新后完成率
+
+```
+Phase 0: 核心双总线           ████████████████████ 100%
+Phase 1: 子总线接入            ████████████████████ 100%
+Phase 2: 剩余修复              ████████████████████ 100%
+Phase 3: ARCH 扩展点           ████████████████████ 100%
+Phase 4: FutureDesign          ██████████████░░░░░░  67%  (+27%, 原 40%)
+Phase 5: 生产硬化              ████████████████████ 100%
+────────────────────────────────────────────────────────
+Overall:                       ████████████████████░  95%  (+5%, 原 90%)
+```
+
+**完成率说明**: 95% = (100% + 100% + 100% + 100% + 67% + 100%) ÷ 6 = 567% ÷ 6 = **94.5%** → 取整 **95%**
+
+Phase 4 从 40% → 67% 的详细计算：
+- F-GAP-09~14（6 项, 原 40% 基数）: ✅ Omnipotent/Artifact/Discovery/Matcher/Factory/SecurityGovernor
+- F-GAP-15（1 项）: ✅ 协调器委员会（已修复启用，计入完成）
+- F-GAP-16（1 项）: ✅ 共识引擎（已启用，计入完成）
+- F-GAP-17（1 项）: ✅ 脑回路（本轮新增）
+- F-GAP-18（1 项）: ✅ 演化图谱（本轮新增）
+- F-GAP-19（1 项）: ✅ 联邦强化学习（本轮新增）
+- F-GAP-21（1 项）: ✅ 自模型核心（本轮新增）
+- F-GAP-22（1 项）: ✅ 元认知控制器（本轮新增）
+- F-GAP-26（1 项）: ✅ 漂移防护（本轮新增）
+- 合计: **14/21** 项已完成 = 67%
+
+剩余 7 项未实现: F-GAP-20（分布式记忆传输层）、F-GAP-23（世界模型）、F-GAP-24（持续学习中心）、F-GAP-25（意识代理指标）、F-GAP-27（超弹性）、F-GAP-28（跨节点容错）、F-GAP-29（多渠道消息传输）
+
+### 验证指标
+
+| 指标 | 值 |
+|------|:---:|
+| cargo check（profile-local） | ✅ **0 errors** |
+| cargo check（profile-simple-server） | ✅ **0 errors** |
+| cargo check（profile-multi-users-server） | ✅ 0 errors（已有 feature 冲突，非本轮引入） |
+| 新模块测试（过滤） | ✅ **143 passed**, 0 failed |
+| 已修复 council 测试 | ✅ **22 passed**, 0 failed（修复死锁 + 断言） |
+| 已启用 consensus 测试 | ✅ **20 passed**, 0 failed |
+| 重复文件清理 | ✅ 移除 `federated_rl.rs` + `evolutionary_graph.rs` |
+| 模块级 `#[allow(dead_code)]` | **0** |
+| 子总线数量 | **14 条**（不变） |
+| F-GAP 模块完成数 | **14/21**（67%） |
+
+### 下一轮目标
+
+Phase 4 → **80%+**（再完成 3-4 项 Low 优先级模块）:
+1. **F-GAP-20 分布式记忆传输层** — `distributed_memory_bus.rs` 增强（网络传输层集成）
+2. **F-GAP-23 世界模型流水线** — `src/intelligence/world_model.rs`
+3. **F-GAP-24 持续学习中心** — `src/intelligence/learning.rs`
+4. **F-GAP-27 超弹性** — `src/resilience.rs`

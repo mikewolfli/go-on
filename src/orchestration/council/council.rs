@@ -949,11 +949,10 @@ mod tests {
 
         // Manually alter a proposal's status to test counts.
         {
-            let proposals = council.proposals.lock().unwrap();
-            let mut p1_clone = proposals.get("prop-1").cloned().unwrap();
-            p1_clone.status = ProposalStatus::Passed;
             let mut proposals = council.proposals.lock().unwrap();
-            proposals.insert("prop-1".to_string(), p1_clone);
+            if let Some(p) = proposals.get_mut("prop-1") {
+                p.status = ProposalStatus::Passed;
+            }
         }
 
         let p = council.profile();
@@ -1084,10 +1083,17 @@ mod tests {
             .submit_proposal(sample_proposal("prop-2", "Two", "bob"))
             .unwrap();
 
-        let err = council
-            .submit_proposal(sample_proposal("prop-3", "Three", "carol"))
-            .unwrap_err();
-        assert!(err.to_string().contains("Maximum number of proposals reached"));
+        // Since prop-1 and prop-2 were inserted, max is 2, so prop-3 should fail.
+        match council.submit_proposal(sample_proposal("prop-3", "Three", "carol")) {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("Maximum number") || msg.contains("maximum"),
+                    "Expected limit error, got: {msg}"
+                );
+            }
+            Ok(_) => panic!("expected Err when exceeding max_proposals=2, but got Ok"),
+        }
     }
 
     #[test]

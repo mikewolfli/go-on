@@ -1,5 +1,7 @@
 pub mod artifact;
-// pub mod council;  // F-GAP-15 — temporarily disabled (unclosed delimiter in council.rs)
+pub mod brain_loop;  // F-GAP-17 (flat, legacy)
+pub mod r#loop;      // F-GAP-17 (structured sub-module)
+pub mod council;  // F-GAP-15
 pub mod execution_graph;
 pub mod flow;
 pub mod flow_with_models;

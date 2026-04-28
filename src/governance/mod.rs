@@ -4,6 +4,7 @@
 //! which provides a single evaluate/validate/verify entry point for CapabilityBus.
 
 pub mod audit;
+pub mod drift;
 pub mod hardening;
 pub mod harness_bus;
 pub mod pua;
