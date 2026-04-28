@@ -185,14 +185,10 @@ impl ExecutionGraph {
         let start_id = "start".to_string();
         let end_id = "end".to_string();
         let mut nodes = HashMap::new();
-        nodes.insert(
-            start_id.clone(),
-            ExNode::new(&start_id, ExNodeKind::Start, "Start"),
-        );
-        nodes.insert(
-            end_id.clone(),
-            ExNode::new(&end_id, ExNodeKind::End, "End"),
-        );
+        let mut start_node = ExNode::new(&start_id, ExNodeKind::Start, "Start");
+        start_node.state = ExNodeState::Completed;
+        nodes.insert(start_id.clone(), start_node);
+        nodes.insert(end_id.clone(), ExNode::new(&end_id, ExNodeKind::End, "End"));
 
         Self {
             nodes,
@@ -281,6 +277,7 @@ impl ExecutionGraph {
     }
 
     /// Get nodes whose dependencies are all satisfied (ready to execute).
+    /// Only returns `Task` or `Branch` nodes — structural nodes (Start/End/Join) are excluded.
     pub fn get_ready_nodes(&self) -> Vec<ExNodeId> {
         let completed: HashSet<&ExNodeId> = self
             .nodes
@@ -292,6 +289,10 @@ impl ExecutionGraph {
         self.nodes
             .iter()
             .filter(|(id, node)| {
+                // Only Task and Branch nodes can be "ready" for execution
+                if !matches!(node.kind, ExNodeKind::Task | ExNodeKind::Branch) {
+                    return false;
+                }
                 if node.state != ExNodeState::Pending {
                     return false;
                 }
@@ -397,6 +398,7 @@ mod tests {
         assert!(g.nodes.contains_key("start"));
         assert!(g.nodes.contains_key("end"));
         assert_eq!(g.nodes["start"].kind, ExNodeKind::Start);
+        assert_eq!(g.nodes["start"].state, ExNodeState::Completed);
         assert_eq!(g.nodes["end"].kind, ExNodeKind::End);
     }
 
@@ -437,15 +439,20 @@ mod tests {
             ("t2".to_string(), "Task 2".to_string()),
         ];
         let _ = g.add_fan_out("build", "build-join", tasks, "start");
-        let group_id = &g.fan_out_groups[0].group_id;
+        let group_id = g.fan_out_groups[0].group_id.clone();
 
         // Complete one task
-        assert!(g.complete_task("t1", serde_json::json!({"ok": true})).is_ok());
-        assert!(!g.is_fan_out_complete(group_id));
+        assert!(g
+            .complete_task("t1", serde_json::json!({"ok": true}))
+            .is_ok());
+        assert!(!g.is_fan_out_complete(&group_id));
+        assert!(!g.is_fan_out_complete(&group_id));
 
         // Complete second task
-        assert!(g.complete_task("t2", serde_json::json!({"ok": true})).is_ok());
-        assert!(g.is_fan_out_complete(group_id));
+        assert!(g
+            .complete_task("t2", serde_json::json!({"ok": true}))
+            .is_ok());
+        assert!(g.is_fan_out_complete(&group_id));
     }
 
     #[test]
@@ -555,15 +562,13 @@ mod tests {
 
         // Only step1 should be ready (start completed, step1 pending)
         // Since start defaults to Pending, we need to mark it completed
-        g.set_node_state("start", ExNodeState::Completed)
-            .unwrap();
+        // start is already Completed by default in new() — step1 should be ready immediately
         let ready = g.get_ready_nodes();
         assert_eq!(ready.len(), 1);
         assert!(ready.contains(&"step1".to_string()));
 
         // Complete step1
-        g.set_node_state("step1", ExNodeState::Completed)
-            .unwrap();
+        g.set_node_state("step1", ExNodeState::Completed).unwrap();
         let ready = g.get_ready_nodes();
         assert_eq!(ready.len(), 1);
         assert!(ready.contains(&"step2".to_string()));
@@ -575,7 +580,9 @@ mod tests {
         let tasks = vec![("a".to_string(), "A".to_string())];
         let _ = g.add_fan_out("single", "single-join", tasks, "start");
 
-        assert!(g.complete_task("a", serde_json::json!({"ok": true})).is_ok());
+        assert!(g
+            .complete_task("a", serde_json::json!({"ok": true}))
+            .is_ok());
         assert_eq!(g.fan_out_groups[0].completed_count, 1);
         let summary = g.fan_out_summary();
         assert_eq!(summary[0].1, 1);
@@ -586,8 +593,7 @@ mod tests {
     fn test_is_complete() {
         let mut g = make_graph("test");
         assert!(!g.is_complete());
-        g.set_node_state("end", ExNodeState::Completed)
-            .unwrap();
+        g.set_node_state("end", ExNodeState::Completed).unwrap();
         assert!(g.is_complete());
     }
 
@@ -595,24 +601,24 @@ mod tests {
     fn test_reset() {
         let mut g = make_graph("test");
         g.add_node(ExNode::new("step1", ExNodeKind::Task, "Step 1"));
-        g.set_node_state("step1", ExNodeState::Completed)
-            .unwrap();
-        assert_eq!(g.count_by_state(&ExNodeState::Completed), 2); // step1 + start
+        // start is already Completed by default in new()
+        assert_eq!(g.count_by_state(&ExNodeState::Completed), 1); // start
 
         g.reset();
-        assert_eq!(g.count_by_state(&ExNodeState::Pending), 3); // start + step1 + end
-        assert_eq!(g.count_by_state(&ExNodeState::Completed), 0);
+        // After reset: start→Pending, step1→Pending, end→Pending = 3
+        assert_eq!(g.count_by_state(&ExNodeState::Pending), 3);
     }
 
     #[test]
     fn test_count_by_state() {
         let mut g = make_graph("test");
         g.add_node(ExNode::new("step1", ExNodeKind::Task, "Step 1"));
-        assert_eq!(g.count_by_state(&ExNodeState::Pending), 3);
-        g.set_node_state("step1", ExNodeState::Completed)
-            .unwrap();
-        assert_eq!(g.count_by_state(&ExNodeState::Completed), 1);
+        // start=Completed, step1=Pending, end=Pending
         assert_eq!(g.count_by_state(&ExNodeState::Pending), 2);
+        assert_eq!(g.count_by_state(&ExNodeState::Completed), 1);
+        g.set_node_state("step1", ExNodeState::Completed).unwrap();
+        assert_eq!(g.count_by_state(&ExNodeState::Completed), 2); // start + step1
+        assert_eq!(g.count_by_state(&ExNodeState::Pending), 1); // end only
     }
 
     #[test]

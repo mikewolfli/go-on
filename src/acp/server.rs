@@ -11,6 +11,7 @@ use tokio::sync::{Mutex, Notify};
 
 use crate::acp::prelude::RuntimeMetrics;
 use crate::adaptive_selector::AdaptiveModelSelector;
+use crate::observability::provenance::ProvenanceLedger;
 
 use crate::agent::AgentRegistry;
 use crate::cache::ResponseCache;
@@ -25,9 +26,14 @@ use crate::intelligence::token_cache::TokenMultiLevelCache;
 use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::memory_response_cache::MemoryResponseCache;
 use crate::observability::telemetry::TelemetryRuntime;
+use crate::orchestration::fork_registry::ForkRegistry;
+use crate::orchestration::promotion_plugin::PromotionRegistry;
+use crate::orchestration::prompt_layers::PromptAssembler;
 use crate::orchestration::scheduler::AgentWorkerScheduler;
 use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::task_graph_store::TaskGraphStore;
+use crate::orchestration::task_schema::SchemaRegistry;
+use crate::orchestration::workflow_optimizer::OptimizerRegistry;
 use crate::reinforcement::ArtifactLedger;
 use crate::vector::VectorStore;
 
@@ -119,6 +125,26 @@ pub struct AcpServer {
     pub harness_bus: Option<Arc<HarnessBus>>,
     /// CapabilityBus scheduling coordinator (BLUE38 ARCH-13)
     pub capability_bus: Option<Arc<CapabilityBus>>,
+    /// ForkRegistry — sub-agent process isolation (ARCH-05)
+    pub fork_registry: Arc<StdMutex<ForkRegistry>>,
+    /// Planner — task decomposition engine (F-GAP-05)
+    pub planner: crate::orchestration::planner_executor::Planner,
+    /// Executor — plan execution engine (F-GAP-05)
+    pub executor: crate::orchestration::planner_executor::Executor,
+    /// BenchmarkSuite — evaluation suite for agent quality (F-GAP-06)
+    pub evaluation_suite: Arc<StdMutex<crate::intelligence::evaluation::BenchmarkSuite>>,
+    /// SchemaRegistry — task envelope validation (F-GAP-07)
+    pub schema_registry: Arc<StdMutex<crate::orchestration::task_schema::SchemaRegistry>>,
+    /// TenantBudgetEnforcer — per-tenant resource quota management (F-GAP-08)
+    pub tenant_budget: Arc<StdMutex<crate::governance::hardening::TenantBudgetEnforcer>>,
+    /// OptimizerRegistry — workflow optimization plugins (ARCH-11)
+    pub optimizer_registry:
+        Arc<StdMutex<crate::orchestration::workflow_optimizer::OptimizerRegistry>>,
+    /// PromptAssembler — 8-layer prompt assembly (ARCH-03)
+    pub prompt_assembler: crate::orchestration::prompt_layers::PromptAssembler,
+    /// PromotionRegistry — promotion plugin evaluation (ARCH-10)
+    pub promotion_registry:
+        Arc<StdMutex<crate::orchestration::promotion_plugin::PromotionRegistry>>,
     /// Verbose logging flag
     pub verbose: bool,
     /// Output stream for responses
@@ -133,6 +159,8 @@ pub struct AcpServer {
     /// Dual-level task scheduler for priority queue and worker pool
     #[allow(dead_code)]
     pub scheduler: Option<Arc<AgentWorkerScheduler>>,
+    /// Provenance ledger — immutable data lineage tracking
+    pub provenance_ledger: Option<Arc<ProvenanceLedger>>,
 }
 
 impl AcpServer {
@@ -324,6 +352,7 @@ pub struct ServerBuilder {
     capability_bus: Option<Arc<CapabilityBus>>,
     task_graph_store: Option<Arc<TaskGraphStore>>,
     scheduler: Option<Arc<AgentWorkerScheduler>>,
+    provenance_ledger: Option<Arc<ProvenanceLedger>>,
 }
 
 impl ServerBuilder {
@@ -342,6 +371,7 @@ impl ServerBuilder {
             capability_bus: None,
             task_graph_store: None,
             scheduler: None,
+            provenance_ledger: None,
         }
     }
 
@@ -423,6 +453,13 @@ impl ServerBuilder {
     #[allow(dead_code)]
     pub fn with_scheduler(mut self, scheduler: Arc<AgentWorkerScheduler>) -> Self {
         self.scheduler = Some(scheduler);
+        self
+    }
+
+    /// Set the provenance ledger
+    #[allow(dead_code)]
+    pub fn with_provenance_ledger(mut self, ledger: Arc<ProvenanceLedger>) -> Self {
+        self.provenance_ledger = Some(ledger);
         self
     }
 
@@ -524,12 +561,26 @@ impl ServerBuilder {
             artifact_ledger,
             harness_bus: self.harness_bus,
             capability_bus: self.capability_bus,
+            fork_registry: Arc::new(StdMutex::new(ForkRegistry::new(100))),
+            planner: crate::orchestration::planner_executor::Planner,
+            executor: crate::orchestration::planner_executor::Executor,
+            evaluation_suite: Arc::new(StdMutex::new(
+                crate::intelligence::evaluation::BenchmarkSuite::new(),
+            )),
+            schema_registry: Arc::new(StdMutex::new(SchemaRegistry::new())),
+            tenant_budget: Arc::new(StdMutex::new(
+                crate::governance::hardening::TenantBudgetEnforcer::new(),
+            )),
+            optimizer_registry: Arc::new(StdMutex::new(OptimizerRegistry::new())),
+            prompt_assembler: PromptAssembler,
+            promotion_registry: Arc::new(StdMutex::new(PromotionRegistry::new())),
             verbose: self.verbose,
             output: Arc::new(Mutex::new(tokio::io::stdout())),
             shutdown_notify: Arc::new(Notify::new()),
             responses_api_store,
             task_graph_store: self.task_graph_store,
             scheduler: self.scheduler,
+            provenance_ledger: self.provenance_ledger,
         })
     }
 }

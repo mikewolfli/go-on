@@ -761,7 +761,7 @@ mod tests {
 
         // Dequeue returns highest priority first: t3 (30), then t2 (20)
         let task_a = scheduler.dequeue("same-role").unwrap();
-        let task_b = scheduler.dequeue("same-role").unwrap();
+        let _task_b = scheduler.dequeue("same-role").unwrap();
         // Role cap should prevent third dequeue
         assert!(scheduler.dequeue("same-role").is_none());
 
@@ -842,13 +842,10 @@ mod tests {
 
         // Without aging, high-prio would be dequeued first.
         // With aging, the aged low-prio task may surpass it.
-        let mut aged_bonus = 0.0;
-        {
+        let aged_bonus = {
             let task_map = scheduler.task_map.lock().unwrap();
-            aged_bonus = task_map.get("low-prio").unwrap().aging_bonus;
-        }
-        let effective_low = 10.0 + aged_bonus;
-        let effective_high = 1000.0;
+            task_map.get("low-prio").unwrap().aging_bonus
+        };
 
         // Since 10 + aged_bonus < 1000 (aging_rate * 10s = 1000, capped at 500),
         // high-prio should still be dequeued first by default.

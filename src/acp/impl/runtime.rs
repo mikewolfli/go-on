@@ -85,7 +85,10 @@ pub fn new_acp_server(
     builder = builder.with_config_path(config_path.clone());
 
     // Note: ServerBuilder doesn't have methods for all parameters yet
-    // For now, we'll build with defaults and let the caller set additional fields
+    // For now, we'll build with defaults and let the caller set additional fields.
+    // The builder already initializes ForkRegistry, Planner, Executor, BenchmarkSuite,
+    // SchemaRegistry, TenantBudgetEnforcer, OptimizerRegistry, PromptAssembler, and
+    // PromotionRegistry with sensible defaults.
     // Create HarnessBus and CapabilityBus to wire into the server
     let harness_bus = {
         let config_path_ref = config_path.as_deref().map(Path::new);
@@ -106,11 +109,14 @@ pub fn new_acp_server(
     let workflow_registry = Arc::new(std::sync::Mutex::new(
         crate::orchestration::workflow_registry::WorkflowRegistry::new(),
     ));
+    // Create a shared provenance ledger
+    let provenance_ledger = Arc::new(crate::observability::provenance::ProvenanceLedger::default());
     let capability_bus = Arc::new(
         crate::intelligence::capability_bus::core::CapabilityBus::new_default(
             Arc::clone(&harness_bus),
             Some(workflow_registry),
-        ),
+        )
+        .with_provenance_ledger(Arc::clone(&provenance_ledger)),
     );
 
     match builder.build() {
@@ -125,10 +131,35 @@ pub fn new_acp_server(
             server.verbose = _verbose;
             server.harness_bus = Some(harness_bus);
             server.capability_bus = Some(capability_bus);
+            server.provenance_ledger = Some(provenance_ledger);
 
             if server.runtime_config.skills_enabled {
                 server.register_skill(Arc::new(crate::orchestration::skill::EchoSkill));
             }
+
+            // Wire the new modules' state from CapabilityBus into the server's
+            // standalone fields so process_chat_request can access them directly.
+            server.schema_registry = Arc::clone(
+                &server
+                    .capability_bus
+                    .as_ref()
+                    .map(|cb| Arc::clone(&cb.schema_registry))
+                    .unwrap_or_default(),
+            );
+            server.tenant_budget = Arc::clone(
+                &server
+                    .capability_bus
+                    .as_ref()
+                    .map(|cb| Arc::clone(&cb.tenant_budget))
+                    .unwrap_or_default(),
+            );
+            server.optimizer_registry = Arc::clone(
+                &server
+                    .capability_bus
+                    .as_ref()
+                    .map(|cb| Arc::clone(&cb.optimizer_registry))
+                    .unwrap_or_default(),
+            );
 
             // Wire the token cache into the agent registry so that all
             // agents returned by registry.get() are automatically wrapped
@@ -212,6 +243,28 @@ pub fn new_acp_server(
                 verbose: _verbose,
                 harness_bus: Some(Arc::clone(&harness_bus)),
                 capability_bus: Some(Arc::clone(&capability_bus)),
+                provenance_ledger: Some(provenance_ledger),
+                fork_registry: Arc::new(StdMutex::new(
+                    crate::orchestration::fork_registry::ForkRegistry::new(100),
+                )),
+                planner: crate::orchestration::planner_executor::Planner,
+                executor: crate::orchestration::planner_executor::Executor,
+                evaluation_suite: Arc::new(StdMutex::new(
+                    crate::intelligence::evaluation::BenchmarkSuite::new(),
+                )),
+                schema_registry: Arc::new(StdMutex::new(
+                    crate::orchestration::task_schema::SchemaRegistry::new(),
+                )),
+                tenant_budget: Arc::new(StdMutex::new(
+                    crate::governance::hardening::TenantBudgetEnforcer::new(),
+                )),
+                optimizer_registry: Arc::new(StdMutex::new(
+                    crate::orchestration::workflow_optimizer::OptimizerRegistry::new(),
+                )),
+                prompt_assembler: crate::orchestration::prompt_layers::PromptAssembler,
+                promotion_registry: Arc::new(StdMutex::new(
+                    crate::orchestration::promotion_plugin::PromotionRegistry::new(),
+                )),
                 output: Arc::new(Mutex::new(tokio::io::stdout())),
                 shutdown_notify: Arc::new(Notify::new()),
                 responses_api_store: Arc::new(StdMutex::new(std::collections::HashMap::new())),

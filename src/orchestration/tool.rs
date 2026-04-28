@@ -1286,7 +1286,7 @@ mod tests {
             verify_output: None,
         };
 
-        let (decision, trace) = execute_loop(
+        let (decision, _trace) = execute_loop(
             "test all fail",
             &registry,
             &input,

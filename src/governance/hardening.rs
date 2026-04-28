@@ -28,6 +28,86 @@ pub struct TenantResourceQuota {
     pub daily_api_call_limit: usize,
 }
 
+/// Tracks per-tenant resource usage and enforces quotas.
+/// Used by CapabilityBus to reject tasks when a tenant exceeds its limits.
+#[derive(Debug, Clone, Default)]
+pub struct TenantBudgetEnforcer {
+    quotas: HashMap<String, TenantResourceQuota>,
+    token_usage: HashMap<String, usize>,
+    api_call_usage: HashMap<String, usize>,
+    active_tasks: HashMap<String, usize>,
+}
+
+impl TenantBudgetEnforcer {
+    pub fn new() -> Self {
+        Self {
+            quotas: HashMap::new(),
+            token_usage: HashMap::new(),
+            api_call_usage: HashMap::new(),
+            active_tasks: HashMap::new(),
+        }
+    }
+
+    /// Register or update a tenant's quota.
+    pub fn set_quota(&mut self, quota: TenantResourceQuota) {
+        self.quotas.insert(quota.tenant_id.clone(), quota);
+    }
+
+    /// Check whether a tenant is allowed to start a new task.
+    pub fn check_can_start(&self, tenant_id: &str) -> Result<(), String> {
+        let quota = self
+            .quotas
+            .get(tenant_id)
+            .ok_or_else(|| format!("no quota configured for tenant '{}'", tenant_id))?;
+
+        let current_tasks = self.active_tasks.get(tenant_id).copied().unwrap_or(0);
+        if current_tasks >= quota.concurrent_tasks_limit {
+            return Err(format!(
+                "tenant '{}' at concurrent task limit ({}/{})",
+                tenant_id, current_tasks, quota.concurrent_tasks_limit
+            ));
+        }
+
+        let tokens = self.token_usage.get(tenant_id).copied().unwrap_or(0);
+        if tokens >= quota.daily_token_limit {
+            return Err(format!(
+                "tenant '{}' exceeded daily token limit ({}/{})",
+                tenant_id, tokens, quota.daily_token_limit
+            ));
+        }
+
+        let calls = self.api_call_usage.get(tenant_id).copied().unwrap_or(0);
+        if calls >= quota.daily_api_call_limit {
+            return Err(format!(
+                "tenant '{}' exceeded daily API call limit ({}/{})",
+                tenant_id, calls, quota.daily_api_call_limit
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Record that a tenant started a task.
+    pub fn start_task(&mut self, tenant_id: &str) {
+        *self.active_tasks.entry(tenant_id.to_string()).or_insert(0) += 1;
+    }
+
+    /// Record resource consumption after a task completes.
+    pub fn record_usage(&mut self, tenant_id: &str, tokens: usize, api_calls: usize) {
+        *self.token_usage.entry(tenant_id.to_string()).or_insert(0) += tokens;
+        *self
+            .api_call_usage
+            .entry(tenant_id.to_string())
+            .or_insert(0) += api_calls;
+        let tasks = self.active_tasks.entry(tenant_id.to_string()).or_insert(0);
+        *tasks = tasks.saturating_sub(1);
+    }
+
+    pub fn quotas(&self) -> &HashMap<String, TenantResourceQuota> {
+        &self.quotas
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BudgetExceededError {
     pub limit_type: &'static str,
@@ -208,6 +288,17 @@ impl PolicyBundle {
             sandbox_level: "strict".to_string(),
         }
     }
+
+    pub fn production_hardened() -> Self {
+        Self {
+            name: "production-hardened".to_string(),
+            deployment_target: "production".to_string(),
+            max_autonomy: "agent".to_string(),
+            require_approval_for_write: true,
+            enable_code_execution: false,
+            sandbox_level: "isolated".to_string(),
+        }
+    }
 }
 
 pub struct Idempotency;
@@ -348,13 +439,14 @@ pub struct SandboxPolicy;
 impl SandboxPolicy {
     /// Check if read_file operations are allowed at this security level
     ///
-    /// Security levels: "none" (unrestricted) -> "basic" (limited) -> "strict" (minimal)
+    /// Security levels: "none" (unrestricted) -> "basic" (limited) -> "strict" (standard) -> "isolated" (production)
     pub fn can_execute_read_file(level: &str) -> bool {
         match level {
-            "none" => true,   // Unrestricted: allow all read operations
-            "basic" => true,  // Basic: allow read (safe, read-only operation)
-            "strict" => true, // Strict: still allow reads (non-destructive)
-            _ => false,       // Unknown level: deny by default (fail-safe)
+            "none" => true,     // Unrestricted: allow all read operations
+            "basic" => true,    // Basic: allow read (safe, read-only operation)
+            "strict" => true,   // Strict: still allow reads (non-destructive)
+            "isolated" => true, // Isolated: allow reads (safe, read-only)
+            _ => false,         // Unknown level: deny by default (fail-safe)
         }
     }
 
@@ -363,10 +455,11 @@ impl SandboxPolicy {
     /// Search is a read-only operation, safe across all levels
     pub fn can_execute_search(level: &str) -> bool {
         match level {
-            "none" => true,   // Unrestricted: allow all searches
-            "basic" => true,  // Basic: allow search (read-only, safe operation)
-            "strict" => true, // Strict: allow search (read-only, non-destructive)
-            _ => false,       // Unknown level: deny by default
+            "none" => true,     // Unrestricted: allow all searches
+            "basic" => true,    // Basic: allow search (read-only, safe operation)
+            "strict" => true,   // Strict: allow search (read-only, non-destructive)
+            "isolated" => true, // Isolated: allow search (read-only, non-destructive)
+            _ => false,         // Unknown level: deny by default
         }
     }
 
@@ -375,10 +468,11 @@ impl SandboxPolicy {
     /// Write operations are potentially dangerous and scope-limited by level
     pub fn can_execute_write(level: &str) -> bool {
         match level {
-            "none" => true,    // Unrestricted: allow all writes
-            "basic" => true,   // Basic: allow writes (but with audit/approval gates)
-            "strict" => false, // Strict: deny writes (read-only enforcement)
-            _ => false,        // Unknown level: deny by default (fail-safe)
+            "none" => true,      // Unrestricted: allow all writes
+            "basic" => true,     // Basic: allow writes (but with audit/approval gates)
+            "strict" => false,   // Strict: deny writes (read-only enforcement)
+            "isolated" => false, // Isolated: deny writes (read-only enforcement, prod hardened)
+            _ => false,          // Unknown level: deny by default (fail-safe)
         }
     }
 
@@ -387,10 +481,11 @@ impl SandboxPolicy {
     /// Shell execution is most dangerous and only allowed in unrestricted mode
     pub fn can_execute_shell(level: &str) -> bool {
         match level {
-            "none" => true,    // Unrestricted: allow shell/code execution
-            "basic" => false,  // Basic: deny shell (too dangerous, use restricted APIs)
-            "strict" => false, // Strict: deny shell execution (locked down)
-            _ => false,        // Unknown level: deny by default (fail-safe)
+            "none" => true,      // Unrestricted: allow shell/code execution
+            "basic" => false,    // Basic: deny shell (too dangerous, use restricted APIs)
+            "strict" => false,   // Strict: deny shell execution (locked down)
+            "isolated" => false, // Isolated: deny shell execution (locked down, production)
+            _ => false,          // Unknown level: deny by default (fail-safe)
         }
     }
 }
@@ -416,6 +511,7 @@ pub fn policy_bundle_for_target(target: Option<&str>) -> PolicyBundle {
     match target.unwrap_or("local-dev").to_ascii_lowercase().as_str() {
         "ci" | "ci-pipeline" => PolicyBundle::ci_pipeline(),
         "managed-service" | "managed" => PolicyBundle::managed_service(),
+        "production" | "prod" => PolicyBundle::production_hardened(),
         _ => PolicyBundle::local_dev(),
     }
 }

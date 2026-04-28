@@ -266,7 +266,7 @@ impl TaskGraphStore {
     /// `conn_str` — libpq-style connection string, e.g.
     /// `"postgres://user:pass@localhost/go_on"`
     pub fn new(conn_str: &str) -> Result<Self> {
-        let client = Client::connect(conn_str, NoTls)?;
+        let mut client = Client::connect(conn_str, NoTls)?;
         client.batch_execute(
             "CREATE TABLE IF NOT EXISTS task_graphs (
                 graph_id        TEXT    PRIMARY KEY,
@@ -301,7 +301,7 @@ impl TaskGraphStore {
     pub fn save_graph(&self, graph_id: &str, graph: &TaskGraph) -> Result<()> {
         let now = now_ts();
         let serialized = serde_json::to_string(graph)?;
-        let client = self.client.lock().unwrap();
+        let mut client = self.client.lock().unwrap();
         client.execute(
             "INSERT INTO task_graphs (graph_id, root_node_id, serialized_graph, created_at, updated_at, status)
              VALUES ($1, $2, $3, $4, $5, 'active')
@@ -317,7 +317,7 @@ impl TaskGraphStore {
 
     /// Load a task graph by its graph_id.
     pub fn load_graph(&self, graph_id: &str) -> Result<Option<TaskGraph>> {
-        let client = self.client.lock().unwrap();
+        let mut client = self.client.lock().unwrap();
         let rows = client.query(
             "SELECT serialized_graph FROM task_graphs WHERE graph_id = $1",
             &[&graph_id],
@@ -340,7 +340,7 @@ impl TaskGraphStore {
     ) -> Result<()> {
         let now = now_ts();
         let serialized = serde_json::to_string(checkpoint)?;
-        let client = self.client.lock().unwrap();
+        let mut client = self.client.lock().unwrap();
         client.execute(
             "INSERT INTO task_checkpoints (checkpoint_id, graph_id, serialized_checkpoint, created_at)
              VALUES ($1, $2, $3, $4)
@@ -358,7 +358,7 @@ impl TaskGraphStore {
         &self,
         checkpoint_id: &str,
     ) -> Result<Option<TaskGraphCheckpointArtifact>> {
-        let client = self.client.lock().unwrap();
+        let mut client = self.client.lock().unwrap();
         let rows = client.query(
             "SELECT serialized_checkpoint FROM task_checkpoints WHERE checkpoint_id = $1",
             &[&checkpoint_id],
@@ -375,7 +375,7 @@ impl TaskGraphStore {
 
     /// List all graph IDs with status 'active'.
     pub fn list_active_graphs(&self) -> Result<Vec<String>> {
-        let client = self.client.lock().unwrap();
+        let mut client = self.client.lock().unwrap();
         let rows = client.query(
             "SELECT graph_id FROM task_graphs WHERE status = 'active' ORDER BY updated_at DESC",
             &[],
@@ -387,7 +387,7 @@ impl TaskGraphStore {
     /// Mark a graph as completed (status = 'completed').
     pub fn mark_graph_completed(&self, graph_id: &str) -> Result<()> {
         let now = now_ts();
-        let client = self.client.lock().unwrap();
+        let mut client = self.client.lock().unwrap();
         client.execute(
             "UPDATE task_graphs SET status = 'completed', updated_at = $1 WHERE graph_id = $2",
             &[&now, &graph_id],
@@ -397,7 +397,7 @@ impl TaskGraphStore {
 
     /// Delete a graph and all its associated checkpoints.
     pub fn delete_graph(&self, graph_id: &str) -> Result<()> {
-        let client = self.client.lock().unwrap();
+        let mut client = self.client.lock().unwrap();
         client.execute(
             "DELETE FROM task_checkpoints WHERE graph_id = $1",
             &[&graph_id],

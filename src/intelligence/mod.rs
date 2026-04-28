@@ -10,6 +10,9 @@
 //! - **Verification Systems**: Ensuring output correctness and safety
 
 pub mod adaptive_selector;
+// pub mod consensus;  // F-GAP-16 — pre-existing compilation errors, disabled
+pub mod discovery;
+pub mod matcher;
 
 pub mod capability_bus;
 pub mod capability_graph;

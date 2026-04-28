@@ -2921,6 +2921,7 @@ pub(super) async fn handle_governance_status(
                 "experience_case_count": p.experience_case_count,
                 "event_history_len": p.event_history_len,
                 "workflow_presets_count": p.workflow_presets_count,
+                "provenance_entries_count": p.provenance_entries_count,
             })
         })
         .unwrap_or_else(|| {
@@ -2936,6 +2937,7 @@ pub(super) async fn handle_governance_status(
                 "experience_case_count": 0u32,
                 "event_history_len": 0u32,
                 "workflow_presets_count": 0u32,
+                "provenance_entries_count": 0u32,
             })
         });
 
@@ -3499,7 +3501,11 @@ pub(super) async fn handle_governance_status(
                     "ready": provenance_ledger_ready,
                     "provenance_ledger_profile": {
                         "enabled": provenance_ledger_ready,
-                        "entry_count": governance_audit.len() as u64,
+                        "entry_count": server
+                            .provenance_ledger
+                            .as_ref()
+                            .map(|pl| pl.len() as u64)
+                            .unwrap_or(0),
                         "last_entry_ts": status.timestamp,
                         "drop_count": 0u64,
                     },

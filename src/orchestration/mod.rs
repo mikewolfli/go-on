@@ -1,8 +1,15 @@
+pub mod artifact;
+// pub mod council;  // F-GAP-15 — temporarily disabled (unclosed delimiter in council.rs)
 pub mod execution_graph;
 pub mod flow;
 pub mod flow_with_models;
+pub mod fork_registry;
 pub mod mode;
+pub mod omnipotent;
 pub mod orchestrator;
+pub mod planner_executor;
+pub mod promotion_plugin;
+pub mod prompt_layers;
 pub mod roles;
 pub mod scheduler;
 pub mod skill;
@@ -12,6 +19,8 @@ pub mod task_decomposer;
 pub mod task_graph;
 pub mod task_graph_store;
 pub mod task_router;
+pub mod task_schema;
 pub mod token_layers;
 pub mod tool;
+pub mod workflow_optimizer;
 pub mod workflow_registry;

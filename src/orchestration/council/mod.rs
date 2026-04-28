@@ -1,0 +1,8 @@
+//! Orchestration Council — F-GAP-15 (FUTURE5.M1 / BLUE38 §6.6).
+//!
+//! Multi-agent council that coordinates decision-making among multiple agents
+//! through a voting-based governance model. Council members can submit proposals,
+//! cast votes, and the system tallies results to reach consensus.
+
+pub mod council;
+pub use council::*;

@@ -29,3 +29,10 @@
 //! 5. **Evolution** — update Q-table, decay exploration rate
 
 pub mod core;
+pub mod distributed_memory_bus;
+pub mod memory_bus;
+pub mod observability_bus;
+pub mod optimization_bus;
+pub mod orchestration_bus;
+pub mod protocol_bus;
+pub mod tool_bus;

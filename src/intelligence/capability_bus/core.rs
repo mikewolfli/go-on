@@ -1,20 +1,44 @@
 //! Core CapabilityBus implementation.
 //!
-//! Phased implementation — all types are public and ready for HarnessBus
-//! integration. dead_code & unused warnings will resolve once wired into
-//! the main request lifecycle in Phase 1.
+//! Full multi-bus bidirectional closed-loop (BLUE38 ARCH-13):
+//!   sense → decide → act → feedback → evolve
 //!
 //! This module defines the top-level `CapabilityBus` struct that holds references
-//! to all sub-bus components and orchestrates the sensing → decision → action →
-//! feedback → evolution loop.
+//! to all 13 sub-bus components and orchestrates the complete lifecycle.
+//! Sub-buses:
+//!   1. WorkflowLearningBus  (existing)
+//!   2. KnowledgeBus          (existing)
+//!   3. ReputationStore       (existing)
+//!   4. CapabilityGraph       (existing)
+//!   5. QLearningAgent        (existing)
+//!   6. ExperienceKnowledgeBase (existing)
+//!   7. HarnessBus            (existing)
+//!   8. ToolBus               (new in Phase 4)
+//!   9. ObservabilityBus      (new in Phase 4)
+//!  10. OptimizationBus       (new in Phase 4)
+//!  11. MemoryBus             (new in Phase 4)
+//!  12. ProtocolBus           (new in Phase 4)
+//!  13. OrchestrationBus      (new in Phase 4)
+//!  14. DistributedMemoryBus  (new in Phase 4)
 
+use crate::governance::hardening::TenantBudgetEnforcer;
 use crate::governance::harness_bus::{AgentExecutionPolicy, HarnessBus, PolicyVerdict};
 use crate::governance::pua::TaskContext;
+use crate::intelligence::capability_bus::distributed_memory_bus::DistributedMemoryBus;
+use crate::intelligence::capability_bus::memory_bus::MemoryBus;
+use crate::intelligence::capability_bus::observability_bus::ObservabilityBus;
+use crate::intelligence::capability_bus::optimization_bus::OptimizationBus;
+use crate::intelligence::capability_bus::orchestration_bus::OrchestrationBus;
+use crate::intelligence::capability_bus::protocol_bus::ProtocolBus;
+use crate::intelligence::capability_bus::tool_bus::ToolBus;
 use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::intelligence::reinforcement::learning::{
     ExperienceKnowledgeBase, QLearningAgent, RewardFunction, RlTaskExecutionMetrics, SuccessCase,
 };
 use crate::intelligence::reputation::ReputationStore;
+use crate::observability::provenance::{make_entry, ProvenanceLedger};
+use crate::orchestration::task_schema::SchemaRegistry;
+use crate::orchestration::workflow_optimizer::OptimizerRegistry;
 use crate::orchestration::workflow_registry::WorkflowRegistry;
 
 use serde::{Deserialize, Serialize};
@@ -164,6 +188,23 @@ pub struct CapabilityBusProfile {
     pub experience_case_count: usize,
     pub event_history_len: usize,
     pub workflow_presets_count: usize,
+    pub provenance_entries_count: usize,
+    // Phase 4 sub-bus metrics
+    pub tool_bus_tools: u32,
+    pub tool_bus_skills: u32,
+    pub tool_bus_calls: u64,
+    pub observability_tracked_agents: u32,
+    pub observability_system_error_rate: f64,
+    pub optimization_total: u64,
+    pub optimization_circuit_breaker_trips: u64,
+    pub protocol_active_transport: String,
+    pub protocol_healthy_count: u32,
+    pub orchestration_active_flows: u32,
+    pub orchestration_available_modes: u32,
+    pub memory_cache_hit_rate: f64,
+    pub memory_total_entries: u32,
+    pub distributed_memory_peers: u32,
+    pub distributed_memory_shared: u32,
 }
 
 impl Default for CapabilityBusProfile {
@@ -180,12 +221,29 @@ impl Default for CapabilityBusProfile {
             experience_case_count: 0,
             event_history_len: 0,
             workflow_presets_count: 0,
+            provenance_entries_count: 0,
+            tool_bus_tools: 0,
+            tool_bus_skills: 0,
+            tool_bus_calls: 0,
+            observability_tracked_agents: 0,
+            observability_system_error_rate: 0.0,
+            optimization_total: 0,
+            optimization_circuit_breaker_trips: 0,
+            protocol_active_transport: "auto".to_string(),
+            protocol_healthy_count: 0,
+            orchestration_active_flows: 0,
+            orchestration_available_modes: 0,
+            memory_cache_hit_rate: 0.0,
+            memory_total_entries: 0,
+            distributed_memory_peers: 0,
+            distributed_memory_shared: 0,
         }
     }
 }
 
 /// CapabilityBus aggregates all sub-bus references and orchestrates the
 /// 5-stage lifecycle: sense → decide → act → feedback → evolve.
+/// This is the scheduling coordinator for all 14 sub-buses (BLUE38 ARCH-13).
 pub struct CapabilityBus {
     /// HarnessBus — strategy engine (pre-route / pre-tool / post-exec)
     pub harness: Arc<HarnessBus>,
@@ -220,6 +278,40 @@ pub struct CapabilityBus {
     /// Workflow registry — named workflow presets for workflow-based routing
     workflow_registry: Option<Arc<Mutex<WorkflowRegistry>>>,
 
+    /// Provenance ledger — immutable data lineage tracking for every operation
+    pub provenance_ledger: Arc<ProvenanceLedger>,
+
+    /// Schema registry — validates task envelopes against role schemas (F-GAP-07)
+    pub schema_registry: Arc<Mutex<SchemaRegistry>>,
+
+    /// Tenant budget enforcer — per-tenant resource quota management (F-GAP-08)
+    pub tenant_budget: Arc<Mutex<TenantBudgetEnforcer>>,
+
+    /// Optimizer registry — workflow optimization plugins (ARCH-11)
+    pub optimizer_registry: Arc<Mutex<OptimizerRegistry>>,
+
+    // ── Phase 4 sub-buses ────────────────────────────────────────────────
+    /// ToolBus — unified tool/skill invocation with capability-aware routing
+    pub tool_bus: ToolBus,
+
+    /// ObservabilityBus — unified trace/metric/audit coordination
+    pub observability_bus: ObservabilityBus,
+
+    /// OptimizationBus — cost, speed, reliability optimization coordination
+    pub optimization_bus: OptimizationBus,
+
+    /// MemoryBus — unified cache coordination (L1 memory → L2 SQLite → L3 vector)
+    pub memory_bus: MemoryBus,
+
+    /// ProtocolBus — protocol-aware routing and health tracking
+    pub protocol_bus: ProtocolBus,
+
+    /// OrchestrationBus — unified flow/task/mode coordination
+    pub orchestration_bus: OrchestrationBus,
+
+    /// DistributedMemoryBus — cross-node memory sharing
+    pub distributed_memory_bus: DistributedMemoryBus,
+
     max_event_history: usize,
 }
 
@@ -231,6 +323,7 @@ impl CapabilityBus {
         q_learning: QLearningAgent,
         experience: ExperienceKnowledgeBase,
         reward_fn: RewardFunction,
+        provenance_ledger: Arc<ProvenanceLedger>,
     ) -> Self {
         Self {
             harness,
@@ -241,10 +334,26 @@ impl CapabilityBus {
             q_learning: Arc::new(Mutex::new(q_learning)),
             experience: Arc::new(Mutex::new(experience)),
             reward_fn: Arc::new(Mutex::new(reward_fn)),
-            event_history: Arc::new(Mutex::new(VecDeque::new())),
+            event_history: Arc::new(Mutex::new(VecDeque::with_capacity(100))),
             profile: Arc::new(Mutex::new(CapabilityBusProfile::default())),
             workflow_registry: None,
-            max_event_history: 500,
+            provenance_ledger,
+            schema_registry: Arc::new(Mutex::new(SchemaRegistry::new())),
+            tenant_budget: Arc::new(Mutex::new(TenantBudgetEnforcer::new())),
+            optimizer_registry: Arc::new(Mutex::new(OptimizerRegistry::new())),
+            tool_bus: ToolBus::new(
+                Arc::new(Mutex::new(crate::orchestration::tool::ToolRegistry::new())),
+                Arc::new(Mutex::new(
+                    crate::orchestration::skill::SkillRegistry::default(),
+                )),
+            ),
+            observability_bus: ObservabilityBus::new(),
+            optimization_bus: OptimizationBus::default(),
+            memory_bus: MemoryBus::new(None, None, None, None),
+            protocol_bus: ProtocolBus::new(),
+            orchestration_bus: OrchestrationBus::new(None, None),
+            distributed_memory_bus: DistributedMemoryBus::new(5000),
+            max_event_history: 100,
         }
     }
 
@@ -259,14 +368,65 @@ impl CapabilityBus {
             QLearningAgent::default(),
             ExperienceKnowledgeBase::default(),
             RewardFunction::default(),
+            Arc::new(ProvenanceLedger::default()),
         );
         bus.workflow_registry = workflow_registry;
         bus
     }
 
+    /// Attach a shared ProvenanceLedger to the CapabilityBus, replacing the default
+    pub fn with_provenance_ledger(mut self, ledger: Arc<ProvenanceLedger>) -> Self {
+        self.provenance_ledger = ledger;
+        self
+    }
+
     /// Attach a WorkflowRegistry to an existing CapabilityBus
     pub fn with_workflow_registry(mut self, registry: Arc<Mutex<WorkflowRegistry>>) -> Self {
         self.workflow_registry = Some(registry);
+        self
+    }
+
+    // ── Phase 4 sub-bus builder methods ───────────────────────────────────
+
+    /// Attach a ToolBus to the CapabilityBus
+    pub fn with_tool_bus(mut self, tool_bus: ToolBus) -> Self {
+        self.tool_bus = tool_bus;
+        self
+    }
+
+    /// Attach an ObservabilityBus to the CapabilityBus
+    pub fn with_observability_bus(mut self, bus: ObservabilityBus) -> Self {
+        self.observability_bus = bus;
+        self
+    }
+
+    /// Attach an OptimizationBus to the CapabilityBus
+    pub fn with_optimization_bus(mut self, bus: OptimizationBus) -> Self {
+        self.optimization_bus = bus;
+        self
+    }
+
+    /// Attach a MemoryBus to the CapabilityBus
+    pub fn with_memory_bus(mut self, bus: MemoryBus) -> Self {
+        self.memory_bus = bus;
+        self
+    }
+
+    /// Attach a ProtocolBus to the CapabilityBus
+    pub fn with_protocol_bus(mut self, bus: ProtocolBus) -> Self {
+        self.protocol_bus = bus;
+        self
+    }
+
+    /// Attach an OrchestrationBus to the CapabilityBus
+    pub fn with_orchestration_bus(mut self, bus: OrchestrationBus) -> Self {
+        self.orchestration_bus = bus;
+        self
+    }
+
+    /// Attach a DistributedMemoryBus to the CapabilityBus
+    pub fn with_distributed_memory_bus(mut self, bus: DistributedMemoryBus) -> Self {
+        self.distributed_memory_bus = bus;
         self
     }
 
@@ -306,7 +466,7 @@ impl CapabilityBus {
     // Stage 1: Sensing — gather input from sub-buses
     // ------------------------------------------------------------------
 
-    pub fn sense(&self, _task: &TaskContext) -> SensingOutput {
+    pub fn sense(&self, task: &TaskContext) -> SensingOutput {
         let cap_agents = self
             .capability_graph
             .lock()
@@ -326,10 +486,26 @@ impl CapabilityBus {
             })
             .unwrap_or_default();
 
+        // Phase 4: Query ObservabilityBus for healthy agents
+        let healthy = self.observability_bus.healthy_agents(0.5);
+
+        // Phase 4: Query OrchestrationBus for available modes
+        let modes = self.orchestration_bus.available_modes();
+
+        // Phase 4: Get optimization recommendation
+        let task_type_str = format!("{:?}", task.task_type);
+        let token_estimate = (task.file_count * 512) as u64;
+        let opt =
+            self.optimization_bus
+                .recommend(&task_type_str, token_estimate.max(1024), "balanced");
+
         SensingOutput {
             capability_agent_count: cap_agents,
             reputation_snapshot: rep_snapshot,
             recent_agents: _learning_rates,
+            healthy_agents: healthy,
+            available_modes: modes,
+            optimization: Some(opt),
         }
     }
 
@@ -357,6 +533,8 @@ impl CapabilityBus {
                     agent_policy: None,
                     confidence: 0.0,
                     duration_ms: start.elapsed().as_millis() as u64,
+                    recommended_mode: "ask".to_string(),
+                    available_tools: vec![],
                 };
             }
             PolicyVerdict::Escalate(r) => {
@@ -373,6 +551,8 @@ impl CapabilityBus {
                     agent_policy: None,
                     confidence: 0.0,
                     duration_ms: start.elapsed().as_millis() as u64,
+                    recommended_mode: "ask".to_string(),
+                    available_tools: vec![],
                 };
             }
             _ => {}
@@ -443,12 +623,28 @@ impl CapabilityBus {
             .map(|r| r.score)
             .unwrap_or(0.5);
 
+        // Phase 4: Get recommended execution mode from OrchestrationBus
+        let task_type_str = format!("{:?}", task.task_type);
+        let recommended_mode = self
+            .orchestration_bus
+            .recommend_mode(&task_type_str, task.risk_score);
+
+        // Phase 4: Get available tools for the selected agent via ToolBus
+        let available_tools = selected_agent
+            .as_ref()
+            .map(|agent| self.tool_bus.agent_tool_match(agent, &task_type_str))
+            .unwrap_or_default();
+
         self.record_event(
             "decision",
             selected_agent.clone(),
             None,
             "success",
-            serde_json::json!({"confidence": confidence}),
+            serde_json::json!({
+                "confidence": confidence,
+                "recommended_mode": recommended_mode,
+                "available_tools": available_tools.len(),
+            }),
         );
 
         if let Ok(mut p) = self.profile.lock() {
@@ -462,6 +658,8 @@ impl CapabilityBus {
             agent_policy,
             confidence,
             duration_ms: start.elapsed().as_millis() as u64,
+            recommended_mode,
+            available_tools,
         }
     }
 
@@ -484,6 +682,99 @@ impl CapabilityBus {
             .collect();
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.first().map(|(name, _)| (*name).clone())
+    }
+
+    // ------------------------------------------------------------------
+    // Stage 3: Action — dispatch to agent with tool bus awareness
+    // ------------------------------------------------------------------
+
+    /// Execute a tool through the ToolBus with HarnessBus validation
+    pub fn execute_tool(
+        &self,
+        tool_name: &str,
+        input: &crate::orchestration::tool::ToolInput,
+    ) -> anyhow::Result<crate::orchestration::tool::ToolOutput> {
+        // Step 1: Validate via HarnessBus
+        let tool_verdict = self
+            .harness
+            .evaluator
+            .check_tool_call(tool_name, &input.payload);
+        if !tool_verdict.is_allowed() {
+            self.record_event(
+                "action",
+                None,
+                None,
+                "blocked",
+                serde_json::json!({"tool": tool_name, "reason": "HarnessBus denied"}),
+            );
+            return Err(anyhow::anyhow!(
+                "Tool call '{}' denied by HarnessBus policy",
+                tool_name
+            ));
+        }
+
+        // Step 2: Execute via ToolBus
+        let start = Instant::now();
+        let result = self.tool_bus.execute_tool(tool_name, input);
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let success = result.is_ok();
+
+        // Step 3: Record execution in ObservabilityBus
+        self.observability_bus.record_trace(
+            "capability_bus",
+            "tool_call",
+            duration_ms,
+            success,
+            result.as_ref().err().map(|e| e.to_string()),
+            0,
+        );
+
+        // Step 4: Record outcome in ToolBus
+        self.tool_bus
+            .record_tool_call(tool_name, success, duration_ms);
+
+        // Step 5: Record event
+        let outcome = if success { "success" } else { "failure" };
+        self.record_event(
+            "action",
+            None,
+            None,
+            outcome,
+            serde_json::json!({"tool": tool_name, "duration_ms": duration_ms}),
+        );
+
+        result
+    }
+
+    /// Check if an agent is healthy via ObservabilityBus and OptimizationBus
+    pub fn is_agent_healthy(&self, agent: &str) -> bool {
+        // Check circuit breaker via OptimizationBus
+        if self.optimization_bus.is_circuit_broken(agent) {
+            return false;
+        }
+        // Check error rate via ObservabilityBus
+        if let Some(err_rate) = self.observability_bus.agent_error_rate(agent) {
+            if err_rate.error_rate > 0.5 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Get recommended execution mode via OrchestrationBus
+    pub fn recommended_mode(&self, task_type: &str, complexity: f64) -> String {
+        self.orchestration_bus.recommend_mode(task_type, complexity)
+    }
+
+    /// Get optimization recommendation for a task
+    pub fn optimization_recommendation(
+        &self,
+        task_type: &str,
+        token_count: u64,
+        priority: &str,
+    ) -> crate::intelligence::capability_bus::optimization_bus::OptimizationRecommendation {
+        self.optimization_bus
+            .recommend(task_type, token_count, priority)
     }
 
     // ------------------------------------------------------------------
@@ -524,7 +815,21 @@ impl CapabilityBus {
             rep.record_outcome(agent, success);
         }
 
-        // 3. Record event
+        // 3. Write to ObservabilityBus
+        self.observability_bus.record_trace(
+            agent,
+            task_type,
+            duration_ms,
+            success,
+            None,
+            token_cost,
+        );
+
+        // 4. Write to OptimizationBus
+        self.optimization_bus
+            .record_execution(agent, duration_ms, token_cost, success);
+
+        // 5. Record event
         let outcome = if success { "success" } else { "failure" };
         self.record_event(
             "feedback",
@@ -537,6 +842,17 @@ impl CapabilityBus {
                 "quality_score": quality_score,
             }),
         );
+
+        // 6. Record provenance
+        self.provenance_ledger.append(make_entry(
+            task_id,
+            task_type,
+            agent,
+            "capability_bus",
+            &serde_json::json!({"task_type": task_type, "quality_score": quality_score}),
+            &serde_json::json!({"success": success, "duration_ms": duration_ms}),
+            vec![],
+        ));
     }
 
     // ------------------------------------------------------------------
@@ -639,6 +955,38 @@ impl CapabilityBus {
                 .and_then(|wr| wr.lock().ok())
                 .map(|r| r.list().len())
                 .unwrap_or(0);
+            p.provenance_entries_count = self.provenance_ledger.len();
+
+            // Phase 4 sub-bus profile enrichment
+            let tb = self.tool_bus.profile();
+            p.tool_bus_tools = tb.total_tools;
+            p.tool_bus_skills = tb.total_skills;
+            p.tool_bus_calls = tb.total_calls;
+
+            let ob = self.observability_bus.system_health();
+            p.observability_tracked_agents = ob.tracked_agents;
+            p.observability_system_error_rate = ob.system_error_rate;
+
+            let opt = self.optimization_bus.profile();
+            p.optimization_total = opt.total_optimizations;
+            p.optimization_circuit_breaker_trips = opt.circuit_breaker_trips;
+
+            let pb = self.protocol_bus.profile();
+            p.protocol_active_transport = pb.active_transport;
+            p.protocol_healthy_count = pb.healthy_protocols;
+
+            let orb = self.orchestration_bus.profile();
+            p.orchestration_active_flows = orb.active_flows;
+            p.orchestration_available_modes = orb.available_modes;
+
+            let mb = self.memory_bus.profile();
+            p.memory_cache_hit_rate = mb.cache_hit_rate;
+            p.memory_total_entries = mb.vector_docs_count + mb.memory_entries;
+
+            let dmb = self.distributed_memory_bus.profile();
+            p.distributed_memory_peers = dmb.remote_peers;
+            p.distributed_memory_shared = dmb.shared_entries;
+
             p.clone()
         } else {
             CapabilityBusProfile::default()
@@ -647,7 +995,7 @@ impl CapabilityBus {
 }
 
 // ---------------------------------------------------------------------------
-// Stage output types
+/// Stage output types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
@@ -655,6 +1003,13 @@ pub struct SensingOutput {
     pub capability_agent_count: usize,
     pub reputation_snapshot: Vec<crate::intelligence::reputation::ReputationRecord>,
     pub recent_agents: Vec<String>,
+    /// Phase 4: healthy agents from ObservabilityBus
+    pub healthy_agents: Vec<String>,
+    /// Phase 4: available modes from OrchestrationBus
+    pub available_modes: Vec<String>,
+    /// Phase 4: optimization recommendation
+    pub optimization:
+        Option<crate::intelligence::capability_bus::optimization_bus::OptimizationRecommendation>,
 }
 
 #[derive(Debug)]
@@ -664,4 +1019,8 @@ pub struct DecisionOutput {
     pub agent_policy: Option<AgentExecutionPolicy>,
     pub confidence: f64,
     pub duration_ms: u64,
+    /// Phase 4: recommended execution mode
+    pub recommended_mode: String,
+    /// Phase 4: tools available for the selected agent
+    pub available_tools: Vec<String>,
 }

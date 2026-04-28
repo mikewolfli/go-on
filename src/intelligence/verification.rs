@@ -585,7 +585,6 @@ mod tests {
         assert!(!signal.passed, "todo!() macro should be flagged");
     }
 
-    #[test]
     // ── AdversarialVerifier tests ────────────────────────────────
     #[test]
     fn adversarial_security_detects_unsafe() {

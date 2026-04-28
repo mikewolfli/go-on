@@ -11,6 +11,7 @@ pub mod copilot;
 pub mod deepquest;
 pub mod deepseek;
 pub mod facewall;
+pub mod factory;
 pub mod fireworks;
 pub mod gemini;
 pub mod glm;

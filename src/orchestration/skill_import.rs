@@ -418,6 +418,94 @@ fn now_ts() -> i64 {
         .unwrap_or(0)
 }
 
+/// A remote skill that wraps an MCP endpoint as a Skill trait implementation.
+///
+/// This allows remote MCP skills to be registered in the SkillRegistry and
+/// invoked through the same interface as local skills.
+pub struct RemoteSkill {
+    name: String,
+    description: String,
+    input_schema: Value,
+    endpoint: String,
+    client: reqwest::Client,
+}
+
+impl RemoteSkill {
+    /// Create a new RemoteSkill that proxies tool calls to an MCP endpoint.
+    ///
+    /// The endpoint should point to an MCP-compatible server that exposes
+    /// a `/tools/call` endpoint accepting `{"name": "...", "arguments": {...}}`.
+    pub fn new(endpoint: &str, skill_name: &str) -> Result<Self> {
+        let connect_timeout = Duration::from_secs(SKILL_IMPORT_CONNECT_TIMEOUT_SECS);
+        let request_timeout = Duration::from_secs(SKILL_IMPORT_REQUEST_TIMEOUT_SECS);
+        let client = Client::builder()
+            .connect_timeout(connect_timeout)
+            .timeout(request_timeout)
+            .build()
+            .context("failed to build HTTP client for RemoteSkill")?;
+
+        Ok(Self {
+            name: skill_name.to_string(),
+            description: format!("Remote MCP skill at {}", endpoint),
+            input_schema: json!({"type": "object"}),
+            endpoint: endpoint.trim_end_matches('/').to_string(),
+            client,
+        })
+    }
+
+    async fn call_remote(&self, input: &Value) -> Result<Value> {
+        let url = format!("{}/tools/call", self.endpoint);
+        let payload = json!({
+            "name": self.name,
+            "arguments": input,
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .with_context(|| format!("failed to call remote skill at {}", url))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!(
+                "remote skill '{}' returned status {} from {}",
+                self.name,
+                status,
+                url
+            );
+        }
+
+        let body: Value = response
+            .json()
+            .await
+            .with_context(|| format!("failed to parse response from {}", url))?;
+
+        Ok(body)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::orchestration::skill::Skill for RemoteSkill {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> Value {
+        self.input_schema.clone()
+    }
+
+    async fn execute(&self, input: &Value) -> Result<Value> {
+        self.call_remote(input).await
+    }
+}
+
 impl SkillImportSource {
     fn expected_sha256(&self) -> Option<&str> {
         match self {
