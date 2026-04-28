@@ -2272,6 +2272,17 @@ async fn execute_single_subtask(
         record_index + 1,
         crate::acp::prelude::now_ts_ms()
     );
+    let startup_evidence = crate::orchestration::startup_context::get()
+        .map(crate::orchestration::startup_context::summary_text)
+        .filter(|s| !s.is_empty());
+    let mut evidence_parts = Vec::new();
+    if let Some(summary) = startup_evidence {
+        evidence_parts.push(format!("Startup context:\n{}", summary));
+    }
+    if !tool_context.is_empty() {
+        evidence_parts.push(format!("Tool observations:\n{}", tool_context));
+    }
+
     let envelope = AgentTaskEnvelope {
         task_id: task_id.clone(),
         phase: format!("phase-{}", phase_index + 1),
@@ -2280,10 +2291,10 @@ async fn execute_single_subtask(
             .unwrap_or_else(|| "executor".to_string()),
         objective: subtask_description.clone(),
         constraints: context.principles.as_ref().map(|p| p.join("; ")),
-        evidence: if tool_context.is_empty() {
+        evidence: if evidence_parts.is_empty() {
             None
         } else {
-            Some(tool_context.clone())
+            Some(evidence_parts.join("\n\n"))
         },
         input: serde_json::json!({ "task": task.as_str(), "subtask": subtask_description.as_str() }),
     };

@@ -332,8 +332,58 @@ impl MultiChannelTransport {
     /// Mark a message as failed, optionally retrying based on QoS.
     pub fn fail_message(&self, _msg_id: &str, _reason: &str) {
         let mut inner = self.inner.lock().unwrap();
-        inner.total_failed += 1;
-        inner.last_activity_ms = Self::now_ms();
+        let now = Self::now_ms();
+        let enable_retry = inner.config.enable_retry;
+        let max_retries = inner.config.max_retries;
+        let retry_delay_ms = inner.config.retry_delay_ms;
+
+        // Best-effort retry path: locate the message in any queue and update its
+        // delivery status based on retry policy.
+        let mut retry_scheduled = false;
+        let mut failed_channel: Option<TransportChannel> = None;
+        for (channel, queue) in inner.queues.iter_mut() {
+            if let Some(idx) = queue.iter().position(|m| m.id == _msg_id) {
+                let mut msg = queue.remove(idx).expect("indexed message should exist");
+                let retry_count = match &msg.delivery_status {
+                    DeliveryStatus::Failed { retry_count, .. } => *retry_count,
+                    _ => 0,
+                };
+
+                if enable_retry && retry_count < max_retries {
+                    msg.delivery_status = DeliveryStatus::Failed {
+                        reason: _reason.to_string(),
+                        retry_count: retry_count + 1,
+                    };
+                    // Record retry delay for downstream consumers.
+                    msg.headers.insert(
+                        "x-retry-after-ms".to_string(),
+                        retry_delay_ms.to_string(),
+                    );
+                    queue.push_back(msg);
+                    retry_scheduled = true;
+                } else {
+                    msg.delivery_status = DeliveryStatus::Failed {
+                        reason: _reason.to_string(),
+                        retry_count,
+                    };
+                    failed_channel = Some(channel.clone());
+                }
+                break;
+            }
+        }
+
+        if let Some(channel) = failed_channel {
+            let stats = inner
+                .stats
+                .entry(channel.clone())
+                .or_insert_with(|| Self::new_stats(channel));
+            stats.messages_failed += 1;
+        }
+
+        if !retry_scheduled {
+            inner.total_failed += 1;
+        }
+        inner.last_activity_ms = now;
     }
 
     // ── introspection ─────────────────────────────────────────────────────
@@ -389,11 +439,11 @@ impl MultiChannelTransport {
 
     /// Obtain a snapshot of the entire transport profile.
     pub fn profile(&self) -> TransportProfile {
+        let channel_stats = self.all_channel_stats();
         let inner = self.inner.lock().unwrap();
 
         // Collect borrowed data into owned values before building the struct
         let active_channels: Vec<String> = inner.queues.keys().map(|ch| ch.to_string()).collect();
-        let channel_stats: Vec<ChannelStats> = inner.stats.values().cloned().collect();
 
         TransportProfile {
             enabled: inner.status,
@@ -474,7 +524,7 @@ impl MultiChannelTransport {
     ) -> ChannelMessage {
         let id = self.next_message_id.fetch_add(1, Ordering::Relaxed);
         let now = Self::now_ms();
-        let config = self.inner.lock().unwrap().config.clone();
+        let config = self.config();
 
         ChannelMessage {
             id: format!("msg_{}", id),

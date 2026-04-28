@@ -102,6 +102,41 @@ pub async fn load(cfg: &StartupContextConfig) -> StartupContext {
         ctx.build_commands.push("npm run build".to_string());
     }
 
+    // Style rules from common repository policy files (best-effort).
+    let style_sources = [
+        ".editorconfig",
+        "rustfmt.toml",
+        "clippy.toml",
+        "docs/DEVELOPMENT_RULES.md",
+        "docs/RULES.md",
+    ];
+    for source in style_sources {
+        if ctx.style_rules.len() >= 4 {
+            break;
+        }
+        let path = cwd.join(source);
+        if let Ok(content) = tokio::fs::read_to_string(&path).await {
+            let mut lines = content
+                .lines()
+                .map(str::trim)
+                .filter(|line| {
+                    !line.is_empty()
+                        && !line.starts_with('#')
+                        && !line.starts_with("//")
+                        && !line.starts_with('[')
+                })
+                .take(6)
+                .collect::<Vec<_>>()
+                .join(" | ");
+            if !lines.is_empty() {
+                if lines.chars().count() > 300 {
+                    lines = lines.chars().take(300).collect();
+                }
+                ctx.style_rules.push(format!("{}: {}", source, lines));
+            }
+        }
+    }
+
     // Recent git commits (best-effort)
     let commit_count = cfg.recent_commits;
     if let Ok(output) = tokio::process::Command::new("git")
@@ -140,6 +175,9 @@ pub fn summary_text(ctx: &StartupContext) -> String {
     }
     if !ctx.recent_commits.is_empty() {
         parts.push(format!("Recent commits: {}", ctx.recent_commits.join("; ")));
+    }
+    if !ctx.style_rules.is_empty() {
+        parts.push(format!("Style rules: {}", ctx.style_rules.join(" || ")));
     }
     parts.join("\n")
 }

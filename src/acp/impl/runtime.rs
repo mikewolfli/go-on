@@ -133,6 +133,21 @@ pub fn new_acp_server(
             server.capability_bus = Some(capability_bus);
             server.provenance_ledger = Some(provenance_ledger);
 
+            // Wire dual-level task scheduler (ARCH-02): create the scheduler and
+            // register one worker per known agent so the priority queue has real routing
+            // targets.  The scheduler tracks queue depth and active-worker counts that
+            // are surfaced in governance.status.
+            let task_scheduler = {
+                let config = crate::orchestration::scheduler::SchedulerConfig::default();
+                let s =
+                    Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(config));
+                for agent_name in registry.names() {
+                    let _ = s.register_worker(&agent_name, &agent_name);
+                }
+                s
+            };
+            server.scheduler = Some(task_scheduler);
+
             if server.runtime_config.skills_enabled {
                 server.register_skill(Arc::new(crate::orchestration::skill::EchoSkill));
             }

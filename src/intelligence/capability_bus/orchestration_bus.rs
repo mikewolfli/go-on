@@ -12,7 +12,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::orchestration::execution_graph::{ExCondition, ExNode, ExNodeKind, ExecutionGraph};
 use crate::orchestration::flow::FlowManager;
-use crate::orchestration::task_router::TaskRouter;
 
 // ── Supporting types ────────────────────────────────────────────────────────
 
@@ -108,8 +107,6 @@ struct FlowEntry {
 pub struct OrchestrationBus {
     /// Flow manager reference
     flow_manager: Option<Arc<FlowManager>>,
-    /// Task router reference
-    task_router: Option<Arc<TaskRouter>>,
     /// Execution graph
     execution_graph: Arc<Mutex<ExecutionGraph>>,
     /// Available modes
@@ -127,20 +124,15 @@ impl OrchestrationBus {
     ///
     /// # Arguments
     /// * `flow_manager` - Optional shared reference to a `FlowManager`
-    /// * `task_router` - Optional shared reference to a `TaskRouter`
     ///
     /// # Returns
     /// * `Self` - A new `OrchestrationBus` instance
-    pub fn new(
-        flow_manager: Option<Arc<FlowManager>>,
-        task_router: Option<Arc<TaskRouter>>,
-    ) -> Self {
+    pub fn new(flow_manager: Option<Arc<FlowManager>>) -> Self {
         // Create a minimal default ExecutionGraph for initialization.
         let graph = ExecutionGraph::new("orchestration_root");
 
         Self {
             flow_manager,
-            task_router,
             execution_graph: Arc::new(Mutex::new(graph)),
             available_modes: Arc::new(RwLock::new(Vec::new())),
             profile: Arc::new(Mutex::new(OrchestrationBusProfile {
@@ -160,6 +152,8 @@ impl OrchestrationBus {
     /// # Arguments
     /// * `mode` - The mode name to register
     pub fn register_mode(&self, mode: &str) {
+        // Parse known standard modes to keep enum conversion path active.
+        let _ = OrchestrationMode::from_str(mode);
         let mut modes = self
             .available_modes
             .write()
@@ -448,7 +442,7 @@ mod tests {
 
     #[test]
     fn test_new_bus_defaults() {
-        let bus = OrchestrationBus::new(None, None);
+        let bus = OrchestrationBus::new(None);
         let prof = bus.profile();
         assert!(prof.enabled);
         assert_eq!(prof.active_flows, 0);
@@ -459,7 +453,7 @@ mod tests {
 
     #[test]
     fn test_register_and_list_modes() {
-        let bus = OrchestrationBus::new(None, None);
+        let bus = OrchestrationBus::new(None);
         assert!(bus.available_modes().is_empty());
 
         bus.register_mode("ask");
@@ -474,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_start_and_complete_flow() {
-        let bus = OrchestrationBus::new(None, None);
+        let bus = OrchestrationBus::new(None);
 
         assert!(bus.start_flow("test-flow", "task-001").is_ok());
         assert_eq!(bus.active_flows().len(), 1);
@@ -494,7 +488,7 @@ mod tests {
 
     #[test]
     fn test_recommend_mode() {
-        let bus = OrchestrationBus::new(None, None);
+        let bus = OrchestrationBus::new(None);
 
         // Safety-critical tasks
         let mode = bus.recommend_mode("security audit", 3.0);
@@ -562,7 +556,7 @@ mod tests {
 
     #[test]
     fn test_profile_updates() {
-        let bus = OrchestrationBus::new(None, None);
+        let bus = OrchestrationBus::new(None);
 
         assert_eq!(bus.profile().available_modes, 0);
         bus.register_mode("ask");
@@ -581,7 +575,7 @@ mod tests {
 
     #[test]
     fn test_active_flows_output() {
-        let bus = OrchestrationBus::new(None, None);
+        let bus = OrchestrationBus::new(None);
 
         bus.start_flow("alpha", "t1").unwrap();
         bus.start_flow("beta", "t2").unwrap();

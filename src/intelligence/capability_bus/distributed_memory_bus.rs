@@ -22,10 +22,12 @@
 //!   full peer set and shared‑entry machinery is active.
 
 use std::collections::{HashMap, VecDeque};
+#[cfg(feature = "profile-multi-users-server")]
 use std::sync::atomic::AtomicBool;
 #[cfg(feature = "profile-multi-users-server")]
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
+#[cfg(feature = "profile-multi-users-server")]
 use std::thread::JoinHandle;
 #[cfg(feature = "profile-multi-users-server")]
 use std::thread;
@@ -197,12 +199,15 @@ pub struct DistributedMemoryBus {
     /// Profile / metrics snapshot.
     profile: Arc<Mutex<DistributedMemoryBusProfile>>,
     /// Transport running flag.
+    #[cfg(feature = "profile-multi-users-server")]
     transport_running: Arc<AtomicBool>,
     /// Transport configuration.
+    #[cfg(feature = "profile-multi-users-server")]
     transport_config: Arc<Mutex<Option<MemoryTransportConfig>>>,
     /// Transport statistics.
     transport_stats: Arc<Mutex<TransportStats>>,
     /// Handle for the background sync thread.
+    #[cfg(feature = "profile-multi-users-server")]
     sync_thread: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
@@ -223,9 +228,12 @@ impl DistributedMemoryBus {
             shared_entries: Arc::new(Mutex::new(VecDeque::with_capacity(max))),
             max_entries: max,
             profile: Arc::new(Mutex::new(DistributedMemoryBusProfile::default())),
+            #[cfg(feature = "profile-multi-users-server")]
             transport_running: Arc::new(AtomicBool::new(false)),
+            #[cfg(feature = "profile-multi-users-server")]
             transport_config: Arc::new(Mutex::new(None)),
             transport_stats: Arc::new(Mutex::new(TransportStats::default())),
+            #[cfg(feature = "profile-multi-users-server")]
             sync_thread: Arc::new(Mutex::new(None)),
         }
     }

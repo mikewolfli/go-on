@@ -1051,6 +1051,14 @@ pub(super) async fn handle_governance_status(
             .unwrap_or(false),
         "loaded": startup_context.as_ref().map(|ctx| ctx.loaded).unwrap_or(false),
         "readme_chars": startup_context.as_ref().map(|ctx| ctx.readme_chars).unwrap_or(0),
+        "build_command_count": startup_context
+            .as_ref()
+            .map(|ctx| ctx.build_commands.len())
+            .unwrap_or(0),
+        "style_rule_count": startup_context
+            .as_ref()
+            .map(|ctx| ctx.style_rules.len())
+            .unwrap_or(0),
         "commit_count": startup_context.as_ref().map(|ctx| ctx.recent_commits.len()).unwrap_or(0),
         "has_code_repo": startup_context.as_ref().map(|ctx| ctx.has_code_repo).unwrap_or(false),
     });
@@ -2990,6 +2998,52 @@ pub(super) async fn handle_governance_status(
         })
         .unwrap_or((serde_json::Value::Null, serde_json::Value::Null));
 
+    // REAL DATA: token layer chain stats from HarnessBus (ARCH-04)
+    // Each entry is (layer_name, (allow_count, reject_count)).
+    let (token_l0_reject, token_l1_cache_hit, token_l5_invocations, token_gate_count): (
+        u64,
+        u64,
+        u64,
+        u32,
+    ) = server
+        .harness_bus
+        .as_ref()
+        .and_then(|hb| {
+            hb.token_chain.lock().ok().map(|chain| {
+                let stats = chain.layer_stats();
+                let l0_reject = stats.get("L0FastReject").map(|(_, r)| *r).unwrap_or(0);
+                let l1_hit = stats.get("L1CacheReuse").map(|(a, _)| *a).unwrap_or(0);
+                let l5_inv = stats
+                    .get("L5VerifyEscalate")
+                    .map(|(a, _)| *a)
+                    .unwrap_or(0);
+                let count = stats.len() as u32;
+                (l0_reject, l1_hit, l5_inv, count)
+            })
+        })
+        .unwrap_or((0, 0, 0, 6));
+
+    // REAL DATA: dual-level scheduler stats from AgentWorkerScheduler (ARCH-02)
+    let sched_l1_queue_depth: u32;
+    let sched_l2_active_workers: u32;
+    let sched_l2_fan_out_count: u32;
+    let sched_starvation_prevented: u64;
+    let sched_total_submitted: u64;
+    if let Some(ref sched) = server.scheduler {
+        let p = sched.level1.profile();
+        sched_l1_queue_depth = p.l1_queue_depth;
+        sched_l2_active_workers = p.l2_active_workers;
+        sched_l2_fan_out_count = p.l2_fan_out_count;
+        sched_starvation_prevented = p.starvation_events_prevented;
+        sched_total_submitted = p.total_submitted;
+    } else {
+        sched_l1_queue_depth = 0;
+        sched_l2_active_workers = 0;
+        sched_l2_fan_out_count = 0;
+        sched_starvation_prevented = 0;
+        sched_total_submitted = 0;
+    }
+
     send_result(
         server,
         request_id,
@@ -3448,21 +3502,23 @@ pub(super) async fn handle_governance_status(
                     "ready": layered_token_trigger_ready,
                     "layered_token_trigger_profile": {
                         "enabled": layered_token_trigger_ready,
-                        "l0_reject_count": 0u64,
-                        "l1_cache_hit_count": 0u64,
-                        "l5_invocation_count": 0u64,
+                        "l0_reject_count": token_l0_reject,
+                        "l1_cache_hit_count": token_l1_cache_hit,
+                        "l5_invocation_count": token_l5_invocations,
                         "avg_escalation_level": 1u32,
-                        "gate_count": 6u32,
+                        "gate_count": token_gate_count,
                     },
                 },
                 "multi_priority_scheduler": {
                     "ready": multi_priority_scheduler_ready,
                     "dual_level_scheduler_profile": {
                         "enabled": multi_priority_scheduler_ready,
-                        "l1_queue_depth": 0u32,
-                        "l2_active_workers": 0u32,
-                        "l2_fan_out_count": 0u32,
-                        "global_max_concurrent_tasks": 32u32,
+                        "l1_queue_depth": sched_l1_queue_depth,
+                        "l2_active_workers": sched_l2_active_workers,
+                        "l2_fan_out_count": sched_l2_fan_out_count,
+                        "total_submitted": sched_total_submitted,
+                        "starvation_events_prevented": sched_starvation_prevented,
+                        "global_max_concurrent_tasks": 10u32,
                     },
                 },
                 "worker_scheduler_backpressure": {

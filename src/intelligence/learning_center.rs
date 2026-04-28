@@ -62,6 +62,19 @@ pub struct LearningExperience {
     pub metadata: HashMap<String, String>,
 }
 
+/// Extra annotations attached to a recorded experience.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExperienceContext {
+    pub tags: Vec<String>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl ExperienceContext {
+    pub fn new(tags: Vec<String>, metadata: HashMap<String, String>) -> Self {
+        Self { tags, metadata }
+    }
+}
+
 /// A consolidated knowledge chunk abstracted from multiple experiences.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsolidatedKnowledge {
@@ -101,6 +114,8 @@ pub struct LearningCenterProfile {
     pub replay_count: u64,
     pub catastrophic_forgetting_events: u64,
 }
+
+type ConsolidationGroupEntry = (String, f64, bool, Vec<String>);
 
 // ---------------------------------------------------------------------------
 // Inner state
@@ -203,8 +218,7 @@ impl ContinuousLearningCenter {
         output_summary: String,
         success: bool,
         reward: f64,
-        tags: Vec<String>,
-        metadata: HashMap<String, String>,
+        context: ExperienceContext,
     ) -> String {
         let mut inner = self.inner.lock().unwrap();
         let now = now_ms();
@@ -220,8 +234,8 @@ impl ContinuousLearningCenter {
             reward,
             importance,
             timestamp_ms: now,
-            tags: tags.clone(),
-            metadata,
+            tags: context.tags.clone(),
+            metadata: context.metadata,
         };
 
         // Enforce max_experiences cap.
@@ -294,7 +308,7 @@ impl ContinuousLearningCenter {
         let now = now_ms();
 
         // Group experiences by task_type — clone all data we need outside the lock.
-        let mut groups: HashMap<String, Vec<(String, f64, bool, Vec<String>)>> = HashMap::new();
+        let mut groups: HashMap<String, Vec<ConsolidationGroupEntry>> = HashMap::new();
         for exp in inner.experiences.iter() {
             let entry = (
                 exp.id.clone(),
@@ -570,8 +584,7 @@ mod tests {
             "Bonjour le monde".to_string(),
             true,
             0.85,
-            vec!["language".to_string()],
-            HashMap::new(),
+            ExperienceContext::new(vec!["language".to_string()], HashMap::new()),
         );
         assert!(id.starts_with("exp-"));
 
@@ -593,8 +606,7 @@ mod tests {
             "b".to_string(),
             true,
             0.8,
-            vec!["lang".to_string()],
-            HashMap::new(),
+            ExperienceContext::new(vec!["lang".to_string()], HashMap::new()),
         );
         center.record_experience(
             "summarization".to_string(),
@@ -602,8 +614,7 @@ mod tests {
             "d".to_string(),
             false,
             -0.3,
-            vec!["nlp".to_string()],
-            HashMap::new(),
+            ExperienceContext::new(vec!["nlp".to_string()], HashMap::new()),
         );
 
         let results = center.query_experiences("translation", &[]);
@@ -632,8 +643,7 @@ mod tests {
                 "output".to_string(),
                 true,
                 0.9,
-                vec!["ml".to_string()],
-                HashMap::new(),
+                ExperienceContext::new(vec!["ml".to_string()], HashMap::new()),
             );
         }
 
@@ -664,8 +674,7 @@ mod tests {
                 "a".to_string(),
                 true,
                 0.7,
-                vec!["question".to_string()],
-                HashMap::new(),
+                ExperienceContext::new(vec!["question".to_string()], HashMap::new()),
             );
         }
         center.consolidate();
@@ -697,8 +706,10 @@ mod tests {
                 "class".to_string(),
                 true,
                 0.8,
-                vec!["vision".to_string(), "ml".to_string()],
-                HashMap::new(),
+                ExperienceContext::new(
+                    vec!["vision".to_string(), "ml".to_string()],
+                    HashMap::new(),
+                ),
             );
         }
         center.consolidate();
@@ -729,8 +740,7 @@ mod tests {
                 "out".to_string(),
                 true,
                 reward,
-                vec![],
-                HashMap::new(),
+                ExperienceContext::new(vec![], HashMap::new()),
             );
         }
 
@@ -758,8 +768,7 @@ mod tests {
             "entities".to_string(),
             true,
             0.9,
-            vec![],
-            HashMap::new(),
+            ExperienceContext::new(vec![], HashMap::new()),
         );
         center.record_experience(
             "ner".to_string(),
@@ -767,8 +776,7 @@ mod tests {
             "entities2".to_string(),
             false,
             0.1,
-            vec![],
-            HashMap::new(),
+            ExperienceContext::new(vec![], HashMap::new()),
         );
 
         let perf = center
@@ -796,8 +804,7 @@ mod tests {
                 "out".to_string(),
                 reward > 0.5,
                 reward,
-                vec![],
-                HashMap::new(),
+                ExperienceContext::new(vec![], HashMap::new()),
             );
         }
 
@@ -820,8 +827,7 @@ mod tests {
                     "out".to_string(),
                     reward > 0.0,
                     reward,
-                    vec![],
-                    HashMap::new(),
+                    ExperienceContext::new(vec![], HashMap::new()),
                 );
             }
             assert!(
@@ -845,8 +851,7 @@ mod tests {
                 "out".to_string(),
                 true,
                 0.9,
-                vec![],
-                HashMap::new(),
+                ExperienceContext::new(vec![], HashMap::new()),
             );
         }
 
@@ -865,8 +870,7 @@ mod tests {
             "out".to_string(),
             true,
             0.9,
-            vec![],
-            HashMap::new(),
+            ExperienceContext::new(vec![], HashMap::new()),
         );
         center.consolidate();
 
@@ -895,8 +899,7 @@ mod tests {
                 "out".to_string(),
                 true,
                 0.8,
-                vec!["profile".to_string()],
-                HashMap::new(),
+                ExperienceContext::new(vec!["profile".to_string()], HashMap::new()),
             );
         }
         center.consolidate();

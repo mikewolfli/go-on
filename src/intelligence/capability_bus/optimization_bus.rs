@@ -257,27 +257,6 @@ impl SpeedOptimizer {
     }
 }
 
-/// Lightweight workflow-level optimizer (delegates to the workflow CostOptimizer).
-struct BusWorkflowOptimizer {
-    inner: WfCostOptimizer,
-}
-
-impl BusWorkflowOptimizer {
-    fn new() -> Self {
-        Self {
-            inner: WfCostOptimizer::default(),
-        }
-    }
-
-    fn optimize(&self, plan: &str, success_rate: f64, avg_duration_ms: f64) -> Vec<String> {
-        self.inner
-            .optimize(plan, success_rate, avg_duration_ms)
-            .into_iter()
-            .map(|rec| rec.strategy)
-            .collect()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // OptimizationBus – public API
 // ---------------------------------------------------------------------------

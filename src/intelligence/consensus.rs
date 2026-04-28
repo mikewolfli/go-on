@@ -12,14 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 // ── ID generation ────────────────────────────────────────────────────────────
 
-static NODE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ROUND_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static PROPOSAL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-fn generate_node_id() -> String {
-    let n = NODE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("node-{}", n)
-}
 
 fn generate_round_id() -> String {
     let n = ROUND_ID_COUNTER.fetch_add(1, Ordering::Relaxed);

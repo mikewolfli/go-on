@@ -2,7 +2,6 @@
 //!
 //! Extracted from the original monolithic `reinforcement.rs`.
 
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 
 use anyhow::Result;
@@ -307,34 +306,6 @@ fn missing_envs_for_agent(config: &AppConfig) -> Vec<Value> {
         }
     }
     missing
-}
-
-fn probe_local_endpoint(url: &str, timeout_secs: u64) -> CheckStatus {
-    let (host, port) = extract_host_port(url);
-    let addr: SocketAddr = match format!("{}:{}", host, port).to_socket_addrs() {
-        Ok(mut addrs) => match addrs.next() {
-            Some(addr) => addr,
-            None => return CheckStatus::Error,
-        },
-        Err(_) => return CheckStatus::Error,
-    };
-    match TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(timeout_secs)) {
-        Ok(_) => CheckStatus::Healthy,
-        Err(_) => CheckStatus::Error,
-    }
-}
-
-fn extract_host_port(url: &str) -> (String, u16) {
-    let url = url
-        .trim_start_matches("http://")
-        .trim_start_matches("https://");
-    let without_path = url.split('/').next().unwrap_or(url);
-    if let Some((host, port_str)) = without_path.rsplit_once(':') {
-        if let Ok(port) = port_str.parse::<u16>() {
-            return (host.to_string(), port);
-        }
-    }
-    (without_path.to_string(), 443)
 }
 
 pub fn now_ts() -> i64 {

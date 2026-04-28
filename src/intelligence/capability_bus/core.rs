@@ -32,6 +32,14 @@ use crate::intelligence::capability_bus::orchestration_bus::OrchestrationBus;
 use crate::intelligence::capability_bus::protocol_bus::ProtocolBus;
 use crate::intelligence::capability_bus::tool_bus::ToolBus;
 use crate::intelligence::capability_graph::CapabilityGraph;
+use crate::intelligence::consciousness::AgencyConsciousness;
+use crate::intelligence::metacognitive::MetacognitiveController;
+use crate::intelligence::world_model::WorldModel;
+use crate::intelligence::self_model::SelfModelCore;
+use crate::intelligence::federated_rl::FederatedRL;
+use crate::intelligence::matcher::ScenarioMatcher;
+use crate::intelligence::discovery::DiscoveryCenter;
+use crate::intelligence::consensus::ConsensusEngine;
 use crate::intelligence::reinforcement::learning::{
     ExperienceKnowledgeBase, QLearningAgent, RewardFunction, RlTaskExecutionMetrics, SuccessCase,
 };
@@ -313,6 +321,16 @@ pub struct CapabilityBus {
     pub distributed_memory_bus: DistributedMemoryBus,
 
     max_event_history: usize,
+
+    // ── Cognitive modules ──────────────────────────────────────────────
+    pub consciousness: AgencyConsciousness,
+    pub metacognitive: MetacognitiveController,
+    pub world_model: WorldModel,
+    pub self_model: SelfModelCore,
+    pub federated_rl: FederatedRL,
+    pub matcher: ScenarioMatcher,
+    pub discovery: DiscoveryCenter,
+    pub consensus: ConsensusEngine,
 }
 
 impl CapabilityBus {
@@ -351,9 +369,17 @@ impl CapabilityBus {
             optimization_bus: OptimizationBus::default(),
             memory_bus: MemoryBus::new(None, None, None, None),
             protocol_bus: ProtocolBus::new(),
-            orchestration_bus: OrchestrationBus::new(None, None),
+            orchestration_bus: OrchestrationBus::new(None),
             distributed_memory_bus: DistributedMemoryBus::new(5000),
             max_event_history: 100,
+            consciousness: AgencyConsciousness::new(Default::default()),
+            metacognitive: MetacognitiveController::new(Default::default()),
+            world_model: WorldModel::new(Default::default()),
+            self_model: SelfModelCore::new(Default::default()),
+            federated_rl: FederatedRL::new(Default::default()),
+            matcher: ScenarioMatcher::default(),
+            discovery: DiscoveryCenter::new(),
+            consensus: ConsensusEngine::new(Default::default()),
         }
     }
 

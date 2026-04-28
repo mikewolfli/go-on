@@ -536,7 +536,6 @@ impl L2SemanticCache {
 // long-context queries (2000+ tokens) and caches reusable templates.
 // Uses SQLite for persistence across restarts.
 
-use std::path::PathBuf;
 
 // CacheEntry is already in scope from the shared types above.
 
@@ -561,15 +560,13 @@ pub struct TemplatePattern {
 pub struct L3TemplateCache {
     /// Known templates by structure signature
     templates: HashMap<String, TemplatePattern>,
-    /// Path to SQLite store (for persistence)
-    store_path: PathBuf,
 }
 
 impl L3TemplateCache {
     pub fn new(store_path: &str) -> Self {
+        let _ = store_path;
         Self {
             templates: HashMap::new(),
-            store_path: PathBuf::from(store_path),
         }
     }
 

@@ -697,7 +697,18 @@ fn parse_escalation_level(level: &str) -> u8 {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex as StdMutex};
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&dir).expect("temporary directory should be creatable");
+        dir
+    }
 
     #[test]
     fn builds_high_risk_plan() {
@@ -985,5 +996,49 @@ mod tests {
             .escalation_level
             .clone();
         assert_eq!(level, "L5");
+    }
+
+    #[test]
+    fn mode_execution_report_marks_high_risk_as_approval_required() {
+        let report = mode_execution_report("agent", true);
+        assert_eq!(report.stage, "mode:agent");
+        assert_eq!(report.status, "approval_required");
+        assert_eq!(report.escalation_level, "L2");
+        assert!(
+            report
+                .completed_checks
+                .iter()
+                .any(|c| c == "high_risk_detected")
+        );
+        assert!(
+            report
+                .missing_checks
+                .iter()
+                .any(|c| c == "operator_approval")
+        );
+    }
+
+    #[test]
+    fn tool_execution_report_clears_missing_proof_when_verification_present() {
+        let report = tool_execution_report("shell", Some("runtime_ok"));
+        assert_eq!(report.stage, "tool:shell");
+        assert_eq!(report.status, "enforced");
+        assert!(
+            report
+                .completed_checks
+                .iter()
+                .any(|c| c == "verification:runtime_ok")
+        );
+        assert!(!report
+            .missing_checks
+            .iter()
+            .any(|c| c == "proof_linked_to_task"));
+    }
+
+    #[test]
+    fn review_gate_prompt_contains_approve_or_reject_instruction() {
+        let prompt = review_gate_prompt();
+        assert!(prompt.contains("APPROVE or REJECT"));
+        assert!(prompt.contains("PUA red lines"));
     }
 }

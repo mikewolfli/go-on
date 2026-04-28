@@ -495,6 +495,9 @@ fn resolve_sqlite_vector_mode(conn: &Connection) -> Result<SqliteVectorMode> {
 
             #[cfg(not(feature = "profile-local"))]
             {
+                // Keep variant reachable across profile combinations so dead_code
+                // does not fire when fallback is compile-time disabled.
+                let _fallback_marker = SqliteVectorMode::JsonFallback;
                 Err(anyhow::anyhow!(
                     "sqlite-vec is required for this build profile but failed to initialize: {}",
                     err

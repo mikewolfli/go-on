@@ -486,6 +486,38 @@ pub(crate) async fn process_chat_request(
         }
     }
 
+    // ── HarnessBus token gate evaluation (ARCH-04) ─────────────────────
+    // Evaluate the L0-L5 token layer chain to determine the routing tier
+    // for this request.  The evaluation updates per-layer counters that are
+    // exposed in governance.status as layered_token_trigger_profile.  A
+    // Reject verdict from L0 stops processing immediately; other verdicts
+    // are informational and do not block execution.
+    if let Some(ref harness) = server.harness_bus {
+        let input_chars: usize = params.messages.iter().map(|m| m.content.len()).sum();
+        let estimated_input = (input_chars / 4).max(1) as u64;
+        let gate_ctx = crate::orchestration::token_layers::GateContext {
+            request_id: trace.request_id.clone(),
+            estimated_input_tokens: estimated_input,
+            estimated_output_tokens: estimated_input / 2,
+            keywords: vec![],
+            has_cache_hit: false,
+            confidence_score: 0.8,
+            request_text: String::new(),
+        };
+        let verdict = harness.evaluate_token_gate(&gate_ctx);
+        if matches!(
+            verdict,
+            crate::orchestration::token_layers::TokenGateVerdict::Reject(_)
+        ) {
+            let reason = match verdict {
+                crate::orchestration::token_layers::TokenGateVerdict::Reject(r) => r,
+                _ => "token gate rejected".to_string(),
+            };
+            anyhow::bail!("token gate L0 rejected request: {}", reason);
+        }
+        debug!("token gate verdict: {:?}", verdict);
+    }
+
     // ── TenantBudgetEnforcer pre-route check (F-GAP-08) ───────────────
     // Check per-tenant resource quotas before allocating compute.
     // Uses the conversation_id as a tenant identifier — in production this
@@ -834,6 +866,37 @@ pub(crate) async fn process_chat_request(
     let mut quota_failed_agents: Vec<String> = Vec::new();
     let mut agent_attempts: Vec<Value> = Vec::new();
     let mut cache_hit = false;
+
+    // ── Scheduler task submission (ARCH-02) ────────────────────────────
+    // Submit this request as a ScheduledTask so the dual-level priority
+    // queue tracks queue depth and active-worker counts.  These stats are
+    // read back in governance.status as dual_level_scheduler_profile.
+    let sched_task_id = trace.request_id.clone();
+    if let Some(ref sched) = server.scheduler {
+        let submitted_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let primary_role = resolved
+            .agents
+            .first()
+            .map(|(n, _)| n.clone())
+            .unwrap_or_else(|| "general".to_string());
+        let task = crate::orchestration::scheduler::ScheduledTask {
+            task_id: sched_task_id.clone(),
+            role: primary_role,
+            priority: crate::orchestration::scheduler::Priority(100),
+            base_score: 1.0,
+            urgency: 0.5,
+            cost_efficiency: 0.8,
+            deadline_pressure: 0.0,
+            aging_bonus: 0.0,
+            submitted_at,
+            retries: 0,
+            max_retries: 3,
+        };
+        let _ = sched.level1.submit(task);
+    }
 
     // ── Token cache lookup ──────────────────────────────────────────────
     //
@@ -1670,6 +1733,13 @@ pub(crate) async fn process_chat_request(
         "role_routing": role_routing_result,
         "enhanced_verification": verification_result
     });
+
+    // ── Scheduler task completion (ARCH-02) ────────────────────────────
+    // Mark the scheduled task as completed so the active-worker counter
+    // decrements and queue depth reflects the true in-flight load.
+    if let Some(ref sched) = server.scheduler {
+        let _ = sched.level1.complete(&sched_task_id);
+    }
 
     // ── CapabilityBus feedback on execution outcome ────────────────────
     // Record the execution result back into the sub-buses (learning,

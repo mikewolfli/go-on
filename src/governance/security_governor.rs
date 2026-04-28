@@ -692,12 +692,6 @@ mod tests {
         }
     }
 
-    fn context_single(key: &str, value: &str) -> HashMap<String, String> {
-        let mut m = HashMap::new();
-        m.insert(key.into(), value.into());
-        m
-    }
-
     // -----------------------------------------------------------------------
     // Tests
     // -----------------------------------------------------------------------
