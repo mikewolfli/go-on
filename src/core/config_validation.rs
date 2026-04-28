@@ -330,10 +330,8 @@ pub enum ErrorSeverity {
     /// Critical error - configuration cannot be used
     Critical,
     /// Error - configuration has issues but might work
-    #[allow(dead_code)]
     Error,
     /// Warning - configuration has minor issues
-    #[allow(dead_code)]
     Warning,
 }
 
@@ -380,13 +378,10 @@ pub enum RecommendationCategory {
     /// Security improvement
     Security,
     /// Reliability enhancement
-    #[allow(dead_code)]
     Reliability,
     /// Maintainability improvement
-    #[allow(dead_code)]
     Maintainability,
     /// Cost optimization
-    #[allow(dead_code)]
     Cost,
 }
 
@@ -398,7 +393,6 @@ pub enum ImpactLevel {
     /// Medium impact
     Medium,
     /// Low impact
-    #[allow(dead_code)]
     Low,
 }
 
@@ -410,7 +404,6 @@ pub enum PriorityLevel {
     /// Medium priority
     Medium,
     /// Low priority
-    #[allow(dead_code)]
     Low,
 }
 
@@ -422,10 +415,8 @@ pub struct DependencyAnalysis {
     /// Required keyring entries
     pub required_keyring_entries: HashSet<String>,
     /// External service dependencies
-    #[allow(dead_code)]
     pub external_dependencies: HashSet<String>,
     /// Internal module dependencies
-    #[allow(dead_code)]
     pub internal_dependencies: HashSet<String>,
     /// Configuration dependencies
     pub config_dependencies: HashMap<String, Vec<String>>,

@@ -50,6 +50,7 @@
 12 - 最小修改（只改触发问题的最小必要代码）
 13 - 不留 warning（以后端 `cargo clippy --all-features -- -D warnings` 为硬门）
 14 - 不允许占位，空函数，逻辑错误，不完整的函数或结构。
+15 **功能增强** - 所有新增功能根据local, simple-server, multi-users-server接入（wired）主链路，纳入对应总线框架内。
 
 ### 0.3 扫描范围
 

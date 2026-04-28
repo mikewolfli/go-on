@@ -19,7 +19,6 @@ pub mod conversation;
 pub mod metrics;
 
 // Miscellaneous helper functions
-#[allow(dead_code)]
 pub mod misc;
 
 // Re-export for convenience

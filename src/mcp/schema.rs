@@ -50,7 +50,6 @@ pub struct McpResource {
     pub mime_type: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolUseBlock {
     pub r#type: String,
@@ -59,7 +58,6 @@ pub struct ToolUseBlock {
     pub input: Value,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextBlock {
     pub r#type: String,

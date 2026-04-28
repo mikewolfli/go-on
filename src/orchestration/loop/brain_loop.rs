@@ -18,25 +18,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
+
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
 
 /// The phase of the brain loop at a given point in time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum BrainLoopState {
+    #[default]
     Planning,
     Executing,
     Reflecting,
     Replanning,
     Completed,
     Failed,
-}
-
-impl Default for BrainLoopState {
-    fn default() -> Self {
-        Self::Planning
-    }
 }
 
 impl BrainLoopState {
@@ -51,7 +48,7 @@ impl BrainLoopState {
 // ---------------------------------------------------------------------------
 
 /// A single atomic step in the brain loop.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrainLoopStep {
     pub id: String,
     pub phase: BrainLoopState,
@@ -98,7 +95,7 @@ pub struct Reflection {
 }
 
 /// Summary report returned by [`BrainLoop::run`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrainLoopReport {
     pub iterations: usize,
     pub final_score: f64,
@@ -107,7 +104,7 @@ pub struct BrainLoopReport {
 }
 
 /// Runtime metrics snapshot.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BrainLoopProfile {
     pub state: BrainLoopState,
     pub iteration_count: u32,
@@ -229,13 +226,12 @@ impl BrainLoop {
         inner.steps.push(step);
 
         // Simulate execution result.
-        let result = format!(
-            "Execution result for plan:\n\
+        let result = "Execution result for plan:\n\
              ─────────────────────────\n\
              - All steps completed successfully.\n\
              - Output meets the stated requirements.\n\
              - No critical errors detected."
-        );
+            .to_string();
 
         if let Some(last) = inner.steps.last_mut() {
             last.output = Some(result.clone());
@@ -357,8 +353,7 @@ impl BrainLoop {
         } else {
             plan.push_str(&format!(
                 "\nNext iteration aims to raise score from {:.3} to ≥ {:.3}\n",
-                reflection.score,
-                inner.config.min_score,
+                reflection.score, inner.config.min_score,
             ));
         }
 
@@ -437,6 +432,13 @@ impl BrainLoop {
             inner.steps.clone()
         };
 
+        // Verify terminal state is set correctly.
+        let state = {
+            let inner = self.inner.lock().unwrap();
+            inner.state
+        };
+        debug_assert!(state.is_terminal(), "state must be terminal after run");
+
         Ok(BrainLoopReport {
             iterations,
             final_score,
@@ -452,34 +454,50 @@ impl BrainLoop {
         let inner = self.inner.lock().unwrap();
         let total_steps = inner.steps.len() as u64;
 
-        let scores: Vec<f64> = inner
-            .steps
-            .iter()
-            .filter_map(|s| s.score)
-            .collect();
+        let scores: Vec<f64> = inner.steps.iter().filter_map(|s| s.score).collect();
         let avg_score = if scores.is_empty() {
             0.0
         } else {
             scores.iter().sum::<f64>() / scores.len() as f64
         };
 
+        // Summarise the last completed step for diagnostic info.
+        let last_step_info: String = inner
+            .steps
+            .last()
+            .map(|s| {
+                let reflection_note = s
+                    .reflection
+                    .as_deref()
+                    .unwrap_or("-");
+                format!(
+                    "step {} [phase={:?}, input_len={}, created_ms={}, reflection={}]",
+                    s.id,
+                    s.phase,
+                    s.input.len(),
+                    s.created_ms,
+                    reflection_note
+                )
+            })
+            .unwrap_or_default();
+
         let convergence_info = match inner.state {
             BrainLoopState::Completed => {
                 format!(
-                    "Converged after {} iterations (avg score: {:.3})",
-                    inner.iteration_count, avg_score
+                    "Converged after {} iterations (avg score: {:.3}); last: {}",
+                    inner.iteration_count, avg_score, last_step_info
                 )
             }
             BrainLoopState::Failed => {
                 format!(
-                    "Failed after {} iterations (avg score: {:.3}, min required: {:.3})",
-                    inner.iteration_count, avg_score, inner.config.min_score
+                    "Failed after {} iterations (avg score: {:.3}, min required: {:.3}); last: {}",
+                    inner.iteration_count, avg_score, inner.config.min_score, last_step_info
                 )
             }
-            BrainLoopState::Planning => "Planning phase".to_string(),
-            BrainLoopState::Executing => "Executing phase".to_string(),
-            BrainLoopState::Reflecting => "Reflecting phase".to_string(),
-            BrainLoopState::Replanning => "Replanning phase".to_string(),
+            BrainLoopState::Planning => format!("Planning phase; last: {}", last_step_info),
+            BrainLoopState::Executing => format!("Executing phase; last: {}", last_step_info),
+            BrainLoopState::Reflecting => format!("Reflecting phase; last: {}", last_step_info),
+            BrainLoopState::Replanning => format!("Replanning phase; last: {}", last_step_info),
         };
 
         BrainLoopProfile {
@@ -678,10 +696,7 @@ mod tests {
         let bl = BrainLoop::new(config);
         let report = bl.run("Simple task").unwrap();
 
-        assert!(
-            report.converged,
-            "loop should converge with low min_score"
-        );
+        assert!(report.converged, "loop should converge with low min_score");
         assert!(
             report.final_score >= 0.0,
             "final score should be non-negative"
@@ -791,10 +806,7 @@ mod tests {
         };
         let bl = BrainLoop::new(config);
         let report = bl.run("Converge by score").unwrap();
-        assert!(
-            report.converged,
-            "should converge by exceeding min_score"
-        );
+        assert!(report.converged, "should converge by exceeding min_score");
         assert!(
             report.final_score >= 0.3,
             "final score should meet min_score threshold"
@@ -806,7 +818,7 @@ mod tests {
         // successive iterations with similar-length plans/results should converge).
         let config2 = BrainLoopConfig {
             max_iterations: 3,
-            min_score: 0.5,   // reachable by the heuristic
+            min_score: 0.5,             // reachable by the heuristic
             convergence_threshold: 0.5, // very wide — will trigger stability convergence
         };
         let bl2 = BrainLoop::new(config2);
@@ -819,7 +831,7 @@ mod tests {
         // No convergence when score never reaches min and threshold is tiny.
         let config3 = BrainLoopConfig {
             max_iterations: 2,
-            min_score: 0.99,     // unreachable
+            min_score: 0.99,             // unreachable
             convergence_threshold: 1e-9, // essentially never stable
         };
         let bl3 = BrainLoop::new(config3);

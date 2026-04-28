@@ -1,4 +1,5 @@
 //! # Brain Loop — Plan → Execute → Reflect → Replan
+
 //!
 //! Implements FUTURE5.MD M5 "脑回路（Plan→Execute→Reflect→Replan）",
 //! an iterative orchestration cycle that drives a plan forward by executing
@@ -210,12 +211,7 @@ impl BrainLoop {
     /// Marks the step as `InProgress`, records `output`, advances the plan
     /// phase to `Executing`, and bumps the cycle counter if this is the
     /// first step executed in a new iteration.
-    pub fn execute_step(
-        &self,
-        plan_id: &str,
-        step_id: &str,
-        output: &str,
-    ) -> anyhow::Result<()> {
+    pub fn execute_step(&self, plan_id: &str, step_id: &str, output: &str) -> anyhow::Result<()> {
         let now = now_epoch_ms();
         let mut inner = self.inner.lock().unwrap();
 
@@ -253,10 +249,7 @@ impl BrainLoop {
 
             if plan.current_iteration > plan.max_iterations {
                 plan.phase = BrainLoopPhase::Failed;
-                plan.fail_reason = format!(
-                    "exceeded maximum iterations ({})",
-                    plan.max_iterations
-                );
+                plan.fail_reason = format!("exceeded maximum iterations ({})", plan.max_iterations);
                 inner.plans.insert(plan_id.to_string(), plan);
                 return Ok(());
             }
@@ -348,7 +341,10 @@ impl BrainLoop {
             .ok_or_else(|| anyhow::anyhow!("plan `{plan_id}` not found"))?;
 
         if plan.phase.is_terminal() {
-            anyhow::bail!("plan `{plan_id}` is already in terminal phase {:?}", plan.phase);
+            anyhow::bail!(
+                "plan `{plan_id}` is already in terminal phase {:?}",
+                plan.phase
+            );
         }
 
         // Keep only steps that are not pending (they are either done or in progress).
@@ -372,7 +368,10 @@ impl BrainLoop {
             .ok_or_else(|| anyhow::anyhow!("plan `{plan_id}` not found"))?;
 
         if plan.phase.is_terminal() {
-            anyhow::bail!("plan `{plan_id}` is already in terminal phase {:?}", plan.phase);
+            anyhow::bail!(
+                "plan `{plan_id}` is already in terminal phase {:?}",
+                plan.phase
+            );
         }
 
         plan.phase = BrainLoopPhase::Completed;
@@ -388,7 +387,10 @@ impl BrainLoop {
             .ok_or_else(|| anyhow::anyhow!("plan `{plan_id}` not found"))?;
 
         if plan.phase.is_terminal() {
-            anyhow::bail!("plan `{plan_id}` is already in terminal phase {:?}", plan.phase);
+            anyhow::bail!(
+                "plan `{plan_id}` is already in terminal phase {:?}",
+                plan.phase
+            );
         }
 
         plan.phase = BrainLoopPhase::Failed;
@@ -405,7 +407,10 @@ impl BrainLoop {
             .ok_or_else(|| anyhow::anyhow!("plan `{plan_id}` not found"))?;
 
         if plan.phase.is_terminal() {
-            anyhow::bail!("plan `{plan_id}` is already in terminal phase {:?}", plan.phase);
+            anyhow::bail!(
+                "plan `{plan_id}` is already in terminal phase {:?}",
+                plan.phase
+            );
         }
 
         plan.phase = BrainLoopPhase::Cancelled;
@@ -581,7 +586,9 @@ mod tests {
     #[test]
     fn test_execute_nonexistent_step_fails() {
         let bl = BrainLoop::new(default_config());
-        let plan_id = bl.start_plan("Goal", vec![make_step("s1", "Real step")]).unwrap();
+        let plan_id = bl
+            .start_plan("Goal", vec![make_step("s1", "Real step")])
+            .unwrap();
 
         let err = bl.execute_step(&plan_id, "s999", "data").unwrap_err();
         assert!(
@@ -606,7 +613,9 @@ mod tests {
     #[test]
     fn test_reflect() {
         let bl = BrainLoop::new(default_config());
-        let plan_id = bl.start_plan("Goal", vec![make_step("s1", "Step A")]).unwrap();
+        let plan_id = bl
+            .start_plan("Goal", vec![make_step("s1", "Step A")])
+            .unwrap();
 
         bl.execute_step(&plan_id, "s1", "done").unwrap();
 
@@ -648,14 +657,8 @@ mod tests {
 
         // Execute and reflect.
         bl.execute_step(&plan_id, "s1", "result").unwrap();
-        bl.reflect(
-            &plan_id,
-            "s1",
-            vec!["ok".to_string()],
-            vec![],
-            vec![],
-        )
-        .unwrap();
+        bl.reflect(&plan_id, "s1", vec!["ok".to_string()], vec![], vec![])
+            .unwrap();
 
         // Replan with two new steps.
         let new_steps = vec![
@@ -680,7 +683,9 @@ mod tests {
     #[test]
     fn test_complete_plan() {
         let bl = BrainLoop::new(default_config());
-        let plan_id = bl.start_plan("Goal", vec![make_step("s1", "Step")]).unwrap();
+        let plan_id = bl
+            .start_plan("Goal", vec![make_step("s1", "Step")])
+            .unwrap();
 
         bl.complete_plan(&plan_id).unwrap();
 
@@ -700,7 +705,9 @@ mod tests {
     #[test]
     fn test_fail_plan() {
         let bl = BrainLoop::new(default_config());
-        let plan_id = bl.start_plan("Goal", vec![make_step("s1", "Step")]).unwrap();
+        let plan_id = bl
+            .start_plan("Goal", vec![make_step("s1", "Step")])
+            .unwrap();
 
         bl.fail_plan(&plan_id, "Something went wrong").unwrap();
 
@@ -721,7 +728,9 @@ mod tests {
     #[test]
     fn test_cancel_plan() {
         let bl = BrainLoop::new(default_config());
-        let plan_id = bl.start_plan("Goal", vec![make_step("s1", "Step")]).unwrap();
+        let plan_id = bl
+            .start_plan("Goal", vec![make_step("s1", "Step")])
+            .unwrap();
 
         bl.cancel_plan(&plan_id).unwrap();
 

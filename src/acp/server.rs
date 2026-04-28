@@ -154,10 +154,8 @@ pub struct AcpServer {
     /// In-memory registry for Responses API objects
     pub responses_api_store: Arc<StdMutex<HashMap<String, serde_json::Value>>>,
     /// Persistent task graph store for checkpoints and recovery
-    #[allow(dead_code)]
     pub task_graph_store: Option<Arc<TaskGraphStore>>,
     /// Dual-level task scheduler for priority queue and worker pool
-    #[allow(dead_code)]
     pub scheduler: Option<Arc<AgentWorkerScheduler>>,
     /// Provenance ledger — immutable data lineage tracking
     pub provenance_ledger: Option<Arc<ProvenanceLedger>>,
@@ -412,7 +410,6 @@ impl ServerBuilder {
     }
 
     /// Set the memory response cache
-    #[allow(dead_code)]
     pub fn with_memory_response_cache(
         mut self,
         memory_response_cache: MemoryResponseCache,
@@ -422,42 +419,36 @@ impl ServerBuilder {
     }
 
     /// Set verbose mode
-    #[allow(dead_code)]
     pub fn verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
     }
 
     /// Set the harness bus
-    #[allow(dead_code)]
     pub fn with_harness_bus(mut self, harness_bus: Arc<HarnessBus>) -> Self {
         self.harness_bus = Some(harness_bus);
         self
     }
 
     /// Set the capability bus
-    #[allow(dead_code)]
     pub fn with_capability_bus(mut self, capability_bus: Arc<CapabilityBus>) -> Self {
         self.capability_bus = Some(capability_bus);
         self
     }
 
     /// Set the task graph store
-    #[allow(dead_code)]
     pub fn with_task_graph_store(mut self, store: Arc<TaskGraphStore>) -> Self {
         self.task_graph_store = Some(store);
         self
     }
 
     /// Set the dual-level task scheduler
-    #[allow(dead_code)]
     pub fn with_scheduler(mut self, scheduler: Arc<AgentWorkerScheduler>) -> Self {
         self.scheduler = Some(scheduler);
         self
     }
 
     /// Set the provenance ledger
-    #[allow(dead_code)]
     pub fn with_provenance_ledger(mut self, ledger: Arc<ProvenanceLedger>) -> Self {
         self.provenance_ledger = Some(ledger);
         self

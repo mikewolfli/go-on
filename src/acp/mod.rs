@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! ACP (Agent Coordination Protocol) module
 //!
 //! This module contains the core ACP server implementation and related components
@@ -13,13 +15,9 @@
 //! - `tests` - Test utilities
 
 // Core modules
-#[allow(dead_code)]
 pub mod background;
-#[allow(dead_code)]
 pub mod helpers;
-#[allow(dead_code)]
 pub mod r#impl;
-#[allow(dead_code)]
 pub mod prelude;
 pub mod server;
 

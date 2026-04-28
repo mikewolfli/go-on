@@ -27,7 +27,6 @@ use sqlite_vec::sqlite3_vec_init;
 use tracing::warn;
 
 /// Vector search hit
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct VectorHit {
     /// Response snippet
@@ -43,7 +42,6 @@ pub struct VectorPrecisionFeedback {
     /// Average similarity of returned hits (0.0-1.0).
     pub avg_similarity: f32,
     /// Number of hits returned.
-    #[allow(dead_code)]
     pub hit_count: usize,
 }
 
@@ -69,7 +67,6 @@ impl VectorPrecisionFeedback {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SqliteVectorMode {
     SqliteVec,
-    #[allow(dead_code)]
     JsonFallback,
 }
 
@@ -565,7 +562,7 @@ fn embed_text(text: &str, dimensions: usize) -> Vec<f32> {
     vector
 }
 
-#[allow(dead_code)]
+#[cfg(feature = "backend-sqlite")]
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
 }

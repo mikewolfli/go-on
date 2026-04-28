@@ -41,7 +41,6 @@ pub enum ExNodeState {
 }
 
 /// A node in the execution graph
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExNode {
     pub id: ExNodeId,
@@ -58,7 +57,6 @@ pub struct ExNode {
     pub duration_ms: Option<u64>,
 }
 
-#[allow(dead_code)]
 impl ExNode {
     pub fn new(id: &str, kind: ExNodeKind, name: &str) -> Self {
         Self {
@@ -78,7 +76,6 @@ impl ExNode {
 // ── Conditions ──────────────────────────────────────────────────────────────
 
 /// Condition evaluated by a Condition node to determine branching
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ExCondition {
     /// True when a node's output matches an expected value
@@ -101,7 +98,6 @@ pub enum ExCondition {
     Always,
 }
 
-#[allow(dead_code)]
 impl ExCondition {
     /// Evaluate this condition against the current node outputs.
     pub fn evaluate(&self, node_outputs: &HashMap<ExNodeId, &ExNode>) -> bool {
@@ -153,7 +149,6 @@ pub struct ExEdge {
 // ── Fan-out groups ──────────────────────────────────────────────────────────
 
 /// Tracks a fan-out group: branch → parallel tasks → join
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FanOutGroup {
     pub group_id: String,
@@ -167,7 +162,6 @@ pub struct FanOutGroup {
 // ── Execution graph ─────────────────────────────────────────────────────────
 
 /// Execution graph — a DAG supporting fan-out/join and conditional branching.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionGraph {
     pub nodes: HashMap<ExNodeId, ExNode>,
@@ -178,7 +172,6 @@ pub struct ExecutionGraph {
     pub name: String,
 }
 
-#[allow(dead_code)]
 impl ExecutionGraph {
     /// Create a new execution graph with Start and End nodes.
     pub fn new(name: &str) -> Self {

@@ -10,7 +10,6 @@ use std::collections::HashMap;
 
 /// Token cost estimation per layer
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct TokenCostEstimate {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -19,7 +18,6 @@ pub struct TokenCostEstimate {
 
 /// Verdict returned by a token layer gate
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub enum TokenGateVerdict {
     /// Allow the request to pass through this gate
     Allow,
@@ -33,7 +31,6 @@ pub enum TokenGateVerdict {
 
 /// Request layer classification (L0–L5)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
 pub enum RequestLayer {
     /// Fast reject / routing
     L0FastReject,
@@ -51,7 +48,6 @@ pub enum RequestLayer {
 
 /// A single gate in the token layer chain
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct TokenGate {
     pub name: String,
     pub layer: RequestLayer,
@@ -63,7 +59,6 @@ pub struct TokenGate {
 
 /// Gate condition evaluator — one of four conditions (A–D)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub enum GateCondition {
     /// Gate A: Token budget check
     TokenBudget { max_input: u64, max_output: u64 },
@@ -77,7 +72,6 @@ pub enum GateCondition {
 
 /// Context passed to gate conditions for evaluation
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct GateContext {
     pub request_id: String,
     pub estimated_input_tokens: u64,
@@ -90,7 +84,6 @@ pub struct GateContext {
 
 impl GateCondition {
     /// Evaluate this condition against the given context.
-    #[allow(dead_code)]
     pub fn evaluate(&self, context: &GateContext) -> TokenGateVerdict {
         match self {
             GateCondition::TokenBudget {
@@ -143,7 +136,6 @@ impl GateCondition {
 /// the request moves to the next layer. Any Reject, Route, or
 /// RequireApproval verdict short-circuits and is returned immediately.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct TokenLayerChain {
     /// Ordered list of (layer, conditions) pairs.
     gates: Vec<(RequestLayer, Vec<GateCondition>)>,
@@ -160,7 +152,6 @@ impl TokenLayerChain {
     /// L3 – Context compress: token budget (32K in / 16K out)
     /// L4 – Primary generation: token budget (128K in / 64K out)
     /// L5 – Verify / escalate: confidence ≥ 0.8
-    #[allow(dead_code)]
     pub fn new() -> Self {
         let layers = vec![
             RequestLayer::L0FastReject,
@@ -217,7 +208,6 @@ impl TokenLayerChain {
     }
 
     /// Evaluate a request through all layers, returning the final verdict.
-    #[allow(dead_code)]
     pub fn evaluate(&mut self, context: &GateContext) -> TokenGateVerdict {
         for (layer, conditions) in &self.gates {
             let mut layer_verdict = TokenGateVerdict::Allow;
@@ -257,7 +247,6 @@ impl TokenLayerChain {
     }
 
     /// Get per-layer counter snapshot (allow_count, reject_count) keyed by layer name.
-    #[allow(dead_code)]
     pub fn layer_stats(&self) -> HashMap<String, (u64, u64)> {
         self.counters
             .iter()
@@ -266,17 +255,50 @@ impl TokenLayerChain {
     }
 
     /// Reset all counters to zero.
-    #[allow(dead_code)]
     pub fn reset_counters(&mut self) {
         for val in self.counters.values_mut() {
             *val = (0, 0);
         }
+    }
+
+    /// Describe each configured gate as a `TokenGate` snapshot.
+    pub fn gates_config(&self) -> Vec<TokenGate> {
+        self.gates
+            .iter()
+            .map(|(layer, _)| {
+                let (max_input, max_output, max_cost) = match layer {
+                    RequestLayer::L0FastReject => (8_000u64, 4_000u64, 0.01f64),
+                    RequestLayer::L1CacheReuse => (8_000, 4_000, 0.001),
+                    RequestLayer::L2CheapClassify => (8_000, 4_000, 0.002),
+                    RequestLayer::L3ContextCompress => (32_000, 16_000, 0.05),
+                    RequestLayer::L4PrimaryGeneration => (128_000, 64_000, 1.0),
+                    RequestLayer::L5VerifyEscalate => (8_000, 4_000, 0.02),
+                };
+                TokenGate {
+                    name: format!("{:?}", layer),
+                    layer: layer.clone(),
+                    max_input_tokens: max_input,
+                    max_output_tokens: max_output,
+                    max_cost_usd: max_cost,
+                    enabled: true,
+                }
+            })
+            .collect()
     }
 }
 
 impl Default for TokenLayerChain {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Estimate token cost given input/output token counts and a per-1K-token rate.
+pub fn estimate_cost(input_tokens: u64, output_tokens: u64, cost_per_1k: f64) -> TokenCostEstimate {
+    TokenCostEstimate {
+        input_tokens,
+        output_tokens,
+        estimated_cost_usd: ((input_tokens + output_tokens) as f64 / 1_000.0) * cost_per_1k,
     }
 }
 

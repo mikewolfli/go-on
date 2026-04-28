@@ -562,7 +562,6 @@ pub struct L3TemplateCache {
     /// Known templates by structure signature
     templates: HashMap<String, TemplatePattern>,
     /// Path to SQLite store (for persistence)
-    #[allow(dead_code)]
     store_path: PathBuf,
 }
 

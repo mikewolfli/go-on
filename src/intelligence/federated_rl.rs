@@ -350,7 +350,10 @@ impl FederatedRL {
         }
 
         // Policy must not be a duplicate for this round.
-        if round.contributed_policy_ids.contains(&policy_id.to_string()) {
+        if round
+            .contributed_policy_ids
+            .contains(&policy_id.to_string())
+        {
             return Err(FederatedError::PolicyAlreadyContributed(
                 policy_id.to_string(),
             ));
@@ -465,8 +468,8 @@ impl FederatedRL {
             })).collect::<Vec<_>>(),
         });
 
-        let merged_policy = serde_json::to_string(&merged_payload)
-            .unwrap_or_else(|_| "{}".to_string());
+        let merged_policy =
+            serde_json::to_string(&merged_payload).unwrap_or_else(|_| "{}".to_string());
 
         // Step 4 — update the round record (borrow scope ensures no aliasing).
         let completed_ms = now_ms();
@@ -497,8 +500,7 @@ impl FederatedRL {
     /// List all distillation rounds, ordered by round number (ascending).
     pub fn list_rounds(&self) -> Vec<DistillationRound> {
         let inner = self.inner.lock().unwrap();
-        let mut rounds: Vec<DistillationRound> =
-            inner.rounds.values().cloned().collect();
+        let mut rounds: Vec<DistillationRound> = inner.rounds.values().cloned().collect();
         rounds.sort_by_key(|r| r.round_number);
         rounds
     }
@@ -518,8 +520,7 @@ impl FederatedRL {
             .count();
 
         let mut contributor_nodes: Vec<String> = {
-            let mut nodes: std::collections::BTreeSet<&str> =
-                std::collections::BTreeSet::new();
+            let mut nodes: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
             for p in inner.policies.values() {
                 nodes.insert(p.node_id.as_str());
             }
@@ -761,21 +762,33 @@ mod tests {
 
         // Phase 1: new round is Pending
         let rid = frl.start_distillation_round();
-        assert_eq!(frl.get_round(&rid).unwrap().status, DistillationStatus::Pending);
+        assert_eq!(
+            frl.get_round(&rid).unwrap().status,
+            DistillationStatus::Pending
+        );
 
         // Phase 2: first contribution transitions to InProgress
         let pid1 = frl.submit_policy("n1".into(), "cls".into(), "{}".into(), 0.9, 30);
         frl.contribute_to_round(&rid, &pid1).unwrap();
-        assert_eq!(frl.get_round(&rid).unwrap().status, DistillationStatus::InProgress);
+        assert_eq!(
+            frl.get_round(&rid).unwrap().status,
+            DistillationStatus::InProgress
+        );
 
         // Phase 3: second contribution stays InProgress
         let pid2 = frl.submit_policy("n2".into(), "cls".into(), "{}".into(), 0.7, 20);
         frl.contribute_to_round(&rid, &pid2).unwrap();
-        assert_eq!(frl.get_round(&rid).unwrap().status, DistillationStatus::InProgress);
+        assert_eq!(
+            frl.get_round(&rid).unwrap().status,
+            DistillationStatus::InProgress
+        );
 
         // Phase 4: complete transitions to Completed
         frl.complete_round(&rid).unwrap();
-        assert_eq!(frl.get_round(&rid).unwrap().status, DistillationStatus::Completed);
+        assert_eq!(
+            frl.get_round(&rid).unwrap().status,
+            DistillationStatus::Completed
+        );
 
         // Phase 5: list rounds returns it
         let rounds = frl.list_rounds();

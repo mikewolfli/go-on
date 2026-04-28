@@ -18,7 +18,6 @@ use crate::orchestration::roles::{install_role_registry, RoleDefinition};
 
 /// Application configuration structure
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub struct AppConfig {
     /// Default phase to use when none is specified
     pub default_phase: String,
@@ -148,15 +147,6 @@ fn default_detail_level() -> String {
 fn default_learning_speed() -> String {
     "adaptive".to_string()
 }
-#[allow(dead_code)]
-fn default_evaluate_interval() -> u32 {
-    20
-}
-#[allow(dead_code)]
-fn default_min_query_chars_step() -> u32 {
-    20
-}
-
 const PROVIDER_CAPABILITY_FILE: &str = "providers.toml";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -949,7 +939,6 @@ fn default_runtime_skills_cache_dir() -> String {
     "skills_cache".to_string()
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct AutoTuneConfig {
     #[serde(default)]
@@ -1212,7 +1201,6 @@ impl AutoTuneState {
     }
 
     /// Decrement cooldown counter (called once per evaluation window).
-    #[allow(dead_code)]
     pub fn tick_cooldown(&mut self) {
         if self.cooldown_remaining > 0 {
             self.cooldown_remaining -= 1;
@@ -1248,7 +1236,6 @@ fn default_cache_max_entries() -> usize {
     5000
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct VectorConfig {
     #[serde(default)]
@@ -2478,7 +2465,6 @@ pub fn validate_runtime_readiness(
     Ok(build_config_health_report(config_path, config))
 }
 
-#[allow(dead_code)]
 pub fn collect_config_warnings(config_path: &Path, config: &AppConfig) -> Vec<String> {
     collect_config_warnings_detailed(config_path, config)
         .into_iter()

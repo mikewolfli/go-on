@@ -16,7 +16,8 @@ pub mod brain_loop;
 // Re-exports — the most commonly used items can be pulled straight from `loop`.
 // ---------------------------------------------------------------------------
 
+#[allow(unused_imports)]
 pub use brain_loop::{
-    BrainLoop, BrainLoopConfig, BrainLoopProfile, BrainLoopReport, BrainLoopState,
-    BrainLoopStep, Reflection,
+    BrainLoop, BrainLoopConfig, BrainLoopProfile, BrainLoopReport, BrainLoopState, BrainLoopStep,
+    Reflection,
 };

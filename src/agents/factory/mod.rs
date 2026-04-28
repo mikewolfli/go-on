@@ -7,6 +7,7 @@
 
 pub mod agent_factory;
 
+#[allow(unused_imports)]
 pub use agent_factory::{
     AgentFactory, AgentFactoryConfig, AgentTemplate, CreateAgentRequest, FactoryProfile,
     SubAgentInstance,

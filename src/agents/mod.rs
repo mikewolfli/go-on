@@ -11,6 +11,10 @@ pub mod copilot;
 pub mod deepquest;
 pub mod deepseek;
 pub mod facewall;
+#[cfg(any(
+    feature = "profile-simple-server",
+    feature = "profile-multi-users-server"
+))]
 pub mod factory;
 pub mod fireworks;
 pub mod gemini;

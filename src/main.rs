@@ -866,25 +866,6 @@ fn print_completeness_report(config: &crate::config::AppConfig, report: &Runtime
     }
 }
 
-#[allow(dead_code)]
-fn provider_ready_counts(report: &RuntimeHealthcheckReport) -> Option<(u64, u64)> {
-    let component = report
-        .components
-        .iter()
-        .find(|component| component.name == "provider_dependencies")?;
-    let ready = component
-        .details
-        .get("ready")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(0);
-    let total = component
-        .details
-        .get("total")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(0);
-    Some((ready, total))
-}
-
 fn maybe_prompt_ai_onboarding(cli: &Cli, config_path: &std::path::Path) -> Result<bool> {
     if cli.setup
         || cli.validate_config

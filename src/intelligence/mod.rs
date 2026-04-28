@@ -27,6 +27,7 @@ pub mod reinforcement;
 pub mod reputation;
 pub mod token_cache;
 pub mod verification;
+pub mod learning_center;
 
 pub mod self_model;
 

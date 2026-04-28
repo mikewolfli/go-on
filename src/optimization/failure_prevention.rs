@@ -79,8 +79,6 @@ pub struct FailurePrevention {
     successful_requests: HashMap<String, u64>,
     anomaly_thresholds: AnomalyThresholds,
     max_failure_threshold: u32,
-    #[allow(dead_code)]
-    open_duration_ms: u32,
 }
 
 /// Anomaly detection thresholds
@@ -105,7 +103,6 @@ impl FailurePrevention {
                 success_rate_threshold: 0.8,
             },
             max_failure_threshold: 5,
-            open_duration_ms: 30000, // 30 seconds
         }
     }
 

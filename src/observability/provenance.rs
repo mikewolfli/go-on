@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 /// A single provenance entry
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProvenanceEntry {
     pub id: String,
@@ -24,27 +23,23 @@ pub struct ProvenanceEntry {
 }
 
 /// In-process provenance ledger (append-only, bounded)
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ProvenanceLedger {
     inner: Arc<Mutex<ProvenanceLedgerInner>>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 struct ProvenanceLedgerInner {
     entries: Vec<ProvenanceEntry>,
     max_entries: usize,
 }
 
-#[allow(dead_code)]
 impl Default for ProvenanceLedger {
     fn default() -> Self {
         Self::new(2000)
     }
 }
 
-#[allow(dead_code)]
 impl ProvenanceLedger {
     pub fn new(max_entries: usize) -> Self {
         Self {
@@ -103,7 +98,6 @@ impl ProvenanceLedger {
 }
 
 /// Helper to create a provenance entry quickly
-#[allow(dead_code)]
 pub fn make_entry(
     task_id: &str,
     phase: &str,
@@ -127,7 +121,6 @@ pub fn make_entry(
     }
 }
 
-#[allow(dead_code)]
 fn uuid_v4() -> String {
     use std::cell::RefCell;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -170,7 +163,6 @@ fn uuid_v4() -> String {
     )
 }
 
-#[allow(dead_code)]
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

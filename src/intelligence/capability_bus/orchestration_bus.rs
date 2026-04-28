@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::orchestration::execution_graph::ExecutionGraph;
+use crate::orchestration::execution_graph::{ExCondition, ExNode, ExNodeKind, ExecutionGraph};
 use crate::orchestration::flow::FlowManager;
 use crate::orchestration::task_router::TaskRouter;
 
@@ -239,13 +239,13 @@ impl OrchestrationBus {
         if lower_type.contains("feature")
             || lower_type.contains("implement")
             || lower_type.contains("add")
-            || (complexity >= 2.0 && complexity < 4.0)
+            || (2.0..4.0).contains(&complexity)
         {
             return OrchestrationMode::Edit.as_str().to_string();
         }
 
         // Medium complexity — delegate to agent
-        if complexity >= 4.0 && complexity < 7.0 {
+        if (4.0..7.0).contains(&complexity) {
             return OrchestrationMode::Agent.as_str().to_string();
         }
 
@@ -271,7 +271,10 @@ impl OrchestrationBus {
             return Err(anyhow!(
                 "Flow '{}' is already active with task '{}'",
                 flow_name,
-                flow_map.get(flow_name).map(|e| e.task_id.as_str()).unwrap_or("unknown")
+                flow_map
+                    .get(flow_name)
+                    .map(|e| e.task_id.as_str())
+                    .unwrap_or("unknown")
             ));
         }
 
@@ -325,7 +328,10 @@ impl OrchestrationBus {
         prof.active_flows = flow_map.len() as u32;
 
         // Increment total routes
-        let mut total = self.total_routes.lock().expect("total_routes lock poisoned");
+        let mut total = self
+            .total_routes
+            .lock()
+            .expect("total_routes lock poisoned");
         *total += 1;
     }
 
@@ -357,9 +363,82 @@ impl OrchestrationBus {
     /// * `OrchestrationBusProfile` - A copy of the current profile metrics
     pub fn profile(&self) -> OrchestrationBusProfile {
         let mut prof = self.profile.lock().expect("profile lock poisoned");
-        let total = *self.total_routes.lock().expect("total_routes lock poisoned");
+        let total = *self
+            .total_routes
+            .lock()
+            .expect("total_routes lock poisoned");
         prof.total_routes = total;
         prof.clone()
+    }
+
+    /// Queue a task node in the execution graph, connected from `predecessor`.
+    ///
+    /// Returns the IDs of nodes that are now ready to run.
+    pub fn queue_graph_task(&self, task_id: &str, task_name: &str, predecessor: &str) -> Vec<String> {
+        let mut graph = self.execution_graph.lock().expect("execution_graph lock poisoned");
+        let node = ExNode::new(task_id, ExNodeKind::Task, task_name);
+        graph.add_node(node);
+        graph.add_edge(predecessor, task_id, None);
+        graph.get_ready_nodes()
+    }
+
+    /// Add a conditional branch in the execution graph.
+    ///
+    /// The `ExCondition::Always` guard is used for unconditional pass-through.
+    pub fn add_graph_condition(&self, cond_id: &str, predecessor: &str, true_target: &str, false_target: &str) {
+        let mut graph = self.execution_graph.lock().expect("execution_graph lock poisoned");
+        graph.add_condition(cond_id, cond_id, ExCondition::Always, predecessor, true_target, false_target);
+    }
+
+    /// Evaluate a condition against current node outputs.
+    ///
+    /// Returns true if the condition passes; always true for `ExCondition::Always`.
+    pub fn evaluate_condition(&self, condition: &ExCondition) -> bool {
+        condition.evaluate(&std::collections::HashMap::new())
+    }
+
+    /// Mark a task node as complete and record its output.
+    pub fn complete_graph_task(&self, task_id: &str, output: serde_json::Value) -> Result<bool> {
+        let mut graph = self.execution_graph.lock().expect("execution_graph lock poisoned");
+        graph.complete_task(task_id, output)?;
+        Ok(graph.is_complete())
+    }
+
+    /// Create a fan-out group in the execution graph.
+    pub fn add_graph_fan_out(
+        &self,
+        branch_name: &str,
+        join_name: &str,
+        parallel_tasks: Vec<(String, String)>,
+        predecessor: &str,
+    ) -> Result<(String, String)> {
+        let mut graph = self.execution_graph.lock().expect("execution_graph lock poisoned");
+        graph.add_fan_out(branch_name, join_name, parallel_tasks, predecessor)
+    }
+
+    /// Set a node's state in the execution graph.
+    pub fn set_graph_node_state(&self, id: &str, state: crate::orchestration::execution_graph::ExNodeState) -> Result<()> {
+        self.execution_graph.lock().expect("execution_graph lock poisoned").set_node_state(id, state)
+    }
+
+    /// Check if a fan-out group is complete.
+    pub fn is_fan_out_complete(&self, group_id: &str) -> bool {
+        self.execution_graph.lock().expect("execution_graph lock poisoned").is_fan_out_complete(group_id)
+    }
+
+    /// Count graph nodes in a given state.
+    pub fn count_graph_nodes_by_state(&self, state: &crate::orchestration::execution_graph::ExNodeState) -> usize {
+        self.execution_graph.lock().expect("execution_graph lock poisoned").count_by_state(state)
+    }
+
+    /// Summary of fan-out groups: (group_id, completed_count, total_count).
+    pub fn graph_fan_out_summary(&self) -> Vec<(String, usize, usize)> {
+        self.execution_graph.lock().expect("execution_graph lock poisoned").fan_out_summary()
+    }
+
+    /// Reset the execution graph for reuse.
+    pub fn reset_graph(&self) {
+        self.execution_graph.lock().expect("execution_graph lock poisoned").reset();
     }
 }
 
@@ -458,11 +537,26 @@ mod tests {
         assert_eq!(OrchestrationMode::FullAuto.as_str(), "full_auto");
         assert_eq!(OrchestrationMode::SafeGuard.as_str(), "safe_guard");
 
-        assert_eq!(OrchestrationMode::from_str("ask"), Some(OrchestrationMode::Ask));
-        assert_eq!(OrchestrationMode::from_str("edit"), Some(OrchestrationMode::Edit));
-        assert_eq!(OrchestrationMode::from_str("agent"), Some(OrchestrationMode::Agent));
-        assert_eq!(OrchestrationMode::from_str("full_auto"), Some(OrchestrationMode::FullAuto));
-        assert_eq!(OrchestrationMode::from_str("safe_guard"), Some(OrchestrationMode::SafeGuard));
+        assert_eq!(
+            OrchestrationMode::from_str("ask"),
+            Some(OrchestrationMode::Ask)
+        );
+        assert_eq!(
+            OrchestrationMode::from_str("edit"),
+            Some(OrchestrationMode::Edit)
+        );
+        assert_eq!(
+            OrchestrationMode::from_str("agent"),
+            Some(OrchestrationMode::Agent)
+        );
+        assert_eq!(
+            OrchestrationMode::from_str("full_auto"),
+            Some(OrchestrationMode::FullAuto)
+        );
+        assert_eq!(
+            OrchestrationMode::from_str("safe_guard"),
+            Some(OrchestrationMode::SafeGuard)
+        );
         assert_eq!(OrchestrationMode::from_str("invalid"), None);
     }
 

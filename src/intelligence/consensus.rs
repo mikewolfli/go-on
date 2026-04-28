@@ -439,11 +439,7 @@ impl ConsensusEngine {
         };
 
         // Find the proposal with the most approve weight.
-        let best_approval = approval_weight
-            .into_iter()
-            .map(|(_, w)| w)
-            .max()
-            .unwrap_or(0);
+        let best_approval = approval_weight.into_values().max().unwrap_or(0);
 
         // Require majority: best_approval > online_weight / 2
         let majority = online_weight / 2;

@@ -22,9 +22,14 @@
 //!   full peer set and shared‑entry machinery is active.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(feature = "profile-multi-users-server")]
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
-use std::thread::{self, JoinHandle};
+use std::thread::JoinHandle;
+#[cfg(feature = "profile-multi-users-server")]
+use std::thread;
+#[cfg(feature = "profile-multi-users-server")]
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -60,9 +65,10 @@ impl Default for MemoryTransportConfig {
 }
 
 /// Represents the current status of a sync operation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum SyncStatus {
     /// No sync operation is in progress.
+    #[default]
     Idle,
     /// A sync operation is currently running.
     Syncing,
@@ -75,12 +81,6 @@ pub enum SyncStatus {
         /// Duration of the sync operation in milliseconds.
         duration_ms: u64,
     },
-}
-
-impl Default for SyncStatus {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 /// Statistics collected by the transport layer.
@@ -582,10 +582,7 @@ impl DistributedMemoryBus {
 
                     // Update profile with transport state
                     if let Ok(mut p) = profile.lock() {
-                        let peers_ok = remote_peers
-                            .read()
-                            .map(|r| r.len() as u32)
-                            .unwrap_or(0);
+                        let peers_ok = remote_peers.read().map(|r| r.len() as u32).unwrap_or(0);
                         p.transport_running = true;
                         p.transport_peers_reachable = peers_ok;
                     }
@@ -763,10 +760,8 @@ impl DistributedMemoryBus {
         let payload_bytes = payload.len();
 
         // Get current peers
-        let peers: HashMap<String, String> = remote_peers
-            .read()
-            .map(|r| r.clone())
-            .unwrap_or_default();
+        let peers: HashMap<String, String> =
+            remote_peers.read().map(|r| r.clone()).unwrap_or_default();
 
         if peers.is_empty() {
             // No peers to sync to — still track as completed
@@ -868,7 +863,7 @@ fn uuid_v4() -> String {
         (r0 & 0xFFFF) as u16,
         ((r1 >> 12) & 0x0FFF) as u16,
         (0x8000 | ((r1 >> 4) & 0x3FFF)) as u16,
-        (r1 & 0x0000_FFFF_FFFF) as u64,
+        r1 & 0x0000_FFFF_FFFF,
     )
 }
 
@@ -905,6 +900,7 @@ fn local_node_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "profile-multi-users-server")]
     use std::time::Duration;
 
     fn make_bus(max: usize) -> DistributedMemoryBus {
@@ -1102,10 +1098,7 @@ mod tests {
                 entries_synced,
                 duration_ms: _,
             } => {
-                assert!(
-                    entries_synced > 0,
-                    "expected entries to be synced"
-                );
+                assert!(entries_synced > 0, "expected entries to be synced");
             }
             other => panic!("expected Completed status, got {:?}", other),
         }
@@ -1116,21 +1109,21 @@ mod tests {
     fn test_ingest_shared_entries() {
         let bus = make_bus(100);
 
-        let entries = vec![
-            MemoryBusEntry {
-                id: "id-1".into(),
-                node_id: "remote-node".into(),
-                key: "shared-key".into(),
-                value: "shared-val".into(),
-                tags: vec!["tag-a".into()],
-                confidence: 0.85,
-                created_ms: 1000,
-                ttl_ms: 0,
-            },
-        ];
+        let entries = vec![MemoryBusEntry {
+            id: "id-1".into(),
+            node_id: "remote-node".into(),
+            key: "shared-key".into(),
+            value: "shared-val".into(),
+            tags: vec!["tag-a".into()],
+            confidence: 0.85,
+            created_ms: 1000,
+            ttl_ms: 0,
+        }];
 
         let json = serde_json::to_string(&entries).unwrap();
-        let count = bus.ingest_shared(&json).expect("ingest_shared should succeed");
+        let count = bus
+            .ingest_shared(&json)
+            .expect("ingest_shared should succeed");
         assert_eq!(count, 1, "expected 1 ingested entry");
 
         let results = bus.find_by_key("shared-key");
@@ -1179,18 +1172,16 @@ mod tests {
         let bus = make_bus(100);
 
         // Ingest an entry via simulated peer sync
-        let entries = vec![
-            MemoryBusEntry {
-                id: "remote-id-1".into(),
-                node_id: "peer-node".into(),
-                key: "remote-findable".into(),
-                value: "found-me".into(),
-                tags: vec!["discoverable".into()],
-                confidence: 0.95,
-                created_ms: 2000,
-                ttl_ms: 0,
-            },
-        ];
+        let entries = vec![MemoryBusEntry {
+            id: "remote-id-1".into(),
+            node_id: "peer-node".into(),
+            key: "remote-findable".into(),
+            value: "found-me".into(),
+            tags: vec!["discoverable".into()],
+            confidence: 0.95,
+            created_ms: 2000,
+            ttl_ms: 0,
+        }];
 
         let json = serde_json::to_string(&entries).unwrap();
         bus.ingest_shared(&json).unwrap();

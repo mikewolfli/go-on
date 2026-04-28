@@ -260,29 +260,6 @@ pub(crate) fn inspect_secret_pool(secret_ref: &str, field_name: &str) -> Result<
     Ok(candidates)
 }
 
-#[allow(dead_code)]
-fn mask_secret(secret: &str) -> String {
-    let chars: Vec<char> = secret.chars().collect();
-    let len = chars.len();
-    if len <= 8 {
-        return format!("{} (len={})", "*".repeat(len.min(4)), len);
-    }
-
-    let prefix: String = chars.iter().take(4).collect();
-    let suffix: String = chars.iter().skip(len.saturating_sub(4)).collect();
-    format!("{}...{}", prefix, suffix)
-}
-
-#[allow(dead_code)]
-pub(crate) fn secret_pool_fingerprints(secret_ref: &str, field_name: &str) -> Result<Vec<String>> {
-    inspect_secret_pool(secret_ref, field_name).map(|values| {
-        values
-            .into_iter()
-            .map(|value| mask_secret(&value))
-            .collect()
-    })
-}
-
 /// Model information for provider selection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {

@@ -180,12 +180,7 @@ impl AgentFactory {
             templates
                 .get(&request.template_name)
                 .cloned()
-                .ok_or_else(|| {
-                    anyhow!(
-                        "Template '{}' not found",
-                        request.template_name
-                    )
-                })?
+                .ok_or_else(|| anyhow!("Template '{}' not found", request.template_name))?
         };
 
         // Check max instances limit.
@@ -769,10 +764,7 @@ mod tests {
         let tmpl = sample_template("blocked", "openai", &["blocked"]);
         let result = factory.register_template(tmpl);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is disabled"));
+        assert!(result.unwrap_err().to_string().contains("is disabled"));
     }
 
     // ── test_list_templates_empty ────────────────────────────────────────────
@@ -800,9 +792,7 @@ mod tests {
             .register_template(sample_template("persistent", "openai", &["keep"]))
             .unwrap();
 
-        let _inst = factory
-            .create_agent(sample_request("persistent"))
-            .unwrap();
+        let _inst = factory.create_agent(sample_request("persistent")).unwrap();
         assert_eq!(factory.list_agents().len(), 1);
 
         // No instances should be expired (long default TTL).

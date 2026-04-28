@@ -340,10 +340,10 @@ impl ObservabilityBus {
                 .agent_error_rates
                 .lock()
                 .expect("ObservabilityBus agent_error_rates lock poisoned (inner)");
-            let (total_errors, total_calls): (u64, u64) = error_rates.values().fold(
-                (0, 0),
-                |(acc_err, acc_call), s| (acc_err + s.error_count, acc_call + s.total_calls),
-            );
+            let (total_errors, total_calls): (u64, u64) =
+                error_rates.values().fold((0, 0), |(acc_err, acc_call), s| {
+                    (acc_err + s.error_count, acc_call + s.total_calls)
+                });
             profile.system_error_rate = if total_calls > 0 {
                 total_errors as f64 / total_calls as f64
             } else {
@@ -422,7 +422,7 @@ impl ObservabilityBus {
             .lock()
             .expect("ObservabilityBus trace_events lock poisoned");
         let len = events.len();
-        let start = if len > count { len - count } else { 0 };
+        let start = len.saturating_sub(count);
         events.range(start..).cloned().collect()
     }
 
@@ -479,7 +479,11 @@ mod tests {
         assert_eq!(latency.sample_count, 2);
         assert!((latency.avg_duration_ms - 150.0).abs() < 0.01);
         // With only 2 samples all percentiles land on actual values.
-        assert!((latency.p50_ms - 150.0).abs() < 0.01 || (latency.p50_ms - 100.0).abs() < 0.01 || (latency.p50_ms - 200.0).abs() < 0.01);
+        assert!(
+            (latency.p50_ms - 150.0).abs() < 0.01
+                || (latency.p50_ms - 100.0).abs() < 0.01
+                || (latency.p50_ms - 200.0).abs() < 0.01
+        );
 
         let err_rate = bus.agent_error_rate("agent-a").unwrap();
         assert_eq!(err_rate.total_calls, 2);
@@ -491,7 +495,14 @@ mod tests {
     fn test_error_rate_tracking() {
         let bus = ObservabilityBus::new();
         bus.record_trace("agent-b", "embed", 50, true, None, 10);
-        bus.record_trace("agent-b", "embed", 60, false, Some("timeout".to_string()), 10);
+        bus.record_trace(
+            "agent-b",
+            "embed",
+            60,
+            false,
+            Some("timeout".to_string()),
+            10,
+        );
         bus.record_trace("agent-b", "embed", 55, false, Some("panic".to_string()), 10);
 
         let err = bus.agent_error_rate("agent-b").unwrap();

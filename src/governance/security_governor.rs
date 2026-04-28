@@ -33,18 +33,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // ---------------------------------------------------------------------------
 
 /// Severity of a security policy.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum PolicySeverity {
     Low,
+    #[default]
     Medium,
     High,
     Critical,
-}
-
-impl Default for PolicySeverity {
-    fn default() -> Self {
-        Self::Medium
-    }
 }
 
 impl std::fmt::Display for PolicySeverity {
@@ -180,18 +175,13 @@ fn regex_match(haystack: &str, pattern: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// How multiple conditions are combined.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum PolicyComposition {
     /// All conditions must match.
+    #[default]
     And,
     /// Any one condition must match.
     Or,
-}
-
-impl Default for PolicyComposition {
-    fn default() -> Self {
-        Self::And
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +210,7 @@ pub struct SecurityPolicy {
 }
 
 impl SecurityPolicy {
-    /// Evaluate whether this policy matches the given request.
+    /// Evaluate whether this policy matches the given request attributes.
     pub fn matches(&self, resource: &str, actor: &str, context: &HashMap<String, String>) -> bool {
         if self.conditions.is_empty() {
             return false; // no conditions → no match
@@ -325,7 +315,7 @@ pub struct AuditEntry {
 }
 
 impl AuditEntry {
-    /// Create a new audit entry with the current timestamp.
+    /// Create a new audit entry.
     pub fn new(
         policy_id: String,
         verdict: PolicyVerdict,
@@ -353,7 +343,7 @@ impl AuditEntry {
 // SecurityGovernorConfig
 // ---------------------------------------------------------------------------
 
-/// Configuration for the [`SecurityGovernor`].
+/// Configuration for the security governor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityGovernorConfig {
     /// Whether the governor is enabled.
@@ -454,7 +444,7 @@ impl SecurityGovernor {
     /// Returns `true` if the policy existed and was removed.
     pub fn remove_policy(&self, id: &str) -> bool {
         let mut inner = self.inner.lock().expect("lock poisoned");
-        inner.policies.remove(id).is_some()
+        inner.policies.shift_remove(id).is_some()
     }
 
     /// Evaluate all registered policies against the given request.

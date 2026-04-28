@@ -563,7 +563,9 @@ mod tests {
     fn test_register_entity() {
         let wm = WorldModel::new(test_config());
 
-        let id = wm.register_entity("Sensor-1", EntityType::Resource).unwrap();
+        let id = wm
+            .register_entity("Sensor-1", EntityType::Resource)
+            .unwrap();
 
         // Verify the ID is non-empty.
         assert!(!id.is_empty());
@@ -598,9 +600,7 @@ mod tests {
     fn test_update_entity() {
         let wm = WorldModel::new(test_config());
 
-        let id = wm
-            .register_entity("Updatable", EntityType::System)
-            .unwrap();
+        let id = wm.register_entity("Updatable", EntityType::System).unwrap();
 
         let mut props = HashMap::new();
         props.insert("version".to_string(), "2.1.0".to_string());
@@ -610,10 +610,7 @@ mod tests {
 
         let entities = wm.query_entities(None, 0.0);
         assert_eq!(entities.len(), 1);
-        assert_eq!(
-            entities[0].properties.get("version").unwrap(),
-            "2.1.0"
-        );
+        assert_eq!(entities[0].properties.get("version").unwrap(), "2.1.0");
         assert_eq!(entities[0].properties.get("status").unwrap(), "online");
     }
 
@@ -650,7 +647,9 @@ mod tests {
     fn test_record_relationship() {
         let wm = WorldModel::new(test_config());
 
-        let id_x = wm.register_entity("Service-X", EntityType::Service).unwrap();
+        let id_x = wm
+            .register_entity("Service-X", EntityType::Service)
+            .unwrap();
         let id_y = wm.register_entity("DB-Y", EntityType::DataStore).unwrap();
 
         wm.record_relationship(&id_x, &id_y, RelationshipType::DependsOn, 0.95)
@@ -710,9 +709,7 @@ mod tests {
         payload.insert("severity".to_string(), "critical".to_string());
         payload.insert("message".to_string(), "disk full".to_string());
 
-        let event_id = wm
-            .record_event("alert", &id, payload)
-            .unwrap();
+        let event_id = wm.record_event("alert", &id, payload).unwrap();
 
         assert!(!event_id.is_empty());
         assert!(event_id.starts_with("evt_"));
@@ -725,9 +722,7 @@ mod tests {
     fn test_query_events() {
         let wm = WorldModel::new(test_config());
 
-        let id = wm
-            .register_entity("Source", EntityType::System)
-            .unwrap();
+        let id = wm.register_entity("Source", EntityType::System).unwrap();
 
         let mut p1 = HashMap::new();
         p1.insert("level".to_string(), "info".to_string());
@@ -764,7 +759,9 @@ mod tests {
         let wm = WorldModel::new(test_config());
 
         let id_a = wm.register_entity("Entity-A", EntityType::Agent).unwrap();
-        let id_b = wm.register_entity("Entity-B", EntityType::Resource).unwrap();
+        let id_b = wm
+            .register_entity("Entity-B", EntityType::Resource)
+            .unwrap();
 
         wm.record_relationship(&id_a, &id_b, RelationshipType::Owns, 1.0)
             .unwrap();
@@ -789,8 +786,12 @@ mod tests {
         let wm = WorldModel::new(config);
 
         // Register entities inside the world model.
-        let id_old = wm.register_entity("OldEntity", EntityType::External).unwrap();
-        let id_fresh = wm.register_entity("FreshEntity", EntityType::Agent).unwrap();
+        let id_old = wm
+            .register_entity("OldEntity", EntityType::External)
+            .unwrap();
+        let id_fresh = wm
+            .register_entity("FreshEntity", EntityType::Agent)
+            .unwrap();
 
         // Manually set the old entity's last_seen_ms to a very old value.
         {
@@ -854,8 +855,7 @@ mod tests {
         }
 
         // Record an event.
-        wm.record_event("deploy", &id_a, HashMap::new())
-            .unwrap();
+        wm.record_event("deploy", &id_a, HashMap::new()).unwrap();
         {
             let p = wm.profile();
             assert_eq!(p.total_events, 1);

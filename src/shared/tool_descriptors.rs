@@ -79,7 +79,6 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
 /// This is a convenience wrapper around `tool_descriptor` that returns the
 /// serialized JSON value. It is used by the ACP request handler in `request.rs`
 /// for building MCP tool descriptor lists.
-#[allow(dead_code)]
 pub fn tool_descriptor_value(name: &'static str) -> Value {
     let tool = tool_descriptor(name);
     serde_json::to_value(tool).unwrap_or_else(|_| {

@@ -46,6 +46,9 @@ pub struct SkillImportManifest {
     pub description: String,
     #[serde(default = "default_manifest_schema")]
     pub input_schema: Value,
+    /// Optional MCP endpoint for remote skill invocation.
+    #[serde(default)]
+    pub endpoint: Option<String>,
 }
 
 fn default_manifest_schema() -> Value {
@@ -211,9 +214,17 @@ impl SkillImportStore {
             imported_at: now_ts(),
         };
 
+        // If the manifest declares an MCP endpoint, validate that a RemoteSkill
+        // can be constructed for it (connection is not made at import time).
+        if let Some(endpoint) = &manifest.endpoint {
+            let _remote = RemoteSkill::new(endpoint, &manifest.name)
+                .context("failed to validate RemoteSkill endpoint")?;
+        }
+
         self.records.insert(record.name.clone(), record.clone());
         Ok(record)
     }
+
 }
 
 struct FetchedSource {

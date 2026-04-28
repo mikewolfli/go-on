@@ -207,8 +207,7 @@ impl FederatedLearning {
         self.round_counter += 1;
         self.total_improvement_sum += improvement_score;
 
-        let clients_participated: Vec<String> =
-            self.pending_weights.keys().cloned().collect();
+        let clients_participated: Vec<String> = self.pending_weights.keys().cloned().collect();
 
         let round = FederatedRound {
             round_id: self.round_counter,
@@ -233,10 +232,7 @@ impl FederatedLearning {
     ///
     /// The local policy uses the global Q-table as a base and overlays any
     /// entries from the client's last submission that have higher values.
-    pub fn distill_to_local_policy(
-        &self,
-        client_id: &str,
-    ) -> Result<HashMap<String, f64>> {
+    pub fn distill_to_local_policy(&self, client_id: &str) -> Result<HashMap<String, f64>> {
         let _state = self
             .clients
             .get(client_id)
@@ -284,7 +280,8 @@ impl FederatedLearning {
             } else {
                 0.0
             },
-            last_round_ms: self.global_weights
+            last_round_ms: self
+                .global_weights
                 .as_ref()
                 .map(|_| elapsed_ms())
                 .unwrap_or(0),
@@ -299,7 +296,7 @@ impl FederatedLearning {
         let mut q_avg: HashMap<String, f64> = HashMap::new();
         let mut p_avg: HashMap<String, f64> = HashMap::new();
 
-        for (_, (w, _)) in &self.pending_weights {
+        for (w, _) in self.pending_weights.values() {
             for (k, v) in &w.q_table_snapshot {
                 *q_avg.entry(k.clone()).or_insert(0.0) += v / n;
             }
@@ -332,7 +329,11 @@ impl FederatedLearning {
             .map(|s| s.weight)
             .sum();
 
-        let total_weight = if total_weight <= 0.0 { 1.0 } else { total_weight };
+        let total_weight = if total_weight <= 0.0 {
+            1.0
+        } else {
+            total_weight
+        };
 
         let mut q_avg: HashMap<String, f64> = HashMap::new();
         let mut p_avg: HashMap<String, f64> = HashMap::new();
@@ -374,7 +375,7 @@ impl FederatedLearning {
         // Collect all keys first.
         let mut all_q_keys: BTreeSet<String> = BTreeSet::new();
         let mut all_p_keys: BTreeSet<String> = BTreeSet::new();
-        for (_, (w, _)) in &self.pending_weights {
+        for (w, _) in self.pending_weights.values() {
             for k in w.q_table_snapshot.keys() {
                 all_q_keys.insert(k.clone());
             }
@@ -385,10 +386,10 @@ impl FederatedLearning {
 
         let n = self.pending_weights.len();
 
-        fn median_of_values(values: &mut Vec<f64>) -> f64 {
+        fn median_of_values(values: &mut [f64]) -> f64 {
             values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let mid = values.len() / 2;
-            if values.len() % 2 == 0 {
+            if values.len().is_multiple_of(2) {
                 (values[mid - 1] + values[mid]) / 2.0
             } else {
                 values[mid]
@@ -463,10 +464,7 @@ mod tests {
 
     // Helper: create a set of simple model weights from a vector of
     // (state_action_key, value) pairs.
-    fn make_weights(
-        entries: Vec<(&str, f64)>,
-        version: u64,
-    ) -> ModelWeights {
+    fn make_weights(entries: Vec<(&str, f64)>, version: u64) -> ModelWeights {
         let mut q_table_snapshot = HashMap::new();
         let mut policy_params = HashMap::new();
         for (k, v) in entries {
@@ -583,8 +581,16 @@ mod tests {
 
         // FedAvg: (10+30)/2 = 20, (20+40)/2 = 30
         let q = &round.global_weights.q_table_snapshot;
-        assert!((get_val(q, "q1") - 20.0).abs() < 1e-10, "q1={}", get_val(q, "q1"));
-        assert!((get_val(q, "q2") - 30.0).abs() < 1e-10, "q2={}", get_val(q, "q2"));
+        assert!(
+            (get_val(q, "q1") - 20.0).abs() < 1e-10,
+            "q1={}",
+            get_val(q, "q1")
+        );
+        assert!(
+            (get_val(q, "q2") - 30.0).abs() < 1e-10,
+            "q2={}",
+            get_val(q, "q2")
+        );
     }
 
     #[test]
@@ -616,8 +622,16 @@ mod tests {
         // q1 = 10*(3/4) + 30*(1/4) = 7.5 + 7.5 = 15.0
         // q2 = 20*(3/4) + 40*(1/4) = 15.0 + 10.0 = 25.0
         let q = &round.global_weights.q_table_snapshot;
-        assert!((get_val(q, "q1") - 15.0).abs() < 1e-10, "q1={}", get_val(q, "q1"));
-        assert!((get_val(q, "q2") - 25.0).abs() < 1e-10, "q2={}", get_val(q, "q2"));
+        assert!(
+            (get_val(q, "q1") - 15.0).abs() < 1e-10,
+            "q1={}",
+            get_val(q, "q1")
+        );
+        assert!(
+            (get_val(q, "q2") - 25.0).abs() < 1e-10,
+            "q2={}",
+            get_val(q, "q2")
+        );
     }
 
     #[test]
@@ -661,9 +675,17 @@ mod tests {
 
         let policy = fl.distill_to_local_policy("alpha").unwrap();
         // g1 should keep global 100 (since 90 < 100).
-        assert!((get_val(&policy, "g1") - 100.0).abs() < 1e-10, "g1={}", get_val(&policy, "g1"));
+        assert!(
+            (get_val(&policy, "g1") - 100.0).abs() < 1e-10,
+            "g1={}",
+            get_val(&policy, "g1")
+        );
         // g2 should use local 999 (since 999 > 200).
-        assert!((get_val(&policy, "g2") - 999.0).abs() < 1e-10, "g2={}", get_val(&policy, "g2"));
+        assert!(
+            (get_val(&policy, "g2") - 999.0).abs() < 1e-10,
+            "g2={}",
+            get_val(&policy, "g2")
+        );
     }
 
     #[test]
@@ -739,7 +761,11 @@ mod tests {
         // profile avg_improvement = 0.40 / 2 = 0.20
         let p = fl.profile();
         assert_eq!(p.total_rounds, 2);
-        assert!((p.avg_improvement - 0.20).abs() < 1e-10, "avg={}", p.avg_improvement);
+        assert!(
+            (p.avg_improvement - 0.20).abs() < 1e-10,
+            "avg={}",
+            p.avg_improvement
+        );
     }
 
     #[test]

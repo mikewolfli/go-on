@@ -6,6 +6,7 @@
 
 pub mod hyper_resilience;
 
+#[allow(unused_imports)]
 pub use hyper_resilience::{
     CircuitBreaker, CircuitState, DegradationLevel, FailoverGroup, FailureMode, HealingReport,
     HyperResilienceEngine, ResilienceConfig, ResilienceLevel, ResilienceProfile, SelfHealingAction,

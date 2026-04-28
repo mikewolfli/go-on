@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! F-GAP-27: Hyper-resilience — super-node failover, multi-level circuit breaking,
 //! cascading degradation handling, and self-healing capabilities.
 //!
@@ -18,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Resilience hardening level for a component or profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub enum ResilienceLevel {
     Standard,
     Enhanced,
@@ -27,6 +29,7 @@ pub enum ResilienceLevel {
 
 /// Failure mode classification used by the engine to categorise events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub enum FailureMode {
     NodeFailure,
     NetworkPartition,
@@ -38,6 +41,7 @@ pub enum FailureMode {
 
 /// State of a single circuit breaker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub enum CircuitState {
     /// Circuit is operating normally — requests are allowed.
     Closed,
@@ -49,6 +53,7 @@ pub enum CircuitState {
 
 /// System-wide degradation level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd)]
+#[allow(dead_code)]
 pub enum DegradationLevel {
     Normal,
     Degraded,
@@ -58,6 +63,7 @@ pub enum DegradationLevel {
 
 /// Self-healing action that can be executed by the engine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub enum SelfHealingAction {
     RestartNode,
     PromoteReplica,
@@ -96,6 +102,7 @@ pub struct FailoverGroup {
 
 /// Snapshot of current system health metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct SystemHealth {
     pub level: DegradationLevel,
     pub active_circuit_breakers: usize,
@@ -132,18 +139,23 @@ pub struct ResilienceConfig {
     pub self_healing_enabled: bool,
 }
 
+#[allow(dead_code)]
 fn default_circuit_breaker_threshold() -> u64 {
     5
 }
+#[allow(dead_code)]
 fn default_recovery_timeout_ms() -> u64 {
     30_000
 }
+#[allow(dead_code)]
 fn default_health_check_interval_ms() -> u64 {
     5_000
 }
+#[allow(dead_code)]
 fn default_max_failover_attempts() -> u32 {
     3
 }
+#[allow(dead_code)]
 fn default_self_healing_enabled() -> bool {
     true
 }
@@ -424,18 +436,16 @@ impl HyperResilienceEngine {
             .count();
 
         // Determine degradation level based on the ratio of open circuits.
-        let level = if open_circuits > 0 && open_circuits > active_circuit_breakers.saturating_sub(1)
-        {
-            DegradationLevel::Emergency
-        } else if open_circuits >= active_circuit_breakers / 2 {
-            DegradationLevel::Constrained
-        } else if open_circuits > 0 {
-            DegradationLevel::Degraded
-        } else if active_failovers > 0 {
-            DegradationLevel::Degraded
-        } else {
-            DegradationLevel::Normal
-        };
+        let level =
+            if open_circuits > 0 && open_circuits > active_circuit_breakers.saturating_sub(1) {
+                DegradationLevel::Emergency
+            } else if open_circuits >= active_circuit_breakers / 2 {
+                DegradationLevel::Constrained
+            } else if open_circuits > 0 || active_failovers > 0 {
+                DegradationLevel::Degraded
+            } else {
+                DegradationLevel::Normal
+            };
 
         SystemHealth {
             level,
@@ -452,7 +462,11 @@ impl HyperResilienceEngine {
     ///
     /// This is a simulated operation — no actual node restarts or resource
     /// scaling are performed.
-    pub fn execute_healing(&self, action: SelfHealingAction, target: &str) -> Result<HealingReport> {
+    pub fn execute_healing(
+        &self,
+        action: SelfHealingAction,
+        target: &str,
+    ) -> Result<HealingReport> {
         let started_ms = now_millis();
         let mut inner = self.inner.lock().unwrap();
 
@@ -475,7 +489,10 @@ impl HyperResilienceEngine {
                     cb.failure_count = 0;
                     cb.last_failure_ms = 0;
                     cb.half_open_attempts = 0;
-                    (true, format!("Circuit breaker '{}' reset to closed", target))
+                    (
+                        true,
+                        format!("Circuit breaker '{}' reset to closed", target),
+                    )
                 } else {
                     (false, format!("Circuit breaker '{}' not found", target))
                 }
@@ -497,26 +514,22 @@ impl HyperResilienceEngine {
                         format!("Promoted replica '{}' for group '{}'", new_leader, target),
                     )
                 } else {
-                    (
-                        false,
-                        format!("Failover group '{}' not found", target),
-                    )
+                    (false, format!("Failover group '{}' not found", target))
                 }
             }
             _ => {
                 // Generic simulation for other actions.
                 (
                     true,
-                    format!(
-                        "{:?} executed on '{}' (simulated)",
-                        action, target
-                    ),
+                    format!("{:?} executed on '{}' (simulated)", action, target),
                 )
             }
         };
 
         let completed_ms = now_millis();
-        let duration_ms = completed_ms.saturating_sub(started_ms).max(simulated_duration_ms);
+        let duration_ms = completed_ms
+            .saturating_sub(started_ms)
+            .max(simulated_duration_ms);
 
         Ok(HealingReport {
             action,
@@ -549,15 +562,16 @@ impl HyperResilienceEngine {
         };
 
         // Determine system health degradation.
-        let system_health = if open_circuits > 0 && open_circuits >= total_circuit_breakers.saturating_sub(1) {
-            DegradationLevel::Emergency
-        } else if open_circuits >= total_circuit_breakers / 2 {
-            DegradationLevel::Constrained
-        } else if open_circuits > 0 {
-            DegradationLevel::Degraded
-        } else {
-            DegradationLevel::Normal
-        };
+        let system_health =
+            if open_circuits > 0 && open_circuits >= total_circuit_breakers.saturating_sub(1) {
+                DegradationLevel::Emergency
+            } else if open_circuits >= total_circuit_breakers / 2 {
+                DegradationLevel::Constrained
+            } else if open_circuits > 0 {
+                DegradationLevel::Degraded
+            } else {
+                DegradationLevel::Normal
+            };
 
         let uptime_ms = now_millis().saturating_sub(inner.started_ms);
 
@@ -591,6 +605,7 @@ impl HyperResilienceEngine {
 // ---------------------------------------------------------------------------
 
 /// Return the current time in milliseconds since the Unix epoch.
+#[allow(dead_code)]
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -634,9 +649,7 @@ mod tests {
     #[test]
     fn test_circuit_breaker_trips_open() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
-        engine
-            .register_circuit_breaker("cb-db", 3, 10_000)
-            .unwrap();
+        engine.register_circuit_breaker("cb-db", 3, 10_000).unwrap();
 
         // First two failures — still closed.
         assert_eq!(
@@ -648,10 +661,7 @@ mod tests {
             CircuitState::Closed
         );
         // Third failure trips to open.
-        assert_eq!(
-            engine.record_failure("cb-db").unwrap(),
-            CircuitState::Open
-        );
+        assert_eq!(engine.record_failure("cb-db").unwrap(), CircuitState::Open);
     }
 
     /// 4. After recovery timeout elapses, an open breaker transitions to half-open.
@@ -659,9 +669,7 @@ mod tests {
     fn test_circuit_breaker_half_open() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
         // Use a very short timeout so the test doesn't take long.
-        engine
-            .register_circuit_breaker("cb-cache", 1, 1)
-            .unwrap();
+        engine.register_circuit_breaker("cb-cache", 1, 1).unwrap();
 
         // Single failure trips to open.
         assert_eq!(
@@ -683,9 +691,7 @@ mod tests {
     #[test]
     fn test_circuit_breaker_resets_on_success() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
-        engine
-            .register_circuit_breaker("cb-api", 1, 1)
-            .unwrap();
+        engine.register_circuit_breaker("cb-api", 1, 1).unwrap();
 
         // Trip to open.
         engine.record_failure("cb-api").unwrap();
@@ -761,12 +767,8 @@ mod tests {
     #[test]
     fn test_system_health_reflects_state() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
-        engine
-            .register_circuit_breaker("cb-1", 1, 60_000)
-            .unwrap();
-        engine
-            .register_circuit_breaker("cb-2", 1, 60_000)
-            .unwrap();
+        engine.register_circuit_breaker("cb-1", 1, 60_000).unwrap();
+        engine.register_circuit_breaker("cb-2", 1, 60_000).unwrap();
 
         let health = engine.system_health();
         assert_eq!(health.active_circuit_breakers, 2);
@@ -805,18 +807,10 @@ mod tests {
     #[test]
     fn test_profile_reflects_state() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine.register_circuit_breaker("cb-1", 3, 10_000).unwrap();
+        engine.register_circuit_breaker("cb-2", 3, 10_000).unwrap();
         engine
-            .register_circuit_breaker("cb-1", 3, 10_000)
-            .unwrap();
-        engine
-            .register_circuit_breaker("cb-2", 3, 10_000)
-            .unwrap();
-        engine
-            .register_failover_group(
-                "group-gamma",
-                "node-p",
-                vec!["node-r1".to_string()],
-            )
+            .register_failover_group("group-gamma", "node-p", vec!["node-r1".to_string()])
             .unwrap();
 
         // Trip one breaker.

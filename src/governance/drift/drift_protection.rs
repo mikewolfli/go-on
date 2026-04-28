@@ -14,15 +14,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum DriftType {
     /// Deviation from strategic goals or objectives.
-    GoalDrift,
+    Goal,
     /// Deviation in system capabilities or feature set.
-    CapabilityDrift,
+    Capability,
     /// Deviation in agent or user behaviour patterns.
-    BehavioralDrift,
+    Behavioral,
     /// Deviation in performance metrics (latency, throughput, etc.).
-    PerformanceDrift,
+    Performance,
     /// Deviation in operational context or environment.
-    ContextDrift,
+    Context,
 }
 
 /// Severity level assigned to a detected drift alert.
@@ -161,6 +161,7 @@ pub struct DriftProtectionEngine {
 
 impl DriftProtectionEngine {
     /// Creates a new drift protection engine with the given configuration.
+    #[allow(dead_code)]
     pub fn new(config: DriftProtectionConfig) -> Self {
         Self {
             config,
@@ -172,6 +173,7 @@ impl DriftProtectionEngine {
     }
 
     /// Registers a drift policy. Returns an error if a policy with the same name already exists.
+    #[allow(dead_code)]
     pub fn register_policy(&self, policy: DriftPolicy) -> Result<()> {
         let mut policies = self
             .policies
@@ -187,6 +189,7 @@ impl DriftProtectionEngine {
     /// Records a metric measurement. If a metric with the same name already exists
     /// for the given drift type, it is updated with the new value; otherwise a new entry
     /// is created.
+    #[allow(dead_code)]
     pub fn record_metric(
         &self,
         name: &str,
@@ -215,6 +218,7 @@ impl DriftProtectionEngine {
     /// Evaluates all recorded metrics against registered policies and returns
     /// any newly triggered alerts. Previously triggered alerts that should be
     /// auto-resolved based on time-out are resolved first.
+    #[allow(dead_code)]
     pub fn check_for_drift(&self) -> Vec<DriftAlert> {
         let now_ms = current_time_ms();
         let config = &self.config;
@@ -275,17 +279,14 @@ impl DriftProtectionEngine {
                     continue;
                 }
 
-                let alert_id = format!(
-                    "drift-{}",
-                    {
-                        let mut ctr = match self.alert_counter.lock() {
-                            Ok(c) => c,
-                            Err(_) => continue,
-                        };
-                        *ctr += 1;
-                        *ctr
-                    }
-                );
+                let alert_id = format!("drift-{}", {
+                    let mut ctr = match self.alert_counter.lock() {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                    *ctr += 1;
+                    *ctr
+                });
 
                 let message = format!(
                     "{} drift detected in '{}': deviation {:.4} exceeds {} threshold ({:.2})",
@@ -337,6 +338,7 @@ impl DriftProtectionEngine {
     }
 
     /// Marks an alert as resolved by its ID. Returns an error if no alert with that ID exists.
+    #[allow(dead_code)]
     pub fn resolve_alert(&self, alert_id: &str) -> Result<()> {
         let mut alerts = self
             .alerts
@@ -352,18 +354,16 @@ impl DriftProtectionEngine {
     }
 
     /// Returns a list of all alerts that are currently unresolved.
+    #[allow(dead_code)]
     pub fn get_active_alerts(&self) -> Vec<DriftAlert> {
         match self.alerts.lock() {
-            Ok(alerts) => alerts
-                .iter()
-                .filter(|a| !a.resolved)
-                .cloned()
-                .collect(),
+            Ok(alerts) => alerts.iter().filter(|a| !a.resolved).cloned().collect(),
             Err(_) => Vec::new(),
         }
     }
 
     /// Returns all alerts (resolved and unresolved) filtered by severity.
+    #[allow(dead_code)]
     pub fn get_alerts_by_severity(&self, severity: DriftSeverity) -> Vec<DriftAlert> {
         match self.alerts.lock() {
             Ok(alerts) => alerts
@@ -376,6 +376,7 @@ impl DriftProtectionEngine {
     }
 
     /// Returns a snapshot profile of the current drift protection state.
+    #[allow(dead_code)]
     pub fn profile(&self) -> DriftProfile {
         let total_metrics = match self.metrics.lock() {
             Ok(m) => m.len(),
@@ -409,7 +410,11 @@ impl DriftProtectionEngine {
 
 /// Computes the normalised deviation: |current - baseline| / max(baseline, 0.01).
 fn compute_deviation(current: f64, baseline: f64) -> f64 {
-    let denominator = if baseline.abs() < 0.01 { 0.01 } else { baseline.abs() };
+    let denominator = if baseline.abs() < 0.01 {
+        0.01
+    } else {
+        baseline.abs()
+    };
     (current - baseline).abs() / denominator
 }
 
@@ -429,11 +434,11 @@ mod tests {
         DriftPolicy {
             name: "default".to_string(),
             drift_types: vec![
-                DriftType::GoalDrift,
-                DriftType::CapabilityDrift,
-                DriftType::BehavioralDrift,
-                DriftType::PerformanceDrift,
-                DriftType::ContextDrift,
+                DriftType::Goal,
+                DriftType::Capability,
+                DriftType::Behavioral,
+                DriftType::Performance,
+                DriftType::Context,
             ],
             warning_threshold: 0.10,
             critical_threshold: 0.25,
@@ -491,7 +496,7 @@ mod tests {
     fn test_record_metric() {
         let engine = make_engine();
         assert!(engine
-            .record_metric("test_metric", 0.5, 0.4, DriftType::PerformanceDrift)
+            .record_metric("test_metric", 0.5, 0.4, DriftType::Performance)
             .is_ok());
         let profile = engine.profile();
         assert_eq!(profile.total_metrics, 1);
@@ -507,7 +512,7 @@ mod tests {
             .register_policy(default_policy())
             .expect("register policy should succeed");
         engine
-            .record_metric("latency", 0.105, 0.10, DriftType::PerformanceDrift)
+            .record_metric("latency", 0.105, 0.10, DriftType::Performance)
             .expect("record metric should succeed");
         // deviation = |0.105 - 0.10| / 0.10 = 0.05 — below warning threshold of 0.10
         let alerts = engine.check_for_drift();
@@ -524,7 +529,7 @@ mod tests {
             .register_policy(default_policy())
             .expect("register policy should succeed");
         engine
-            .record_metric("latency", 0.115, 0.10, DriftType::PerformanceDrift)
+            .record_metric("latency", 0.115, 0.10, DriftType::Performance)
             .expect("record metric should succeed");
         // deviation = |0.115 - 0.10| / 0.10 = 0.15 — above warning (0.10), below critical (0.25)
         let alerts = engine.check_for_drift();
@@ -543,7 +548,7 @@ mod tests {
             .register_policy(default_policy())
             .expect("register policy should succeed");
         engine
-            .record_metric("throughput", 0.65, 0.50, DriftType::PerformanceDrift)
+            .record_metric("throughput", 0.65, 0.50, DriftType::Performance)
             .expect("record metric should succeed");
         // deviation = |0.65 - 0.50| / 0.50 = 0.30 — above critical (0.25), below breach (0.50)
         let alerts = engine.check_for_drift();
@@ -561,7 +566,7 @@ mod tests {
             .register_policy(default_policy())
             .expect("register policy should succeed");
         engine
-            .record_metric("completion_rate", 0.20, 0.10, DriftType::GoalDrift)
+            .record_metric("completion_rate", 0.20, 0.10, DriftType::Goal)
             .expect("record metric should succeed");
         // deviation = |0.20 - 0.10| / 0.10 = 1.00 — above breach (0.50)
         let alerts = engine.check_for_drift();
@@ -579,7 +584,7 @@ mod tests {
             .register_policy(default_policy())
             .expect("register policy should succeed");
         engine
-            .record_metric("accuracy", 1.00, 0.50, DriftType::GoalDrift)
+            .record_metric("accuracy", 1.00, 0.50, DriftType::Goal)
             .expect("record metric should succeed");
         let alerts = engine.check_for_drift();
         assert_eq!(alerts.len(), 1);
@@ -614,10 +619,10 @@ mod tests {
             .register_policy(default_policy())
             .expect("register policy should succeed");
         engine
-            .record_metric("metric_a", 0.30, 0.10, DriftType::GoalDrift)
+            .record_metric("metric_a", 0.30, 0.10, DriftType::Goal)
             .expect("record metric a should succeed");
         engine
-            .record_metric("metric_b", 0.30, 0.10, DriftType::CapabilityDrift)
+            .record_metric("metric_b", 0.30, 0.10, DriftType::Capability)
             .expect("record metric b should succeed");
         let alerts = engine.check_for_drift();
         assert_eq!(alerts.len(), 2);
@@ -644,13 +649,13 @@ mod tests {
 
         // Record two metrics; one will trigger a critical alert, the other a warning.
         engine
-            .record_metric("critical_metric", 0.60, 0.20, DriftType::GoalDrift)
+            .record_metric("critical_metric", 0.60, 0.20, DriftType::Goal)
             .expect("record critical metric should succeed");
         // deviation = |0.60 - 0.20| / 0.20 = 2.00 → breach / critical
         engine
-            .record_metric("warning_metric", 0.060, 0.05, DriftType::ContextDrift)
+            .record_metric("warning_metric", 0.060, 0.05, DriftType::Context)
             .expect("record warning metric should succeed");
-            // deviation = |0.060 - 0.05| / 0.05 = 0.20 → above warning threshold (0.10), below critical (0.25) => warning
+        // deviation = |0.060 - 0.05| / 0.05 = 0.20 → above warning threshold (0.10), below critical (0.25) => warning
 
         let _alerts = engine.check_for_drift();
 

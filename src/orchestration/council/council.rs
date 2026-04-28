@@ -239,10 +239,7 @@ impl OrchestrationCouncil {
             .map_err(|e| anyhow!("Failed to acquire lock on proposals: {}", e))?;
 
         if proposals.contains_key(&proposal.id) {
-            return Err(anyhow!(
-                "Proposal '{}' already exists",
-                proposal.id
-            ));
+            return Err(anyhow!("Proposal '{}' already exists", proposal.id));
         }
 
         if proposals.len() >= self.config.max_proposals {
@@ -290,9 +287,9 @@ impl OrchestrationCouncil {
                 .lock()
                 .map_err(|e| anyhow!("Failed to acquire lock on proposals: {}", e))?;
 
-            let proposal = proposals.get(&vote.proposal_id).ok_or_else(|| {
-                anyhow!("Proposal '{}' not found", vote.proposal_id)
-            })?;
+            let proposal = proposals
+                .get(&vote.proposal_id)
+                .ok_or_else(|| anyhow!("Proposal '{}' not found", vote.proposal_id))?;
 
             if proposal.status != ProposalStatus::Active {
                 return Err(anyhow!(
@@ -342,9 +339,9 @@ impl OrchestrationCouncil {
             .lock()
             .map_err(|e| anyhow!("Failed to acquire lock on proposals: {}", e))?;
 
-        let proposal = proposals.get(proposal_id).ok_or_else(|| {
-            anyhow!("Proposal '{}' not found", proposal_id)
-        })?;
+        let proposal = proposals
+            .get(proposal_id)
+            .ok_or_else(|| anyhow!("Proposal '{}' not found", proposal_id))?;
 
         if proposal.status != ProposalStatus::Active {
             return Err(anyhow!(
@@ -465,7 +462,10 @@ impl OrchestrationCouncil {
     /// List proposals, optionally filtered by status.
     ///
     /// If `status_filter` is `None`, all proposals are returned.
-    pub fn list_proposals(&self, status_filter: Option<ProposalStatus>) -> Result<Vec<CouncilProposal>> {
+    pub fn list_proposals(
+        &self,
+        status_filter: Option<ProposalStatus>,
+    ) -> Result<Vec<CouncilProposal>> {
         let proposals = self
             .proposals
             .lock()
@@ -543,8 +543,7 @@ impl OrchestrationCouncil {
             .map(|p| {
                 p.values()
                     .filter(|pr| {
-                        pr.status == ProposalStatus::Pending
-                            || pr.status == ProposalStatus::Active
+                        pr.status == ProposalStatus::Pending || pr.status == ProposalStatus::Active
                     })
                     .count() as u32
             })

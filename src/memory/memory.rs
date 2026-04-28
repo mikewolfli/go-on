@@ -75,7 +75,6 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
-    #[allow(dead_code)]
     pub fn new(policy: MemoryPolicy) -> Self {
         Self {
             entries: HashMap::new(),
@@ -83,12 +82,10 @@ impl MemoryStore {
         }
     }
 
-    #[allow(dead_code)]
     pub fn store(&mut self, entry: MemoryEntry) {
         self.entries.insert(entry.id.clone(), entry);
     }
 
-    #[allow(dead_code)]
     pub fn retrieve(&self, class: MemoryClass, limit: usize) -> Vec<MemoryEntry> {
         self.entries
             .values()

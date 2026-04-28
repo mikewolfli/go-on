@@ -238,7 +238,7 @@ impl ProtocolBus {
 
         // Sort by average latency ascending, then pick the first.
         candidates.sort_by_key(|(_, _, avg)| *avg);
-        let (best_proto, _, best_avg) = candidates[0].clone();
+        let (best_proto, _, best_avg) = candidates[0];
 
         let confidence = compute_confidence(best_avg, payload_size, false);
         let reason = format!(

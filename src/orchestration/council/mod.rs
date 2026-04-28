@@ -5,4 +5,5 @@
 //! cast votes, and the system tallies results to reach consensus.
 
 pub mod council;
+#[allow(unused_imports)]
 pub use council::*;

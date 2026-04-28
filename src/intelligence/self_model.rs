@@ -85,7 +85,7 @@ pub struct SelfModelConfig {
 impl Default for SelfModelConfig {
     fn default() -> Self {
         Self {
-            update_interval_ms: 60_000,   // 1 minute
+            update_interval_ms: 60_000, // 1 minute
             max_history: 1000,
             enable_performance_tracking: true,
         }
@@ -178,7 +178,7 @@ impl SelfModelCore {
         let max = inner.config.max_history;
         if inner.capabilities.len() >= max {
             // Evict the oldest capability (by last_verified_ms) to make room.
-            inner.capabilities.sort_by(|a, b| a.last_verified_ms.cmp(&b.last_verified_ms));
+            inner.capabilities.sort_by_key(|a| a.last_verified_ms);
             inner.capabilities.pop();
         }
 
@@ -307,12 +307,8 @@ impl SelfModelCore {
     pub fn performance_history(&self, count: usize) -> Vec<SelfPerformanceSnapshot> {
         let inner = self.inner.lock().unwrap();
         let len = inner.snapshots.len();
-        let start = if count >= len { 0 } else { len - count };
-        inner.snapshots[start..]
-            .iter()
-            .rev()
-            .cloned()
-            .collect()
+        let start = len.saturating_sub(count);
+        inner.snapshots[start..].iter().rev().cloned().collect()
     }
 
     /// Get the latest performance snapshot, if any.
@@ -414,7 +410,12 @@ mod tests {
     }
 
     /// Helper to construct a simple capability.
-    fn test_capability(name: &str, category: &str, effectiveness: f64, confidence: f64) -> SelfCapability {
+    fn test_capability(
+        name: &str,
+        category: &str,
+        effectiveness: f64,
+        confidence: f64,
+    ) -> SelfCapability {
         SelfCapability {
             name: name.to_string(),
             description: format!("Capability {}", name),

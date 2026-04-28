@@ -13,12 +13,10 @@ use tracing::{debug, info, warn};
 
 /// Scheduling priority (higher = more urgent)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct Priority(pub i64);
 
 /// Task priority with anti-starvation boost
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct ScheduledTask {
     pub task_id: String,
     pub role: String,
@@ -42,7 +40,6 @@ pub struct ScheduledTask {
 }
 
 impl ScheduledTask {
-    #[allow(dead_code)]
     pub fn effective_priority(&self) -> f64 {
         self.base_score + self.aging_bonus
     }
@@ -74,7 +71,6 @@ impl PartialOrd for ScheduledTask {
 
 /// Configuration for the scheduler
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct SchedulerConfig {
     /// Global maximum concurrent tasks
     pub global_max_concurrent_tasks: usize,
@@ -105,7 +101,6 @@ impl Default for SchedulerConfig {
 
 /// Scheduler statistics snapshot for governance.status
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct SchedulerProfile {
     /// Level-1 queue depth
     pub l1_queue_depth: u32,
@@ -144,7 +139,6 @@ pub struct TaskScheduler {
 }
 
 impl TaskScheduler {
-    #[allow(dead_code)]
     pub fn new(config: SchedulerConfig) -> Self {
         Self {
             queue: Mutex::new(BinaryHeap::new()),
@@ -166,7 +160,6 @@ impl TaskScheduler {
     }
 
     /// Submit a task to the queue. Pushes into BinaryHeap, stores in task_map.
-    #[allow(dead_code)]
     pub fn submit(&self, task: ScheduledTask) -> Result<()> {
         let task_id = task.task_id.clone();
         if self
@@ -196,8 +189,10 @@ impl TaskScheduler {
     /// Dequeue the highest-priority task matching the role.
     /// Checks global concurrency cap and per-role cap.
     /// On success, adds task_id to active_tasks and increments role counter.
-    #[allow(dead_code)]
     pub fn dequeue(&self, role: &str) -> Option<ScheduledTask> {
+        // Refresh dynamic priorities before picking the next task.
+        self.apply_aging();
+
         if self.is_global_at_capacity() {
             debug!("Global concurrency cap reached, cannot dequeue");
             return None;
@@ -248,7 +243,6 @@ impl TaskScheduler {
 
     /// Mark task as completed. Removes from active_tasks and task_map, decrements role counter,
     /// updates stats.
-    #[allow(dead_code)]
     pub fn complete(&self, task_id: &str) -> Result<()> {
         {
             let mut active = self
@@ -286,7 +280,6 @@ impl TaskScheduler {
 
     /// Mark task as failed. If requeue and retries < max_retries, increments retries
     /// and pushes back to queue. Otherwise removes permanently.
-    #[allow(dead_code)]
     pub fn fail(&self, task_id: &str, requeue: bool) -> Result<()> {
         // Remove from active first
         {
@@ -351,7 +344,6 @@ impl TaskScheduler {
     /// Apply aging to all waiting tasks. Iterates task_map, increments aging_bonus
     /// by aging_rate * elapsed_seconds, capped at max_aging_bonus. Rebuilds BinaryHeap.
     /// Tracks starvation_events_prevented when aging bonus crosses a threshold.
-    #[allow(dead_code)]
     pub fn apply_aging(&self) {
         let now = Instant::now();
         let elapsed = {
@@ -422,7 +414,6 @@ impl TaskScheduler {
     }
 
     /// Return a snapshot of current stats
-    #[allow(dead_code)]
     pub fn profile(&self) -> SchedulerProfile {
         let mut profile = self
             .stats
@@ -447,7 +438,6 @@ impl TaskScheduler {
     }
 
     /// Check if a role has reached max_workers
-    #[allow(dead_code)]
     pub fn is_role_at_capacity(&self, role: &str) -> bool {
         if let Ok(counts) = self.role_active_count.lock() {
             let count = counts.get(role).copied().unwrap_or(0);
@@ -458,7 +448,6 @@ impl TaskScheduler {
     }
 
     /// Check if global concurrency cap is reached
-    #[allow(dead_code)]
     pub fn is_global_at_capacity(&self) -> bool {
         if let Ok(active) = self.active_tasks.lock() {
             active.len() >= self.config.global_max_concurrent_tasks
@@ -483,7 +472,6 @@ pub struct AgentWorkerScheduler {
 }
 
 impl AgentWorkerScheduler {
-    #[allow(dead_code)]
     pub fn new(config: SchedulerConfig) -> Self {
         Self {
             level1: Arc::new(TaskScheduler::new(config)),
@@ -494,7 +482,6 @@ impl AgentWorkerScheduler {
     }
 
     /// Register a worker for a role
-    #[allow(dead_code)]
     pub fn register_worker(&self, worker_id: &str, role: &str) -> Result<()> {
         let mut workers = self
             .workers
@@ -509,7 +496,6 @@ impl AgentWorkerScheduler {
     }
 
     /// Remove a worker
-    #[allow(dead_code)]
     pub fn unregister_worker(&self, worker_id: &str, role: &str) -> Result<()> {
         let mut workers = self
             .workers
@@ -537,7 +523,6 @@ impl AgentWorkerScheduler {
 
     /// Find an idle worker for the role, dequeue from level-1, assign the task.
     /// Returns (worker_id, task) on success.
-    #[allow(dead_code)]
     pub fn assign_next(&self, role: &str) -> Option<(String, ScheduledTask)> {
         // Find an idle worker for this role
         let idle_worker = {
@@ -568,7 +553,6 @@ impl AgentWorkerScheduler {
     }
 
     /// Complete the task assigned to worker
-    #[allow(dead_code)]
     pub fn complete_task(&self, worker_id: &str) -> Result<()> {
         let task_id = {
             let mut assignments = self
@@ -584,7 +568,6 @@ impl AgentWorkerScheduler {
 
     /// Submit multiple tasks as a fan-out group. All tasks share the same role
     /// and are submitted to level-1. Returns group_id.
-    #[allow(dead_code)]
     pub fn submit_fan_out(&self, base_name: &str, tasks: Vec<ScheduledTask>) -> Result<String> {
         let group_id = format!("fanout-{}-{}", base_name, chrono_now_ms());
         let task_ids: Vec<String> = tasks.iter().map(|t| t.task_id.clone()).collect();
@@ -611,7 +594,6 @@ impl AgentWorkerScheduler {
     }
 
     /// Return (completed_count, total_count) for a fan-out group
-    #[allow(dead_code)]
     pub fn fan_out_progress(&self, group_id: &str) -> Result<(usize, usize)> {
         let groups = self
             .fan_out_groups
@@ -637,7 +619,6 @@ impl AgentWorkerScheduler {
     }
 
     /// Aggregate profile from level-1 + worker stats
-    #[allow(dead_code)]
     pub fn profile(&self) -> SchedulerProfile {
         let mut profile = self.level1.profile();
         if let Ok(assignments) = self.assignments.lock() {
@@ -651,7 +632,6 @@ impl AgentWorkerScheduler {
 }
 
 /// Helper: current timestamp in milliseconds for unique fan-out group IDs.
-#[allow(dead_code)]
 fn chrono_now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

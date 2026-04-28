@@ -1,4 +1,5 @@
 //! F-GAP-07: Workflow Task Schema Specification
+
 //!
 //! Defines typed input/output schemas for agent roles,
 //! with versioning support and validation.

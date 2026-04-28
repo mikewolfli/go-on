@@ -344,13 +344,13 @@ fn now_iso8601() -> String {
     // sufficient for memory entry timestamps.
     let year = 1970f64 + days as f64 / 365.25;
     let year_int = year as u64;
-    let day_of_year = days - ((year_int - 1970) * 365 + ((year_int - 1969) / 4)) as u64;
+    let day_of_year = days - ((year_int - 1970) * 365 + ((year_int - 1969) / 4));
 
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
         year_int,
-        (day_of_year / 30).max(1).min(12),
-        (day_of_year % 30).max(1).min(31),
+        (day_of_year / 30).clamp(1, 12),
+        (day_of_year % 30).clamp(1, 31),
         hours,
         minutes,
         seconds

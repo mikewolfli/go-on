@@ -1,3 +1,4 @@
+
 //! Omnipotent mode runtime — F-GAP-09 (FUTURE3.M1 / BLUE38 §6.6).
 //!
 //! Omnipotent mode is a special execution mode where the agent has unrestricted
@@ -140,18 +141,9 @@ impl OmnipotentMode {
     /// `ttl_secs` controls how many seconds the token remains valid.
     ///
     /// Returns the new `token_id` on success.
-    pub fn issue_token(
-        &self,
-        issued_to: &str,
-        reason: &str,
-        ttl_secs: u64,
-    ) -> Result<String> {
+    pub fn issue_token(&self, issued_to: &str, reason: &str, ttl_secs: u64) -> Result<String> {
         let now_ms = now_epoch_ms();
-        let token_id = format!(
-            "omni-{}-{}",
-            issued_to,
-            hex_encode_timestamp(now_ms)
-        );
+        let token_id = format!("omni-{}-{}", issued_to, hex_encode_timestamp(now_ms));
 
         let token = EscalationToken {
             token_id: token_id.clone(),
@@ -244,19 +236,11 @@ impl OmnipotentMode {
 
         let token = match tokens.get(token_id) {
             Some(t) => t,
-            None => {
-                return OmnipotentVerdict::Denied(format!(
-                    "Token '{}' not found",
-                    token_id
-                ))
-            }
+            None => return OmnipotentVerdict::Denied(format!("Token '{}' not found", token_id)),
         };
 
         if token.is_revoked {
-            return OmnipotentVerdict::Denied(format!(
-                "Token '{}' has been revoked",
-                token_id
-            ));
+            return OmnipotentVerdict::Denied(format!("Token '{}' has been revoked", token_id));
         }
 
         let now_ms = now_epoch_ms();
@@ -342,8 +326,7 @@ impl OmnipotentMode {
 
     /// Check whether anyone is currently in omnipotent mode.
     pub fn is_omnipotent(&self) -> bool {
-        self.enabled.load(Ordering::Acquire)
-            && self.active_sessions.load(Ordering::Acquire) > 0
+        self.enabled.load(Ordering::Acquire) && self.active_sessions.load(Ordering::Acquire) > 0
     }
 
     /// Return a snapshot of the current omnipotent mode profile metrics.
@@ -443,13 +426,18 @@ mod tests {
             .expect("Should issue token");
 
         assert!(om.enabled.load(Ordering::Acquire));
-        assert!(matches!(om.validate_token(&token_id), OmnipotentVerdict::Allowed));
+        assert!(matches!(
+            om.validate_token(&token_id),
+            OmnipotentVerdict::Allowed
+        ));
     }
 
     #[test]
     fn test_issue_token_updates_profile() {
         let om = OmnipotentMode::new();
-        let _ = om.issue_token("bob", "Debug production issue", 120).unwrap();
+        let _ = om
+            .issue_token("bob", "Debug production issue", 120)
+            .unwrap();
         let profile = om.profile();
         assert!(profile.enabled);
         assert_eq!(profile.total_escalations, 1);
@@ -502,7 +490,9 @@ mod tests {
         let om = OmnipotentMode::new();
         let token_id = om.issue_token("frank", "System upgrade", 300).unwrap();
 
-        let session = om.enter_omnipotent(&token_id).expect("Should enter omnipotent mode");
+        let session = om
+            .enter_omnipotent(&token_id)
+            .expect("Should enter omnipotent mode");
         assert!(om.is_omnipotent());
         assert_eq!(session.token_id, token_id);
 
@@ -559,16 +549,28 @@ mod tests {
         // The next attempt should fail.
         let result = om.enter_omnipotent(&token_id);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Maximum concurrent"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Maximum concurrent"));
 
-        assert_eq!(om.active_sessions.load(Ordering::Acquire), om.max_concurrent);
+        assert_eq!(
+            om.active_sessions.load(Ordering::Acquire),
+            om.max_concurrent
+        );
 
         // Drop one session, then we should be able to enter again.
         sessions.pop();
-        assert_eq!(om.active_sessions.load(Ordering::Acquire), om.max_concurrent - 1);
+        assert_eq!(
+            om.active_sessions.load(Ordering::Acquire),
+            om.max_concurrent - 1
+        );
 
         let _new_session = om.enter_omnipotent(&token_id).unwrap();
-        assert_eq!(om.active_sessions.load(Ordering::Acquire), om.max_concurrent);
+        assert_eq!(
+            om.active_sessions.load(Ordering::Acquire),
+            om.max_concurrent
+        );
     }
 
     #[test]
@@ -594,7 +596,13 @@ mod tests {
         let om = OmnipotentMode::new();
         om.record_action("admin", "read", "/etc/config", "success", "tok-1");
         om.record_action("admin", "write", "/tmp/output", "success", "tok-1");
-        om.record_action("user", "execute", "diagnostic.sh", "failure: timeout", "tok-2");
+        om.record_action(
+            "user",
+            "execute",
+            "diagnostic.sh",
+            "failure: timeout",
+            "tok-2",
+        );
 
         let profile = om.profile();
         assert_eq!(profile.total_actions, 3);

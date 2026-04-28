@@ -553,11 +553,7 @@ impl MetacognitiveController {
             return Vec::new();
         }
 
-        let unresolved_count = inner
-            .observations
-            .iter()
-            .filter(|o| !o.is_resolved)
-            .count();
+        let unresolved_count = inner.observations.iter().filter(|o| !o.is_resolved).count();
 
         if (unresolved_count as u32) < inner.config.min_observations_for_reflection {
             return Vec::new();
@@ -612,7 +608,12 @@ impl MetacognitiveController {
         let avg_confidence = if total_reports == 0 {
             0.0
         } else {
-            inner.reports.iter().map(|r| r.confidence_score).sum::<f64>() / total_reports as f64
+            inner
+                .reports
+                .iter()
+                .map(|r| r.confidence_score)
+                .sum::<f64>()
+                / total_reports as f64
         };
 
         MetacognitiveProfile {
@@ -671,7 +672,13 @@ mod tests {
     fn test_record_observation() {
         let ctrl = MetacognitiveController::new(base_config());
         let id = ctrl
-            .record_observation("task-1", "agent-a", "latency_spike", "high", "Latency exceeded 5s")
+            .record_observation(
+                "task-1",
+                "agent-a",
+                "latency_spike",
+                "high",
+                "Latency exceeded 5s",
+            )
             .unwrap();
 
         assert!(id.starts_with("obs-"));
@@ -922,7 +929,8 @@ mod tests {
     #[test]
     fn test_get_report() {
         let ctrl = MetacognitiveController::new(base_config());
-        ctrl.record_observation("task-1", "a", "error", "low", "Minor").unwrap();
+        ctrl.record_observation("task-1", "a", "error", "low", "Minor")
+            .unwrap();
 
         let id = ctrl.generate_reflection_report("task-1").unwrap();
         let report = ctrl.get_report(&id).unwrap();

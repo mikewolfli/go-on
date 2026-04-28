@@ -27,6 +27,8 @@
 //! └── Feedback Layer — PuaFeedbackCollector + EscalationEngine
 //! ```
 //!
+//! ├── SecurityGovernor (resource/actor policy enforcement)
+//!
 //! # Status
 //! Phase 0 implementation — all governance components are wired into
 //! a single runner that CapabilityBus calls.
@@ -40,6 +42,17 @@ use crate::governance::review_controls::{
     review_verdict, ReviewGateOutcome, ReviewTimeoutPolicy, ReviewVerdict,
 };
 use crate::governance::runtime_controls::OnlineControllerState;
+use crate::governance::security_governor::{SecurityGovernor, SecurityGovernorConfig};
+use crate::governance::drift::drift_protection::{DriftProfile, DriftProtectionConfig, DriftProtectionEngine};
+use crate::orchestration::brain_loop::{BrainLoop, BrainLoopConfig, BrainLoopProfile};
+use crate::orchestration::artifact::{ArtifactLayer, ArtifactProfile};
+use crate::orchestration::omnipotent::{OmnipotentMode, OmnipotentProfile};
+use crate::orchestration::promotion_plugin::PromotionRegistry;
+use crate::orchestration::token_layers::{estimate_cost, GateContext, TokenCostEstimate, TokenGateVerdict, TokenLayerChain};
+use crate::orchestration::r#loop::brain_loop::{
+    BrainLoop as BrainLoopRunner, BrainLoopConfig as BrainLoopRunnerConfig,
+    BrainLoopProfile as BrainLoopRunnerProfile,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -510,6 +523,7 @@ pub struct PolicyEvaluator {
     pub idempotency: Arc<Mutex<IdempotencyCache>>,
     pub runtime_control: Arc<Mutex<OnlineControllerState>>,
     pub guard: Arc<Mutex<SelfRationalizationGuard>>,
+    pub security_governor: Arc<SecurityGovernor>,
 }
 
 impl PolicyEvaluator {
@@ -531,6 +545,7 @@ impl PolicyEvaluator {
             idempotency,
             runtime_control,
             guard,
+            security_governor: Arc::new(SecurityGovernor::new(SecurityGovernorConfig::default())),
         }
     }
 
@@ -628,7 +643,39 @@ impl PolicyEvaluator {
             }
         }
 
-        // 7. All checks passed
+        // 7. Security governor policy evaluation
+        let task_type_str = format!("{:?}", ctx.task_type);
+        let actor = format!("risk:{:.2}", ctx.risk_score);
+        let context: std::collections::HashMap<String, String> = [
+            ("task_type".to_string(), task_type_str.clone()),
+            ("file_count".to_string(), ctx.file_count.to_string()),
+            ("risk_score".to_string(), ctx.risk_score.to_string()),
+        ]
+        .into_iter()
+        .collect();
+        if let Ok(sg_verdict) = self.security_governor.evaluate(&task_type_str, &actor, &context) {
+            if !sg_verdict.allowed {
+                return PolicyVerdict::Deny(PolicyViolation {
+                    kind: "security_policy".to_string(),
+                    detail: sg_verdict
+                        .reasons
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "denied by security governor".to_string()),
+                });
+            }
+            if sg_verdict.required_review {
+                return PolicyVerdict::Review(ReviewReason {
+                    reason: sg_verdict
+                        .reasons
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "review required by security governor".to_string()),
+                });
+            }
+        }
+
+        // 8. All checks passed
         PolicyVerdict::Allow
     }
 
@@ -724,6 +771,13 @@ pub struct HarnessBus {
     pub audit_trail: Arc<Mutex<HarnessAuditTrail>>,
     pub feedback_collector: Option<PuaFeedbackCollector>,
     pub profile: Arc<Mutex<PuaGovernanceProfile>>,
+    pub drift_engine: Arc<DriftProtectionEngine>,
+    pub brain_loop: Arc<BrainLoop>,
+    pub artifact_layer: Arc<ArtifactLayer>,
+    pub omnipotent_mode: Arc<OmnipotentMode>,
+    pub promotion_registry: Arc<Mutex<PromotionRegistry>>,
+    pub token_chain: Arc<Mutex<TokenLayerChain>>,
+    pub brain_runner: Arc<BrainLoopRunner>,
 }
 
 impl HarnessBus {
@@ -751,6 +805,13 @@ impl HarnessBus {
             audit_trail: Arc::new(Mutex::new(HarnessAuditTrail::default())),
             feedback_collector,
             profile: Arc::new(Mutex::new(PuaGovernanceProfile::default())),
+            drift_engine: Arc::new(DriftProtectionEngine::new(DriftProtectionConfig::default())),
+            brain_loop: Arc::new(BrainLoop::new(BrainLoopConfig::default())),
+            artifact_layer: Arc::new(ArtifactLayer::new()),
+            omnipotent_mode: Arc::new(OmnipotentMode::new()),
+            promotion_registry: Arc::new(Mutex::new(PromotionRegistry::new())),
+                    token_chain: Arc::new(Mutex::new(TokenLayerChain::new())),
+                    brain_runner: Arc::new(BrainLoopRunner::new(BrainLoopRunnerConfig::default())),
         }
     }
 
@@ -892,6 +953,54 @@ impl HarnessBus {
             GovernanceAction::Shell => policy_bundle.enable_code_execution,
             _ => true,
         }
+    }
+
+    /// Drift protection profile snapshot (F-GAP-26).
+    pub fn drift_profile(&self) -> DriftProfile {
+        self.drift_engine.profile()
+    }
+
+    /// Brain loop orchestration profile snapshot.
+    pub fn brain_profile(&self) -> BrainLoopProfile {
+        self.brain_loop.profile()
+    }
+
+    /// Artifact layer profile snapshot.
+    pub fn artifact_profile(&self) -> ArtifactProfile {
+        self.artifact_layer.profile()
+    }
+
+    /// Omnipotent mode profile snapshot.
+    pub fn omnipotent_profile(&self) -> OmnipotentProfile {
+        self.omnipotent_mode.profile()
+    }
+
+    /// Number of registered promotion plugins.
+    pub fn promotion_plugin_count(&self) -> usize {
+        self.promotion_registry.lock().map(|r| r.plugin_count()).unwrap_or(0)
+    }
+
+    /// Evaluate a token gate request through the L0-L5 chain.
+    pub fn evaluate_token_gate(&self, ctx: &GateContext) -> TokenGateVerdict {
+        self.token_chain
+            .lock()
+            .map(|mut chain| chain.evaluate(ctx))
+            .unwrap_or(TokenGateVerdict::Allow)
+    }
+
+    /// Brain loop runner profile snapshot (loop/brain_loop).
+    pub fn brain_runner_profile(&self) -> BrainLoopRunnerProfile {
+        self.brain_runner.profile()
+    }
+
+    /// Estimate token cost for a given input/output token count pair at a specified rate.
+    pub fn token_cost_estimate(&self, input: u64, output: u64, cost_per_1k: f64) -> TokenCostEstimate {
+        estimate_cost(input, output, cost_per_1k)
+    }
+
+    /// Review gate prompt for LLM-based approval (PUA-wired).
+    pub fn review_gate_prompt(&self) -> String {
+        crate::governance::pua::review_gate_prompt()
     }
 }
 

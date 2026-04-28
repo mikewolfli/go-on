@@ -2,11 +2,9 @@ use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct MemoryCachedResponse {
     pub(crate) response_text: String,
-    pub(crate) agent_name: Option<String>,
     expires_at: i64,
 }
 
@@ -16,7 +14,6 @@ pub struct MemoryResponseCache {
 }
 
 impl MemoryResponseCache {
-    #[allow(dead_code)]
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
         let mut guard = self.inner.lock().ok()?;
@@ -48,12 +45,11 @@ impl MemoryResponseCache {
         self.inner.lock().map(|guard| guard.len()).unwrap_or(0)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn put(
         &self,
         key: String,
         response_text: String,
-        agent_name: Option<String>,
+        _agent_name: Option<String>,
         ttl_seconds: u64,
     ) {
         if ttl_seconds == 0 {
@@ -66,7 +62,6 @@ impl MemoryResponseCache {
                 key,
                 MemoryCachedResponse {
                     response_text,
-                    agent_name,
                     expires_at,
                 },
             );

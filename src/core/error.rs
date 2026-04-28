@@ -16,7 +16,6 @@ use thiserror::Error;
 
 /// Main application error type
 #[derive(Debug, Error)]
-#[allow(dead_code)]
 pub enum AppError {
     /// Proxy-related errors
     #[error("proxy error: {0}")]
@@ -64,24 +63,20 @@ pub enum ProxyError {
 
     /// Rate limit exceeded error
     #[error("rate limit exceeded: {0}")]
-    #[allow(dead_code)]
     RateLimitExceeded(String),
 
     /// Circuit breaker open error
     #[error("circuit breaker open: {0}")]
-    #[allow(dead_code)]
     CircuitBreakerOpen(String),
 
     /// Timeout error
     #[error("timeout: {0}")]
-    #[allow(dead_code)]
     Timeout(String),
 }
 
 /// Configuration and input validation errors
 /// Configuration validation errors
 #[derive(Debug, Error)]
-#[allow(dead_code)]
 pub enum ValidationError {
     /// Invalid configuration
     #[error("invalid configuration: {0}")]
@@ -102,7 +97,6 @@ pub enum ValidationError {
 
 /// Network and communication errors
 #[derive(Debug, Error)]
-#[allow(dead_code)]
 pub enum NetworkError {
     /// Connection failed
     #[error("connection failed: {0}")]
@@ -123,7 +117,6 @@ pub enum NetworkError {
 
 /// Resource and system errors
 #[derive(Debug, Error)]
-#[allow(dead_code)]
 pub enum ResourceError {
     /// File system error
     #[error("file system error: {0}")]
@@ -143,11 +136,9 @@ pub enum ResourceError {
 }
 
 /// Convenience type alias for Result<T, AppError>
-#[allow(dead_code)]
 pub type Result<T> = std::result::Result<T, AppError>;
 
 /// Extension trait for error context
-#[allow(dead_code)]
 pub trait ErrorContext {
     /// Add context to an error
     fn context(self, context: &str) -> Self;

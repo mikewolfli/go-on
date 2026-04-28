@@ -25,10 +25,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
-use crate::orchestration::tool::{
-    ToolInput, ToolOutput, ToolRegistry, ToolRiskLevel,
-};
 use crate::orchestration::skill::SkillRegistry;
+use crate::orchestration::tool::{ToolInput, ToolOutput, ToolRegistry, ToolRiskLevel};
 
 // ---------------------------------------------------------------------------
 // Descriptor – one item in the combined capability matrix
@@ -183,9 +181,7 @@ impl ToolBus {
                         })
                         .unwrap_or("medium")
                         .to_string(),
-                    timeout_ms: profile
-                        .map(|p| p.timeout_budget_ms)
-                        .unwrap_or(30_000),
+                    timeout_ms: profile.map(|p| p.timeout_budget_ms).unwrap_or(30_000),
                     fallback_chain: profile
                         .map(|p| p.fallback_chain.clone())
                         .unwrap_or_default(),
@@ -356,7 +352,11 @@ impl ToolBus {
 
     /// Return a snapshot of per-tool usage statistics.
     pub fn tool_stats(&self) -> HashMap<String, ToolStats> {
-        self.inner.lock().ok().map(|inner| inner.stats.clone()).unwrap_or_default()
+        self.inner
+            .lock()
+            .ok()
+            .map(|inner| inner.stats.clone())
+            .unwrap_or_default()
     }
 
     /// Record a tool call outcome for statistics tracking.
@@ -428,9 +428,9 @@ pub fn import_remote_skill(
 ) -> Result<()> {
     use crate::orchestration::skill_import::RemoteSkill;
 
-    let bus = tool_bus.lock().map_err(|e| {
-        anyhow::anyhow!("ToolBus lock poisoned: {}", e)
-    })?;
+    let bus = tool_bus
+        .lock()
+        .map_err(|e| anyhow::anyhow!("ToolBus lock poisoned: {}", e))?;
 
     let remote = RemoteSkill::new(endpoint, skill_name)?;
 
@@ -451,7 +451,7 @@ mod tests {
     fn make_bus() -> ToolBus {
         let tool_registry = Arc::new(Mutex::new(ToolRegistry::new()));
         let skill_registry = Arc::new(Mutex::new(SkillRegistry::default()));
-        let mut bus = ToolBus::new(tool_registry, skill_registry);
+        let bus = ToolBus::new(tool_registry, skill_registry);
 
         // Register the builtin echo skill for testing.
         if let Ok(mut reg) = bus.skill_registry.lock() {
@@ -467,7 +467,11 @@ mod tests {
         let matrix = bus.capability_matrix();
 
         // At least the 6 built-in tools.
-        assert!(matrix.len() >= 6, "expected at least 6 tools, got {}", matrix.len());
+        assert!(
+            matrix.len() >= 6,
+            "expected at least 6 tools, got {}",
+            matrix.len()
+        );
 
         let tool_names: Vec<&str> = matrix.iter().map(|d| d.name.as_str()).collect();
         assert!(tool_names.contains(&"read_file"), "read_file missing");
@@ -475,7 +479,10 @@ mod tests {
         assert!(tool_names.contains(&"search_files"), "search_files missing");
         assert!(tool_names.contains(&"apply_patch"), "apply_patch missing");
         assert!(tool_names.contains(&"run_tests"), "run_tests missing");
-        assert!(tool_names.contains(&"inspect_git_diff"), "inspect_git_diff missing");
+        assert!(
+            tool_names.contains(&"inspect_git_diff"),
+            "inspect_git_diff missing"
+        );
 
         // Also includes the echo skill.
         assert!(tool_names.contains(&"builtin.echo"), "builtin.echo missing");
@@ -563,7 +570,9 @@ mod tests {
         bus.record_tool_call("read_file", false, 30);
 
         let stats = bus.tool_stats();
-        let rf_stats = stats.get("read_file").expect("expected stats for read_file");
+        let rf_stats = stats
+            .get("read_file")
+            .expect("expected stats for read_file");
 
         assert_eq!(rf_stats.total_calls, 3);
         assert_eq!(rf_stats.success_calls, 2);

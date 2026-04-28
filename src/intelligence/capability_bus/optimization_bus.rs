@@ -225,10 +225,7 @@ impl ReliabilityOptimizer {
     }
 
     fn score(&self, agent: &str) -> f64 {
-        self.reliability_scores
-            .get(agent)
-            .copied()
-            .unwrap_or(0.5)
+        self.reliability_scores.get(agent).copied().unwrap_or(0.5)
     }
 
     fn suggest_most_reliable(&self) -> Option<String> {
@@ -341,9 +338,7 @@ impl OptimizationBus {
             _ => None, // balanced — let the caller decide.
         };
 
-        let agent = suggested_agent
-            .as_deref()
-            .unwrap_or("claude-sonnet-4");
+        let agent = suggested_agent.as_deref().unwrap_or("claude-sonnet-4");
 
         let estimated_cost = cost.estimate_cost(agent, token_count);
         let estimated_duration_ms = speed.estimate_duration(agent, token_count);
@@ -385,14 +380,9 @@ impl OptimizationBus {
     /// Feeds the outcome back into the failure-prevention subsystem so that
     /// future circuit-breaker and recommendation decisions are informed by
     /// real execution data.
-    pub fn record_execution(
-        &self,
-        agent: &str,
-        duration_ms: u64,
-        _token_cost: u64,
-        success: bool,
-    ) {
-        self.failure_prevention.record_outcome(agent, duration_ms, success);
+    pub fn record_execution(&self, agent: &str, duration_ms: u64, _token_cost: u64, success: bool) {
+        self.failure_prevention
+            .record_outcome(agent, duration_ms, success);
 
         // If this was a failure, log a reliability flag.
         if !success {

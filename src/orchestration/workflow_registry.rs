@@ -153,7 +153,6 @@ impl WorkflowDetector {
     }
 
     /// True when the workflow type requires phase gating
-    #[allow(dead_code)]
     pub fn requires_phase_gate(wf: &WorkflowType) -> bool {
         matches!(
             wf,
@@ -162,7 +161,6 @@ impl WorkflowDetector {
     }
 
     /// True when review-gate is mandatory
-    #[allow(dead_code)]
     pub fn requires_review_gate(wf: &WorkflowType) -> bool {
         matches!(wf, WorkflowType::Auto | WorkflowType::Dev)
     }

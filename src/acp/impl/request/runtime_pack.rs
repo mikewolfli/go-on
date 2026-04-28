@@ -1091,6 +1091,8 @@ pub(super) async fn handle_governance_status(
         "ephemeral_phases": [],
         "available_workflow_types": ["auto", "dev", "general", "custom", "free"],
         "custom_phases_defined": custom_phases_defined,
+        "requires_phase_gate": crate::orchestration::workflow_registry::WorkflowDetector::requires_phase_gate(&effective_workflow_type),
+        "requires_review_gate": crate::orchestration::workflow_registry::WorkflowDetector::requires_review_gate(&effective_workflow_type),
     });
 
     let entry_rate_snapshot = with_acp_lock(

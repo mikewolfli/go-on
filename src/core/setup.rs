@@ -662,7 +662,6 @@ pub enum SecretAction {
     List,
 }
 
-#[allow(dead_code)]
 /// Run setup with default options.
 ///
 /// This helper is a thin wrapper around `run_setup_with_options`.

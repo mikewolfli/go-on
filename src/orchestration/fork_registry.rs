@@ -1,3 +1,4 @@
+
 //! BLUE35 S10: Fork Registry — Sub-agent Process Isolation (ARCH-05)
 //!
 //! Tracks forked sub-agent executions and provides isolation boundaries

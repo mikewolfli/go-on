@@ -309,7 +309,6 @@ fn missing_envs_for_agent(config: &AppConfig) -> Vec<Value> {
     missing
 }
 
-#[allow(dead_code)]
 fn probe_local_endpoint(url: &str, timeout_secs: u64) -> CheckStatus {
     let (host, port) = extract_host_port(url);
     let addr: SocketAddr = match format!("{}:{}", host, port).to_socket_addrs() {
@@ -325,7 +324,6 @@ fn probe_local_endpoint(url: &str, timeout_secs: u64) -> CheckStatus {
     }
 }
 
-#[allow(dead_code)]
 fn extract_host_port(url: &str) -> (String, u16) {
     let url = url
         .trim_start_matches("http://")

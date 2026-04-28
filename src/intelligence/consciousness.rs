@@ -330,21 +330,27 @@ impl AgencyConsciousness {
     /// This aggregates metrics for `SelfAwareness`, `GoalDirectedness`, and
     /// `Reflexivity` — the three dimensions most closely tied to self-awareness.
     pub fn compute_self_awareness(&self) -> f64 {
-        compute_dimension_set_average(self, &[
-            ConsciousnessDimension::SelfAwareness,
-            ConsciousnessDimension::GoalDirectedness,
-            ConsciousnessDimension::Reflexivity,
-        ])
+        compute_dimension_set_average(
+            self,
+            &[
+                ConsciousnessDimension::SelfAwareness,
+                ConsciousnessDimension::GoalDirectedness,
+                ConsciousnessDimension::Reflexivity,
+            ],
+        )
     }
 
     /// Compute an adaptability score from the latest dimension metrics.
     ///
     /// This aggregates metrics for `Adaptability` and `LearningCapacity`.
     pub fn compute_adaptability(&self) -> f64 {
-        compute_dimension_set_average(self, &[
-            ConsciousnessDimension::Adaptability,
-            ConsciousnessDimension::LearningCapacity,
-        ])
+        compute_dimension_set_average(
+            self,
+            &[
+                ConsciousnessDimension::Adaptability,
+                ConsciousnessDimension::LearningCapacity,
+            ],
+        )
     }
 
     /// Compute an autonomy score from the latest dimension metrics.
@@ -555,11 +561,7 @@ impl AgencyConsciousness {
 
         ConsciousnessProfile {
             enabled: inner.config.enable_tracking,
-            last_report_ms: inner
-                .reports
-                .last()
-                .map(|r| r.timestamp_ms)
-                .unwrap_or(0),
+            last_report_ms: inner.reports.last().map(|r| r.timestamp_ms).unwrap_or(0),
             overall_score: self.compute_overall_from_inner(&inner),
             total_metrics: inner.metrics.len(),
             dimensions_count: dims_with_data,
@@ -605,7 +607,12 @@ fn compute_dimension_set_average(
     }
     let sum: f64 = dims
         .iter()
-        .map(|d| consciousness.latest_metric(*d).map(|m| m.score).unwrap_or(0.0))
+        .map(|d| {
+            consciousness
+                .latest_metric(*d)
+                .map(|m| m.score)
+                .unwrap_or(0.0)
+        })
         .sum();
     sum / dims.len() as f64
 }
@@ -613,20 +620,15 @@ fn compute_dimension_set_average(
 /// Generate a narrative reflection depth string based on the overall score.
 fn generate_reflection_text(score: f64) -> String {
     if score >= 0.9 {
-        "高度自我意识 - 系统在几乎所有的意识维度上都表现出卓越的自我认知和适应能力。"
-            .to_string()
+        "高度自我意识 - 系统在几乎所有的意识维度上都表现出卓越的自我认知和适应能力。".to_string()
     } else if score >= 0.75 {
-        "强自我意识 - 系统具有良好的自我意识，能够有效地适应变化并自主行动。"
-            .to_string()
+        "强自我意识 - 系统具有良好的自我意识，能够有效地适应变化并自主行动。".to_string()
     } else if score >= 0.5 {
-        "中等自我意识 - 系统表现出基本的自我认知，但在某些维度上仍有改进空间。"
-            .to_string()
+        "中等自我意识 - 系统表现出基本的自我认知，但在某些维度上仍有改进空间。".to_string()
     } else if score >= 0.25 {
-        "弱自我意识 - 系统自我意识有限，需要更多的反射和适应能力提升。"
-            .to_string()
+        "弱自我意识 - 系统自我意识有限，需要更多的反射和适应能力提升。".to_string()
     } else {
-        "极低自我意识 - 系统缺乏基本的自我认知，需要大幅提升各维度的意识水平。"
-            .to_string()
+        "极低自我意识 - 系统缺乏基本的自我认知，需要大幅提升各维度的意识水平。".to_string()
     }
 }
 
@@ -645,7 +647,9 @@ fn generate_recommendations(score: f64) -> Vec<String> {
         recs.push("Improve adaptability with dynamic strategy switching mechanisms.".to_string());
     }
     if recs.is_empty() {
-        recs.push("All dimensions performing well; continue monitoring for regression.".to_string());
+        recs.push(
+            "All dimensions performing well; continue monitoring for regression.".to_string(),
+        );
     }
     recs
 }
@@ -673,11 +677,7 @@ mod tests {
     }
 
     /// Helper to record a metric for a dimension with a given score.
-    fn record(
-        c: &AgencyConsciousness,
-        dim: ConsciousnessDimension,
-        score: f64,
-    ) {
+    fn record(c: &AgencyConsciousness, dim: ConsciousnessDimension, score: f64) {
         c.record_metric(dim, score, 0.8, &format!("test metric for {dim:?}"))
             .unwrap();
     }
@@ -765,7 +765,9 @@ mod tests {
 
         let sa = c.get_metrics(Some(ConsciousnessDimension::SelfAwareness), 0);
         assert_eq!(sa.len(), 2);
-        assert!(sa.iter().all(|m| m.dimension == ConsciousnessDimension::SelfAwareness));
+        assert!(sa
+            .iter()
+            .all(|m| m.dimension == ConsciousnessDimension::SelfAwareness));
 
         let ad = c.get_metrics(Some(ConsciousnessDimension::Adaptability), 0);
         assert_eq!(ad.len(), 1);
@@ -791,7 +793,9 @@ mod tests {
         assert!((latest.score - 0.75).abs() < 1e-9);
 
         // Dimension with no data returns None.
-        assert!(c.latest_metric(ConsciousnessDimension::Reflexivity).is_none());
+        assert!(c
+            .latest_metric(ConsciousnessDimension::Reflexivity)
+            .is_none());
     }
 
     // ── 6. Compute self-awareness ───────────────────────────────────────

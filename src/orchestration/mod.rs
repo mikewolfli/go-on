@@ -1,11 +1,15 @@
 pub mod artifact;
-pub mod brain_loop;  // F-GAP-17 (flat, legacy)
-pub mod r#loop;      // F-GAP-17 (structured sub-module)
-pub mod council;  // F-GAP-15
+pub mod brain_loop; // F-GAP-17 (flat, legacy)
+#[cfg(any(
+    feature = "profile-simple-server",
+    feature = "profile-multi-users-server"
+))]
+pub mod council; // F-GAP-15
 pub mod execution_graph;
 pub mod flow;
 pub mod flow_with_models;
 pub mod fork_registry;
+pub mod r#loop; // F-GAP-17 (structured sub-module)
 pub mod mode;
 pub mod omnipotent;
 pub mod orchestrator;

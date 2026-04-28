@@ -1,3 +1,4 @@
+
 //! F-GAP-10: Artifact Contract Layer (FUTURE3.M9 / BLUE38 §6.6)
 //!
 //! Provides a unified schema and storage layer for all artifact types
@@ -267,8 +268,8 @@ impl ArtifactLayer {
         {
             let mut profile = self.profile.lock().expect("profile lock poisoned");
             profile.total_artifacts = artifacts.len() as u32;
-            profile.active_artifacts = profile_total_active(&artifacts) as u32;
-            profile.producers = profile_unique_producers(&artifacts) as u32;
+            profile.active_artifacts = profile_total_active(&artifacts);
+            profile.producers = profile_unique_producers(&artifacts);
         }
 
         Ok(id)
@@ -332,8 +333,8 @@ impl ArtifactLayer {
         // Update profile.
         let mut profile = self.profile.lock().expect("profile lock poisoned");
         profile.total_artifacts = artifacts.len() as u32;
-        profile.active_artifacts = profile_total_active(&artifacts) as u32;
-        profile.producers = profile_unique_producers(&artifacts) as u32;
+        profile.active_artifacts = profile_total_active(&artifacts);
+        profile.producers = profile_unique_producers(&artifacts);
     }
 
     /// Returns a snapshot of the current profile metrics.

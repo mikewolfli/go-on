@@ -5,7 +5,9 @@
 //! - `backend-postgres` (profile-multi-users-server): postgres-backed
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+#[cfg(not(feature = "backend-postgres"))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
