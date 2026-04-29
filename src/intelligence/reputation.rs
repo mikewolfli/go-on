@@ -98,6 +98,10 @@ impl ReputationStore {
     pub fn record_outcome(&mut self, agent: &str, success: bool) {
         let alpha = self.config.ema_alpha;
         let r = self.record(agent);
+
+        // Capture the previous timestamp before updating it, for decay calculation
+        let prev_updated_ms = r.last_updated_ms;
+
         r.total_tasks += 1;
         r.last_updated_ms = now_ms();
         if success {
@@ -109,6 +113,16 @@ impl ReputationStore {
         }
         let outcome = if success { 1.0f64 } else { 0.0f64 };
         r.score = alpha * outcome + (1.0 - alpha) * r.score;
+
+        // Apply time-based decay: reduce weight of old scores
+        let now_ms_val = r.last_updated_ms;
+        let elapsed_ms = now_ms_val.saturating_sub(prev_updated_ms);
+        if prev_updated_ms > 0 && elapsed_ms > 86_400_000 {
+            // Apply decay factor for entries older than 24 hours since last update
+            let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
+            let decay = (-0.01 * (elapsed_hours - 24.0)).exp(); // exponential decay
+            r.score = 1.0 + (r.score - 1.0) * decay;
+        }
     }
 
     /// Current score for agent (1.0 for unknown agents)
@@ -144,4 +158,77 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_store_empty() {
+        let store = ReputationStore::new(ReputationConfig::default());
+        assert_eq!(store.tracked_agent_count(), 0);
+    }
+
+    #[test]
+    fn test_record_outcome_creates_entry() {
+        let mut store = ReputationStore::new(ReputationConfig::default());
+        store.record_outcome("agent_a", true);
+        assert_eq!(store.tracked_agent_count(), 1);
+        let score = store.score("agent_a");
+        assert!(score > 0.0);
+    }
+
+    #[test]
+    fn test_score_increases_on_success() {
+        let mut store = ReputationStore::new(ReputationConfig::default());
+        // First failure lowers the score from 1.0
+        store.record_outcome("agent_a", false);
+        let s1 = store.score("agent_a");
+        assert!(s1 < 1.0);
+        // Then a success should increase it
+        store.record_outcome("agent_a", true);
+        let s2 = store.score("agent_a");
+        assert!(s2 > s1);
+    }
+
+    #[test]
+    fn test_score_decreases_on_failure() {
+        let mut store = ReputationStore::new(ReputationConfig::default());
+        store.record_outcome("agent_a", true);
+        let s1 = store.score("agent_a");
+        store.record_outcome("agent_a", false);
+        let s2 = store.score("agent_a");
+        assert!(s2 < s1);
+    }
+
+    #[test]
+    fn test_is_degraded_after_many_failures() {
+        let mut store = ReputationStore::new(ReputationConfig::default());
+        for _ in 0..10 {
+            store.record_outcome("agent_a", false);
+        }
+        assert!(store.is_degraded("agent_a"));
+    }
+
+    #[test]
+    fn test_snapshot_includes_all_agents() {
+        let mut store = ReputationStore::new(ReputationConfig::default());
+        store.record_outcome("agent_a", true);
+        store.record_outcome("agent_b", false);
+        let snap = store.snapshot();
+        assert_eq!(snap.len(), 2);
+    }
+
+    #[test]
+    fn test_unknown_agent_score_is_default() {
+        let store = ReputationStore::new(ReputationConfig::default());
+        assert!((store.score("unknown") - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_unknown_agent_not_degraded() {
+        let store = ReputationStore::new(ReputationConfig::default());
+        assert!(!store.is_degraded("unknown"));
+    }
 }

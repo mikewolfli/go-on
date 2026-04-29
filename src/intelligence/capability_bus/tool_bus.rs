@@ -378,6 +378,11 @@ impl ToolBus {
     // Profile
     // -----------------------------------------------------------------------
 
+    /// Access the inner SkillRegistry for profiling / evolution tracking.
+    pub fn skill_registry_ref(&self) -> &Arc<Mutex<SkillRegistry>> {
+        &self.skill_registry
+    }
+
     /// Produce a high-level profile snapshot of the ToolBus.
     pub fn profile(&self) -> ToolBusProfile {
         let total_tools = self

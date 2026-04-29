@@ -11,6 +11,42 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
+// Causal inference & prediction
+// ---------------------------------------------------------------------------
+
+/// A causal link between two entities: action_entity causes effect_entity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CausalLink {
+    /// The entity representing the cause/action
+    pub cause_entity_id: String,
+    /// The entity representing the effect/outcome
+    pub effect_entity_id: String,
+    /// Confidence in this causal relationship (0.0 – 1.0)
+    pub confidence: f64,
+    /// Number of times this causation has been observed
+    pub observation_count: u64,
+    /// Average time delay between cause and effect (ms)
+    pub avg_delay_ms: f64,
+    /// Context tags under which this causal link is valid
+    pub context_tags: Vec<String>,
+}
+
+/// A prediction about a future entity state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Prediction {
+    /// The entity being predicted
+    pub entity_id: String,
+    /// The predicted attribute values
+    pub predicted_attributes: serde_json::Value,
+    /// Confidence in prediction (0.0 – 1.0)
+    pub confidence: f64,
+    /// Time horizon of the prediction (ms from now)
+    pub horizon_ms: u64,
+    /// What action/event this prediction is based on
+    pub based_on: String,
+}
+
+// ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
@@ -167,6 +203,8 @@ struct Inner {
     next_entity_id: u64,
     next_event_id: u64,
     next_snapshot_id: u64,
+    causal_links: Vec<CausalLink>,
+    predictions: Vec<Prediction>,
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +231,8 @@ impl WorldModel {
                 next_entity_id: 1,
                 next_event_id: 1,
                 next_snapshot_id: 1,
+                causal_links: Vec::new(),
+                predictions: Vec::new(),
             })),
         }
     }
@@ -473,6 +513,191 @@ impl WorldModel {
         }
 
         before - inner.entities.len()
+    }
+
+    // -- Causal inference & prediction ------------------------------------
+
+    /// Record a causal link between two entities.
+    ///
+    /// Increments observation_count if the link already exists, otherwise creates a new one.
+    /// Updates confidence based on observation frequency.
+    pub fn record_causal_link(
+        &self,
+        cause: &str,
+        effect: &str,
+        delay_ms: f64,
+        context_tags: Vec<String>,
+    ) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(existing) = inner
+            .causal_links
+            .iter_mut()
+            .find(|l| l.cause_entity_id == cause && l.effect_entity_id == effect)
+        {
+            existing.observation_count += 1;
+            existing.avg_delay_ms =
+                (existing.avg_delay_ms * (existing.observation_count - 1) as f64 + delay_ms)
+                    / existing.observation_count as f64;
+            existing.confidence =
+                (existing.confidence + 1.0 / (existing.observation_count as f64 + 1.0)).min(1.0);
+            // Merge context tags
+            for tag in context_tags {
+                if !existing.context_tags.contains(&tag) {
+                    existing.context_tags.push(tag);
+                }
+            }
+        } else {
+            inner.causal_links.push(CausalLink {
+                cause_entity_id: cause.to_string(),
+                effect_entity_id: effect.to_string(),
+                confidence: 0.3, // Initial low confidence
+                observation_count: 1,
+                avg_delay_ms: delay_ms,
+                context_tags,
+            });
+        }
+        inner.last_update_ms = now_ms();
+    }
+
+    /// Predict the outcome of taking `action` on `target_entity`.
+    ///
+    /// Returns a list of predicted effects with confidence scores.
+    pub fn predict_outcome(&self, action: &str, target_entity: &str) -> Vec<Prediction> {
+        let inner = self.inner.lock().unwrap();
+        let mut results: Vec<Prediction> = Vec::new();
+
+        // Helper to convert entity properties to a serde_json Value
+        let props_to_json =
+            |props: &std::collections::HashMap<String, String>| -> serde_json::Value {
+                serde_json::json!(props)
+            };
+
+        // Find causal links where the action matches a known cause
+        for link in &inner.causal_links {
+            if link.cause_entity_id == action || link.cause_entity_id.contains(action) {
+                // Find the effect entity's current state
+                let effect_state = inner
+                    .entities
+                    .iter()
+                    .find(|e| e.id == link.effect_entity_id)
+                    .map(|e| props_to_json(&e.properties))
+                    .unwrap_or_else(|| serde_json::json!({}));
+
+                results.push(Prediction {
+                    entity_id: link.effect_entity_id.clone(),
+                    predicted_attributes: effect_state,
+                    confidence: link.confidence,
+                    horizon_ms: link.avg_delay_ms as u64,
+                    based_on: format!("causal:{}→{}", link.cause_entity_id, link.effect_entity_id),
+                });
+            }
+        }
+
+        // If no causal link found, do a similarity-based prediction
+        if results.is_empty() {
+            // Find entities similar to target and see what actions affected them
+            let similar_entities: Vec<&WorldEntity> = inner
+                .entities
+                .iter()
+                .filter(|e| e.id.contains(target_entity) || target_entity.contains(&e.id))
+                .collect();
+
+            for similar in &similar_entities {
+                for link in &inner.causal_links {
+                    if link.cause_entity_id.contains(&similar.id)
+                        || similar.id.contains(&link.cause_entity_id)
+                    {
+                        let effect_state = inner
+                            .entities
+                            .iter()
+                            .find(|e| e.id == link.effect_entity_id)
+                            .map(|e| props_to_json(&e.properties))
+                            .unwrap_or_else(|| serde_json::json!({}));
+
+                        results.push(Prediction {
+                            entity_id: link.effect_entity_id.clone(),
+                            predicted_attributes: effect_state,
+                            confidence: link.confidence * 0.7, // Lower confidence for similarity-based
+                            horizon_ms: link.avg_delay_ms as u64,
+                            based_on: format!(
+                                "similarity:{}→{}",
+                                link.cause_entity_id, link.effect_entity_id
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Analyze recent events to discover new causal patterns.
+    ///
+    /// Scans events within `window_ms` and looks for recurring (action → outcome) patterns.
+    pub fn discover_causal_patterns(&self, window_ms: u64) -> Vec<String> {
+        let now = now_ms();
+        let cutoff = now.saturating_sub(window_ms);
+
+        // Collect event data while holding the lock, then drop it before mutation
+        let event_data: Vec<(String, std::collections::HashMap<String, String>)> = {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .events
+                .iter()
+                .filter(|e| e.timestamp_ms >= cutoff)
+                .map(|e| (e.source.clone(), e.payload.clone()))
+                .collect()
+        };
+
+        let mut discoveries = Vec::new();
+
+        // Group events by source
+        let mut by_source: std::collections::HashMap<
+            String,
+            Vec<std::collections::HashMap<String, String>>,
+        > = std::collections::HashMap::new();
+        for (source, payload) in event_data {
+            by_source.entry(source).or_default().push(payload);
+        }
+
+        // Now work with cloned data only — borrow checker is happy
+        let mut new_links: Vec<CausalLink> = Vec::new();
+
+        for (source, events) in &by_source {
+            if events.len() >= 3 {
+                let entity_changes: Vec<&str> = events
+                    .iter()
+                    .filter_map(|payload| payload.get("target_entity").map(|v| v.as_str()))
+                    .collect();
+
+                if entity_changes.len() >= 3 {
+                    new_links.push(CausalLink {
+                        cause_entity_id: source.clone(),
+                        effect_entity_id: entity_changes[0].to_string(),
+                        confidence: 0.3,
+                        observation_count: 1,
+                        avg_delay_ms: 1000.0,
+                        context_tags: vec!["discovered".to_string()],
+                    });
+                    discoveries.push(format!(
+                        "Discovered causal pattern: {} → {} ({} events)",
+                        source,
+                        entity_changes[0],
+                        events.len()
+                    ));
+                }
+            }
+        }
+
+        // Push all discovered links into inner state
+        if !new_links.is_empty() {
+            if let Ok(mut inner) = self.inner.lock() {
+                inner.causal_links.extend(new_links);
+            }
+        }
+
+        discoveries
     }
 
     // -- Profile -----------------------------------------------------------

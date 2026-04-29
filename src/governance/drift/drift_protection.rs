@@ -155,25 +155,26 @@ pub struct DriftProtectionEngine {
     config: DriftProtectionConfig,
     policies: Mutex<HashMap<String, DriftPolicy>>,
     metrics: Mutex<HashMap<String, DriftMetric>>,
+    /// Historical metrics grouped by drift type for trend analysis.
+    metric_history: Mutex<HashMap<DriftType, Vec<DriftMetric>>>,
     alerts: Mutex<Vec<DriftAlert>>,
     alert_counter: Mutex<u64>,
 }
 
 impl DriftProtectionEngine {
     /// Creates a new drift protection engine with the given configuration.
-    #[allow(dead_code)]
     pub fn new(config: DriftProtectionConfig) -> Self {
         Self {
             config,
             policies: Mutex::new(HashMap::new()),
             metrics: Mutex::new(HashMap::new()),
+            metric_history: Mutex::new(HashMap::new()),
             alerts: Mutex::new(Vec::new()),
             alert_counter: Mutex::new(0),
         }
     }
 
     /// Registers a drift policy. Returns an error if a policy with the same name already exists.
-    #[allow(dead_code)]
     pub fn register_policy(&self, policy: DriftPolicy) -> Result<()> {
         let mut policies = self
             .policies
@@ -189,7 +190,6 @@ impl DriftProtectionEngine {
     /// Records a metric measurement. If a metric with the same name already exists
     /// for the given drift type, it is updated with the new value; otherwise a new entry
     /// is created.
-    #[allow(dead_code)]
     pub fn record_metric(
         &self,
         name: &str,
@@ -199,6 +199,7 @@ impl DriftProtectionEngine {
     ) -> Result<()> {
         let deviation = compute_deviation(current_value, baseline_value);
         let now_ms = current_time_ms();
+        let drift_type_for_history = drift_type.clone();
         let metric = DriftMetric {
             name: name.to_string(),
             current_value,
@@ -211,14 +212,23 @@ impl DriftProtectionEngine {
             .metrics
             .lock()
             .map_err(|e| anyhow::anyhow!("failed to lock metrics: {}", e))?;
-        metrics.insert(name.to_string(), metric);
+        metrics.insert(name.to_string(), metric.clone());
+
+        // Track history for trend analysis (keep last 100 entries per type)
+        if let Ok(mut history) = self.metric_history.lock() {
+            let entry = history.entry(drift_type_for_history).or_default();
+            entry.push(metric);
+            if entry.len() > 100 {
+                entry.remove(0);
+            }
+        }
+
         Ok(())
     }
 
     /// Evaluates all recorded metrics against registered policies and returns
     /// any newly triggered alerts. Previously triggered alerts that should be
     /// auto-resolved based on time-out are resolved first.
-    #[allow(dead_code)]
     pub fn check_for_drift(&self) -> Vec<DriftAlert> {
         let now_ms = current_time_ms();
         let config = &self.config;
@@ -338,7 +348,6 @@ impl DriftProtectionEngine {
     }
 
     /// Marks an alert as resolved by its ID. Returns an error if no alert with that ID exists.
-    #[allow(dead_code)]
     pub fn resolve_alert(&self, alert_id: &str) -> Result<()> {
         let mut alerts = self
             .alerts
@@ -354,7 +363,6 @@ impl DriftProtectionEngine {
     }
 
     /// Returns a list of all alerts that are currently unresolved.
-    #[allow(dead_code)]
     pub fn get_active_alerts(&self) -> Vec<DriftAlert> {
         match self.alerts.lock() {
             Ok(alerts) => alerts.iter().filter(|a| !a.resolved).cloned().collect(),
@@ -363,7 +371,6 @@ impl DriftProtectionEngine {
     }
 
     /// Returns all alerts (resolved and unresolved) filtered by severity.
-    #[allow(dead_code)]
     pub fn get_alerts_by_severity(&self, severity: DriftSeverity) -> Vec<DriftAlert> {
         match self.alerts.lock() {
             Ok(alerts) => alerts
@@ -376,7 +383,6 @@ impl DriftProtectionEngine {
     }
 
     /// Returns a snapshot profile of the current drift protection state.
-    #[allow(dead_code)]
     pub fn profile(&self) -> DriftProfile {
         let total_metrics = match self.metrics.lock() {
             Ok(m) => m.len(),
@@ -405,6 +411,99 @@ impl DriftProtectionEngine {
             highest_severity,
             last_check_ms: current_time_ms(),
         }
+    }
+
+    /// Analyze drift metrics over time to detect rising trends.
+    /// Returns a list of drift types that show a statistically significant upward trend.
+    pub fn detect_trends(&self) -> Vec<(DriftType, f64, String)> {
+        let history = match self.metric_history.lock() {
+            Ok(h) => h.clone(),
+            Err(_) => return Vec::new(),
+        };
+        let mut trends = Vec::new();
+
+        for (drift_type, metrics) in &history {
+            if metrics.len() >= 5 {
+                // Simple linear regression slope
+                let n = metrics.len() as f64;
+                let indices: Vec<f64> = (0..metrics.len()).map(|i| i as f64).collect();
+                let values: Vec<f64> = metrics.iter().map(|m| m.deviation).collect();
+
+                let sum_x: f64 = indices.iter().sum();
+                let sum_y: f64 = values.iter().sum();
+                let sum_xy: f64 = indices.iter().zip(values.iter()).map(|(x, y)| x * y).sum();
+                let sum_xx: f64 = indices.iter().map(|x| x * x).sum();
+
+                let denominator = n * sum_xx - sum_x * sum_x;
+                if denominator.abs() < f64::EPSILON {
+                    continue;
+                }
+                let slope = (n * sum_xy - sum_x * sum_y) / denominator;
+
+                if slope > 0.05 {
+                    let severity = if slope > 0.2 {
+                        "critical"
+                    } else if slope > 0.1 {
+                        "warning"
+                    } else {
+                        "notice"
+                    };
+                    trends.push((
+                        drift_type.clone(),
+                        slope,
+                        format!(
+                            "Rising trend detected in {:?} (slope: {:.4}, severity: {})",
+                            drift_type, slope, severity
+                        ),
+                    ));
+                }
+            }
+        }
+
+        trends
+    }
+
+    /// Generate auto-remediation suggestions for detected drifts.
+    pub fn suggest_remediation(&self) -> Vec<String> {
+        let alerts = match self.alerts.lock() {
+            Ok(a) => a.clone(),
+            Err(_) => return Vec::new(),
+        };
+        let mut suggestions = Vec::new();
+
+        for alert in &alerts {
+            if alert.resolved {
+                continue;
+            }
+            match alert.drift_type {
+                DriftType::Goal => {
+                    suggestions.push(format!(
+                        "Realign goal '{}': current deviation {:.2} exceeds threshold",
+                        alert.metric_name, alert.deviation
+                    ));
+                }
+                DriftType::Performance => {
+                    suggestions.push(format!(
+                        "Performance drift detected in '{}': consider scaling resources or optimizing",
+                        alert.metric_name
+                    ));
+                }
+                DriftType::Behavioral => {
+                    suggestions.push(format!(
+                        "Behavioral drift in '{}': review agent configuration or retrain",
+                        alert.metric_name
+                    ));
+                }
+                _ => {
+                    suggestions.push(format!(
+                        "Drift detected in {:?} metric '{}': recommend investigation",
+                        alert.drift_type, alert.metric_name
+                    ));
+                }
+            }
+        }
+
+        suggestions
     }
 }
 

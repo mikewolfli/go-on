@@ -21,6 +21,11 @@
 //!  13. OrchestrationBus      (new in Phase 4)
 //!  14. DistributedMemoryBus  (new in Phase 4)
 
+#[cfg(any(
+    feature = "profile-simple-server",
+    feature = "profile-multi-users-server"
+))]
+use crate::agents::factory::{AgentFactory, AgentFactoryConfig};
 use crate::governance::hardening::TenantBudgetEnforcer;
 use crate::governance::harness_bus::{AgentExecutionPolicy, HarnessBus, PolicyVerdict};
 use crate::governance::pua::TaskContext;
@@ -32,22 +37,30 @@ use crate::intelligence::capability_bus::orchestration_bus::OrchestrationBus;
 use crate::intelligence::capability_bus::protocol_bus::ProtocolBus;
 use crate::intelligence::capability_bus::tool_bus::ToolBus;
 use crate::intelligence::capability_graph::CapabilityGraph;
-use crate::intelligence::consciousness::AgencyConsciousness;
-use crate::intelligence::metacognitive::MetacognitiveController;
-use crate::intelligence::world_model::WorldModel;
-use crate::intelligence::self_model::SelfModelCore;
+use crate::intelligence::consciousness::ConsciousnessMetrics;
+use crate::intelligence::consensus::ConsensusEngine;
+use crate::intelligence::continuous_learning::ContinuousLearningCenter;
+use crate::intelligence::discovery::DiscoveryCenter;
+use crate::intelligence::evolution_graph::EvolutionGraph;
 use crate::intelligence::federated_rl::FederatedRL;
 use crate::intelligence::matcher::ScenarioMatcher;
-use crate::intelligence::discovery::DiscoveryCenter;
-use crate::intelligence::consensus::ConsensusEngine;
+use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::intelligence::reinforcement::learning::{
     ExperienceKnowledgeBase, QLearningAgent, RewardFunction, RlTaskExecutionMetrics, SuccessCase,
 };
 use crate::intelligence::reputation::ReputationStore;
+use crate::intelligence::self_model::SelfModelCore;
+use crate::intelligence::world_model::WorldModel;
 use crate::observability::provenance::{make_entry, ProvenanceLedger};
+#[cfg(any(
+    feature = "profile-simple-server",
+    feature = "profile-multi-users-server"
+))]
+use crate::orchestration::council::{CouncilConfig, OrchestrationCouncil};
 use crate::orchestration::task_schema::SchemaRegistry;
 use crate::orchestration::workflow_optimizer::OptimizerRegistry;
 use crate::orchestration::workflow_registry::WorkflowRegistry;
+use crate::protocol::transport::MultiChannelTransport;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -213,6 +226,8 @@ pub struct CapabilityBusProfile {
     pub memory_total_entries: u32,
     pub distributed_memory_peers: u32,
     pub distributed_memory_shared: u32,
+    /// Number of skill evolution records
+    pub skill_evolution_count: u32,
 }
 
 impl Default for CapabilityBusProfile {
@@ -245,6 +260,7 @@ impl Default for CapabilityBusProfile {
             memory_total_entries: 0,
             distributed_memory_peers: 0,
             distributed_memory_shared: 0,
+            skill_evolution_count: 0,
         }
     }
 }
@@ -323,7 +339,7 @@ pub struct CapabilityBus {
     max_event_history: usize,
 
     // ── Cognitive modules ──────────────────────────────────────────────
-    pub consciousness: AgencyConsciousness,
+    pub consciousness: ConsciousnessMetrics,
     pub metacognitive: MetacognitiveController,
     pub world_model: WorldModel,
     pub self_model: SelfModelCore,
@@ -331,6 +347,27 @@ pub struct CapabilityBus {
     pub matcher: ScenarioMatcher,
     pub discovery: DiscoveryCenter,
     pub consensus: ConsensusEngine,
+
+    /// Agent factory — dynamic sub-agent creation (F-GAP-13)
+    #[cfg(any(
+        feature = "profile-simple-server",
+        feature = "profile-multi-users-server"
+    ))]
+    pub agent_factory: Arc<Mutex<AgentFactory>>,
+    /// Orchestration council — multi-agent voting governance (F-GAP-15)
+    #[cfg(any(
+        feature = "profile-simple-server",
+        feature = "profile-multi-users-server"
+    ))]
+    pub council: Arc<Mutex<OrchestrationCouncil>>,
+    /// Evolution graph — capability lifecycle tracking (F-GAP-18)
+    pub evolution_graph: Arc<Mutex<EvolutionGraph>>,
+
+    /// Continuous learning center — lifelong learning (F-GAP-24)
+    pub continuous_learning: Arc<Mutex<ContinuousLearningCenter>>,
+
+    /// Multi-channel message transport — protocol layer (F-GAP-29)
+    pub transport: Arc<Mutex<MultiChannelTransport>>,
 }
 
 impl CapabilityBus {
@@ -372,7 +409,7 @@ impl CapabilityBus {
             orchestration_bus: OrchestrationBus::new(None),
             distributed_memory_bus: DistributedMemoryBus::new(5000),
             max_event_history: 100,
-            consciousness: AgencyConsciousness::new(Default::default()),
+            consciousness: ConsciousnessMetrics::new(Default::default()),
             metacognitive: MetacognitiveController::new(Default::default()),
             world_model: WorldModel::new(Default::default()),
             self_model: SelfModelCore::new(Default::default()),
@@ -380,6 +417,23 @@ impl CapabilityBus {
             matcher: ScenarioMatcher::default(),
             discovery: DiscoveryCenter::new(),
             consensus: ConsensusEngine::new(Default::default()),
+            #[cfg(any(
+                feature = "profile-simple-server",
+                feature = "profile-multi-users-server"
+            ))]
+            agent_factory: Arc::new(Mutex::new(AgentFactory::new(AgentFactoryConfig::default()))),
+            #[cfg(any(
+                feature = "profile-simple-server",
+                feature = "profile-multi-users-server"
+            ))]
+            council: Arc::new(Mutex::new(OrchestrationCouncil::new(
+                CouncilConfig::default(),
+            ))),
+            evolution_graph: Arc::new(Mutex::new(EvolutionGraph::new())),
+            continuous_learning: Arc::new(Mutex::new(ContinuousLearningCenter::new(
+                Default::default(),
+            ))),
+            transport: Arc::new(Mutex::new(MultiChannelTransport::new(Default::default()))),
         }
     }
 
@@ -926,6 +980,105 @@ impl CapabilityBus {
             });
         }
 
+        // --- Cognitive module integration ---
+
+        let now = now_ms();
+
+        // 1. FederatedRL: submit local policy update
+        if success {
+            let frl = self.federated_rl.submit_policy(
+                "local_agent".to_string(),
+                format!("evolve_{}", state.0),
+                serde_json::json!({
+                    "state": state,
+                    "action": action,
+                    "reward": reward,
+                    "timestamp": now,
+                })
+                .to_string(),
+                quality_score,
+                1,
+            );
+            // Try to contribute to the current round if one exists
+            let _ = self
+                .federated_rl
+                .contribute_to_round(&format!("round_{}", state.0), &frl);
+        }
+
+        // 2. ContinuousLearning: consolidate experience to prevent forgetting
+        if let Ok(cl) = self.continuous_learning.lock() {
+            let _ = cl.consolidate_experience(
+                &format!("{:?}_{}", state.0, action),
+                &serde_json::json!({
+                    "state": state,
+                    "action": action,
+                    "success": success,
+                    "reward": reward,
+                    "quality": quality_score,
+                })
+                .to_string(),
+                quality_score,
+            );
+        }
+
+        // 3. Metacognitive: record observation for self-reflection
+        if let Ok(mc) = self.metacognitive.record_observation(
+            &format!("evolve_{}_{}", state.0, action),
+            "capability_bus",
+            "evolution",
+            if success { "success" } else { "failure" },
+            &format!("reward={}, quality={}", reward, quality_score),
+        ) {
+            let _ = mc;
+        }
+
+        // 4. DiscoveryCenter: record successful patterns
+        if success && quality_score > 0.7 {
+            if let Ok(dc) = self.discovery.record_solution(
+                crate::intelligence::discovery::DiscoveryEntry {
+                    id: String::new(),
+                    problem_pattern: format!("state_{}", state.0),
+                    solution_summary: format!("action_{}", action),
+                    solution_detail: serde_json::json!({"reward": reward, "quality": quality_score}),
+                    applicability_tags: vec![state.0.clone(), state.1.clone()],
+                    success_rate: quality_score,
+                    total_attempts: 1,
+                    successful_attempts: if success { 1 } else { 0 },
+                    discovered_by: "capability_bus_evolve".to_string(),
+                    created_ms: now,
+                    last_used_ms: now,
+                }
+            ) {
+                let _ = dc;
+            }
+        }
+
+        // 5. EvolutionGraph: update capability evolution trajectory
+        if let Ok(mut eg) = self.evolution_graph.lock() {
+            let cap_name = format!("evolve_{}", action);
+            let _ = eg.record_version(
+                &state.0,
+                &cap_name,
+                if success { quality_score } else { 0.0 },
+                0.0,
+            );
+        }
+
+        // 6. WorldModel: update environmental state cognition
+        if let Ok(wm) = self.world_model.register_entity(
+            &format!("action_{}", action),
+            crate::intelligence::world_model::EntityType::System,
+        ) {
+            let _ = wm;
+            let mut props = std::collections::HashMap::new();
+            props.insert("state_0".to_string(), state.0.clone());
+            props.insert("state_1".to_string(), state.1.clone());
+            props.insert("reward".to_string(), reward.to_string());
+            let _ = self
+                .world_model
+                .update_entity(&format!("action_{}", action), props);
+        }
+
         self.record_event(
             "evolve",
             None,
@@ -1013,6 +1166,15 @@ impl CapabilityBus {
             p.distributed_memory_peers = dmb.remote_peers;
             p.distributed_memory_shared = dmb.shared_entries;
 
+            // Skill evolution metrics
+            if let Ok(skills) = self.tool_bus.skill_registry_ref().lock() {
+                p.skill_evolution_count = skills
+                    .evolution_history
+                    .values()
+                    .map(|v| v.len())
+                    .sum::<usize>() as u32;
+            }
+
             p.clone()
         } else {
             CapabilityBusProfile::default()
@@ -1049,4 +1211,12 @@ pub struct DecisionOutput {
     pub recommended_mode: String,
     /// Phase 4: tools available for the selected agent
     pub available_tools: Vec<String>,
+}
+
+/// Current wall-clock time in milliseconds since Unix epoch.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }

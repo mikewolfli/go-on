@@ -439,7 +439,7 @@ impl HyperResilienceEngine {
         let level =
             if open_circuits > 0 && open_circuits > active_circuit_breakers.saturating_sub(1) {
                 DegradationLevel::Emergency
-            } else if open_circuits >= active_circuit_breakers / 2 {
+            } else if open_circuits > active_circuit_breakers / 2 {
                 DegradationLevel::Constrained
             } else if open_circuits > 0 || active_failovers > 0 {
                 DegradationLevel::Degraded

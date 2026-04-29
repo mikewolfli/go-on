@@ -33,6 +33,10 @@
 //! Phase 0 implementation — all governance components are wired into
 //! a single runner that CapabilityBus calls.
 
+use crate::fault_tolerance::{FaultToleranceConfig, FaultToleranceEngine, FaultToleranceProfile};
+use crate::governance::drift::drift_protection::{
+    DriftProfile, DriftProtectionConfig, DriftProtectionEngine,
+};
 use crate::governance::hardening::{
     BudgetTracker, GovernanceAction, IdempotencyCache, PolicyBundle, SandboxPolicy, TaskBudget,
 };
@@ -43,15 +47,19 @@ use crate::governance::review_controls::{
 };
 use crate::governance::runtime_controls::OnlineControllerState;
 use crate::governance::security_governor::{SecurityGovernor, SecurityGovernorConfig};
-use crate::governance::drift::drift_protection::{DriftProfile, DriftProtectionConfig, DriftProtectionEngine};
-use crate::orchestration::brain_loop::{BrainLoop, BrainLoopConfig, BrainLoopProfile};
 use crate::orchestration::artifact::{ArtifactLayer, ArtifactProfile};
+use crate::orchestration::brain_loop::{BrainLoop, BrainLoopConfig, BrainLoopProfile};
 use crate::orchestration::omnipotent::{OmnipotentMode, OmnipotentProfile};
 use crate::orchestration::promotion_plugin::PromotionRegistry;
-use crate::orchestration::token_layers::{estimate_cost, GateContext, TokenCostEstimate, TokenGateVerdict, TokenLayerChain};
 use crate::orchestration::r#loop::brain_loop::{
     BrainLoop as BrainLoopRunner, BrainLoopConfig as BrainLoopRunnerConfig,
     BrainLoopProfile as BrainLoopRunnerProfile,
+};
+use crate::orchestration::token_layers::{
+    estimate_cost, GateContext, TokenCostEstimate, TokenGateVerdict, TokenLayerChain,
+};
+use crate::resilience::hyper_resilience::{
+    HyperResilienceEngine, ResilienceConfig, ResilienceProfile,
 };
 
 use serde::{Deserialize, Serialize};
@@ -653,7 +661,10 @@ impl PolicyEvaluator {
         ]
         .into_iter()
         .collect();
-        if let Ok(sg_verdict) = self.security_governor.evaluate(&task_type_str, &actor, &context) {
+        if let Ok(sg_verdict) = self
+            .security_governor
+            .evaluate(&task_type_str, &actor, &context)
+        {
             if !sg_verdict.allowed {
                 return PolicyVerdict::Deny(PolicyViolation {
                     kind: "security_policy".to_string(),
@@ -778,6 +789,10 @@ pub struct HarnessBus {
     pub promotion_registry: Arc<Mutex<PromotionRegistry>>,
     pub token_chain: Arc<Mutex<TokenLayerChain>>,
     pub brain_runner: Arc<BrainLoopRunner>,
+    /// Hyper-resilience engine — circuit breakers, failover, self-healing (F-GAP-27)
+    pub resilience_engine: Arc<HyperResilienceEngine>,
+    /// Fault tolerance engine — node isolation, heartbeat detection (F-GAP-28)
+    pub fault_tolerance: Arc<FaultToleranceEngine>,
 }
 
 impl HarnessBus {
@@ -810,8 +825,10 @@ impl HarnessBus {
             artifact_layer: Arc::new(ArtifactLayer::new()),
             omnipotent_mode: Arc::new(OmnipotentMode::new()),
             promotion_registry: Arc::new(Mutex::new(PromotionRegistry::new())),
-                    token_chain: Arc::new(Mutex::new(TokenLayerChain::new())),
-                    brain_runner: Arc::new(BrainLoopRunner::new(BrainLoopRunnerConfig::default())),
+            token_chain: Arc::new(Mutex::new(TokenLayerChain::new())),
+            brain_runner: Arc::new(BrainLoopRunner::new(BrainLoopRunnerConfig::default())),
+            resilience_engine: Arc::new(HyperResilienceEngine::new(ResilienceConfig::default())),
+            fault_tolerance: Arc::new(FaultToleranceEngine::new(FaultToleranceConfig::default())),
         }
     }
 
@@ -977,7 +994,10 @@ impl HarnessBus {
 
     /// Number of registered promotion plugins.
     pub fn promotion_plugin_count(&self) -> usize {
-        self.promotion_registry.lock().map(|r| r.plugin_count()).unwrap_or(0)
+        self.promotion_registry
+            .lock()
+            .map(|r| r.plugin_count())
+            .unwrap_or(0)
     }
 
     /// Evaluate a token gate request through the L0-L5 chain.
@@ -993,8 +1013,23 @@ impl HarnessBus {
         self.brain_runner.profile()
     }
 
+    /// Hyper-resilience profile snapshot (F-GAP-27)
+    pub fn resilience_profile(&self) -> ResilienceProfile {
+        self.resilience_engine.profile()
+    }
+
+    /// Fault tolerance profile snapshot (F-GAP-28)
+    pub fn fault_tolerance_profile(&self) -> FaultToleranceProfile {
+        self.fault_tolerance.profile()
+    }
+
     /// Estimate token cost for a given input/output token count pair at a specified rate.
-    pub fn token_cost_estimate(&self, input: u64, output: u64, cost_per_1k: f64) -> TokenCostEstimate {
+    pub fn token_cost_estimate(
+        &self,
+        input: u64,
+        output: u64,
+        cost_per_1k: f64,
+    ) -> TokenCostEstimate {
         estimate_cost(input, output, cost_per_1k)
     }
 

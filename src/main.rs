@@ -54,6 +54,7 @@
 mod acp;
 mod agents;
 mod core;
+mod fault_tolerance;
 mod governance;
 mod i18n;
 mod intelligence;

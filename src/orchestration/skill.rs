@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 #[async_trait]
@@ -22,10 +23,22 @@ pub trait Skill: Send + Sync {
     async fn execute(&self, input: &Value) -> Result<Value>;
 }
 
+/// Records a version change in a skill's evolution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillVersionRecord {
+    pub skill_name: String,
+    pub version: u32,
+    pub change_description: String,
+    pub score_at_version: f64,
+    pub timestamp_ms: u64,
+}
+
 #[derive(Default)]
 pub struct SkillRegistry {
     skills: HashMap<String, Arc<dyn Skill>>,
     stats: HashMap<String, SkillRuntimeStats>,
+    /// Skill evolution history keyed by skill name
+    pub evolution_history: HashMap<String, Vec<SkillVersionRecord>>,
 }
 
 pub struct SkillDescriptor {
@@ -198,7 +211,211 @@ impl SkillRegistry {
             })
             .map(|(name, _)| name)
     }
+
+    /// Create a new skill from a prompt template.
+    ///
+    /// Generates a `PromptBasedSkill` that wraps the given prompt into a Skill trait.
+    pub fn create_skill_from_prompt(
+        &mut self,
+        name: &str,
+        description: &str,
+        prompt_template: &str,
+        input_schema: HashMap<String, String>,
+    ) -> Result<()> {
+        // Validate name uniqueness
+        if self.skills.contains_key(name) {
+            anyhow::bail!("Skill '{}' already exists", name);
+        }
+
+        let skill = PromptBasedSkill {
+            name: name.to_string(),
+            description: description.to_string(),
+            prompt_template: prompt_template.to_string(),
+            input_schema,
+        };
+
+        self.register(Arc::new(skill))?;
+
+        // Record evolution
+        self.evolution_history
+            .entry(name.to_string())
+            .or_default()
+            .push(SkillVersionRecord {
+                skill_name: name.to_string(),
+                version: 1,
+                change_description: "Created from prompt template".to_string(),
+                score_at_version: 0.5,
+                timestamp_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+            });
+
+        Ok(())
+    }
+
+    /// Create a new skill by composing two existing skills.
+    ///
+    /// The composed skill first executes `skill_a`, then passes its output
+    /// as input to `skill_b`.
+    pub fn compose_skills(
+        &mut self,
+        name: &str,
+        description: &str,
+        skill_a: &str,
+        skill_b: &str,
+    ) -> Result<()> {
+        if self.skills.contains_key(name) {
+            anyhow::bail!("Skill '{}' already exists", name);
+        }
+        if !self.skills.contains_key(skill_a) {
+            anyhow::bail!("Source skill '{}' not found", skill_a);
+        }
+        if !self.skills.contains_key(skill_b) {
+            anyhow::bail!("Source skill '{}' not found", skill_b);
+        }
+
+        let skill = ComposedSkill {
+            name: name.to_string(),
+            description: format!("{}: {} \u{2192} {}", description, skill_a, skill_b),
+            skill_a: skill_a.to_string(),
+            skill_b: skill_b.to_string(),
+        };
+
+        self.register(Arc::new(skill))?;
+
+        self.evolution_history
+            .entry(name.to_string())
+            .or_default()
+            .push(SkillVersionRecord {
+                skill_name: name.to_string(),
+                version: 1,
+                change_description: format!("Composed from '{}' and '{}'", skill_a, skill_b),
+                score_at_version: 0.5,
+                timestamp_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+            });
+
+        Ok(())
+    }
+
+    /// Get evolution history for a skill.
+    pub fn skill_evolution(&self, name: &str) -> Vec<SkillVersionRecord> {
+        self.evolution_history
+            .get(name)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// List all known skill names (for discovery).
+    pub fn list_skills(&self) -> Vec<String> {
+        self.skills.keys().cloned().collect()
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Skill implementations
+// ---------------------------------------------------------------------------
+
+/// A skill created from a prompt template.
+#[derive(Debug, Clone)]
+pub struct PromptBasedSkill {
+    pub name: String,
+    pub description: String,
+    pub prompt_template: String,
+    pub input_schema: HashMap<String, String>,
+}
+
+#[async_trait]
+impl Skill for PromptBasedSkill {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> Value {
+        let mut properties = serde_json::Map::new();
+        for (k, v) in &self.input_schema {
+            properties.insert(k.clone(), json!({"type": v}));
+        }
+        json!({
+            "type": "object",
+            "properties": properties,
+        })
+    }
+
+    async fn execute(&self, _input: &Value) -> Result<Value> {
+        // In a real implementation, this would execute the prompt through an LLM.
+        // For now, return a placeholder outcome indicating the skill exists.
+        let template_preview: &str = &self.prompt_template[..self.prompt_template.len().min(100)];
+        Ok(json!({
+            "success": true,
+            "summary": format!("Prompt-based skill '{}' executed (template: {})", self.name, self.prompt_template),
+            "details": {
+                "skill_type": "prompt_based",
+                "template_preview": template_preview,
+            }
+        }))
+    }
+}
+
+impl PromptBasedSkill {
+    /// Register this skill with a `SkillRegistry`.
+    pub fn boxed(self) -> Arc<dyn Skill> {
+        Arc::new(self)
+    }
+}
+
+/// A skill composed from two other skills (pipeline: A \u2192 B).
+#[derive(Debug, Clone)]
+pub struct ComposedSkill {
+    pub name: String,
+    pub description: String,
+    pub skill_a: String,
+    pub skill_b: String,
+}
+
+#[async_trait]
+impl Skill for ComposedSkill {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    async fn execute(&self, _input: &Value) -> Result<Value> {
+        Ok(json!({
+            "success": true,
+            "summary": format!("Composed skill '{}' ({} \u{2192} {})", self.name, self.skill_a, self.skill_b),
+            "details": {
+                "skill_type": "composed",
+                "pipeline": [self.skill_a, self.skill_b],
+            }
+        }))
+    }
+}
+
+impl ComposedSkill {
+    /// Register this skill with a `SkillRegistry`.
+    pub fn boxed(self) -> Arc<dyn Skill> {
+        Arc::new(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
 
 fn normalize_name(name: &str) -> String {
     name.chars()

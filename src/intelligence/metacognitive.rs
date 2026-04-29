@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 // ── Reflection level ────────────────────────────────────────────────────────
@@ -165,7 +166,7 @@ pub struct MetacognitiveProfile {
 
 // ── Internal state ──────────────────────────────────────────────────────────
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Inner {
     config: MetacognitiveConfig,
     observations: Vec<ExecutionObservation>,
@@ -624,6 +625,121 @@ impl MetacognitiveController {
             total_reports,
             avg_confidence,
         }
+    }
+
+    // ── RL Feedback ──────────────────────────────────────────────────────────
+
+    /// Generate an RL-oriented reflection report that quantifies how observations
+    /// should influence the reward function and exploration strategy.
+    ///
+    /// Returns (adjusted_reward_multiplier, suggested_exploration_rate, key_insights).
+    pub fn reflect_for_rl(&self) -> (f64, f64, Vec<String>) {
+        let state = match self.inner.lock() {
+            Ok(s) => Inner::clone(&s),
+            Err(_) => return (1.0, 0.1, vec!["Lock poisoned".to_string()]),
+        };
+
+        if state.observations.is_empty() {
+            return (1.0, 0.1, vec!["No observations yet".to_string()]);
+        }
+
+        let total = state.observations.len();
+        let failures = state
+            .observations
+            .iter()
+            .filter(|o| o.severity == "high" || o.severity == "critical")
+            .count();
+        let success_rate = if total > 0 {
+            (total - failures) as f64 / total as f64
+        } else {
+            1.0
+        };
+
+        let mut insights: Vec<String> = Vec::new();
+
+        // Adjust reward multiplier based on recent success rate
+        let reward_mult = if success_rate < 0.3 {
+            insights.push(format!(
+                "Low success rate ({:.2}): consider increasing exploration",
+                success_rate
+            ));
+            0.5 // Decrease reward signal when failing often (focus on exploration)
+        } else if success_rate > 0.9 {
+            insights.push(format!(
+                "High success rate ({:.2}): consider reducing exploration",
+                success_rate
+            ));
+            1.5 // Increase reward signal when succeeding (focus on exploitation)
+        } else {
+            1.0
+        };
+
+        // Suggest exploration rate based on observation diversity
+        let unique_actions: HashSet<&str> = state
+            .observations
+            .iter()
+            .map(|o| o.observation_type.as_str())
+            .collect();
+        let diversity = unique_actions.len() as f64 / total.max(1) as f64;
+        let exploration_rate = if diversity < 0.2 {
+            insights.push(format!(
+                "Low action diversity ({:.2}): increase exploration rate",
+                diversity
+            ));
+            0.3
+        } else if success_rate < 0.4 {
+            insights.push(
+                "Frequent failures detected: increase exploration to discover better strategies"
+                    .to_string(),
+            );
+            0.25
+        } else {
+            0.1
+        };
+
+        // Detect recurring failure patterns
+        let mut failure_patterns: HashMap<String, usize> = HashMap::new();
+        for obs in &state.observations {
+            if obs.severity == "high" || obs.severity == "critical" {
+                *failure_patterns
+                    .entry(obs.observation_type.clone())
+                    .or_insert(0) += 1;
+            }
+        }
+        for (category, count) in failure_patterns.iter().filter(|(_, c)| **c >= 3) {
+            insights.push(format!(
+                "Recurring failure pattern in '{}' ({} times): consider avoiding this action",
+                category, count
+            ));
+        }
+
+        // Check if corrective actions are addressing root causes
+        if state.actions.len() > state.observations.len() / 3 {
+            insights.push(format!(
+                "High corrective action rate ({}/{}): system may be in a correction loop",
+                state.actions.len(),
+                total
+            ));
+        }
+
+        (reward_mult, exploration_rate, insights)
+    }
+
+    /// Merge metacognitive insights into a structured feedback payload
+    /// that can be sent to the CapabilityBus's evolve() method.
+    pub fn generate_evolve_feedback(&self) -> serde_json::Value {
+        let (reward_mult, exploration_rate, insights) = self.reflect_for_rl();
+
+        serde_json::json!({
+            "source": "metacognitive",
+            "reward_multiplier": reward_mult,
+            "suggested_exploration_rate": exploration_rate,
+            "insights": insights,
+            "timestamp_ms": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        })
     }
 }
 

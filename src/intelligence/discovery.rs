@@ -160,6 +160,7 @@ impl DiscoveryCenter {
         }
 
         patterns.insert(pattern.name.clone(), pattern);
+        drop(patterns); // release write lock before refresh_profile
         self.refresh_profile();
         Ok(())
     }
@@ -194,6 +195,7 @@ impl DiscoveryCenter {
         entry.last_used_ms = now;
 
         entries.push(entry);
+        drop(entries); // release lock before refresh_profile
         self.refresh_profile();
         Ok(id)
     }
@@ -283,6 +285,156 @@ impl DiscoveryCenter {
         }
     }
 
+    /// Automatically extract and register solution patterns from high-performing entries.
+    ///
+    /// Scans all entries with success_rate above `min_success_rate`, clusters them
+    /// by shared tags/problem_pattern, and creates/updates SolutionPattern entries
+    /// for clusters that meet the `min_occurrences` threshold.
+    pub fn extract_patterns(&self, min_success_rate: f64, min_occurrences: usize) -> Vec<String> {
+        let entries = match self.entries.lock() {
+            Ok(e) => e.clone(),
+            Err(_) => return Vec::new(),
+        };
+
+        // Filter high-quality entries
+        let candidates: Vec<_> = entries
+            .iter()
+            .filter(|e| e.success_rate >= min_success_rate && e.total_attempts > 0)
+            .collect();
+
+        if candidates.len() < min_occurrences {
+            return Vec::new();
+        }
+
+        // Cluster by shared tags (entries sharing 2+ tags form a cluster)
+        let mut clusters: Vec<Vec<&DiscoveryEntry>> = Vec::new();
+        for candidate in &candidates {
+            let mut added = false;
+            for cluster in clusters.iter_mut() {
+                let shared_tags: usize = cluster[0]
+                    .applicability_tags
+                    .iter()
+                    .filter(|t| candidate.applicability_tags.contains(t))
+                    .count();
+                if shared_tags >= 2 {
+                    cluster.push(candidate);
+                    added = true;
+                    break;
+                }
+            }
+            if !added {
+                clusters.push(vec![candidate]);
+            }
+        }
+
+        // Generate patterns for clusters above threshold
+        let mut generated: Vec<String> = Vec::new();
+        for cluster in clusters.iter().filter(|c| c.len() >= min_occurrences) {
+            // Find the most common problem pattern
+            let mut pattern_counts: HashMap<&str, usize> = HashMap::new();
+            let mut all_tags: Vec<&str> = Vec::new();
+            for entry in cluster {
+                *pattern_counts
+                    .entry(entry.problem_pattern.as_str())
+                    .or_insert(0) += 1;
+                for tag in &entry.applicability_tags {
+                    if !all_tags.contains(&tag.as_str()) {
+                        all_tags.push(tag.as_str());
+                    }
+                }
+            }
+            let best_pattern = pattern_counts
+                .into_iter()
+                .max_by_key(|(_, count)| *count)
+                .map(|(p, _)| p.to_string())
+                .unwrap_or_else(|| "auto_extracted".to_string());
+
+            let avg_success =
+                cluster.iter().map(|e| e.success_rate).sum::<f64>() / cluster.len() as f64;
+            let category = cluster[0]
+                .applicability_tags
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "general".to_string());
+
+            let pattern = SolutionPattern {
+                name: format!("auto_{}_{}", best_pattern, generated.len()),
+                description: format!(
+                    "Auto-extracted from {} entries (avg success: {:.2})",
+                    cluster.len(),
+                    avg_success
+                ),
+                category,
+                complexity: 1.0 - avg_success,
+                tags: all_tags.iter().map(|t| t.to_string()).collect(),
+            };
+
+            // Register if not duplicate
+            let patterns = self.patterns.read().map(|p| p.clone()).unwrap_or_default();
+            if !patterns.contains_key(&pattern.name) {
+                if self.register_pattern(pattern).is_ok() {
+                    generated.push(best_pattern);
+                }
+            }
+        }
+
+        generated
+    }
+
+    /// Generate abstract knowledge by cross-referencing patterns across categories.
+    ///
+    /// Returns a human-readable summary of discovered cross-domain insights.
+    pub fn abstract_knowledge(&self) -> Vec<String> {
+        let patterns = match self.patterns.read() {
+            Ok(p) => p.clone(),
+            Err(_) => return Vec::new(),
+        };
+
+        let mut insights: Vec<String> = Vec::new();
+
+        // Group patterns by category
+        let mut by_category: HashMap<String, Vec<&SolutionPattern>> = HashMap::new();
+        for (_, pattern) in &patterns {
+            by_category
+                .entry(pattern.category.clone())
+                .or_default()
+                .push(pattern);
+        }
+
+        // Cross-category insight: patterns with similar tags across categories
+        let all_patterns: Vec<&SolutionPattern> = patterns.values().collect();
+        for (i, pa) in all_patterns.iter().enumerate() {
+            for pb in all_patterns.iter().skip(i + 1) {
+                if pa.category != pb.category {
+                    let shared: Vec<&String> =
+                        pa.tags.iter().filter(|t| pb.tags.contains(t)).collect();
+                    if shared.len() >= 2 {
+                        insights.push(format!(
+                            "Cross-domain insight: patterns '{}' ({}) and '{}' ({}) share tags: {:?}",
+                            pa.name, pa.category, pb.name, pb.category, shared
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Category-level abstraction
+        for (category, pats) in &by_category {
+            if pats.len() >= 3 {
+                let avg_complexity: f64 =
+                    pats.iter().map(|p| p.complexity).sum::<f64>() / pats.len() as f64;
+                insights.push(format!(
+                    "Category '{}' has {} patterns (avg complexity: {:.2})",
+                    category,
+                    pats.len(),
+                    avg_complexity
+                ));
+            }
+        }
+
+        insights
+    }
+
     /// Record the outcome of an attempt associated with a discovery entry.
     ///
     /// Updates the entry's success rate (`successful_attempts / total_attempts`)
@@ -304,6 +456,7 @@ impl DiscoveryCenter {
                 0.0
             };
             entry.last_used_ms = now_ms();
+            drop(entries); // release lock before refresh_profile
             self.refresh_profile();
         }
     }

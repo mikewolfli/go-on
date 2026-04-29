@@ -12,24 +12,26 @@
 //! - **Consciousness Metrics**: BLUE38 F-GAP-25 Agency Consciousness Metrics (M10)
 
 pub mod adaptive_selector;
-pub mod metacognitive;
 pub mod consensus;
 pub mod discovery;
 pub mod matcher;
+pub mod metacognitive;
 
 pub mod capability_bus;
 pub mod capability_graph;
 pub mod consciousness;
 pub mod evaluation;
+pub mod learning_center;
 pub mod model_selector;
 pub mod quality_models;
 pub mod reinforcement;
 pub mod reputation;
 pub mod token_cache;
 pub mod verification;
-pub mod learning_center;
 
 pub mod self_model;
+
+pub mod continuous_learning;
 
 pub mod evolution_graph;
 pub mod federated_rl;

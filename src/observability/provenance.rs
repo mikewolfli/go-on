@@ -75,14 +75,16 @@ impl ProvenanceLedger {
             .unwrap_or_default()
     }
 
-    /// Build a simple digest of the input value (SHA-256 hex, first 16 chars)
+    /// Build a digest of the input value (SHA-256 hex).
+    /// Uses the `sha2` crate to produce a deterministic cryptographic hash.
     pub fn digest(value: &serde_json::Value) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use sha2::{Digest, Sha256};
         let s = value.to_string();
-        let mut hasher = DefaultHasher::new();
-        s.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        let hash = Sha256::digest(s.as_bytes());
+        hash.iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .concat()
     }
 
     pub fn len(&self) -> usize {
@@ -94,6 +96,85 @@ impl ProvenanceLedger {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Compute a content-digest of the entire ledger (SHA-256 hex).
+    pub fn ledger_digest(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let combined: String = self
+            .inner
+            .lock()
+            .map(|inner| {
+                inner
+                    .entries
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "{}|{}|{}|{}|{}",
+                            e.id, e.task_id, e.phase, e.tool, e.timestamp_ms
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("::")
+            })
+            .unwrap_or_default();
+        let hash = Sha256::digest(combined.as_bytes());
+        hash.iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .concat()
+    }
+
+    /// Query entries by phase (action type).
+    pub fn entries_by_phase(&self, phase: &str) -> Vec<ProvenanceEntry> {
+        self.inner
+            .lock()
+            .map(|inner| {
+                inner
+                    .entries
+                    .iter()
+                    .filter(|e| e.phase == phase)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Query entries by tool (component).
+    pub fn entries_by_tool(&self, tool: &str) -> Vec<ProvenanceEntry> {
+        self.inner
+            .lock()
+            .map(|inner| {
+                inner
+                    .entries
+                    .iter()
+                    .filter(|e| e.tool == tool)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Query entries within a time window (inclusive, in milliseconds since Unix epoch).
+    pub fn entries_between(&self, start_ms: u64, end_ms: u64) -> Vec<ProvenanceEntry> {
+        self.inner
+            .lock()
+            .map(|inner| {
+                inner
+                    .entries
+                    .iter()
+                    .filter(|e| e.timestamp_ms >= start_ms && e.timestamp_ms <= end_ms)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Clear all entries (for testing / reset).
+    pub fn clear(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.entries.clear();
+        }
     }
 }
 
@@ -168,4 +249,313 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn make_test_entry(
+        task_id: &str,
+        phase: &str,
+        agent: &str,
+        tool: &str,
+        input: &serde_json::Value,
+        output: &serde_json::Value,
+        upstream_ids: Vec<String>,
+    ) -> ProvenanceEntry {
+        make_entry(task_id, phase, agent, tool, input, output, upstream_ids)
+    }
+
+    #[test]
+    fn test_append_and_length() {
+        let ledger = ProvenanceLedger::new(100);
+        let entry = make_test_entry(
+            "task1",
+            "exec",
+            "agent1",
+            "component",
+            &json!({"file": "x"}),
+            &json!({"result": "ok"}),
+            vec![],
+        );
+        ledger.append(entry);
+        assert_eq!(ledger.len(), 1);
+    }
+
+    #[test]
+    fn test_entries_for_task() {
+        let ledger = ProvenanceLedger::new(100);
+        ledger.append(make_test_entry(
+            "task1",
+            "exec",
+            "agent1",
+            "comp",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+        ledger.append(make_test_entry(
+            "task2",
+            "exec",
+            "agent1",
+            "comp",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+        assert_eq!(ledger.entries_for_task("task1").len(), 1);
+        assert_eq!(ledger.entries_for_task("task3").len(), 0);
+    }
+
+    #[test]
+    fn test_ledger_digest_is_consistent() {
+        let ledger = ProvenanceLedger::new(100);
+        ledger.append(make_test_entry(
+            "t1",
+            "exec",
+            "a1",
+            "comp",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+        let d1 = ledger.ledger_digest();
+        let d2 = ledger.ledger_digest();
+        assert_eq!(d1, d2, "ledger_digest should be deterministic");
+    }
+
+    #[test]
+    fn test_append_bounded_capacity() {
+        let ledger = ProvenanceLedger::new(5);
+        for i in 0..10 {
+            ledger.append(make_test_entry(
+                &format!("t{i}"),
+                "exec",
+                "agent",
+                "comp",
+                &json!({}),
+                &json!({}),
+                vec![],
+            ));
+        }
+        assert_eq!(ledger.len(), 5, "should be bounded by capacity");
+    }
+
+    #[test]
+    fn test_multiple_components_tracked() {
+        let ledger = ProvenanceLedger::new(100);
+        ledger.append(make_test_entry(
+            "t1",
+            "read",
+            "a1",
+            "reader",
+            &json!({"file": "x.rs"}),
+            &json!({"lines": 100}),
+            vec![],
+        ));
+        ledger.append(make_test_entry(
+            "t1",
+            "write",
+            "a1",
+            "writer",
+            &json!({"file": "x.rs"}),
+            &json!({"lines": 120}),
+            vec![],
+        ));
+        let entries = ledger.entries_for_task("t1");
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|e| e.tool == "reader"));
+        assert!(entries.iter().any(|e| e.tool == "writer"));
+    }
+
+    #[test]
+    fn test_entries_by_phase() {
+        let ledger = ProvenanceLedger::new(100);
+        ledger.append(make_test_entry(
+            "t1",
+            "read",
+            "a1",
+            "tool1",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+        ledger.append(make_test_entry(
+            "t2",
+            "write",
+            "a1",
+            "tool1",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+        ledger.append(make_test_entry(
+            "t3",
+            "read",
+            "a2",
+            "tool2",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+        assert_eq!(ledger.entries_by_phase("read").len(), 2);
+        assert_eq!(ledger.entries_by_phase("write").len(), 1);
+        assert_eq!(ledger.entries_by_phase("delete").len(), 0);
+    }
+
+    #[test]
+    fn test_entries_by_tool() {
+        let ledger = ProvenanceLedger::new(100);
+        ledger.append(make_test_entry(
+            "t1",
+            "exec",
+            "a1",
+            "scanner",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+        ledger.append(make_test_entry(
+            "t2",
+            "exec",
+            "a1",
+            "scanner",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+        ledger.append(make_test_entry(
+            "t3",
+            "exec",
+            "a2",
+            "formatter",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+        assert_eq!(ledger.entries_by_tool("scanner").len(), 2);
+        assert_eq!(ledger.entries_by_tool("formatter").len(), 1);
+        assert_eq!(ledger.entries_by_tool("unknown").len(), 0);
+    }
+
+    #[test]
+    fn test_entries_between() {
+        let ledger = ProvenanceLedger::new(100);
+        // Use a fixed timestamp by overriding the ledger's entries directly
+        // Append normally first, then modify timestamps for deterministic testing
+        ledger.append(make_test_entry(
+            "t1",
+            "exec",
+            "a1",
+            "tool1",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+        ledger.append(make_test_entry(
+            "t2",
+            "exec",
+            "a1",
+            "tool1",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+
+        // Get timestamps from the actual entries (they're both ~now)
+        let entries = ledger.entries_for_task("t1");
+        let ts = entries[0].timestamp_ms;
+
+        // Both entries should be within a window around now
+        let found = ledger.entries_between(ts - 1000, ts + 1000);
+        assert_eq!(found.len(), 2, "both entries should be in the time window");
+
+        let found_none = ledger.entries_between(0, ts.checked_sub(100_000).unwrap_or(0));
+        assert_eq!(found_none.len(), 0, "no entries should match a past window");
+    }
+
+    #[test]
+    fn test_clear() {
+        let ledger = ProvenanceLedger::new(100);
+        ledger.append(make_test_entry(
+            "t1",
+            "exec",
+            "a1",
+            "comp",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+        assert_eq!(ledger.len(), 1);
+        ledger.clear();
+        assert_eq!(ledger.len(), 0);
+        assert!(ledger.is_empty());
+    }
+
+    #[test]
+    fn test_digest_different_inputs_differ() {
+        // The static digest() should produce different hashes for different values
+        let d1 = ProvenanceLedger::digest(&json!({"a": 1}));
+        let d2 = ProvenanceLedger::digest(&json!({"a": 2}));
+        assert_ne!(d1, d2, "different inputs should produce different digests");
+    }
+
+    #[test]
+    fn test_digest_same_input_consistent() {
+        let d1 = ProvenanceLedger::digest(&json!({"hello": "world"}));
+        let d2 = ProvenanceLedger::digest(&json!({"hello": "world"}));
+        assert_eq!(d1, d2, "same inputs should produce identical digests");
+    }
+
+    #[test]
+    fn test_ledger_digest_changes_after_append() {
+        let ledger = ProvenanceLedger::new(100);
+        let d0 = ledger.ledger_digest();
+        ledger.append(make_test_entry(
+            "t1",
+            "exec",
+            "a1",
+            "comp",
+            &json!({}),
+            &json!({}),
+            vec![],
+        ));
+        let d1 = ledger.ledger_digest();
+        assert_ne!(d0, d1, "digest should change after appending an entry");
+    }
+
+    #[test]
+    fn test_default_capacity() {
+        let ledger = ProvenanceLedger::default();
+        assert_eq!(ledger.len(), 0);
+        // Insert many entries to verify default capacity (2000) works
+        for i in 0..2500 {
+            ledger.append(make_test_entry(
+                &format!("t{i}"),
+                "exec",
+                "agent",
+                "comp",
+                &json!({}),
+                &json!({}),
+                vec![],
+            ));
+        }
+        assert_eq!(ledger.len(), 2000);
+    }
+
+    #[test]
+    fn test_empty_ledger_properties() {
+        let ledger = ProvenanceLedger::new(10);
+        assert!(ledger.is_empty());
+        assert_eq!(ledger.len(), 0);
+        assert_eq!(ledger.entries_for_task("anything").len(), 0);
+        assert_eq!(ledger.entries_by_phase("anything").len(), 0);
+        assert_eq!(ledger.entries_by_tool("anything").len(), 0);
+        assert!(ledger.entries_between(0, u64::MAX).is_empty());
+        // Digest should still work on empty ledger
+        let digest = ledger.ledger_digest();
+        assert!(!digest.is_empty());
+    }
 }

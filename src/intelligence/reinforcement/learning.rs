@@ -408,7 +408,87 @@ impl ExperienceKnowledgeBase {
 
 // ── Q-Learning agent ───────────────────────────────────────────────────────
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+
+/// A replay buffer that stores experiences for batch learning.
+#[derive(Debug, Clone)]
+pub struct ReplayBuffer {
+    capacity: usize,
+    buffer: VecDeque<(String, String, String, f64, String, String)>,
+}
+
+impl ReplayBuffer {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            buffer: VecDeque::with_capacity(capacity.min(10000)),
+        }
+    }
+
+    pub fn push(
+        &mut self,
+        state: (&str, &str),
+        action: &str,
+        reward: f64,
+        next_state: (&str, &str),
+    ) {
+        if self.buffer.len() >= self.capacity {
+            self.buffer.pop_front();
+        }
+        self.buffer.push_back((
+            state.0.to_string(),
+            state.1.to_string(),
+            action.to_string(),
+            reward,
+            next_state.0.to_string(),
+            next_state.1.to_string(),
+        ));
+    }
+
+    pub fn sample(
+        &self,
+        batch_size: usize,
+    ) -> Vec<((String, String), String, f64, (String, String))> {
+        let len = self.buffer.len();
+        if len == 0 {
+            return Vec::new();
+        }
+        let count = batch_size.min(len);
+        // Use hash-based indices for deterministic sampling (no rand dependency)
+        let mut indices: Vec<usize> = (0..len).collect();
+        // Simple Fisher-Yates partial shuffle using the existing simple_random functions
+        for i in (0..count).rev() {
+            let j = (simple_random_u64() as usize) % (i + 1);
+            indices.swap(i, j);
+        }
+        indices[..count]
+            .iter()
+            .map(|&idx| {
+                let s = &self.buffer[idx];
+                (
+                    (s.0.clone(), s.1.clone()),
+                    s.2.clone(),
+                    s.3,
+                    (s.4.clone(), s.5.clone()),
+                )
+            })
+            .collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+}
+
+impl Default for ReplayBuffer {
+    fn default() -> Self {
+        Self::new(10000)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RlTaskExecutionMetrics {
@@ -424,6 +504,9 @@ pub struct QLearningAgent {
     pub learning_rate: f64,
     pub discount_factor: f64,
     pub exploration_rate: f64,
+    /// Experience replay buffer
+    #[serde(skip)]
+    pub replay_buffer: ReplayBuffer,
 }
 
 impl Default for QLearningAgent {
@@ -433,6 +516,7 @@ impl Default for QLearningAgent {
             learning_rate: 0.1,
             discount_factor: 0.9,
             exploration_rate: 1.0,
+            replay_buffer: ReplayBuffer::new(10000),
         }
     }
 }
@@ -493,6 +577,21 @@ impl QLearningAgent {
 
     pub fn decay_exploration(&mut self, decay_rate: f64) {
         self.exploration_rate = (self.exploration_rate * decay_rate).max(0.01);
+    }
+
+    /// Perform a batch update using sampled experiences from the replay buffer.
+    pub fn batch_update(&mut self, batch_size: usize, _gamma: f64, _alpha: f64) -> usize {
+        if self.replay_buffer.is_empty() {
+            return 0;
+        }
+        let batch = self
+            .replay_buffer
+            .sample(batch_size.min(self.replay_buffer.len()));
+        let count = batch.len();
+        for (state, action, reward, next_state) in batch {
+            self.update(&state, &action, reward, &next_state);
+        }
+        count
     }
 }
 
@@ -560,4 +659,76 @@ fn simple_random_u64() -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     nanos.hash(&mut hasher);
     hasher.finish()
+}
+
+#[cfg(test)]
+mod qlearning_tests {
+    use super::*;
+
+    #[test]
+    fn test_new_agent_empty() {
+        let agent = QLearningAgent::default();
+        assert!(agent.q_table.is_empty());
+    }
+
+    #[test]
+    fn test_choose_action_returns_valid_action() {
+        let mut agent = QLearningAgent::default();
+        // Add a Q-value for a known state-action pair
+        agent
+            .q_table
+            .entry(("s1".to_string(), "s1".to_string()))
+            .or_default()
+            .insert("action_a".to_string(), 1.0);
+        let action = agent.choose_action(
+            &("s1".to_string(), "s1".to_string()),
+            &["action_a".to_string(), "action_b".to_string()],
+        );
+        assert!(action == Some("action_a".to_string()) || action == Some("action_b".to_string()));
+    }
+
+    #[test]
+    fn test_update_adds_entry() {
+        let mut agent = QLearningAgent::default();
+        agent.update(
+            &("s1".to_string(), "s1".to_string()),
+            "action_a",
+            1.0,
+            &("s2".to_string(), "s2".to_string()),
+        );
+        assert!(agent
+            .q_table
+            .contains_key(&("s1".to_string(), "s1".to_string())));
+    }
+
+    #[test]
+    fn test_decay_exploration_reduces_epsilon() {
+        let mut agent = QLearningAgent::default();
+        let initial = agent.exploration_rate;
+        agent.decay_exploration(0.99);
+        assert!(agent.exploration_rate < initial);
+    }
+
+    #[test]
+    fn test_replay_buffer_push_and_sample() {
+        let mut buf = ReplayBuffer::new(100);
+        buf.push(("s1", "t1"), "a1", 1.0, ("s2", "t2"));
+        buf.push(("s2", "t2"), "a2", 0.5, ("s3", "t3"));
+        assert_eq!(buf.len(), 2);
+        let samples = buf.sample(2);
+        assert_eq!(samples.len(), 2);
+    }
+
+    #[test]
+    fn test_batch_update_processes_samples() {
+        let mut agent = QLearningAgent::default();
+        agent
+            .replay_buffer
+            .push(("s1", "t1"), "a1", 1.0, ("s2", "t2"));
+        agent
+            .replay_buffer
+            .push(("s2", "t2"), "a2", 0.5, ("s3", "t3"));
+        let count = agent.batch_update(5, 0.9, 0.1);
+        assert_eq!(count, 2);
+    }
 }
