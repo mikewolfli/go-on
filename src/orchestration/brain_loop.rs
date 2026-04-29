@@ -234,7 +234,15 @@ impl BrainLoop {
             .steps
             .iter()
             .position(|s| s.id == step_id)
-            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.step_not_found", &[("id", step_id), ("plan_id", plan_id)])))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tf(
+                        "error.step_not_found",
+                        &[("id", step_id), ("plan_id", plan_id)]
+                    )
+                )
+            })?;
 
         if plan.steps[step_idx].status == StepStatus::Done {
             inner.plans.insert(plan_id.to_string(), plan);
@@ -298,7 +306,15 @@ impl BrainLoop {
             .steps
             .iter()
             .position(|s| s.id == step_id)
-            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.step_not_found", &[("id", step_id), ("plan_id", plan_id)])))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tf(
+                        "error.step_not_found",
+                        &[("id", step_id), ("plan_id", plan_id)]
+                    )
+                )
+            })?;
 
         let started = plan.steps[step_idx].started_ms;
 

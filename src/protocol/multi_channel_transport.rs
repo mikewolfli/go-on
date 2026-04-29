@@ -355,10 +355,8 @@ impl MultiChannelTransport {
                         retry_count: retry_count + 1,
                     };
                     // Record retry delay for downstream consumers.
-                    msg.headers.insert(
-                        "x-retry-after-ms".to_string(),
-                        retry_delay_ms.to_string(),
-                    );
+                    msg.headers
+                        .insert("x-retry-after-ms".to_string(), retry_delay_ms.to_string());
                     queue.push_back(msg);
                     retry_scheduled = true;
                 } else {

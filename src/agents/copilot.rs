@@ -18,10 +18,10 @@ use tracing::warn;
 
 use crate::agent::{Agent, Message};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
-use crate::i18n::runtime::tf;
 use crate::agents::{
     option_f64, option_string, option_u64, principles_to_text, stream_sse_to_sender,
 };
+use crate::i18n::runtime::tf;
 
 const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
 const COPILOT_COMPLETIONS_URL: &str = "https://api.githubcopilot.com/chat/completions";
@@ -79,12 +79,8 @@ impl CopilotAgent {
         }
 
         // Slow path: fetch a new token.
-        let github_token = std::env::var(&self.token_env).with_context(|| {
-            tf(
-                "error.copilot_env_not_set",
-                &[("name", &self.token_env)],
-            )
-        })?;
+        let github_token = std::env::var(&self.token_env)
+            .with_context(|| tf("error.copilot_env_not_set", &[("name", &self.token_env)]))?;
         let response = self
             .client
             .get(COPILOT_TOKEN_URL)
@@ -247,7 +243,10 @@ impl CopilotAgent {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("{}", chat_request_failed_msg("copilot", &status.to_string(), &body));
+            anyhow::bail!(
+                "{}",
+                chat_request_failed_msg("copilot", &status.to_string(), &body)
+            );
         }
 
         stream_sse_to_sender(response, sender).await

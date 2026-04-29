@@ -1,4 +1,3 @@
-
 //! F-GAP-10: Artifact Contract Layer (FUTURE3.M9 / BLUE38 §6.6)
 //!
 //! Provides a unified schema and storage layer for all artifact types

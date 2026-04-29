@@ -1,3 +1,7 @@
-from .client import GoOnClient
+from .client import GoOnClient, GovernanceStatusResponse, HealthResponse
 
-__all__ = ["GoOnClient"]
+__all__ = [
+    "GoOnClient",
+    "HealthResponse",
+    "GovernanceStatusResponse",
+]

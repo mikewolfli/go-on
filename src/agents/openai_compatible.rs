@@ -139,7 +139,10 @@ impl OpenAiCompatibleAgent {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("{}", chat_request_failed_msg("openai_compatible", &status.to_string(), &body));
+            anyhow::bail!(
+                "{}",
+                chat_request_failed_msg("openai_compatible", &status.to_string(), &body)
+            );
         }
 
         stream_sse_to_sender(response, sender).await

@@ -257,7 +257,10 @@ pub async fn run_dual_review_gate(
                         return Ok(outcome);
                     }
                     Err(_err) => {
-                        server.observability.metrics.inc_review_gate_invalid_response();
+                        server
+                            .observability
+                            .metrics
+                            .inc_review_gate_invalid_response();
                         return Ok(ReviewGateOutcome {
                             passed: true,
                             comments: vec![tf("warning.review_timeout_continue", &[])],
@@ -290,7 +293,10 @@ pub async fn run_dual_review_gate(
             Ok(outcome)
         }
         Err(err) => {
-            server.observability.metrics.inc_review_gate_invalid_response();
+            server
+                .observability
+                .metrics
+                .inc_review_gate_invalid_response();
             server.observability.metrics.inc_review_gate_rejected();
             Err(err)
         }
@@ -348,11 +354,17 @@ async fn run_single_review(
         )
     })?;
 
-    // Build review messages: copy the original conversation and append a review prompt
+    // Build review messages: copy the original conversation and append a
+    // review prompt sourced from HarnessBus when available.
     let mut review_messages = messages.to_vec();
+    let review_prompt = server
+        .harness_bus
+        .as_ref()
+        .map(|hb| hb.review_gate_prompt())
+        .unwrap_or_else(|| tf("review.request_prompt", &[]));
     review_messages.push(Message {
         role: "user".to_string(),
-        content: tf("review.request_prompt", &[]),
+        content: review_prompt,
     });
 
     let agent_options = phase_options.and_then(|opts| opts.agent_options());

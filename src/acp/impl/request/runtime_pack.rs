@@ -253,24 +253,34 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
     let token_cache_report = token_cache_stats.to_json();
 
     // Module-level health profiles — read from harness_bus and capability_bus.
-    let harness_profile = server.harness_bus.as_ref().map(|hb| json!({
-        "enabled": true,
-        "governance": hb.governance_profile(),
-        "drift": hb.drift_profile(),
-        "brain_loop": hb.brain_profile(),
-        "artifact": hb.artifact_profile(),
-        "omnipotent": hb.omnipotent_profile(),
-        "brain_runner": hb.brain_runner_profile(),
-        "resilience": hb.resilience_profile(),
-        "fault_tolerance": hb.fault_tolerance_profile(),
-    })).unwrap_or(json!({"enabled": false}));
-
-    let capability_profile = server.capability_bus.as_ref().map(|cb| {
-        json!({
-            "enabled": true,
-            "profile": cb.capability_bus_profile(),
+    let harness_profile = server
+        .harness_bus
+        .as_ref()
+        .map(|hb| {
+            json!({
+                "enabled": true,
+                "governance": hb.governance_profile(),
+                "drift": hb.drift_profile(),
+                "brain_loop": hb.brain_profile(),
+                "artifact": hb.artifact_profile(),
+                "omnipotent": hb.omnipotent_profile(),
+                "brain_runner": hb.brain_runner_profile(),
+                "resilience": hb.resilience_profile(),
+                "fault_tolerance": hb.fault_tolerance_profile(),
+            })
         })
-    }).unwrap_or(json!({"enabled": false}));
+        .unwrap_or(json!({"enabled": false}));
+
+    let capability_profile = server
+        .capability_bus
+        .as_ref()
+        .map(|cb| {
+            json!({
+                "enabled": true,
+                "profile": cb.capability_bus_profile(),
+            })
+        })
+        .unwrap_or(json!({"enabled": false}));
 
     send_result(
         server,
@@ -2984,6 +2994,33 @@ pub(super) async fn handle_governance_status(
         .map(|g| g.total_edges() as u64)
         .unwrap_or(0);
 
+    // REAL DATA: capability graph high-risk and deprecated node counts from CapabilityBus
+    let capability_graph_high_risk_count: u64 = server
+        .capability_bus
+        .as_ref()
+        .and_then(|cb| cb.capability_graph.lock().ok())
+        .map(|g| g.high_risk_count() as u64)
+        .unwrap_or(0);
+    let capability_graph_deprecated_count: u64 = server
+        .capability_bus
+        .as_ref()
+        .and_then(|cb| cb.capability_graph.lock().ok())
+        .map(|g| g.deprecated_count() as u64)
+        .unwrap_or(0);
+
+    // REAL DATA: fork registry stats for active/reaped/rejected counts
+    let (fork_active_count, fork_reaped_count, fork_rejected_count) = server
+        .fork_registry
+        .lock()
+        .map(|r| {
+            (
+                r.active_count() as u32,
+                r.reaped_count(),
+                r.rejected_count(),
+            )
+        })
+        .unwrap_or((0, 0, 0));
+
     // REAL DATA: reputation top/bottom agents from CapabilityBus
     let (reputation_top_agent, reputation_bottom_agent) = server
         .capability_bus
@@ -3038,10 +3075,7 @@ pub(super) async fn handle_governance_status(
                 let stats = chain.layer_stats();
                 let l0_reject = stats.get("L0FastReject").map(|(_, r)| *r).unwrap_or(0);
                 let l1_hit = stats.get("L1CacheReuse").map(|(a, _)| *a).unwrap_or(0);
-                let l5_inv = stats
-                    .get("L5VerifyEscalate")
-                    .map(|(a, _)| *a)
-                    .unwrap_or(0);
+                let l5_inv = stats.get("L5VerifyEscalate").map(|(a, _)| *a).unwrap_or(0);
                 let count = stats.len() as u32;
                 (l0_reject, l1_hit, l5_inv, count)
             })
@@ -3564,10 +3598,10 @@ pub(super) async fn handle_governance_status(
                     "ready": fork_isolation_guard_ready,
                     "fork_isolation_profile": {
                         "enabled": fork_isolation_guard_ready,
-                        "zombie_reaped_count": 0u64,
-                        "schema_violation_rejected_count": 0u64,
+                        "zombie_reaped_count": fork_reaped_count,
+                        "schema_violation_rejected_count": fork_rejected_count,
                         "avg_child_token_usage": 0u64,
-                        "active_forks": 0u32,
+                        "active_forks": fork_active_count,
                     },
                 },
                 "capability_graph": {
@@ -3576,8 +3610,8 @@ pub(super) async fn handle_governance_status(
                         "enabled": capability_graph_ready,
                         "node_count": registered_agent_total as u64,
                         "edge_count": capability_graph_edge_count,
-                        "high_risk_node_count": 0u64,
-                        "deprecated_node_count": 0u64,
+                        "high_risk_node_count": capability_graph_high_risk_count,
+                        "deprecated_node_count": capability_graph_deprecated_count,
                     },
                 },
                 "provenance_ledger": {
@@ -4618,6 +4652,32 @@ pub(super) async fn handle_autotune_reset(
             "state_before": before,
             "state_after": after,
             "warning": warning,
+        }),
+    )
+    .await
+}
+
+pub(super) async fn handle_runtime_features(
+    server: &AcpServer,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "features": {
+                "harness_bus": server.harness_bus.is_some(),
+                "capability_bus": server.capability_bus.is_some(),
+                "vector_store": server.cache.vector_store.is_some(),
+                "response_cache": server.cache.response_cache.is_some(),
+                "autotune": server.autotune.is_some(),
+                "skills_enabled": server.runtime_config.skills_enabled,
+                "skills_import": server.runtime_config.skills_import_enabled,
+                "entry_auth": server.runtime_config.entry_auth_enabled,
+                "otel": server.runtime_config.otel_enabled,
+                "production_strict": server.runtime_config.production_strict,
+            }
         }),
     )
     .await

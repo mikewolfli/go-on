@@ -448,10 +448,7 @@ impl ReplayBuffer {
         ));
     }
 
-    pub fn sample(
-        &self,
-        batch_size: usize,
-    ) -> ReplaySample {
+    pub fn sample(&self, batch_size: usize) -> ReplaySample {
         let len = self.buffer.len();
         if len == 0 {
             return Vec::new();
@@ -667,14 +664,8 @@ impl QLearningAgent {
         all_actions
             .into_iter()
             .map(|a| {
-                let q1 = actions_q1
-                    .and_then(|m| m.get(&a))
-                    .copied()
-                    .unwrap_or(0.0);
-                let q2 = actions_q2
-                    .and_then(|m| m.get(&a))
-                    .copied()
-                    .unwrap_or(0.0);
+                let q1 = actions_q1.and_then(|m| m.get(&a)).copied().unwrap_or(0.0);
+                let q2 = actions_q2.and_then(|m| m.get(&a)).copied().unwrap_or(0.0);
                 let avg = (q1 + q2) / 2.0;
                 (a.clone(), avg)
             })
@@ -824,10 +815,18 @@ mod qlearning_tests {
             &("s4".to_string(), "s4".to_string()),
         );
         // At least one table should have entries from the two updates
-        let q1_has = agent.q_table.contains_key(&("s1".to_string(), "s1".to_string()))
-            || agent.q_table.contains_key(&("s3".to_string(), "s3".to_string()));
-        let q2_has = agent.q_table_2.contains_key(&("s1".to_string(), "s1".to_string()))
-            || agent.q_table_2.contains_key(&("s3".to_string(), "s3".to_string()));
+        let q1_has = agent
+            .q_table
+            .contains_key(&("s1".to_string(), "s1".to_string()))
+            || agent
+                .q_table
+                .contains_key(&("s3".to_string(), "s3".to_string()));
+        let q2_has = agent
+            .q_table_2
+            .contains_key(&("s1".to_string(), "s1".to_string()))
+            || agent
+                .q_table_2
+                .contains_key(&("s3".to_string(), "s3".to_string()));
         assert!(q1_has, "q_table should have at least one entry");
         assert!(q2_has, "q_table_2 should have at least one entry");
     }

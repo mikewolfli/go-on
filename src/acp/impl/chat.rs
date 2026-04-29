@@ -652,6 +652,10 @@ pub(crate) async fn process_chat_request(
         layered_prompt.token_estimate
     );
 
+    let mut capability_selected_agent: Option<String> = None;
+    let mut capability_recommended_mode: Option<String> = None;
+    let mut capability_optimization_hint: Option<Value> = None;
+
     // ── CapabilityBus agent selection ──────────────────────────────────
     // If a CapabilityBus is present, use its sense/decide pipeline to
     // refine or override the agent list before falling through to the
@@ -664,6 +668,24 @@ pub(crate) async fn process_chat_request(
         };
         let sensing = cb.sense(&task_ctx);
         let decision = cb.decide(&task_ctx, &sensing);
+        capability_selected_agent = decision.selected_agent.clone();
+        capability_recommended_mode = Some(decision.recommended_mode.clone());
+        let opt = cb.optimization_recommendation(
+            &phase.phase_name,
+            (params.messages.len() as u64).saturating_mul(512),
+            if params.mode.eq_ignore_ascii_case("full_auto") {
+                "high"
+            } else {
+                "balanced"
+            },
+        );
+        capability_optimization_hint = Some(serde_json::json!({
+            "suggested_agent": opt.suggested_agent,
+            "estimated_cost": opt.estimated_cost,
+            "estimated_duration_ms": opt.estimated_duration_ms,
+            "reliability_score": opt.reliability_score,
+            "confidence": opt.confidence,
+        }));
         if let Some(ref agent) = decision.selected_agent {
             // Move the CapabilityBus-recommended agent to the front of the list
             let _ = reorder_agents_with_priority(&mut resolved.agents, agent);
@@ -678,6 +700,8 @@ pub(crate) async fn process_chat_request(
                 "candidate_count": sensing.capability_agent_count,
                 "confidence": decision.confidence,
                 "duration_ms": decision.duration_ms,
+                "recommended_mode": decision.recommended_mode,
+                "optimization": capability_optimization_hint,
             }),
         );
     }
@@ -994,6 +1018,19 @@ pub(crate) async fn process_chat_request(
         for (agent_name, agent) in resolved.agents {
             let attempt_started = std::time::Instant::now();
 
+            if let Some(ref cb) = server.capability_bus {
+                if !cb.is_agent_healthy(&agent_name) {
+                    agent_attempts.push(json!({
+                        "agent": agent_name,
+                        "ok": false,
+                        "skipped_unhealthy": true,
+                        "duration_ms": 0u64,
+                        "error": "agent unhealthy by capability bus"
+                    }));
+                    continue;
+                }
+            }
+
             let mut per_attempt_options = base_agent_options.clone();
             if agent_name.eq_ignore_ascii_case("copilot")
                 && !per_attempt_options.contains_key("model")
@@ -1090,6 +1127,13 @@ pub(crate) async fn process_chat_request(
                 }
             }
         }
+    }
+
+    if !cache_hit && response_text.is_empty() && last_err.is_none() {
+        anyhow::bail!(
+            "no healthy agent produced a response for phase '{}'",
+            phase.phase_name
+        );
     }
 
     if let Some(err) = last_err {
@@ -1731,7 +1775,12 @@ pub(crate) async fn process_chat_request(
         "memory_policy": memory_promotion_result,
         "task_graph": task_graph_result,
         "role_routing": role_routing_result,
-        "enhanced_verification": verification_result
+        "enhanced_verification": verification_result,
+        "capability_routing": {
+            "selected_agent": capability_selected_agent,
+            "recommended_mode": capability_recommended_mode,
+            "optimization": capability_optimization_hint
+        }
     });
 
     // ── Scheduler task completion (ARCH-02) ────────────────────────────
@@ -3939,6 +3988,7 @@ mod tests {
 /// Run tool execution loop for full_auto mode
 /// This function integrates the tool execution loop from request.rs into the chat flow
 #[cfg(test)]
+#[allow(dead_code)]
 fn run_tool_execution_loop(task: &str, subtask: &str, record_index: usize) -> String {
     // Simplified tool execution loop
     format!(
@@ -3960,6 +4010,7 @@ fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<Str
 
 /// Execute model tool calls
 #[cfg(test)]
+#[allow(dead_code)]
 fn execute_tool_calls(
     task: &str,
     subtask: &str,

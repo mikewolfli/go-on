@@ -12,6 +12,8 @@
 - **改进的性能**：针对服务器工作负载优化
 - **更好的可靠性**：增强的错误处理和恢复
 - **生产就绪**：适用于小规模生产使用
+- **完整 Phase 4 架构**：所有 14 条总线和 21 个 F-GAP 模块，包括 AgentFactory 和 OrchestrationCouncil
+- **条件编译模块**：AgentFactory 和 Council 使用 `#[cfg(feature = "profile-simple-server")]` 门控
 
 ### 架构
 ```

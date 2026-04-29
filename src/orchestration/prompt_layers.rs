@@ -1,4 +1,3 @@
-
 //! BLUE35 S6: Prompt 8-Layer Architecture (ARCH-03)
 //!
 //! Defines a layered prompt processing pipeline:

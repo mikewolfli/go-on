@@ -8,8 +8,11 @@ on:
     branches: [main]
 jobs:
   gate:
-    name: BLUE26 Top-Level Gate
-    runs-on: ubuntu-latest
+    name: Phase 4 Gate (3 profiles + clippy + tests)
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -18,9 +21,41 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
       - name: Create required SQLite databases for CI
+        shell: bash
         run: |
-          touch acp_cache.sqlite3
-          touch acp_vector.sqlite3
+          mkdir -p config
+          touch config/acp_cache.sqlite3
+          touch config/acp_vector.sqlite3
+
+      # ── Profile: local ────────────────────────────────────────────────
+      - name: Build check (profile-local)
+        run: cargo check --all-targets 2>&1
+      - name: Clippy (profile-local, deny warnings)
+        run: cargo clippy -F profile-local -- -D warnings
+      - name: Unit tests (profile-local)
+        run: cargo test -F profile-local --bin go-on
+
+      # ── Profile: simple-server ────────────────────────────────────────
+      - name: Clippy (profile-simple-server, deny warnings)
+        run: cargo clippy --no-default-features -F profile-simple-server -- -D warnings
+
+      # ── Profile: multi-users-server ───────────────────────────────────
+      - name: Clippy (profile-multi-users-server, deny warnings)
+        run: cargo clippy --no-default-features -F profile-multi-users-server -- -D warnings
+
+      # ── Integration tests ─────────────────────────────────────────────
+      - name: Integration — release readiness
+        run: cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_release_readiness_benchmark_requests -- --nocapture
+      - name: Integration — governance
+        run: cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_governance_dynamic_rules_benchmark_requests -- --nocapture
+      - name: Integration — managed service inference
+        run: cargo test --test acp_runtime_rpc_integration managed_service_target_infers_multi_user_mode_on_main_chain -- --nocapture
+      - name: Integration — adversarial paths
+        run: cargo test --test acp_runtime_rpc_integration adversarial_ -- --nocapture
+      - name: Integration — multi-user lifecycle drill
+        run: cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_multi_user_lifecycle_drill_requests -- --nocapture
+
+      # ── Front-end ─────────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -29,18 +64,6 @@ jobs:
         run: npm --prefix vscode-addon ci
       - name: Install GUI dependencies
         run: npm --prefix GUI ci
-      - name: Backend check (0 warnings)
-        run: cargo check --all-targets 2>&1 | tee /tmp/cargo-check.log && ! grep -c "^warning" /tmp/cargo-check.log | grep -v "^0"
-      - name: Backend integration tests (BLUE26 release-readiness)
-        run: cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_release_readiness_benchmark_requests -- --nocapture
-      - name: Backend integration tests (BLUE26 governance)
-        run: cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_governance_dynamic_rules_benchmark_requests -- --nocapture
-      - name: Backend integration tests (managed-service inference)
-        run: cargo test --test acp_runtime_rpc_integration managed_service_target_infers_multi_user_mode_on_main_chain -- --nocapture
-      - name: Backend integration tests (S14 adversarial paths)
-        run: cargo test --test acp_runtime_rpc_integration adversarial_ -- --nocapture
-      - name: Backend integration tests (S17 multi-user lifecycle drill)
-        run: cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_multi_user_lifecycle_drill_requests -- --nocapture
       - name: VS Code addon compile + lint
         run: npm --prefix vscode-addon run check
       - name: VS Code addon contract smoke
@@ -49,10 +72,20 @@ jobs:
         run: npm --prefix GUI run build
       - name: GUI contract smoke
         run: npm --prefix GUI run test:contract
+
+      # ── Upload OS-specific artifact ───────────────────────────────────
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-on-backend-${{ matrix.os }}
+          path: target/release/go-on
   build:
     name: Full Build
     needs: gate
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -62,7 +95,7 @@ jobs:
           node-version: "20"
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Build backend
+      - name: Build backend (profile-local, release)
         run: cargo build --release
       - name: Build GUI
         working-directory: ./GUI
@@ -79,10 +112,10 @@ jobs:
       - name: Upload backend artifact
         uses: actions/upload-artifact@v4
         with:
-          name: go-on-backend
+          name: go-on-backend-${{ matrix.os }}
           path: target/release/go-on
       - name: Upload GUI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: go-on-gui-dist
+          name: go-on-gui-dist-${{ matrix.os }}
           path: GUI/dist/

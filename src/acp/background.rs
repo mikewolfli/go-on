@@ -85,7 +85,10 @@ pub async fn run_background_maintenance_loop(ctx: BackgroundContext) {
 
     loop {
         if iteration_count >= max_iterations {
-            info!("background maintenance loop reached max iterations ({})", max_iterations);
+            info!(
+                "background maintenance loop reached max iterations ({})",
+                max_iterations
+            );
             break;
         }
         iteration_count += 1;

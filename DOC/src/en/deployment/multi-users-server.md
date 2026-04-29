@@ -2,7 +2,7 @@
 
 ## Overview
 
-Multi-Users Server mode (`profile-multi-users-server`) is the enterprise-grade deployment profile for go-on, designed for production environments with multiple concurrent users. It uses PostgreSQL with pgvector for scalable storage and provides advanced features for security, monitoring, and high availability.
+Multi-Users Server mode (`profile-multi-users-server`) is the enterprise-grade build profile for go-on, designed for production environments with multiple concurrent users. It uses PostgreSQL with pgvector for scalable storage and provides advanced features for security, monitoring, and high availability.
 
 ## Features
 
@@ -13,6 +13,10 @@ Multi-Users Server mode (`profile-multi-users-server`) is the enterprise-grade d
 - **Advanced security**: Role-based access control, audit logging
 - **Enterprise monitoring**: Comprehensive observability stack
 - **Scalability**: Horizontal scaling capabilities
+- **Full Phase 4 architecture**: All 14 buses and 21 F-GAP modules
+- **Distributed memory bus**: Cross-node memory sharing via DistributedMemoryBus
+- **Fault tolerance engine**: Cross-node fault isolation and auto-recovery
+- **Multi-channel transport**: 6-channel, QoS-enabled message transport
 
 ### Architecture
 ```

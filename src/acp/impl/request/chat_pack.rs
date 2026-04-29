@@ -205,7 +205,11 @@ pub(super) async fn send_error(
 }
 
 /// Send result response
-pub(super) async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Result<()> {
+pub(super) async fn send_result(
+    server: &AcpServer,
+    id: Option<Value>,
+    result: Value,
+) -> Result<()> {
     let method = DISPATCH_REQUEST_METHOD
         .try_with(|m| m.clone())
         .unwrap_or_default();

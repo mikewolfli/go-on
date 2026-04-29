@@ -2,7 +2,7 @@
 
 ## Overview
 
-Local mode (`profile-local`) is the default deployment profile for go-on, designed for single-user development environments. It provides a lightweight, self-contained runtime with SQLite-based storage and adaptive vector capabilities.
+Local mode (`profile-local`) is the default build profile for go-on, designed for single-user development environments. It provides a lightweight, self-contained runtime with SQLite-based storage and adaptive vector capabilities.
 
 ## Features
 
@@ -12,6 +12,7 @@ Local mode (`profile-local`) is the default deployment profile for go-on, design
 - **Adaptive vector store**: Uses `sqlite-vec` when available, falls back to JSON embeddings
 - **Zero external dependencies**: No database servers required
 - **Quick setup**: Minimal configuration needed
+- **All 14 capability buses and 21 F-GAP modules included**: Local profile has full Phase 4 functionality
 
 ### Storage Architecture
 ```
@@ -51,7 +52,7 @@ min_similarity = 0.82
 ```
 
 ### Feature Flags
-Local mode enables the following Cargo features:
+Local mode (`profile-local`) enables the following Cargo features:
 - `backend-sqlite`: SQLite database support
 - `rusqlite`: SQLite bindings with bundled SQLite
 - `sqlite-vec`: Vector extension for SQLite (optional)
@@ -65,9 +66,6 @@ cargo build
 
 # Explicit local mode build
 cargo build --no-default-features -F profile-local
-
-# With all features
-cargo build --features "backend-sqlite"
 ```
 
 ### Binary Distribution

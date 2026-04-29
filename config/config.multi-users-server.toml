@@ -1,56 +1,63 @@
-﻿# ============================================================
-# go-on Universal Workflow Config (profile-local)
-#   Default: SQLite + sqlite-vec, single-user development
-#   Build:   cargo build (default feature = profile-local)
+# ============================================================
+# go-on Multi-Users Server Profile (profile-multi-users-server)
+#   Build:   cargo build --no-default-features -F profile-multi-users-server
+#   Backend: PostgreSQL + pgvector, multi-user production
 #   Phase 4: 14 buses, 21 F-GAP modules, i18n ~95%
-#   Tests:   866+ (766 unit + 86 RPC + 14 transport)
-#   Usage:   go-on --config config.toml
+#   Tests:   898+ (798 unit + 86 RPC + 14 transport)
+#   NOTE:    Set DB_USER, DB_PASS, DB_HOST env vars before startup.
 # ============================================================
 
 default_phase = "default"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "adaptive"
+mode = "acp_http"
 
 [cache]
 enabled = true
 path = "acp_cache.sqlite3"
 default_ttl_seconds = 3600
-max_entries = 5000
+max_entries = 50000
 
 [vector]
 enabled = true
-auto_mode = true
+auto_mode = false
 path = "acp_vector.sqlite3"
-dimensions = 192
+dimensions = 768
 min_query_chars = 80
-top_k = 2
-min_similarity = 0.82
+top_k = 10
+min_similarity = 0.70
 max_snippet_chars = 800
-max_entries = 10000
+max_entries = 200000
 summary_enabled = true
 summary_trigger_messages = 8
 summary_max_chars = 1200
 
 [runtime]
-maintenance_interval_seconds = 60
-health_interval_seconds = 120
-shutdown_drain_seconds = 30
-sqlite_vacuum_interval_cycles = 60
-entry_auth_enabled = false
-entry_rate_limit_rpm = 240
-entry_rate_limit_burst = 60
-production_strict = false
+maintenance_interval_seconds = 120
+health_interval_seconds = 60
+shutdown_drain_seconds = 60
+sqlite_vacuum_interval_cycles = 120
+acp_http_bind_addr = "0.0.0.0:8090"
+entry_auth_enabled = true
+entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
+entry_rate_limit_rpm = 5000
+entry_rate_limit_burst = 1000
+production_strict = true
+otel_enabled = true
+otel_exporter = "otlp"
+otel_service_name = "go-on-multi"
+otel_sample_ratio = 0.5
+trace_slow_top_n = 50
 i18n_enabled = true
 i18n_default_language = "en_US"
-skills_enabled = true
+skills_enabled = false
 skills_import_enabled = false
-skills_allowed_sources = ["local:*"]
+skills_allowed_sources = []
 skills_require_sha256 = true
 skills_cache_dir = "skills_cache"
 governance_enabled = true
-governance_policy_mode = "advisory"
+governance_policy_mode = "enforce"
 
 [agents]
 
@@ -61,12 +68,12 @@ model = "deepseek-chat"
 supports_system = true
 
 [flow]
-name = "Universal Adaptive"
+name = "Multi-User Adaptive"
 phases = ["think", "act", "check", "done"]
 
 [phases.think]
 description = "Think — analyze, plan, gather context"
-agents = []
+agents = ["deepseek"]
 fallback = true
 
 [phases.think.options]
@@ -80,7 +87,7 @@ global_max_inflight = 128
 
 [phases.act]
 description = "Act — execute, generate, implement"
-agents = []
+agents = ["deepseek"]
 fallback = true
 
 [phases.act.options]
@@ -94,7 +101,7 @@ global_max_inflight = 128
 
 [phases.check]
 description = "Check — verify, validate, review results"
-agents = []
+agents = ["deepseek"]
 fallback = true
 
 [phases.check.options]
@@ -109,7 +116,7 @@ global_max_inflight = 128
 
 [phases.done]
 description = "Done — finalize, deliver, complete"
-agents = []
+agents = ["deepseek"]
 fallback = false
 
 [phases.done.options]

@@ -1,4 +1,3 @@
-
 //! ARCH-10: Promotion Plugin System
 //!
 //! Pluggable promotion strategies that can be registered with CapabilityBus
@@ -116,11 +115,26 @@ impl Default for PromotionRegistry {
 impl PromotionRegistry {
     pub fn new() -> Self {
         let criteria = vec![
-            PromotionCriterion { name: "success_rate".to_string(), weight: 1.0, threshold: 0.8 },
-            PromotionCriterion { name: "latency_ms".to_string(), weight: 0.5, threshold: 5000.0 },
-            PromotionCriterion { name: "cost_score".to_string(), weight: 0.5, threshold: 0.7 },
+            PromotionCriterion {
+                name: "success_rate".to_string(),
+                weight: 1.0,
+                threshold: 0.8,
+            },
+            PromotionCriterion {
+                name: "latency_ms".to_string(),
+                weight: 0.5,
+                threshold: 5000.0,
+            },
+            PromotionCriterion {
+                name: "cost_score".to_string(),
+                weight: 0.5,
+                threshold: 0.7,
+            },
         ];
-        let mut reg = Self { plugins: Vec::new(), criteria };
+        let mut reg = Self {
+            plugins: Vec::new(),
+            criteria,
+        };
         reg.register(Box::new(ThresholdPromotion::new(0.8, 5000.0, 0.7)));
         reg
     }

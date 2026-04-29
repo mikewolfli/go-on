@@ -81,13 +81,25 @@
               <el-tab-pane :label="t('menu.backendOps')" name="backend-ops">
                 <BackendOpsView />
               </el-tab-pane>
-              <el-tab-pane :label="t('menu.autoTune')" name="autotune">
+              <el-tab-pane
+                v-if="!runtime.status.running || runtime.activeFeatures.autotune"
+                :label="t('menu.autoTune')"
+                name="autotune"
+              >
                 <AutoTuneView />
               </el-tab-pane>
-              <el-tab-pane :label="t('menu.workflow')" name="workflow">
+              <el-tab-pane
+                v-if="!runtime.status.running || runtime.activeFeatures.skills_enabled || runtime.activeFeatures.skills_import"
+                :label="t('menu.workflow')"
+                name="workflow"
+              >
                 <WorkflowView />
               </el-tab-pane>
-              <el-tab-pane :label="t('menu.security')" name="security">
+              <el-tab-pane
+                v-if="!runtime.status.running || runtime.activeFeatures.entry_auth || runtime.activeFeatures.production_strict"
+                :label="t('menu.security')"
+                name="security"
+              >
                 <SecurityView />
               </el-tab-pane>
             </el-tabs>

@@ -339,17 +339,15 @@ mod tests {
 
     #[test]
     fn test_model_selection_vision_filtering() {
-        let models = vec![
-            ModelCharacteristics {
-                id: "no-vision".to_string(),
-                cost_per_request_cents: 10,
-                latency_ms: 100,
-                capability_tier: 5,
-                supports_vision: false,
-                supports_function_calling: false,
-                excels_at_code: false,
-            },
-        ];
+        let models = vec![ModelCharacteristics {
+            id: "no-vision".to_string(),
+            cost_per_request_cents: 10,
+            latency_ms: 100,
+            capability_tier: 5,
+            supports_vision: false,
+            supports_function_calling: false,
+            excels_at_code: false,
+        }];
 
         let criteria = SelectionCriteria {
             requires_vision: true,

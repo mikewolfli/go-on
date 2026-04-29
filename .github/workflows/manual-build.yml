@@ -5,8 +5,11 @@ on:
 
 jobs:
   build-all:
-    name: Build Backend and GUI
-    runs-on: ubuntu-latest
+    name: Build Backend (3 profiles) + GUI + VS Code
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -14,22 +17,47 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build Backend
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      # ── Build & verify all 3 profiles ──────────────────────────────────
+      - name: Build profile-local
         run: cargo build --release
 
-      - name: Verify Backend Binary
+      - name: Verify profile-local binary
         run: test -f target/release/go-on
 
-      - name: Upload Backend Artifact
+      - name: Build profile-simple-server
+        run: cargo build --release --no-default-features -F profile-simple-server
+
+      - name: Build profile-multi-users-server
+        run: cargo build --release --no-default-features -F profile-multi-users-server
+
+      # ── Clippy all 3 profiles ──────────────────────────────────────────
+      - name: Clippy (profile-local)
+        run: cargo clippy -F profile-local -- -D warnings
+
+      - name: Clippy (profile-simple-server)
+        run: cargo clippy --no-default-features -F profile-simple-server -- -D warnings
+
+      - name: Clippy (profile-multi-users-server)
+        run: cargo clippy --no-default-features -F profile-multi-users-server -- -D warnings
+
+      # ── Tests ──────────────────────────────────────────────────────────
+      - name: Unit + integration tests (profile-local)
+        run: cargo test -F profile-local
+
+      - name: Upload backend artifact
         uses: actions/upload-artifact@v4
         with:
-          name: go-on-backend
+          name: go-on-backend-${{ matrix.os }}
           path: target/release/go-on
 
+      # ── GUI ────────────────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Install GUI dependencies
         working-directory: ./GUI
@@ -47,6 +75,7 @@ jobs:
         working-directory: ./GUI
         run: npm run tauri build
 
+      # ── VS Code addon ──────────────────────────────────────────────────
       - name: Install VS Code addon dependencies
         working-directory: ./vscode-addon
         run: npm install
@@ -62,5 +91,5 @@ jobs:
       - name: Upload GUI Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: go-on-gui
+          name: go-on-gui-${{ matrix.os }}
           path: GUI/src-tauri/target/release/

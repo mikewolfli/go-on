@@ -84,6 +84,30 @@ impl CapabilityGraph {
         self.edges.len()
     }
 
+    /// Count agents tagged "high_risk" (or "high-risk").
+    pub fn high_risk_count(&self) -> usize {
+        self.capabilities
+            .values()
+            .filter(|decls| {
+                decls
+                    .iter()
+                    .any(|d| d.tags.iter().any(|t| t == "high_risk" || t == "high-risk"))
+            })
+            .count()
+    }
+
+    /// Count agents tagged "deprecated".
+    pub fn deprecated_count(&self) -> usize {
+        self.capabilities
+            .values()
+            .filter(|decls| {
+                decls
+                    .iter()
+                    .any(|d| d.tags.iter().any(|t| t == "deprecated"))
+            })
+            .count()
+    }
+
     /// Set of all declared capability names across all agents
     pub fn all_capability_names(&self) -> HashSet<&str> {
         self.capabilities

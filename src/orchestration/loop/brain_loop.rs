@@ -466,10 +466,7 @@ impl BrainLoop {
             .steps
             .last()
             .map(|s| {
-                let reflection_note = s
-                    .reflection
-                    .as_deref()
-                    .unwrap_or("-");
+                let reflection_note = s.reflection.as_deref().unwrap_or("-");
                 format!(
                     "step {} [phase={:?}, input_len={}, created_ms={}, reflection={}]",
                     s.id,

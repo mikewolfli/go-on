@@ -76,6 +76,39 @@ Escalate when output contains unverified language or surrender patterns:
 - "I think", "maybe", "probably", "should work"
 - "We cannot solve this", "need more context", "beyond scope"
 
+## Phase 4 Extension: Profile-Specific Verification
+
+- When Red Line 1 is triggered require cargo check plus cargo clippy D warnings proof
+- When examining error output verify across all three profiles if the error is build-related
+- Fault tolerance and transport modules require E2E plus stress test proof not just unit test pass
+- Distributed memory bus changes require cross-node integration test verification
+- HarnessBus and governance changes require governance.status endpoint verification
+
+## Phase 4 Extension: L3 Checklist Additions
+
+- Verify i18n completeness across all three language files
+- Verify the change compiles under all three build profiles
+- Check for file-level or module-level allow dead_code in the changed files
+- Verify E2E test exists for fault tolerance transport changes
+- Verify distributed memory bus integration tests pass
+
+## Phase 4 Extension: Quality Compass Additions
+
+- Cross-profile compilation verified 3 profiles
+- i18n keys added to all three language files
+- No hardcoded user-facing strings in changed files
+- Dead code audit no file-level or module-level allow dead_code introduced
+- E2E fault tolerance test passes if fault tolerance was changed
+
+## Phase 4 Extension: Iceberg Rule Categories
+
+- Checkpoint chain scan for similar None-handling gaps if parent_checkpoint_id resolution failed
+- Dead code scan entire file for similar misattributed annotations if allow dead_code found on production code
+- Lock safety scan all Mutex lock calls in same module if double-lock deadlock found
+- Fault recovery scan all recovery path functions for missing cleanup if reintegrate_node missed fault resolution
+- i18n scan entire module for similar untranslated strings if hardcoded error string found
+- Transport scan all send methods for missing dedup if QoS dedup was missing
+
 ## Enforcement in go-on
 
 On each request:

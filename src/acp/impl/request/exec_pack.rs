@@ -2597,7 +2597,10 @@ async fn run_agent_chat_collecting(
         Ok(Err(err)) => Err(err.into()),
         Err(_) => Err(anyhow::anyhow!(
             "{}",
-            tf("error.agent_chat_timed_out", &[("duration", &format!("{:?}", timeout_duration))])
+            tf(
+                "error.agent_chat_timed_out",
+                &[("duration", &format!("{:?}", timeout_duration))]
+            )
         )),
     };
 

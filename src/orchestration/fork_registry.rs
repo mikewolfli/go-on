@@ -1,4 +1,3 @@
-
 //! BLUE35 S10: Fork Registry — Sub-agent Process Isolation (ARCH-05)
 //!
 //! Tracks forked sub-agent executions and provides isolation boundaries
@@ -59,6 +58,10 @@ pub struct ForkEntry {
 pub struct ForkRegistry {
     forks: HashMap<String, ForkEntry>,
     max_forks: usize,
+    /// Number of forks GC'd (reaped) since startup
+    reaped_count: u64,
+    /// Number of register() calls rejected due to capacity limit
+    rejected_count: u64,
 }
 
 impl ForkRegistry {
@@ -66,7 +69,19 @@ impl ForkRegistry {
         Self {
             forks: HashMap::new(),
             max_forks,
+            reaped_count: 0,
+            rejected_count: 0,
         }
+    }
+
+    /// Number of forks reaped by GC since startup.
+    pub fn reaped_count(&self) -> u64 {
+        self.reaped_count
+    }
+
+    /// Number of register() calls rejected due to capacity limit.
+    pub fn rejected_count(&self) -> u64 {
+        self.rejected_count
     }
 
     /// Register a new fork, returning its ID.
@@ -78,6 +93,7 @@ impl ForkRegistry {
         budget: ForkBudget,
     ) -> Option<String> {
         if self.forks.len() >= self.max_forks {
+            self.rejected_count += 1;
             return None;
         }
         let fork_id = format!("fork-{}-{}", parent_task_id, self.forks.len());
@@ -113,15 +129,19 @@ impl ForkRegistry {
         self.forks.len()
     }
 
-    /// Clean up completed forks older than the given duration
+    /// Clean up completed forks older than the given duration.
+    /// Increments reaped_count for each fork removed.
     pub fn gc(&mut self, max_age: Duration) {
         let now = Instant::now();
+        let mut reaped: u64 = 0;
         self.forks.retain(|_, entry| {
             if entry.completed && now.duration_since(entry.created_at) > max_age {
+                reaped += 1;
                 return false;
             }
             true
         });
+        self.reaped_count += reaped;
     }
 }
 

@@ -1041,7 +1041,8 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results = harness.run_scenario_file(Path::new("tests/requests/quality-benchmark.ndjson"));
+        let results =
+            harness.run_scenario_file(Path::new("tests/requests/quality-benchmark.ndjson"));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1234,8 +1235,9 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/breaker-recovery-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/breaker-recovery-benchmark.ndjson",
+        ));
 
         assert_eq!(results.len(), 6);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1298,8 +1300,9 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/observability-alerts-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/observability-alerts-benchmark.ndjson",
+        ));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1337,8 +1340,9 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/runtime-stability-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/runtime-stability-benchmark.ndjson",
+        ));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1374,8 +1378,9 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/runtime-self-model-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/runtime-self-model-benchmark.ndjson",
+        ));
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1465,8 +1470,9 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/security-baseline-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/security-baseline-benchmark.ndjson",
+        ));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1496,7 +1502,8 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results = harness.run_scenario_file(Path::new("tests/requests/harness-benchmark.ndjson"));
+        let results =
+            harness.run_scenario_file(Path::new("tests/requests/harness-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1605,8 +1612,9 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/hardness-routing-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/hardness-routing-benchmark.ndjson",
+        ));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1655,8 +1663,9 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/token-cost-governance-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/token-cost-governance-benchmark.ndjson",
+        ));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1785,7 +1794,8 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results = harness.run_scenario_file(Path::new("tests/requests/build-repro-benchmark.ndjson"));
+        let results =
+            harness.run_scenario_file(Path::new("tests/requests/build-repro-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -1871,8 +1881,9 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/optimization-peak-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/optimization-peak-benchmark.ndjson",
+        ));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -2521,8 +2532,9 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/release-readiness-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/release-readiness-benchmark.ndjson",
+        ));
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3542,8 +3554,9 @@ mod advanced {
         write_managed_service_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/multi-user-lifecycle-drill.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/multi-user-lifecycle-drill.ndjson",
+        ));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3599,7 +3612,8 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results = harness.run_scenario_file(Path::new("tests/requests/lock-status-benchmark.ndjson"));
+        let results =
+            harness.run_scenario_file(Path::new("tests/requests/lock-status-benchmark.ndjson"));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3628,7 +3642,8 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results = harness.run_scenario_file(Path::new("tests/requests/autotune-benchmark.ndjson"));
+        let results =
+            harness.run_scenario_file(Path::new("tests/requests/autotune-benchmark.ndjson"));
 
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3787,8 +3802,9 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/phase-policy-replay-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/phase-policy-replay-benchmark.ndjson",
+        ));
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3882,7 +3898,8 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results = harness.run_scenario_file(Path::new("tests/requests/debug-panel-benchmark.ndjson"));
+        let results =
+            harness.run_scenario_file(Path::new("tests/requests/debug-panel-benchmark.ndjson"));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -3944,8 +3961,9 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/task-plan-execute-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/task-plan-execute-benchmark.ndjson",
+        ));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -4033,8 +4051,9 @@ mod advanced {
         write_test_config(&config_path, 60, 120, 5);
 
         let mut harness = AdvancedRpcHarness::new(&config_path);
-        let results =
-            harness.run_scenario_file(Path::new("tests/requests/workflow-subcommands-benchmark.ndjson"));
+        let results = harness.run_scenario_file(Path::new(
+            "tests/requests/workflow-subcommands-benchmark.ndjson",
+        ));
 
         assert_eq!(results.len(), 4);
         assert_eq!(results[0].0["method"], "initialize");
@@ -6074,8 +6093,9 @@ fn blue24_learning_profile_has_meta_cognition_block() {
     write_test_config(&config_path, 60, 120, 5);
     let mut harness = AdvancedRpcHarness::new(&config_path);
 
-    let results =
-        harness.run_scenario_file(Path::new("tests/requests/task-plan-execute-benchmark.ndjson"));
+    let results = harness.run_scenario_file(Path::new(
+        "tests/requests/task-plan-execute-benchmark.ndjson",
+    ));
     assert_eq!(results.len(), 4);
 
     // task.plan — planning-class
@@ -6144,8 +6164,9 @@ fn blue24_token_economy_has_dynamic_compression() {
     write_test_config(&config_path, 60, 120, 5);
     let mut harness = AdvancedRpcHarness::new(&config_path);
 
-    let results =
-        harness.run_scenario_file(Path::new("tests/requests/task-plan-execute-benchmark.ndjson"));
+    let results = harness.run_scenario_file(Path::new(
+        "tests/requests/task-plan-execute-benchmark.ndjson",
+    ));
     assert_eq!(results.len(), 4);
 
     let execute = results[2].1.as_ref().expect("task.execute should succeed");
@@ -6190,8 +6211,9 @@ fn blue24_knowledge_refinement_has_cross_round_distillation() {
     write_test_config(&config_path, 60, 120, 5);
     let mut harness = AdvancedRpcHarness::new(&config_path);
 
-    let results =
-        harness.run_scenario_file(Path::new("tests/requests/task-plan-execute-benchmark.ndjson"));
+    let results = harness.run_scenario_file(Path::new(
+        "tests/requests/task-plan-execute-benchmark.ndjson",
+    ));
     assert_eq!(results.len(), 4);
 
     let execute = results[2].1.as_ref().expect("task.execute should succeed");
@@ -6520,11 +6542,15 @@ fn blue35_governance_profiles_present_for_s1_s16() {
         "self_rationalization_guard must include self_rationalization_guard_profile"
     );
     assert!(
-        gov["self_rationalization_guard"]["self_rationalization_guard_profile"]["reexamine_triggered_count"].is_number(),
+        gov["self_rationalization_guard"]["self_rationalization_guard_profile"]
+            ["reexamine_triggered_count"]
+            .is_number(),
         "self_rationalization_guard_profile must include reexamine_triggered_count"
     );
     assert!(
-        gov["self_rationalization_guard"]["self_rationalization_guard_profile"]["weak_evidence_blocked_count"].is_number(),
+        gov["self_rationalization_guard"]["self_rationalization_guard_profile"]
+            ["weak_evidence_blocked_count"]
+            .is_number(),
         "self_rationalization_guard_profile must include weak_evidence_blocked_count"
     );
 
@@ -6562,7 +6588,8 @@ fn blue35_governance_profiles_present_for_s1_s16() {
         "layered_token_trigger must include layered_token_trigger_profile"
     );
     assert!(
-        gov["layered_token_trigger"]["layered_token_trigger_profile"]["l1_cache_hit_count"].is_number(),
+        gov["layered_token_trigger"]["layered_token_trigger_profile"]["l1_cache_hit_count"]
+            .is_number(),
         "layered_token_trigger_profile must include l1_cache_hit_count"
     );
 
@@ -6576,7 +6603,8 @@ fn blue35_governance_profiles_present_for_s1_s16() {
         "multi_priority_scheduler must include dual_level_scheduler_profile"
     );
     assert!(
-        gov["multi_priority_scheduler"]["dual_level_scheduler_profile"]["l1_queue_depth"].is_number(),
+        gov["multi_priority_scheduler"]["dual_level_scheduler_profile"]["l1_queue_depth"]
+            .is_number(),
         "dual_level_scheduler_profile must include l1_queue_depth"
     );
 
@@ -6590,7 +6618,9 @@ fn blue35_governance_profiles_present_for_s1_s16() {
         "worker_scheduler_backpressure must include priority_queue_profile"
     );
     assert!(
-        gov["worker_scheduler_backpressure"]["priority_queue_profile"]["starvation_events_prevented"].is_number(),
+        gov["worker_scheduler_backpressure"]["priority_queue_profile"]
+            ["starvation_events_prevented"]
+            .is_number(),
         "priority_queue_profile must include starvation_events_prevented"
     );
 
@@ -6646,7 +6676,8 @@ fn blue35_governance_profiles_present_for_s1_s16() {
         "node_reputation_tracker must include node_reputation_profile"
     );
     assert!(
-        gov["node_reputation_tracker"]["node_reputation_profile"]["tracked_agent_count"].is_number(),
+        gov["node_reputation_tracker"]["node_reputation_profile"]["tracked_agent_count"]
+            .is_number(),
         "node_reputation_profile must include tracked_agent_count"
     );
 
@@ -6719,30 +6750,96 @@ fn blue35_readiness_profiles_present_for_s1_s17() {
     let readiness = harness.request(19011, "release.readiness", None);
     let r = &readiness["result"]["readiness"];
 
-    assert!(r["custom_role_registry"].is_object(), "readiness.custom_role_registry must be object");
-    assert!(r["custom_role_dynamic_matching"].is_object(), "readiness.custom_role_dynamic_matching must be object");
-    assert!(r["compliance_audit_metadata"].is_object(), "readiness.compliance_audit_metadata must be object");
-    assert!(r["self_rationalization_guard"].is_object(), "readiness.self_rationalization_guard must be object");
-    assert!(r["startup_context_loader"].is_object(), "readiness.startup_context_loader must be object");
-    assert!(r["layered_prompt_builder"].is_object(), "readiness.layered_prompt_builder must be object");
-    assert!(r["layered_token_trigger"].is_object(), "readiness.layered_token_trigger must be object");
-    assert!(r["multi_priority_scheduler"].is_object(), "readiness.multi_priority_scheduler must be object");
-    assert!(r["worker_scheduler_backpressure"].is_object(), "readiness.worker_scheduler_backpressure must be object");
-    assert!(r["fork_isolation_guard"].is_object(), "readiness.fork_isolation_guard must be object");
-    assert!(r["capability_graph"].is_object(), "readiness.capability_graph must be object");
-    assert!(r["provenance_ledger"].is_object(), "readiness.provenance_ledger must be object");
-    assert!(r["node_reputation_tracker"].is_object(), "readiness.node_reputation_tracker must be object");
-    assert!(r["k8s_delivery_pack"].is_object(), "readiness.k8s_delivery_pack must be object");
-    assert!(r["sdk_multi_language_stub"].is_object(), "readiness.sdk_multi_language_stub must be object");
-    assert!(r["workflow_type_tri_mode"].is_object(), "readiness.workflow_type_tri_mode must be object");
-    assert!(r["blue35_release_closure"].is_object(), "readiness.blue35_release_closure must be object");
+    assert!(
+        r["custom_role_registry"].is_object(),
+        "readiness.custom_role_registry must be object"
+    );
+    assert!(
+        r["custom_role_dynamic_matching"].is_object(),
+        "readiness.custom_role_dynamic_matching must be object"
+    );
+    assert!(
+        r["compliance_audit_metadata"].is_object(),
+        "readiness.compliance_audit_metadata must be object"
+    );
+    assert!(
+        r["self_rationalization_guard"].is_object(),
+        "readiness.self_rationalization_guard must be object"
+    );
+    assert!(
+        r["startup_context_loader"].is_object(),
+        "readiness.startup_context_loader must be object"
+    );
+    assert!(
+        r["layered_prompt_builder"].is_object(),
+        "readiness.layered_prompt_builder must be object"
+    );
+    assert!(
+        r["layered_token_trigger"].is_object(),
+        "readiness.layered_token_trigger must be object"
+    );
+    assert!(
+        r["multi_priority_scheduler"].is_object(),
+        "readiness.multi_priority_scheduler must be object"
+    );
+    assert!(
+        r["worker_scheduler_backpressure"].is_object(),
+        "readiness.worker_scheduler_backpressure must be object"
+    );
+    assert!(
+        r["fork_isolation_guard"].is_object(),
+        "readiness.fork_isolation_guard must be object"
+    );
+    assert!(
+        r["capability_graph"].is_object(),
+        "readiness.capability_graph must be object"
+    );
+    assert!(
+        r["provenance_ledger"].is_object(),
+        "readiness.provenance_ledger must be object"
+    );
+    assert!(
+        r["node_reputation_tracker"].is_object(),
+        "readiness.node_reputation_tracker must be object"
+    );
+    assert!(
+        r["k8s_delivery_pack"].is_object(),
+        "readiness.k8s_delivery_pack must be object"
+    );
+    assert!(
+        r["sdk_multi_language_stub"].is_object(),
+        "readiness.sdk_multi_language_stub must be object"
+    );
+    assert!(
+        r["workflow_type_tri_mode"].is_object(),
+        "readiness.workflow_type_tri_mode must be object"
+    );
+    assert!(
+        r["blue35_release_closure"].is_object(),
+        "readiness.blue35_release_closure must be object"
+    );
 
     // Verify key sub-fields
-    assert!(r["self_rationalization_guard"]["ready"].is_boolean(), "self_rationalization_guard.ready must be boolean");
-    assert!(r["capability_graph"]["node_dependency_graph"].is_boolean(), "capability_graph.node_dependency_graph must be boolean");
-    assert!(r["workflow_type_tri_mode"]["auto_detection"].is_boolean(), "workflow_type_tri_mode.auto_detection must be boolean");
-    assert!(r["fork_isolation_guard"]["zombie_reap"].is_boolean(), "fork_isolation_guard.zombie_reap must be boolean");
-    assert!(r["layered_token_trigger"]["gate_chain"].is_array(), "layered_token_trigger.gate_chain must be array");
+    assert!(
+        r["self_rationalization_guard"]["ready"].is_boolean(),
+        "self_rationalization_guard.ready must be boolean"
+    );
+    assert!(
+        r["capability_graph"]["node_dependency_graph"].is_boolean(),
+        "capability_graph.node_dependency_graph must be boolean"
+    );
+    assert!(
+        r["workflow_type_tri_mode"]["auto_detection"].is_boolean(),
+        "workflow_type_tri_mode.auto_detection must be boolean"
+    );
+    assert!(
+        r["fork_isolation_guard"]["zombie_reap"].is_boolean(),
+        "fork_isolation_guard.zombie_reap must be boolean"
+    );
+    assert!(
+        r["layered_token_trigger"]["gate_chain"].is_array(),
+        "layered_token_trigger.gate_chain must be array"
+    );
 
     let shutdown = harness.request(19012, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);

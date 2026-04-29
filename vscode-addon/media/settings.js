@@ -29,8 +29,19 @@
             renderSettingsActionOutput(message.message);
         } else if (message.type === 'settingsActionError') {
             renderSettingsActionOutput(`Error: ${message.message}`);
+        } else if (message.type === 'runtimeFeatures') {
+            applyRuntimeFeatures(message.features || {});
         }
     });
+
+    function applyRuntimeFeatures(features) {
+        document.querySelectorAll('[data-feature]').forEach(el => {
+            const required = String(el.getAttribute('data-feature') || '');
+            const keys = required.split(',').map(s => s.trim()).filter(Boolean);
+            const visible = keys.length === 0 || keys.some(k => Boolean(features[k]));
+            el.style.display = visible ? '' : 'none';
+        });
+    }
 
     function loadSettings(settings) {
         Object.keys(settings).forEach(key => {

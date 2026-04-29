@@ -161,6 +161,7 @@ fn extract_host_port(url: &str) -> Option<(String, u16)> {
 /// Work grade classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(test)]
+#[allow(dead_code)]
 pub enum WorkGrade {
     Ask,
     Edit,
@@ -171,6 +172,7 @@ pub enum WorkGrade {
 
 /// Test function to verify module works
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn test_function() -> &'static str {
     "context module is working"
 }
@@ -192,7 +194,15 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(25)).await;
                 Ok::<(), anyhow::Error>(())
             },
-            |duration| anyhow::anyhow!("{}", tf("error.agent_chat_timed_out", &[("duration", &format!("{}ms", duration.as_millis()))])),
+            |duration| {
+                anyhow::anyhow!(
+                    "{}",
+                    tf(
+                        "error.agent_chat_timed_out",
+                        &[("duration", &format!("{}ms", duration.as_millis()))]
+                    )
+                )
+            },
         )
         .await
         .expect_err("timeout should be returned");

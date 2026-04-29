@@ -1522,8 +1522,12 @@ impl AppConfig {
     /// # Returns
     /// * `Result<Self>` - Returns Ok(Self) if loaded successfully, or an error if something goes wrong
     pub fn load(path: &Path) -> Result<Self> {
-        let content = fs::read_to_string(path)
-            .with_context(|| tf("error.config_read_failed", &[("error", &path.display().to_string())]))?;
+        let content = fs::read_to_string(path).with_context(|| {
+            tf(
+                "error.config_read_failed",
+                &[("error", &path.display().to_string())],
+            )
+        })?;
 
         let normalized = if content.trim().is_empty() {
             let bootstrap = default_non_ai_config_toml();
@@ -1542,8 +1546,12 @@ impl AppConfig {
             content
         };
 
-        let mut cfg: AppConfig = toml::from_str(&normalized)
-            .with_context(|| tf("error.config_parse_failed", &[("error", &path.display().to_string())]))?;
+        let mut cfg: AppConfig = toml::from_str(&normalized).with_context(|| {
+            tf(
+                "error.config_parse_failed",
+                &[("error", &path.display().to_string())],
+            )
+        })?;
         normalize_nested_phase_option_extra(&mut cfg);
         apply_auto_rules(path, &mut cfg);
         if !cfg.role_registry.is_empty() {
@@ -1725,13 +1733,31 @@ impl AppConfig {
 
         if let Some(runtime) = &self.runtime {
             if runtime.maintenance_interval_seconds == 0 {
-                anyhow::bail!("{}", tf("error.runtime_must_be_positive", &[("field", "maintenance_interval_seconds")]));
+                anyhow::bail!(
+                    "{}",
+                    tf(
+                        "error.runtime_must_be_positive",
+                        &[("field", "maintenance_interval_seconds")]
+                    )
+                );
             }
             if runtime.health_interval_seconds == 0 {
-                anyhow::bail!("{}", tf("error.runtime_must_be_positive", &[("field", "health_interval_seconds")]));
+                anyhow::bail!(
+                    "{}",
+                    tf(
+                        "error.runtime_must_be_positive",
+                        &[("field", "health_interval_seconds")]
+                    )
+                );
             }
             if runtime.shutdown_drain_seconds == 0 {
-                anyhow::bail!("{}", tf("error.runtime_must_be_positive", &[("field", "shutdown_drain_seconds")]));
+                anyhow::bail!(
+                    "{}",
+                    tf(
+                        "error.runtime_must_be_positive",
+                        &[("field", "shutdown_drain_seconds")]
+                    )
+                );
             }
             if runtime.entry_auth_api_key_env.trim().is_empty() {
                 anyhow::bail!("{}", tf("error.entry_auth_api_key_empty", &[]));
@@ -1743,13 +1769,25 @@ impl AppConfig {
                 anyhow::bail!("{}", tf("error.entry_rate_limit_burst_positive", &[]));
             }
             if runtime.sqlite_vacuum_interval_cycles == 0 {
-                anyhow::bail!("{}", tf("error.runtime_must_be_positive", &[("field", "sqlite_vacuum_interval_cycles")]));
+                anyhow::bail!(
+                    "{}",
+                    tf(
+                        "error.runtime_must_be_positive",
+                        &[("field", "sqlite_vacuum_interval_cycles")]
+                    )
+                );
             }
             if !(0.0..=1.0).contains(&runtime.otel_sample_ratio) {
                 anyhow::bail!("{}", tf("error.otel_sample_ratio_range", &[]));
             }
             if runtime.trace_slow_top_n == 0 {
-                anyhow::bail!("{}", tf("error.runtime_must_be_positive", &[("field", "trace_slow_top_n")]));
+                anyhow::bail!(
+                    "{}",
+                    tf(
+                        "error.runtime_must_be_positive",
+                        &[("field", "trace_slow_top_n")]
+                    )
+                );
             }
             let exporter = runtime.otel_exporter.to_ascii_lowercase();
             if runtime.otel_enabled && exporter != "otlp" && exporter != "jaeger" {
@@ -1772,10 +1810,22 @@ impl AppConfig {
                     anyhow::bail!("{}", tf("error.vector_max_entries_positive", &[]));
                 }
                 if vector.summary_trigger_messages == 0 {
-                    anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", "vector"), ("field", "summary_trigger_messages")]));
+                    anyhow::bail!(
+                        "{}",
+                        tf(
+                            "error.phase_field_positive",
+                            &[("phase", "vector"), ("field", "summary_trigger_messages")]
+                        )
+                    );
                 }
                 if vector.summary_max_chars == 0 {
-                    anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", "vector"), ("field", "summary_max_chars")]));
+                    anyhow::bail!(
+                        "{}",
+                        tf(
+                            "error.phase_field_positive",
+                            &[("phase", "vector"), ("field", "summary_max_chars")]
+                        )
+                    );
                 }
             }
         }
@@ -1786,29 +1836,54 @@ impl AppConfig {
                     anyhow::bail!("{}", tf("error.autotune_interval_positive", &[]));
                 }
                 if autotune.min_query_chars_step == 0 {
-                    anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", "autotune"), ("field", "min_query_chars_step")]));
+                    anyhow::bail!(
+                        "{}",
+                        tf(
+                            "error.phase_field_positive",
+                            &[("phase", "autotune"), ("field", "min_query_chars_step")]
+                        )
+                    );
                 }
                 if autotune.min_query_chars_min == 0 {
-                    anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", "autotune"), ("field", "min_query_chars_min")]));
+                    anyhow::bail!(
+                        "{}",
+                        tf(
+                            "error.phase_field_positive",
+                            &[("phase", "autotune"), ("field", "min_query_chars_min")]
+                        )
+                    );
                 }
                 if autotune.min_query_chars_min > autotune.min_query_chars_max {
                     anyhow::bail!(
                         "{}",
                         tf(
                             "error.autotune_min_le_max",
-                            &[("field1", "min_query_chars_min"), ("field2", "min_query_chars_max")]
+                            &[
+                                ("field1", "min_query_chars_min"),
+                                ("field2", "min_query_chars_max")
+                            ]
                         )
                     );
                 }
                 if autotune.max_top_k == 0 {
-                    anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", "autotune"), ("field", "max_top_k")]));
+                    anyhow::bail!(
+                        "{}",
+                        tf(
+                            "error.phase_field_positive",
+                            &[("phase", "autotune"), ("field", "max_top_k")]
+                        )
+                    );
                 }
                 if !(0.0..=1.0).contains(&autotune.low_precision_threshold) {
                     anyhow::bail!(
                         "{}",
                         tf(
                             "error.autotune_range_invalid",
-                            &[("field", "low_precision_threshold"), ("min", "0"), ("max", "1")]
+                            &[
+                                ("field", "low_precision_threshold"),
+                                ("min", "0"),
+                                ("max", "1")
+                            ]
                         )
                     );
                 }
@@ -1817,7 +1892,11 @@ impl AppConfig {
                         "{}",
                         tf(
                             "error.autotune_range_invalid",
-                            &[("field", "high_precision_threshold"), ("min", "0"), ("max", "1")]
+                            &[
+                                ("field", "high_precision_threshold"),
+                                ("min", "0"),
+                                ("max", "1")
+                            ]
                         )
                     );
                 }
@@ -1826,22 +1905,40 @@ impl AppConfig {
                         "{}",
                         tf(
                             "error.autotune_min_le_max",
-                            &[("field1", "low_precision_threshold"), ("field2", "high_precision_threshold")]
+                            &[
+                                ("field1", "low_precision_threshold"),
+                                ("field2", "high_precision_threshold")
+                            ]
                         )
                     );
                 }
                 if autotune.min_vector_searches == 0 {
-                    anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", "autotune"), ("field", "min_vector_searches")]));
+                    anyhow::bail!(
+                        "{}",
+                        tf(
+                            "error.phase_field_positive",
+                            &[("phase", "autotune"), ("field", "min_vector_searches")]
+                        )
+                    );
                 }
                 if autotune.summary_trigger_min == 0 {
-                    anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", "autotune"), ("field", "summary_trigger_min")]));
+                    anyhow::bail!(
+                        "{}",
+                        tf(
+                            "error.phase_field_positive",
+                            &[("phase", "autotune"), ("field", "summary_trigger_min")]
+                        )
+                    );
                 }
                 if autotune.summary_trigger_min > autotune.summary_trigger_max {
                     anyhow::bail!(
                         "{}",
                         tf(
                             "error.autotune_min_le_max",
-                            &[("field1", "summary_trigger_min"), ("field2", "summary_trigger_max")]
+                            &[
+                                ("field1", "summary_trigger_min"),
+                                ("field2", "summary_trigger_max")
+                            ]
                         )
                     );
                 }
@@ -2098,39 +2195,105 @@ fn append_unique(target: &mut Vec<String>, items: Vec<String>) {
 
 fn validate_phase_options(phase_name: &str, options: &PhaseOptions) -> Result<()> {
     if matches!(options.cache_ttl_seconds, Some(0)) {
-        anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", phase_name), ("field", "cache_ttl_seconds")]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_field_positive",
+                &[("phase", phase_name), ("field", "cache_ttl_seconds")]
+            )
+        );
     }
     if matches!(options.vector_min_query_chars, Some(0)) {
-        anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", phase_name), ("field", "vector_min_query_chars")]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_field_positive",
+                &[("phase", phase_name), ("field", "vector_min_query_chars")]
+            )
+        );
     }
     if matches!(options.vector_top_k, Some(0)) {
-        anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", phase_name), ("field", "vector_top_k")]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_field_positive",
+                &[("phase", phase_name), ("field", "vector_top_k")]
+            )
+        );
     }
     if let Some(value) = options.vector_min_similarity {
         if !(0.0..=1.0).contains(&value) {
-            anyhow::bail!("{}", tf("error.phase_option_must_be_number", &[("phase", phase_name), ("option", "vector_min_similarity")]));
+            anyhow::bail!(
+                "{}",
+                tf(
+                    "error.phase_option_must_be_number",
+                    &[("phase", phase_name), ("option", "vector_min_similarity")]
+                )
+            );
         }
     }
     if matches!(options.vector_max_snippet_chars, Some(0)) {
-        anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", phase_name), ("field", "vector_max_snippet_chars")]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_field_positive",
+                &[("phase", phase_name), ("field", "vector_max_snippet_chars")]
+            )
+        );
     }
     if matches!(options.summary_trigger_messages, Some(0)) {
-        anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", phase_name), ("field", "summary_trigger_messages")]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_field_positive",
+                &[("phase", phase_name), ("field", "summary_trigger_messages")]
+            )
+        );
     }
     if matches!(options.summary_max_chars, Some(0)) {
-        anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", phase_name), ("field", "summary_max_chars")]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_field_positive",
+                &[("phase", phase_name), ("field", "summary_max_chars")]
+            )
+        );
     }
     if matches!(options.max_history_messages, Some(0)) {
-        anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", phase_name), ("field", "max_history_messages")]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_field_positive",
+                &[("phase", phase_name), ("field", "max_history_messages")]
+            )
+        );
     }
     if matches!(options.max_history_chars, Some(0)) {
-        anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", phase_name), ("field", "max_history_chars")]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_field_positive",
+                &[("phase", phase_name), ("field", "max_history_chars")]
+            )
+        );
     }
     if matches!(options.request_timeout_seconds, Some(0)) {
-        anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", phase_name), ("field", "request_timeout_seconds")]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_field_positive",
+                &[("phase", phase_name), ("field", "request_timeout_seconds")]
+            )
+        );
     }
     if matches!(options.review_timeout_seconds, Some(0)) {
-        anyhow::bail!("{}", tf("error.phase_field_positive", &[("phase", phase_name), ("field", "review_timeout_seconds")]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_field_positive",
+                &[("phase", phase_name), ("field", "review_timeout_seconds")]
+            )
+        );
     }
 
     validate_extra_u64_range(phase_name, options, "max_request_chars", 1, 2_000_000)?;
@@ -2175,7 +2338,13 @@ fn validate_phase_options(phase_name: &str, options: &PhaseOptions) -> Result<()
     {
         if !policy.eq_ignore_ascii_case("reject") && !policy.eq_ignore_ascii_case("degrade_single")
         {
-            anyhow::bail!("{}", tf("error.phase_option_must_be_bool", &[("phase", phase_name), ("option", "review_timeout_policy")]));
+            anyhow::bail!(
+                "{}",
+                tf(
+                    "error.phase_option_must_be_bool",
+                    &[("phase", phase_name), ("option", "review_timeout_policy")]
+                )
+            );
         }
     }
 
@@ -2189,7 +2358,13 @@ fn validate_phase_options(phase_name: &str, options: &PhaseOptions) -> Result<()
         .and_then(|value| value.as_u64());
     if let (Some(min_reviewers), Some(required_approvals)) = (min_reviewers, required_approvals) {
         if required_approvals > min_reviewers {
-            anyhow::bail!("{}", tf("error.phase_option_must_be_number", &[("phase", phase_name), ("option", "required_approvals")]));
+            anyhow::bail!(
+                "{}",
+                tf(
+                    "error.phase_option_must_be_number",
+                    &[("phase", phase_name), ("option", "required_approvals")]
+                )
+            );
         }
     }
 
@@ -2208,11 +2383,23 @@ fn validate_extra_u64_range(
     };
 
     let Some(num) = value.as_u64() else {
-        anyhow::bail!("{}", tf("error.phase_option_must_be_number", &[("phase", phase_name), ("option", key)]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_option_must_be_number",
+                &[("phase", phase_name), ("option", key)]
+            )
+        );
     };
 
     if num < min || num > max {
-        anyhow::bail!("{}", tf("error.phase_option_must_be_number", &[("phase", phase_name), ("option", key)]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_option_must_be_number",
+                &[("phase", phase_name), ("option", key)]
+            )
+        );
     }
 
     Ok(())
@@ -2224,7 +2411,13 @@ fn validate_extra_bool(phase_name: &str, options: &PhaseOptions, key: &str) -> R
     };
 
     if !value.is_boolean() {
-        anyhow::bail!("{}", tf("error.phase_option_must_be_bool", &[("phase", phase_name), ("option", key)]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_option_must_be_bool",
+                &[("phase", phase_name), ("option", key)]
+            )
+        );
     }
 
     Ok(())
@@ -2241,16 +2434,34 @@ fn validate_extra_string_array(
     };
 
     let Some(items) = value.as_array() else {
-        anyhow::bail!("{}", tf("error.phase_option_must_be_bool", &[("phase", phase_name), ("option", key)]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_option_must_be_bool",
+                &[("phase", phase_name), ("option", key)]
+            )
+        );
     };
 
     for item in items {
         let Some(module_name) = item.as_str() else {
-            anyhow::bail!("{}", tf("error.phase_option_must_be_bool", &[("phase", phase_name), ("option", key)]));
+            anyhow::bail!(
+                "{}",
+                tf(
+                    "error.phase_option_must_be_bool",
+                    &[("phase", phase_name), ("option", key)]
+                )
+            );
         };
 
         if !allowed.iter().any(|candidate| candidate == &module_name) {
-            anyhow::bail!("{}", tf("error.phase_option_must_be_number", &[("phase", phase_name), ("option", key)]));
+            anyhow::bail!(
+                "{}",
+                tf(
+                    "error.phase_option_must_be_number",
+                    &[("phase", phase_name), ("option", key)]
+                )
+            );
         }
     }
 
@@ -2269,11 +2480,23 @@ fn validate_extra_f64_range(
     };
 
     let Some(num) = value.as_f64() else {
-        anyhow::bail!("{}", tf("error.phase_option_must_be_number", &[("phase", phase_name), ("option", key)]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_option_must_be_number",
+                &[("phase", phase_name), ("option", key)]
+            )
+        );
     };
 
     if num < min || num > max {
-        anyhow::bail!("{}", tf("error.phase_option_must_be_number", &[("phase", phase_name), ("option", key)]));
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.phase_option_must_be_number",
+                &[("phase", phase_name), ("option", key)]
+            )
+        );
     }
 
     Ok(())
@@ -2414,7 +2637,16 @@ pub fn validate_runtime_readiness(
                 .map(|(agent, vars)| format!("{}({})", agent, vars.join(",")))
                 .collect::<Vec<_>>()
                 .join("; ");
-            anyhow::bail!("{}", tf("error.missing_field", &[("field", &format!("production_strict agent secrets: {}", blocked))]));
+            anyhow::bail!(
+                "{}",
+                tf(
+                    "error.missing_field",
+                    &[(
+                        "field",
+                        &format!("production_strict agent secrets: {}", blocked)
+                    )]
+                )
+            );
         }
 
         let total_agents = config.agents.len();
@@ -2450,7 +2682,19 @@ pub fn validate_runtime_readiness(
     if strict_enabled {
         let strict_violations = collect_production_strict_violations(config);
         if !strict_violations.is_empty() {
-            anyhow::bail!("{}", tf("error.missing_field", &[("field", &format!("production_strict violations: {}", strict_violations.join("; ")))]));
+            anyhow::bail!(
+                "{}",
+                tf(
+                    "error.missing_field",
+                    &[(
+                        "field",
+                        &format!(
+                            "production_strict violations: {}",
+                            strict_violations.join("; ")
+                        )
+                    )]
+                )
+            );
         }
     }
 
@@ -2848,11 +3092,17 @@ fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
                 // resolved to empty value — fallback to env
             }
             Err(err) => {
-                warn!("keyring entry for {}/{} cannot be read: {}", service, account, err);
+                warn!(
+                    "keyring entry for {}/{} cannot be read: {}",
+                    service, account, err
+                );
             }
         },
         Err(err) => {
-            warn!("failed to open keyring entry for {}/{}: {}", service, account, err);
+            warn!(
+                "failed to open keyring entry for {}/{}: {}",
+                service, account, err
+            );
         }
     }
 
@@ -2872,7 +3122,13 @@ fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
         }
 
         if secret.is_empty() {
-            anyhow::bail!("{}", tf("error.missing_field", &[("field", &format!("keyring {}/{}", service, account))]));
+            anyhow::bail!(
+                "{}",
+                tf(
+                    "error.missing_field",
+                    &[("field", &format!("keyring {}/{}", service, account))]
+                )
+            );
         }
     }
 
@@ -3053,8 +3309,7 @@ mod tests {
             .validate()
             .expect_err("default phase outside flow must fail");
         assert!(
-            err.to_string()
-                .contains("error.default_phase_not_in_list"),
+            err.to_string().contains("error.default_phase_not_in_list"),
             "unexpected error: {err}"
         );
     }
@@ -3153,8 +3408,7 @@ mod tests {
             .validate()
             .expect_err("zero maintenance interval must fail");
         assert!(
-            err.to_string()
-                .contains("error.runtime_must_be_positive"),
+            err.to_string().contains("error.runtime_must_be_positive"),
             "unexpected error: {err}"
         );
     }
@@ -3182,8 +3436,7 @@ mod tests {
             .validate()
             .expect_err("invalid autotune summary range must fail");
         assert!(
-            err.to_string()
-                .contains("error.autotune_min_le_max"),
+            err.to_string().contains("error.autotune_min_le_max"),
             "unexpected error: {err}"
         );
     }
@@ -3249,8 +3502,7 @@ mod tests {
 
         let err = cfg.validate().expect_err("zero request timeout must fail");
         assert!(
-            err.to_string()
-                .contains("error.phase_field_positive"),
+            err.to_string().contains("error.phase_field_positive"),
             "unexpected error: {err}"
         );
     }
@@ -3331,7 +3583,8 @@ mod tests {
             .validate()
             .expect_err("complex autopilot with >2 reviewers must fail");
         assert!(
-            err.to_string().contains("error.complex_autopilot_max_review_agents"),
+            err.to_string()
+                .contains("error.complex_autopilot_max_review_agents"),
             "unexpected error: {err}"
         );
     }
@@ -3378,7 +3631,8 @@ mod tests {
             .validate()
             .expect_err("burst multiplier out of range must fail");
         assert!(
-            err.to_string().contains("error.phase_option_must_be_number"),
+            err.to_string()
+                .contains("error.phase_option_must_be_number"),
             "unexpected error: {err}"
         );
     }
@@ -3401,7 +3655,8 @@ mod tests {
             .validate()
             .expect_err("zero breaker open seconds must fail");
         assert!(
-            err.to_string().contains("error.phase_option_must_be_number"),
+            err.to_string()
+                .contains("error.phase_option_must_be_number"),
             "unexpected error: {err}"
         );
     }
@@ -3444,8 +3699,7 @@ mod tests {
             .validate()
             .expect_err("non-boolean auto_attach must fail");
         assert!(
-            err.to_string()
-                .contains("error.phase_option_must_be_bool"),
+            err.to_string().contains("error.phase_option_must_be_bool"),
             "unexpected error: {err}"
         );
     }
@@ -3468,7 +3722,8 @@ mod tests {
             .validate()
             .expect_err("unsupported optimization module must fail");
         assert!(
-            err.to_string().contains("error.phase_option_must_be_number"),
+            err.to_string()
+                .contains("error.phase_option_must_be_number"),
             "unexpected error: {err}"
         );
     }
@@ -3600,7 +3855,8 @@ mod tests {
 
     #[test]
     fn adaptive_template_loads_and_validates() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/config.toml.autopilot-adaptive");
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/config.toml.autopilot-adaptive");
         let cfg = AppConfig::load(&path).expect("config.toml.autopilot-adaptive should parse");
 
         cfg.validate()

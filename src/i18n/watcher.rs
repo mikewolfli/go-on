@@ -218,11 +218,8 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
 
         let en_path = temp_dir.path().join("en_US.json");
-        std::fs::write(
-            &en_path,
-            r#"{"language":"en_US","messages":{"key":"old"}}"#,
-        )
-        .expect("failed to write language file");
+        std::fs::write(&en_path, r#"{"language":"en_US","messages":{"key":"old"}}"#)
+            .expect("failed to write language file");
 
         let manager =
             Arc::new(I18nManager::new(temp_dir.path()).expect("failed to initialize i18n manager"));
@@ -231,18 +228,21 @@ mod tests {
             .expect("watcher should be created");
 
         // Before modification — no changes expected
-        assert!(!watcher.check_for_changes(), "no changes before modification");
+        assert!(
+            !watcher.check_for_changes(),
+            "no changes before modification"
+        );
 
         // Modify the file
         std::thread::sleep(std::time::Duration::from_millis(10));
-        std::fs::write(
-            &en_path,
-            r#"{"language":"en_US","messages":{"key":"new"}}"#,
-        )
-        .expect("failed to update language file");
+        std::fs::write(&en_path, r#"{"language":"en_US","messages":{"key":"new"}}"#)
+            .expect("failed to update language file");
 
         // After modification — changes should be detected
-        assert!(watcher.check_for_changes(), "changes should be detected after modification");
+        assert!(
+            watcher.check_for_changes(),
+            "changes should be detected after modification"
+        );
 
         watcher.stop();
     }
@@ -261,8 +261,8 @@ mod tests {
         let manager =
             Arc::new(I18nManager::new(temp_dir.path()).expect("failed to initialize i18n manager"));
 
-        let watcher = LanguageWatcher::new(manager, temp_dir.path())
-            .expect("watcher should be created");
+        let watcher =
+            LanguageWatcher::new(manager, temp_dir.path()).expect("watcher should be created");
 
         // stop should succeed without panicking
         watcher.stop();
@@ -275,17 +275,14 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
 
         let en_path = temp_dir.path().join("en_US.json");
-        std::fs::write(
-            &en_path,
-            r#"{"language":"en_US","messages":{"a":"b"}}"#,
-        )
-        .expect("failed to write language file");
+        std::fs::write(&en_path, r#"{"language":"en_US","messages":{"a":"b"}}"#)
+            .expect("failed to write language file");
 
         let manager =
             Arc::new(I18nManager::new(temp_dir.path()).expect("failed to initialize i18n manager"));
 
-        let mut watcher = LanguageWatcher::new(manager, temp_dir.path())
-            .expect("watcher should be created");
+        let mut watcher =
+            LanguageWatcher::new(manager, temp_dir.path()).expect("watcher should be created");
 
         // update_file_times should succeed without error
         assert!(watcher.update_file_times().is_ok());

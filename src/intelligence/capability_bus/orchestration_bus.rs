@@ -368,8 +368,16 @@ impl OrchestrationBus {
     /// Queue a task node in the execution graph, connected from `predecessor`.
     ///
     /// Returns the IDs of nodes that are now ready to run.
-    pub fn queue_graph_task(&self, task_id: &str, task_name: &str, predecessor: &str) -> Vec<String> {
-        let mut graph = self.execution_graph.lock().expect("execution_graph lock poisoned");
+    pub fn queue_graph_task(
+        &self,
+        task_id: &str,
+        task_name: &str,
+        predecessor: &str,
+    ) -> Vec<String> {
+        let mut graph = self
+            .execution_graph
+            .lock()
+            .expect("execution_graph lock poisoned");
         let node = ExNode::new(task_id, ExNodeKind::Task, task_name);
         graph.add_node(node);
         graph.add_edge(predecessor, task_id, None);
@@ -379,9 +387,25 @@ impl OrchestrationBus {
     /// Add a conditional branch in the execution graph.
     ///
     /// The `ExCondition::Always` guard is used for unconditional pass-through.
-    pub fn add_graph_condition(&self, cond_id: &str, predecessor: &str, true_target: &str, false_target: &str) {
-        let mut graph = self.execution_graph.lock().expect("execution_graph lock poisoned");
-        graph.add_condition(cond_id, cond_id, ExCondition::Always, predecessor, true_target, false_target);
+    pub fn add_graph_condition(
+        &self,
+        cond_id: &str,
+        predecessor: &str,
+        true_target: &str,
+        false_target: &str,
+    ) {
+        let mut graph = self
+            .execution_graph
+            .lock()
+            .expect("execution_graph lock poisoned");
+        graph.add_condition(
+            cond_id,
+            cond_id,
+            ExCondition::Always,
+            predecessor,
+            true_target,
+            false_target,
+        );
     }
 
     /// Evaluate a condition against current node outputs.
@@ -393,7 +417,10 @@ impl OrchestrationBus {
 
     /// Mark a task node as complete and record its output.
     pub fn complete_graph_task(&self, task_id: &str, output: serde_json::Value) -> Result<bool> {
-        let mut graph = self.execution_graph.lock().expect("execution_graph lock poisoned");
+        let mut graph = self
+            .execution_graph
+            .lock()
+            .expect("execution_graph lock poisoned");
         graph.complete_task(task_id, output)?;
         Ok(graph.is_complete())
     }
@@ -406,33 +433,58 @@ impl OrchestrationBus {
         parallel_tasks: Vec<(String, String)>,
         predecessor: &str,
     ) -> Result<(String, String)> {
-        let mut graph = self.execution_graph.lock().expect("execution_graph lock poisoned");
+        let mut graph = self
+            .execution_graph
+            .lock()
+            .expect("execution_graph lock poisoned");
         graph.add_fan_out(branch_name, join_name, parallel_tasks, predecessor)
     }
 
     /// Set a node's state in the execution graph.
-    pub fn set_graph_node_state(&self, id: &str, state: crate::orchestration::execution_graph::ExNodeState) -> Result<()> {
-        self.execution_graph.lock().expect("execution_graph lock poisoned").set_node_state(id, state)
+    pub fn set_graph_node_state(
+        &self,
+        id: &str,
+        state: crate::orchestration::execution_graph::ExNodeState,
+    ) -> Result<()> {
+        self.execution_graph
+            .lock()
+            .expect("execution_graph lock poisoned")
+            .set_node_state(id, state)
     }
 
     /// Check if a fan-out group is complete.
     pub fn is_fan_out_complete(&self, group_id: &str) -> bool {
-        self.execution_graph.lock().expect("execution_graph lock poisoned").is_fan_out_complete(group_id)
+        self.execution_graph
+            .lock()
+            .expect("execution_graph lock poisoned")
+            .is_fan_out_complete(group_id)
     }
 
     /// Count graph nodes in a given state.
-    pub fn count_graph_nodes_by_state(&self, state: &crate::orchestration::execution_graph::ExNodeState) -> usize {
-        self.execution_graph.lock().expect("execution_graph lock poisoned").count_by_state(state)
+    pub fn count_graph_nodes_by_state(
+        &self,
+        state: &crate::orchestration::execution_graph::ExNodeState,
+    ) -> usize {
+        self.execution_graph
+            .lock()
+            .expect("execution_graph lock poisoned")
+            .count_by_state(state)
     }
 
     /// Summary of fan-out groups: (group_id, completed_count, total_count).
     pub fn graph_fan_out_summary(&self) -> Vec<(String, usize, usize)> {
-        self.execution_graph.lock().expect("execution_graph lock poisoned").fan_out_summary()
+        self.execution_graph
+            .lock()
+            .expect("execution_graph lock poisoned")
+            .fan_out_summary()
     }
 
     /// Reset the execution graph for reuse.
     pub fn reset_graph(&self) {
-        self.execution_graph.lock().expect("execution_graph lock poisoned").reset();
+        self.execution_graph
+            .lock()
+            .expect("execution_graph lock poisoned")
+            .reset();
     }
 }
 

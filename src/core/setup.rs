@@ -1058,7 +1058,13 @@ fn prompt_additional_agents() -> Result<Vec<CustomAgentSpec>> {
     let mut agents: Vec<CustomAgentSpec> = Vec::new();
 
     loop {
-        println!("\n{}", tf("cli.custom_agent_title", &[("name", &(agents.len() + 1).to_string())]));
+        println!(
+            "\n{}",
+            tf(
+                "cli.custom_agent_title",
+                &[("name", &(agents.len() + 1).to_string())]
+            )
+        );
 
         // Name
         let name = loop {
@@ -1076,7 +1082,13 @@ fn prompt_additional_agents() -> Result<Vec<CustomAgentSpec>> {
         };
 
         // Type
-        println!("  {}", tf("cli.agent_type_available", &[("types", &KNOWN_TYPES.join(", "))]));
+        println!(
+            "  {}",
+            tf(
+                "cli.agent_type_available",
+                &[("types", &KNOWN_TYPES.join(", "))]
+            )
+        );
         let agent_type = loop {
             let raw = prompt_value(&format!("  {}", t("cli.agent_type_prompt")))?;
             let trimmed = raw.trim().to_string();
@@ -1086,7 +1098,13 @@ fn prompt_additional_agents() -> Result<Vec<CustomAgentSpec>> {
             if KNOWN_TYPES.contains(&trimmed.as_str()) {
                 break trimmed;
             }
-            println!("  {}", tf("cli.agent_type_unknown", &[("types", &KNOWN_TYPES.join(", "))]));
+            println!(
+                "  {}",
+                tf(
+                    "cli.agent_type_unknown",
+                    &[("types", &KNOWN_TYPES.join(", "))]
+                )
+            );
         };
 
         // URL (required for non-managed types)
@@ -1188,11 +1206,7 @@ fn prompt_provider_selection_quick(detected_providers: &[String]) -> Result<Vec<
                         .map(|i| (i + 1).to_string())
                 })
                 .collect();
-            println!(
-                "\n  {} {}",
-                t("cli.detected_note"),
-                default_nums.join(",")
-            );
+            println!("\n  {} {}", t("cli.detected_note"), default_nums.join(","));
             print!(
                 "\n{} [{}]: ",
                 t("cli.enter_numbers"),
@@ -1243,10 +1257,7 @@ fn prompt_provider_selection_quick(detected_providers: &[String]) -> Result<Vec<
             }
         }
         if let Some(bad) = invalid {
-            println!(
-                "  {}",
-                tf("cli.invalid_selection", &[("value", &bad)])
-            );
+            println!("  {}", tf("cli.invalid_selection", &[("value", &bad)]));
             continue;
         }
         if selected.is_empty() {

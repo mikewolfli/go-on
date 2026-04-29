@@ -82,27 +82,80 @@
           </div>
         </div>
 
+        <!-- Image / File Previews -->
+        <div v-if="attachments.length" class="attachment-previews">
+          <div class="attachment-previews-header">
+            <span class="attachment-count">{{ t('chat.imageAttached', { n: attachments.length }) }}</span>
+            <el-button size="small" text @click="removeAllAttachments">{{ t('chat.removeAll') }}</el-button>
+          </div>
+          <div class="attachment-previews-scroll">
+            <div
+              v-for="(att, idx) in attachments"
+              :key="idx"
+              class="attachment-thumb"
+            >
+              <img
+                v-if="att.type.startsWith('image/')"
+                :src="att.dataUrl"
+                class="attachment-thumb-img"
+                :alt="att.name"
+              />
+              <div v-else class="attachment-thumb-file">
+                <el-icon><Document /></el-icon>
+                <span class="attachment-thumb-name">{{ att.name }}</span>
+              </div>
+              <el-button
+                class="attachment-remove"
+                size="small"
+                circle
+                @click="removeAttachment(idx)"
+              >
+                ✕
+              </el-button>
+            </div>
+          </div>
+        </div>
+
         <!-- Input Area (1/5 height) -->
         <div class="input-area">
-          <el-input
-            v-model="inputText"
-            type="textarea"
-            :rows="3"
-            :placeholder="t('chat.inputPlaceholder')"
-            :disabled="loading || !isBackendRunning"
-            @keydown.ctrl.enter="sendMessage"
-            @keydown.meta.enter="sendMessage"
-            resize="none"
-          />
-          <el-button
-            type="primary"
-            :loading="loading"
-            :disabled="!inputText.trim() || !isBackendRunning"
-            @click="sendMessage"
-            class="send-button"
-          >
-            {{ t('chat.send') }}
-          </el-button>
+          <div class="input-area-row">
+            <el-upload
+              :show-file-list="false"
+              :multiple="true"
+              :accept="acceptTypes"
+              :before-upload="handleFileSelect"
+              :auto-upload="false"
+              :disabled="loading"
+            >
+              <el-button
+                size="small"
+                :disabled="loading"
+                :title="t('chat.attachImage')"
+                class="upload-button"
+              >
+                <svg t="1743266093421" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="2549" width="16" height="16"><path d="M928 64H96C42.98 64 0 106.98 0 160v704c0 53.02 42.98 96 96 96h832c53.02 0 96-42.98 96-96V160c0-53.02-42.98-96-96-96z m32 800c0 17.673-14.327 32-32 32H96c-17.673 0-32-14.327-32-32V160c0-17.673 14.327-32 32-32h832c17.673 0 32 14.327 32 32v704z" fill="currentColor" p-id="2550"></path><path d="M384 480l-128 192h512l-192-256-128 160zM256 320c-35.346 0-64 28.654-64 64s28.654 64 64 64 64-28.654 64-64-28.654-64-64-64z" fill="currentColor" p-id="2551"></path></svg>
+              </el-button>
+            </el-upload>
+            <el-input
+              v-model="inputText"
+              type="textarea"
+              :rows="3"
+              :placeholder="t('chat.inputPlaceholder')"
+              :disabled="loading || !isBackendRunning"
+              @keydown.ctrl.enter="sendMessage"
+              @keydown.meta.enter="sendMessage"
+              resize="none"
+            />
+            <el-button
+              type="primary"
+              :loading="loading"
+              :disabled="(!inputText.trim() && !attachments.length) || !isBackendRunning"
+              @click="sendMessage"
+              class="send-button"
+            >
+              {{ t('chat.send') }}
+            </el-button>
+          </div>
         </div>
 
         <!-- Mode Bar (bottom) -->
@@ -147,7 +200,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElIcon } from "element-plus";
+import { Document } from "@element-plus/icons-vue";
 import { useRuntimeStore } from "../stores/runtime";
 import { defaultRuntimeBaseUrl } from "../services/protocolContract";
 
@@ -170,6 +224,47 @@ const chatWorkflow = ref("auto");
 const expandedSession = ref<string | null>(null);
 const activeSessionId = ref<string | null>(null);
 
+// ── File Attachments ─────────────────────────────────────────────────────────
+interface Attachment {
+  name: string;
+  type: string;
+  dataUrl: string;
+  file: File;
+}
+const attachments = ref<Attachment[]>([]);
+const acceptTypes = "image/*,.pdf,.txt,.md,.csv,.json";
+
+function handleFileSelect(file: File): boolean {
+  const allowedExtensions = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "pdf", "txt", "md", "csv", "json"];
+  const ext = file.name.split(".").pop()?.toLowerCase() || "";
+  const isImage = file.type.startsWith("image/");
+  if (!isImage && !allowedExtensions.includes(ext)) {
+    ElMessage.warning(t("chat.unsupportedFileType", { type: file.type || ext }));
+    return false;
+  }
+
+  // Read as data URL
+  const reader = new FileReader();
+  reader.onload = () => {
+    attachments.value.push({
+      name: file.name,
+      type: file.type,
+      dataUrl: reader.result as string,
+      file,
+    });
+  };
+  reader.readAsDataURL(file);
+  return false; // prevent auto-upload
+}
+
+function removeAttachment(index: number) {
+  attachments.value.splice(index, 1);
+}
+
+function removeAllAttachments() {
+  attachments.value = [];
+}
+
 // ── Agents ────────────────────────────────────────────────────────────────────
 interface AgentInfo { id: string; name: string }
 const activeAgents = ref<AgentInfo[]>([
@@ -185,7 +280,13 @@ interface Session {
   messages: ChatMessage[];
 }
 
-interface ChatMessage { id: string; role: "user" | "assistant"; content: string }
+interface ChatMessageContentPart {
+  type: "text" | "image_url";
+  text?: string;
+  image_url?: { url: string; detail?: string };
+}
+
+interface ChatMessage { id: string; role: "user" | "assistant"; content: string | ChatMessageContentPart[] }
 
 const sessions = ref<Session[]>([]);
 let sessionCounter = 0;
@@ -224,7 +325,16 @@ function sanitizeHtml(html: string): string {
   );
 }
 
-function renderMarkdown(text: string): string {
+function renderMarkdown(text: string | ChatMessageContentPart[]): string {
+  // For multi-modal content, render as plain text from the text part
+  if (Array.isArray(text)) {
+    const textPart = text.find(p => p.type === "text");
+    return renderMarkdownText(textPart?.text || "");
+  }
+  return renderMarkdownText(text);
+}
+
+function renderMarkdownText(text: string): string {
   const html = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -239,7 +349,7 @@ function renderMarkdown(text: string): string {
 // ── Send ──────────────────────────────────────────────────────────────────────
 async function sendMessage() {
   const text = inputText.value.trim();
-  if (!text || loading.value) return;
+  if ((!text && !attachments.value.length) || loading.value) return;
 
   if (!activeSessionId.value) {
     newSession();
@@ -248,9 +358,25 @@ async function sendMessage() {
   const session = sessions.value.find(s => s.id === activeSessionId.value);
   if (!session) return;
 
-  const userMsg: ChatMessage = { id: `m${Date.now()}`, role: "user", content: text };
+  // Build content: string-only or multi-modal array
+  let content: string | ChatMessageContentPart[] = text;
+  if (attachments.value.length > 0) {
+    const parts: ChatMessageContentPart[] = [{ type: "text", text }];
+    for (const att of attachments.value) {
+      if (att.type.startsWith("image/")) {
+        parts.push({
+          type: "image_url",
+          image_url: { url: att.dataUrl, detail: "auto" },
+        });
+      }
+    }
+    content = parts;
+  }
+
+  const userMsg: ChatMessage = { id: `m${Date.now()}`, role: "user", content };
   session.messages.push(userMsg);
   inputText.value = "";
+  attachments.value = []; // clear after sending
   loading.value = true;
   await nextTick();
   scrollToBottom();
@@ -456,14 +582,102 @@ onMounted(() => {
   40% { transform: scale(1.2); opacity: 1; }
 }
 
+/* Attachment Previews */
+.attachment-previews {
+  flex-shrink: 0;
+  padding: 6px 12px 0 12px;
+  border-top: 1px solid var(--color-border, #e0e0e0);
+}
+.attachment-previews-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.attachment-count {
+  font-size: 12px;
+  color: var(--color-text-secondary, #6b7280);
+}
+.attachment-previews-scroll {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+.attachment-thumb {
+  position: relative;
+  flex-shrink: 0;
+  width: 80px;
+  height: 80px;
+  border: 1px solid var(--color-border, #e0e0e0);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-alt, #f5f5f5);
+}
+.attachment-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.attachment-thumb-file {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  font-size: 10px;
+  text-align: center;
+  word-break: break-all;
+  line-height: 1.2;
+  color: var(--color-text-secondary, #6b7280);
+}
+.attachment-thumb-name {
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  min-width: 0;
+  padding: 0;
+  font-size: 10px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+}
+.attachment-remove:hover {
+  opacity: 1;
+}
+
 /* Input Area */
 .input-area {
   flex-shrink: 0;
   padding: 8px 12px;
   border-top: 1px solid var(--color-border, #e0e0e0);
+}
+.input-area-row {
   display: flex;
   gap: 8px;
   align-items: flex-end;
+}
+.upload-button {
+  flex-shrink: 0;
+  align-self: flex-end;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  margin-bottom: 2px;
 }
 .send-button { flex-shrink: 0; align-self: flex-end; }
 

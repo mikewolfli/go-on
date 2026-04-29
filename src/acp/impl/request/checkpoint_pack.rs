@@ -149,9 +149,8 @@ pub async fn create_checkpoint_record(
 
     // Auto-detect parent checkpoint from current branch head when not explicitly provided.
     // This ensures checkpoints created after rollback or normal creation form a proper chain.
-    let resolved_parent = parent_checkpoint_id.or_else(|| {
-        state.branch_heads.get(&branch_key).cloned()
-    });
+    let resolved_parent =
+        parent_checkpoint_id.or_else(|| state.branch_heads.get(&branch_key).cloned());
 
     let checkpoint = ConversationCheckpoint {
         checkpoint_id,
@@ -189,11 +188,11 @@ pub async fn persist_checkpoint_metacognitive_loop(
     loop_state: Value,
 ) -> Value {
     let mut state = server.conversation_state.lock().await;
-    if let Some(checkpoint) = state
-        .checkpoints
-        .iter_mut()
-        .find(|cp| cp.checkpoint_id == checkpoint_id && cp.conversation_id == conversation_id && cp.branch_id == branch_id)
-    {
+    if let Some(checkpoint) = state.checkpoints.iter_mut().find(|cp| {
+        cp.checkpoint_id == checkpoint_id
+            && cp.conversation_id == conversation_id
+            && cp.branch_id == branch_id
+    }) {
         checkpoint.metacognitive_loop = Some(loop_state.clone());
     }
     loop_state

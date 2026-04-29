@@ -1061,7 +1061,11 @@ async fn initialize_cache(
         .map_err(|e| anyhow::anyhow!("cache init task join error: {}", e))?;
 
         // profile-local: cache init failure is non-fatal (adaptive behaviour).
-        #[cfg(feature = "profile-local")]
+        #[cfg(all(
+            feature = "profile-local",
+            not(feature = "profile-simple-server"),
+            not(feature = "profile-multi-users-server")
+        ))]
         {
             match result {
                 Ok(cache) => Ok(cache),
@@ -1075,7 +1079,11 @@ async fn initialize_cache(
             }
         }
 
-        #[cfg(not(feature = "profile-local"))]
+        #[cfg(not(all(
+            feature = "profile-local",
+            not(feature = "profile-simple-server"),
+            not(feature = "profile-multi-users-server")
+        )))]
         return result;
     }
 }
@@ -1132,7 +1140,11 @@ async fn initialize_vector_store(
         .map_err(|e| anyhow::anyhow!("vector init task join error: {}", e))?;
 
         // profile-local: vector init failure is non-fatal (adaptive behaviour).
-        #[cfg(feature = "profile-local")]
+        #[cfg(all(
+            feature = "profile-local",
+            not(feature = "profile-simple-server"),
+            not(feature = "profile-multi-users-server")
+        ))]
         {
             match result {
                 Ok(store) => Ok(store),
@@ -1146,7 +1158,11 @@ async fn initialize_vector_store(
             }
         }
 
-        #[cfg(not(feature = "profile-local"))]
+        #[cfg(not(all(
+            feature = "profile-local",
+            not(feature = "profile-simple-server"),
+            not(feature = "profile-multi-users-server")
+        )))]
         return result;
     }
 }

@@ -6,6 +6,7 @@ import {
   getEndpointHealthStatsWithMeta,
   getUsageHeatmapWithMeta,
   getRecentLogs,
+  fetchRuntimeFeatures,
   type EndpointHealthStat,
   type EditorIntegrationStatus,
   type UsageHeatmap,
@@ -14,6 +15,7 @@ import {
   type HealthSnapshot,
   type LogChunk,
   type ServiceStatus,
+  type RuntimeFeatures,
 } from "../services/bridge";
 import { defaultRuntimeBaseUrl } from "../services/protocolContract";
 
@@ -55,6 +57,7 @@ export const useRuntimeStore = defineStore("runtime", {
     statusPollingInFlight: false,
     logsPollingInFlight: false,
     loading: false,
+    activeFeatures: {} as Partial<RuntimeFeatures>,
     lastError: "",
     offline: false,
     lastKnownStatus: { running: false } as ServiceStatus,
@@ -192,6 +195,16 @@ export const useRuntimeStore = defineStore("runtime", {
         String(this.logsPollingMs),
       );
     },
+    async refreshFeatures() {
+      if (!this.status.running) {
+        return;
+      }
+      try {
+        this.activeFeatures = await fetchRuntimeFeatures();
+      } catch {
+        // keep previous features on error
+      }
+    },
     async refreshAll() {
       this.loading = true;
       await Promise.all([
@@ -201,6 +214,7 @@ export const useRuntimeStore = defineStore("runtime", {
         this.refreshUsageHeatmap(),
         this.refreshEditorIntegrations(),
         this.refreshEndpointHealthStats(),
+        this.refreshFeatures(),
       ]);
       this.loading = false;
     },

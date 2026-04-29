@@ -297,7 +297,10 @@ async fn handle_http_connection(
                 result: None,
                 error: Some(crate::mcp::JsonRpcError {
                     code: crate::mcp::error_codes::PARSE_ERROR,
-                    message: tf("error.http_parse_error", &[("error", &parse_error.to_string())]),
+                    message: tf(
+                        "error.http_parse_error",
+                        &[("error", &parse_error.to_string())],
+                    ),
                     data: Some(error_data),
                 }),
                 id: None,

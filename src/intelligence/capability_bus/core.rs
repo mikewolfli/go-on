@@ -40,8 +40,8 @@ use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::intelligence::consciousness::ConsciousnessMetrics;
 use crate::intelligence::consensus::ConsensusEngine;
 use crate::intelligence::continuous_learning::ContinuousLearningCenter;
-use crate::intelligence::evolution_graph::{EvolutionGraph, EvolutionStage, TrendDirection};
 use crate::intelligence::discovery::DiscoveryCenter;
+use crate::intelligence::evolution_graph::{EvolutionGraph, EvolutionStage, TrendDirection};
 
 use crate::intelligence::federated_rl::FederatedRL;
 use crate::intelligence::matcher::ScenarioMatcher;
@@ -229,6 +229,14 @@ pub struct CapabilityBusProfile {
     pub distributed_memory_shared: u32,
     /// Number of skill evolution records
     pub skill_evolution_count: u32,
+    /// Phase-gated sub-agent factory active instances (simple/multi profiles)
+    pub agent_factory_active_instances: u32,
+    /// Phase-gated sub-agent factory templates (simple/multi profiles)
+    pub agent_factory_templates: u32,
+    /// Phase-gated orchestration council active members (simple/multi profiles)
+    pub council_active_members: u32,
+    /// Phase-gated orchestration council pending proposals (simple/multi profiles)
+    pub council_pending_proposals: u32,
 }
 
 impl Default for CapabilityBusProfile {
@@ -262,6 +270,10 @@ impl Default for CapabilityBusProfile {
             distributed_memory_peers: 0,
             distributed_memory_shared: 0,
             skill_evolution_count: 0,
+            agent_factory_active_instances: 0,
+            agent_factory_templates: 0,
+            council_active_members: 0,
+            council_pending_proposals: 0,
         }
     }
 }
@@ -580,11 +592,26 @@ impl CapabilityBus {
             self.optimization_bus
                 .recommend(&task_type_str, token_estimate.max(1024), "balanced");
 
+        // Phase 4: Protocol recommendation (used for routing diagnostics)
+        let proto_reco = self
+            .protocol_bus
+            .recommend_protocol(&task_type_str, token_estimate.max(1024));
+        self.record_event(
+            "sense",
+            None,
+            None,
+            "protocol_recommend",
+            serde_json::json!({
+                "preferred_protocol": proto_reco.preferred_protocol,
+                "confidence": proto_reco.confidence,
+            }),
+        );
+
         // Send a heartbeat through the transport layer
         if let Ok(transport) = self.transport.lock() {
-            let _ = transport.send_heartbeat("capability-bus", "harness-bus", "{\"status\":\"alive\"}");
+            let _ =
+                transport.send_heartbeat("capability-bus", "harness-bus", "{\"status\":\"alive\"}");
         }
-
 
         SensingOutput {
             capability_agent_count: cap_agents,
@@ -646,7 +673,8 @@ impl CapabilityBus {
         }
 
         // Step B: pick best agent from capability graph + reputation
-        let candidate_agents = self
+        #[allow(unused_mut)]
+        let mut candidate_agents = self
             .capability_graph
             .lock()
             .map(|g| {
@@ -668,6 +696,25 @@ impl CapabilityBus {
                 candidates
             })
             .unwrap_or_default();
+
+        #[cfg(any(
+            feature = "profile-simple-server",
+            feature = "profile-multi-users-server"
+        ))]
+        {
+            // In server profiles, also merge runtime-created sub-agent templates
+            // from AgentFactory into routing candidates.
+            if let Ok(factory) = self.agent_factory.lock() {
+                for inst in factory.find_agents_by_capability("general") {
+                    if !candidate_agents
+                        .iter()
+                        .any(|name| name == &inst.template_name)
+                    {
+                        candidate_agents.push(inst.template_name);
+                    }
+                }
+            }
+        }
 
         let selected_agent = self.select_best_agent(&candidate_agents, sensing);
 
@@ -731,6 +778,8 @@ impl CapabilityBus {
                 "confidence": confidence,
                 "recommended_mode": recommended_mode,
                 "available_tools": available_tools.len(),
+                "candidate_agents": candidate_agents.len(),
+                "healthy_agents": sensing.healthy_agents.len(),
             }),
         );
 
@@ -892,6 +941,9 @@ impl CapabilityBus {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
+        let flow_id = format!("{}::{}", task_type, task_id);
+        let _ = self.orchestration_bus.start_flow(&flow_id, task_id);
+
         // 1. Write to learning bus
         if let Ok(mut lb) = self.learning_bus.lock() {
             lb.push(WorkflowLearningEvent {
@@ -924,6 +976,41 @@ impl CapabilityBus {
         self.optimization_bus
             .record_execution(agent, duration_ms, token_cost, success);
 
+        // 4b. Update ProtocolBus with runtime latency on active transport.
+        let active_transport = self.protocol_bus.active_transport();
+        self.protocol_bus
+            .record_protocol_latency(&active_transport, duration_ms);
+
+        // 4c. Persist execution summary to MemoryBus L1/L2.
+        let memory_key = format!("{}::{}", task_type, task_id);
+        let memory_value = serde_json::json!({
+            "agent": agent,
+            "success": success,
+            "duration_ms": duration_ms,
+            "token_cost": token_cost,
+            "quality_score": quality_score,
+        })
+        .to_string()
+        .into_bytes();
+        self.memory_bus.store(
+            &memory_key,
+            memory_value,
+            &crate::intelligence::capability_bus::memory_bus::CacheStrategy::default(),
+        );
+
+        // 4d. Persist execution summary to DistributedMemoryBus and share.
+        let dist_id = self.distributed_memory_bus.store_local(
+            &memory_key,
+            &format!(
+                "agent={} success={} quality={:.3}",
+                agent, success, quality_score
+            ),
+            vec![task_type.to_string(), agent.to_string()],
+            quality_score,
+            300_000,
+        );
+        let _ = self.distributed_memory_bus.share_with_peers(&dist_id);
+
         // 5. Record event
         let outcome = if success { "success" } else { "failure" };
         self.record_event(
@@ -948,6 +1035,9 @@ impl CapabilityBus {
             &serde_json::json!({"success": success, "duration_ms": duration_ms}),
             vec![],
         ));
+
+        // 7. Complete orchestration flow lifecycle for this task.
+        self.orchestration_bus.complete_flow(&flow_id, task_id);
     }
 
     // ------------------------------------------------------------------
@@ -1089,9 +1179,12 @@ impl CapabilityBus {
                 if let Some(rec) = record {
                     let next_stage = match rec.current_stage {
                         EvolutionStage::New => Some(EvolutionStage::Learning),
-                        EvolutionStage::Learning if rec.versions.len() >= 3
-                            && rec.trend == TrendDirection::Improving =>
-                            Some(EvolutionStage::Mature),
+                        EvolutionStage::Learning
+                            if rec.versions.len() >= 3
+                                && rec.trend == TrendDirection::Improving =>
+                        {
+                            Some(EvolutionStage::Mature)
+                        }
                         _ => None,
                     };
                     if let Some(stage) = next_stage {
@@ -1151,15 +1244,16 @@ impl CapabilityBus {
                 is_online: true,
                 last_heartbeat_ms: 0,
             });
-            let round_id = self
-                .consensus
-                .start_round("capability-bus", vec![serde_json::json!({
+            let round_id = self.consensus.start_round(
+                "capability-bus",
+                vec![serde_json::json!({
                     "action": action,
                     "state": state,
                     "reward": reward,
                     "q_value": q_value,
                     "success": success,
-                })]);
+                })],
+            );
             if let Ok(rid) = round_id {
                 let _ = self.consensus.cast_vote(ConsensusVote {
                     node_id: "capability-bus".to_string(),
@@ -1266,6 +1360,23 @@ impl CapabilityBus {
                     .values()
                     .map(|v| v.len())
                     .sum::<usize>() as u32;
+            }
+
+            #[cfg(any(
+                feature = "profile-simple-server",
+                feature = "profile-multi-users-server"
+            ))]
+            {
+                if let Ok(factory) = self.agent_factory.lock() {
+                    let fp = factory.profile();
+                    p.agent_factory_active_instances = fp.active_instances as u32;
+                    p.agent_factory_templates = fp.total_templates as u32;
+                }
+                if let Ok(council) = self.council.lock() {
+                    let cp = council.profile();
+                    p.council_active_members = cp.active_members;
+                    p.council_pending_proposals = cp.pending_count;
+                }
             }
 
             p.clone()

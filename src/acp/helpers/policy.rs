@@ -531,18 +531,18 @@ pub fn rank_execution_agents(
             let (role_match_score, role_reason) = if let Some(role) = desired_role {
                 let role = role.to_ascii_lowercase();
                 let keywords = role_keywords_for(role.as_str());
-                    let dynamic_keywords = if keywords.is_empty() {
-                        role_registry_keywords_for(role.as_str())
-                    } else {
-                        Vec::new()
-                    };
-                    let static_match = !keywords.is_empty()
-                        && keywords.iter().any(|keyword| lower.contains(keyword));
-                    let dynamic_match = !dynamic_keywords.is_empty()
-                        && dynamic_keywords
-                            .iter()
-                            .any(|keyword| lower.contains(&keyword.to_ascii_lowercase()));
-                    if static_match || dynamic_match {
+                let dynamic_keywords = if keywords.is_empty() {
+                    role_registry_keywords_for(role.as_str())
+                } else {
+                    Vec::new()
+                };
+                let static_match =
+                    !keywords.is_empty() && keywords.iter().any(|keyword| lower.contains(keyword));
+                let dynamic_match = !dynamic_keywords.is_empty()
+                    && dynamic_keywords
+                        .iter()
+                        .any(|keyword| lower.contains(&keyword.to_ascii_lowercase()));
+                if static_match || dynamic_match {
                     (0.35f64, format!("role match for {}", role))
                 } else if keywords.is_empty() {
                     // Custom or unknown role: neutral score (no penalty)

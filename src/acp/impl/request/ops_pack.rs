@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 
 pub(super) async fn handle_breaker_status(
     server: &AcpServer,
@@ -801,13 +801,14 @@ pub(super) async fn handle_release_readiness(
     let custom_role_registry_gate = blue34_release_closure_gate && status.lifecycle.is_healthy;
     let custom_role_dynamic_matching_gate = custom_role_registry_gate && observability_gate;
     let compliance_audit_metadata_gate = custom_role_dynamic_matching_gate && strict_enabled;
-    let self_rationalization_guard_gate = compliance_audit_metadata_gate
-        && metrics.total_requests >= metrics.failed_requests;
+    let self_rationalization_guard_gate =
+        compliance_audit_metadata_gate && metrics.total_requests >= metrics.failed_requests;
     let startup_context_loader_gate = self_rationalization_guard_gate;
     let layered_prompt_builder_gate = startup_context_loader_gate && status.lifecycle.is_healthy;
     let layered_token_trigger_gate = layered_prompt_builder_gate && observability_gate;
     let multi_priority_scheduler_gate = layered_token_trigger_gate && dual_track_consistency_gate;
-    let worker_scheduler_backpressure_gate = multi_priority_scheduler_gate && multi_user_server_gate;
+    let worker_scheduler_backpressure_gate =
+        multi_priority_scheduler_gate && multi_user_server_gate;
     let fork_isolation_guard_gate = worker_scheduler_backpressure_gate && open_breakers == 0;
     let capability_graph_gate = fork_isolation_guard_gate && registered_agent_total > 0;
     let provenance_ledger_gate = capability_graph_gate && observability_gate;
@@ -815,9 +816,8 @@ pub(super) async fn handle_release_readiness(
     let k8s_delivery_pack_gate = node_reputation_tracker_gate && detail_multi_user_lifecycle_ready;
     let sdk_multi_language_stub_gate = k8s_delivery_pack_gate && status.lifecycle.is_healthy;
     let workflow_type_tri_mode_gate = sdk_multi_language_stub_gate && dual_track_consistency_gate;
-    let blue35_release_closure_gate = workflow_type_tri_mode_gate
-        && sdk_multi_language_stub_gate
-        && k8s_delivery_pack_gate;
+    let blue35_release_closure_gate =
+        workflow_type_tri_mode_gate && sdk_multi_language_stub_gate && k8s_delivery_pack_gate;
 
     let gates = vec![
         json!({

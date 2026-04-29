@@ -4,12 +4,12 @@
 //! external environment — tracking entities, relationships, events, and state
 //! changes over time. All state is guarded behind `Arc<Mutex<>>`.
 
+use crate::i18n::runtime::tf;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::i18n::runtime::tf;
 
 // ---------------------------------------------------------------------------
 // Causal inference & prediction
@@ -259,7 +259,10 @@ impl WorldModel {
                 "{}",
                 tf(
                     "error.entity_already_registered",
-                    &[("name", name), ("entity_type", &format!("{:?}", entity_type))]
+                    &[
+                        ("name", name),
+                        ("entity_type", &format!("{:?}", entity_type))
+                    ]
                 )
             );
         }

@@ -222,28 +222,13 @@ mod tests {
     fn test_match_workflow_by_type() {
         // Test that WorkflowDetector::detect returns expected types
         // given explicit mode matches.
-        let result = WorkflowDetector::detect(
-            Some(&WorkflowType::Auto),
-            Some("free"),
-            None,
-            None,
-        );
+        let result = WorkflowDetector::detect(Some(&WorkflowType::Auto), Some("free"), None, None);
         assert_eq!(result, WorkflowType::Free);
 
-        let result = WorkflowDetector::detect(
-            Some(&WorkflowType::Auto),
-            Some("dev"),
-            None,
-            None,
-        );
+        let result = WorkflowDetector::detect(Some(&WorkflowType::Auto), Some("dev"), None, None);
         assert_eq!(result, WorkflowType::Dev);
 
-        let result = WorkflowDetector::detect(
-            Some(&WorkflowType::Auto),
-            Some("auto"),
-            None,
-            None,
-        );
+        let result = WorkflowDetector::detect(Some(&WorkflowType::Auto), Some("auto"), None, None);
         assert_eq!(result, WorkflowType::Auto);
     }
 
@@ -273,12 +258,7 @@ mod tests {
             has_code_repo: true,
             ..Default::default()
         };
-        let result = WorkflowDetector::detect(
-            Some(&WorkflowType::Auto),
-            None,
-            None,
-            Some(&ctx),
-        );
+        let result = WorkflowDetector::detect(Some(&WorkflowType::Auto), None, None, Some(&ctx));
         assert_eq!(result, WorkflowType::Dev);
 
         // Auto mode, no request mode, no role, no code repo → General
@@ -286,49 +266,25 @@ mod tests {
             has_code_repo: false,
             ..Default::default()
         };
-        let result = WorkflowDetector::detect(
-            Some(&WorkflowType::Auto),
-            None,
-            None,
-            Some(&ctx),
-        );
+        let result = WorkflowDetector::detect(Some(&WorkflowType::Auto), None, None, Some(&ctx));
         assert_eq!(result, WorkflowType::General);
     }
 
     #[test]
     fn test_workflow_detector_explicit_type() {
         // Explicit non-Auto config type should pass through
-        let result = WorkflowDetector::detect(
-            Some(&WorkflowType::General),
-            None,
-            None,
-            None,
-        );
+        let result = WorkflowDetector::detect(Some(&WorkflowType::General), None, None, None);
         assert_eq!(result, WorkflowType::General);
 
-        let result = WorkflowDetector::detect(
-            Some(&WorkflowType::Free),
-            None,
-            None,
-            None,
-        );
+        let result = WorkflowDetector::detect(Some(&WorkflowType::Free), None, None, None);
         assert_eq!(result, WorkflowType::Free);
 
-        let result = WorkflowDetector::detect(
-            Some(&WorkflowType::Custom),
-            None,
-            None,
-            None,
-        );
+        let result = WorkflowDetector::detect(Some(&WorkflowType::Custom), None, None, None);
         assert_eq!(result, WorkflowType::Custom);
 
         // Request mode overrides config type
-        let result = WorkflowDetector::detect(
-            Some(&WorkflowType::Custom),
-            Some("auto"),
-            None,
-            None,
-        );
+        let result =
+            WorkflowDetector::detect(Some(&WorkflowType::Custom), Some("auto"), None, None);
         assert_eq!(result, WorkflowType::Auto);
     }
 
@@ -336,7 +292,9 @@ mod tests {
     fn test_requires_phase_gate() {
         assert!(WorkflowDetector::requires_phase_gate(&WorkflowType::Auto));
         assert!(WorkflowDetector::requires_phase_gate(&WorkflowType::Dev));
-        assert!(WorkflowDetector::requires_phase_gate(&WorkflowType::General));
+        assert!(WorkflowDetector::requires_phase_gate(
+            &WorkflowType::General
+        ));
         assert!(WorkflowDetector::requires_phase_gate(&WorkflowType::Custom));
         assert!(!WorkflowDetector::requires_phase_gate(&WorkflowType::Free));
     }
@@ -345,8 +303,12 @@ mod tests {
     fn test_requires_review_gate() {
         assert!(WorkflowDetector::requires_review_gate(&WorkflowType::Auto));
         assert!(WorkflowDetector::requires_review_gate(&WorkflowType::Dev));
-        assert!(!WorkflowDetector::requires_review_gate(&WorkflowType::General));
+        assert!(!WorkflowDetector::requires_review_gate(
+            &WorkflowType::General
+        ));
         assert!(!WorkflowDetector::requires_review_gate(&WorkflowType::Free));
-        assert!(!WorkflowDetector::requires_review_gate(&WorkflowType::Custom));
+        assert!(!WorkflowDetector::requires_review_gate(
+            &WorkflowType::Custom
+        ));
     }
 }

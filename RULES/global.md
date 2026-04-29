@@ -10,9 +10,31 @@ Authoritative policy sources (single source of truth):
 Compatibility bootstrap:
 - .github/copilot-instructions.md points to RULES and is not the long-form authority.
 
-Archive/index policy:
+## Archive/index policy:
 - Historical or duplicate policy documents must be reduced to short index pages.
 - Index pages should only point to the authoritative sources above.
+
+## Phase 4 Architecture Rules
+
+- All sub-buses must integrate through CapabilityBus sense/decide/evolve lifecycle
+- All policy evaluation and governance checks must go through HarnessBus
+- Every new bus must implement Builder pattern with with_*_bus injection
+- Every F-GAP module must have unit tests covering normal/edge/error paths
+- Feature-gated modules must use cfg feature guards and conditionally compile tests
+- No file-level or module-level allow dead_code is permitted
+- Use precise per-item allow dead_code with justification comment for planned wiring
+- Use cfg test instead of allow dead_code for test-only code
+- Each new module must i18n-cover its error surfaces and user-facing messages via tr macro
+- All three language files must be updated in parallel for any new message key
+- All user-facing strings must go through i18n runtime tr macro
+- Every change must compile and pass clippy D warnings under all three profiles
+- No test may be flaky; flaky tests must be investigated and fixed
+- All 38 capability dimensions must reach real starred rating with implementation tests and bus wiring
+- Dimensional ratings must be validated before any release
+- Never remove allow dead_code without verifying the annotated item is used in production code
+- Prefer cfg test over allow dead_code for test-only code
+
+## Universal Cross-Cutting Rules
 
 - Follow all repository-wide rules from DEVELOPMENT_RULES.md and top-level policies.
 - Preserve API and protocol compatibility; never break method contracts.

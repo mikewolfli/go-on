@@ -674,7 +674,11 @@ fn acp_http_route_inventory_changes_require_transport_gate_update() {
             .find("fn infer_adaptive_signal(")
             .map(|offset| post_start + offset)
             .expect("infer_adaptive_signal marker must exist");
-        let combined = format!("{}\n{}", &source[get_start..get_end], &source[post_start..post_end]);
+        let combined = format!(
+            "{}\n{}",
+            &source[get_start..get_end],
+            &source[post_start..post_end]
+        );
 
         let mut discovered = BTreeSet::new();
         let bytes = combined.as_bytes();
@@ -720,6 +724,9 @@ fn acp_http_route_inventory_changes_require_transport_gate_update() {
         );
     }));
     if let Err(e) = result {
-        panic!("acp_http_route_inventory_changes_require_transport_gate_update panicked: {:?}", e);
+        panic!(
+            "acp_http_route_inventory_changes_require_transport_gate_update panicked: {:?}",
+            e
+        );
     }
 }

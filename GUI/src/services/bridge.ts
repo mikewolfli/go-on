@@ -330,3 +330,26 @@ export async function switchToMainWindow() {
 export async function switchToMiniWindow() {
     return invokeWithTimeout<void>("switch_to_mini_window");
 }
+
+export interface RuntimeFeatures {
+    harness_bus: boolean;
+    capability_bus: boolean;
+    vector_store: boolean;
+    response_cache: boolean;
+    autotune: boolean;
+    skills_enabled: boolean;
+    skills_import: boolean;
+    entry_auth: boolean;
+    otel: boolean;
+    production_strict: boolean;
+}
+
+export async function fetchRuntimeFeatures(): Promise<RuntimeFeatures> {
+    const json = await invokeRuntimeRpc("runtime.features", "{}");
+    try {
+        const parsed = JSON.parse(json);
+        return (parsed?.features as RuntimeFeatures) ?? {} as RuntimeFeatures;
+    } catch {
+        return {} as RuntimeFeatures;
+    }
+}

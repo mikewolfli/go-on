@@ -20,8 +20,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::acp::background::start_background_tasks;
 use crate::acp::r#impl::io::send_error;
-use crate::i18n::runtime::{t, tf};
 use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
+use crate::i18n::runtime::{t, tf};
 
 use crate::acp::server::{AcpServer, CacheLayer, ObservabilityLayer};
 use crate::adaptive_selector::AdaptiveModelSelector;
@@ -140,8 +140,9 @@ pub fn new_acp_server(
             // are surfaced in governance.status.
             let task_scheduler = {
                 let config = crate::orchestration::scheduler::SchedulerConfig::default();
-                let s =
-                    Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(config));
+                let s = Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(
+                    config,
+                ));
                 for agent_name in registry.names() {
                     let _ = s.register_worker(&agent_name, &agent_name);
                 }
@@ -342,7 +343,14 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
         let request = match serde_json::from_str::<JsonRpcRequest>(&line) {
             Ok(request) => request,
             Err(err) => {
-                send_error(server, None, -32700, tf("error.parse_error", &[("error", &err.to_string())]), None).await?;
+                send_error(
+                    server,
+                    None,
+                    -32700,
+                    tf("error.parse_error", &[("error", &err.to_string())]),
+                    None,
+                )
+                .await?;
                 continue;
             }
         };
@@ -1342,8 +1350,7 @@ async fn handle_openai_chat_completions(
             write_openai_sse_done(socket).await?;
         }
         Err(err) => {
-            let payload =
-                serde_json::json!({"error": {"message": tf("error.chat_task_panicked", &[("error", &err.to_string())])}});
+            let payload = serde_json::json!({"error": {"message": tf("error.chat_task_panicked", &[("error", &err.to_string())])}});
             write_openai_sse_data(socket, &payload).await?;
             write_openai_sse_done(socket).await?;
         }
@@ -1437,18 +1444,18 @@ async fn validate_responses_post_request(
     if body.get("model").and_then(|v| v.as_str()).is_none() {
         if body.get("model").is_some() {
             let payload = build_responses_error(
-                    "invalid_input",
-                    "invalid_request_error",
-                    t("error.model_must_be_string"),
-                );
+                "invalid_input",
+                "invalid_request_error",
+                t("error.model_must_be_string"),
+            );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
         }
         let payload = build_responses_error(
-                "missing_required_field",
-                "invalid_request_error",
-                t("error.model_required"),
-            );
+            "missing_required_field",
+            "invalid_request_error",
+            t("error.model_required"),
+        );
         let _ = write_responses_api_error(socket, payload).await;
         return Err(());
     }

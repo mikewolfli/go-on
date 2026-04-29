@@ -96,8 +96,6 @@ impl FromStr for Language {
     }
 }
 
-
-
 /// Language translations for a single language
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Translations {

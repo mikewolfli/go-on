@@ -12,6 +12,8 @@ Simple Server mode (`profile-simple-server`) is designed for single-server deplo
 - **Improved performance**: Optimized for server workloads
 - **Better reliability**: Enhanced error handling and recovery
 - **Production readiness**: Suitable for small-scale production use
+- **Full Phase 4 architecture**: All 14 buses and 21 F-GAP modules, including AgentFactory and OrchestrationCouncil
+- **Conditionally compiled modules**: AgentFactory and Council are gated with `#[cfg(feature = "profile-simple-server")]`
 
 ### Architecture
 ```

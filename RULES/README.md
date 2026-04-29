@@ -38,6 +38,16 @@ Authoritative source model:
 4. Keep phase-specific rules in `RULES/coding.md`, `RULES/review.md`, etc.
 5. Keep project-local phase overrides in `RULES/<phase>.local.md` or `<phase>.rules.md` sidecar files when needed.
 
+## Phase 4 Rule Coverage
+
+- global.md covers architecture profile gating F-GAP conventions 38-dimension star rating
+- common.md covers multi-bus integration patterns E2E and stress test standards transport QoS fault tolerance checkpoint convention dead code management
+- coding.md covers F-GAP module coding patterns bus pattern transport checkpoint test pattern i18n pattern
+- review.md covers cross-profile validation i18n completeness dead code verification test coverage gate bus integration gate architecture compliance 38-dimension audit
+- pua.md covers L3 checklist enhanced with profile-specific verification quality compass additions iceberg rule categories
+- Profile gating convention three build profiles local simple-server multi-users-server require different rule scopes
+- Annotate profile-specific rules with bracket markers all simple-server or multi-users-server
+
 ## Example
 
 If your config defines phases `coding` and `review`, start with:

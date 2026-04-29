@@ -44,6 +44,149 @@ Select a specific phase profile to run. Use this when your config defines multip
 
 Enable verbose logging. Use this first when diagnosing startup, config, transport, or provider readiness issues.
 
+## Phase & Sub-Phase Configuration
+
+Phases define the workflow stages the runtime executes. Each phase can optionally contain sub-phases for finer-grained control.
+
+### Phase configuration in config.toml
+
+Phases are configured under `[phases.<name>]` sections, referenced by the `flow.phases` list:
+
+```toml
+[flow]
+# Order of execution. Add or remove phases to match your workflow.
+phases = ["think", "act", "check", "done"]
+
+[phases.think]
+description = "Think — analyze, plan, gather context"
+# Agents assigned to this phase (empty = setup wizard will prompt)
+agents = []
+# If true, the phase continues even when no agents are configured
+fallback = true
+
+[phases.think.options]
+request_timeout_seconds = 120
+review_timeout_seconds = 60
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+phase_max_inflight = 8      # max concurrent tasks within this phase
+global_max_inflight = 128    # max concurrent tasks across all phases
+```
+
+### Sub-phases
+
+Sub-phases provide hierarchical workflow decomposition. A phase can define a `sub_phases` list with nested `[phases.<parent>.<child>]` sections:
+
+```toml
+[flow]
+phases = ["think", "act", "check", "done"]
+
+[phases.act]
+description = "Main execution phase"
+agents = []
+fallback = true
+# Sub-phases run in order within this phase
+sub_phases = ["plan", "code", "test"]
+
+[phases.act.options]
+request_timeout_seconds = 300
+cache_enabled = true
+phase_max_inflight = 24
+
+[phases.act.plan]
+description = "Implementation plan"
+agents = []
+fallback = true
+
+[phases.act.plan.options]
+request_timeout_seconds = 120
+phase_max_inflight = 4
+
+[phases.act.code]
+description = "Write code"
+agents = []
+fallback = true
+
+[phases.act.code.options]
+request_timeout_seconds = 180
+phase_max_inflight = 12
+
+[phases.act.test]
+description = "Run tests"
+agents = []
+fallback = true
+
+[phases.act.test.options]
+request_timeout_seconds = 120
+phase_max_inflight = 8
+```
+
+Sub-phases inherit their parent's `options` as defaults, which can be overridden per sub-phase.
+
+### Phase-only vs sub-phase execution
+
+- **Without sub-phases**: each phase runs top-to-bottom in the `phases` list order.
+- **With sub-phases**: the parent phase orchestrates its sub-phases in order before moving to the next parent phase.
+- Sub-phases are optional — most workflows work fine with flat phases only.
+
+### Built-in phase preset files
+
+Four preset config files ship with the project — each with a different phase setup:
+
+| File | Phases | Best for |
+|------|--------|----------|
+| `config.toml` | think, act, check, done | Generic workflows (default) |
+| `config.coding.toml` | coding | IDE integrations (Zed, VS Code) |
+| `config.simple-server.toml` | think, act, check, done | Single-server deployment |
+| `config.multi-users-server.toml` | think, act, check, done | Multi-user enterprise |
+
+### Using a specific phase config
+
+```bash
+# Use the coding phase config with an IDE
+go-on --config config.coding.toml --phase coding
+
+# Use the universal config with HTTP endpoint
+go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+```
+
+### Creating custom phases
+
+You can define any phase name — there are no built-in restrictions:
+
+```toml
+[flow]
+phases = ["research", "draft", "review", "approve", "publish"]
+
+[phases.research]
+description = "Gather information and sources"
+agents = []
+fallback = true
+
+[phases.research.options]
+request_timeout_seconds = 180
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+phase_max_inflight = 4
+```
+
+### Key options per phase
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `request_timeout_seconds` | 150 | Max time for a single task request within this phase |
+| `review_timeout_seconds` | 60 | Max time for review within this phase |
+| `review_timeout_policy` | `"reject"` | Action on review timeout (`"reject"` or `"warn"`) |
+| `review_min_response_chars` | 12 | Minimum characters expected in a review response |
+| `cache_enabled` | true | Enable cache lookups within this phase |
+| `vector_enabled` | true | Enable vector store lookups within this phase |
+| `summary_enabled` | true | Enable conversation summarization |
+| `phase_max_inflight` | 24 | Max concurrent tasks within this phase |
+| `global_max_inflight` | 128 | Max concurrent tasks across all phases globally |
+| `autopilot_complexity` | `"auto"` | Complexity mode: `"auto"`, `"simple"`, `"complex"` |
+
 ## Validation and readiness
 
 ### `--validate-config` or `--doctor`
@@ -229,7 +372,7 @@ Use this when you want the runtime to materialize a durable plan object before e
 
 Accepted values:
 
-- `adaptive`
+- `adaptive` (recommended default)
 - `acp_stdio`
 - `acp_http`
 - `mcp_stdio`

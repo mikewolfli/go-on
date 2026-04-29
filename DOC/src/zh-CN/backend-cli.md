@@ -22,27 +22,176 @@ cargo run -- --config config.toml
 Usage: go-on.exe [OPTIONS]
 ```
 
-这里没有子命令，全部通过参数控制。
+没有子命令，所有操作由标志驱动。
 
-## 基础运行参数
+## 核心运行时选项
 
 ### `--config <CONFIG>`
 
-指定配置文件路径。如果不传，后端会从可执行文件所在目录解析 `config.toml`。
+指定显式配置文件路径。如果省略，运行时将从可执行文件所在目录解析 `config.toml`。
+
+示例：
+
+```bash
+go-on --config D:\go-on\config.toml
+```
 
 ### `--phase <PHASE>`
 
-指定运行阶段。适合你的配置里定义了多个 phase，并且希望固定选中某一个入口时使用。
+选择要运行的特定阶段（phase）配置文件。当你的配置定义了多个阶段行为，并希望使用一个确定的入口点时使用。
 
 ### `--verbose`
 
-开启详细日志。排查启动、配置、传输层、Provider 就绪问题时应优先开启。
+启用详细日志输出。在诊断启动、配置、传输或 Provider 就绪问题时首先使用此选项。
 
-## 校验与就绪检查
+## Phase 与 Sub-Phase 配置
+
+Phase 定义运行时执行的工作流阶段。每个 phase 可以包含可选的 sub-phase，实现更精细的控制。
+
+### 在 config.toml 中配置 phase
+
+Phase 在 `[phases.<name>]` 节中配置，由 `flow.phases` 列表引用：
+
+```toml
+[flow]
+# 执行顺序。根据你的工作流增删 phase。
+phases = ["think", "act", "check", "done"]
+
+[phases.think]
+description = "Think — 分析、规划、收集上下文"
+# 分配给此 phase 的 agent（空 = setup wizard 会提示填写）
+agents = []
+# 为 true 时，即使没有配置 agent 也继续执行
+fallback = true
+
+[phases.think.options]
+request_timeout_seconds = 120
+review_timeout_seconds = 60
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+phase_max_inflight = 8      # 此 phase 内最大并发任务数
+global_max_inflight = 128    # 所有 phase 全局最大并发任务数
+```
+
+### Sub-phases（子阶段）
+
+Sub-phases 提供分层工作流分解。一个 phase 可以定义 `sub_phases` 列表，配合嵌套的 `[phases.<parent>.<child>]` 节：
+
+```toml
+[flow]
+phases = ["think", "act", "check", "done"]
+
+[phases.act]
+description = "主执行阶段"
+agents = []
+fallback = true
+# Sub-phases 在此 phase 内按顺序执行
+sub_phases = ["plan", "code", "test"]
+
+[phases.act.options]
+request_timeout_seconds = 300
+cache_enabled = true
+phase_max_inflight = 24
+
+[phases.act.plan]
+description = "实现计划"
+agents = []
+fallback = true
+
+[phases.act.plan.options]
+request_timeout_seconds = 120
+phase_max_inflight = 4
+
+[phases.act.code]
+description = "编写代码"
+agents = []
+fallback = true
+
+[phases.act.code.options]
+request_timeout_seconds = 180
+phase_max_inflight = 12
+
+[phases.act.test]
+description = "运行测试"
+agents = []
+fallback = true
+
+[phases.act.test.options]
+request_timeout_seconds = 120
+phase_max_inflight = 8
+```
+
+Sub-phases 会继承父级的 `options` 作为默认值，可在每个 sub-phase 中覆盖。
+
+### Phase-only 与 sub-phase 执行的区别
+
+- **无 sub-phases**：每个 phase 按 `phases` 列表顺序从上到下依次执行。
+- **有 sub-phases**：父 phase 先编排其 sub-phases 按顺序执行，完成后才进入下一个父 phase。
+- Sub-phases 是可选的——大多数工作流使用扁平 phase 即可。
+
+### 内置 phase 预设文件
+
+项目内置四个预设配置文件，各有不同的 phase 设置：
+
+| 文件 | Phases | 适用场景 |
+|------|--------|----------|
+| `config.toml` | think, act, check, done | 通用工作流（默认） |
+| `config.coding.toml` | coding | IDE 集成（Zed、VS Code） |
+| `config.simple-server.toml` | think, act, check, done | 单服务部署 |
+| `config.multi-users-server.toml` | think, act, check, done | 多用户企业环境 |
+
+### 使用特定 phase 配置
+
+```bash
+# 使用编码阶段配置与 IDE 配合
+go-on --config config.coding.toml --phase coding
+
+# 使用通用配置配合 HTTP 端点
+go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+```
+
+### 创建自定义 phase
+
+你可以定义任意 phase 名称——没有内置限制：
+
+```toml
+[flow]
+phases = ["research", "draft", "review", "approve", "publish"]
+
+[phases.research]
+description = "收集信息和资料"
+agents = []
+fallback = true
+
+[phases.research.options]
+request_timeout_seconds = 180
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+phase_max_inflight = 4
+```
+
+### 每个 phase 的关键选项
+
+| 选项 | 默认值 | 说明 |
+|--------|---------|------|
+| `request_timeout_seconds` | 150 | 此 phase 中单个任务请求的最大时间 |
+| `review_timeout_seconds` | 60 | 此 phase 中审查的最大时间 |
+| `review_timeout_policy` | `"reject"` | 审查超时时的处理方式（`"reject"` 或 `"warn"`） |
+| `review_min_response_chars` | 12 | 审查回复的最小字符数 |
+| `cache_enabled` | true | 在此 phase 中启用缓存查找 |
+| `vector_enabled` | true | 在此 phase 中启用向量存储查找 |
+| `summary_enabled` | true | 启用对话摘要 |
+| `phase_max_inflight` | 24 | 此 phase 内最大并发任务数 |
+| `global_max_inflight` | 128 | 所有 phase 全局最大并发任务数 |
+| `autopilot_complexity` | `"auto"` | 复杂度模式：`"auto"`、`"simple"`、`"complex"` |
+
+## 验证与就绪检查
 
 ### `--validate-config` 或 `--doctor`
 
-校验配置后退出。这是排查问题前最便宜、最直接的一步。
+验证配置并退出。在排查更大的运行时问题之前，这是最快的快速检查。
 
 ```bash
 go-on --config config.toml --validate-config
@@ -50,9 +199,9 @@ go-on --config config.toml --validate-config
 
 ### `--status` 或 `--check`
 
-打印已配置 Provider 和运行时就绪状态。
+打印已配置的 AI Provider 和运行时就绪状态。
 
-适合在 setup 之后、手改 `config.toml` 之后、接编辑器之前执行。
+在 setup 之后、编辑 `config.toml` 之后或附加编辑器客户端之前使用。
 
 ```bash
 go-on --status
@@ -60,87 +209,103 @@ go-on --status
 
 ### `--healthcheck`
 
-生成运行时健康报告并持久化到 `.goon/`。适合需要留档或后续排查时使用。
+生成运行时健康报告并持久化到 `.goon/` 下。当需要持久化的工件用于后续审查或分类时使用。
 
-## setup 与推荐配置
+```bash
+go-on --healthcheck
+```
+
+## Setup 与推荐工作流
 
 ### `--setup` 或 `--init`
 
 运行交互式设置向导。
 
+```bash
+go-on --setup
+```
+
 ### `--setup-profile <SETUP_PROFILE>`
 
-当前接受值只有：
+当前接受的值：`adaptive`。
 
-- `adaptive`
+示例：
+
+```bash
+go-on --setup --setup-profile adaptive
+```
 
 ### `--setup-level <SETUP_LEVEL>`
 
-接受值：
+接受的值：
 
 - `quick`
 - `standard`
 - `custom`
 
-实际建议：
+实用指导：
 
-- `quick`：最短路径，跳过额外 agent 提示。
-- `standard`：默认推荐。
-- `custom`：适合想手动控制更多细节的场景。
+- `quick`：最小路径，跳过额外的 Agent 提示。
+- `standard`：大多数用户的最佳默认值。
+- `custom`：暴露更多手动决策。
 
 ### `--setup-secrets <SETUP_SECRETS>`
 
-接受值：
+接受的值：
 
 - `env`
 - `keyring`
 - `auto`
 
-实现上 `autodetect` 也会被接受。
+`auto` 也接受 `autodetect`。
 
 ### `--apply-recommended`
 
-把 Provider 能力推荐应用到当前 `config.toml` 后退出。适合补齐 Provider 或调整模型组合之后使用。
+将 Provider 能力推荐应用到当前 `config.toml` 并退出。
+
+在接入新 Provider 或更改模型组合后使用。
 
 ### `--force`
 
-即使目标文件已存在也强制 setup。只有在你明确要覆盖当前配置时才应使用。
+即使目标文件已存在也强制运行 setup。
+
+谨慎使用，尤其是当你精心维护了一个手写的 `config.toml` 时。
 
 ## 本地模型注册
 
 ### `--add-local-model` 或 `--add-model`
 
-向配置里新增或更新本地模型 agent 条目。
+在配置中添加或更新本地模型 Agent 条目。
 
-通常要和下面的 `--local-model-*` 参数一起使用。
+此标志通常与下面的 `--local-model-*` 选项组合使用。
 
 ### `--local-model-name <NAME>`
 
-本地 agent 的逻辑名称。
+逻辑 Agent 名称。
 
 ### `--local-model-url <URL>`
 
-本地模型服务地址。
+本地 Provider 的端点 URL。
 
 ### `--local-model-type <TYPE>`
 
-Provider 类型，默认意图是 `openai`。
+Provider 类型。默认意图为 `openai`。
 
 ### `--local-model-model <MODEL_ID>`
 
-配置中写入的模型 ID。
+要存储在配置中的模型标识符。
 
 ### `--local-model-api-key-env <ENV_NAME>`
 
-可选的 API Key 环境变量名。
+可选的 API 密钥环境变量字段。
 
 ### `--local-model-secret-key-env <ENV_NAME>`
 
-可选的 secret key 环境变量名。
+可选的密钥环境变量字段。
 
 ### `--local-model-register-only`
 
-只把模型注册到 `[agents]`，不自动挂接到 phase agent 列表。
+仅在 `[agents]` 下注册本地模型，而不自动附加到 phase agent 列表。
 
 示例：
 
@@ -157,7 +322,7 @@ go-on --add-local-model \
 
 ### `--secret <ACTION>`
 
-接受动作：
+接受的动作：
 
 - `set`
 - `get`
@@ -166,11 +331,11 @@ go-on --add-local-model \
 
 ### `--secret-name <SECRET_NAME>`
 
-逻辑 secret 名称。
+逻辑 Secret 目标的名称。
 
 ### `--secret-value <SECRET_VALUE>`
 
-与 `set` 配合使用的值。
+与 `set` 一起使用的 Secret 值。
 
 示例：
 
@@ -181,11 +346,13 @@ go-on --secret get --secret-name openai
 go-on --secret delete --secret-name openai
 ```
 
-## 计划与制品检查
+## 规划与制品检查
 
 ### `--action-check <ACTION_CHECK>`
 
-对 `.goon/` 下的制品执行检查。帮助文本给出的取值为：
+针对 `.goon/` 制品运行操作检查。
+
+帮助中描述的预期值：
 
 - `all`
 - `spec`
@@ -195,37 +362,39 @@ go-on --secret delete --secret-name openai
 
 ### `--plan-task <PLAN_TASK>`
 
-为复杂任务构建并持久化受控计划制品。
+为复杂任务构建并持久化一个受控的任务规划制品。
+
+当你希望运行时在执行前物化一个持久的规划对象时使用。
 
 ## 传输模式选择
 
 ### `--protocol-mode <MODE>`
 
-接受值：
+接受的值：
 
-- `adaptive`
+- `adaptive`（推荐默认）
 - `acp_stdio`
 - `acp_http`
 - `mcp_stdio`
 - `mcp_http`
 
-使用建议：
+推荐用法：
 
-- `adaptive`：默认最稳，适合多前端共享。
-- `acp_stdio`：适合编辑器直接拉起子进程。
-- `acp_http`：适合 ACP 客户端连接共享 HTTP 后端。
-- `mcp_stdio`：只在客户端明确要求 MCP stdio 时使用。
-- `mcp_http`：适合需要 OpenAI 兼容 `/v1` HTTP 面的客户端。
+- `adaptive`：当多个客户端可能连接时的最安全默认值；它保留双栈请求路由并从运行时前提条件推导启动传输。
+- `acp_stdio`：当编辑器将 `go-on` 作为子进程启动时的最佳选择。
+- `acp_http`：当 ACP 兼容客户端需要一个共享的长时间运行后端时的最佳选择。
+- `mcp_stdio`：仅当你的客户端明确期望 MCP over stdio 时使用。
+- `mcp_http`：当你的客户端需要 OpenAI 兼容的 `/v1` HTTP 端点时的最佳选择。
 
 ### `--acp-http-bind <ADDR>`
 
-绑定 HTTP 监听，并暴露：
+绑定 HTTP 监听器并暴露：
 
 - `/health`
 - `/chat`
 - `/chat/stream`
 
-当前实现里，同一个运行时也会同时暴露 Zed 和探测逻辑常用的 `/v1` 兼容端点。
+实践中，同一运行时也会暴露 OpenAI 兼容的 `/v1` 端点，用于 Zed 模型提供方风格的集成和运行时探测。
 
 示例：
 
@@ -233,36 +402,36 @@ go-on --secret delete --secret-name openai
 go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
 ```
 
-## 常用命令组合
+## 常用命令配方
 
-最常见 setup：
+最小化 setup：
 
 ```bash
 go-on --setup --setup-level standard --setup-secrets auto
 ```
 
-先校验再检查就绪：
+验证然后检查就绪状态：
 
 ```bash
 go-on --config config.toml --validate-config
 go-on --config config.toml --status
 ```
 
-启动共享本地 HTTP 运行时：
+为 GUI、Zed 和探测启动共享的本地 HTTP 运行时：
 
 ```bash
 go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
 ```
 
-为编辑器拉起式场景运行 ACP stdio：
+为编辑器启动的集成运行 ACP over stdio：
 
 ```bash
 go-on --config config.toml --protocol-mode acp_stdio --verbose
 ```
 
-## 运维建议
+## 操作指导
 
-- 遇到问题先跑 `--validate-config`，不要先怀疑传输层。
-- 打开 GUI 或编辑器前先跑一次 `--status`。
-- 除非客户端契约明确要求 ACP-only 或 MCP-only，否则优先用 `adaptive`。
-- 接本地 OpenAI 兼容模型时，优先用 `--add-local-model`，不要直接手改配置。
+- 在假设传输层故障之前，先使用 `--validate-config`。
+- 在打开 GUI 或编辑器插件之前，先使用 `--status`。
+- 除非你有具体的客户端契约要求仅 ACP 或仅 MCP 行为，否则使用 `adaptive`。
+- 在接入本地 OpenAI 兼容端点时，优先使用 `--add-local-model` 而不是手动编辑配置。

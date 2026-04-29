@@ -1,4 +1,3 @@
-
 //! Omnipotent mode runtime — F-GAP-09 (FUTURE3.M1 / BLUE38 §6.6).
 //!
 //! Omnipotent mode is a special execution mode where the agent has unrestricted

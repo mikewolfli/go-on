@@ -1,4 +1,4 @@
-﻿//! PUA enforcement model shared across routing, execution, verification, and review.
+//! PUA enforcement model shared across routing, execution, verification, and review.
 
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -660,7 +660,7 @@ pub fn tool_execution_report(tool_name: &str, verification: Option<&str>) -> Pua
     }
 }
 
-// TODO: wire into review gate phase when review controls are fully active
+// Review-gate system prompt used by dual-review execution path.
 pub fn review_gate_prompt() -> String {
     "Act as a strict execution approval gate. Reply with APPROVE or REJECT on the first line only. After the first line, evaluate the request against the PUA red lines and quality compass: build/test/runtime proof, fact-based reasoning, exhaustive attempts, pattern scan, root cause clarity, and quality improvement. Reject if any required proof is missing.".to_string()
 }
@@ -1004,18 +1004,14 @@ mod tests {
         assert_eq!(report.stage, "mode:agent");
         assert_eq!(report.status, "approval_required");
         assert_eq!(report.escalation_level, "L2");
-        assert!(
-            report
-                .completed_checks
-                .iter()
-                .any(|c| c == "high_risk_detected")
-        );
-        assert!(
-            report
-                .missing_checks
-                .iter()
-                .any(|c| c == "operator_approval")
-        );
+        assert!(report
+            .completed_checks
+            .iter()
+            .any(|c| c == "high_risk_detected"));
+        assert!(report
+            .missing_checks
+            .iter()
+            .any(|c| c == "operator_approval"));
     }
 
     #[test]
@@ -1023,12 +1019,10 @@ mod tests {
         let report = tool_execution_report("shell", Some("runtime_ok"));
         assert_eq!(report.stage, "tool:shell");
         assert_eq!(report.status, "enforced");
-        assert!(
-            report
-                .completed_checks
-                .iter()
-                .any(|c| c == "verification:runtime_ok")
-        );
+        assert!(report
+            .completed_checks
+            .iter()
+            .any(|c| c == "verification:runtime_ok"));
         assert!(!report
             .missing_checks
             .iter()

@@ -32,6 +32,7 @@ fn is_acp_request(method: &str) -> bool {
             | "provider.status"
             | "release.readiness"
             | "runtime.stability"
+            | "runtime.features"
             | "observability.alerts"
             | "security.baseline"
             | "harness.status"
@@ -498,6 +499,9 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
+                "runtime.features" => {
+                    runtime_pack::handle_runtime_features(server, request_id).await
+                }
                 "observability.alerts" => {
                     handle_observability_alerts(
                         server,
@@ -762,9 +766,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
-                "health.check" => {
-                    run_health_check(server).await
-                }
+                "health.check" => run_health_check(server).await,
                 _ => {
                     send_error(
                         server,

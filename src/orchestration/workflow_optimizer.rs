@@ -1,4 +1,3 @@
-
 //! ARCH-11: Workflow Optimizer Plugin
 //!
 //! Pluggable optimization strategies for workflow execution.

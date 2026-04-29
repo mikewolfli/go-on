@@ -536,7 +536,6 @@ impl L2SemanticCache {
 // long-context queries (2000+ tokens) and caches reusable templates.
 // Uses SQLite for persistence across restarts.
 
-
 // CacheEntry is already in scope from the shared types above.
 
 /// A reusable template extracted from a long-context interaction.

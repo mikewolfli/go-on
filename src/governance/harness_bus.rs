@@ -1115,9 +1115,9 @@ impl HarnessBus {
         use crate::intelligence::reinforcement::ArtifactLedger;
 
         let ledger = ArtifactLedger::new(None);
-        use crate::reinforcement::TaskPlanArtifact;
-        use crate::orchestration::task_router::{TaskCharacteristics, TaskType, RoutingDecision};
         use crate::governance::pua::PuaEnforcementPlan;
+        use crate::orchestration::task_router::{RoutingDecision, TaskCharacteristics, TaskType};
+        use crate::reinforcement::TaskPlanArtifact;
 
         let plan = TaskPlanArtifact {
             generated_at: 0,

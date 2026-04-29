@@ -24,6 +24,12 @@ use sha2::{Digest, Sha256};
 #[cfg(not(feature = "backend-postgres"))]
 use sqlite_vec::sqlite3_vec_init;
 #[cfg(all(not(feature = "backend-postgres"), feature = "profile-local"))]
+#[cfg(all(
+    not(feature = "backend-postgres"),
+    feature = "profile-local",
+    not(feature = "profile-simple-server"),
+    not(feature = "profile-multi-users-server")
+))]
 use tracing::warn;
 
 /// Vector search hit
@@ -484,7 +490,11 @@ fn resolve_sqlite_vector_mode(conn: &Connection) -> Result<SqliteVectorMode> {
     match probe {
         Ok(_) => Ok(SqliteVectorMode::SqliteVec),
         Err(err) => {
-            #[cfg(feature = "profile-local")]
+            #[cfg(all(
+                feature = "profile-local",
+                not(feature = "profile-simple-server"),
+                not(feature = "profile-multi-users-server")
+            ))]
             {
                 warn!(
                     "sqlite-vec unavailable, falling back to JSON embedding table for profile-local: {}",
@@ -493,7 +503,11 @@ fn resolve_sqlite_vector_mode(conn: &Connection) -> Result<SqliteVectorMode> {
                 Ok(SqliteVectorMode::JsonFallback)
             }
 
-            #[cfg(not(feature = "profile-local"))]
+            #[cfg(not(all(
+                feature = "profile-local",
+                not(feature = "profile-simple-server"),
+                not(feature = "profile-multi-users-server")
+            )))]
             {
                 // Keep variant reachable across profile combinations so dead_code
                 // does not fire when fallback is compile-time disabled.

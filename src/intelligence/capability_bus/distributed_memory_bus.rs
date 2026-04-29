@@ -30,9 +30,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 #[cfg(feature = "profile-multi-users-server")]
-use std::thread::JoinHandle;
-#[cfg(feature = "profile-multi-users-server")]
 use std::thread;
+#[cfg(feature = "profile-multi-users-server")]
+use std::thread::JoinHandle;
 #[cfg(feature = "profile-multi-users-server")]
 use std::time::{Duration, Instant};
 

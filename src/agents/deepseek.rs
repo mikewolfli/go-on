@@ -10,10 +10,10 @@ use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
+use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{
     option_f64, option_string, option_u64, principles_to_text, stream_sse_to_sender,
 };
-use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 
 pub struct DeepSeekAgent {
     api_key_env: String,
@@ -93,7 +93,10 @@ impl DeepSeekAgent {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("{}", chat_request_failed_msg("deepseek", &status.to_string(), &body));
+            anyhow::bail!(
+                "{}",
+                chat_request_failed_msg("deepseek", &status.to_string(), &body)
+            );
         }
 
         stream_sse_to_sender(response, sender).await
@@ -226,11 +229,7 @@ mod tests {
             reqwest::Client::new(),
         );
 
-        let payload = agent.build_payload(
-            vec![message("user", "hello")],
-            None,
-            None,
-        );
+        let payload = agent.build_payload(vec![message("user", "hello")], None, None);
 
         assert_eq!(payload["model"], "deepseek-chat");
         assert_eq!(payload["messages"][0]["content"], "hello");

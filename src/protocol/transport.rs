@@ -325,9 +325,7 @@ impl MultiChannelTransport {
         if message.qos == QosLevel::ExactlyOnce && inner.sent_ids.contains(&message.id) {
             return Ok(DeliveryReceipt {
                 message_id: message.id.clone(),
-                status: DeliveryStatus::Delivered {
-                    timestamp_ms: now,
-                },
+                status: DeliveryStatus::Delivered { timestamp_ms: now },
                 delivered_ms: Some(now),
                 error: None,
             });
@@ -1081,10 +1079,7 @@ mod tests {
         let r2 = transport.send(msg).unwrap();
         match r2.status {
             DeliveryStatus::Delivered { .. } => {} // expected
-            _ => panic!(
-                "Expected Delivered status for dedup, got {:?}",
-                r2.status
-            ),
+            _ => panic!("Expected Delivered status for dedup, got {:?}", r2.status),
         }
     }
 

@@ -101,7 +101,10 @@ impl GeminiAgent {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("{}", chat_request_failed_msg("gemini", &status.to_string(), &body));
+            anyhow::bail!(
+                "{}",
+                chat_request_failed_msg("gemini", &status.to_string(), &body)
+            );
         }
 
         // Parse Gemini streaming response which uses `candidates[0].content.parts[0].text`
