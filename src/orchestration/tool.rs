@@ -5,6 +5,7 @@
 //! once orchestration logic integrates them.
 
 use anyhow::Result;
+use crate::i18n::runtime::{t, tf};
 use glob::Pattern;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -240,7 +241,7 @@ impl ToolRegistry {
 
     pub fn run_with_fallback(&self, name: &str, input: &ToolInput) -> Result<ToolOutput> {
         let Some(primary) = self.get(name) else {
-            anyhow::bail!("tool '{}' not found", name);
+            anyhow::bail!("{}", tf("error.tool_not_found", &[("name", name)]));
         };
 
         let mut primary_result = primary.run(input)?;
@@ -296,9 +297,11 @@ fn sanitize_path(input: &ToolInput, path: &str) -> Result<PathBuf> {
         let base_canonical = std::fs::canonicalize(base_dir).unwrap_or_else(|_| base_dir.clone());
         if !canonical.starts_with(&base_canonical) {
             anyhow::bail!(
-                "path traversal denied: '{}' is outside the allowed base directory '{}'",
-                path,
-                base_dir.display()
+                "{}",
+                tf(
+                    "error.path_traversal_denied",
+                    &[("path", path), ("base", &base_dir.display().to_string())]
+                )
             );
         }
     }
@@ -314,7 +317,7 @@ impl Tool for ReadFileTool {
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing path"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_path")))?;
         let validated_path = sanitize_path(input, path)?;
         let content = std::fs::read_to_string(&validated_path)?;
         Ok(ToolOutput {
@@ -336,10 +339,10 @@ impl Tool for WriteFileTool {
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing path"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_path")))?;
         let content = input.payload["content"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing content"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_content")))?;
         let mode = input.payload["mode"].as_str().unwrap_or("overwrite");
         let path_buf = sanitize_path(input, path)?;
         if let Some(parent) = path_buf.parent() {
@@ -360,7 +363,7 @@ impl Tool for WriteFileTool {
                 fs::write(&path_buf, content)?;
             }
             other => {
-                anyhow::bail!("unsupported write mode '{}'", other);
+                anyhow::bail!("{}", tf("error.unsupported_write_mode", &[("mode", other)]));
             }
         }
 
@@ -383,7 +386,7 @@ impl Tool for SearchFilesTool {
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let pattern = input.payload["pattern"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing pattern"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_pattern")))?;
         let directory = input.payload["directory"].as_str().unwrap_or(".");
         let root = sanitize_path(input, directory)?;
         let matcher = Pattern::new(pattern)?;
@@ -413,7 +416,7 @@ impl Tool for ApplyPatchTool {
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let patch = input.payload["patch"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing patch"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_patch")))?;
         let check_only = input.payload["check"].as_bool().unwrap_or(false);
         let current_dir = input.payload["directory"].as_str().unwrap_or(".");
         let patch_file = env::temp_dir().join(format!(
@@ -487,8 +490,8 @@ impl Tool for RunTestsTool {
         let command_name = input.payload["command"].as_str().unwrap_or("cargo");
         if !ALLOWED_TEST_COMMANDS.contains(&command_name) {
             anyhow::bail!(
-                "command '{}' is not in the allowed test commands whitelist",
-                command_name
+                "{}",
+                tf("error.command_not_allowed", &[("command", command_name)])
             );
         }
         let args = input.payload["args"]

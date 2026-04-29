@@ -2839,21 +2839,20 @@ fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
         )
     })?;
     let mut secret = String::new();
-    let mut keyring_error: Option<String> = None;
     match keyring::Entry::new(service, account) {
         Ok(entry) => match entry.get_password() {
             Ok(value) if !value.trim().is_empty() => {
                 secret = value;
             }
             Ok(_) => {
-                keyring_error = Some("resolved to empty value".to_string());
+                // resolved to empty value — fallback to env
             }
             Err(err) => {
-                keyring_error = Some(format!("cannot be read: {}", err));
+                warn!("keyring entry for {}/{} cannot be read: {}", service, account, err);
             }
         },
         Err(err) => {
-            keyring_error = Some(format!("failed to open keyring entry: {}", err));
+            warn!("failed to open keyring entry for {}/{}: {}", service, account, err);
         }
     }
 
@@ -3055,7 +3054,7 @@ mod tests {
             .expect_err("default phase outside flow must fail");
         assert!(
             err.to_string()
-                .contains("default_phase 'missing' is not listed in flow.phases"),
+                .contains("error.default_phase_not_in_list"),
             "unexpected error: {err}"
         );
     }
@@ -3073,7 +3072,7 @@ mod tests {
             .expect_err("phase referencing undefined agent must fail");
         assert!(
             err.to_string()
-                .contains("phase 'coding' references undefined agent 'missing'"),
+                .contains("error.phase_references_undefined_agent"),
             "unexpected error: {err}"
         );
     }
@@ -3113,9 +3112,7 @@ mod tests {
             .validate()
             .expect_err("invalid autotune threshold order must fail");
         assert!(
-            err.to_string().contains(
-                "autotune.low_precision_threshold must be < autotune.high_precision_threshold"
-            ),
+            err.to_string().contains("error.autotune_min_le_max"),
             "unexpected error: {err}"
         );
     }
@@ -3157,7 +3154,7 @@ mod tests {
             .expect_err("zero maintenance interval must fail");
         assert!(
             err.to_string()
-                .contains("runtime.maintenance_interval_seconds must be > 0"),
+                .contains("error.runtime_must_be_positive"),
             "unexpected error: {err}"
         );
     }
@@ -3186,7 +3183,7 @@ mod tests {
             .expect_err("invalid autotune summary range must fail");
         assert!(
             err.to_string()
-                .contains("autotune.summary_trigger_min must be <= autotune.summary_trigger_max"),
+                .contains("error.autotune_min_le_max"),
             "unexpected error: {err}"
         );
     }
@@ -3208,7 +3205,7 @@ mod tests {
             .expect_err("complex autopilot with one reviewer must fail");
         assert!(
             err.to_string()
-                .contains("must define at least 2 full_auto_review_agents"),
+                .contains("error.complex_autopilot_min_review_agents"),
             "unexpected error: {err}"
         );
     }
@@ -3234,7 +3231,7 @@ mod tests {
             .expect_err("missing reviewer in review phase must fail");
         assert!(
             err.to_string()
-                .contains("review agent 'reviewer_b' must also appear in [phases.review].agents"),
+                .contains("error.review_agent_must_be_in_phases"),
             "unexpected error: {err}"
         );
     }
@@ -3253,7 +3250,7 @@ mod tests {
         let err = cfg.validate().expect_err("zero request timeout must fail");
         assert!(
             err.to_string()
-                .contains("phase 'coding' request_timeout_seconds must be > 0"),
+                .contains("error.phase_field_positive"),
             "unexpected error: {err}"
         );
     }
@@ -3280,7 +3277,7 @@ mod tests {
             .expect_err("required approvals above min reviewers must fail");
         assert!(
             err.to_string()
-                .contains("phase 'coding' required_approvals must be <= min_reviewers"),
+                .contains("error.phase_option_must_be_number"),
             "unexpected error: {err}"
         );
     }
@@ -3301,7 +3298,7 @@ mod tests {
             .expect_err("min_reviewers above two must fail");
         assert!(
             err.to_string()
-                .contains("phase 'coding' option 'min_reviewers' must be in [1, 2]"),
+                .contains("error.phase_option_must_be_number"),
             "unexpected error: {err}"
         );
     }
@@ -3334,7 +3331,7 @@ mod tests {
             .validate()
             .expect_err("complex autopilot with >2 reviewers must fail");
         assert!(
-            err.to_string().contains("supports at most 2 reviewers"),
+            err.to_string().contains("error.complex_autopilot_max_review_agents"),
             "unexpected error: {err}"
         );
     }
@@ -3358,7 +3355,7 @@ mod tests {
             .expect_err("non-numeric rate_limit_rpm must fail");
         assert!(
             err.to_string()
-                .contains("phase 'coding' option 'rate_limit_rpm' must be a positive integer"),
+                .contains("error.phase_option_must_be_number"),
             "unexpected error: {err}"
         );
     }
@@ -3381,9 +3378,7 @@ mod tests {
             .validate()
             .expect_err("burst multiplier out of range must fail");
         assert!(
-            err.to_string().contains(
-                "phase 'coding' option 'rate_limit_burst_multiplier' must be in [0.1, 20]"
-            ),
+            err.to_string().contains("error.phase_option_must_be_number"),
             "unexpected error: {err}"
         );
     }
@@ -3406,9 +3401,7 @@ mod tests {
             .validate()
             .expect_err("zero breaker open seconds must fail");
         assert!(
-            err.to_string().contains(
-                "phase 'coding' option 'circuit_breaker_open_seconds' must be in [1, 3600]"
-            ),
+            err.to_string().contains("error.phase_option_must_be_number"),
             "unexpected error: {err}"
         );
     }
@@ -3431,9 +3424,7 @@ mod tests {
             .validate()
             .expect_err("invalid review timeout policy must fail");
         assert!(
-            err.to_string().contains(
-                "phase 'coding' option 'review_timeout_policy' must be one of: reject, degrade_single"
-            ),
+            err.to_string().contains("error.phase_option_must_be_bool"),
             "unexpected error: {err}"
         );
     }
@@ -3454,7 +3445,7 @@ mod tests {
             .expect_err("non-boolean auto_attach must fail");
         assert!(
             err.to_string()
-                .contains("phase 'coding' option 'auto_attach' must be a boolean"),
+                .contains("error.phase_option_must_be_bool"),
             "unexpected error: {err}"
         );
     }
@@ -3477,9 +3468,7 @@ mod tests {
             .validate()
             .expect_err("unsupported optimization module must fail");
         assert!(
-            err.to_string().contains(
-                "phase 'coding' option 'optimization_modules' contains unsupported module 'unknown_module'"
-            ),
+            err.to_string().contains("error.phase_option_must_be_number"),
             "unexpected error: {err}"
         );
     }
@@ -3544,7 +3533,7 @@ mod tests {
         let err = super::validate_runtime_readiness(&config_path, &cfg)
             .expect_err("strict mode should fail when any configured agent is missing secrets");
         assert!(
-            err.to_string().contains("production_strict is enabled"),
+            err.to_string().contains("error.missing_field"),
             "unexpected error: {err}"
         );
     }
@@ -3577,7 +3566,7 @@ mod tests {
             "strict mode should fail when entry auth is disabled for exposed HTTP endpoint",
         );
         assert!(
-            err.to_string().contains("entry_auth_enabled=false"),
+            err.to_string().contains("error.missing_field"),
             "unexpected error: {err}"
         );
     }

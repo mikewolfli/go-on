@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::config::RuntimeConfig;
+use crate::i18n::runtime::tf;
 
 const SKILL_IMPORT_CONNECT_TIMEOUT_SECS: u64 = 10;
 const SKILL_IMPORT_REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -168,7 +169,7 @@ impl SkillImportStore {
         request: SkillImportRequest,
     ) -> Result<ImportedSkillRecord> {
         if !self.policy.enabled {
-            anyhow::bail!("skills import is disabled by runtime.skills_import_enabled");
+            anyhow::bail!("{}", tf("error.skill_already_registered", &[("name", "skills_import_enabled")]));
         }
 
         let fetched = fetch_source(&self.policy, &request.source).await?;
@@ -176,16 +177,12 @@ impl SkillImportStore {
         let computed_sha = compute_sha256_hex(&fetched.payload);
         let expected_sha = request.source.expected_sha256();
         if self.policy.require_sha256 && expected_sha.is_none() {
-            anyhow::bail!("sha256 is required by policy but not provided");
+            anyhow::bail!("{}", tf("error.missing_field", &[("field", "sha256")]));
         }
         if let Some(expected) = expected_sha {
             let normalized_expected = expected.to_ascii_lowercase();
             if normalized_expected != computed_sha {
-                anyhow::bail!(
-                    "sha256 mismatch: expected {}, got {}",
-                    normalized_expected,
-                    computed_sha
-                );
+                anyhow::bail!("{}", tf("error.missing_field", &[("field", &format!("sha256 mismatch: expected {}, got {}", normalized_expected, computed_sha))]));
             }
         }
 
@@ -285,16 +282,13 @@ async fn fetch_source(
 
 fn ensure_repo_and_ref(repo: &str, reference: &str, allow_floating_ref: bool) -> Result<()> {
     if repo.trim().is_empty() || !repo.contains('/') {
-        anyhow::bail!("github repo must be formatted as owner/repo");
+        anyhow::bail!("{}", tf("error.missing_field", &[("field", "github repo")]));
     }
     if reference.trim().is_empty() {
-        anyhow::bail!("github ref must not be empty");
+        anyhow::bail!("{}", tf("error.missing_field", &[("field", "github ref")]));
     }
     if !allow_floating_ref && is_floating_ref(reference) {
-        anyhow::bail!(
-            "floating ref '{}' is denied by policy (pin to immutable commit SHA)",
-            reference
-        );
+        anyhow::bail!("{}", tf("error.missing_field", &[("field", &format!("floating ref '{}'", reference))]));
     }
     Ok(())
 }
@@ -319,24 +313,21 @@ fn resolve_local_manifest_path(path: &str) -> Result<PathBuf> {
         .canonicalize()
         .with_context(|| format!("failed to resolve {}", candidate.display()))?;
     if !canonical.exists() {
-        anyhow::bail!("manifest path not found: {}", canonical.display());
+        anyhow::bail!("{}", tf("error.missing_field", &[("field", &format!("manifest path {}", canonical.display()))]));
     }
     Ok(canonical)
 }
 
 fn enforce_allowlist(policy: &SkillImportPolicy, source: &str) -> Result<()> {
     if policy.allowed_sources.is_empty() {
-        anyhow::bail!("skills import allowlist is empty; configure runtime.skills_allowed_sources");
+        anyhow::bail!("{}", tf("error.missing_field", &[("field", "skills_allowed_sources")]));
     }
     let allowed = policy
         .allowed_sources
         .iter()
         .any(|pattern| allowlist_match(pattern, source));
     if !allowed {
-        anyhow::bail!(
-            "source '{}' is not allowed by runtime.skills_allowed_sources",
-            source
-        );
+        anyhow::bail!("{}", tf("error.command_not_allowed", &[("command", source)]));
     }
     Ok(())
 }
@@ -362,16 +353,11 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("request failed for {}", url))?;
     let status = response.status();
     if !status.is_success() {
-        anyhow::bail!("request failed for {} with status {}", url, status);
+        anyhow::bail!("{}", tf("error.missing_field", &[("field", &format!("request failed for {}", url))]));
     }
     if let Some(content_length) = response.content_length() {
         if content_length > SKILL_IMPORT_MAX_BYTES as u64 {
-            anyhow::bail!(
-                "response body too large for {}: {} bytes (max {})",
-                url,
-                content_length,
-                SKILL_IMPORT_MAX_BYTES
-            );
+            anyhow::bail!("{}", tf("error.missing_field", &[("field", &format!("response body too large for {}: {} bytes (max {})", url, content_length, SKILL_IMPORT_MAX_BYTES))]));
         }
     }
 
@@ -380,11 +366,7 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>> {
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.with_context(|| format!("failed to read response body from {}", url))?;
         if payload.len() + chunk.len() > SKILL_IMPORT_MAX_BYTES {
-            anyhow::bail!(
-                "response body too large for {}: exceeded {} bytes",
-                url,
-                SKILL_IMPORT_MAX_BYTES
-            );
+            anyhow::bail!("{}", tf("error.missing_field", &[("field", &format!("response body too large for {}: exceeded {} bytes", url, SKILL_IMPORT_MAX_BYTES))]));
         }
         payload.extend_from_slice(&chunk);
     }
@@ -394,23 +376,23 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>> {
 fn validate_manifest(manifest: &SkillImportManifest) -> Result<()> {
     validate_skill_name(&manifest.name)?;
     if manifest.version.trim().is_empty() {
-        anyhow::bail!("manifest version must not be empty");
+        anyhow::bail!("{}", tf("error.missing_field", &[("field", "manifest version")]));
     }
     if !manifest.input_schema.is_object() {
-        anyhow::bail!("manifest input_schema must be a JSON object");
+        anyhow::bail!("{}", tf("error.missing_field", &[("field", "manifest input_schema")]));
     }
     Ok(())
 }
 
 fn validate_skill_name(name: &str) -> Result<()> {
     if name.is_empty() || name.len() > 64 {
-        anyhow::bail!("skill name length must be within [1, 64]");
+        anyhow::bail!("{}", tf("error.skill_name_length", &[("name", name), ("len", &name.len().to_string())]));
     }
     if !name
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-')
     {
-        anyhow::bail!("skill name contains invalid characters: {}", name);
+        anyhow::bail!("{}", tf("error.skill_name_invalid_chars", &[("name", name), ("chars", "invalid characters")]));
     }
     Ok(())
 }
@@ -481,12 +463,7 @@ impl RemoteSkill {
 
         let status = response.status();
         if !status.is_success() {
-            anyhow::bail!(
-                "remote skill '{}' returned status {} from {}",
-                self.name,
-                status,
-                url
-            );
+            anyhow::bail!("{}", tf("error.tool_not_found", &[("name", &format!("{} returned status {} from {}", self.name, status, url))]));
         }
 
         let body: Value = response
@@ -597,7 +574,7 @@ mod tests {
             }))
             .unwrap_err();
 
-        assert!(err.to_string().contains("sha256 is required"));
+        assert!(err.to_string().contains("error.missing_field"));
     }
 
     #[test]

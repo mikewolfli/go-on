@@ -21,6 +21,8 @@
 //! - `#[cfg(feature = "profile-multi-users-server")]` — multi‑node; the
 //!   full peer set and shared‑entry machinery is active.
 
+use crate::i18n::runtime::tf;
+
 use std::collections::{HashMap, VecDeque};
 #[cfg(feature = "profile-multi-users-server")]
 use std::sync::atomic::AtomicBool;
@@ -544,7 +546,7 @@ impl DistributedMemoryBus {
     #[cfg(feature = "profile-multi-users-server")]
     pub fn start_transport(&self, config: MemoryTransportConfig) -> anyhow::Result<()> {
         if self.transport_running.load(Ordering::SeqCst) {
-            anyhow::bail!("Transport is already running");
+            anyhow::bail!("{}", tf("error.transport_already_running", &[]));
         }
 
         // Store config
@@ -618,14 +620,14 @@ impl DistributedMemoryBus {
     /// Non‑multi‑user stub: transport is a no‑op.
     #[cfg(not(feature = "profile-multi-users-server"))]
     pub fn start_transport(&self, _config: MemoryTransportConfig) -> anyhow::Result<()> {
-        anyhow::bail!("Transport is not available in single-node mode");
+        anyhow::bail!("{}", tf("error.transport_single_node", &[]));
     }
 
     /// Stop the background transport sync thread.
     #[cfg(feature = "profile-multi-users-server")]
     pub fn stop_transport(&self) -> anyhow::Result<()> {
         if !self.transport_running.load(Ordering::SeqCst) {
-            anyhow::bail!("Transport is not running");
+            anyhow::bail!("{}", tf("error.transport_not_running", &[]));
         }
 
         self.transport_running.store(false, Ordering::SeqCst);
@@ -646,7 +648,7 @@ impl DistributedMemoryBus {
     /// Non‑multi‑user stub.
     #[cfg(not(feature = "profile-multi-users-server"))]
     pub fn stop_transport(&self) -> anyhow::Result<()> {
-        anyhow::bail!("Transport is not available in single-node mode");
+        anyhow::bail!("{}", tf("error.transport_single_node", &[]));
     }
 
     /// Trigger an immediate sync operation.

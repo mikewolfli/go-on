@@ -8,6 +8,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::i18n::runtime::tf;
+
 #[async_trait]
 pub trait Skill: Send + Sync {
     fn name(&self) -> &str;
@@ -102,28 +104,26 @@ impl SkillRegistry {
         let name = skill.name().to_string();
         if name.is_empty() || name.len() > 64 {
             anyhow::bail!(
-                "skill name '{}' length {} is outside [1, 64]",
-                name,
-                name.len()
+                "{}",
+                tf("error.skill_name_length", &[("name", name.as_str()), ("len", &name.len().to_string())])
             );
         }
         if !name.chars().all(|c| {
             c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-'
         }) {
             anyhow::bail!(
-                "skill name '{}' contains invalid characters (allowed: a-z 0-9 . _ -)",
-                name
+                "{}",
+                tf("error.skill_name_invalid_chars", &[("name", name.as_str()), ("chars", "invalid characters")])
             );
         }
         if self.skills.contains_key(&name) {
-            anyhow::bail!("skill '{}' is already registered", name);
+            anyhow::bail!("{}", tf("error.skill_already_registered", &[("name", name.as_str())]));
         }
         match skill.input_schema() {
             serde_json::Value::Object(_) => {}
             other => anyhow::bail!(
-                "skill '{}' input_schema must be a JSON object, got: {}",
-                name,
-                other
+                "{}",
+                tf("error.skill_name_invalid_chars", &[("name", &name), ("chars", &format!("input_schema must be a JSON object, got: {}", other))])
             ),
         }
         self.skills.insert(name.clone(), skill);
@@ -224,7 +224,7 @@ impl SkillRegistry {
     ) -> Result<()> {
         // Validate name uniqueness
         if self.skills.contains_key(name) {
-            anyhow::bail!("Skill '{}' already exists", name);
+            anyhow::bail!("{}", tf("error.skill_already_registered", &[("name", name)]));
         }
 
         let skill = PromptBasedSkill {
@@ -266,13 +266,13 @@ impl SkillRegistry {
         skill_b: &str,
     ) -> Result<()> {
         if self.skills.contains_key(name) {
-            anyhow::bail!("Skill '{}' already exists", name);
+            anyhow::bail!("{}", tf("error.skill_already_registered", &[("name", name)]));
         }
         if !self.skills.contains_key(skill_a) {
-            anyhow::bail!("Source skill '{}' not found", skill_a);
+            anyhow::bail!("{}", tf("error.skill_not_found", &[("name", skill_a)]));
         }
         if !self.skills.contains_key(skill_b) {
-            anyhow::bail!("Source skill '{}' not found", skill_b);
+            anyhow::bail!("{}", tf("error.skill_already_registered", &[("name", skill_b)]));
         }
 
         let skill = ComposedSkill {
@@ -653,7 +653,7 @@ mod tests {
         let mut registry = SkillRegistry::default();
         registry.register(Arc::new(EchoSkill)).unwrap();
         let err = registry.register(Arc::new(EchoSkill)).unwrap_err();
-        assert!(err.to_string().contains("already registered"));
+        assert!(err.to_string().contains("error.skill_already_registered"));
     }
 
     #[test]

@@ -182,6 +182,7 @@ mod tests {
 
     use super::{probe_agent_runtime_readiness, run_with_optional_timeout, AgentRuntimeReadiness};
     use crate::config::{AgentConfig, AppConfig, FlowConfig};
+    use crate::i18n::runtime::tf;
 
     #[tokio::test]
     async fn run_with_optional_timeout_returns_timeout_error() {
@@ -191,12 +192,12 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(25)).await;
                 Ok::<(), anyhow::Error>(())
             },
-            |duration| anyhow::anyhow!("timed out after {}ms", duration.as_millis()),
+            |duration| anyhow::anyhow!("{}", tf("error.agent_chat_timed_out", &[("duration", &format!("{}ms", duration.as_millis()))])),
         )
         .await
         .expect_err("timeout should be returned");
 
-        assert!(err.to_string().contains("timed out after 5ms"));
+        assert!(err.to_string().contains("error.agent_chat_timed_out"));
     }
 
     #[tokio::test]

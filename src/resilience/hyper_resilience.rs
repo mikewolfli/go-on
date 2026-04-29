@@ -8,6 +8,7 @@
 //! is detected.
 
 use anyhow::{bail, Context, Result};
+use crate::i18n::runtime::tf;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -228,7 +229,7 @@ impl HyperResilienceEngine {
     ) -> Result<()> {
         let mut inner = self.inner.lock().unwrap();
         if inner.circuit_breakers.contains_key(name) {
-            bail!("Circuit breaker '{}' is already registered", name);
+            bail!("{}", tf("error.circuit_breaker_already_registered", &[("name", name)]));
         }
         inner.circuit_breakers.insert(
             name.to_string(),
@@ -855,6 +856,6 @@ mod tests {
         let result = engine.register_circuit_breaker("cb-dup", 3, 20_000);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("already registered"));
+        assert!(err.to_string().contains("error.circuit_breaker_already_registered"));
     }
 }

@@ -5,6 +5,7 @@
 //! `Arc<Mutex<>>` for thread-safe access.
 
 use anyhow::{bail, Result};
+use crate::i18n::runtime::tf;
 use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
@@ -172,7 +173,7 @@ impl SelfModelCore {
     pub fn register_capability(&self, capability: SelfCapability) -> Result<()> {
         let mut inner = self.inner.lock().unwrap();
         if inner.capabilities.iter().any(|c| c.name == capability.name) {
-            bail!("capability '{}' is already registered", capability.name);
+            bail!("{}", tf("error.capability_already_registered", &[("name", &capability.name)]));
         }
 
         let max = inner.config.max_history;
@@ -196,7 +197,7 @@ impl SelfModelCore {
             .capabilities
             .iter_mut()
             .find(|c| c.name == name)
-            .ok_or_else(|| anyhow::anyhow!("capability '{}' not found", name))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.capability_not_found", &[("name", name)])))?;
 
         cap.effectiveness = effectiveness.clamp(0.0, 1.0);
         cap.confidence = confidence.clamp(0.0, 1.0);

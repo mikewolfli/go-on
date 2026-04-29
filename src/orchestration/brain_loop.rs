@@ -19,6 +19,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::i18n::runtime::tf;
+
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -221,23 +223,22 @@ impl BrainLoop {
         let mut plan = inner
             .plans
             .remove(plan_id)
-            .ok_or_else(|| anyhow::anyhow!("plan `{plan_id}` not found"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)])))?;
 
         if plan.phase.is_terminal() {
-            let p = plan.phase;
             inner.plans.insert(plan_id.to_string(), plan);
-            anyhow::bail!("plan `{plan_id}` is already in terminal phase {:?}", p);
+            anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
         }
 
         let step_idx = plan
             .steps
             .iter()
             .position(|s| s.id == step_id)
-            .ok_or_else(|| anyhow::anyhow!("step `{step_id}` not found in plan `{plan_id}`"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.step_not_found", &[("id", step_id), ("plan_id", plan_id)])))?;
 
         if plan.steps[step_idx].status == StepStatus::Done {
             inner.plans.insert(plan_id.to_string(), plan);
-            anyhow::bail!("step `{step_id}` is already done");
+            anyhow::bail!("{}", tf("error.step_already_done", &[("id", step_id)]));
         }
 
         // Iteration transition – only bump on the first execution of a
@@ -286,19 +287,18 @@ impl BrainLoop {
         let mut plan = inner
             .plans
             .remove(plan_id)
-            .ok_or_else(|| anyhow::anyhow!("plan `{plan_id}` not found"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)])))?;
 
         if plan.phase.is_terminal() {
-            let p = plan.phase;
             inner.plans.insert(plan_id.to_string(), plan);
-            anyhow::bail!("plan `{plan_id}` is already in terminal phase {:?}", p);
+            anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
         }
 
         let step_idx = plan
             .steps
             .iter()
             .position(|s| s.id == step_id)
-            .ok_or_else(|| anyhow::anyhow!("step `{step_id}` not found in plan `{plan_id}`"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.step_not_found", &[("id", step_id), ("plan_id", plan_id)])))?;
 
         let started = plan.steps[step_idx].started_ms;
 
@@ -340,13 +340,10 @@ impl BrainLoop {
         let plan = inner
             .plans
             .get_mut(plan_id)
-            .ok_or_else(|| anyhow::anyhow!("plan `{plan_id}` not found"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)])))?;
 
         if plan.phase.is_terminal() {
-            anyhow::bail!(
-                "plan `{plan_id}` is already in terminal phase {:?}",
-                plan.phase
-            );
+            anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
         }
 
         // Keep only steps that are not pending (they are either done or in progress).
@@ -367,13 +364,10 @@ impl BrainLoop {
         let plan = inner
             .plans
             .get_mut(plan_id)
-            .ok_or_else(|| anyhow::anyhow!("plan `{plan_id}` not found"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)])))?;
 
         if plan.phase.is_terminal() {
-            anyhow::bail!(
-                "plan `{plan_id}` is already in terminal phase {:?}",
-                plan.phase
-            );
+            anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
         }
 
         plan.phase = BrainLoopPhase::Completed;
@@ -386,13 +380,10 @@ impl BrainLoop {
         let plan = inner
             .plans
             .get_mut(plan_id)
-            .ok_or_else(|| anyhow::anyhow!("plan `{plan_id}` not found"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)])))?;
 
         if plan.phase.is_terminal() {
-            anyhow::bail!(
-                "plan `{plan_id}` is already in terminal phase {:?}",
-                plan.phase
-            );
+            anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
         }
 
         plan.phase = BrainLoopPhase::Failed;
@@ -406,13 +397,10 @@ impl BrainLoop {
         let plan = inner
             .plans
             .get_mut(plan_id)
-            .ok_or_else(|| anyhow::anyhow!("plan `{plan_id}` not found"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)])))?;
 
         if plan.phase.is_terminal() {
-            anyhow::bail!(
-                "plan `{plan_id}` is already in terminal phase {:?}",
-                plan.phase
-            );
+            anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
         }
 
         plan.phase = BrainLoopPhase::Cancelled;
@@ -594,7 +582,7 @@ mod tests {
 
         let err = bl.execute_step(&plan_id, "s999", "data").unwrap_err();
         assert!(
-            err.to_string().contains("s999"),
+            err.to_string().contains("error.step_not_found"),
             "error should mention the missing step id: {err}"
         );
 
@@ -603,7 +591,7 @@ mod tests {
             .execute_step("plan-nonexistent", "s1", "data")
             .unwrap_err();
         assert!(
-            err2.to_string().contains("plan-nonexistent"),
+            err2.to_string().contains("error.plan_not_found"),
             "error should mention the missing plan id: {err2}"
         );
     }
@@ -697,7 +685,7 @@ mod tests {
 
         // Completing an already completed plan should fail.
         let err = bl.complete_plan(&plan_id).unwrap_err();
-        assert!(err.to_string().contains("already in terminal phase"));
+        assert!(err.to_string().contains("error.plan_already_terminal"));
     }
 
     // -----------------------------------------------------------------------
@@ -720,7 +708,7 @@ mod tests {
 
         // Failing an already failed plan should fail.
         let err = bl.fail_plan(&plan_id, "again").unwrap_err();
-        assert!(err.to_string().contains("already in terminal phase"));
+        assert!(err.to_string().contains("error.plan_already_terminal"));
     }
 
     // -----------------------------------------------------------------------
@@ -742,7 +730,7 @@ mod tests {
 
         // Cancelling an already cancelled plan should fail.
         let err = bl.cancel_plan(&plan_id).unwrap_err();
-        assert!(err.to_string().contains("already in terminal phase"));
+        assert!(err.to_string().contains("error.plan_already_terminal"));
     }
 
     // -----------------------------------------------------------------------
@@ -860,9 +848,9 @@ mod tests {
         let bl = BrainLoop::new(default_config());
 
         let err = bl.get_plan("does-not-exist").unwrap_err();
-        assert!(err.to_string().contains("does-not-exist"));
+        assert!(err.to_string().contains("not found"));
 
         let err = bl.current_phase("phantom-plan").unwrap_err();
-        assert!(err.to_string().contains("phantom-plan"));
+        assert!(err.to_string().contains("not found"));
     }
 }

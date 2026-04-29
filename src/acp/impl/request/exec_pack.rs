@@ -756,7 +756,7 @@ pub(super) async fn handle_workflow_execute(
             server,
             request_id,
             -32007,
-            "consultation blocked without consensus".to_string(),
+            t("error.consultation_blocked"),
             Some(json!({
                 "kind": "consultation_blocked",
                 "consultation_artifact_path": consultation_artifact_path.display().to_string(),
@@ -2596,7 +2596,8 @@ async fn run_agent_chat_collecting(
         }
         Ok(Err(err)) => Err(err.into()),
         Err(_) => Err(anyhow::anyhow!(
-            "agent chat timed out after {timeout_duration:?}"
+            "{}",
+            tf("error.agent_chat_timed_out", &[("duration", &format!("{:?}", timeout_duration))])
         )),
     };
 

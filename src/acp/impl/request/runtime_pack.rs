@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::runtime::{t, tf};
 
 pub(super) async fn handle_metrics(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     let status = server.get_status();
@@ -4141,7 +4142,7 @@ pub(super) async fn handle_conversation_checkpoint_create(
             server,
             request_id,
             -32602,
-            "conversation_id is required".to_string(),
+            t("error.conversation_id_required"),
             None,
         )
         .await;
@@ -4152,7 +4153,7 @@ pub(super) async fn handle_conversation_checkpoint_create(
             server,
             request_id,
             -32602,
-            "conversation_id is required".to_string(),
+            t("error.conversation_id_required"),
             None,
         )
         .await;
@@ -4167,7 +4168,7 @@ pub(super) async fn handle_conversation_checkpoint_create(
             server,
             request_id,
             -32602,
-            "branch_id is invalid".to_string(),
+            t("error.branch_id_invalid"),
             None,
         )
         .await;
@@ -4179,7 +4180,7 @@ pub(super) async fn handle_conversation_checkpoint_create(
                 server,
                 request_id,
                 -32602,
-                "messages are required".to_string(),
+                t("error.messages_required"),
                 None,
             )
             .await;
@@ -4214,7 +4215,7 @@ pub(super) async fn handle_conversation_checkpoint_list(
             server,
             request_id,
             -32602,
-            "conversation_id is required".to_string(),
+            t("error.conversation_id_required"),
             None,
         )
         .await;
@@ -4252,7 +4253,7 @@ pub(super) async fn handle_conversation_rollback(
             server,
             request_id,
             -32602,
-            "conversation_id is required".to_string(),
+            t("error.conversation_id_required"),
             None,
         )
         .await;
@@ -4262,7 +4263,7 @@ pub(super) async fn handle_conversation_rollback(
             server,
             request_id,
             -32602,
-            "checkpoint_id is required".to_string(),
+            t("error.checkpoint_id_required"),
             None,
         )
         .await;
@@ -4280,7 +4281,7 @@ pub(super) async fn handle_conversation_rollback(
                 server,
                 request_id,
                 -32004,
-                format!("checkpoint not found: {}", checkpoint_id),
+                tf("error.checkpoint_not_found", &[("id", checkpoint_id)]),
                 None,
             )
             .await;
@@ -4339,7 +4340,7 @@ pub(super) async fn handle_conversation_checkpoint_prune(
             server,
             request_id,
             -32602,
-            "conversation_id is required".to_string(),
+            t("error.conversation_id_required"),
             None,
         )
         .await;
@@ -4350,7 +4351,7 @@ pub(super) async fn handle_conversation_checkpoint_prune(
             server,
             request_id,
             -32602,
-            "keep must be >= 1".to_string(),
+            t("error.keep_must_be_ge_1"),
             None,
         )
         .await;

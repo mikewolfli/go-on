@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::i18n::runtime::tf;
 
 // ---------------------------------------------------------------------------
 // Causal inference & prediction
@@ -255,9 +256,11 @@ impl WorldModel {
             .any(|e| e.name == name && e.entity_type == entity_type)
         {
             bail!(
-                "entity '{}' of type {:?} is already registered",
-                name,
-                entity_type
+                "{}",
+                tf(
+                    "error.entity_already_registered",
+                    &[("name", name), ("entity_type", &format!("{:?}", entity_type))]
+                )
             );
         }
 
@@ -301,7 +304,7 @@ impl WorldModel {
             .entities
             .iter_mut()
             .find(|e| e.id == id)
-            .ok_or_else(|| anyhow::anyhow!("entity '{}' not found", id))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.entity_not_found", &[("id", id)])))?;
 
         for (key, value) in properties {
             entity.properties.insert(key, value);
@@ -323,7 +326,7 @@ impl WorldModel {
             .entities
             .iter()
             .position(|e| e.id == id)
-            .ok_or_else(|| anyhow::anyhow!("entity '{}' not found", id))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.entity_not_found", &[("id", id)])))?;
 
         inner.entities.remove(pos);
 
@@ -353,10 +356,10 @@ impl WorldModel {
 
         // Verify both entities exist.
         if !inner.entities.iter().any(|e| e.id == source_id) {
-            bail!("source entity '{}' not found", source_id);
+            bail!("{}", tf("error.entity_not_found", &[("id", source_id)]));
         }
         if !inner.entities.iter().any(|e| e.id == target_id) {
-            bail!("target entity '{}' not found", target_id);
+            bail!("{}", tf("error.entity_not_found", &[("id", target_id)]));
         }
 
         // Clamp weight to [0.0, 1.0].
