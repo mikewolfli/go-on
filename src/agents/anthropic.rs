@@ -17,6 +17,7 @@ use crate::agent::{Agent, Message};
 use crate::agents::{
     option_f64, option_string, option_u64, principles_to_text, stream_sse_events, SseEventAction,
 };
+use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 
 /// Anthropic Claude agent
 pub struct AnthropicAgent {
@@ -209,7 +210,7 @@ impl AnthropicAgent {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("claude request failed with {status}: {body}");
+            anyhow::bail!("{}", chat_request_failed_msg("claude", &status.to_string(), &body));
         }
 
         self.stream_sse(response, sender).await
@@ -294,7 +295,7 @@ impl Agent for AnthropicAgent {
         }
 
         Err(last_error
-            .unwrap_or_else(|| anyhow::anyhow!("claude request failed"))
+            .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("claude")))
             .into())
     }
 }

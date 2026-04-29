@@ -21,6 +21,7 @@ const MAX_CHECKPOINT_MESSAGE_CHARS: usize = 100_000;
 /// Create a conversation checkpoint
 ///
 /// This function replaces the `AcpServer::create_conversation_checkpoint` method.
+#[allow(dead_code)]
 pub async fn create_conversation_checkpoint(
     server: &AcpServer,
     conversation_id: &str,
@@ -46,6 +47,7 @@ pub async fn create_conversation_checkpoint(
 /// Get conversation state
 ///
 /// This function replaces the `AcpServer::get_conversation_state` method.
+#[allow(dead_code)]
 pub async fn get_conversation_state(
     server: &AcpServer,
     conversation_id: &str,
@@ -73,6 +75,7 @@ pub async fn get_conversation_state(
 /// Get conversation checkpoint
 ///
 /// This function replaces the `AcpServer::get_conversation_checkpoint` method.
+#[allow(dead_code)]
 pub async fn get_conversation_checkpoint(
     server: &AcpServer,
     conversation_id: &str,
@@ -92,6 +95,7 @@ pub async fn get_conversation_checkpoint(
 /// List conversation checkpoints
 ///
 /// This function replaces the `AcpServer::list_conversation_checkpoints` method.
+#[allow(dead_code)]
 pub async fn list_conversation_checkpoints(
     server: &AcpServer,
     conversation_id: &str,
@@ -120,6 +124,7 @@ pub async fn list_conversation_checkpoints(
 /// Delete conversation
 ///
 /// This function replaces the `AcpServer::delete_conversation` method.
+#[allow(dead_code)]
 pub async fn delete_conversation(server: &AcpServer, conversation_id: &str) -> Result<()> {
     let mut state = server.conversation_state.lock().await;
 
@@ -139,6 +144,7 @@ pub async fn delete_conversation(server: &AcpServer, conversation_id: &str) -> R
 /// Get branch head
 ///
 /// This function replaces the `AcpServer::get_branch_head` method.
+#[allow(dead_code)]
 pub async fn get_branch_head(
     server: &AcpServer,
     conversation_id: &str,
@@ -153,6 +159,7 @@ pub async fn get_branch_head(
 /// Set branch head
 ///
 /// This function replaces the `AcpServer::set_branch_head` method.
+#[allow(dead_code)]
 pub async fn set_branch_head(
     server: &AcpServer,
     conversation_id: &str,
@@ -170,6 +177,7 @@ pub async fn set_branch_head(
 /// Clear old conversations
 ///
 /// This function replaces the `AcpServer::clear_old_conversations` method.
+#[allow(dead_code)]
 pub async fn clear_old_conversations(server: &AcpServer, max_age_seconds: i64) -> Result<usize> {
     let mut state = server.conversation_state.lock().await;
     let now = SystemTime::now()
@@ -210,6 +218,7 @@ pub async fn clear_old_conversations(server: &AcpServer, max_age_seconds: i64) -
 /// Get conversation statistics
 ///
 /// This function replaces the `AcpServer::get_conversation_stats` method.
+#[allow(dead_code)]
 pub async fn get_conversation_stats(server: &AcpServer) -> Result<Value> {
     let state = server.conversation_state.lock().await;
 

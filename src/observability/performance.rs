@@ -584,7 +584,7 @@ pub fn global_metrics_snapshot() -> Option<PerformanceMetrics> {
 
 #[cfg(test)]
 mod tests {
-    use super::utils;
+    use super::*;
     use std::time::Duration;
 
     #[test]
@@ -595,5 +595,40 @@ mod tests {
         });
         assert_eq!(result, 42);
         assert!(duration.as_nanos() > 0);
+    }
+
+    #[test]
+    fn performance_monitor_records_latency_and_metrics() {
+        let mut monitor = PerformanceMonitor::new(100);
+        monitor.record_operation(true, 10.0);
+        monitor.record_operation(true, 20.0);
+        monitor.record_operation(false, 30.0);
+
+        let metrics = monitor.get_metrics();
+        assert_eq!(metrics.total_ops, 3);
+        assert_eq!(metrics.successful_ops, 2);
+        assert_eq!(metrics.failed_ops, 1);
+        assert!((metrics.avg_latency_ms - 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn performance_monitor_tracks_cache_hit_rate() {
+        let monitor = PerformanceMonitor::new(100);
+        monitor.record_cache_hit();
+        monitor.record_cache_hit();
+        monitor.record_cache_hit();
+        monitor.record_cache_miss();
+
+        let metrics = monitor.get_metrics();
+        assert!((metrics.cache_hit_rate - 0.75).abs() < 0.01);
+    }
+
+    #[test]
+    fn performance_monitor_empty_state_returns_defaults() {
+        let monitor = PerformanceMonitor::new(100);
+        let metrics = monitor.get_metrics();
+        assert_eq!(metrics.total_ops, 0);
+        assert_eq!(metrics.avg_latency_ms, 0.0);
+        assert_eq!(metrics.cache_hit_rate, 0.0);
     }
 }

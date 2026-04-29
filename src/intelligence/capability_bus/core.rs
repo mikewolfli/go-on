@@ -40,8 +40,9 @@ use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::intelligence::consciousness::ConsciousnessMetrics;
 use crate::intelligence::consensus::ConsensusEngine;
 use crate::intelligence::continuous_learning::ContinuousLearningCenter;
+use crate::intelligence::evolution_graph::{EvolutionGraph, EvolutionStage, TrendDirection};
 use crate::intelligence::discovery::DiscoveryCenter;
-use crate::intelligence::evolution_graph::EvolutionGraph;
+
 use crate::intelligence::federated_rl::FederatedRL;
 use crate::intelligence::matcher::ScenarioMatcher;
 use crate::intelligence::metacognitive::MetacognitiveController;
@@ -579,6 +580,12 @@ impl CapabilityBus {
             self.optimization_bus
                 .recommend(&task_type_str, token_estimate.max(1024), "balanced");
 
+        // Send a heartbeat through the transport layer
+        if let Ok(transport) = self.transport.lock() {
+            let _ = transport.send_heartbeat("capability-bus", "harness-bus", "{\"status\":\"alive\"}");
+        }
+
+
         SensingOutput {
             capability_agent_count: cap_agents,
             reputation_snapshot: rep_snapshot,
@@ -730,6 +737,14 @@ impl CapabilityBus {
         if let Ok(mut p) = self.profile.lock() {
             p.routing_count = p.routing_count.saturating_add(1);
             p.last_route_duration_ms = start.elapsed().as_millis() as u64;
+        }
+
+        // Send a control message through the transport layer if an agent was selected
+        if let Some(agent) = &selected_agent {
+            if let Ok(transport) = self.transport.lock() {
+                let msg = serde_json::json!({ "selected_tool": agent, "agent": agent });
+                let _ = transport.send_control("capability-bus", "tool-bus", &msg.to_string());
+            }
         }
 
         DecisionOutput {
@@ -1056,12 +1071,34 @@ impl CapabilityBus {
         // 5. EvolutionGraph: update capability evolution trajectory
         if let Ok(mut eg) = self.evolution_graph.lock() {
             let cap_name = format!("evolve_{}", action);
+
+            // Register the capability if it doesn't exist yet
+            let _ = eg.register_capability(&state.0, &cap_name, EvolutionStage::New);
+
+            // Record a new version snapshot
             let _ = eg.record_version(
                 &state.0,
                 &cap_name,
                 if success { quality_score } else { 0.0 },
                 0.0,
             );
+
+            // Promote if consistently successful (high quality, multiple versions)
+            if success && quality_score > 0.8 {
+                let record = eg.get_history(&state.0, &cap_name);
+                if let Some(rec) = record {
+                    let next_stage = match rec.current_stage {
+                        EvolutionStage::New => Some(EvolutionStage::Learning),
+                        EvolutionStage::Learning if rec.versions.len() >= 3
+                            && rec.trend == TrendDirection::Improving =>
+                            Some(EvolutionStage::Mature),
+                        _ => None,
+                    };
+                    if let Some(stage) = next_stage {
+                        let _ = eg.advance_stage(&state.0, &cap_name, stage);
+                    }
+                }
+            }
         }
 
         // 6. WorldModel: update environmental state cognition
@@ -1077,6 +1114,62 @@ impl CapabilityBus {
             let _ = self
                 .world_model
                 .update_entity(&format!("action_{}", action), props);
+        }
+
+        // Send an event through the transport layer with evolve summary
+        // Compute q_value for both the transport event and consensus
+        let q_value;
+        let exploration_rate;
+        if let Ok(ql) = self.q_learning.lock() {
+            q_value = ql
+                .q_table
+                .get(state)
+                .and_then(|m| m.get(action))
+                .copied()
+                .unwrap_or(0.0);
+            exploration_rate = ql.exploration_rate;
+        } else {
+            q_value = 0.0;
+            exploration_rate = 0.0;
+        }
+
+        // Send an event through the transport layer with evolve summary
+        if let Ok(transport) = self.transport.lock() {
+            let summary =
+                serde_json::json!({ "q_value": q_value, "exploration_rate": exploration_rate });
+            let _ = transport.send_event("capability-bus", "monitor", &summary.to_string());
+        }
+
+        // 7. ConsensusEngine: record the evolve result as a round in consensus
+        {
+            use crate::intelligence::consensus::{ConsensusNode, ConsensusVote, NodeRole};
+            let _ = self.consensus.register_node(ConsensusNode {
+                id: "capability-bus".to_string(),
+                address: "internal://capability_bus".to_string(),
+                weight: 1,
+                role: NodeRole::Leader,
+                is_online: true,
+                last_heartbeat_ms: 0,
+            });
+            let round_id = self
+                .consensus
+                .start_round("capability-bus", vec![serde_json::json!({
+                    "action": action,
+                    "state": state,
+                    "reward": reward,
+                    "q_value": q_value,
+                    "success": success,
+                })]);
+            if let Ok(rid) = round_id {
+                let _ = self.consensus.cast_vote(ConsensusVote {
+                    node_id: "capability-bus".to_string(),
+                    round_id: rid,
+                    proposal_id: String::new(),
+                    approve: success,
+                    weight: 1,
+                    vote_ms: 0,
+                });
+            }
         }
 
         self.record_event(

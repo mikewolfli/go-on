@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! MCP (Model Context Protocol) compatibility layer.
 
 use std::sync::Arc;
@@ -27,6 +25,7 @@ pub use tools::error_codes;
 pub const MCP_VERSION: &str = "2024-11-05";
 
 /// MCP Server implementation
+#[allow(dead_code)]
 pub struct McpServer {
     pub(crate) agent_registry: Arc<AgentRegistry>,
     pub(crate) tool_registry: Arc<ToolRegistry>,
@@ -76,6 +75,7 @@ impl McpServer {
     }
 
     /// Get a reference to the token cache if available
+    #[allow(dead_code)]
     pub fn token_cache(&self) -> Option<&Arc<TokenMultiLevelCache>> {
         self.acp_server.as_ref().map(|s| &s.cache.token_cache)
     }

@@ -10,6 +10,7 @@ pub(super) struct HardnessDimensions {
 
 #[derive(Clone, Debug, Serialize, Default)]
 pub(super) struct HardnessBudgetProfile {
+    #[allow(dead_code)]
     pub timeout_seconds: u64,
     pub parallelism_cap: usize,
     pub required_reviews: usize,

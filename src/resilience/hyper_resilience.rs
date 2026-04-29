@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+
 //! F-GAP-27: Hyper-resilience — super-node failover, multi-level circuit breaking,
 //! cascading degradation handling, and self-healing capabilities.
 //!
@@ -19,7 +19,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Resilience hardening level for a component or profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub enum ResilienceLevel {
     Standard,
     Enhanced,
@@ -41,7 +40,6 @@ pub enum FailureMode {
 
 /// State of a single circuit breaker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub enum CircuitState {
     /// Circuit is operating normally — requests are allowed.
     Closed,
@@ -53,7 +51,6 @@ pub enum CircuitState {
 
 /// System-wide degradation level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd)]
-#[allow(dead_code)]
 pub enum DegradationLevel {
     Normal,
     Degraded,
@@ -63,7 +60,6 @@ pub enum DegradationLevel {
 
 /// Self-healing action that can be executed by the engine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub enum SelfHealingAction {
     RestartNode,
     PromoteReplica,
@@ -102,7 +98,6 @@ pub struct FailoverGroup {
 
 /// Snapshot of current system health metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct SystemHealth {
     pub level: DegradationLevel,
     pub active_circuit_breakers: usize,
@@ -139,23 +134,18 @@ pub struct ResilienceConfig {
     pub self_healing_enabled: bool,
 }
 
-#[allow(dead_code)]
 fn default_circuit_breaker_threshold() -> u64 {
     5
 }
-#[allow(dead_code)]
 fn default_recovery_timeout_ms() -> u64 {
     30_000
 }
-#[allow(dead_code)]
 fn default_health_check_interval_ms() -> u64 {
     5_000
 }
-#[allow(dead_code)]
 fn default_max_failover_attempts() -> u32 {
     3
 }
-#[allow(dead_code)]
 fn default_self_healing_enabled() -> bool {
     true
 }
@@ -598,6 +588,38 @@ impl HyperResilienceEngine {
         inner.simulated_avg_latency_ms = 8.0;
         inner.simulated_error_rate = 0.0005;
     }
+
+    /// Record an execution outcome (success/failure) against a named circuit
+    /// breaker.  If the breaker does not exist it will be automatically
+    /// registered with the engine's default threshold and recovery timeout.
+    ///
+    /// This is the primary integration point for production code paths such as
+    /// `HarnessBus::evaluate()` and `verify_output()`.
+    pub fn record_execution(&self, breaker_name: &str, success: bool) {
+        // Auto-register if missing.
+        {
+            let inner = self.inner.lock().unwrap();
+            if !inner.circuit_breakers.contains_key(breaker_name) {
+                // Drop lock before calling register_circuit_breaker.
+                drop(inner);
+                let config = {
+                    let inner = self.inner.lock().unwrap();
+                    inner.config.clone()
+                };
+                let _ = self.register_circuit_breaker(
+                    breaker_name,
+                    config.circuit_breaker_threshold,
+                    config.recovery_timeout_ms,
+                );
+            }
+        }
+
+        if success {
+            let _ = self.record_success(breaker_name);
+        } else {
+            let _ = self.record_failure(breaker_name);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -605,7 +627,6 @@ impl HyperResilienceEngine {
 // ---------------------------------------------------------------------------
 
 /// Return the current time in milliseconds since the Unix epoch.
-#[allow(dead_code)]
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -11,6 +11,7 @@ use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
+use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
 
 pub struct AlephAgent {
@@ -98,7 +99,7 @@ impl AlephAgent {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("aleph chat request failed with {status}: {body}");
+            anyhow::bail!("{}", chat_request_failed_msg("aleph", &status.to_string(), &body));
         }
 
         stream_sse_to_sender(response, sender).await
@@ -137,7 +138,7 @@ impl Agent for AlephAgent {
         }
 
         Err(last_error
-            .unwrap_or_else(|| anyhow::anyhow!("aleph request failed"))
+            .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("aleph")))
             .into())
     }
 }

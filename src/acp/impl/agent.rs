@@ -28,6 +28,7 @@ use crate::verification::DeterministicVerifier;
 #[derive(Debug, Clone)]
 pub struct ReviewTimeoutPolicy {
     /// Timeout in seconds
+    #[allow(dead_code)]
     pub timeout_seconds: Option<u64>,
     /// Whether to fail on timeout
     pub fail_on_timeout: bool,

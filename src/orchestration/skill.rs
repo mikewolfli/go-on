@@ -365,7 +365,9 @@ impl Skill for PromptBasedSkill {
 }
 
 impl PromptBasedSkill {
-    /// Register this skill with a `SkillRegistry`.
+    /// Convenience method: wraps this skill into `Arc<dyn Skill>` for registry registration.
+    /// Not called internally but kept as a public utility for consumers.
+    #[allow(dead_code)]
     pub fn boxed(self) -> Arc<dyn Skill> {
         Arc::new(self)
     }
@@ -407,7 +409,9 @@ impl Skill for ComposedSkill {
 }
 
 impl ComposedSkill {
-    /// Register this skill with a `SkillRegistry`.
+    /// Convenience method: wraps this skill into `Arc<dyn Skill>` for registry registration.
+    /// Not called internally but kept as a public utility for consumers.
+    #[allow(dead_code)]
     pub fn boxed(self) -> Arc<dyn Skill> {
         Arc::new(self)
     }

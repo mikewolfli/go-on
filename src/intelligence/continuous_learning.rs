@@ -397,7 +397,7 @@ impl ContinuousLearningCenter {
                 let elapsed_ms = now.saturating_sub(curve.last_reinforced_ms);
                 let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
                 let strength =
-                    curve.original_strength * (-curve.decay_rate * elapsed_hours as f64).exp();
+                    curve.original_strength * (-curve.decay_rate * elapsed_hours).exp();
                 strength < self.config.min_retention_importance
             })
             .cloned()

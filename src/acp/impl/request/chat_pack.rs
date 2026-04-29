@@ -1,6 +1,7 @@
 use super::*;
 
 /// Handle chat request
+#[allow(dead_code)]
 pub(super) async fn handle_chat(
     server: &AcpServer,
     params: Value,
@@ -31,6 +32,7 @@ pub(super) async fn handle_chat(
 }
 
 /// Handle phase request
+#[allow(dead_code)]
 pub(super) async fn handle_phase(
     server: &AcpServer,
     _params: Value,
@@ -69,6 +71,7 @@ pub(super) async fn handle_phase(
 }
 
 /// Handle primary/secondary summary
+#[allow(dead_code)]
 pub(super) async fn handle_primary_secondary_summary(
     server: &AcpServer,
     params: Value,

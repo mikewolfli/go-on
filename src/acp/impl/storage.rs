@@ -20,6 +20,7 @@ use crate::performance::CacheStats;
 /// Get value from cache
 ///
 /// This function replaces the `AcpServer::cache_get` method.
+#[allow(dead_code)]
 pub async fn cache_get(
     _server: &AcpServer,
     cache: Arc<ResponseCache>,
@@ -41,6 +42,7 @@ pub async fn cache_get(
 /// Put value into cache
 ///
 /// This function replaces the `AcpServer::cache_put` method.
+#[allow(dead_code)]
 pub async fn cache_put(
     _server: &AcpServer,
     cache: Arc<ResponseCache>,
@@ -65,6 +67,7 @@ pub async fn cache_put(
 /// Get cache entry count
 ///
 /// This function replaces the `AcpServer::cache_entry_count` method.
+#[allow(dead_code)]
 pub async fn cache_entry_count(_server: &AcpServer, cache: Arc<ResponseCache>) -> Result<u64> {
     spawn_blocking(move || cache.entry_count())
         .await
@@ -99,6 +102,7 @@ pub async fn cache_clear(_server: &AcpServer, cache: Arc<ResponseCache>) -> Resu
 /// Get cache statistics
 ///
 /// This function replaces the `AcpServer::cache_stats` method.
+#[allow(dead_code)]
 pub async fn cache_stats(_server: &AcpServer, cache: Arc<ResponseCache>) -> Result<CacheStats> {
     let snapshot = spawn_blocking(move || cache.stats()).await.map_err(|e| {
         anyhow::anyhow!(
@@ -127,6 +131,7 @@ pub async fn cache_stats(_server: &AcpServer, cache: Arc<ResponseCache>) -> Resu
 /// Persist checkpoint summary
 ///
 /// This function replaces the `AcpServer::persist_checkpoint_summary` method.
+#[allow(dead_code)]
 pub fn persist_checkpoint_summary(
     server: &AcpServer,
     checkpoint: &crate::acp::prelude::ConversationCheckpoint,
@@ -162,6 +167,7 @@ pub fn persist_checkpoint_summary(
 /// Load checkpoint summary
 ///
 /// This function replaces the `AcpServer::load_checkpoint_summary` method.
+#[allow(dead_code)]
 pub fn load_checkpoint_summary(
     server: &AcpServer,
     checkpoint_id: &str,
@@ -175,6 +181,7 @@ pub fn load_checkpoint_summary(
 /// Save conversation state
 ///
 /// This function replaces the `AcpServer::save_conversation_state` method.
+#[allow(dead_code)]
 pub fn save_conversation_state(
     _server: &AcpServer,
     conversation_id: &str,
@@ -196,6 +203,7 @@ pub fn save_conversation_state(
 /// Load conversation state
 ///
 /// This function replaces the `AcpServer::load_conversation_state` method.
+#[allow(dead_code)]
 pub fn load_conversation_state(
     server: &AcpServer,
     conversation_id: &str,
@@ -209,6 +217,7 @@ pub fn load_conversation_state(
     serde_json::from_str(&raw).ok()
 }
 
+#[allow(dead_code)]
 fn checkpoint_summary_path(root: &std::path::Path, checkpoint_id: &str) -> PathBuf {
     root.join(format!("checkpoint-{}.json", checkpoint_id))
 }

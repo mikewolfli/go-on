@@ -50,6 +50,7 @@ impl Default for ConsciousnessConfig {
 
 /// Category of awareness being measured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[allow(clippy::enum_variant_names)]
 pub enum AwarenessMetricType {
     /// Awareness of one's own internal state, capabilities, and limitations.
     SelfAwareness,

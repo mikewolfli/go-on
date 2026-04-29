@@ -15,6 +15,7 @@ use crate::orchestration::task_router::{RoutingDecision, TaskCharacteristics};
 use crate::roles::AgentRole;
 
 /// Histogram bucket boundaries for latency monitoring (seconds)
+#[allow(dead_code)]
 const HISTOGRAM_BUCKETS_SECONDS: [f64; 9] = [
     0.001, // 1ms
     0.005, // 5ms
@@ -28,16 +29,20 @@ const HISTOGRAM_BUCKETS_SECONDS: [f64; 9] = [
 ];
 
 /// Maximum checkpoints per conversation
+#[allow(dead_code)]
 pub const MAX_CHECKPOINTS_PER_CONVERSATION: usize = 256;
 
 /// Maximum stream chunks
+#[allow(dead_code)]
 pub const MAX_STREAM_CHUNKS: usize = 4_096;
 
 /// Maximum stream characters
+#[allow(dead_code)]
 pub const MAX_STREAM_CHARS: usize = 256_000;
 
 /// Conversation state structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ConversationState {
     /// Conversation ID
     pub conversation_id: String,
@@ -53,6 +58,7 @@ pub struct ConversationState {
 
 /// Approval strategy enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum ApprovalStrategy {
     /// No approval required
     None,
@@ -64,12 +70,14 @@ pub enum ApprovalStrategy {
 
 impl ApprovalStrategy {
     /// Check if dual review is needed
+    #[allow(dead_code)]
     pub fn needs_dual_review(&self) -> bool {
         matches!(self, Self::Dual)
     }
 }
 
 /// Observe latency in histogram
+#[allow(dead_code)]
 pub fn observe_latency_histogram(
     duration: Duration,
     count: &mut u64,
@@ -90,6 +98,7 @@ pub fn observe_latency_histogram(
 }
 
 /// Extract task description from messages
+#[allow(dead_code)]
 pub fn extract_task_description(messages: &[Message]) -> String {
     messages
         .iter()
@@ -103,6 +112,7 @@ pub fn extract_task_description(messages: &[Message]) -> String {
 }
 
 /// Check for pipeline gate violations
+#[allow(dead_code)]
 pub fn pipeline_gate_violation(
     analyzed_task: &TaskCharacteristics,
     routing: &RoutingDecision,
@@ -137,6 +147,7 @@ pub fn pipeline_gate_violation(
 }
 
 /// Touch conversation order (move to most recent)
+#[allow(dead_code)]
 pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
     if let Ok(mut guard) = order.lock() {
         if let Some(position) = guard.iter().position(|item| item == conversation_id) {
@@ -147,6 +158,7 @@ pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: 
 }
 
 /// Evict oldest conversation
+#[allow(dead_code)]
 pub fn evict_oldest_conversation(
     store: &mut HashMap<String, ConversationState>,
     order: &StdMutex<Vec<String>>,
@@ -170,6 +182,7 @@ pub fn evict_oldest_conversation(
 }
 
 /// Enforce checkpoint capacity
+#[allow(dead_code)]
 pub fn enforce_checkpoint_capacity(
     state: &mut ConversationState,
     incoming: usize,
@@ -215,6 +228,7 @@ pub fn stream_would_exceed_limits(
 }
 
 /// Validate storage key
+#[allow(dead_code)]
 pub fn validate_storage_key(
     value: &str,
     field: &str,
@@ -241,11 +255,13 @@ pub fn validate_storage_key(
 }
 
 /// Calculate total characters in checkpoint messages
+#[allow(dead_code)]
 pub fn checkpoint_message_chars(messages: &[Message]) -> usize {
     messages.iter().map(|msg| msg.content.chars().count()).sum()
 }
 
 /// Repair conversation branch heads
+#[allow(dead_code)]
 pub fn repair_conversation_branch_heads(state: &mut ConversationState) {
     let existing_ids = state
         .checkpoints
@@ -273,6 +289,7 @@ pub fn repair_conversation_branch_heads(state: &mut ConversationState) {
 }
 
 /// Calculate branch head adjustment counts
+#[allow(dead_code)]
 pub fn branch_head_adjustment_counts(
     before: &HashMap<String, String>,
     after: &HashMap<String, String>,
@@ -291,6 +308,7 @@ pub fn branch_head_adjustment_counts(
 }
 
 /// Infer PUA stage from event type and phase
+#[allow(dead_code)]
 pub fn infer_pua_stage(event_type: &str, phase: &str) -> Option<String> {
     if event_type.starts_with("phase.") {
         return Some(phase.to_string());
@@ -299,6 +317,7 @@ pub fn infer_pua_stage(event_type: &str, phase: &str) -> Option<String> {
 }
 
 /// Normalize trace attributes
+#[allow(dead_code)]
 pub fn normalize_trace_attributes(
     event_type: &str,
     phase: &str,

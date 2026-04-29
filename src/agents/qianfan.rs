@@ -15,6 +15,7 @@ use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
+use crate::agents::agent::{chat_request_failed_msg, request_failed_msg, token_request_failed_msg};
 use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
 
 const STRICT_STAGE_NOTE: &str = "Enforce strict completeness checks: no empty functions, no unhandled errors, no missing boundary checks, and no placeholder implementations.";
@@ -79,7 +80,7 @@ impl QianfanAgent {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("qianfan token request failed with {status}: {body}");
+            anyhow::bail!("{}", token_request_failed_msg("qianfan", &status.to_string(), &body));
         }
 
         let token_response: QianfanTokenResponse = response.json().await?;
@@ -159,7 +160,7 @@ impl QianfanAgent {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("qianfan chat request failed with {status}: {body}");
+            anyhow::bail!("{}", chat_request_failed_msg("qianfan", &status.to_string(), &body));
         }
 
         stream_sse_to_sender(response, sender).await
@@ -198,7 +199,7 @@ impl Agent for QianfanAgent {
         }
 
         Err(last_error
-            .unwrap_or_else(|| anyhow::anyhow!("qianfan request failed"))
+            .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("qianfan")))
             .into())
     }
 }

@@ -20,6 +20,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::acp::background::start_background_tasks;
 use crate::acp::r#impl::io::send_error;
+use crate::i18n::runtime::{t, tf};
 use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
 
 use crate::acp::server::{AcpServer, CacheLayer, ObservabilityLayer};
@@ -341,7 +342,7 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
         let request = match serde_json::from_str::<JsonRpcRequest>(&line) {
             Ok(request) => request,
             Err(err) => {
-                send_error(server, None, -32700, format!("parse error: {err}"), None).await?;
+                send_error(server, None, -32700, tf("error.parse_error", &[("error", &err.to_string())]), None).await?;
                 continue;
             }
         };
@@ -351,7 +352,7 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
                 server,
                 request.id,
                 -32600,
-                "jsonrpc must be 2.0".to_string(),
+                t("error.jsonrpc_must_be_2_0").to_string(),
                 None,
             )
             .await?;
@@ -419,6 +420,7 @@ pub fn routing_handles(server: &AcpServer) -> Result<(Arc<FlowManager>, Arc<Agen
 }
 
 /// Get cache handle
+#[allow(dead_code)]
 pub fn cache_handle(server: &AcpServer) -> Option<Arc<crate::cache::ResponseCache>> {
     server.cache.response_cache.clone()
 }
@@ -437,16 +439,19 @@ pub fn artifact_ledger(_server: &AcpServer) -> crate::reinforcement::ArtifactLed
 }
 
 /// Get vector store handle
+#[allow(dead_code)]
 pub fn vector_store_handle(server: &AcpServer) -> Option<Arc<VectorStore>> {
     server.cache.vector_store.clone()
 }
 
 /// Get vector configuration snapshot
+#[allow(dead_code)]
 pub fn vector_config_snapshot(server: &AcpServer) -> Option<VectorConfig> {
     server.vector_config.clone()
 }
 
 /// Get autotune handle
+#[allow(dead_code)]
 pub fn autotune_handle(server: &AcpServer) -> Option<Arc<tokio::sync::Mutex<AutoTuneState>>> {
     server.autotune.clone()
 }
@@ -1338,7 +1343,7 @@ async fn handle_openai_chat_completions(
         }
         Err(err) => {
             let payload =
-                serde_json::json!({"error": {"message": format!("chat task panicked: {err}")}});
+                serde_json::json!({"error": {"message": tf("error.chat_task_panicked", &[("error", &err.to_string())])}});
             write_openai_sse_data(socket, &payload).await?;
             write_openai_sse_done(socket).await?;
         }
@@ -1422,7 +1427,7 @@ async fn validate_responses_post_request(
         let payload = build_responses_error(
             "invalid_request_error",
             "invalid_request_error",
-            "request body must be a JSON object",
+            t("error.request_body_must_be_json_object"),
         );
         let _ = write_responses_api_error(socket, payload).await;
         return Err(());
@@ -1432,18 +1437,18 @@ async fn validate_responses_post_request(
     if body.get("model").and_then(|v| v.as_str()).is_none() {
         if body.get("model").is_some() {
             let payload = build_responses_error(
-                "invalid_input",
-                "invalid_request_error",
-                "model must be a string",
-            );
+                    "invalid_input",
+                    "invalid_request_error",
+                    t("error.model_must_be_string"),
+                );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
         }
         let payload = build_responses_error(
-            "missing_required_field",
-            "invalid_request_error",
-            "model is required",
-        );
+                "missing_required_field",
+                "invalid_request_error",
+                t("error.model_required"),
+            );
         let _ = write_responses_api_error(socket, payload).await;
         return Err(());
     }
@@ -1452,7 +1457,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "missing_required_field",
                 "invalid_request_error",
-                "input is required",
+                t("error.input_required"),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1461,7 +1466,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "invalid_input",
                 "invalid_request_error",
-                "input must be a string or an array of input messages",
+                t("error.input_must_be_string_or_array"),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1473,7 +1478,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "invalid_input",
                 "invalid_request_error",
-                "max_output_tokens must be a positive integer",
+                t("error.max_output_tokens_invalid"),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1484,7 +1489,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "invalid_input",
                 "invalid_request_error",
-                "temperature must be a number",
+                t("error.temperature_must_be_number"),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1493,7 +1498,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "invalid_input",
                 "invalid_request_error",
-                "temperature must be between 0 and 2",
+                t("error.temperature_invalid"),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1504,7 +1509,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "invalid_input",
                 "invalid_request_error",
-                "metadata must be an object",
+                t("error.metadata_invalid"),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1515,7 +1520,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "invalid_input",
                 "invalid_request_error",
-                "reasoning must be an object",
+                t("error.reasoning_invalid"),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1526,7 +1531,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "invalid_input",
                 "invalid_request_error",
-                "tools must be an array",
+                t("error.tools_invalid"),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1537,7 +1542,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "invalid_input",
                 "invalid_request_error",
-                "tools entries must be objects",
+                t("error.tools_entries_object"),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1556,7 +1561,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "invalid_input",
                 "invalid_request_error",
-                "tool_choice must be a string or object",
+                t("error.tool_choice_invalid"),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1565,7 +1570,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "invalid_input",
                 "invalid_request_error",
-                "tool_choice string must be one of: auto, none, required",
+                t("error.tool_choice_value_invalid"),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1581,7 +1586,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "invalid_input",
                 "invalid_request_error",
-                "previous_response_id must be a non-empty string",
+                t("error.previous_response_id_invalid"),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1594,7 +1599,7 @@ async fn validate_responses_post_request(
             let payload = build_responses_error(
                 "invalid_request_error",
                 "invalid_request_error",
-                format!("invalid responses request: {err}"),
+                tf("error.invalid_request", &[("error", &err.to_string())]),
             );
             let _ = write_responses_api_error(socket, payload).await;
             return Err(());
@@ -1623,7 +1628,7 @@ async fn handle_responses_api(
         let payload = build_responses_error(
             "invalid_input",
             "invalid_request_error",
-            "model must be a non-empty string",
+            t("error.model_required"),
         );
         write_responses_api_error(socket, payload).await?;
         return Ok(());
@@ -1633,7 +1638,7 @@ async fn handle_responses_api(
         let payload = build_responses_error(
             "invalid_input",
             "invalid_request_error",
-            "max_output_tokens must be greater than 0",
+            t("error.max_output_tokens_gt_zero"),
         );
         write_responses_api_error(socket, payload).await?;
         return Ok(());
@@ -2171,6 +2176,7 @@ struct ParsedHttpRequest<'a> {
     path: &'a str,
     header_part: &'a str,
     body_initial_part: &'a str,
+    #[allow(dead_code)]
     adaptive_signal: &'static str,
 }
 
@@ -2266,7 +2272,7 @@ async fn route_http_get(socket: &mut TcpStream, server: &AcpServer, path: &str) 
             write_http_json_response_with_context(
                 socket,
                 404,
-                serde_json::json!({"error": "not found"}),
+                serde_json::json!({"error": t("error.not_found")}),
                 "chat",
             )
             .await?;
@@ -2297,7 +2303,7 @@ async fn route_http_post(
                 build_responses_error(
                     "missing_required_field",
                     "invalid_request_error",
-                    "request body required",
+                    t("error.body_required"),
                 ),
                 "responses.api",
             )
@@ -2306,7 +2312,7 @@ async fn route_http_post(
             write_http_json_response_with_context(
                 socket,
                 400,
-                serde_json::json!({"error": "request body required"}),
+                serde_json::json!({"error": t("error.body_required")}),
                 "chat",
             )
             .await?;
@@ -2331,7 +2337,7 @@ async fn route_http_post(
                     build_responses_error(
                         "invalid_request_error",
                         "invalid_request_error",
-                        format!("invalid json body: {err}"),
+                        tf("error.invalid_json", &[("error", &err.to_string())]),
                     ),
                     "responses.api",
                 )
@@ -2340,7 +2346,7 @@ async fn route_http_post(
                 write_http_json_response_with_context(
                     socket,
                     400,
-                    serde_json::json!({"error": format!("invalid json body: {err}")}),
+                    serde_json::json!({"error": tf("error.invalid_json", &[("error", &err.to_string())])}),
                     "chat",
                 )
                 .await?;
@@ -2360,7 +2366,7 @@ async fn route_http_post(
                                 write_http_json_response_with_context(
                                 socket,
                                 400,
-                                serde_json::json!({"error": format!("invalid chat params: {err}")}),
+                                serde_json::json!({"error": tf("error.invalid_chat_params", &[("error", &err.to_string())])}),
                                 "chat",
                             )
                             .await?;
@@ -2387,7 +2393,7 @@ async fn route_http_post(
                                 write_http_json_response_with_context(
                                 socket,
                                 400,
-                                serde_json::json!({"error": format!("invalid chat params: {err}")}),
+                                serde_json::json!({"error": tf("error.invalid_chat_params", &[("error", &err.to_string())])}),
                                 "chat",
                             )
                             .await?;
@@ -2450,7 +2456,7 @@ async fn route_http_post(
                     write_http_json_response_with_context(
                         socket,
                         404,
-                        serde_json::json!({"error": "not found"}),
+                        serde_json::json!({"error": t("error.not_found")}),
                         "chat",
                     )
                     .await?;
@@ -2479,6 +2485,7 @@ async fn route_http_post(
 }
 
 /// Write a standard HTTP JSON response. Thin wrapper for consistency.
+#[allow(dead_code)]
 async fn write_http_response(
     socket: &mut TcpStream,
     status: u16,
@@ -2523,7 +2530,7 @@ async fn handle_http_connection(
         write_http_json_response_with_context(
             socket,
             405,
-            serde_json::json!({"error": "method not allowed"}),
+            serde_json::json!({"error": t("error.method_not_allowed")}),
             "chat",
         )
         .await?;

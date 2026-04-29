@@ -9,6 +9,9 @@
 //! SandboxPolicy, IdempotencyCache, AuditLogger, PolicyBundle, review controls,
 //! runtime controls, self-rationalization guard) into a single evaluator that
 //! the CapabilityBus calls before, during, and after every task.
+//!
+//! It also exposes work grading and optimization policy methods that delegate
+//! to the ACP helpers in `crate::acp::helpers::policy`.
 
 //!
 //! # Architecture
@@ -870,6 +873,17 @@ impl HarnessBus {
                 p.current_active_policies = 5u32; // rule engine + budget + runtime control + sandbox + guard
             }
         }
+
+        // Record execution outcome through the resilience engine (F-GAP-27).
+        let success = matches!(
+            &verdict,
+            PolicyVerdict::Allow
+                | PolicyVerdict::AllowWithConstraints(_)
+                | PolicyVerdict::Review(_)
+        );
+        self.resilience_engine
+            .record_execution("harness-main", success);
+
         verdict
     }
 
@@ -1036,6 +1050,124 @@ impl HarnessBus {
     /// Review gate prompt for LLM-based approval (PUA-wired).
     pub fn review_gate_prompt(&self) -> String {
         crate::governance::pua::review_gate_prompt()
+    }
+
+    /// -----------------------------------------------------------------------
+    /// ACP Policy Helpers — work grading & optimisation
+    /// -----------------------------------------------------------------------
+    /// Evaluate and decide the work grade for a task context.
+    ///
+    /// Delegates to `acp::helpers::policy::decide_work_grade`.
+    pub fn decide_work_grade_for_task(
+        &self,
+        requested_grade: &str,
+        task_complexity: f64,
+    ) -> serde_json::Value {
+        use crate::acp::helpers::policy::decide_work_grade;
+
+        // Build a minimal TaskPlanArtifact from the simplified parameters
+        let plan = crate::reinforcement::TaskPlanArtifact {
+            generated_at: 0,
+            task: String::new(),
+            characteristics: crate::orchestration::task_router::TaskCharacteristics {
+                description: String::new(),
+                task_type: crate::orchestration::task_router::TaskType::Unknown,
+                complexity: task_complexity.min(5.0) as u8,
+                required_capabilities: vec![],
+                involves_multiple_modules: false,
+                is_time_critical: false,
+                needs_verification: false,
+                has_safety_concerns: false,
+            },
+            routing: crate::orchestration::task_router::RoutingDecision {
+                roles: vec![],
+                requirements: vec![],
+                predicted_success_rate: 0.95,
+                estimated_duration_seconds: 0,
+                can_parallelize: vec![],
+                risk_factors: vec![],
+                recommended_safeguards: vec![],
+                pua_enforcement: crate::governance::pua::PuaEnforcementPlan::default(),
+            },
+            decomposition: None,
+            planned_subtasks: vec![],
+            sub_agent_recommended: false,
+            activation_reasons: vec![],
+            action_checks_required: vec![],
+        };
+
+        let decision = decide_work_grade(Some(requested_grade), &plan, true, false, false);
+
+        serde_json::json!({
+            "requested": decision.requested.as_str(),
+            "decided": decision.decided.as_str(),
+            "decision_action": decision.decision_action,
+            "reasons": decision.reasons,
+            "risk_score": decision.risk_score,
+        })
+    }
+
+    /// Evaluate optimization policy for a task.
+    ///
+    /// Delegates to `acp::helpers::policy::evaluate_optimization_policy`.
+    pub fn evaluate_optimization_for_task(&self, _task_type: &str) -> serde_json::Value {
+        use crate::acp::helpers::policy::evaluate_optimization_policy;
+        use crate::intelligence::reinforcement::ArtifactLedger;
+
+        let ledger = ArtifactLedger::new(None);
+        use crate::reinforcement::TaskPlanArtifact;
+        use crate::orchestration::task_router::{TaskCharacteristics, TaskType, RoutingDecision};
+        use crate::governance::pua::PuaEnforcementPlan;
+
+        let plan = TaskPlanArtifact {
+            generated_at: 0,
+            task: String::new(),
+            characteristics: TaskCharacteristics {
+                description: String::new(),
+                task_type: TaskType::Unknown,
+                complexity: 0,
+                required_capabilities: vec![],
+                involves_multiple_modules: false,
+                is_time_critical: false,
+                needs_verification: false,
+                has_safety_concerns: false,
+            },
+            routing: RoutingDecision {
+                roles: vec![],
+                requirements: vec![],
+                predicted_success_rate: 0.95,
+                estimated_duration_seconds: 0,
+                can_parallelize: vec![],
+                risk_factors: vec![],
+                recommended_safeguards: vec![],
+                pua_enforcement: PuaEnforcementPlan::default(),
+            },
+            decomposition: None,
+            planned_subtasks: vec![],
+            sub_agent_recommended: false,
+            activation_reasons: vec![],
+            action_checks_required: vec![],
+        };
+        let outcome = evaluate_optimization_policy(&ledger, "", &plan, None, true, true);
+
+        serde_json::json!({
+            "auto_attach": outcome.report.auto_attach,
+            "auto_detach": outcome.report.auto_detach,
+            "runtime_healthy": outcome.report.runtime_healthy,
+            "anomaly_detected": outcome.report.anomaly_detected,
+            "phase_parallelism_cap": outcome.phase_parallelism_cap,
+            "force_fail_fast": outcome.force_fail_fast,
+        })
+    }
+
+    /// Extract an optional `u64` value from a JSON options map.
+    pub fn extra_u64(&self, options: &serde_json::Value, key: &str) -> Option<u64> {
+        options.get(key).and_then(|v| v.as_u64())
+    }
+
+    /// Extract an optional `f64` value from a JSON options map.
+    pub fn extra_f64(&self, options: &serde_json::Value, key: &str) -> Option<f64> {
+        options.get(key).and_then(|v| v.as_f64())
     }
 }
 

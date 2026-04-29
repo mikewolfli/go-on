@@ -69,7 +69,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 const props = withDefaults(defineProps<{
@@ -86,23 +86,23 @@ const { t } = useI18n();
 
 const showQuickNav = ref(true);
 
-const quickNavItems = [
-  { tabName: "dashboard", label: "Dashboard", shortLabel: "Dash", icon: "📊", mainTab: "monitor", subTab: "dashboard" },
-  { tabName: "monitor", label: "Monitor", shortLabel: "Mon", icon: "📈", mainTab: "monitor", subTab: "monitor" },
-  { tabName: "ai-usage", label: "AI Usage", shortLabel: "AI", icon: "🤖", mainTab: "monitor", subTab: "ai-usage" },
-  { tabName: "health-breakdown", label: "Health", shortLabel: "Health", icon: "💚", mainTab: "monitor", subTab: "health" },
-  { tabName: "logs", label: "Logs", shortLabel: "Logs", icon: "📝", mainTab: "monitor", subTab: "logs" },
-  { tabName: "setup", label: "Setup", shortLabel: "Setup", icon: "⚙️", mainTab: "config", subTab: "setup" },
-  { tabName: "config", label: "Config", shortLabel: "Conf", icon: "🔧", mainTab: "config", subTab: "config" },
-  { tabName: "providers", label: "Providers", shortLabel: "Prov", icon: "🔑", mainTab: "config", subTab: "providers" },
-  { tabName: "backend-ops", label: "Ops", shortLabel: "Ops", icon: "🛠️", mainTab: "config", subTab: "backend-ops" },
-  { tabName: "autotune", label: "AutoTune", shortLabel: "Tune", icon: "⚡", mainTab: "config", subTab: "autotune" },
-  { tabName: "workflow", label: "Workflow", shortLabel: "Flow", icon: "🔄", mainTab: "config", subTab: "workflow" },
-  { tabName: "security", label: "Security", shortLabel: "Sec", icon: "🔒", mainTab: "config", subTab: "security" },
-];
+const quickNavItems = computed(() => [
+  { tabName: "dashboard", label: t("nav.dashboard"), shortLabel: t("nav.dashboardShort"), icon: "📊", mainTab: "monitor", subTab: "dashboard" },
+  { tabName: "monitor", label: t("nav.monitor"), shortLabel: t("nav.monitorShort"), icon: "📈", mainTab: "monitor", subTab: "monitor" },
+  { tabName: "ai-usage", label: t("nav.aiUsage"), shortLabel: t("nav.aiUsageShort"), icon: "🤖", mainTab: "monitor", subTab: "ai-usage" },
+  { tabName: "health-breakdown", label: t("nav.health"), shortLabel: t("nav.healthShort"), icon: "💚", mainTab: "monitor", subTab: "health" },
+  { tabName: "logs", label: t("nav.logs"), shortLabel: t("nav.logsShort"), icon: "📝", mainTab: "monitor", subTab: "logs" },
+  { tabName: "setup", label: t("nav.setup"), shortLabel: t("nav.setupShort"), icon: "⚙️", mainTab: "config", subTab: "setup" },
+  { tabName: "config", label: t("nav.config"), shortLabel: t("nav.configShort"), icon: "🔧", mainTab: "config", subTab: "config" },
+  { tabName: "providers", label: t("nav.providers"), shortLabel: t("nav.providersShort"), icon: "🔑", mainTab: "config", subTab: "providers" },
+  { tabName: "backend-ops", label: t("nav.ops"), shortLabel: t("nav.opsShort"), icon: "🛠️", mainTab: "config", subTab: "backend-ops" },
+  { tabName: "autotune", label: t("nav.autoTune"), shortLabel: t("nav.autoTuneShort"), icon: "⚡", mainTab: "config", subTab: "autotune" },
+  { tabName: "workflow", label: t("nav.workflow"), shortLabel: t("nav.workflowShort"), icon: "🔄", mainTab: "config", subTab: "workflow" },
+  { tabName: "security", label: t("nav.security"), shortLabel: t("nav.securityShort"), icon: "🔒", mainTab: "config", subTab: "security" },
+]);
 
 function navigate(tabName: string) {
-  const item = quickNavItems.find(i => i.tabName === tabName);
+  const item = quickNavItems.value.find(i => i.tabName === tabName);
   if (item) {
     emit("navigate", item.mainTab, item.subTab);
   }

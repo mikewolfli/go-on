@@ -410,6 +410,9 @@ impl ExperienceKnowledgeBase {
 
 use std::collections::{HashMap, VecDeque};
 
+/// Sample type returned by ReplayBuffer::sample.
+type ReplaySample = Vec<((String, String), String, f64, (String, String))>;
+
 /// A replay buffer that stores experiences for batch learning.
 #[derive(Debug, Clone)]
 pub struct ReplayBuffer {
@@ -448,7 +451,7 @@ impl ReplayBuffer {
     pub fn sample(
         &self,
         batch_size: usize,
-    ) -> Vec<((String, String), String, f64, (String, String))> {
+    ) -> ReplaySample {
         let len = self.buffer.len();
         if len == 0 {
             return Vec::new();
@@ -501,6 +504,8 @@ pub struct RlTaskExecutionMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QLearningAgent {
     pub q_table: HashMap<(String, String), HashMap<String, f64>>,
+    /// Double Q-Learning table for bias reduction
+    pub q_table_2: HashMap<(String, String), HashMap<String, f64>>,
     pub learning_rate: f64,
     pub discount_factor: f64,
     pub exploration_rate: f64,
@@ -513,6 +518,7 @@ impl Default for QLearningAgent {
     fn default() -> Self {
         Self {
             q_table: HashMap::new(),
+            q_table_2: HashMap::new(),
             learning_rate: 0.1,
             discount_factor: 0.9,
             exploration_rate: 1.0,
@@ -573,6 +579,106 @@ impl QLearningAgent {
             .entry(state.clone())
             .or_default()
             .insert(action.to_string(), new_q);
+    }
+
+    /// Perform a Double Q-Learning update to reduce overestimation bias.
+    /// Randomly updates one of the two Q-tables, using the other for action selection.
+    pub fn double_q_update(
+        &mut self,
+        state: &(String, String),
+        action: &str,
+        reward: f64,
+        next_state: &(String, String),
+    ) {
+        let alpha = self.learning_rate;
+        let gamma = self.discount_factor;
+
+        // Use a simple hash-based coin flip instead of depending on rand
+        let coin = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            state.hash(&mut hasher);
+            action.hash(&mut hasher);
+            hasher.finish().is_multiple_of(2)
+        };
+
+        if coin {
+            // Update q_table, using q_table_2 for next-state action selection
+            let next_max = self
+                .q_table_2
+                .get(next_state)
+                .and_then(|m| {
+                    m.values()
+                        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                })
+                .copied()
+                .unwrap_or(0.0);
+            let current = self
+                .q_table
+                .get(state)
+                .and_then(|m| m.get(action))
+                .copied()
+                .unwrap_or(0.0);
+            let new_q = current + alpha * (reward + gamma * next_max - current);
+            self.q_table
+                .entry(state.clone())
+                .or_default()
+                .insert(action.to_string(), new_q);
+        } else {
+            // Update q_table_2, using q_table for next-state action selection
+            let next_max = self
+                .q_table
+                .get(next_state)
+                .and_then(|m| {
+                    m.values()
+                        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                })
+                .copied()
+                .unwrap_or(0.0);
+            let current = self
+                .q_table_2
+                .get(state)
+                .and_then(|m| m.get(action))
+                .copied()
+                .unwrap_or(0.0);
+            let new_q = current + alpha * (reward + gamma * next_max - current);
+            self.q_table_2
+                .entry(state.clone())
+                .or_default()
+                .insert(action.to_string(), new_q);
+        }
+    }
+
+    /// Select the best action using the average of both Q-tables (Double Q-Learning).
+    pub fn best_action_using_both(&self, state: &(String, String)) -> Option<(String, f64)> {
+        let actions_q1 = self.q_table.get(state);
+        let actions_q2 = self.q_table_2.get(state);
+
+        let mut all_actions: Vec<String> = Vec::new();
+        if let Some(m) = actions_q1 {
+            all_actions.extend(m.keys().cloned());
+        }
+        if let Some(m) = actions_q2 {
+            all_actions.extend(m.keys().cloned());
+        }
+        all_actions.sort();
+        all_actions.dedup();
+
+        all_actions
+            .into_iter()
+            .map(|a| {
+                let q1 = actions_q1
+                    .and_then(|m| m.get(&a))
+                    .copied()
+                    .unwrap_or(0.0);
+                let q2 = actions_q2
+                    .and_then(|m| m.get(&a))
+                    .copied()
+                    .unwrap_or(0.0);
+                let avg = (q1 + q2) / 2.0;
+                (a.clone(), avg)
+            })
+            .max_by(|(_, v1), (_, v2)| v1.partial_cmp(v2).unwrap_or(std::cmp::Ordering::Equal))
     }
 
     pub fn decay_exploration(&mut self, decay_rate: f64) {
@@ -699,6 +805,59 @@ mod qlearning_tests {
         assert!(agent
             .q_table
             .contains_key(&("s1".to_string(), "s1".to_string())));
+    }
+
+    #[test]
+    fn test_double_q_update_creates_tables() {
+        let mut agent = QLearningAgent::default();
+        // Use two different state/action combos to hit both coin-flip branches
+        agent.double_q_update(
+            &("s1".to_string(), "s1".to_string()),
+            "a1",
+            1.0,
+            &("s2".to_string(), "s2".to_string()),
+        );
+        agent.double_q_update(
+            &("s3".to_string(), "s3".to_string()),
+            "b1",
+            0.5,
+            &("s4".to_string(), "s4".to_string()),
+        );
+        // At least one table should have entries from the two updates
+        let q1_has = agent.q_table.contains_key(&("s1".to_string(), "s1".to_string()))
+            || agent.q_table.contains_key(&("s3".to_string(), "s3".to_string()));
+        let q2_has = agent.q_table_2.contains_key(&("s1".to_string(), "s1".to_string()))
+            || agent.q_table_2.contains_key(&("s3".to_string(), "s3".to_string()));
+        assert!(q1_has, "q_table should have at least one entry");
+        assert!(q2_has, "q_table_2 should have at least one entry");
+    }
+
+    #[test]
+    fn test_best_action_using_both() {
+        let mut agent = QLearningAgent::default();
+        agent.double_q_update(
+            &("s1".to_string(), "s1".to_string()),
+            "a1",
+            1.0,
+            &("s2".to_string(), "s2".to_string()),
+        );
+        agent.double_q_update(
+            &("s1".to_string(), "s1".to_string()),
+            "a2",
+            0.5,
+            &("s2".to_string(), "s2".to_string()),
+        );
+        let best = agent.best_action_using_both(&("s1".to_string(), "s1".to_string()));
+        assert!(best.is_some());
+        let (action, _) = best.unwrap();
+        assert_eq!(action, "a1");
+    }
+
+    #[test]
+    fn test_best_action_using_both_empty_state() {
+        let agent = QLearningAgent::default();
+        let best = agent.best_action_using_both(&("unknown".to_string(), "unknown".to_string()));
+        assert!(best.is_none());
     }
 
     #[test]

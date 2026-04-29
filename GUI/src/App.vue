@@ -37,8 +37,8 @@
           {{ t(themeLabel) }}
         </el-button>
         <el-select :model-value="locale" size="small" style="width: 120px" @change="onLocaleChange">
-          <el-option label="English" value="en-US" />
-          <el-option label="简体中文" value="zh-CN" />
+          <el-option :label="t('language.english')" value="en-US" />
+          <el-option :label="t('language.simplifiedChinese')" value="zh-CN" />
         </el-select>
       </el-header>
 

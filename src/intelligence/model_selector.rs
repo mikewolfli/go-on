@@ -297,4 +297,93 @@ mod tests {
 
         assert_eq!(selected, Some("cheap".to_string()));
     }
+
+    #[test]
+    fn test_model_selection_fastest() {
+        let models = vec![
+            ModelCharacteristics {
+                id: "slow".to_string(),
+                cost_per_request_cents: 10,
+                latency_ms: 500,
+                capability_tier: 5,
+                supports_vision: true,
+                supports_function_calling: true,
+                excels_at_code: true,
+            },
+            ModelCharacteristics {
+                id: "fast".to_string(),
+                cost_per_request_cents: 20,
+                latency_ms: 50,
+                capability_tier: 3,
+                supports_vision: false,
+                supports_function_calling: false,
+                excels_at_code: false,
+            },
+        ];
+
+        let criteria = SelectionCriteria::fast_response();
+        let selected =
+            ModelSelector::select_model(&criteria, &models, ModelSelectionStrategy::Fastest);
+
+        assert_eq!(selected, Some("fast".to_string()));
+    }
+
+    #[test]
+    fn test_model_selection_empty_models() {
+        let criteria = SelectionCriteria::minimal();
+        let selected =
+            ModelSelector::select_model(&criteria, &[], ModelSelectionStrategy::MostCapable);
+
+        assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn test_model_selection_vision_filtering() {
+        let models = vec![
+            ModelCharacteristics {
+                id: "no-vision".to_string(),
+                cost_per_request_cents: 10,
+                latency_ms: 100,
+                capability_tier: 5,
+                supports_vision: false,
+                supports_function_calling: false,
+                excels_at_code: false,
+            },
+        ];
+
+        let criteria = SelectionCriteria {
+            requires_vision: true,
+            ..SelectionCriteria::minimal()
+        };
+        let selected =
+            ModelSelector::select_model(&criteria, &models, ModelSelectionStrategy::MostCapable);
+
+        assert_eq!(selected, None, "no-vision model should be filtered out");
+    }
+
+    #[test]
+    fn test_recommended_strategy_adaptive() {
+        let policy = AutomaticModePolicy::AdaptiveCapability;
+
+        let complex = SelectionCriteria::complex();
+        assert_eq!(
+            ModelSelector::recommended_strategy(&policy, &complex),
+            ModelSelectionStrategy::MostCapable,
+            "complex tasks should use most capable"
+        );
+
+        let fast = SelectionCriteria::fast_response();
+        assert_eq!(
+            ModelSelector::recommended_strategy(&policy, &fast),
+            ModelSelectionStrategy::Fastest,
+            "fast response should use fastest"
+        );
+
+        let simple = SelectionCriteria::minimal();
+        assert_eq!(
+            ModelSelector::recommended_strategy(&policy, &simple),
+            ModelSelectionStrategy::Balanced,
+            "simple tasks should use balanced"
+        );
+    }
 }

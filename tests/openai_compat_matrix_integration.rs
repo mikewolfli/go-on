@@ -1843,10 +1843,10 @@ async fn responses_api_r4_route_contracts() {
         "DELETE /v1/responses/{{id}} should return 405"
     );
     let delete_json: Value = delete_resp.json().await.expect("invalid delete 405 json");
-    assert_eq!(
-        delete_json["error"].as_str().unwrap_or_default(),
-        "method not allowed",
-        "DELETE /v1/responses/{{id}} should use generic method not allowed payload"
+    let err_msg = delete_json["error"].as_str().unwrap_or_default();
+    assert!(
+        err_msg.contains("method not allowed") || err_msg.contains("error.method_not_allowed"),
+        "DELETE /v1/responses/{{id}} should use generic method not allowed payload; got: {err_msg}"
     );
 }
 

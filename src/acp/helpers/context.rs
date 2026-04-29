@@ -160,6 +160,7 @@ fn extract_host_port(url: &str) -> Option<(String, u16)> {
 
 /// Work grade classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub enum WorkGrade {
     Ask,
     Edit,
@@ -169,6 +170,7 @@ pub enum WorkGrade {
 }
 
 /// Test function to verify module works
+#[cfg(test)]
 pub fn test_function() -> &'static str {
     "context module is working"
 }

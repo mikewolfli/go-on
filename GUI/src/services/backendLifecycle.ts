@@ -9,6 +9,7 @@ import {
 } from "./bridge";
 import { openDialog } from "./dialog";
 import { normalizeErrorMessage } from "../utils/errors";
+import { i18n } from "../locales";
 
 export const MAX_BACKEND_CONFIGURE_ATTEMPTS = 5;
 
@@ -73,9 +74,7 @@ export async function ensureBackendAndStart() {
   const localAuto = await autoConfigureBackendPath();
   if (localAuto.linked) {
     await startBackendWithChecks();
-    ElMessage.success(
-      "Automatically detected and linked backend in the local directory.",
-    );
+    ElMessage.success(i18n.global.t("backend.autoDetectedAndLinked"));
     return;
   }
 
@@ -87,8 +86,11 @@ export async function ensureBackendAndStart() {
     }
 
     await ElMessageBox.alert(
-      `Backend executable "go-on" not found. Please select the directory containing go-on (it will look for root/bin/exec/backend automatically).\nAttempt ${attempt}/${MAX_BACKEND_CONFIGURE_ATTEMPTS}`,
-      "Configure Backend Path",
+      i18n.global.t("backend.executableNotFound", {
+        attempt: String(attempt),
+        max: String(MAX_BACKEND_CONFIGURE_ATTEMPTS),
+      }),
+      i18n.global.t("backend.configureBackendPath"),
       {
         confirmButtonText: "Select Directory",
         closeOnClickModal: false,
@@ -104,14 +106,17 @@ export async function ensureBackendAndStart() {
 
     if (!picked) {
       ElMessage.warning(
-        `No directory selected (${attempt}/${MAX_BACKEND_CONFIGURE_ATTEMPTS}), please retry.`,
+        i18n.global.t("backend.noDirectorySelected", {
+          attempt: String(attempt),
+          max: String(MAX_BACKEND_CONFIGURE_ATTEMPTS),
+        }),
       );
       continue;
     }
 
     const inputPath = Array.isArray(picked) ? picked[0] : picked;
     if (!inputPath || !String(inputPath).trim()) {
-      ElMessage.warning("Path cannot be empty, please specify again.");
+      ElMessage.warning(i18n.global.t("backend.pathCannotBeEmpty"));
       continue;
     }
 
@@ -119,21 +124,21 @@ export async function ensureBackendAndStart() {
       await configureServiceByDirectory(String(inputPath));
     } catch (error) {
       ElMessage.error(
-        `Failed to resolve backend from directory: ${normalizeErrorMessage(error)}`,
+        i18n.global.t("backend.failedToResolve", {
+          error: normalizeErrorMessage(error),
+        }),
       );
       continue;
     }
 
     const configuredExists = await backendExecutableExists();
     if (!configuredExists) {
-      ElMessage.error(
-        "Specified path is invalid or file does not exist, please specify again.",
-      );
+      ElMessage.error(i18n.global.t("backend.pathInvalid"));
       continue;
     }
 
     await startBackendWithChecks();
-    ElMessage.success("Backend started.");
+    ElMessage.success(i18n.global.t("backend.started"));
     return;
   }
 
@@ -153,13 +158,13 @@ export async function bootstrapBackend(monitorOnly: boolean) {
     if (health.ok) {
       const result = await autoConfigureBackendPath();
       if (result.linked) {
-        ElMessage.success(
-          "Backend detected as already running, automatically linked and saved to config.",
-        );
+        ElMessage.success(i18n.global.t("backend.detectedRunning"));
         return;
       }
       ElMessage.warning(
-        `Backend detected as running, but auto-link failed: ${result.reason}`,
+        i18n.global.t("backend.detectedRunningAutoLinkFailed", {
+          reason: result.reason,
+        }),
       );
     }
   } catch {
@@ -167,9 +172,7 @@ export async function bootstrapBackend(monitorOnly: boolean) {
   }
 
   if (monitorOnly) {
-    ElMessage.warning(
-      "Currently in monitor-only mode: will not auto-start backend. Please start go-on manually.",
-    );
+    ElMessage.warning(i18n.global.t("backend.monitorOnlyMode"));
     return;
   }
 

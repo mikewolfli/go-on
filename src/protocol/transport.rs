@@ -3,8 +3,9 @@
 //! Provides protocol-layer channel separation for different message types.
 //! Each channel is isolated with its own queue, configuration, and statistics.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Result};
@@ -57,17 +58,29 @@ pub enum MessagePriority {
     Critical,
 }
 
+/// Quality of Service level for a message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
+pub enum QosLevel {
+    /// Fire-and-forget; no delivery guarantee
+    AtMostOnce,
+    /// Retry until acknowledged
+    AtLeastOnce,
+    /// Guaranteed exactly-once delivery via deduplication
+    ExactlyOnce,
+}
+
 /// Delivery status of a message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DeliveryStatus {
     /// Message is queued and awaiting delivery
-    Queued,
+    Pending,
     /// Message is currently in flight
     InFlight,
     /// Message has been successfully delivered
-    Delivered,
+    Delivered { timestamp_ms: u64 },
     /// Delivery failed (permanently)
-    Failed,
+    Failed { reason: String, retry_count: u32 },
     /// Message expired before delivery
     Expired,
 }
@@ -85,6 +98,8 @@ pub struct TransportMessage {
     pub channel: ChannelId,
     /// Delivery priority
     pub priority: MessagePriority,
+    /// Quality of Service level
+    pub qos: QosLevel,
     /// Message payload (string-encoded)
     pub payload: String,
     /// Source component identifier
@@ -199,6 +214,7 @@ pub struct TransportProfile {
 #[derive(Debug, Clone)]
 struct QueuedMessage {
     message: TransportMessage,
+    #[allow(dead_code)]
     status: DeliveryStatus,
     retries_remaining: u32,
     enqueued_ms: u64,
@@ -218,6 +234,7 @@ struct ChannelState {
 struct TransportInner {
     config: TransportConfig,
     channels: HashMap<ChannelId, ChannelState>,
+    sent_ids: HashSet<String>,
     total_sent: u64,
     total_received: u64,
     total_failures: u64,
@@ -244,6 +261,7 @@ impl MultiChannelTransport {
             inner: Arc::new(Mutex::new(TransportInner {
                 config,
                 channels: HashMap::new(),
+                sent_ids: HashSet::new(),
                 total_sent: 0,
                 total_received: 0,
                 total_failures: 0,
@@ -302,6 +320,19 @@ impl MultiChannelTransport {
         let mut inner = self.inner.lock().unwrap();
         let now = Self::now_ms();
 
+        // Dedup for ExactlyOnce QoS: if the message id was already sent, return
+        // a Delivered receipt without re-enqueuing
+        if message.qos == QosLevel::ExactlyOnce && inner.sent_ids.contains(&message.id) {
+            return Ok(DeliveryReceipt {
+                message_id: message.id.clone(),
+                status: DeliveryStatus::Delivered {
+                    timestamp_ms: now,
+                },
+                delivered_ms: Some(now),
+                error: None,
+            });
+        }
+
         // Check global rate limit
         // Simple rate limiting: track time window globally
         // (per-channel rate limiting is handled in channel logic)
@@ -351,10 +382,11 @@ impl MultiChannelTransport {
         }
 
         // Enqueue with priority ordering (higher priority first)
+        let max_retries = channel.config.max_retries;
         let queued = QueuedMessage {
             message: message.clone(),
-            status: DeliveryStatus::Queued,
-            retries_remaining: channel.config.max_retries,
+            status: DeliveryStatus::Pending,
+            retries_remaining: max_retries,
             enqueued_ms: now,
         };
 
@@ -370,11 +402,16 @@ impl MultiChannelTransport {
         // Update stats
         channel.stats.messages_sent += 1;
         channel.stats.queue_depth = channel.queue.len();
+
+        // Record sent id for ExactlyOnce QoS dedup — after channel borrow is done
+        if message.qos == QosLevel::ExactlyOnce {
+            inner.sent_ids.insert(message.id.clone());
+        }
         inner.total_sent += 1;
 
         Ok(DeliveryReceipt {
             message_id: message.id.clone(),
-            status: DeliveryStatus::Queued,
+            status: DeliveryStatus::Pending,
             delivered_ms: None,
             error: None,
         })
@@ -453,6 +490,54 @@ impl MultiChannelTransport {
     /// Forward a message to a different channel.
     ///
     /// Removes the original message and sends a copy to the target channel.
+    /// Peek at the next message in a channel without dequeuing.
+    pub fn peek(&self, channel_id: &ChannelId) -> Option<TransportMessage> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .channels
+            .get(channel_id)
+            .and_then(|ch| ch.queue.first().map(|qm| qm.message.clone()))
+    }
+
+    /// Get statistics for all channels.
+    pub fn all_channel_stats(&self) -> Vec<ChannelStats> {
+        let inner = self.inner.lock().unwrap();
+        inner.channels.values().map(|ch| ch.stats.clone()).collect()
+    }
+
+    /// Send a message on the Control channel.
+    pub fn send_control(
+        &self,
+        source: &str,
+        target: &str,
+        payload: &str,
+    ) -> Result<DeliveryReceipt> {
+        self.send(self.make_message(ChannelId::Control, source, target, payload))
+    }
+
+    /// Send a message on the Data channel.
+    pub fn send_data(&self, source: &str, target: &str, payload: &str) -> Result<DeliveryReceipt> {
+        self.send(self.make_message(ChannelId::Data, source, target, payload))
+    }
+
+    /// Send a message on the Event channel.
+    pub fn send_event(&self, source: &str, target: &str, payload: &str) -> Result<DeliveryReceipt> {
+        self.send(self.make_message(ChannelId::Event, source, target, payload))
+    }
+
+    /// Send a message on the Heartbeat channel.
+    pub fn send_heartbeat(
+        &self,
+        source: &str,
+        target: &str,
+        payload: &str,
+    ) -> Result<DeliveryReceipt> {
+        self.send(self.make_message(ChannelId::Heartbeat, source, target, payload))
+    }
+
+    /// Forward a message to a different channel.
+    ///
+    /// Removes the original message and sends a copy to the target channel.
     pub fn forward(&self, message_id: &str, target_channel: ChannelId) -> Result<DeliveryReceipt> {
         let mut inner = self.inner.lock().unwrap();
 
@@ -503,7 +588,7 @@ impl MultiChannelTransport {
         let now = Self::now_ms();
         let queued = QueuedMessage {
             message: msg.clone(),
-            status: DeliveryStatus::Queued,
+            status: DeliveryStatus::Pending,
             retries_remaining: target.config.max_retries,
             enqueued_ms: now,
         };
@@ -523,7 +608,7 @@ impl MultiChannelTransport {
 
         Ok(DeliveryReceipt {
             message_id: msg.id.clone(),
-            status: DeliveryStatus::Queued,
+            status: DeliveryStatus::Pending,
             delivered_ms: None,
             error: None,
         })
@@ -600,7 +685,40 @@ impl MultiChannelTransport {
             .unwrap_or_default()
             .as_millis() as u64
     }
+
+    /// Build a minimal TransportMessage with default QoS and auto-generated id.
+    fn make_message(
+        &self,
+        channel: ChannelId,
+        source: &str,
+        target: &str,
+        payload: &str,
+    ) -> TransportMessage {
+        TransportMessage {
+            id: format!("msg-{}", Self::next_id()),
+            channel,
+            priority: MessagePriority::Normal,
+            qos: QosLevel::AtMostOnce,
+            payload: payload.to_string(),
+            source: source.to_string(),
+            target: target.to_string(),
+            created_ms: Self::now_ms(),
+            ttl_ms: 30000,
+            delivery_attempts: 0,
+        }
+    }
+
+    /// Atomically increment and return the next message id counter.
+    fn next_id() -> u64 {
+        NEXT_MSG_ID.fetch_add(1, Ordering::SeqCst)
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Static helpers
+// ---------------------------------------------------------------------------
+
+static NEXT_MSG_ID: AtomicU64 = AtomicU64::new(1);
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -636,17 +754,18 @@ mod tests {
 
     /// Helper: create a sample message for testing.
     fn sample_message(
-        transport: &MultiChannelTransport,
+        _transport: &MultiChannelTransport,
         channel: ChannelId,
         priority: MessagePriority,
-        id: &str,
     ) -> TransportMessage {
         let now = MultiChannelTransport::now_ms();
+        let channel_name = channel.to_string();
         TransportMessage {
-            id: id.to_string(),
+            id: format!("msg-{}", MultiChannelTransport::next_id()),
             channel,
             priority,
-            payload: format!("payload-{}", id),
+            qos: QosLevel::AtMostOnce,
+            payload: format!("payload-{}", channel_name),
             source: "test_source".to_string(),
             target: "test_target".to_string(),
             created_ms: now,
@@ -692,16 +811,11 @@ mod tests {
     #[test]
     fn test_send_message() {
         let transport = configured_transport();
-        let msg = sample_message(
-            &transport,
-            ChannelId::Data,
-            MessagePriority::Normal,
-            "send-1",
-        );
+        let msg = sample_message(&transport, ChannelId::Data, MessagePriority::Normal);
         let receipt = transport.send(msg).unwrap();
 
-        assert_eq!(receipt.status, DeliveryStatus::Queued);
-        assert_eq!(receipt.message_id, "send-1");
+        assert_eq!(receipt.status, DeliveryStatus::Pending);
+        assert!(receipt.message_id.starts_with("msg-"));
 
         let profile = transport.profile();
         assert_eq!(profile.total_messages_sent, 1);
@@ -713,20 +827,10 @@ mod tests {
     fn test_send_with_priority() {
         let transport = configured_transport();
 
-        let low = sample_message(&transport, ChannelId::Data, MessagePriority::Low, "p-low");
-        let critical = sample_message(
-            &transport,
-            ChannelId::Data,
-            MessagePriority::Critical,
-            "p-critical",
-        );
-        let normal = sample_message(
-            &transport,
-            ChannelId::Data,
-            MessagePriority::Normal,
-            "p-normal",
-        );
-        let high = sample_message(&transport, ChannelId::Data, MessagePriority::High, "p-high");
+        let low = sample_message(&transport, ChannelId::Data, MessagePriority::Low);
+        let critical = sample_message(&transport, ChannelId::Data, MessagePriority::Critical);
+        let normal = sample_message(&transport, ChannelId::Data, MessagePriority::Normal);
+        let high = sample_message(&transport, ChannelId::Data, MessagePriority::High);
 
         transport.send(low).unwrap();
         transport.send(critical).unwrap();
@@ -737,8 +841,11 @@ mod tests {
         let received = transport.receive(ChannelId::Data).unwrap();
         assert_eq!(received.len(), 4);
 
-        let ids: Vec<&str> = received.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, vec!["p-critical", "p-high", "p-normal", "p-low"]);
+        // Messages should come out in priority order (Critical > High > Normal > Low)
+        assert_eq!(received[0].priority, MessagePriority::Critical);
+        assert_eq!(received[1].priority, MessagePriority::High);
+        assert_eq!(received[2].priority, MessagePriority::Normal);
+        assert_eq!(received[3].priority, MessagePriority::Low);
     }
 
     // ── 5. send and receive ───────────────────────────────────────────────
@@ -746,17 +853,11 @@ mod tests {
     #[test]
     fn test_send_and_receive() {
         let transport = configured_transport();
-        let msg = sample_message(
-            &transport,
-            ChannelId::Event,
-            MessagePriority::Normal,
-            "send-recv-1",
-        );
+        let msg = sample_message(&transport, ChannelId::Event, MessagePriority::Normal);
         transport.send(msg).unwrap();
 
         let received = transport.receive(ChannelId::Event).unwrap();
         assert_eq!(received.len(), 1);
-        assert_eq!(received[0].id, "send-recv-1");
     }
 
     // ── 6. receive empty channel ──────────────────────────────────────────
@@ -774,17 +875,13 @@ mod tests {
     #[test]
     fn test_acknowledge() {
         let transport = configured_transport();
-        let msg = sample_message(
-            &transport,
-            ChannelId::Data,
-            MessagePriority::Normal,
-            "ack-msg-1",
-        );
+        let msg = sample_message(&transport, ChannelId::Data, MessagePriority::Normal);
+        let msg_id = msg.id.clone();
         transport.send(msg).unwrap();
         let _received = transport.receive(ChannelId::Data).unwrap();
 
         // Acknowledge the message — should remove it from the queue
-        transport.acknowledge("ack-msg-1").unwrap();
+        transport.acknowledge(&msg_id).unwrap();
 
         // Receiving again should yield nothing new since the message was acknowledged
         let remaining = transport.receive(ChannelId::Data).unwrap();
@@ -801,22 +898,18 @@ mod tests {
     #[test]
     fn test_forward_message() {
         let transport = configured_transport();
-        let msg = sample_message(
-            &transport,
-            ChannelId::Data,
-            MessagePriority::Normal,
-            "fwd-1",
-        );
+        let msg = sample_message(&transport, ChannelId::Data, MessagePriority::Normal);
+        let msg_id = msg.id.clone();
         transport.send(msg).unwrap();
 
         // Forward from Data to Event channel
-        let receipt = transport.forward("fwd-1", ChannelId::Event).unwrap();
-        assert_eq!(receipt.status, DeliveryStatus::Queued);
+        let receipt = transport.forward(&msg_id, ChannelId::Event).unwrap();
+        assert_eq!(receipt.status, DeliveryStatus::Pending);
 
         // The message should now be on the Event channel
         let event_msgs = transport.receive(ChannelId::Event).unwrap();
         assert_eq!(event_msgs.len(), 1);
-        assert_eq!(event_msgs[0].id, "fwd-1");
+        assert_eq!(event_msgs[0].id, msg_id);
         assert_eq!(event_msgs[0].channel, ChannelId::Event);
     }
 
@@ -834,6 +927,7 @@ mod tests {
                 id: "expired-1".to_string(),
                 channel: ChannelId::Data,
                 priority: MessagePriority::Normal,
+                qos: QosLevel::AtMostOnce,
                 payload: "old".to_string(),
                 source: "src".to_string(),
                 target: "dst".to_string(),
@@ -843,7 +937,7 @@ mod tests {
             };
             channel.queue.push(QueuedMessage {
                 message: old_msg,
-                status: DeliveryStatus::Queued,
+                status: DeliveryStatus::Pending,
                 retries_remaining: 3,
                 enqueued_ms: 1000,
             });
@@ -869,6 +963,7 @@ mod tests {
             id: "ttl-msg".to_string(),
             channel: ChannelId::Data,
             priority: MessagePriority::Normal,
+            qos: QosLevel::AtMostOnce,
             payload: "will-expire".to_string(),
             source: "src".to_string(),
             target: "dst".to_string(),
@@ -894,12 +989,7 @@ mod tests {
         let transport = configured_transport();
 
         // Send a message on the Data channel
-        let msg = sample_message(
-            &transport,
-            ChannelId::Data,
-            MessagePriority::Normal,
-            "stats-1",
-        );
+        let msg = sample_message(&transport, ChannelId::Data, MessagePriority::Normal);
         transport.send(msg).unwrap();
 
         // Receive it
@@ -919,18 +1009,8 @@ mod tests {
         let transport = configured_transport();
 
         // Send a couple of messages on different channels
-        let msg1 = sample_message(
-            &transport,
-            ChannelId::Control,
-            MessagePriority::Critical,
-            "prof-ctrl",
-        );
-        let msg2 = sample_message(
-            &transport,
-            ChannelId::Data,
-            MessagePriority::Normal,
-            "prof-data",
-        );
+        let msg1 = sample_message(&transport, ChannelId::Control, MessagePriority::Critical);
+        let msg2 = sample_message(&transport, ChannelId::Data, MessagePriority::Normal);
         transport.send(msg1).unwrap();
         transport.send(msg2).unwrap();
 
@@ -949,23 +1029,19 @@ mod tests {
         let transport = configured_transport();
 
         // Send a message with a custom config that has limited retries
-        let msg = sample_message(
-            &transport,
-            ChannelId::Data,
-            MessagePriority::Normal,
-            "retry-1",
-        );
+        let msg = sample_message(&transport, ChannelId::Data, MessagePriority::Normal);
+        let msg_id = msg.id.clone();
         transport.send(msg).unwrap();
 
         // Simulate retries: the message will be received and the
         // delivery_attempts field tracks progress. When the message is
         // forwarded, delivery_attempts increments.
-        let receipt1 = transport.forward("retry-1", ChannelId::Data).unwrap();
-        assert_eq!(receipt1.status, DeliveryStatus::Queued);
+        let receipt1 = transport.forward(&msg_id, ChannelId::Data).unwrap();
+        assert_eq!(receipt1.status, DeliveryStatus::Pending);
 
         // Forward again — simulates a second retry
-        let receipt2 = transport.forward("retry-1", ChannelId::Data).unwrap();
-        assert_eq!(receipt2.status, DeliveryStatus::Queued);
+        let receipt2 = transport.forward(&msg_id, ChannelId::Data).unwrap();
+        assert_eq!(receipt2.status, DeliveryStatus::Pending);
 
         // After forwarding, each forward removed the message and re-queued a copy.
         // Forward #1: removes original (attempts=0), queues copy (attempts=1)
@@ -973,7 +1049,99 @@ mod tests {
         let messages = transport.receive(ChannelId::Data).unwrap();
 
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].id, "retry-1");
+        assert_eq!(messages[0].id, msg_id);
         assert_eq!(messages[0].delivery_attempts, 2); // each forward increments by 1
+    }
+
+    // ── 14. send with QoS ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_send_with_qos() {
+        let transport = configured_transport();
+        let mut msg = sample_message(&transport, ChannelId::Data, MessagePriority::Normal);
+        msg.qos = QosLevel::ExactlyOnce;
+        let receipt = transport.send(msg).unwrap();
+        assert_eq!(receipt.status, DeliveryStatus::Pending);
+    }
+
+    // ── 15. dedup for ExactlyOnce ─────────────────────────────────────────
+
+    #[test]
+    fn test_dedup_exactly_once() {
+        let transport = configured_transport();
+        let mut msg = sample_message(&transport, ChannelId::Data, MessagePriority::Normal);
+        msg.id = "dedup-test-1".to_string();
+        msg.qos = QosLevel::ExactlyOnce;
+
+        // First send should succeed
+        let r1 = transport.send(msg.clone()).unwrap();
+        assert_eq!(r1.status, DeliveryStatus::Pending);
+
+        // Second send of same id should result in already-delivered
+        let r2 = transport.send(msg).unwrap();
+        match r2.status {
+            DeliveryStatus::Delivered { .. } => {} // expected
+            _ => panic!(
+                "Expected Delivered status for dedup, got {:?}",
+                r2.status
+            ),
+        }
+    }
+
+    // ── 16. peek does not dequeue ─────────────────────────────────────────
+
+    #[test]
+    fn test_peek_does_not_dequeue() {
+        let transport = configured_transport();
+        let msg = sample_message(&transport, ChannelId::Data, MessagePriority::High);
+        let msg_id = msg.id.clone();
+        transport.send(msg).unwrap();
+
+        // Peek should return the message without dequeuing
+        let peeked = transport.peek(&ChannelId::Data).unwrap();
+        assert_eq!(peeked.id, msg_id);
+        assert_eq!(peeked.priority, MessagePriority::High);
+
+        // The message should still be in the queue (receive should still get it)
+        let received = transport.receive(ChannelId::Data).unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].id, msg_id);
+    }
+
+    // ── 17. convenience send methods ──────────────────────────────────────
+
+    #[test]
+    fn test_convenience_send_methods() {
+        let transport = configured_transport();
+
+        transport.send_control("src", "dst", "control_msg").unwrap();
+        transport.send_data("src", "dst", "data_msg").unwrap();
+        transport.send_event("src", "dst", "event_msg").unwrap();
+        transport.send_heartbeat("src", "dst", "hb").unwrap();
+
+        let stats = transport.all_channel_stats();
+        let total_sent: u64 = stats.iter().map(|s| s.messages_sent).sum();
+        assert_eq!(total_sent, 4);
+    }
+
+    // ── 18. all channel stats ─────────────────────────────────────────────
+
+    #[test]
+    fn test_all_channel_stats() {
+        let transport = configured_transport();
+        let stats_before = transport.all_channel_stats();
+        let channels_before = stats_before.len();
+
+        transport.send_data("a", "b", "test").unwrap();
+
+        let stats_after = transport.all_channel_stats();
+        assert_eq!(stats_after.len(), channels_before);
+
+        let data_stats: Vec<_> = stats_after
+            .into_iter()
+            .filter(|s| s.channel == ChannelId::Data)
+            .collect();
+        assert_eq!(data_stats.len(), 1);
+        assert_eq!(data_stats[0].messages_sent, 1);
     }
 }

@@ -4,6 +4,7 @@
 //! through a voting-based governance model. Council members can submit proposals,
 //! cast votes, and the system tallies results to reach consensus.
 
+#[allow(clippy::module_inception)]
 pub mod council;
 #[allow(unused_imports)]
 pub use council::*;

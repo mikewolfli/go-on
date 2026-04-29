@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! F-GAP-18: Evolution Graph
 //!
 //! Extends the capability graph with evolution tracking: lifecycle states,
@@ -21,7 +20,6 @@ pub enum EvolutionStage {
     /// Capability has proven effective and is nearing stability.
     Mature,
     /// Capability is stable and reliable.
-    #[allow(dead_code)]
     Stable,
     /// Capability is still functional but being phased out.
     Deprecated,
@@ -37,18 +35,15 @@ pub struct CapabilityVersion {
     /// The evolution stage at which this version was recorded.
     pub stage: EvolutionStage,
     /// Unix timestamp (milliseconds) when this version was created.
-    #[allow(dead_code)]
     pub created_ms: u64,
     /// Success rate in range [0.0, 1.0].
     pub success_rate: f64,
     /// Average latency in milliseconds.
-    #[allow(dead_code)]
     pub avg_latency_ms: f64,
 }
 
 /// Direction of performance trend over recent versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum TrendDirection {
     /// Success rate is trending upward.
     Improving,
@@ -291,7 +286,6 @@ impl Default for EvolutionGraph {
 /// Allowed transitions follow a forward-only lifecycle:
 /// New → Learning → Mature → Stable → Deprecated → Retired
 /// Once Retired, no further transitions are allowed.
-#[allow(dead_code)]
 fn is_valid_transition(from: EvolutionStage, to: EvolutionStage) -> bool {
     match (from, to) {
         (EvolutionStage::New, EvolutionStage::Learning) => true,
@@ -335,7 +329,6 @@ fn calculate_trend(versions: &[CapabilityVersion]) -> TrendDirection {
 ///
 /// Returns the slope coefficient. A positive value means improving,
 /// negative means degrading.
-#[allow(dead_code)]
 fn linear_regression_slope(versions: &[CapabilityVersion]) -> f64 {
     let n = versions.len() as f64;
     if n < 2.0 {

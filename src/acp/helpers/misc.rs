@@ -2,26 +2,36 @@
 //!
 //! This module contains various utility functions that don't fit neatly into
 //! other helper categories but are used throughout the ACP server implementation.
+//!
+//! NOTE: Most utility functions here are duplicated in `policy.rs` and
+//! `requirement.rs` for production use. The copies in this module are
+//! preserved as test-only alternatives.
 
+#[cfg(test)]
 use crate::config::PhaseOptions;
+#[cfg(test)]
 use serde_json::Value;
+#[cfg(test)]
 use std::path::PathBuf;
 
-/// Extract u64 value from PhaseOptions extra field
+/// Extract u64 value from PhaseOptions extra field (test duplicate)
+#[cfg(test)]
 pub fn extra_u64(options: Option<&PhaseOptions>, key: &str) -> Option<u64> {
     options
         .and_then(|opts| opts.extra.get(key))
         .and_then(|v| v.as_u64())
 }
 
-/// Extract f64 value from PhaseOptions extra field
+/// Extract f64 value from PhaseOptions extra field (test duplicate)
+#[cfg(test)]
 pub fn extra_f64(options: Option<&PhaseOptions>, key: &str) -> Option<f64> {
     options
         .and_then(|opts| opts.extra.get(key))
         .and_then(|v| v.as_f64())
 }
 
-/// Extract string value from PhaseOptions extra field
+/// Extract string value from PhaseOptions extra field (test duplicate)
+#[cfg(test)]
 pub fn extra_string(options: Option<&PhaseOptions>, key: &str) -> Option<String> {
     options
         .and_then(|opts| opts.extra.get(key))
@@ -29,14 +39,16 @@ pub fn extra_string(options: Option<&PhaseOptions>, key: &str) -> Option<String>
         .map(|v| v.to_string())
 }
 
-/// Extract bool value from PhaseOptions extra field
+/// Extract bool value from PhaseOptions extra field (test duplicate)
+#[cfg(test)]
 pub fn extra_bool(options: Option<&PhaseOptions>, key: &str) -> Option<bool> {
     options
         .and_then(|opts| opts.extra.get(key))
         .and_then(|v| v.as_bool())
 }
 
-/// Extract string list from PhaseOptions extra field
+/// Extract string list from PhaseOptions extra field (test duplicate)
+#[cfg(test)]
 pub fn extra_string_list(options: Option<&PhaseOptions>, key: &str) -> Option<Vec<String>> {
     options
         .and_then(|opts| opts.extra.get(key))
@@ -50,6 +62,7 @@ pub fn extra_string_list(options: Option<&PhaseOptions>, key: &str) -> Option<Ve
 }
 
 /// Calculate percentile value from a sorted slice of u64 samples
+#[cfg(test)]
 pub fn percentile(samples: &[u64], percentile: f64) -> u64 {
     if samples.is_empty() {
         return 0;
@@ -59,8 +72,9 @@ pub fn percentile(samples: &[u64], percentile: f64) -> u64 {
     samples[rank]
 }
 
-/// Decision structure for requirement gate evaluation
+/// Decision structure for requirement gate evaluation (test duplicate)
 #[derive(Debug, Clone)]
+#[cfg(test)]
 pub struct RequirementGateDecision {
     /// Whether the request is blocked
     pub blocked: bool,
@@ -74,8 +88,9 @@ pub struct RequirementGateDecision {
     pub governance_artifact_path: PathBuf,
 }
 
-/// Metrics for learning clarification process
+/// Metrics for learning clarification process (test duplicate)
 #[derive(Debug, Clone, Copy)]
+#[cfg(test)]
 pub struct LearningClarificationMetrics {
     /// Number of clarification rounds
     pub rounds: u32,
@@ -85,7 +100,8 @@ pub struct LearningClarificationMetrics {
     pub requirement_change_count: u32,
 }
 
-/// Parse a string list from JSON Value
+/// Parse a string list from JSON Value (test duplicate)
+#[cfg(test)]
 pub fn parse_string_list(value: Option<&Value>) -> Vec<String> {
     value
         .and_then(|v| v.as_array())

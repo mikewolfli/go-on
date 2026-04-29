@@ -92,6 +92,7 @@ pub async fn write_json_line(server: &AcpServer, value: &Value) -> Result<()> {
 /// Read JSON line from input
 ///
 /// This function replaces the `AcpServer::read_json_line` method.
+#[allow(dead_code)]
 pub async fn read_json_line() -> Result<Option<Value>> {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -117,6 +118,7 @@ pub async fn read_json_line() -> Result<Option<Value>> {
 /// Flush output buffer
 ///
 /// This function replaces the `AcpServer::flush_output` method.
+#[allow(dead_code)]
 pub async fn flush_output(server: &AcpServer) -> Result<()> {
     let mut stdout = server.output.lock().await;
     stdout.flush().await?;
@@ -130,6 +132,7 @@ pub async fn flush_output(server: &AcpServer) -> Result<()> {
 /// This is a best-effort heuristic used for detecting ACP protocol mode
 /// in auto/adaptive mode.
 /// If the timeout fires, we conservatively return false (no input).
+#[allow(dead_code)]
 pub async fn has_input() -> Result<bool> {
     use std::os::unix::io::AsRawFd;
 

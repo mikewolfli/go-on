@@ -11,6 +11,7 @@ use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
+use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{option_f64, principles_to_text, stream_sse_events, SseEventAction};
 
 pub struct GeminiAgent {
@@ -100,7 +101,7 @@ impl GeminiAgent {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("gemini chat request failed with {status}: {body}");
+            anyhow::bail!("{}", chat_request_failed_msg("gemini", &status.to_string(), &body));
         }
 
         // Parse Gemini streaming response which uses `candidates[0].content.parts[0].text`
@@ -165,7 +166,7 @@ impl Agent for GeminiAgent {
         }
 
         Err(last_error
-            .unwrap_or_else(|| anyhow::anyhow!("gemini request failed"))
+            .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("gemini")))
             .into())
     }
 }

@@ -53,7 +53,10 @@ export function useWorkflow() {
     latestGates.value = (result?.gates || {}) as Record<string, unknown>;
 
     const cycle = result?.execution_cycle || {};
-    latestAutoRepair.value = (cycle?.auto_repair || {}) as Record<string, unknown>;
+    latestAutoRepair.value = (cycle?.auto_repair || {}) as Record<
+      string,
+      unknown
+    >;
     const cycles = Array.isArray(cycle?.cycles) ? cycle.cycles : [];
     latestCycleTimeline.value = cycles.map((item: any) => ({
       iteration: Number(item?.iteration || 0),
@@ -81,7 +84,9 @@ export function useWorkflow() {
 
   function repairTargetCount(): number {
     const repair = latestAutoRepair.value as Record<string, any>;
-    const targets = Array.isArray(repair?.target_subtasks) ? repair.target_subtasks : [];
+    const targets = Array.isArray(repair?.target_subtasks)
+      ? repair.target_subtasks
+      : [];
     return Number(targets.length || 0);
   }
 
@@ -91,19 +96,28 @@ export function useWorkflow() {
       const result = await invokeRuntimeRpc("optimization.peak", "{}");
       const payload = JSON.parse(result);
       const indicators = payload?.result?.peak?.indicators || {};
-      peakIndicators.taskSuccessRate = Number(indicators.task_success_rate || 0);
+      peakIndicators.taskSuccessRate = Number(
+        indicators.task_success_rate || 0,
+      );
       peakIndicators.firstPassRate = Number(indicators.first_pass_rate || 0);
-      peakIndicators.meanRepairIterations = Number(indicators.mean_repair_iterations || 0);
-      peakIndicators.humanInterventionRate = Number(indicators.human_intervention_rate || 0);
+      peakIndicators.meanRepairIterations = Number(
+        indicators.mean_repair_iterations || 0,
+      );
+      peakIndicators.humanInterventionRate = Number(
+        indicators.human_intervention_rate || 0,
+      );
       peakIndicators.regressionRate = Number(indicators.regression_rate || 0);
     } catch (err) {
-      ElMessage.error(`Error: ${err}`);
+      ElMessage.error(t("workflow.error", { error: err }));
     } finally {
       loadingPeak.value = false;
     }
   }
 
-  function taskTextById(taskId: string, tasks: Ref<Array<{ id: string; name: string; description: string }>>): string {
+  function taskTextById(
+    taskId: string,
+    tasks: Ref<Array<{ id: string; name: string; description: string }>>,
+  ): string {
     const task = tasks.value.find((item) => item.id === taskId);
     if (!task) {
       return taskId;
@@ -112,8 +126,24 @@ export function useWorkflow() {
   }
 
   async function loadTasks(
-    tasks: Ref<Array<{ id: string; name: string; description: string; estimated_duration: string }>>,
-    executionHistory: Ref<Array<{ time: string; task_id: string; task_name: string; status: string; duration: string; result: string }>>,
+    tasks: Ref<
+      Array<{
+        id: string;
+        name: string;
+        description: string;
+        estimated_duration: string;
+      }>
+    >,
+    executionHistory: Ref<
+      Array<{
+        time: string;
+        task_id: string;
+        task_name: string;
+        status: string;
+        duration: string;
+        result: string;
+      }>
+    >,
   ) {
     loadingTasks.value = true;
     try {
@@ -125,18 +155,23 @@ export function useWorkflow() {
         const conversations = data.panel.conversations;
         if (conversations) {
           activeWorkflows.value = Number(conversations.count || 0);
-          totalExecuted.value = Number(conversations.checkpoints || totalExecuted.value);
+          totalExecuted.value = Number(
+            conversations.checkpoints || totalExecuted.value,
+          );
         }
       }
       ElMessage.success(t("common.loaded"));
     } catch (err) {
-      ElMessage.error(`Error: ${err}`);
+      ElMessage.error(t("workflow.error", { error: err }));
     } finally {
       loadingTasks.value = false;
     }
   }
 
-  async function planTask(taskId: string, tasks: Ref<Array<{ id: string; name: string; description: string }>>) {
+  async function planTask(
+    taskId: string,
+    tasks: Ref<Array<{ id: string; name: string; description: string }>>,
+  ) {
     try {
       const task = taskTextById(taskId, tasks);
       plannedTask.value = task;
@@ -146,14 +181,30 @@ export function useWorkflow() {
       hydrateExecutionInsights(JSON.parse(result));
       ElMessage.success(t("workflow.planGenerated"));
     } catch (err) {
-      ElMessage.error(`Error: ${err}`);
+      ElMessage.error(t("workflow.error", { error: err }));
     }
   }
 
   async function executeTask(
     taskId: string,
-    tasks: Ref<Array<{ id: string; name: string; description: string; estimated_duration: string }>>,
-    executionHistory: Ref<Array<{ time: string; task_id: string; task_name: string; status: string; duration: string; result: string }>>,
+    tasks: Ref<
+      Array<{
+        id: string;
+        name: string;
+        description: string;
+        estimated_duration: string;
+      }>
+    >,
+    executionHistory: Ref<
+      Array<{
+        time: string;
+        task_id: string;
+        task_name: string;
+        status: string;
+        duration: string;
+        result: string;
+      }>
+    >,
   ) {
     executingId.value = taskId;
     try {
@@ -179,15 +230,31 @@ export function useWorkflow() {
         }
       }
     } catch (err) {
-      ElMessage.error(`Error: ${err}`);
+      ElMessage.error(t("workflow.error", { error: err }));
     } finally {
       executingId.value = "";
     }
   }
 
   async function confirmExecutePlan(
-    tasks: Ref<Array<{ id: string; name: string; description: string; estimated_duration: string }>>,
-    executionHistory: Ref<Array<{ time: string; task_id: string; task_name: string; status: string; duration: string; result: string }>>,
+    tasks: Ref<
+      Array<{
+        id: string;
+        name: string;
+        description: string;
+        estimated_duration: string;
+      }>
+    >,
+    executionHistory: Ref<
+      Array<{
+        time: string;
+        task_id: string;
+        task_name: string;
+        status: string;
+        duration: string;
+        result: string;
+      }>
+    >,
   ) {
     if (!planOutput.value) {
       ElMessage.warning(t("workflow.noPlan"));
@@ -212,7 +279,7 @@ export function useWorkflow() {
         planOutput.value = "";
       }
     } catch (err) {
-      ElMessage.error(`Error: ${err}`);
+      ElMessage.error(t("workflow.error", { error: err }));
     } finally {
       executingPlan.value = false;
     }

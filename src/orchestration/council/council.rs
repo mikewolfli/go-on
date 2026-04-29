@@ -480,7 +480,7 @@ impl OrchestrationCouncil {
             None => proposals.values().cloned().collect(),
         };
 
-        list.sort_by(|a, b| a.created_ms.cmp(&b.created_ms));
+        list.sort_by_key(|a| a.created_ms);
         Ok(list)
     }
 

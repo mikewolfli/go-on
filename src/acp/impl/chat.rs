@@ -3938,6 +3938,7 @@ mod tests {
 
 /// Run tool execution loop for full_auto mode
 /// This function integrates the tool execution loop from request.rs into the chat flow
+#[cfg(test)]
 fn run_tool_execution_loop(task: &str, subtask: &str, record_index: usize) -> String {
     // Simplified tool execution loop
     format!(
@@ -3958,6 +3959,7 @@ fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<Str
 }
 
 /// Execute model tool calls
+#[cfg(test)]
 fn execute_tool_calls(
     task: &str,
     subtask: &str,

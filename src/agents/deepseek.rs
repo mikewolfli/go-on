@@ -13,6 +13,7 @@ use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::{
     option_f64, option_string, option_u64, principles_to_text, stream_sse_to_sender,
 };
+use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 
 pub struct DeepSeekAgent {
     api_key_env: String,
@@ -92,7 +93,7 @@ impl DeepSeekAgent {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("deepseek request failed with {status}: {body}");
+            anyhow::bail!("{}", chat_request_failed_msg("deepseek", &status.to_string(), &body));
         }
 
         stream_sse_to_sender(response, sender).await
@@ -131,7 +132,7 @@ impl Agent for DeepSeekAgent {
         }
 
         Err(last_error
-            .unwrap_or_else(|| anyhow::anyhow!("deepseek request failed"))
+            .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("deepseek")))
             .into())
     }
 
@@ -215,5 +216,65 @@ mod tests {
         assert_eq!(payload["messages"][1]["content"], "ship it");
         assert_eq!(payload["temperature"], 0.1);
         assert_eq!(payload["max_tokens"], 1024);
+    }
+
+    #[test]
+    fn build_payload_without_principles_or_options() {
+        let agent = DeepSeekAgent::new(
+            "DEEPSEEK_API_KEY".to_string(),
+            "deepseek-chat".to_string(),
+            reqwest::Client::new(),
+        );
+
+        let payload = agent.build_payload(
+            vec![message("user", "hello")],
+            None,
+            None,
+        );
+
+        assert_eq!(payload["model"], "deepseek-chat");
+        assert_eq!(payload["messages"][0]["content"], "hello");
+        assert!(payload.get("temperature").is_none());
+        assert!(payload.get("max_tokens").is_none());
+        assert_eq!(payload["stream"], true);
+    }
+
+    #[test]
+    fn available_models_includes_default() {
+        let agent = DeepSeekAgent::new(
+            "DEEPSEEK_API_KEY".to_string(),
+            "deepseek-chat".to_string(),
+            reqwest::Client::new(),
+        );
+
+        let models = agent.available_models();
+        assert!(models.len() >= 3, "should have at least 3 models");
+
+        let has_deepseek_v3 = models.iter().any(|m| m.id == "deepseek-v3");
+        assert!(has_deepseek_v3, "should include deepseek-v3");
+
+        let default = agent.default_model();
+        assert!(default.is_some(), "should have a default model");
+        assert_eq!(default.unwrap().id, "deepseek-chat");
+    }
+
+    #[test]
+    fn build_payload_with_principles_only() {
+        let agent = DeepSeekAgent::new(
+            "DEEPSEEK_API_KEY".to_string(),
+            "deepseek-chat".to_string(),
+            reqwest::Client::new(),
+        );
+
+        let payload = agent.build_payload(
+            vec![message("user", "hello")],
+            Some(vec!["Be concise".to_string(), "Use examples".to_string()]),
+            None,
+        );
+
+        let content = payload["messages"][0]["content"].as_str().unwrap();
+        assert!(content.contains("Be concise"));
+        assert!(content.contains("Use examples"));
+        assert_eq!(payload["model"], "deepseek-chat");
     }
 }

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! ACP (Agent Coordination Protocol) module
 //!
 //! This module contains the core ACP server implementation and related components

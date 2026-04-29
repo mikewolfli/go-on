@@ -1610,6 +1610,7 @@ struct SubtaskRunResult {
     response_excerpt: String,
     tool_loop_used: bool,
     tool_observations: Vec<String>,
+    #[allow(dead_code)]
     audit_log_json: Option<String>,
 }
 

@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
+use crate::i18n::runtime::tf;
 use crate::intelligence::capability_graph::{CapabilityDecl, CapabilityGraph};
 use crate::intelligence::token_cache::{CachedAgentWrapper, TokenMultiLevelCache as TokenCache};
 
@@ -34,6 +35,32 @@ use crate::core::error::Result as AppResult;
 
 use crate::config::{AgentConfig, AppConfig};
 use crate::pua::PuaExecutionReport;
+
+/// Return an i18n'd error message for a failed provider chat request.
+/// All provider files use this instead of hardcoding their own error string.
+pub fn chat_request_failed_msg(provider: &str, status: &str, body: &str) -> String {
+    crate::i18n::runtime::tf("error.agent_chat_failed", &[
+        ("provider", provider),
+        ("status", status),
+        ("body", body),
+    ])
+}
+
+/// Return an i18n'd error message for a failed provider request (fallback, no status).
+pub fn request_failed_msg(provider: &str) -> String {
+    crate::i18n::runtime::tf("error.request_failed", &[
+        ("provider", provider),
+    ])
+}
+
+/// Return an i18n'd error message for a token request failure.
+pub fn token_request_failed_msg(provider: &str, status: &str, body: &str) -> String {
+    crate::i18n::runtime::tf("error.agent_token_failed", &[
+        ("provider", provider),
+        ("status", status),
+        ("body", body),
+    ])
+}
 
 /// Agent task envelope (Phase 0/1 discipline)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,18 +180,16 @@ fn load_secret_value(secret_ref: &str, field_name: &str) -> Result<String> {
     if let Some(locator) = secret_ref.strip_prefix(KEYRING_PREFIX) {
         let (service, account) = locator.split_once('/').ok_or_else(|| {
             anyhow::anyhow!(
-                "invalid {} keyring reference '{}': expected keyring://<service>/<account>",
-                field_name,
-                secret_ref
-            )
+                    "{}",
+                    tf("error.keyring_invalid_ref", &[("provider", field_name), ("ref", secret_ref)])
+                )
         })?;
 
         if service.trim().is_empty() || account.trim().is_empty() {
             anyhow::bail!(
-                "invalid {} keyring reference '{}': service/account must be non-empty",
-                field_name,
-                secret_ref
-            );
+                    "{}",
+                    tf("error.keyring_invalid_ref", &[("provider", field_name), ("ref", secret_ref)])
+                );
         }
 
         let keyring_error = match keyring::Entry::new(service, account) {
@@ -195,15 +220,13 @@ fn load_secret_value(secret_ref: &str, field_name: &str) -> Result<String> {
         }
 
         anyhow::bail!(
-            "keyring entry for {} unavailable ({}); env fallback not set (tried: {})",
-            field_name,
-            keyring_error,
-            fallback_candidates.join(", ")
+            "{}",
+            tf("error.keyring_unavailable", &[("provider", field_name), ("error", &keyring_error), ("vars", &fallback_candidates.join(", "))])
         );
     }
 
     std::env::var(secret_ref)
-        .with_context(|| format!("missing environment variable {}", secret_ref))
+        .with_context(|| tf("error.missing_env_var", &[("name", secret_ref)]))
 }
 
 fn rotation_group(field_name: &str) -> String {
@@ -250,7 +273,7 @@ pub(crate) fn inspect_secret_pool(secret_ref: &str, field_name: &str) -> Result<
     let value = load_secret_value(secret_ref, field_name)?;
     let candidates = split_secret_pool(&value);
     if candidates.is_empty() {
-        anyhow::bail!("{} resolved to an empty secret pool", field_name);
+        anyhow::bail!("{}", tf("error.keyring_empty_pool", &[("provider", field_name)]));
     }
 
     for candidate in &candidates {
@@ -358,10 +381,7 @@ pub trait Agent: Send + Sync {
             phase: envelope.phase.clone(),
             task_id: envelope.task_id.clone(),
             decision: "rejected".to_string(),
-            rationale: Some(
-                "This provider does not implement synchronous task execution; use chat() or provide a concrete run_task override."
-                    .to_string(),
-            ),
+            rationale: Some(tf("error.run_task_not_implemented", &[])),
             timestamp,
         };
 
@@ -382,7 +402,7 @@ pub trait Agent: Send + Sync {
                 "status": "unsupported_operation"
             })),
             error: Some(AgentError::Runtime(
-                "run_task is unsupported for this provider without a concrete override".to_string(),
+                tf("error.run_task_unsupported", &[]),
             )),
             audit_log: Some(serde_json::to_string(&audit).map_err(anyhow::Error::from)?),
             pua_report: None,
@@ -616,9 +636,12 @@ impl Default for AgentRegistry {
 /// * `Result<Arc<dyn Agent>>` - Returns Ok(agent) if built successfully, or an error if something goes wrong
 fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn Agent>> {
     fn required_field(agent_name: &str, value: &Option<String>, field: &str) -> Result<String> {
-        value
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("{} agent requires '{}'", agent_name, field))
+        value.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}",
+                tf("error.agent_requires_field", &[("agent", agent_name), ("field", field)])
+            )
+        })
     }
 
     fn local_test_agents_enabled() -> bool {
@@ -636,8 +659,8 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             return Ok(());
         }
         anyhow::bail!(
-            "agent type '{}' is test-only; set GO_ON_ENABLE_LOCAL_TEST_AGENTS=1 to enable it",
-            agent_type
+            "{}",
+            tf("error.agent_test_only", &[("agent_type", agent_type)])
         );
     }
 
@@ -965,8 +988,8 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             )))
         }
         other => anyhow::bail!(
-            "unsupported agent type '{}'; add implementation in agents/*",
-            other
+            "{}",
+            tf("error.agent_unsupported_type", &[("agent_type", other)])
         ),
     }
 }
@@ -1050,7 +1073,7 @@ pub(crate) fn resolve_secret(secret_ref: &str, field_name: &str) -> Result<Strin
 /// * `Result<()>` - Ok if checks pass, error on invalid values.
 fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
     if secret.trim().is_empty() {
-        anyhow::bail!("{} is empty", field_name);
+        anyhow::bail!("{}", tf("error.agent_empty_field", &[("field", field_name)]));
     }
 
     // Detect newline characters (possible multiline secret or injection attempt)

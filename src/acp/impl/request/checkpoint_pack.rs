@@ -104,6 +104,7 @@ pub(super) fn params_task(params: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+#[allow(dead_code)]
 pub(super) fn session_id_for_task(task: &str) -> String {
     let compact = task
         .chars()
@@ -142,11 +143,21 @@ pub async fn create_checkpoint_record(
         messages.len()
     );
 
+    // Acquire a single lock for the duration of the read + write.
+    let mut state = server.conversation_state.lock().await;
+    let branch_key = format!("{}:{}", conversation_id, branch_id);
+
+    // Auto-detect parent checkpoint from current branch head when not explicitly provided.
+    // This ensures checkpoints created after rollback or normal creation form a proper chain.
+    let resolved_parent = parent_checkpoint_id.or_else(|| {
+        state.branch_heads.get(&branch_key).cloned()
+    });
+
     let checkpoint = ConversationCheckpoint {
         checkpoint_id,
         conversation_id: conversation_id.to_string(),
         branch_id: branch_id.to_string(),
-        parent_checkpoint_id,
+        parent_checkpoint_id: resolved_parent,
         created_at: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -156,8 +167,6 @@ pub async fn create_checkpoint_record(
         messages,
     };
 
-    let mut state = server.conversation_state.lock().await;
-    let branch_key = format!("{}:{}", conversation_id, branch_id);
     // Update branch head to this checkpoint
     state
         .branch_heads

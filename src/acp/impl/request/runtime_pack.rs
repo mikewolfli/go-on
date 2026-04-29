@@ -251,6 +251,26 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
     let token_cache_stats = server.cache.token_cache.stats.read().await;
     let token_cache_report = token_cache_stats.to_json();
 
+    // Module-level health profiles — read from harness_bus and capability_bus.
+    let harness_profile = server.harness_bus.as_ref().map(|hb| json!({
+        "enabled": true,
+        "governance": hb.governance_profile(),
+        "drift": hb.drift_profile(),
+        "brain_loop": hb.brain_profile(),
+        "artifact": hb.artifact_profile(),
+        "omnipotent": hb.omnipotent_profile(),
+        "brain_runner": hb.brain_runner_profile(),
+        "resilience": hb.resilience_profile(),
+        "fault_tolerance": hb.fault_tolerance_profile(),
+    })).unwrap_or(json!({"enabled": false}));
+
+    let capability_profile = server.capability_bus.as_ref().map(|cb| {
+        json!({
+            "enabled": true,
+            "profile": cb.capability_bus_profile(),
+        })
+    }).unwrap_or(json!({"enabled": false}));
+
     send_result(
         server,
         request_id,
@@ -275,6 +295,10 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
                 "runtime_probe_total": metrics.runtime_probe_timeout_total,
             },
             "token_cache": token_cache_report,
+            "modules": {
+                "harness_bus": harness_profile,
+                "capability_bus": capability_profile,
+            },
             "timestamp": status.timestamp,
         }),
     )

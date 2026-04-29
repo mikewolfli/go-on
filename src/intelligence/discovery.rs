@@ -371,10 +371,8 @@ impl DiscoveryCenter {
 
             // Register if not duplicate
             let patterns = self.patterns.read().map(|p| p.clone()).unwrap_or_default();
-            if !patterns.contains_key(&pattern.name) {
-                if self.register_pattern(pattern).is_ok() {
-                    generated.push(best_pattern);
-                }
+            if !patterns.contains_key(&pattern.name) && self.register_pattern(pattern).is_ok() {
+                generated.push(best_pattern);
             }
         }
 
@@ -394,7 +392,7 @@ impl DiscoveryCenter {
 
         // Group patterns by category
         let mut by_category: HashMap<String, Vec<&SolutionPattern>> = HashMap::new();
-        for (_, pattern) in &patterns {
+        for pattern in patterns.values() {
             by_category
                 .entry(pattern.category.clone())
                 .or_default()

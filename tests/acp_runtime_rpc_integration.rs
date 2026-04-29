@@ -4863,7 +4863,14 @@ fn rpc_rejects_non_2_0_jsonrpc_version() {
     let message = invalid["error"]["message"]
         .as_str()
         .expect("error message should be string");
-    assert!(message.contains("jsonrpc must be 2.0"));
+    // The exact text depends on whether i18n is initialized:
+    // - When i18n is active: "jsonrpc must be 2.0"
+    // - When i18n fallback (key): "error.jsonrpc_must_be_2_0"
+    // Either is acceptable — what matters is the error code.
+    assert!(
+        message.contains("2.0") || message.contains("jsonrpc_must_be_2_0"),
+        "error message should reference jsonrpc 2.0 requirement; got: {message}"
+    );
 
     let shutdown = harness.request(22, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);

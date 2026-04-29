@@ -593,11 +593,20 @@ pub fn apply_recommended_to_config(config_path: &Path) -> Result<()> {
         .with_context(|| format!("failed to write config file: {}", config_path.display()))?;
 
     println!(
-        "applied provider recommendations to {}",
-        config_path.to_string_lossy()
+        "{}",
+        tf(
+            "setup.recommendations_applied",
+            &[("path", &config_path.to_string_lossy())]
+        )
     );
     if !created_phases.is_empty() {
-        println!("created missing phases: {}", created_phases.join(", "));
+        println!(
+            "{}",
+            tf(
+                "setup.created_phases",
+                &[("phases", &created_phases.join(", "))]
+            )
+        );
     }
     Ok(())
 }
@@ -1049,27 +1058,27 @@ fn prompt_additional_agents() -> Result<Vec<CustomAgentSpec>> {
     let mut agents: Vec<CustomAgentSpec> = Vec::new();
 
     loop {
-        println!("\n-- Custom agent {} --", agents.len() + 1);
+        println!("\n{}", tf("cli.custom_agent_title", &[("name", &(agents.len() + 1).to_string())]));
 
         // Name
         let name = loop {
-            let raw = prompt_value("  Agent name (identifier, no spaces)")?;
+            let raw = prompt_value(&format!("  {}", t("cli.agent_name_prompt")))?;
             let trimmed = raw.trim().to_string();
             if trimmed.is_empty() {
-                println!("  Name is required.");
+                println!("  {}", t("cli.agent_name_required"));
                 continue;
             }
             if trimmed.contains(|c: char| c.is_whitespace()) {
-                println!("  Name must not contain spaces.");
+                println!("  {}", t("cli.agent_name_no_spaces"));
                 continue;
             }
             break trimmed;
         };
 
         // Type
-        println!("  Available types: {}", KNOWN_TYPES.join(", "));
+        println!("  {}", tf("cli.agent_type_available", &[("types", &KNOWN_TYPES.join(", "))]));
         let agent_type = loop {
-            let raw = prompt_value("  Agent type [openai_compatible]")?;
+            let raw = prompt_value(&format!("  {}", t("cli.agent_type_prompt")))?;
             let trimmed = raw.trim().to_string();
             if trimmed.is_empty() {
                 break "openai_compatible".to_string();
@@ -1077,12 +1086,12 @@ fn prompt_additional_agents() -> Result<Vec<CustomAgentSpec>> {
             if KNOWN_TYPES.contains(&trimmed.as_str()) {
                 break trimmed;
             }
-            println!("  Unknown type. Choose one of: {}", KNOWN_TYPES.join(", "));
+            println!("  {}", tf("cli.agent_type_unknown", &[("types", &KNOWN_TYPES.join(", "))]));
         };
 
         // URL (required for non-managed types)
         let url = {
-            let raw = prompt_value("  Base URL (leave empty to skip)")?;
+            let raw = prompt_value(&format!("  {}", t("cli.base_url_prompt")))?;
             let trimmed = raw.trim().to_string();
             if trimmed.is_empty() {
                 None
@@ -1093,7 +1102,7 @@ fn prompt_additional_agents() -> Result<Vec<CustomAgentSpec>> {
 
         // API key env var
         let api_key_env = {
-            let raw = prompt_value("  API key env var name (leave empty to skip)")?;
+            let raw = prompt_value(&format!("  {}", t("cli.api_key_env_prompt")))?;
             let trimmed = raw.trim().to_string();
             if trimmed.is_empty() {
                 None
@@ -1104,7 +1113,7 @@ fn prompt_additional_agents() -> Result<Vec<CustomAgentSpec>> {
 
         // Secret key env var (e.g. for providers that need two keys)
         let secret_key_env = {
-            let raw = prompt_value("  Secret key env var name (leave empty to skip)")?;
+            let raw = prompt_value(&format!("  {}", t("cli.secret_key_env_prompt")))?;
             let trimmed = raw.trim().to_string();
             if trimmed.is_empty() {
                 None
@@ -1115,7 +1124,7 @@ fn prompt_additional_agents() -> Result<Vec<CustomAgentSpec>> {
 
         // Model
         let model = {
-            let raw = prompt_value("  Model name (leave empty to skip)")?;
+            let raw = prompt_value(&format!("  {}", t("cli.model_name_prompt")))?;
             let trimmed = raw.trim().to_string();
             if trimmed.is_empty() {
                 None
@@ -1158,13 +1167,13 @@ fn prompt_provider_selection(
 fn prompt_provider_selection_quick(detected_providers: &[String]) -> Result<Vec<String>> {
     let specs = provider_specs();
     loop {
-        println!("\nSelect a provider:");
+        println!("\n{}", t("cli.select_provider"));
         println!();
         for (i, spec) in specs.iter().enumerate() {
             let mark = if detected_providers.contains(&spec.name) {
-                " * (detected)"
+                t("cli.detected_marker")
             } else {
-                ""
+                "".to_string()
             };
             let region = spec.region.as_deref().unwrap_or("Other");
             println!("  {:>2}. {}{}  [{}]", i + 1, spec.name, mark, region);
@@ -1180,15 +1189,17 @@ fn prompt_provider_selection_quick(detected_providers: &[String]) -> Result<Vec<
                 })
                 .collect();
             println!(
-                "\n  (* = key detected in env / keyring. Default: {})",
+                "\n  {} {}",
+                t("cli.detected_note"),
                 default_nums.join(",")
             );
             print!(
-                "\nEnter number(s) or \"all\" [{}]: ",
+                "\n{} [{}]: ",
+                t("cli.enter_numbers"),
                 default_nums.join(",")
             );
         } else {
-            print!("\nEnter number(s) or \"all\": ");
+            print!("\n{}: ", t("cli.enter_numbers"));
         }
         io::stdout().flush().context("failed to flush stdout")?;
         let mut input = String::new();
@@ -1198,7 +1209,7 @@ fn prompt_provider_selection_quick(detected_providers: &[String]) -> Result<Vec<
         let value = input.trim();
         if value.is_empty() {
             if detected_providers.is_empty() {
-                println!("  At least one provider is required.");
+                println!("  {}", t("cli.provider_required"));
                 continue;
             }
             return Ok(detected_providers.to_vec());
@@ -1233,13 +1244,13 @@ fn prompt_provider_selection_quick(detected_providers: &[String]) -> Result<Vec<
         }
         if let Some(bad) = invalid {
             println!(
-                "  Invalid selection: '{}'. Enter a number from the list above.",
-                bad
+                "  {}",
+                tf("cli.invalid_selection", &[("value", &bad)])
             );
             continue;
         }
         if selected.is_empty() {
-            println!("  At least one provider is required.");
+            println!("  {}", t("cli.provider_required"));
             continue;
         }
         return Ok(selected);

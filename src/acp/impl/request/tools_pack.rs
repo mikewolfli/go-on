@@ -1,14 +1,17 @@
 use super::protocol_pack::record_tool_call_audit_with_protocol;
 use super::*;
 
+#[allow(dead_code)]
 pub(super) fn record_mcp_tool_audit(name: &str, arguments: &Value, success: bool, reason: &str) {
     record_tool_call_audit_with_protocol(name, arguments, success, reason, "acp_stdio");
 }
 
+#[allow(dead_code)]
 pub(super) fn record_skill_admin_audit(action: &str, target: &str, success: bool, reason: &str) {
     record_skill_admin_audit_with_protocol(action, target, success, reason, "acp_stdio");
 }
 
+#[allow(dead_code)]
 pub(super) fn record_skill_admin_audit_with_protocol(
     action: &str,
     target: &str,
@@ -35,6 +38,7 @@ pub(super) fn record_skill_admin_audit_with_protocol(
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn parse_skill_name_param(params: &Value) -> Result<String> {
     params
         .get("name")
@@ -53,6 +57,7 @@ pub(super) fn open_skill_import_store(server: &AcpServer) -> Result<SkillImportS
     SkillImportStore::load(skill_import_policy(server))
 }
 
+#[allow(dead_code)]
 pub(super) fn normalize_imported_record(record: ImportedSkillRecord) -> Value {
     json!({
         "name": record.name,
@@ -67,6 +72,7 @@ pub(super) fn normalize_imported_record(record: ImportedSkillRecord) -> Value {
     })
 }
 
+#[allow(dead_code)]
 pub(super) async fn handle_skill_import(
     server: &AcpServer,
     params: Value,
@@ -103,6 +109,7 @@ pub(super) async fn handle_skill_import(
     .await
 }
 
+#[allow(dead_code)]
 pub(super) async fn handle_skill_list_imported(
     server: &AcpServer,
     request_id: Option<Value>,
@@ -140,6 +147,7 @@ pub(super) async fn handle_skill_list_imported(
     .await
 }
 
+#[allow(dead_code)]
 pub(super) async fn handle_skill_enabled_toggle(
     server: &AcpServer,
     params: Value,
@@ -177,6 +185,7 @@ pub(super) async fn handle_skill_enabled_toggle(
     .await
 }
 
+#[allow(dead_code)]
 pub(super) async fn handle_skill_remove(
     server: &AcpServer,
     params: Value,
@@ -218,6 +227,7 @@ pub(super) async fn handle_skill_remove(
     .await
 }
 
+#[allow(dead_code)]
 pub(super) fn governance_action_label(action: GovernanceAction) -> &'static str {
     match action {
         GovernanceAction::Read => "read",
@@ -227,6 +237,7 @@ pub(super) fn governance_action_label(action: GovernanceAction) -> &'static str 
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn audit_file_path_from_arguments(name: &str, arguments: &Value) -> String {
     for key in ["path", "filePath", "sourcePdfPath"] {
         if let Some(path) = arguments.get(key).and_then(Value::as_str) {

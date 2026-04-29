@@ -22,7 +22,7 @@
       <el-collapse-item :title="t('config.runtimeGroup')" name="runtime">
         <el-form label-width="150px">
           <el-form-item :label="t('config.executable')">
-            <el-input v-model="executablePath" placeholder="D:/Workspace/RustWorkspace/go-on/go-on.exe">
+            <el-input v-model="executablePath" :placeholder="t('config.executablePathPlaceholder')">
               <template #append>
                 <el-button @click="pickExecutable">{{ t('config.pickFile') }}</el-button>
               </template>

@@ -204,6 +204,7 @@ struct Inner {
     next_event_id: u64,
     next_snapshot_id: u64,
     causal_links: Vec<CausalLink>,
+    #[allow(dead_code)]
     predictions: Vec<Prediction>,
 }
 

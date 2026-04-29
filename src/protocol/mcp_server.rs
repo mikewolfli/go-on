@@ -224,14 +224,14 @@ async fn handle_http_connection(
     let request_text = String::from_utf8_lossy(&buffer[..bytes_read]);
     let header_end = request_text.find("\r\n\r\n").ok_or_else(|| {
         warn!("MCP HTTP: invalid request --missing header terminator");
-        anyhow::anyhow!("invalid HTTP request: missing header terminator")
+        anyhow::anyhow!("{}", t("error.http_missing_header"))
     })?;
 
     let (header_part, body_initial_part) = request_text.split_at(header_end + 4);
     let mut lines = header_part.lines();
     let request_line = lines.next().ok_or_else(|| {
         warn!("MCP HTTP: invalid request --missing request line");
-        anyhow::anyhow!("invalid HTTP request: missing request line")
+        anyhow::anyhow!("{}", t("error.http_missing_request_line"))
     })?;
 
     let mut request_line_parts = request_line.split_whitespace();
@@ -240,14 +240,14 @@ async fn handle_http_connection(
             "MCP HTTP: invalid request --missing method in request line: {}",
             request_line
         );
-        anyhow::anyhow!("invalid HTTP request: missing method")
+        anyhow::anyhow!("{}", t("error.http_missing_method"))
     })?;
     let path = request_line_parts.next().ok_or_else(|| {
         warn!(
             "MCP HTTP: invalid request --missing path in request line: {}",
             request_line
         );
-        anyhow::anyhow!("invalid HTTP request: missing path")
+        anyhow::anyhow!("{}", t("error.http_missing_path"))
     })?;
 
     if method == "GET" && path == "/health" {
@@ -264,7 +264,7 @@ async fn handle_http_connection(
 
     if method != "POST" {
         let body = inject_platform_profiles_if_absent(
-            serde_json::json!({"error": "method not allowed"}),
+            serde_json::json!({"error": t("error.method_not_allowed")}),
             "mcp.unknown_method",
         );
         write_http_json_response(socket, 405, body).await?;
@@ -277,7 +277,7 @@ async fn handle_http_connection(
         let mut remaining = vec![0u8; content_length - body_bytes.len()];
         tokio::time::timeout(Duration::from_secs(30), socket.read_exact(&mut remaining))
             .await
-            .map_err(|_| anyhow::anyhow!("HTTP body read timed out after 30s"))??;
+            .map_err(|_| anyhow::anyhow!("{}", t("error.http_body_timeout")))??;
         body_bytes.extend_from_slice(&remaining);
     }
     body_bytes.truncate(content_length);
@@ -297,7 +297,7 @@ async fn handle_http_connection(
                 result: None,
                 error: Some(crate::mcp::JsonRpcError {
                     code: crate::mcp::error_codes::PARSE_ERROR,
-                    message: format!("Parse error: {}", parse_error),
+                    message: tf("error.http_parse_error", &[("error", &parse_error.to_string())]),
                     data: Some(error_data),
                 }),
                 id: None,
@@ -415,5 +415,25 @@ mod tests {
         let parsed = parse_request_target_for_test(request).expect("request line should parse");
         assert_eq!(parsed.0, "GET");
         assert_eq!(parsed.1, "/health");
+    }
+
+    #[test]
+    fn test_content_length_missing_returns_none() {
+        let headers = "POST / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        assert_eq!(content_length_for_test(headers), None);
+    }
+
+    #[test]
+    fn test_content_length_with_different_casing() {
+        let headers = "POST / HTTP/1.1\r\ncontent-length: 100\r\n\r\n";
+        assert_eq!(content_length_for_test(headers), Some(100));
+    }
+
+    #[test]
+    fn test_parse_request_target_post() {
+        let request = "POST /api/v1/chat HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let parsed = parse_request_target_for_test(request).expect("request line should parse");
+        assert_eq!(parsed.0, "POST");
+        assert_eq!(parsed.1, "/api/v1/chat");
     }
 }

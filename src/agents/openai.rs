@@ -11,6 +11,7 @@ use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
+use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
 pub struct OpenAiAgent {
@@ -89,7 +90,7 @@ impl OpenAiAgent {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("openai chat request failed with {status}: {body}");
+            anyhow::bail!("{}", chat_request_failed_msg("openai", &status.to_string(), &body));
         }
 
         stream_sse_to_sender(response, sender).await
@@ -128,7 +129,7 @@ impl Agent for OpenAiAgent {
         }
 
         Err(last_error
-            .unwrap_or_else(|| anyhow::anyhow!("openai request failed"))
+            .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("openai")))
             .into())
     }
 }

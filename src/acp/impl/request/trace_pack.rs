@@ -200,6 +200,7 @@ pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
     })
 }
 
+#[allow(dead_code)]
 pub(super) fn percentile(samples: &[u64], percentile: f64) -> u64 {
     if samples.is_empty() {
         return 0;

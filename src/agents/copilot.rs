@@ -17,6 +17,8 @@ use tokio::time::sleep;
 use tracing::warn;
 
 use crate::agent::{Agent, Message};
+use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
+use crate::i18n::runtime::tf;
 use crate::agents::{
     option_f64, option_string, option_u64, principles_to_text, stream_sse_to_sender,
 };
@@ -78,10 +80,9 @@ impl CopilotAgent {
 
         // Slow path: fetch a new token.
         let github_token = std::env::var(&self.token_env).with_context(|| {
-            format!(
-                "env var `{}` not set; set it to a GitHub personal access token \
-                 with Copilot access, e.g.: $env:{}=\"ghp_...\"",
-                self.token_env, self.token_env
+            tf(
+                "error.copilot_env_not_set",
+                &[("name", &self.token_env)],
             )
         })?;
         let response = self
@@ -92,7 +93,7 @@ impl CopilotAgent {
             .header("User-Agent", "go-on/1.0")
             .send()
             .await
-            .context("failed to reach GitHub Copilot token endpoint")?;
+            .with_context(|| tf("error.copilot_token_endpoint_failed", &[]))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -106,11 +107,11 @@ impl CopilotAgent {
         let body: Value = response
             .json()
             .await
-            .context("invalid JSON from Copilot token endpoint")?;
+            .with_context(|| tf("error.copilot_invalid_json", &[]))?;
 
         let token = body["token"]
             .as_str()
-            .context("missing 'token' field in Copilot token response")?
+            .with_context(|| tf("error.copilot_missing_token", &[]))?
             .to_string();
 
         let expires_at = body["expires_at"].as_u64().unwrap_or_else(|| {
@@ -246,7 +247,7 @@ impl CopilotAgent {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("copilot request failed with {status}: {body}");
+            anyhow::bail!("{}", chat_request_failed_msg("copilot", &status.to_string(), &body));
         }
 
         stream_sse_to_sender(response, sender).await
@@ -297,7 +298,7 @@ impl Agent for CopilotAgent {
         }
 
         Err(last_error
-            .unwrap_or_else(|| anyhow::anyhow!("copilot request failed"))
+            .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("copilot")))
             .into())
     }
 }

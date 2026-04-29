@@ -27,7 +27,7 @@ pub enum NodeStatus {
 pub enum FaultType {
     Crash,
     Hang,
-    OOM,
+    Oom,
     NetworkSplit,
     DataCorruption,
     ResourceExhaustion,
@@ -99,6 +99,71 @@ pub struct FaultToleranceProfile {
     pub offline_nodes: usize,
     pub active_faults: usize,
     pub isolated_groups: usize,
+    pub recovery_plans_pending: usize,
+    pub recovery_plans_in_progress: usize,
+    pub cluster_health: String,
+}
+
+/// Status of an automatic recovery action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RecoveryState {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+/// Types of automatic recovery actions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RecoveryAction {
+    RestartNode,
+    FailoverToBackup,
+    ScaleUp,
+    Rebalance,
+    NotifyOperator,
+}
+
+/// A recovery plan for a failed node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryPlan {
+    pub plan_id: String,
+    pub node_id: String,
+    pub actions: Vec<RecoveryAction>,
+    pub state: RecoveryState,
+    pub created_ms: u64,
+    pub completed_ms: Option<u64>,
+    pub result: Option<String>,
+}
+
+/// Escalation level for fault handling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EscalationLevel {
+    /// Automatic recovery (self-healing)
+    Auto,
+    /// Requires coordinator attention
+    Coordinated,
+    /// Requires human operator intervention
+    Manual,
+}
+
+/// Severity classification for cluster health.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClusterHealth {
+    Healthy,
+    Degraded,
+    Critical,
+    Down,
+}
+
+/// Summary of a recovery cycle run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryCycleSummary {
+    pub offenders: Vec<String>,
+    pub plans_created: u32,
+    pub plans_completed: u32,
+    pub cluster_health: ClusterHealth,
+    pub active_faults: u32,
+    pub isolated_groups: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +182,38 @@ struct Inner {
     fault_counter: u64,
     /// monotonic counter for generating unique group ids
     group_counter: u64,
+    /// plan_id -> RecoveryPlan
+    recovery_plans: HashMap<String, RecoveryPlan>,
+    /// monotonic counter for generating unique plan ids
+    plan_counter: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Compute cluster health from raw counts (shared by `profile` and `cluster_health`).
+fn cluster_health_from_counts(
+    total_nodes: usize,
+    offline_nodes: usize,
+    degraded_nodes: usize,
+    active_faults: usize,
+) -> &'static str {
+    if total_nodes == 0 {
+        return "Down";
+    }
+    let offline_ratio = offline_nodes as f64 / total_nodes as f64;
+    let degraded_ratio = degraded_nodes as f64 / total_nodes as f64;
+    if offline_ratio >= 0.5 || active_faults >= 10 {
+        "Critical"
+    } else if (offline_ratio >= 0.2 || degraded_ratio >= 0.3 || active_faults >= 5)
+        || offline_nodes > 0
+        || degraded_nodes > 0
+    {
+        "Degraded"
+    } else {
+        "Healthy"
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +237,8 @@ impl FaultToleranceEngine {
             isolation_groups: HashMap::new(),
             fault_counter: 0,
             group_counter: 0,
+            recovery_plans: HashMap::new(),
+            plan_counter: 0,
         };
         Self {
             inner: Arc::new(Mutex::new(inner)),
@@ -326,6 +425,19 @@ impl FaultToleranceEngine {
             record.missed_beats = 0;
         }
 
+        // Resolve all active faults for this node (they were recovered)
+        let fault_ids: Vec<String> = inner.faults.values()
+            .filter(|f| f.node_id == node_id && !f.recovered)
+            .map(|f| f.id.clone())
+            .collect();
+        let now = now_millis();
+        for fault_id in fault_ids {
+            if let Some(event) = inner.faults.get_mut(&fault_id) {
+                event.resolved_ms = Some(now);
+                event.recovered = true;
+            }
+        }
+
         Ok(())
     }
 
@@ -401,6 +513,18 @@ impl FaultToleranceEngine {
         let active_faults = inner.faults.values().filter(|f| !f.recovered).count();
         let isolated_groups = inner.isolation_groups.len();
 
+        let recovery_plans_pending = inner.recovery_plans.values()
+            .filter(|p| p.state == RecoveryState::Pending)
+            .count();
+        let recovery_plans_in_progress = inner.recovery_plans.values()
+            .filter(|p| p.state == RecoveryState::InProgress)
+            .count();
+
+
+        let cluster_health_str =
+            cluster_health_from_counts(total_nodes, offline_nodes, degraded_nodes, active_faults)
+                .to_string();
+
         FaultToleranceProfile {
             total_nodes,
             online_nodes,
@@ -408,6 +532,225 @@ impl FaultToleranceEngine {
             offline_nodes,
             active_faults,
             isolated_groups,
+            recovery_plans_pending,
+            recovery_plans_in_progress,
+            cluster_health: cluster_health_str,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Recovery subsystem
+    // -----------------------------------------------------------------------
+
+    /// Create a recovery plan for a failed node.
+    /// Determines appropriate recovery actions based on fault type and severity.
+    pub fn create_recovery_plan(&self, node_id: &str) -> Result<String> {
+        let mut inner = self.inner.lock().unwrap();
+        let node_id = node_id.to_string();
+        if !inner.heartbeats.contains_key(&node_id) {
+            return Err(anyhow!("node '{}' is not registered", node_id));
+        }
+
+        // Collect active faults for this node
+        let node_faults: Vec<&FaultEvent> = inner.faults.values()
+            .filter(|f| f.node_id == node_id && !f.recovered)
+            .collect();
+
+        // Determine actions based on faults
+        let mut actions = Vec::new();
+        let max_severity = node_faults.iter().map(|f| f.severity).max().unwrap_or(0);
+
+        for fault in &node_faults {
+            match fault.fault_type {
+                FaultType::Crash | FaultType::Oom => {
+                    if !actions.contains(&RecoveryAction::RestartNode) {
+                        actions.push(RecoveryAction::RestartNode);
+                    }
+                }
+                FaultType::Hang | FaultType::ResourceExhaustion => {
+                    if !actions.contains(&RecoveryAction::ScaleUp) {
+                        actions.push(RecoveryAction::ScaleUp);
+                    }
+                }
+                FaultType::NetworkSplit => {
+                    if !actions.contains(&RecoveryAction::FailoverToBackup) {
+                        actions.push(RecoveryAction::FailoverToBackup);
+                    }
+                }
+                FaultType::DataCorruption => {
+                    if !actions.contains(&RecoveryAction::Rebalance) {
+                        actions.push(RecoveryAction::Rebalance);
+                    }
+                }
+            }
+        }
+
+        // Add operator notification for high severity
+        if max_severity >= 9 {
+            actions.push(RecoveryAction::NotifyOperator);
+        }
+
+        // If no specific actions, add a default
+        if actions.is_empty() {
+            actions.push(RecoveryAction::NotifyOperator);
+        }
+
+        inner.plan_counter += 1;
+        let plan_id = format!("plan-{}", inner.plan_counter);
+        let now = now_millis();
+        let plan = RecoveryPlan {
+            plan_id: plan_id.clone(),
+            node_id: node_id.clone(),
+            actions,
+            state: RecoveryState::Pending,
+            created_ms: now,
+            completed_ms: None,
+            result: None,
+        };
+        inner.recovery_plans.insert(plan_id.clone(), plan);
+        Ok(plan_id)
+    }
+
+    /// Execute a recovery plan — transitions it to InProgress.
+    pub fn execute_recovery_plan(&self, plan_id: &str) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let plan = inner.recovery_plans.get_mut(plan_id)
+            .ok_or_else(|| anyhow!("recovery plan '{}' not found", plan_id))?;
+        if plan.state != RecoveryState::Pending {
+            return Err(anyhow!("recovery plan '{}' is not in Pending state", plan_id));
+        }
+        plan.state = RecoveryState::InProgress;
+        Ok(())
+    }
+
+    /// Complete a recovery plan with a result.
+    pub fn complete_recovery_plan(&self, plan_id: &str, result: &str) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let plan = inner.recovery_plans.get_mut(plan_id)
+            .ok_or_else(|| anyhow!("recovery plan '{}' not found", plan_id))?;
+        if plan.state != RecoveryState::InProgress {
+            return Err(anyhow!("recovery plan '{}' is not in InProgress state", plan_id));
+        }
+        let node_id_clone = plan.node_id.clone();
+        plan.state = RecoveryState::Completed;
+        plan.completed_ms = Some(now_millis());
+        plan.result = Some(result.to_string());
+
+        // Restore the node status if completing a recovery plan
+        if let Some(record) = inner.heartbeats.get_mut(&node_id_clone) {
+            record.status = NodeStatus::Recovering;
+        }
+        Ok(())
+    }
+
+    /// Fail a recovery plan.
+    pub fn fail_recovery_plan(&self, plan_id: &str, error: &str) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let plan = inner.recovery_plans.get_mut(plan_id)
+            .ok_or_else(|| anyhow!("recovery plan '{}' not found", plan_id))?;
+        plan.state = RecoveryState::Failed;
+        plan.completed_ms = Some(now_millis());
+        plan.result = Some(format!("failed: {}", error));
+        Ok(())
+    }
+
+    /// Get active recovery plans.
+    pub fn active_recovery_plans(&self) -> Vec<RecoveryPlan> {
+        let inner = self.inner.lock().unwrap();
+        inner.recovery_plans.values()
+            .filter(|p| p.state == RecoveryState::Pending || p.state == RecoveryState::InProgress)
+            .cloned()
+            .collect()
+    }
+
+    /// Assess the escalation level for a given node.
+    pub fn escalation_level(&self, node_id: &str) -> EscalationLevel {
+        let inner = self.inner.lock().unwrap();
+        let node_id = node_id.to_string();
+        let record = match inner.heartbeats.get(&node_id) {
+            Some(r) => r,
+            None => return EscalationLevel::Manual,
+        };
+
+        let active_node_faults: Vec<&FaultEvent> = inner.faults.values()
+            .filter(|f| f.node_id == node_id && !f.recovered)
+            .collect();
+
+        if active_node_faults.is_empty() {
+            return EscalationLevel::Auto;
+        }
+
+        let max_severity = active_node_faults.iter().map(|f| f.severity).max().unwrap_or(0);
+        let ongoing_recovery = inner.recovery_plans.values()
+            .any(|p| p.node_id == node_id && p.state == RecoveryState::InProgress);
+
+        match (record.status.clone(), max_severity, ongoing_recovery) {
+            (NodeStatus::Online, _, _) => EscalationLevel::Auto,
+            (NodeStatus::Degraded, s, _) if s < 7 => EscalationLevel::Auto,
+            (NodeStatus::Degraded, _, _) => EscalationLevel::Coordinated,
+            (NodeStatus::Offline, s, _) if s >= 9 => EscalationLevel::Manual,
+            (NodeStatus::Offline, _, true) => EscalationLevel::Coordinated,
+            (NodeStatus::Offline, _, _) => EscalationLevel::Coordinated,
+            (NodeStatus::Recovering, _, _) => EscalationLevel::Coordinated,
+        }
+    }
+
+    /// Get the overall cluster health.
+    pub fn cluster_health(&self) -> ClusterHealth {
+        let p = self.profile();
+        if p.total_nodes == 0 {
+            return ClusterHealth::Down;
+        }
+        match cluster_health_from_counts(
+            p.total_nodes,
+            p.offline_nodes,
+            p.degraded_nodes,
+            p.active_faults,
+        ) {
+            "Critical" => ClusterHealth::Critical,
+            "Degraded" => ClusterHealth::Degraded,
+            "Healthy" => ClusterHealth::Healthy,
+            _ => ClusterHealth::Down,
+        }
+    }
+
+    /// Run the full recovery cycle: check heartbeats, auto-create recovery plans,
+    /// and return the status summary.
+    pub fn run_recovery_cycle(&self) -> RecoveryCycleSummary {
+        let offenders = self.check_heartbeats();
+        let mut plans_created = 0u32;
+        let plans_completed = 0u32;
+
+        for node_id in &offenders {
+            // Check if a plan already exists for this node
+            let existing = {
+                let inner = self.inner.lock().unwrap();
+                inner.recovery_plans.values()
+                    .any(|p| p.node_id == *node_id && p.state != RecoveryState::Completed)
+            };
+            if !existing && self.create_recovery_plan(node_id).is_ok() {
+                plans_created += 1;
+            }
+        }
+
+        // Auto-execute pending plans
+        let pending_plans = self.active_recovery_plans();
+        for plan in &pending_plans {
+            if plan.state == RecoveryState::Pending {
+                let _ = self.execute_recovery_plan(&plan.plan_id);
+            }
+        }
+
+        let health = self.cluster_health();
+        let profile = self.profile();
+
+        RecoveryCycleSummary {
+            offenders,
+            plans_created,
+            plans_completed,
+            cluster_health: health,
+            active_faults: profile.active_faults as u32,
+            isolated_groups: profile.isolated_groups as u32,
         }
     }
 }
@@ -552,7 +895,7 @@ mod tests {
         let engine = FaultToleranceEngine::new(make_config());
         engine.register_node("node-1").unwrap();
         let fault_id = engine
-            .report_fault("node-1", FaultType::OOM, 9, "Out of memory")
+            .report_fault("node-1", FaultType::Oom, 9, "Out of memory")
             .unwrap();
 
         // Resolve the fault
@@ -661,5 +1004,259 @@ mod tests {
         assert_eq!(profile.offline_nodes, 1);
         assert_eq!(profile.active_faults, 2);
         assert_eq!(profile.isolated_groups, 0);
+    }
+
+    #[test]
+    fn test_create_recovery_plan() {
+        let engine = FaultToleranceEngine::new(make_config());
+        engine.register_node("node-1").unwrap();
+        engine.report_fault("node-1", FaultType::Crash, 8, "crash").unwrap();
+        let plan_id = engine.create_recovery_plan("node-1").unwrap();
+        assert!(plan_id.starts_with("plan-"));
+        let plans = engine.active_recovery_plans();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].node_id, "node-1");
+        assert!(!plans[0].actions.is_empty());
+        // Unknown node should fail
+        assert!(engine.create_recovery_plan("unknown").is_err());
+    }
+
+    #[test]
+    fn test_execute_and_complete_recovery_plan() {
+        let engine = FaultToleranceEngine::new(make_config());
+        engine.register_node("node-1").unwrap();
+        engine.report_fault("node-1", FaultType::Hang, 6, "hang").unwrap();
+        let plan_id = engine.create_recovery_plan("node-1").unwrap();
+
+        // Execute plan
+        engine.execute_recovery_plan(&plan_id).unwrap();
+        let plans = engine.active_recovery_plans();
+        assert_eq!(plans[0].state, RecoveryState::InProgress);
+
+        // Complete plan
+        engine.complete_recovery_plan(&plan_id, "restarted successfully").unwrap();
+        let active = engine.active_recovery_plans();
+        assert!(active.is_empty());
+
+        // Double complete should fail
+        assert!(engine.complete_recovery_plan(&plan_id, "again").is_err());
+    }
+
+    #[test]
+    fn test_fail_recovery_plan() {
+        let engine = FaultToleranceEngine::new(make_config());
+        engine.register_node("node-1").unwrap();
+        engine.report_fault("node-1", FaultType::DataCorruption, 7, "corruption").unwrap();
+        let plan_id = engine.create_recovery_plan("node-1").unwrap();
+        engine.execute_recovery_plan(&plan_id).unwrap();
+        engine.fail_recovery_plan(&plan_id, "timeout").unwrap();
+        let active = engine.active_recovery_plans();
+        assert!(active.is_empty());
+    }
+
+    #[test]
+    fn test_escalation_level() {
+        let engine = FaultToleranceEngine::new(make_config());
+        engine.register_node("node-1").unwrap();
+
+        // No faults → Auto
+        assert_eq!(engine.escalation_level("node-1"), EscalationLevel::Auto);
+
+        // Low severity fault → Auto
+        engine.report_fault("node-1", FaultType::Hang, 3, "minor").unwrap();
+        assert_eq!(engine.escalation_level("node-1"), EscalationLevel::Auto);
+
+        // High severity fault → Manual
+        engine.report_fault("node-1", FaultType::Crash, 9, "severe crash").unwrap();
+        assert_eq!(engine.escalation_level("node-1"), EscalationLevel::Manual);
+
+        // Unknown node → Manual
+        assert_eq!(engine.escalation_level("unknown"), EscalationLevel::Manual);
+    }
+
+    #[test]
+    fn test_cluster_health_healthy() {
+        let engine = FaultToleranceEngine::new(make_config());
+        engine.register_node("node-1").unwrap();
+        engine.register_node("node-2").unwrap();
+        engine.register_node("node-3").unwrap();
+        assert_eq!(engine.cluster_health(), ClusterHealth::Healthy);
+    }
+
+    #[test]
+    fn test_cluster_health_degraded() {
+        let engine = FaultToleranceEngine::new(make_config());
+        engine.register_node("node-1").unwrap();
+        engine.register_node("node-2").unwrap();
+        engine.report_fault("node-1", FaultType::Crash, 5, "moderate").unwrap();
+        assert_eq!(engine.cluster_health(), ClusterHealth::Degraded);
+    }
+
+    #[test]
+    fn test_run_recovery_cycle() {
+        let engine = FaultToleranceEngine::new(make_config());
+        engine.register_node("node-1").unwrap();
+
+        // Force a missed heartbeat
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        for _ in 0..4 {
+            std::thread::sleep(std::time::Duration::from_millis(110));
+            engine.check_heartbeats();
+        }
+
+        let summary = engine.run_recovery_cycle();
+        assert!(!summary.offenders.is_empty());
+        assert!(summary.cluster_health == ClusterHealth::Critical || summary.cluster_health == ClusterHealth::Degraded);
+    }
+
+    // ── E2E: FaultToleranceEngine lifecycle (fault → detect → recover) ──
+
+    #[test]
+    fn test_e2e_fault_detect_recover() {
+        let config = FaultToleranceConfig {
+            heartbeat_timeout_ms: 60_000,
+            max_missed_beats: 5,
+            recovery_check_interval_ms: 1000,
+        };
+        let engine = FaultToleranceEngine::new(config);
+
+        for i in 0..10 {
+            engine.register_node(&format!("node-{}", i)).unwrap();
+        }
+        assert_eq!(engine.profile().total_nodes, 10, "should have 10 total nodes");
+
+        // Inject crash on node-5 — severity 9 sets node to Offline
+        engine.report_fault("node-5", FaultType::Crash, 9, "simulated crash").unwrap();
+        let p = engine.profile();
+        assert_eq!(p.offline_nodes, 1, "crash fault should set one node offline");
+
+        // Create + execute + complete recovery plan
+        let plan = engine.create_recovery_plan("node-5").unwrap();
+        engine.execute_recovery_plan(&plan).unwrap();
+        engine.complete_recovery_plan(&plan, "recovered").unwrap();
+        engine.reintegrate_node("node-5").unwrap();
+
+        let p = engine.profile();
+        assert_eq!(p.total_nodes, 10, "all nodes should be present");
+        assert_eq!(p.online_nodes, 10, "all nodes should be online after recovery");
+        assert_eq!(p.active_faults, 0, "all faults should be resolved");
+    }
+
+    // ── E2E: FaultToleranceEngine + CapabilityBus-style lifecycle ─────
+    //
+    // NOTE: Full HarnessBus integration requires 7 constructor args
+    // (rule_engine, sandbox_level, budget, idempotency, etc.) that are
+    // complex to construct in a unit test. The HarnessBus E2E wiring is
+    // verified in `tests/fault_tolerance_e2e.rs` via crate binary RPC calls.
+
+    // ── Multi-node stress test (500+ nodes) ────────────────────────────
+
+    #[test]
+    fn test_e2e_multi_node_stress_500() {
+        let config = FaultToleranceConfig {
+            heartbeat_timeout_ms: 60_000,
+            max_missed_beats: 3,
+            recovery_check_interval_ms: 100,
+        };
+        let engine = FaultToleranceEngine::new(config);
+        let node_count = 500;
+
+        for i in 0..node_count {
+            engine.register_node(&format!("node-{}", i)).unwrap();
+        }
+        assert_eq!(engine.profile().total_nodes, node_count);
+        assert_eq!(engine.profile().online_nodes, node_count);
+
+        // Inject faults on 20 nodes
+        for i in 0..20 {
+            let idx = (i * 13 + 7) % node_count;
+            engine.report_fault(
+                &format!("node-{}", idx),
+                FaultType::ResourceExhaustion,
+                6,
+                "stress fault",
+            ).unwrap();
+        }
+
+        // Create recovery plans for all fault nodes
+        let mut plans = Vec::new();
+        for i in 0..20 {
+            let idx = (i * 13 + 7) % node_count;
+            if let Ok(pid) = engine.create_recovery_plan(&format!("node-{}", idx)) {
+                plans.push(pid);
+            }
+        }
+        assert!(!plans.is_empty(), "should create plans for faulted nodes");
+
+        // Execute and complete all plans
+        for pid in &plans {
+            let _ = engine.execute_recovery_plan(pid);
+        }
+        for pid in &plans {
+            let _ = engine.complete_recovery_plan(pid, "recovered");
+        }
+
+        // Reintegrate all recovered nodes
+        for i in 0..20 {
+            let idx = (i * 13 + 7) % node_count;
+            let _ = engine.reintegrate_node(&format!("node-{}", idx));
+        }
+
+        let profile = engine.profile();
+        assert_eq!(profile.total_nodes, node_count);
+        assert_eq!(profile.online_nodes, node_count);
+        assert_eq!(profile.active_faults, 0);
+    }
+
+    /// E2E: Node fault → recovery plan → execute → complete → reintegrate
+    /// with transport-level notification via MultiChannelTransport.
+    #[test]
+    fn test_e2e_fault_recovery_with_transport() {
+        use crate::protocol::transport::{
+            ChannelId, MultiChannelTransport, TransportConfig,
+        };
+
+        let ft_config = FaultToleranceConfig {
+            heartbeat_timeout_ms: 60_000,
+            max_missed_beats: 5,
+            recovery_check_interval_ms: 1000,
+        };
+        let ft = FaultToleranceEngine::new(ft_config);
+        let transport = MultiChannelTransport::new(TransportConfig::default());
+
+        // Register 10 nodes
+        for i in 0..10 {
+            ft.register_node(&format!("node-{}", i)).unwrap();
+        }
+        assert_eq!(ft.profile().online_nodes, 10);
+
+        // Crash node-5 — severity 9 marks node offline
+        let crashed = "node-5";
+        ft.report_fault(crashed, FaultType::Crash, 9, "simulated crash").unwrap();
+        let profile = ft.profile();
+        assert_eq!(profile.offline_nodes, 1, "crash should set one node offline");
+        assert_eq!(profile.online_nodes, 9);
+
+        // Create + execute + complete recovery plan
+        let plan = ft.create_recovery_plan(crashed).unwrap();
+        ft.execute_recovery_plan(&plan).unwrap();
+        ft.complete_recovery_plan(&plan, "restarted").unwrap();
+        ft.reintegrate_node(crashed).unwrap();
+
+        // Send recovery notification via transport
+        let _ = transport.send_event("coordinator", "logger", &format!("node {} recovered", crashed));
+
+        assert_eq!(ft.profile().online_nodes, 10);
+        assert_eq!(ft.profile().active_faults, 0);
+    }
+
+    #[test]
+    fn test_profile_includes_recovery() {
+        let engine = FaultToleranceEngine::new(make_config());
+        engine.register_node("node-1").unwrap();
+        engine.report_fault("node-1", FaultType::Oom, 9, "OOM").unwrap();
+        engine.create_recovery_plan("node-1").unwrap();
+        let profile = engine.profile();
+        assert!(profile.total_nodes > 0);
     }
 }

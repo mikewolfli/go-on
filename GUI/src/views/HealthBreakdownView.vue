@@ -202,21 +202,21 @@ const loading = ref(false);
 
 const liveness = reactive({
   type: "info",
-  text: "unknown",
+  text: t("health.unknown"),
   ok: false,
   uptimeSeconds: 0,
 });
 
 const readiness = reactive({
   type: "info",
-  text: "unknown",
+  text: t("health.unknown"),
   ok: false,
   generatedAt: 0,
 });
 
 const cacheStatus = reactive({
   type: "success",
-  text: "Healthy",
+  text: t("health.healthy"),
   hitRate: null as number | null,
   size: null as string | null,
   lastUpdate: null as string | null,
@@ -224,7 +224,7 @@ const cacheStatus = reactive({
 
 const lockStatus = reactive({
   type: "success",
-  text: "healthy",
+  text: t("health.healthy"),
   componentsTracked: 0,
   poisonedTotal: 0,
   recoveredTotal: 0,
@@ -234,7 +234,7 @@ const lockStatus = reactive({
 
 const timeoutStatus = reactive({
   type: "success",
-  text: "healthy",
+  text: t("health.healthy"),
   agentRequestTotal: 0,
   reviewGateTotal: 0,
   runtimeProbeTotal: 0,
@@ -243,7 +243,7 @@ const timeoutStatus = reactive({
 
 const vectorStatus = reactive({
   type: "success",
-  text: "Healthy",
+  text: t("health.healthy"),
   dimensions: null as number | null,
   vectors: null as number | null,
   lastUpdate: null as string | null,
@@ -251,9 +251,9 @@ const vectorStatus = reactive({
 
 const breakerStatus = reactive({
   type: "success",
-  text: "Closed",
+  text: t("health.closed"),
   failures: 0,
-  lastTrip: "Never",
+  lastTrip: t("health.never"),
   recoveryTime: 30,
   degradedCount: 0,
   recoveryAdvice: null as string | null,
@@ -288,18 +288,18 @@ async function refreshBreakdown() {
 
     const livenessData = probes?.liveness || {};
     liveness.ok = livenessData.ok === true;
-    liveness.text = String(livenessData.status || "unknown");
+    liveness.text = String(livenessData.status || t("health.unknown"));
     liveness.uptimeSeconds = Number(livenessData.uptime_seconds || 0);
     liveness.type = liveness.ok ? "success" : "warning";
 
     const readinessData = probes?.readiness || {};
     readiness.ok = readinessData.ok === true;
-    readiness.text = String(readinessData.status || "unknown");
+    readiness.text = String(readinessData.status || t("health.unknown"));
     readiness.generatedAt = Number(readinessData.generated_at || 0);
     readiness.type = readiness.text === "ready" ? "success" : readiness.text === "degraded" ? "warning" : "danger";
 
     const locks = probes?.locks || {};
-    lockStatus.text = String(locks?.status || "unknown");
+    lockStatus.text = String(locks?.status || t("health.unknown"));
     lockStatus.componentsTracked = Number(locks?.components_tracked || 0);
     lockStatus.poisonedTotal = Number(locks?.poisoned_total || 0);
     lockStatus.recoveredTotal = Number(locks?.recovered_total || 0);
@@ -308,7 +308,7 @@ async function refreshBreakdown() {
     lockStatus.type = lockStatus.text === "healthy" ? "success" : lockStatus.text === "warn" ? "warning" : "danger";
 
     const timeouts = probes?.timeouts || {};
-    timeoutStatus.text = String(timeouts?.status || "unknown");
+    timeoutStatus.text = String(timeouts?.status || t("health.unknown"));
     timeoutStatus.agentRequestTotal = Number(timeouts?.agent_request_total || 0);
     timeoutStatus.reviewGateTotal = Number(timeouts?.review_gate_total || 0);
     timeoutStatus.runtimeProbeTotal = Number(timeouts?.runtime_probe_total || 0);
@@ -321,7 +321,7 @@ async function refreshBreakdown() {
 
     const cacheEntries = Number(cacheDep?.details?.entries || 0);
     cacheStatus.type = cacheDep?.status === "healthy" ? "success" : cacheDep?.status === "warn" ? "warning" : "danger";
-    cacheStatus.text = String(cacheDep?.status || "unknown");
+    cacheStatus.text = String(cacheDep?.status || t("health.unknown"));
     cacheStatus.hitRate = cacheEntries > 0 ? 100 : 0;
     cacheStatus.size = `${cacheEntries}`;
     cacheStatus.lastUpdate = "just now";
@@ -329,7 +329,7 @@ async function refreshBreakdown() {
     const memoryEntries = Number(vectorDep?.details?.memory_entries || 0);
     const summaryEntries = Number(vectorDep?.details?.summary_entries || 0);
     vectorStatus.type = vectorDep?.status === "healthy" ? "success" : vectorDep?.status === "warn" ? "warning" : "danger";
-    vectorStatus.text = String(vectorDep?.status || "unknown");
+    vectorStatus.text = String(vectorDep?.status || t("health.unknown"));
     vectorStatus.dimensions = 0;
     vectorStatus.vectors = memoryEntries + summaryEntries;
     vectorStatus.lastUpdate = "just now";
@@ -339,7 +339,7 @@ async function refreshBreakdown() {
     breakerStatus.type = openCount === 0 ? "success" : "danger";
     breakerStatus.text = openCount === 0 ? "closed" : "open";
     breakerStatus.failures = circuitBreakers.reduce((sum: number, item) => sum + Number(item?.failure_count || 0), 0);
-    breakerStatus.lastTrip = openCount > 0 ? "recent" : "Never";
+    breakerStatus.lastTrip = openCount > 0 ? "recent" : t("health.never");
     breakerStatus.recoveryTime = 30;
 
     const breakerParsed = await getBreakerStatus();

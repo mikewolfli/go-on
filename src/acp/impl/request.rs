@@ -81,7 +81,9 @@ fn is_acp_request(method: &str) -> bool {
                 | "skill.remove"
             | "phase.policy.replay"
             | "primary_secondary.summary"
+            | "summary/primary_secondary"
             | "governance.status"
+            | "health.check"
              // diagnostics / ops also used by vscode-addon in ACP mode
              | "metrics.reset"
              | "trace.get"
@@ -123,7 +125,7 @@ tokio::task_local! {
     static DISPATCH_REQUEST_METHOD: String;
 }
 
-use crate::acp::background::run_maintenance_cycle;
+use crate::acp::background::{run_health_check, run_maintenance_cycle};
 
 use crate::acp::helpers::metrics::{
     build_prometheus_metrics, CircuitBreakerSnapshot as PrometheusCircuitBreakerSnapshot,
@@ -752,13 +754,16 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
-                "primary_secondary.summary" => {
+                "primary_secondary.summary" | "summary/primary_secondary" => {
                     learning_pack::handle_primary_secondary_summary(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
                     )
                     .await
+                }
+                "health.check" => {
+                    run_health_check(server).await
                 }
                 _ => {
                     send_error(
