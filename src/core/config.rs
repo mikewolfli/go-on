@@ -3855,12 +3855,11 @@ mod tests {
 
     #[test]
     fn adaptive_template_loads_and_validates() {
-        let path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/config.toml.autopilot-adaptive");
-        let cfg = AppConfig::load(&path).expect("config.toml.autopilot-adaptive should parse");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/config.toml");
+        let cfg = AppConfig::load(&path).expect("config.toml should parse");
 
         cfg.validate()
-            .expect("config.toml.autopilot-adaptive should be internally consistent");
+            .expect("config.toml should be internally consistent");
     }
 
     #[test]

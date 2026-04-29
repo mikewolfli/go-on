@@ -6,7 +6,7 @@
 #   Tests:   905+ (805 unit + 86 RPC + 14 transport)
 # ============================================================
 
-default_phase = "default"
+default_phase = "think"
 model_selection_mode = "adaptive"
 
 [protocol]
