@@ -132,6 +132,7 @@ pub async fn flush_output(server: &AcpServer) -> Result<()> {
 /// This is a best-effort heuristic used for detecting ACP protocol mode
 /// in auto/adaptive mode.
 /// If the timeout fires, we conservatively return false (no input).
+#[cfg(unix)]
 #[allow(dead_code)]
 pub async fn has_input() -> Result<bool> {
     use std::os::unix::io::AsRawFd;
@@ -148,4 +149,13 @@ pub async fn has_input() -> Result<bool> {
         Ok(Err(e)) => Err(anyhow::anyhow!("stdin readable poll failed: {}", e)),
         Err(_) => Ok(false), // timeout — no input available
     }
+}
+
+/// Windows stub for has_input — always returns false (no stdin polling).
+#[cfg(windows)]
+#[allow(dead_code)]
+pub async fn has_input() -> Result<bool> {
+    // Windows does not support async stdin polling via AsRawFd.
+    // Conservatively return false (no input available).
+    Ok(false)
 }
