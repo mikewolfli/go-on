@@ -171,7 +171,10 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         messagesPayload = [{ role: "user", content: text }];
       } else {
         // Multi-modal content with text + images/files
-        const content: any[] = [{ type: "text", text }];
+        const content: (
+          | { type: "text"; text: string }
+          | { type: "image_url"; image_url: { url: string; detail: string } }
+        )[] = [{ type: "text", text }];
         for (const a of attachments) {
           content.push({
             type: "image_url",

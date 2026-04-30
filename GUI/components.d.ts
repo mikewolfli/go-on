@@ -13,6 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     ConfigWizard: typeof import('./src/components/ConfigWizard.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
+    ElBadge: typeof import('element-plus/es')['ElBadge']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElCard: typeof import('element-plus/es')['ElCard']
     ElCheckbox: typeof import('element-plus/es')['ElCheckbox']
@@ -51,6 +52,7 @@ declare module 'vue' {
     ElText: typeof import('element-plus/es')['ElText']
     ElTimeline: typeof import('element-plus/es')['ElTimeline']
     ElTimelineItem: typeof import('element-plus/es')['ElTimelineItem']
+    ElUpload: typeof import('element-plus/es')['ElUpload']
     OfflineIndicator: typeof import('./src/components/OfflineIndicator.vue')['default']
     OnboardingGuide: typeof import('./src/components/OnboardingGuide.vue')['default']
     QuickNavigator: typeof import('./src/components/QuickNavigator.vue')['default']
