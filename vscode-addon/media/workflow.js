@@ -44,7 +44,6 @@
   // Pending workflow-creation state for multi-step input flow
   let pendingWorkflowName = null;
   let pendingWorkflowSteps = [];
-  let pendingWorkflowStepIndex = 0;
   let pendingWorkflowType = null;
 
   createWorkflowBtn.addEventListener("click", () => {
@@ -176,7 +175,6 @@
     // Reset pending state
     pendingWorkflowName = null;
     pendingWorkflowSteps = [];
-    pendingWorkflowStepIndex = 0;
     pendingWorkflowType = null;
   }
 })();
