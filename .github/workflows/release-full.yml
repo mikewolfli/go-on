@@ -12,7 +12,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -47,7 +47,7 @@ jobs:
 
       # ── GUI ────────────────────────────────────────────────────────────
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -110,7 +110,7 @@ jobs:
           tar -czf "${PKG}.tar.gz" "$PKG"
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: go-on-release-*.tar.gz
         env:

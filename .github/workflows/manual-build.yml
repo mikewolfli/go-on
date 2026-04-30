@@ -12,7 +12,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -48,14 +48,14 @@ jobs:
         run: cargo test -F profile-local
 
       - name: Upload backend artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: go-on-backend-${{ matrix.os }}
           path: target/release/go-on
 
       # ── GUI ────────────────────────────────────────────────────────────
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -89,7 +89,7 @@ jobs:
         run: npm test
 
       - name: Upload GUI Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: go-on-gui-${{ matrix.os }}
           path: GUI/src-tauri/target/release/
