@@ -8,7 +8,8 @@ all 38 capability dimensions at ★★★★★, and 14-bus architecture fully o
 It is organized as a bilingual mdBook:
 
 - English chapters start at [Architecture Overview](en/overview.md).
-- 中文章节从 [架构总览](zh-CN/overview.md) 开始。
+- 简体中文章节从 [架构总览](zh-CN/overview.md) 开始。
+- 繁體中文章節從 [架構總覽](zh-TW/overview.md) 開始。
 
 The content is based on the current workspace structure and runtime surfaces:
 

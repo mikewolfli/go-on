@@ -1,0 +1,3889 @@
+<!DOCTYPE HTML>
+<html lang="zh" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>go-on 文档</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-bf14e7b9.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-5b302f00.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">go-on 文档</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/mikewolfli/go-on" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="go-on-文档"><a class="header" href="#go-on-文档">go-on 文档</a></h1>
+<p>本文档描述 <code>go-on</code> 当前的 <code>0.8.3</code> 架构和使用模型。</p>
+<p>运行时已完成 <strong>Phase 4</strong>（FutureDesign）—— 21 个 F-GAP 模块 100% 实现，
+全部 38 个能力维度 ★★★★★，14 总线架构全面运行。</p>
+<p>从 <a href="#架构总览">架构总览</a> 开始阅读。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="架构总览"><a class="header" href="#架构总览">架构总览</a></h1>
+<p><code>go-on</code> 是一个围绕 Rust 后端构建的三端运行时体系：</p>
+<ul>
+<li><strong>后端</strong>：负责配置加载、Provider 选择、路由、setup、健康检查、协议协商、stdio 或 HTTP 传输层，以及包含 14 条总线和 21 个 F-GAP 模块的能力架构。</li>
+<li><strong>GUI</strong>：Tauri 桌面控制台，负责后端发现、进程生命周期、集成探测和本地运维。</li>
+<li><strong>VS Code 插件</strong>：负责拉起或探测运行时，暴露基于 RPC 的命令，并可在工作区级别覆盖协议模式。</li>
+</ul>
+<h2 id="版本"><a class="header" href="#版本">版本</a></h2>
+<ul>
+<li>后端 Runtime：<strong>0.8.3</strong></li>
+<li>GUI 桌面端：<strong>0.8.3</strong></li>
+<li>VS Code 插件：<strong>0.8.3</strong></li>
+</ul>
+<h2 id="构建配置文件"><a class="header" href="#构建配置文件">构建配置文件</a></h2>
+<p>三种构建配置文件适配不同的部署场景：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>配置文件</th><th>后端</th><th>目标</th><th>构建命令</th></tr>
+</thead>
+<tbody>
+<tr><td><code>profile-local</code></td><td>SQLite + sqlite-vec</td><td>单用户本地工具</td><td><code>cargo build</code>（默认）</td></tr>
+<tr><td><code>profile-simple-server</code></td><td>SQLite + sqlite-vec</td><td>单服务部署</td><td><code>cargo build --no-default-features -F profile-simple-server</code></td></tr>
+<tr><td><code>profile-multi-users-server</code></td><td>PostgreSQL + pgvector</td><td>多用户生产环境</td><td><code>cargo build --no-default-features -F profile-multi-users-server</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="验证状态phase-4-完成"><a class="header" href="#验证状态phase-4-完成">验证状态（Phase 4 完成）</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>配置文件</th><th style="text-align: center"><code>cargo check</code></th><th style="text-align: center"><code>cargo clippy -D warnings</code></th><th style="text-align: center"><code>cargo test</code></th></tr>
+</thead>
+<tbody>
+<tr><td><strong>profile-local</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>866 通过</strong>（766 单元 + 86 RPC + 14 transport）</td></tr>
+<tr><td><strong>profile-simple-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>905 通过</strong></td></tr>
+<tr><td><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>898 通过</strong></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="运行时协议模式"><a class="header" href="#运行时协议模式">运行时协议模式</a></h2>
+<p>后端支持 5 种访问模式：</p>
+<ul>
+<li><code>adaptive</code>（推荐默认）：双栈协议能力加按请求类型路由。</li>
+<li><code>acp_stdio</code>：通过 stdio 提供 ACP，适合编辑器拉起子进程。</li>
+<li><code>acp_http</code>：通过 HTTP 暴露 ACP 风格接口，适合共享长驻后端。</li>
+<li><code>mcp_stdio</code>：通过 stdio 提供 MCP。</li>
+<li><code>mcp_http</code>：通过 HTTP 暴露 MCP 与 OpenAI 兼容接口。</li>
+</ul>
+<p>当以后端 <code>--acp-http-bind</code> 启动时，默认会围绕 <code>http://127.0.0.1:8090</code> 暴露实际可用的 HTTP 面：</p>
+<ul>
+<li><code>/health</code></li>
+<li><code>/chat</code></li>
+<li><code>/chat/stream</code></li>
+<li><code>/v1/models</code></li>
+<li><code>/v1/model</code></li>
+<li><code>/v1/chat/completions</code></li>
+<li><code>/v1/responses</code></li>
+</ul>
+<p>这也是三端分工的关键：</p>
+<ul>
+<li>Zed 既可以走 ACP stdio，也可以走 ACP HTTP。</li>
+<li>Zed 也可以把后端当成 OpenAI 兼容的 <code>/v1</code> 模型提供方。</li>
+<li>VS Code 插件既可以走拉起式 stdio RPC，也可以探测 HTTP 运行时。</li>
+<li>GUI 依赖本地后端可执行文件，并要求工作目录中存在 <code>config.toml</code>。</li>
+</ul>
+<h2 id="架构多总线能力系统"><a class="header" href="#架构多总线能力系统">架构：多总线能力系统</a></h2>
+<p>go-on 实现了以 <strong>CapabilityBus</strong> 和 <strong>HarnessBus</strong> 为核心的 <strong>14 条总线架构</strong>。</p>
+<h3 id="核心总线"><a class="header" href="#核心总线">核心总线</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">总线</th><th>模块</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><strong>CapabilityBus</strong></td><td><code>src/intelligence/capability_bus/core.rs</code></td><td>中央智能总线，编排 sense/decide/evolve 生命周期</td></tr>
+<tr><td style="text-align: left"><strong>HarnessBus</strong></td><td><code>src/governance/harness_bus.rs</code></td><td>治理入口，策略评估、漂移/弹性/安全检查</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="子总线phase-4"><a class="header" href="#子总线phase-4">子总线（Phase 4）</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">总线</th><th>模块</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><strong>ToolBus</strong></td><td><code>capability_bus/tool_bus.rs</code></td><td>统一工具/Skill 调用，能力矩阵，Agent-工具匹配</td></tr>
+<tr><td style="text-align: left"><strong>ObservabilityBus</strong></td><td><code>capability_bus/observability_bus.rs</code></td><td>统一可观测：延迟、错误率、Agent 健康</td></tr>
+<tr><td style="text-align: left"><strong>OptimizationBus</strong></td><td><code>capability_bus/optimization_bus.rs</code></td><td>成本/速度/可靠性推荐，熔断器</td></tr>
+<tr><td style="text-align: left"><strong>MemoryBus</strong></td><td><code>capability_bus/memory_bus.rs</code></td><td>级联缓存（L1→L2→L3），向量存储查找</td></tr>
+<tr><td style="text-align: left"><strong>ProtocolBus</strong></td><td><code>capability_bus/protocol_bus.rs</code></td><td>协议感知路由，健康/延迟追踪</td></tr>
+<tr><td style="text-align: left"><strong>OrchestrationBus</strong></td><td><code>capability_bus/orchestration_bus.rs</code></td><td>流程/模式/路由编排，模式推荐</td></tr>
+<tr><td style="text-align: left"><strong>DistributedMemoryBus</strong></td><td><code>capability_bus/distributed_memory_bus.rs</code></td><td>跨节点记忆共享（特性门控）</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="总线生命周期"><a class="header" href="#总线生命周期">总线生命周期</a></h3>
+<pre><code>sense()   →  聚合 Agent 健康、可用模式、优化推荐
+decide()  →  结合模式推荐与工具-Agent 匹配
+evolve()  →  更新 Q 表、记录共识投票、发送进化事件
+execute_tool() → HarnessBus evaluate() → ToolBus execute() → ObservabilityBus record()
+</code></pre>
+<h2 id="f-gap-模块phase-4--2121-全部完成-"><a class="header" href="#f-gap-模块phase-4--2121-全部完成-">F-GAP 模块（Phase 4 — 21/21 全部完成 ✅）</a></h2>
+<p>go-on 实现了 21 个 FutureDesign 模块，分布在六个能力领域：</p>
+<h3 id="编排与执行f-gap-09-10-15-17"><a class="header" href="#编排与执行f-gap-09-10-15-17">编排与执行（F-GAP-09, 10, 15, 17）</a></h3>
+<ul>
+<li><strong>OmnipotentMode 全能模式</strong>（F-GAP-09）：EscalationToken 颁发/验证/吊销、RAII 会话守卫、审计日志</li>
+<li><strong>ArtifactLayer 制品层</strong>（F-GAP-10）：制品模式注册、存储、TTL 裁剪</li>
+<li><strong>RemoteSkill 远程技能</strong>（F-GAP-10）：远程 MCP 端点包装为 Skill trait</li>
+<li><strong>OrchestrationCouncil 编排委员会</strong>（F-GAP-15）：多 Agent 协调委员会</li>
+<li><strong>BrainLoop 脑回路</strong>（F-GAP-17）：Plan→Execute→Reflect→Replan 全循环</li>
+</ul>
+<h3 id="智能与学习f-gap-11-12-16-18-19-21-22-23-24-25"><a class="header" href="#智能与学习f-gap-11-12-16-18-19-21-22-23-24-25">智能与学习（F-GAP-11, 12, 16, 18, 19, 21, 22, 23, 24, 25）</a></h3>
+<ul>
+<li><strong>DiscoveryCenter 方案发现中心</strong>（F-GAP-11）：解决方案模式注册与搜索</li>
+<li><strong>ScenarioMatcher 场景匹配器</strong>（F-GAP-12）：多维度场景匹配</li>
+<li><strong>ConsensusEngine 共识引擎</strong>（F-GAP-16）：分布式投票与共识</li>
+<li><strong>EvolutionGraph 演化图谱</strong>（F-GAP-18）：6 阶段能力演化生命周期</li>
+<li><strong>FederatedRL 联邦强化学习</strong>（F-GAP-19）：FedAvg/FedWeighted/FedMedian 聚合</li>
+<li><strong>SelfModelCore 自模型核心</strong>（F-GAP-21）：自我能力评估与置信度</li>
+<li><strong>MetacognitiveController 元认知控制器</strong>（F-GAP-22）：6 阶段思维链、卡顿检测</li>
+<li><strong>WorldModel 世界模型</strong>（F-GAP-23）：世界模型流水线</li>
+<li><strong>ContinuousLearningCenter 持续学习中心</strong>（F-GAP-24）：持续学习编排</li>
+<li><strong>ConsciousnessMetrics 意识代理指标</strong>（F-GAP-25）：5 维度意识度量</li>
+</ul>
+<h3 id="治理与安全f-gap-14-26"><a class="header" href="#治理与安全f-gap-14-26">治理与安全（F-GAP-14, 26）</a></h3>
+<ul>
+<li><strong>SecurityGovernor 安全治理器</strong>（F-GAP-14）：安全策略治理</li>
+<li><strong>DriftProtection 漂移防护</strong>（F-GAP-26）：5 种漂移类型、4 级严重度、趋势检测</li>
+</ul>
+<h3 id="弹性与容错f-gap-27-28"><a class="header" href="#弹性与容错f-gap-27-28">弹性与容错（F-GAP-27, 28）</a></h3>
+<ul>
+<li><strong>HyperResilienceEngine 超弹性引擎</strong>（F-GAP-27）：熔断器、故障切换、自愈</li>
+<li><strong>FaultToleranceEngine 跨节点容错引擎</strong>（F-GAP-28）：节点心跳、隔离、自动恢复、集群健康评分</li>
+</ul>
+<h3 id="协议与传输f-gap-29"><a class="header" href="#协议与传输f-gap-29">协议与传输（F-GAP-29）</a></h3>
+<ul>
+<li><strong>MultiChannelTransport 多渠道消息传输</strong>（F-GAP-29）：6 通道、4 级优先级、QoS、去重、Peek</li>
+</ul>
+<h3 id="agent-基础设施f-gap-13"><a class="header" href="#agent-基础设施f-gap-13">Agent 基础设施（F-GAP-13）</a></h3>
+<ul>
+<li><strong>AgentFactory Agent 工厂</strong>（F-GAP-13）：特性门控的 Agent 实例化</li>
+</ul>
+<h2 id="38-维度满星评级"><a class="header" href="#38-维度满星评级">38 维度满星评级</a></h2>
+<pre><code>治理与合规 (5/5):    ★★★★★ 溯源账本, 漂移防护, 策略评估器, Token 门控链, 安全治理器
+弹性与容错 (2/2):    ★★★★★ 超弹性引擎, 跨节点容错引擎
+编排与执行 (6/6):    ★★★★★ 编排总线, 任务调度器, 执行图, 全能模式, 制品层, 脑回路
+路由与调度 (7/7):    ★★★★★ 能力图谱, 信誉存储, Q学习Agent, 场景匹配器, 发现中心, 工作流注册表, Agent工厂
+协议与传输 (2/2):    ★★★★★ 协议总线, 多渠道消息传输
+记忆与缓存 (2/2):    ★★★★★ 内存总线, 分布式内存总线
+观测与优化 (3/3):    ★★★★★ 可观测总线, 优化总线, 工具总线
+智能认知 (5/5):      ★★★★★ 深度知识萃取, 强化深度学习, 技能保持传承, AI进化, 自建Skills
+自我认知 (5/5):      ★★★★★ 自模型核心, 意识代理指标, 元认知控制器, 世界模型, 共识引擎
+总计 (38/38):        100% ★★★★★
+</code></pre>
+<h2 id="整体完成率"><a class="header" href="#整体完成率">整体完成率</a></h2>
+<pre><code>Phase 0: 核心双总线           ████████████████████ 100%
+Phase 1: 子总线接入            ████████████████████ 100%
+Phase 2: 剩余修复              ████████████████████ 100%
+Phase 3: ARCH 扩展点           ████████████████████ 100%
+Phase 4: FutureDesign (F-GAP)  ████████████████████ 100% (21/21)
+Phase 5: 生产硬化              ████████████████████ 100%
+────────────────────────────────────────────────────────
+总体:                         ████████████████████ 100%
+</code></pre>
+<h2 id="国际化i18n"><a class="header" href="#国际化i18n">国际化（i18n）</a></h2>
+<p>go-on 在后端实现了约 <strong>95%</strong> 的全链路国际化覆盖：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">语言</th><th style="text-align: left">文件</th><th style="text-align: center">键值数</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left">英语（美国）</td><td style="text-align: left"><code>languages/en_US.json</code></td><td style="text-align: center">372+</td></tr>
+<tr><td style="text-align: left">简体中文</td><td style="text-align: left"><code>languages/zh_CN.json</code></td><td style="text-align: center">372+</td></tr>
+<tr><td style="text-align: left">繁体中文</td><td style="text-align: left"><code>languages/zh_TW.json</code></td><td style="text-align: center">372+</td></tr>
+</tbody>
+</table>
+</div>
+<p>覆盖层：ACP/MCP HTTP 错误（100%）、Agent 供应商模块（100%）、配置验证（100%）、CLI 初始化（100%）、API 处理错误（100%）、编排层（100%）、GUI（约 98%）、VS Code 插件（70+ 键值）。</p>
+<h2 id="与架构对应的仓库目录"><a class="header" href="#与架构对应的仓库目录">与架构对应的仓库目录</a></h2>
+<ul>
+<li><code>src/</code>：后端运行时、CLI、setup、ACP 与 MCP 实现。
+<ul>
+<li><code>src/acp/</code>：ACP 服务、请求路由、workflow/task/chat/checkpoint</li>
+<li><code>src/agents/</code>：Provider 适配器（OpenAI、Anthropic、DeepSeek、Ollama），AgentFactory</li>
+<li><code>src/core/</code>：配置、初始化、就绪性检查、错误模型</li>
+<li><code>src/governance/</code>：策略/规则治理、审计、安全治理器、漂移防护</li>
+<li><code>src/intelligence/</code>：选择器、强化学习、能力总线、发现、共识、演化</li>
+<li><code>src/orchestration/</code>：流程/模式/路由编排、脑回路、全能模式、制品层</li>
+<li><code>src/fault_tolerance.rs</code>：跨节点容错引擎</li>
+<li><code>src/resilience/</code>：超弹性引擎</li>
+<li><code>src/protocol/</code>：协议服务、JSON-RPC、多渠道消息传输</li>
+<li><code>src/i18n/</code>：语言运行时</li>
+</ul>
+</li>
+<li><code>GUI/</code>：Tauri 桌面控制台</li>
+<li><code>vscode-addon/</code>：VS Code 插件（支持 en_US、zh_CN、zh_TW 多语言）</li>
+<li><code>config/</code>：配置文件</li>
+<li><code>tests/</code>：集成测试与回放资产</li>
+<li><code>scripts/</code>：质量/发布门禁脚本</li>
+</ul>
+<h2 id="推荐运维路径"><a class="header" href="#推荐运维路径">推荐运维路径</a></h2>
+<p>新机器或新工作目录，最短路径通常是：</p>
+<ol>
+<li>构建或准备 <code>go-on</code> 后端可执行文件。</li>
+<li>运行 <code>go-on --setup --setup-level standard</code>。</li>
+<li>用 <code>go-on --status</code> 检查运行时就绪状态。</li>
+<li>如果前端要走 HTTP，使用 <code>--protocol-mode adaptive --acp-http-bind 127.0.0.1:8090</code> 启动后端。</li>
+<li>再接入 Zed、VS Code 插件或 GUI。</li>
+</ol>
+<p>后续章节分别展开说明。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="设置向导"><a class="header" href="#设置向导">设置向导</a></h1>
+<p>设置向导由后端实现，是新机器或新工作目录初始化的推荐入口。</p>
+<h2 id="会写入什么"><a class="header" href="#会写入什么">会写入什么</a></h2>
+<p>setup 会以目标配置路径为核心，写出一组默认文件：</p>
+<ul>
+<li><code>config.toml</code></li>
+<li>配置目录附近的默认规则文件</li>
+<li>供环境变量或 keyring 使用的 secret 引用</li>
+</ul>
+<p>当前 setup 走的是 adaptive 模板族。</p>
+<h2 id="入口方式"><a class="header" href="#入口方式">入口方式</a></h2>
+<p>交互式：</p>
+<pre><code class="language-bash">go-on --setup
+</code></pre>
+<p>偏非交互式：</p>
+<pre><code class="language-bash">go-on --setup --setup-profile adaptive --setup-level standard --setup-secrets auto
+</code></pre>
+<p>覆盖已有文件：</p>
+<pre><code class="language-bash">go-on --setup --force
+</code></pre>
+<h2 id="setup-profile"><a class="header" href="#setup-profile">setup profile</a></h2>
+<p>当前只接受：</p>
+<ul>
+<li><code>adaptive</code></li>
+</ul>
+<p>这和当前架构一致，即一份配置尽量同时服务 ACP 与 MCP 风格前端。</p>
+<h2 id="setup-level"><a class="header" href="#setup-level">setup level</a></h2>
+<h3 id="quick"><a class="header" href="#quick"><code>quick</code></a></h3>
+<p>适合追求最快成功初始化。</p>
+<p>实现特征：</p>
+<ul>
+<li>为了减少流程长度，会跳过额外 agent 提示</li>
+</ul>
+<h3 id="standard"><a class="header" href="#standard"><code>standard</code></a></h3>
+<p>默认推荐。</p>
+<p>适合大多数用户，在引导性和可控性之间比较平衡。</p>
+<h3 id="custom"><a class="header" href="#custom"><code>custom</code></a></h3>
+<p>适合想手动控制更多 Provider 与 agent 选择的场景。</p>
+<h2 id="secret-模式"><a class="header" href="#secret-模式">secret 模式</a></h2>
+<h3 id="env"><a class="header" href="#env"><code>env</code></a></h3>
+<p>把 secret 继续作为环境变量驱动。</p>
+<p>适合已经有 shell、<code>.env</code>、CI 或进程管理器注入方案的场景。</p>
+<h3 id="keyring"><a class="header" href="#keyring"><code>keyring</code></a></h3>
+<p>把 secret 存入操作系统 keyring，让配置引用 keyring-backed 值。</p>
+<p>适合桌面本地使用，希望减少明文暴露的场景。</p>
+<h3 id="auto"><a class="header" href="#auto"><code>auto</code></a></h3>
+<p>自动选择。</p>
+<p>实现行为：</p>
+<ul>
+<li>如果机器上已经有可用环境变量，setup 会优先走 <code>env</code></li>
+<li>否则 setup 会继续询问 secret 处理方式</li>
+</ul>
+<h2 id="provider-检测行为"><a class="header" href="#provider-检测行为">Provider 检测行为</a></h2>
+<p>setup 会根据 secret 模式和当前机器状态检测可用 Provider。</p>
+<p>流程大致是：</p>
+<ol>
+<li>检测 Provider</li>
+<li>让用户选择要启用的 Provider</li>
+<li>应用 setup level 对应默认值</li>
+<li>生成 adaptive 配置</li>
+<li>如有需要，把 secret 写入 keyring</li>
+</ol>
+<p>如果最终没有选中任何 Provider，setup 会直接失败，而不是产出一个表面成功但不可运行的配置。</p>
+<h2 id="keyring-行为"><a class="header" href="#keyring-行为">keyring 行为</a></h2>
+<p>选择 keyring 模式后，生成的配置会从环境变量占位符转换成 keyring 引用。</p>
+<p>本仓库当前使用的引用形式是：</p>
+<pre><code class="language-text">keyring://go-on/&lt;account&gt;
+</code></pre>
+<h2 id="setup-之外的-secret-管理"><a class="header" href="#setup-之外的-secret-管理">setup 之外的 secret 管理</a></h2>
+<p>setup 不是唯一入口，后续也可以单独用 CLI 管理：</p>
+<pre><code class="language-bash">go-on --secret list
+go-on --secret set --secret-name openai --secret-value YOUR_KEY
+</code></pre>
+<p>这也是 setup 正常但凭证后续变更时最干净的修复路径。</p>
+<h2 id="推荐初始化顺序"><a class="header" href="#推荐初始化顺序">推荐初始化顺序</a></h2>
+<p>对大多数使用者：</p>
+<ol>
+<li>运行 <code>go-on --setup --setup-level standard --setup-secrets auto</code>。</li>
+<li>运行 <code>go-on --status</code>。</li>
+<li>如果要让 Zed 或 GUI 走 HTTP，使用 <code>--protocol-mode adaptive --acp-http-bind 127.0.0.1:8090</code> 启动后端。</li>
+<li>如果是编辑器自拉起的 stdio 场景，再切到 <code>acp_stdio</code> 或 <code>mcp_stdio</code>。</li>
+</ol>
+<h2 id="什么时候重跑-setup"><a class="header" href="#什么时候重跑-setup">什么时候重跑 setup</a></h2>
+<p>以下场景建议重跑：</p>
+<ul>
+<li>更换机器</li>
+<li>更换 Provider 组合</li>
+<li>从 env 模式切换到 keyring 模式</li>
+<li><code>config.toml</code> 丢失或损坏</li>
+</ul>
+<p>除非明确要替换现有文件集，否则不要轻易带 <code>--force</code> 重跑。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="后端-cli"><a class="header" href="#后端-cli">后端 CLI</a></h1>
+<p>后端可执行文件是当前系统的权威控制面，负责运行时启动、setup、健康检查、任务规划以及协议模式选择。</p>
+<h2 id="调用方式"><a class="header" href="#调用方式">调用方式</a></h2>
+<p>生产或打包后的二进制：</p>
+<pre><code class="language-bash">go-on --config config.toml
+</code></pre>
+<p>开发阶段：</p>
+<pre><code class="language-bash">cargo run -- --config config.toml
+</code></pre>
+<p>当前帮助入口形式为：</p>
+<pre><code class="language-text">Usage: go-on.exe [OPTIONS]
+</code></pre>
+<p>没有子命令，所有操作由标志驱动。</p>
+<h2 id="核心运行时选项"><a class="header" href="#核心运行时选项">核心运行时选项</a></h2>
+<h3 id="--config-config"><a class="header" href="#--config-config"><code>--config &lt;CONFIG&gt;</code></a></h3>
+<p>指定显式配置文件路径。如果省略，运行时将从可执行文件所在目录解析 <code>config.toml</code>。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --config D:\go-on\config.toml
+</code></pre>
+<h3 id="--phase-phase"><a class="header" href="#--phase-phase"><code>--phase &lt;PHASE&gt;</code></a></h3>
+<p>选择要运行的特定阶段（phase）配置文件。当你的配置定义了多个阶段行为，并希望使用一个确定的入口点时使用。</p>
+<h3 id="--verbose"><a class="header" href="#--verbose"><code>--verbose</code></a></h3>
+<p>启用详细日志输出。在诊断启动、配置、传输或 Provider 就绪问题时首先使用此选项。</p>
+<h2 id="phase-与-sub-phase-配置"><a class="header" href="#phase-与-sub-phase-配置">Phase 与 Sub-Phase 配置</a></h2>
+<p>Phase 定义运行时执行的工作流阶段。每个 phase 可以包含可选的 sub-phase，实现更精细的控制。</p>
+<h3 id="在-configtoml-中配置-phase"><a class="header" href="#在-configtoml-中配置-phase">在 config.toml 中配置 phase</a></h3>
+<p>Phase 在 <code>[phases.&lt;name&gt;]</code> 节中配置，由 <code>flow.phases</code> 列表引用：</p>
+<pre><code class="language-toml">[flow]
+# 执行顺序。根据你的工作流增删 phase。
+phases = ["think", "act", "check", "done"]
+
+[phases.think]
+description = "Think — 分析、规划、收集上下文"
+# 分配给此 phase 的 agent（空 = setup wizard 会提示填写）
+agents = []
+# 为 true 时，即使没有配置 agent 也继续执行
+fallback = true
+
+[phases.think.options]
+request_timeout_seconds = 120
+review_timeout_seconds = 60
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+phase_max_inflight = 8      # 此 phase 内最大并发任务数
+global_max_inflight = 128    # 所有 phase 全局最大并发任务数
+</code></pre>
+<h3 id="sub-phases子阶段"><a class="header" href="#sub-phases子阶段">Sub-phases（子阶段）</a></h3>
+<p>Sub-phases 提供分层工作流分解。一个 phase 可以定义 <code>sub_phases</code> 列表，配合嵌套的 <code>[phases.&lt;parent&gt;.&lt;child&gt;]</code> 节：</p>
+<pre><code class="language-toml">[flow]
+phases = ["think", "act", "check", "done"]
+
+[phases.act]
+description = "主执行阶段"
+agents = []
+fallback = true
+# Sub-phases 在此 phase 内按顺序执行
+sub_phases = ["plan", "code", "test"]
+
+[phases.act.options]
+request_timeout_seconds = 300
+cache_enabled = true
+phase_max_inflight = 24
+
+[phases.act.plan]
+description = "实现计划"
+agents = []
+fallback = true
+
+[phases.act.plan.options]
+request_timeout_seconds = 120
+phase_max_inflight = 4
+
+[phases.act.code]
+description = "编写代码"
+agents = []
+fallback = true
+
+[phases.act.code.options]
+request_timeout_seconds = 180
+phase_max_inflight = 12
+
+[phases.act.test]
+description = "运行测试"
+agents = []
+fallback = true
+
+[phases.act.test.options]
+request_timeout_seconds = 120
+phase_max_inflight = 8
+</code></pre>
+<p>Sub-phases 会继承父级的 <code>options</code> 作为默认值，可在每个 sub-phase 中覆盖。</p>
+<h3 id="phase-only-与-sub-phase-执行的区别"><a class="header" href="#phase-only-与-sub-phase-执行的区别">Phase-only 与 sub-phase 执行的区别</a></h3>
+<ul>
+<li><strong>无 sub-phases</strong>：每个 phase 按 <code>phases</code> 列表顺序从上到下依次执行。</li>
+<li><strong>有 sub-phases</strong>：父 phase 先编排其 sub-phases 按顺序执行，完成后才进入下一个父 phase。</li>
+<li>Sub-phases 是可选的——大多数工作流使用扁平 phase 即可。</li>
+</ul>
+<h3 id="内置-phase-预设文件"><a class="header" href="#内置-phase-预设文件">内置 phase 预设文件</a></h3>
+<p>项目内置四个预设配置文件，各有不同的 phase 设置：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>文件</th><th>Phases</th><th>适用场景</th></tr>
+</thead>
+<tbody>
+<tr><td><code>config.toml</code></td><td>think, act, check, done</td><td>通用工作流（默认）</td></tr>
+<tr><td><code>config.coding.toml</code></td><td>coding</td><td>IDE 集成（Zed、VS Code）</td></tr>
+<tr><td><code>config.simple-server.toml</code></td><td>think, act, check, done</td><td>单服务部署</td></tr>
+<tr><td><code>config.multi-users-server.toml</code></td><td>think, act, check, done</td><td>多用户企业环境</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="使用特定-phase-配置"><a class="header" href="#使用特定-phase-配置">使用特定 phase 配置</a></h3>
+<pre><code class="language-bash"># 使用编码阶段配置与 IDE 配合
+go-on --config config.coding.toml --phase coding
+
+# 使用通用配置配合 HTTP 端点
+go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+</code></pre>
+<h3 id="创建自定义-phase"><a class="header" href="#创建自定义-phase">创建自定义 phase</a></h3>
+<p>你可以定义任意 phase 名称——没有内置限制：</p>
+<pre><code class="language-toml">[flow]
+phases = ["research", "draft", "review", "approve", "publish"]
+
+[phases.research]
+description = "收集信息和资料"
+agents = []
+fallback = true
+
+[phases.research.options]
+request_timeout_seconds = 180
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+phase_max_inflight = 4
+</code></pre>
+<h3 id="每个-phase-的关键选项"><a class="header" href="#每个-phase-的关键选项">每个 phase 的关键选项</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>选项</th><th>默认值</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>request_timeout_seconds</code></td><td>150</td><td>此 phase 中单个任务请求的最大时间</td></tr>
+<tr><td><code>review_timeout_seconds</code></td><td>60</td><td>此 phase 中审查的最大时间</td></tr>
+<tr><td><code>review_timeout_policy</code></td><td><code>"reject"</code></td><td>审查超时时的处理方式（<code>"reject"</code> 或 <code>"warn"</code>）</td></tr>
+<tr><td><code>review_min_response_chars</code></td><td>12</td><td>审查回复的最小字符数</td></tr>
+<tr><td><code>cache_enabled</code></td><td>true</td><td>在此 phase 中启用缓存查找</td></tr>
+<tr><td><code>vector_enabled</code></td><td>true</td><td>在此 phase 中启用向量存储查找</td></tr>
+<tr><td><code>summary_enabled</code></td><td>true</td><td>启用对话摘要</td></tr>
+<tr><td><code>phase_max_inflight</code></td><td>24</td><td>此 phase 内最大并发任务数</td></tr>
+<tr><td><code>global_max_inflight</code></td><td>128</td><td>所有 phase 全局最大并发任务数</td></tr>
+<tr><td><code>autopilot_complexity</code></td><td><code>"auto"</code></td><td>复杂度模式：<code>"auto"</code>、<code>"simple"</code>、<code>"complex"</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="验证与就绪检查"><a class="header" href="#验证与就绪检查">验证与就绪检查</a></h2>
+<h3 id="--validate-config-或---doctor"><a class="header" href="#--validate-config-或---doctor"><code>--validate-config</code> 或 <code>--doctor</code></a></h3>
+<p>验证配置并退出。在排查更大的运行时问题之前，这是最快的快速检查。</p>
+<pre><code class="language-bash">go-on --config config.toml --validate-config
+</code></pre>
+<h3 id="--status-或---check"><a class="header" href="#--status-或---check"><code>--status</code> 或 <code>--check</code></a></h3>
+<p>打印已配置的 AI Provider 和运行时就绪状态。</p>
+<p>在 setup 之后、编辑 <code>config.toml</code> 之后或附加编辑器客户端之前使用。</p>
+<pre><code class="language-bash">go-on --status
+</code></pre>
+<h3 id="--healthcheck"><a class="header" href="#--healthcheck"><code>--healthcheck</code></a></h3>
+<p>生成运行时健康报告并持久化到 <code>.goon/</code> 下。当需要持久化的工件用于后续审查或分类时使用。</p>
+<pre><code class="language-bash">go-on --healthcheck
+</code></pre>
+<h2 id="setup-与推荐工作流"><a class="header" href="#setup-与推荐工作流">Setup 与推荐工作流</a></h2>
+<h3 id="--setup-或---init"><a class="header" href="#--setup-或---init"><code>--setup</code> 或 <code>--init</code></a></h3>
+<p>运行交互式设置向导。</p>
+<pre><code class="language-bash">go-on --setup
+</code></pre>
+<h3 id="--setup-profile-setup_profile"><a class="header" href="#--setup-profile-setup_profile"><code>--setup-profile &lt;SETUP_PROFILE&gt;</code></a></h3>
+<p>当前接受的值：<code>adaptive</code>。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --setup --setup-profile adaptive
+</code></pre>
+<h3 id="--setup-level-setup_level"><a class="header" href="#--setup-level-setup_level"><code>--setup-level &lt;SETUP_LEVEL&gt;</code></a></h3>
+<p>接受的值：</p>
+<ul>
+<li><code>quick</code></li>
+<li><code>standard</code></li>
+<li><code>custom</code></li>
+</ul>
+<p>实用指导：</p>
+<ul>
+<li><code>quick</code>：最小路径，跳过额外的 Agent 提示。</li>
+<li><code>standard</code>：大多数用户的最佳默认值。</li>
+<li><code>custom</code>：暴露更多手动决策。</li>
+</ul>
+<h3 id="--setup-secrets-setup_secrets"><a class="header" href="#--setup-secrets-setup_secrets"><code>--setup-secrets &lt;SETUP_SECRETS&gt;</code></a></h3>
+<p>接受的值：</p>
+<ul>
+<li><code>env</code></li>
+<li><code>keyring</code></li>
+<li><code>auto</code></li>
+</ul>
+<p><code>auto</code> 也接受 <code>autodetect</code>。</p>
+<h3 id="--apply-recommended"><a class="header" href="#--apply-recommended"><code>--apply-recommended</code></a></h3>
+<p>将 Provider 能力推荐应用到当前 <code>config.toml</code> 并退出。</p>
+<p>在接入新 Provider 或更改模型组合后使用。</p>
+<h3 id="--force"><a class="header" href="#--force"><code>--force</code></a></h3>
+<p>即使目标文件已存在也强制运行 setup。</p>
+<p>谨慎使用，尤其是当你精心维护了一个手写的 <code>config.toml</code> 时。</p>
+<h2 id="本地模型注册"><a class="header" href="#本地模型注册">本地模型注册</a></h2>
+<h3 id="--add-local-model-或---add-model"><a class="header" href="#--add-local-model-或---add-model"><code>--add-local-model</code> 或 <code>--add-model</code></a></h3>
+<p>在配置中添加或更新本地模型 Agent 条目。</p>
+<p>此标志通常与下面的 <code>--local-model-*</code> 选项组合使用。</p>
+<h3 id="--local-model-name-name"><a class="header" href="#--local-model-name-name"><code>--local-model-name &lt;NAME&gt;</code></a></h3>
+<p>逻辑 Agent 名称。</p>
+<h3 id="--local-model-url-url"><a class="header" href="#--local-model-url-url"><code>--local-model-url &lt;URL&gt;</code></a></h3>
+<p>本地 Provider 的端点 URL。</p>
+<h3 id="--local-model-type-type"><a class="header" href="#--local-model-type-type"><code>--local-model-type &lt;TYPE&gt;</code></a></h3>
+<p>Provider 类型。默认意图为 <code>openai</code>。</p>
+<h3 id="--local-model-model-model_id"><a class="header" href="#--local-model-model-model_id"><code>--local-model-model &lt;MODEL_ID&gt;</code></a></h3>
+<p>要存储在配置中的模型标识符。</p>
+<h3 id="--local-model-api-key-env-env_name"><a class="header" href="#--local-model-api-key-env-env_name"><code>--local-model-api-key-env &lt;ENV_NAME&gt;</code></a></h3>
+<p>可选的 API 密钥环境变量字段。</p>
+<h3 id="--local-model-secret-key-env-env_name"><a class="header" href="#--local-model-secret-key-env-env_name"><code>--local-model-secret-key-env &lt;ENV_NAME&gt;</code></a></h3>
+<p>可选的密钥环境变量字段。</p>
+<h3 id="--local-model-register-only"><a class="header" href="#--local-model-register-only"><code>--local-model-register-only</code></a></h3>
+<p>仅在 <code>[agents]</code> 下注册本地模型，而不自动附加到 phase agent 列表。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --add-local-model \
+  --local-model-name ollama-local \
+  --local-model-url http://127.0.0.1:11434/v1 \
+  --local-model-type openai \
+  --local-model-model qwen2.5-coder \
+  --local-model-register-only
+</code></pre>
+<h2 id="secret-管理"><a class="header" href="#secret-管理">Secret 管理</a></h2>
+<h3 id="--secret-action"><a class="header" href="#--secret-action"><code>--secret &lt;ACTION&gt;</code></a></h3>
+<p>接受的动作：</p>
+<ul>
+<li><code>set</code></li>
+<li><code>get</code></li>
+<li><code>delete</code></li>
+<li><code>list</code></li>
+</ul>
+<h3 id="--secret-name-secret_name"><a class="header" href="#--secret-name-secret_name"><code>--secret-name &lt;SECRET_NAME&gt;</code></a></h3>
+<p>逻辑 Secret 目标的名称。</p>
+<h3 id="--secret-value-secret_value"><a class="header" href="#--secret-value-secret_value"><code>--secret-value &lt;SECRET_VALUE&gt;</code></a></h3>
+<p>与 <code>set</code> 一起使用的 Secret 值。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --secret list
+go-on --secret set --secret-name openai --secret-value YOUR_KEY
+go-on --secret get --secret-name openai
+go-on --secret delete --secret-name openai
+</code></pre>
+<h2 id="规划与制品检查"><a class="header" href="#规划与制品检查">规划与制品检查</a></h2>
+<h3 id="--action-check-action_check"><a class="header" href="#--action-check-action_check"><code>--action-check &lt;ACTION_CHECK&gt;</code></a></h3>
+<p>针对 <code>.goon/</code> 制品运行操作检查。</p>
+<p>帮助中描述的预期值：</p>
+<ul>
+<li><code>all</code></li>
+<li><code>spec</code></li>
+<li><code>qa</code></li>
+<li><code>retest</code></li>
+<li><code>final</code></li>
+</ul>
+<h3 id="--plan-task-plan_task"><a class="header" href="#--plan-task-plan_task"><code>--plan-task &lt;PLAN_TASK&gt;</code></a></h3>
+<p>为复杂任务构建并持久化一个受控的任务规划制品。</p>
+<p>当你希望运行时在执行前物化一个持久的规划对象时使用。</p>
+<h2 id="传输模式选择"><a class="header" href="#传输模式选择">传输模式选择</a></h2>
+<h3 id="--protocol-mode-mode"><a class="header" href="#--protocol-mode-mode"><code>--protocol-mode &lt;MODE&gt;</code></a></h3>
+<p>接受的值：</p>
+<ul>
+<li><code>adaptive</code>（推荐默认）</li>
+<li><code>acp_stdio</code></li>
+<li><code>acp_http</code></li>
+<li><code>mcp_stdio</code></li>
+<li><code>mcp_http</code></li>
+</ul>
+<p>推荐用法：</p>
+<ul>
+<li><code>adaptive</code>：当多个客户端可能连接时的最安全默认值；它保留双栈请求路由并从运行时前提条件推导启动传输。</li>
+<li><code>acp_stdio</code>：当编辑器将 <code>go-on</code> 作为子进程启动时的最佳选择。</li>
+<li><code>acp_http</code>：当 ACP 兼容客户端需要一个共享的长时间运行后端时的最佳选择。</li>
+<li><code>mcp_stdio</code>：仅当你的客户端明确期望 MCP over stdio 时使用。</li>
+<li><code>mcp_http</code>：当你的客户端需要 OpenAI 兼容的 <code>/v1</code> HTTP 端点时的最佳选择。</li>
+</ul>
+<h3 id="--acp-http-bind-addr"><a class="header" href="#--acp-http-bind-addr"><code>--acp-http-bind &lt;ADDR&gt;</code></a></h3>
+<p>绑定 HTTP 监听器并暴露：</p>
+<ul>
+<li><code>/health</code></li>
+<li><code>/chat</code></li>
+<li><code>/chat/stream</code></li>
+</ul>
+<p>实践中，同一运行时也会暴露 OpenAI 兼容的 <code>/v1</code> 端点，用于 Zed 模型提供方风格的集成和运行时探测。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+</code></pre>
+<h2 id="常用命令配方"><a class="header" href="#常用命令配方">常用命令配方</a></h2>
+<p>最小化 setup：</p>
+<pre><code class="language-bash">go-on --setup --setup-level standard --setup-secrets auto
+</code></pre>
+<p>验证然后检查就绪状态：</p>
+<pre><code class="language-bash">go-on --config config.toml --validate-config
+go-on --config config.toml --status
+</code></pre>
+<p>为 GUI、Zed 和探测启动共享的本地 HTTP 运行时：</p>
+<pre><code class="language-bash">go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+</code></pre>
+<p>为编辑器启动的集成运行 ACP over stdio：</p>
+<pre><code class="language-bash">go-on --config config.toml --protocol-mode acp_stdio --verbose
+</code></pre>
+<h2 id="操作指导"><a class="header" href="#操作指导">操作指导</a></h2>
+<ul>
+<li>在假设传输层故障之前，先使用 <code>--validate-config</code>。</li>
+<li>在打开 GUI 或编辑器插件之前，先使用 <code>--status</code>。</li>
+<li>除非你有具体的客户端契约要求仅 ACP 或仅 MCP 行为，否则使用 <code>adaptive</code>。</li>
+<li>在接入本地 OpenAI 兼容端点时，优先使用 <code>--add-local-model</code> 而不是手动编辑配置。</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="本地模式部署"><a class="header" href="#本地模式部署">本地模式部署</a></h1>
+<h2 id="概述"><a class="header" href="#概述">概述</a></h2>
+<p>本地模式（<code>profile-local</code>）是 go-on 的默认部署配置，专为单用户开发环境设计。它提供了一个轻量级、自包含的运行时，具有基于 SQLite 的存储和自适应向量能力。</p>
+<h2 id="特性"><a class="header" href="#特性">特性</a></h2>
+<h3 id="核心能力"><a class="header" href="#核心能力">核心能力</a></h3>
+<ul>
+<li><strong>单用户操作</strong>：专为个人开发者设计</li>
+<li><strong>SQLite 存储</strong>：基于本地文件的缓存和向量存储</li>
+<li><strong>自适应向量存储</strong>：当 <code>sqlite-vec</code> 可用时使用，否则回退到 JSON 嵌入</li>
+<li><strong>零外部依赖</strong>：无需数据库服务器</li>
+<li><strong>所有 14 条能力总线和 21 个 F-GAP 模块已包含</strong>：本地配置文件拥有完整的 Phase 4 功能</li>
+</ul>
+<h3 id="存储架构"><a class="header" href="#存储架构">存储架构</a></h3>
+<pre><code>本地模式存储：
+├── 缓存：SQLite 数据库 (acp_cache.sqlite3)
+├── 向量存储：带向量扩展的 SQLite
+└── 配置：本地 config.toml 文件
+</code></pre>
+<h2 id="配置"><a class="header" href="#配置">配置</a></h2>
+<h3 id="默认配置"><a class="header" href="#默认配置">默认配置</a></h3>
+<p>本地模式使用 <code>config/config.toml</code> 作为默认配置：</p>
+<pre><code class="language-toml"># config/config.toml（本地模式默认配置）
+default_phase = "coding"
+model_selection_mode = "adaptive"
+
+[protocol]
+mode = "adaptive"
+
+[cache]
+enabled = true
+path = "acp_cache.sqlite3"
+default_ttl_seconds = 3600
+max_entries = 5000
+
+[vector]
+enabled = true
+auto_mode = true
+path = "acp_vector.sqlite3"
+dimensions = 192
+min_query_chars = 80
+top_k = 2
+min_similarity = 0.82
+</code></pre>
+<h3 id="特性标志"><a class="header" href="#特性标志">特性标志</a></h3>
+<p>本地模式启用以下 Cargo 特性：</p>
+<ul>
+<li><code>backend-sqlite</code>：SQLite 数据库支持</li>
+<li><code>rusqlite</code>：带捆绑 SQLite 的 SQLite 绑定</li>
+<li><code>sqlite-vec</code>：SQLite 向量扩展（可选）</li>
+</ul>
+<h2 id="安装"><a class="header" href="#安装">安装</a></h2>
+<h3 id="从源码构建"><a class="header" href="#从源码构建">从源码构建</a></h3>
+<pre><code class="language-bash"># 默认构建（profile-local）
+cargo build
+
+# 显式本地模式构建
+cargo build --no-default-features -F profile-local
+
+# 包含所有特性
+cargo build --features "backend-sqlite"
+</code></pre>
+<h3 id="二进制分发"><a class="header" href="#二进制分发">二进制分发</a></h3>
+<pre><code class="language-bash"># 下载预构建二进制文件
+curl -L https://github.com/your-org/go-on/releases/latest/download/go-on-x86_64-unknown-linux-gnu.tar.gz | tar xz
+
+# 设为可执行
+chmod +x go-on
+</code></pre>
+<h2 id="设置"><a class="header" href="#设置">设置</a></h2>
+<h3 id="初始配置"><a class="header" href="#初始配置">初始配置</a></h3>
+<pre><code class="language-bash"># 使用默认配置初始化
+cargo run -- --init --config config/config.toml
+
+# 检查配置
+cargo run -- --check --config config/config.toml
+</code></pre>
+<h3 id="可选设置级别"><a class="header" href="#可选设置级别">可选设置级别</a></h3>
+<pre><code class="language-bash"># 快速设置（最小化配置）
+cargo run -- --init --setup-level quick --config config/config.toml
+
+# 标准设置（推荐）
+cargo run -- --init --setup-level standard --config config/config.toml
+
+# 自定义设置（高级）
+cargo run -- --init --setup-level custom --config config/config.toml
+</code></pre>
+<h2 id="运行"><a class="header" href="#运行">运行</a></h2>
+<h3 id="启动运行时"><a class="header" href="#启动运行时">启动运行时</a></h3>
+<pre><code class="language-bash"># 使用启动脚本
+./scripts/start-go-on.sh
+
+# 直接执行
+cargo run -- --config config/config.toml
+
+# 使用特定协议模式
+cargo run -- --config config/config.toml --protocol-mode adaptive
+</code></pre>
+<h3 id="健康检查"><a class="header" href="#健康检查">健康检查</a></h3>
+<pre><code class="language-bash"># 默认健康端点
+curl http://127.0.0.1:8090/health
+
+# 详细输出
+curl http://127.0.0.1:8090/health?verbose=true
+</code></pre>
+<h2 id="开发工作流"><a class="header" href="#开发工作流">开发工作流</a></h2>
+<h3 id="典型使用模式"><a class="header" href="#典型使用模式">典型使用模式</a></h3>
+<ol>
+<li><strong>启动运行时</strong>：<code>./scripts/start-go-on.sh</code></li>
+<li><strong>连接 IDE</strong>：配置 Zed 或 VS Code 使用本地 go-on</li>
+<li><strong>开发</strong>：使用 AI 辅助编码功能</li>
+<li><strong>监控</strong>：检查健康端点状态</li>
+<li><strong>停止</strong>：使用 <code>./scripts/stop-go-on.sh</code> 或 Ctrl+C</li>
+</ol>
+<h3 id="ide-集成"><a class="header" href="#ide-集成">IDE 集成</a></h3>
+<ul>
+<li><strong>Zed</strong>：使用 ACP over stdio 或 HTTP</li>
+<li><strong>VS Code</strong>：使用 go-on 扩展与本地运行时</li>
+<li><strong>GUI 控制台</strong>：基于 Tauri 的桌面界面</li>
+</ul>
+<h2 id="存储管理"><a class="header" href="#存储管理">存储管理</a></h2>
+<h3 id="缓存位置"><a class="header" href="#缓存位置">缓存位置</a></h3>
+<ul>
+<li><strong>默认</strong>：当前目录下的 <code>acp_cache.sqlite3</code></li>
+<li><strong>自定义</strong>：在配置中设置 <code>cache.path</code></li>
+<li><strong>大小限制</strong>：默认 5000 条记录</li>
+</ul>
+<h3 id="向量存储"><a class="header" href="#向量存储">向量存储</a></h3>
+<ul>
+<li><strong>位置</strong>：当前目录下的 <code>acp_vector.sqlite3</code></li>
+<li><strong>维度</strong>：192 维嵌入</li>
+<li><strong>自动模式</strong>：自动使用可用的向量扩展</li>
+</ul>
+<h3 id="维护"><a class="header" href="#维护">维护</a></h3>
+<pre><code class="language-bash"># 清理缓存（手动）
+rm -f acp_cache.sqlite3 acp_cache.sqlite3-*
+
+# 重置向量存储
+rm -f acp_vector.sqlite3
+
+# 压缩 SQLite 数据库
+sqlite3 acp_cache.sqlite3 "VACUUM;"
+sqlite3 acp_vector.sqlite3 "VACUUM;"
+</code></pre>
+<h2 id="性能调优"><a class="header" href="#性能调优">性能调优</a></h2>
+<h3 id="内存设置"><a class="header" href="#内存设置">内存设置</a></h3>
+<pre><code class="language-toml">[runtime]
+# 根据可用内存调整
+cache_max_memory_mb = 256
+vector_max_memory_mb = 512
+</code></pre>
+<h3 id="并发"><a class="header" href="#并发">并发</a></h3>
+<pre><code class="language-toml">[concurrency]
+# 最大并发请求数
+max_inflight_requests = 32
+max_parallel_tasks = 8
+</code></pre>
+<h3 id="超时"><a class="header" href="#超时">超时</a></h3>
+<pre><code class="language-toml">[timeouts]
+# 请求超时
+request_timeout_seconds = 120
+health_check_timeout_seconds = 30
+shutdown_timeout_seconds = 60
+</code></pre>
+<h2 id="故障排除"><a class="header" href="#故障排除">故障排除</a></h2>
+<h3 id="常见问题"><a class="header" href="#常见问题">常见问题</a></h3>
+<h4 id="sqlite-错误"><a class="header" href="#sqlite-错误">SQLite 错误</a></h4>
+<pre><code class="language-bash"># 检查 SQLite 版本
+sqlite3 --version
+
+# 修复损坏的数据库
+sqlite3 acp_cache.sqlite3 ".recover" | sqlite3 acp_cache_fixed.sqlite3
+</code></pre>
+<h4 id="向量存储问题"><a class="header" href="#向量存储问题">向量存储问题</a></h4>
+<pre><code class="language-bash"># 检查 sqlite-vec 可用性
+cargo build --features "sqlite-vec"
+
+# 回退到 JSON 模式
+[vector]
+auto_mode = false
+use_json_fallback = true
+</code></pre>
+<h4 id="端口冲突"><a class="header" href="#端口冲突">端口冲突</a></h4>
+<pre><code class="language-bash"># 检查端口使用情况
+lsof -i :8090
+
+# 在配置中更改端口
+[runtime]
+acp_http_bind_addr = "127.0.0.1:8091"
+</code></pre>
+<h3 id="日志"><a class="header" href="#日志">日志</a></h3>
+<pre><code class="language-bash"># 启用调试日志
+RUST_LOG=debug ./scripts/start-go-on.sh
+
+# 查看日志
+tail -f go-on.log
+</code></pre>
+<h2 id="迁移"><a class="header" href="#迁移">迁移</a></h2>
+<h3 id="从旧版本迁移"><a class="header" href="#从旧版本迁移">从旧版本迁移</a></h3>
+<pre><code class="language-bash"># 备份现有数据
+cp acp_cache.sqlite3 acp_cache.sqlite3.backup
+cp acp_vector.sqlite3 acp_vector.sqlite3.backup
+
+# 运行迁移
+cargo run -- --migrate --config config/config.toml
+</code></pre>
+<h3 id="迁移到其他部署模式"><a class="header" href="#迁移到其他部署模式">迁移到其他部署模式</a></h3>
+<p>本地模式可以迁移到：</p>
+<ul>
+<li><strong>简单服务器模式</strong>：用于单服务器部署</li>
+<li><strong>多用户服务器模式</strong>：用于生产多用户环境</li>
+</ul>
+<h2 id="最佳实践"><a class="header" href="#最佳实践">最佳实践</a></h2>
+<h3 id="安全"><a class="header" href="#安全">安全</a></h3>
+<ul>
+<li>将配置文件保存在版本控制中（排除密钥）</li>
+<li>使用环境变量存储 API 密钥</li>
+<li>定期更新到最新版本</li>
+</ul>
+<h3 id="性能"><a class="header" href="#性能">性能</a></h3>
+<ul>
+<li>将 SQLite 文件放在快速存储上（SSD）</li>
+<li>监控磁盘空间使用情况</li>
+<li>定期维护（压缩、分析）</li>
+</ul>
+<h3 id="开发"><a class="header" href="#开发">开发</a></h3>
+<ul>
+<li>为不同项目使用单独的配置</li>
+<li>备份重要的向量存储</li>
+<li>使用不同的模型供应商进行测试</li>
+</ul>
+<h2 id="限制"><a class="header" href="#限制">限制</a></h2>
+<h3 id="已知约束"><a class="header" href="#已知约束">已知约束</a></h3>
+<ul>
+<li><strong>仅限单用户</strong>：不支持并发多用户访问</li>
+<li><strong>本地存储</strong>：性能取决于本地磁盘速度</li>
+<li><strong>内存限制</strong>：受可用系统内存限制</li>
+<li><strong>无高可用性</strong>：单点故障</li>
+</ul>
+<h3 id="何时考虑其他模式"><a class="header" href="#何时考虑其他模式">何时考虑其他模式</a></h3>
+<p>考虑升级到：</p>
+<ul>
+<li><strong>简单服务器模式</strong>：需要更好性能时</li>
+<li><strong>多用户服务器模式</strong>：需要多用户支持时</li>
+</ul>
+<h2 id="下一步"><a class="header" href="#下一步">下一步</a></h2>
+<p>设置本地模式后，您可以：</p>
+<ol>
+<li>探索 <a href="#api-概述">API 文档</a></li>
+<li>了解 <a href="#简单服务器模式部署">简单服务器模式</a></li>
+<li>查看 <a href="troubleshooting.html">故障排除指南</a></li>
+<li>加入 <a href="https://github.com/your-org/go-on/discussions">社区讨论</a></li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="简单服务器模式部署"><a class="header" href="#简单服务器模式部署">简单服务器模式部署</a></h1>
+<h2 id="概述-1"><a class="header" href="#概述-1">概述</a></h2>
+<p>简单服务器模式（<code>profile-simple-server</code>）专为单服务器部署设计，提供比本地模式更好的性能和可靠性，同时保持简单性。它使用带有必需向量扩展的 SQLite，适用于小团队或类似生产环境。</p>
+<h2 id="特性-1"><a class="header" href="#特性-1">特性</a></h2>
+<h3 id="增强能力"><a class="header" href="#增强能力">增强能力</a></h3>
+<ul>
+<li><strong>单服务器部署</strong>：专为专用服务器环境设计</li>
+<li><strong>必需向量扩展</strong>：使用 <code>sqlite-vec</code>（无 JSON 回退）</li>
+<li><strong>改进的性能</strong>：针对服务器工作负载优化</li>
+<li><strong>更好的可靠性</strong>：增强的错误处理和恢复</li>
+<li><strong>生产就绪</strong>：适用于小规模生产使用</li>
+<li><strong>完整 Phase 4 架构</strong>：所有 14 条总线和 21 个 F-GAP 模块，包括 AgentFactory 和 OrchestrationCouncil</li>
+<li><strong>条件编译模块</strong>：AgentFactory 和 Council 使用 <code>#[cfg(feature = "profile-simple-server")]</code> 门控</li>
+</ul>
+<h3 id="架构"><a class="header" href="#架构">架构</a></h3>
+<pre><code>简单服务器架构：
+├── 运行时：专用服务器进程
+├── 存储：带向量扩展的 SQLite
+├── 网络：HTTP/HTTPS 端点
+└── 监控：增强的可观测性
+</code></pre>
+<h2 id="配置-1"><a class="header" href="#配置-1">配置</a></h2>
+<h3 id="服务器配置"><a class="header" href="#服务器配置">服务器配置</a></h3>
+<p>创建 <code>config/simple-server.toml</code>：</p>
+<pre><code class="language-toml"># config/simple-server.toml
+default_phase = "coding"
+model_selection_mode = "adaptive"
+
+[protocol]
+mode = "acp_http"  # 服务器部署的 HTTP 模式
+
+[runtime]
+acp_http_bind_addr = "0.0.0.0:8090"  # 绑定到所有接口
+production_strict = true
+entry_auth_enabled = true
+entry_auth_api_key_env = "GO_ON_SERVER_API_KEY"
+entry_rate_limit_rpm = 1000
+entry_rate_limit_burst = 200
+
+[cache]
+enabled = true
+path = "/var/lib/go-on/cache.sqlite3"
+default_ttl_seconds = 7200
+max_entries = 20000
+
+[vector]
+enabled = true
+auto_mode = false  # 需要 sqlite-vec
+use_json_fallback = false
+path = "/var/lib/go-on/vector.sqlite3"
+dimensions = 384  # 更高维度以获得更好准确性
+top_k = 5
+min_similarity = 0.75
+
+[observability]
+otel_enabled = true
+otel_exporter = "otlp"
+otel_endpoint = "http://localhost:4317"
+metrics_port = 9090
+</code></pre>
+<h3 id="特性标志-1"><a class="header" href="#特性标志-1">特性标志</a></h3>
+<p>简单服务器模式需要：</p>
+<ul>
+<li><code>backend-sqlite</code>：SQLite 数据库支持</li>
+<li><code>sqlite-vec</code>：向量扩展（必需，无回退）</li>
+</ul>
+<h2 id="安装-1"><a class="header" href="#安装-1">安装</a></h2>
+<h3 id="为服务器部署构建"><a class="header" href="#为服务器部署构建">为服务器部署构建</a></h3>
+<pre><code class="language-bash"># 使用 simple-server 配置文件构建
+cargo build --no-default-features -F profile-simple-server
+
+# 或显式启用特性
+cargo build --features "backend-sqlite sqlite-vec"
+</code></pre>
+<h3 id="系统要求"><a class="header" href="#系统要求">系统要求</a></h3>
+<ul>
+<li><strong>CPU</strong>：推荐 2+ 核心</li>
+<li><strong>内存</strong>：4GB+ RAM</li>
+<li><strong>存储</strong>：10GB+ 可用空间（推荐 SSD）</li>
+<li><strong>网络</strong>：稳定的互联网连接用于模型供应商</li>
+</ul>
+<h3 id="systemd-服务设置"><a class="header" href="#systemd-服务设置">Systemd 服务设置</a></h3>
+<p>创建 <code>/etc/systemd/system/go-on.service</code>：</p>
+<pre><code class="language-ini">[Unit]
+Description=go-on Simple Server
+After=network.target
+
+[Service]
+Type=simple
+User=go-on
+Group=go-on
+WorkingDirectory=/opt/go-on
+Environment="GO_ON_SERVER_API_KEY=your-api-key-here"
+Environment="RUST_LOG=info"
+ExecStart=/opt/go-on/go-on --config /opt/go-on/config/simple-server.toml
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+</code></pre>
+<h2 id="设置-1"><a class="header" href="#设置-1">设置</a></h2>
+<h3 id="目录结构"><a class="header" href="#目录结构">目录结构</a></h3>
+<pre><code class="language-bash"># 创建目录
+sudo mkdir -p /opt/go-on /var/lib/go-on /var/log/go-on
+sudo chown -R go-on:go-on /opt/go-on /var/lib/go-on /var/log/go-on
+
+# 复制配置
+sudo cp config/simple-server.toml /opt/go-on/config/
+sudo cp scripts/start-go-on.sh /opt/go-on/
+sudo chmod +x /opt/go-on/start-go-on.sh
+</code></pre>
+<h3 id="数据库初始化"><a class="header" href="#数据库初始化">数据库初始化</a></h3>
+<pre><code class="language-bash"># 以 go-on 用户身份初始化
+sudo -u go-on /opt/go-on/go-on --init --config /opt/go-on/config/simple-server.toml
+
+# 检查配置
+sudo -u go-on /opt/go-on/go-on --check --config /opt/go-on/config/simple-server.toml
+</code></pre>
+<h3 id="用户和权限"><a class="header" href="#用户和权限">用户和权限</a></h3>
+<pre><code class="language-bash"># 创建系统用户
+sudo useradd -r -s /bin/false -m -d /opt/go-on go-on
+
+# 设置权限
+sudo chown -R go-on:go-on /opt/go-on
+sudo chmod 750 /opt/go-on
+</code></pre>
+<h2 id="运行-1"><a class="header" href="#运行-1">运行</a></h2>
+<h3 id="启动服务器"><a class="header" href="#启动服务器">启动服务器</a></h3>
+<pre><code class="language-bash"># 使用 systemd
+sudo systemctl daemon-reload
+sudo systemctl enable go-on
+sudo systemctl start go-on
+
+# 检查状态
+sudo systemctl status go-on
+
+# 查看日志
+sudo journalctl -u go-on -f
+</code></pre>
+<h3 id="手动启动"><a class="header" href="#手动启动">手动启动</a></h3>
+<pre><code class="language-bash"># 以 go-on 用户身份
+sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/simple-server.toml
+
+# 带环境变量
+GO_ON_SERVER_API_KEY="your-key" sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/simple-server.toml
+</code></pre>
+<h3 id="健康和监控"><a class="header" href="#健康和监控">健康和监控</a></h3>
+<pre><code class="language-bash"># 健康端点
+curl http://localhost:8090/health
+
+# 指标端点
+curl http://localhost:9090/metrics
+
+# Prometheus 指标
+curl http://localhost:9090/metrics/prometheus
+</code></pre>
+<h2 id="网络配置"><a class="header" href="#网络配置">网络配置</a></h2>
+<h3 id="防火墙规则"><a class="header" href="#防火墙规则">防火墙规则</a></h3>
+<pre><code class="language-bash"># 允许 HTTP 端口
+sudo ufw allow 8090/tcp
+
+# 允许指标端口
+sudo ufw allow 9090/tcp
+
+# 启用防火墙
+sudo ufw enable
+</code></pre>
+<h3 id="反向代理nginx"><a class="header" href="#反向代理nginx">反向代理（Nginx）</a></h3>
+<p>创建 <code>/etc/nginx/sites-available/go-on</code>：</p>
+<pre><code class="language-nginx">server {
+    listen 80;
+    server_name go-on.example.com;
+    
+    location / {
+        proxy_pass http://127.0.0.1:8090;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    
+    # 健康检查端点
+    location /health {
+        proxy_pass http://127.0.0.1:8090/health;
+        access_log off;
+    }
+}
+</code></pre>
+<h3 id="ssltls-配置"><a class="header" href="#ssltls-配置">SSL/TLS 配置</a></h3>
+<pre><code class="language-bash"># 使用 Let's Encrypt 和 Certbot
+sudo certbot --nginx -d go-on.example.com
+
+# 或手动 SSL 配置
+ssl_certificate /etc/ssl/certs/go-on.crt;
+ssl_certificate_key /etc/ssl/private/go-on.key;
+</code></pre>
+<h2 id="存储管理-1"><a class="header" href="#存储管理-1">存储管理</a></h2>
+<h3 id="数据库维护"><a class="header" href="#数据库维护">数据库维护</a></h3>
+<pre><code class="language-bash"># 定期压缩（每周）
+sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 "VACUUM;"
+sudo -u go-on sqlite3 /var/lib/go-on/vector.sqlite3 "VACUUM;"
+
+# 分析查询优化
+sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 "ANALYZE;"
+sudo -u go-on sqlite3 /var/lib/go-on/vector.sqlite3 "ANALYZE;"
+</code></pre>
+<h3 id="备份策略"><a class="header" href="#备份策略">备份策略</a></h3>
+<pre><code class="language-bash"># 每日备份脚本
+#!/bin/bash
+BACKUP_DIR="/backup/go-on"
+DATE=$(date +%Y%m%d)
+
+# 备份数据库
+sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 ".backup $BACKUP_DIR/cache-$DATE.sqlite3"
+sudo -u go-on sqlite3 /var/lib/go-on/vector.sqlite3 ".backup $BACKUP_DIR/vector-$DATE.sqlite3"
+
+# 备份配置
+cp /opt/go-on/config/simple-server.toml $BACKUP_DIR/config-$DATE.toml
+
+# 轮转旧备份（保留 30 天）
+find $BACKUP_DIR -name "*.sqlite3" -mtime +30 -delete
+find $BACKUP_DIR -name "*.toml" -mtime +30 -delete
+</code></pre>
+<h3 id="磁盘空间监控"><a class="header" href="#磁盘空间监控">磁盘空间监控</a></h3>
+<pre><code class="language-bash"># 检查数据库大小
+du -h /var/lib/go-on/*.sqlite3
+
+# 监控增长
+df -h /var/lib/go-on
+</code></pre>
+<h2 id="性能调优-1"><a class="header" href="#性能调优-1">性能调优</a></h2>
+<h3 id="内存优化"><a class="header" href="#内存优化">内存优化</a></h3>
+<pre><code class="language-toml">[runtime]
+# 根据服务器内存调整
+cache_max_memory_mb = 1024
+vector_max_memory_mb = 2048
+max_connections = 100
+</code></pre>
+<h3 id="并发设置"><a class="header" href="#并发设置">并发设置</a></h3>
+<pre><code class="language-toml">[concurrency]
+max_inflight_requests = 100
+max_parallel_tasks = 16
+worker_threads = 8
+</code></pre>
+<h3 id="超时配置"><a class="header" href="#超时配置">超时配置</a></h3>
+<pre><code class="language-toml">[timeouts]
+request_timeout_seconds = 180
+health_check_timeout_seconds = 10
+shutdown_timeout_seconds = 120
+database_timeout_seconds = 30
+</code></pre>
+<h2 id="安全-1"><a class="header" href="#安全-1">安全</a></h2>
+<h3 id="api-密钥管理"><a class="header" href="#api-密钥管理">API 密钥管理</a></h3>
+<pre><code class="language-bash"># 在环境中设置 API 密钥
+export GO_ON_SERVER_API_KEY="secure-random-key-here"
+
+# 或使用密钥环
+keyring set go-on server-api-key
+</code></pre>
+<h3 id="速率限制"><a class="header" href="#速率限制">速率限制</a></h3>
+<pre><code class="language-toml">[security]
+rate_limit_enabled = true
+rate_limit_rpm = 1000
+rate_limit_burst = 200
+rate_limit_by_ip = true
+</code></pre>
+<h3 id="访问控制"><a class="header" href="#访问控制">访问控制</a></h3>
+<pre><code class="language-toml">[access]
+allowed_ips = ["192.168.1.0/24", "10.0.0.0/8"]
+blocked_ips = []
+require_https = true
+cors_allowed_origins = ["https://your-domain.com"]
+</code></pre>
+<h2 id="监控和日志"><a class="header" href="#监控和日志">监控和日志</a></h2>
+<h3 id="日志配置"><a class="header" href="#日志配置">日志配置</a></h3>
+<pre><code class="language-toml">[logging]
+level = "info"
+file_path = "/var/log/go-on/go-on.log"
+max_file_size_mb = 100
+max_files = 10
+json_format = true
+</code></pre>
+<h3 id="指标收集"><a class="header" href="#指标收集">指标收集</a></h3>
+<pre><code class="language-toml">[metrics]
+enabled = true
+port = 9090
+path = "/metrics"
+collect_interval_seconds = 30
+</code></pre>
+<h3 id="告警"><a class="header" href="#告警">告警</a></h3>
+<pre><code class="language-bash"># Prometheus 告警规则示例
+groups:
+- name: go-on-alerts
+  rules:
+  - alert: GoOnHighErrorRate
+    expr: rate(go_on_errors_total[5m]) &gt; 0.1
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "检测到高错误率"
+      description: "错误率为每秒 {{ $value }}"
+</code></pre>
+<h2 id="扩展考虑"><a class="header" href="#扩展考虑">扩展考虑</a></h2>
+<h3 id="何时扩展"><a class="header" href="#何时扩展">何时扩展</a></h3>
+<ul>
+<li>CPU 使用率持续高于 70%</li>
+<li>内存使用率持续高于 80%</li>
+<li>响应时间显著增加</li>
+<li>并发用户超过 50</li>
+</ul>
+<h3 id="扩展选项"><a class="header" href="#扩展选项">扩展选项</a></h3>
+<ol>
+<li><strong>垂直扩展</strong>：升级服务器资源</li>
+<li><strong>水平扩展</strong>：迁移到多用户服务器模式</li>
+<li><strong>负载均衡</strong>：添加多个简单服务器实例</li>
+</ol>
+<h2 id="迁移-1"><a class="header" href="#迁移-1">迁移</a></h2>
+<h3 id="从本地模式迁移"><a class="header" href="#从本地模式迁移">从本地模式迁移</a></h3>
+<pre><code class="language-bash"># 从本地模式导出数据
+cargo run -- --export --config config/config.toml --output local-export.json
+
+# 导入到简单服务器
+sudo -u go-on /opt/go-on/go-on --import --config /opt/go-on/config/simple-server.toml --input local-export.json
+</code></pre>
+<h3 id="备份和恢复"><a class="header" href="#备份和恢复">备份和恢复</a></h3>
+<pre><code class="language-bash"># 完整备份
+tar czf go-on-backup-$(date +%Y%m%d).tar.gz /opt/go-on /var/lib/go-on
+
+# 恢复
+tar xzf go-on-backup-20240101.tar.gz -C /
+</code></pre>
+<h2 id="故障排除-1"><a class="header" href="#故障排除-1">故障排除</a></h2>
+<h3 id="常见问题-1"><a class="header" href="#常见问题-1">常见问题</a></h3>
+<h4 id="服务无法启动"><a class="header" href="#服务无法启动">服务无法启动</a></h4>
+<pre><code class="language-bash"># 检查日志
+sudo journalctl -u go-on --no-pager -n 50
+
+# 检查权限
+sudo ls -la /opt/go-on/
+sudo ls -la /var/lib/go-on/
+
+# 手动测试
+sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/simple-server.toml --dry-run
+</code></pre>
+<h4 id="数据库问题"><a class="header" href="#数据库问题">数据库问题</a></h4>
+<pre><code class="language-bash"># 检查 SQLite 完整性
+sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 "PRAGMA integrity_check;"
+sudo -u go-on sqlite3 /var/lib/go-on/vector.sqlite3 "PRAGMA integrity_check;"
+
+# 需要时修复
+sudo -u go-on cp /var/lib/go-on/cache.sqlite3 /var/lib/go-on/cache.sqlite3.backup
+sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3.backup ".recover" | sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3
+</code></pre>
+<h4 id="性能问题"><a class="header" href="#性能问题">性能问题</a></h4>
+<pre><code class="language-bash"># 监控资源使用情况
+top -u go-on
+iotop -u go-on
+
+# 检查数据库性能
+sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 "EXPLAIN QUERY PLAN SELECT * FROM cache WHERE key = 'test';"
+</code></pre>
+<h2 id="下一步-1"><a class="header" href="#下一步-1">下一步</a></h2>
+<p>设置简单服务器模式后，您可以：</p>
+<ol>
+<li>配置 <a href="deployment/monitoring.html">监控和告警</a></li>
+<li>设置 <a href="deployment/backup.html">备份策略</a></li>
+<li>探索 <a href="#api-概述">API 文档</a></li>
+<li>考虑 <a href="#多用户服务器模式部署">多用户服务器模式</a> 用于更大规模部署</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="多用户服务器模式部署"><a class="header" href="#多用户服务器模式部署">多用户服务器模式部署</a></h1>
+<h2 id="概述-2"><a class="header" href="#概述-2">概述</a></h2>
+<p>多用户服务器模式（<code>profile-multi-users-server</code>）是 go-on 的企业级部署配置，专为具有多个并发用户的生产环境设计。它使用 PostgreSQL 和 pgvector 进行可扩展存储，并提供安全、监控和高可用性的高级功能。</p>
+<h2 id="特性-2"><a class="header" href="#特性-2">特性</a></h2>
+<h3 id="企业能力"><a class="header" href="#企业能力">企业能力</a></h3>
+<ul>
+<li><strong>多用户支持</strong>：专为多个用户并发访问设计</li>
+<li><strong>PostgreSQL 存储</strong>：带 pgvector 扩展的可扩展数据库</li>
+<li><strong>高可用性</strong>：内置冗余和故障转移支持</li>
+<li><strong>高级安全</strong>：基于角色的访问控制、审计日志</li>
+<li><strong>企业监控</strong>：全面的可观测性堆栈</li>
+<li><strong>可扩展性</strong>：水平扩展能力</li>
+<li><strong>完整 Phase 4 架构</strong>：所有 14 条总线和 21 个 F-GAP 模块</li>
+<li><strong>分布式内存总线</strong>：通过 DistributedMemoryBus 跨节点记忆共享</li>
+<li><strong>跨节点容错引擎</strong>：跨节点故障隔离和自动恢复</li>
+<li><strong>多渠道消息传输</strong>：6 通道、QoS 启用的消息传输</li>
+</ul>
+<h3 id="架构-1"><a class="header" href="#架构-1">架构</a></h3>
+<pre><code>多用户服务器架构：
+├── 应用层：go-on 运行时实例
+├── 数据库层：带 pgvector 的 PostgreSQL
+├── 缓存层：Redis（可选）
+├── 负载均衡器：流量分发
+├── 监控：Prometheus、Grafana、ELK
+└── 备份：自动化备份系统
+</code></pre>
+<h2 id="配置-2"><a class="header" href="#配置-2">配置</a></h2>
+<h3 id="服务器配置-1"><a class="header" href="#服务器配置-1">服务器配置</a></h3>
+<p>创建 <code>config/multi-users-server.toml</code>：</p>
+<pre><code class="language-toml"># config/multi-users-server.toml
+default_phase = "coding"
+model_selection_mode = "adaptive"
+
+[protocol]
+mode = "mcp_http"  # 多用户访问的 MCP over HTTP
+
+[runtime]
+acp_http_bind_addr = "0.0.0.0:8090"
+production_strict = true
+entry_auth_enabled = true
+entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
+entry_rate_limit_rpm = 5000
+entry_rate_limit_burst = 1000
+session_timeout_minutes = 60
+max_sessions_per_user = 10
+
+[database]
+type = "postgres"
+host = "localhost"
+port = 5432
+database = "go_on_production"
+username_env = "GO_ON_DB_USERNAME"
+password_env = "GO_ON_DB_PASSWORD"
+pool_size = 20
+connection_timeout_seconds = 30
+ssl_mode = "prefer"
+
+[cache]
+enabled = true
+type = "database"  # 使用 PostgreSQL 作为缓存
+# 可选 Redis 缓存
+# type = "redis"
+# redis_url = "redis://localhost:6379"
+
+[vector]
+enabled = true
+type = "pgvector"
+dimensions = 768  # 企业使用的高维度
+top_k = 10
+min_similarity = 0.7
+
+[security]
+rbac_enabled = true
+audit_logging_enabled = true
+data_encryption_enabled = true
+mfa_enabled = false  # 可选：更高安全性时启用
+
+[observability]
+otel_enabled = true
+otel_exporter = "otlp"
+otel_endpoint = "http://localhost:4317"
+metrics_port = 9090
+tracing_sampling_rate = 0.1
+</code></pre>
+<h3 id="特性标志-2"><a class="header" href="#特性标志-2">特性标志</a></h3>
+<p>多用户服务器模式需要：</p>
+<ul>
+<li><code>backend-postgres</code>：PostgreSQL 数据库支持</li>
+<li><code>postgres</code>：PostgreSQL 客户端库</li>
+<li><code>pgvector</code>：PostgreSQL 的向量扩展</li>
+</ul>
+<h2 id="安装-2"><a class="header" href="#安装-2">安装</a></h2>
+<h3 id="为企业部署构建"><a class="header" href="#为企业部署构建">为企业部署构建</a></h3>
+<pre><code class="language-bash"># 使用 multi-users-server 配置文件构建
+cargo build --no-default-features -F profile-multi-users-server
+
+# 或显式启用特性
+cargo build --features "backend-postgres postgres pgvector"
+</code></pre>
+<h3 id="系统要求-1"><a class="header" href="#系统要求-1">系统要求</a></h3>
+<ul>
+<li><strong>CPU</strong>：推荐 4+ 核心</li>
+<li><strong>内存</strong>：8GB+ RAM</li>
+<li><strong>存储</strong>：50GB+ 可用空间（需要 SSD）</li>
+<li><strong>网络</strong>：高速、可靠的连接</li>
+<li><strong>数据库</strong>：PostgreSQL 14+ 带 pgvector 扩展</li>
+</ul>
+<h3 id="docker-compose-设置"><a class="header" href="#docker-compose-设置">Docker Compose 设置</a></h3>
+<p>创建 <code>docker-compose.yml</code>：</p>
+<pre><code class="language-yaml">version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: go_on_production
+      POSTGRES_USER: go_on
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U go_on"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  go-on:
+    build:
+      context: .
+      dockerfile: Dockerfile.multi-users
+    environment:
+      GO_ON_DB_USERNAME: go_on
+      GO_ON_DB_PASSWORD: ${DB_PASSWORD}
+      GO_ON_ENTRY_API_KEY: ${ENTRY_API_KEY}
+      RUST_LOG: info
+    ports:
+      - "8090:8090"
+      - "9090:9090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./config/multi-users-server.toml:/app/config.toml
+      - ./logs:/app/logs
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+</code></pre>
+<h2 id="数据库设置"><a class="header" href="#数据库设置">数据库设置</a></h2>
+<h3 id="postgresql-配置"><a class="header" href="#postgresql-配置">PostgreSQL 配置</a></h3>
+<p>创建 <code>init.sql</code> 用于数据库初始化：</p>
+<pre><code class="language-sql">-- 创建数据库和扩展
+CREATE DATABASE go_on_production;
+\c go_on_production;
+
+-- 启用所需扩展
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- 创建表
+CREATE TABLE IF NOT EXISTS cache (
+    id SERIAL PRIMARY KEY,
+    key VARCHAR(512) UNIQUE NOT NULL,
+    value TEXT NOT NULL,
+    ttl_seconds INTEGER DEFAULT 3600,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP GENERATED ALWAYS AS (created_at + ttl_seconds * INTERVAL '1 second') STORED
+);
+
+CREATE TABLE IF NOT EXISTS vector_store (
+    id SERIAL PRIMARY KEY,
+    embedding vector(768),
+    content TEXT NOT NULL,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(255) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(50) DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    session_token VARCHAR(255) UNIQUE NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    action VARCHAR(255) NOT NULL,
+    resource VARCHAR(255),
+    details JSONB,
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 创建索引
+CREATE INDEX idx_cache_key ON cache(key);
+CREATE INDEX idx_cache_expires_at ON cache(expires_at);
+CREATE INDEX idx_vector_embedding ON vector_store USING ivfflat (embedding vector_cosine_ops);
+CREATE INDEX idx_users_username ON users(username);
+CREATE INDEX idx_sessions_token ON sessions(session_token);
+CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at);
+
+-- 创建角色和权限
+CREATE ROLE go_on_app WITH LOGIN PASSWORD '${APP_DB_PASSWORD}';
+GRANT CONNECT ON DATABASE go_on_production TO go_on_app;
+GRANT USAGE ON SCHEMA public TO go_on_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO go_on_app;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO go_on_app;
+</code></pre>
+<h3 id="数据库性能调优"><a class="header" href="#数据库性能调优">数据库性能调优</a></h3>
+<p>更新 <code>postgresql.conf</code>：</p>
+<pre><code class="language-ini"># 连接设置
+max_connections = 200
+shared_buffers = 2GB
+effective_cache_size = 6GB
+
+# 性能设置
+maintenance_work_mem = 512MB
+checkpoint_completion_target = 0.9
+wal_buffers = 16MB
+default_statistics_target = 100
+
+# 查询优化
+random_page_cost = 1.1
+effective_io_concurrency = 200
+work_mem = 32MB
+</code></pre>
+<h2 id="部署"><a class="header" href="#部署">部署</a></h2>
+<h3 id="kubernetes-部署"><a class="header" href="#kubernetes-部署">Kubernetes 部署</a></h3>
+<p>创建 <code>kubernetes/deployment.yaml</code>：</p>
+<pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-on
+  namespace: go-on-production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: go-on
+  template:
+    metadata:
+      labels:
+        app: go-on
+    spec:
+      containers:
+      - name: go-on
+        image: your-registry/go-on:multi-users-latest
+        ports:
+        - containerPort: 8090
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: GO_ON_DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: go-on-secrets
+              key: db-username
+        - name: GO_ON_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: go-on-secrets
+              key: db-password
+        - name: GO_ON_ENTRY_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: go-on-secrets
+              key: entry-api-key
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8090
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8090
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: go-on-service
+  namespace: go-on-production
+spec:
+  selector:
+    app: go-on
+  ports:
+  - port: 80
+    targetPort: 8090
+    name: http
+  - port: 9090
+    targetPort: 9090
+    name: metrics
+  type: LoadBalancer
+</code></pre>
+<h3 id="负载均衡器配置"><a class="header" href="#负载均衡器配置">负载均衡器配置</a></h3>
+<p>创建 <code>nginx/load-balancer.conf</code>：</p>
+<pre><code class="language-nginx">upstream go_on_backend {
+    least_conn;
+    server go-on-1:8090;
+    server go-on-2:8090;
+    server go-on-3:8090;
+    keepalive 32;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name go-on.example.com;
+    
+    ssl_certificate /etc/ssl/certs/go-on.crt;
+    ssl_certificate_key /etc/ssl/private/go-on.key;
+    
+    # SSL 配置
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512;
+    ssl_prefer_server_ciphers off;
+    
+    location / {
+        proxy_pass http://go_on_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # 超时设置
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+    
+    location /health {
+        proxy_pass http://go_on_backend/health;
+        access_log off;
+    }
+    
+    location /metrics {
+        proxy_pass http://go_on_backend/metrics;
+        access_log off;
+    }
+}
+</code></pre>
+<h2 id="安全-2"><a class="header" href="#安全-2">安全</a></h2>
+<h3 id="认证和授权"><a class="header" href="#认证和授权">认证和授权</a></h3>
+<pre><code class="language-toml">[security.authentication]
+type = "jwt"
+jwt_secret_env = "GO_ON_JWT_SECRET"
+token_expiry_hours = 24
+refresh_token_expiry_days = 7
+
+[security.authorization]
+rbac_enabled = true
+roles = ["admin", "user", "viewer"]
+default_role = "user"
+
+[security.audit]
+enabled = true
+retention_days = 90
+sensitive_fields = ["password", "api_key", "token"]
+</code></pre>
+<h3 id="网络安全"><a class="header" href="#网络安全">网络安全</a></h3>
+<pre><code class="language-bash"># 防火墙规则
+sudo ufw allow 443/tcp  # HTTPS
+sudo ufw allow 5432/tcp  # PostgreSQL
+sudo ufw allow 6379/tcp  # Redis
+sudo ufw allow 9090/tcp  # 指标
+sudo ufw allow 4317/tcp  # OpenTelemetry
+
+# 启用防火墙
+sudo ufw --force enable
+</code></pre>
+<h3 id="密钥管理"><a class="header" href="#密钥管理">密钥管理</a></h3>
+<pre><code class="language-bash"># 使用 HashiCorp Vault
+vault kv put secret/go-on \
+  db_username=go_on \
+  db_password=$(openssl rand -base64 32) \
+  entry_api_key=$(openssl rand -base64 48) \
+  jwt_secret=$(openssl rand -base64 64)
+
+# 环境变量
+export GO_ON_DB_USERNAME=$(vault kv get -field=db_username secret/go-on)
+export GO_ON_DB_PASSWORD=$(vault kv get -field=db_password secret/go-on)
+export GO_ON_ENTRY_API_KEY=$(vault kv get -field=entry_api_key secret/go-on)
+export GO_ON_JWT_SECRET=$(vault kv get -field=jwt_secret secret/go-on)
+</code></pre>
+<h2 id="监控和可观测性"><a class="header" href="#监控和可观测性">监控和可观测性</a></h2>
+<h3 id="prometheus-配置"><a class="header" href="#prometheus-配置">Prometheus 配置</a></h3>
+<p>创建 <code>prometheus.yml</code>：</p>
+<pre><code class="language-yaml">global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'go-on'
+    static_configs:
+      - targets: ['go-on:9090']
+    metrics_path: '/metrics/prometheus'
+    
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+      
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - 'alerts.yml'
+</code></pre>
+<h3 id="grafana-仪表板"><a class="header" href="#grafana-仪表板">Grafana 仪表板</a></h3>
+<p>创建 <code>grafana/dashboards/go-on.json</code> 包含关键指标：</p>
+<ul>
+<li>请求率和延迟</li>
+<li>错误率和类型</li>
+<li>数据库性能</li>
+<li>缓存命中率</li>
+<li>用户活动</li>
+<li>资源利用率</li>
+</ul>
+<h3 id="日志聚合"><a class="header" href="#日志聚合">日志聚合</a></h3>
+<pre><code class="language-toml">[logging]
+level = "info"
+format = "json"
+outputs = ["file", "stdout", "loki"]
+
+[logging.loki]
+enabled = true
+url = "http://loki:3100"
+labels = ["app=go-on", "environment=production"]
+batch_size = 1000
+batch_timeout_seconds = 5
+</code></pre>
+<h2 id="备份和灾难恢复"><a class="header" href="#备份和灾难恢复">备份和灾难恢复</a></h2>
+<h3 id="数据库备份"><a class="header" href="#数据库备份">数据库备份</a></h3>
+<pre><code class="language-bash">#!/bin/bash
+# backup.sh
+BACKUP_DIR="/backup/go-on"
+DATE=$(date +%Y%m%d_%H%M%S)
+
+# 备份 PostgreSQL
+pg_dump -h localhost -U go_on -d go_on_production \
+  --format=custom \
+  --file="$BACKUP_DIR/go-on-$DATE.dump"
+
+# 备份配置
+cp /opt/go-on/config/multi-users-server.toml "$BACKUP_DIR/config-$DATE.toml"
+
+# 上传到云存储
+aws s3 cp "$BACKUP_DIR/go-on-$DATE.dump" s3://go-on-backups/
+aws s3 cp "$BACKUP_DIR/config-$DATE.toml" s3://go-on-backups/
+
+# 清理旧备份（保留 30 天）
+find $BACKUP_DIR -name "*.dump" -mtime +30 -delete
+find $BACKUP_DIR -name "*.toml" -mtime +30 -delete
+</code></pre>
+<h3 id="灾难恢复计划"><a class="header" href="#灾难恢复计划">灾难恢复计划</a></h3>
+<ol>
+<li><strong>恢复时间目标 (RTO)</strong>：1 小时</li>
+<li><strong>恢复点目标 (RPO)</strong>：15 分钟</li>
+<li><strong>备份频率</strong>：每小时增量，每日完整</li>
+<li><strong>测试</strong>：每月恢复演练</li>
+</ol>
+<h2 id="扩展"><a class="header" href="#扩展">扩展</a></h2>
+<h3 id="水平扩展"><a class="header" href="#水平扩展">水平扩展</a></h3>
+<pre><code class="language-yaml"># Kubernetes 水平 Pod 自动扩展器
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: go-on-hpa
+  namespace: go-on-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: go-on
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+</code></pre>
+<h3 id="数据库扩展"><a class="header" href="#数据库扩展">数据库扩展</a></h3>
+<pre><code class="language-sql">-- 用于扩展读取的只读副本
+CREATE PUBLICATION go_on_publication FOR ALL TABLES;
+CREATE SUBSCRIPTION go_on_subscription
+  CONNECTION 'host=replica-server port=5432 dbname=go_on_production user=replication_user password=secret'
+  PUBLICATION go_on_publication;
+
+-- 大表分区
+CREATE TABLE cache_partitioned (
+    LIKE cache INCLUDING ALL
+) PARTITION BY RANGE (created_at);
+
+CREATE TABLE cache_2024_q1 PARTITION OF cache_partitioned
+    FOR VALUES FROM ('2024-01-01') TO ('2024-04-01');
+CREATE TABLE cache_2024_q2 PARTITION OF cache_partitioned
+    FOR VALUES FROM ('2024-04-01') TO ('2024-07-01');
+</code></pre>
+<h2 id="迁移-2"><a class="header" href="#迁移-2">迁移</a></h2>
+<h3 id="从简单服务器模式迁移"><a class="header" href="#从简单服务器模式迁移">从简单服务器模式迁移</a></h3>
+<pre><code class="language-bash"># 从简单服务器导出数据
+pg_dump -h simple-server -U go_on -d go_on_simple \
+  --format=custom \
+  --file=simple-server-export.dump
+
+# 导入到多用户服务器
+pg_restore -h multi-users-server -U go_on -d go_on_production \
+  --clean \
+  --if-exists \
+  simple-server-export.dump
+
+# 更新配置
+cp config/simple-server.toml config/multi-users-server.toml
+# 在新配置中更新数据库设置
+</code></pre>
+<h3 id="零停机迁移"><a class="header" href="#零停机迁移">零停机迁移</a></h3>
+<ol>
+<li><strong>阶段 1</strong>：在旧系统旁边设置新基础设施</li>
+<li><strong>阶段 2</strong>：开始向两个系统双重写入</li>
+<li><strong>阶段 3</strong>：将读取流量迁移到新系统</li>
+<li><strong>阶段 4</strong>：将写入流量迁移到新系统</li>
+<li><strong>阶段 5</strong>：停用旧系统</li>
+</ol>
+<h2 id="故障排除-2"><a class="header" href="#故障排除-2">故障排除</a></h2>
+<h3 id="性能问题-1"><a class="header" href="#性能问题-1">性能问题</a></h3>
+<h4 id="数据库瓶颈"><a class="header" href="#数据库瓶颈">数据库瓶颈</a></h4>
+<pre><code class="language-sql">-- 识别慢查询
+SELECT query, calls, total_time, mean_time
+FROM pg_stat_statements
+ORDER BY mean_time DESC
+LIMIT 10;
+
+-- 检查表大小
+SELECT schemaname, tablename, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename))
+FROM pg_tables
+WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
+
+-- 检查索引使用情况
+SELECT schemaname, tablename, indexname, idx_scan, idx_tup_read, idx_tup_fetch
+FROM pg_stat_user_indexes
+ORDER BY idx_scan;
+</code></pre>
+<h4 id="应用问题"><a class="header" href="#应用问题">应用问题</a></h4>
+<pre><code class="language-bash"># 检查应用日志
+kubectl logs -l app=go-on --tail=100
+kubectl logs -l app=go-on --since=1h
+
+# 检查资源使用情况
+kubectl top pods -l app=go-on
+kubectl describe pods -l app=go-on
+
+# 检查网络连接
+kubectl exec go-on-pod -- curl http://postgres:5432
+kubectl exec go-on-pod -- curl http://redis:6379
+</code></pre>
+<h3 id="安全问题"><a class="header" href="#安全问题">安全问题</a></h3>
+<h4 id="审计日志审查"><a class="header" href="#审计日志审查">审计日志审查</a></h4>
+<pre><code class="language-sql">-- 审查最近的安全事件
+SELECT *
+FROM audit_logs
+WHERE action IN ('login_failed', 'access_denied', 'privilege_escalation')
+ORDER BY created_at DESC
+LIMIT 100;
+
+-- 检查可疑活动
+SELECT user_id, COUNT(*) as failed_attempts, MIN(created_at) as first_attempt, MAX(created_at) as last_attempt
+FROM audit_logs
+WHERE action = 'login_failed'
+  AND created_at &gt; NOW() - INTERVAL '1 hour'
+GROUP BY user_id
+HAVING COUNT(*) &gt; 5;
+</code></pre>
+<h4 id="安全扫描"><a class="header" href="#安全扫描">安全扫描</a></h4>
+<pre><code class="language-bash"># 运行漏洞扫描
+trivy image your-registry/go-on:multi-users-latest
+
+# 检查代码中的密钥
+gitleaks detect --source . --verbose
+
+# 网络安全扫描
+nmap -sV -p 80,443,5432,6379,8090,9090 go-on.example.com
+</code></pre>
+<h2 id="维护-1"><a class="header" href="#维护-1">维护</a></h2>
+<h3 id="定期维护任务"><a class="header" href="#定期维护任务">定期维护任务</a></h3>
+<pre><code class="language-bash">#!/bin/bash
+# maintenance.sh
+
+# 1. 数据库维护
+psql -h localhost -U go_on -d go_on_production -c "VACUUM ANALYZE;"
+psql -h localhost -U go_on -d go_on_production -c "REINDEX DATABASE go_on_production;"
+
+# 2. 日志轮转
+find /var/log/go-on -name "*.log" -mtime +7 -delete
+
+# 3. 缓存清理
+redis-cli FLUSHDB
+
+# 4. 备份验证
+# （验证最新备份可以恢复）
+</code></pre>
+<h3 id="更新流程"><a class="header" href="#更新流程">更新流程</a></h3>
+<ol>
+<li>
+<p><strong>更新前检查清单</strong>：</p>
+<ul>
+<li>验证备份是最新的</li>
+<li>通知用户维护窗口</li>
+<li>准备回滚计划</li>
+</ul>
+</li>
+<li>
+<p><strong>更新过程</strong>：</p>
+<pre><code class="language-bash"># 1. 部署新版本到暂存环境
+kubectl apply -f kubernetes/staging/
+
+# 2. 运行冒烟测试
+./scripts/smoke-tests.sh
+
+# 3. 部署到生产环境（金丝雀）
+kubectl set image deployment/go-on go-on=your-registry/go-on:new-version
+
+# 4. 监控指标
+watch kubectl get pods -l app=go-on
+
+# 5. 完全推出
+kubectl rollout status deployment/go-on
+</code></pre>
+</li>
+<li>
+<p><strong>更新后验证</strong>：</p>
+<ul>
+<li>验证所有服务健康</li>
+<li>检查错误率和性能</li>
+<li>确认用户功能正常</li>
+</ul>
+</li>
+</ol>
+<h2 id="成本优化"><a class="header" href="#成本优化">成本优化</a></h2>
+<h3 id="资源优化"><a class="header" href="#资源优化">资源优化</a></h3>
+<pre><code class="language-yaml"># Kubernetes 资源请求和限制
+resources:
+  requests:
+    memory: "1Gi"
+    cpu: "500m"
+  limits:
+    memory: "2Gi"
+    cpu: "1000m"
+</code></pre>
+<h3 id="自动扩展策略"><a class="header" href="#自动扩展策略">自动扩展策略</a></h3>
+<ul>
+<li>在非高峰时段缩减规模</li>
+<li>对非关键工作负载使用竞价实例</li>
+<li>实施成本感知调度</li>
+</ul>
+<h3 id="监控成本"><a class="header" href="#监控成本">监控成本</a></h3>
+<ul>
+<li>跟踪数据库存储增长</li>
+<li>监控模型供应商的 API 调用成本</li>
+<li>对意外成本激增发出警报</li>
+</ul>
+<h2 id="支持和社区"><a class="header" href="#支持和社区">支持和社区</a></h2>
+<h3 id="企业支持"><a class="header" href="#企业支持">企业支持</a></h3>
+<ul>
+<li><strong>SLA</strong>：99.9% 正常运行时间保证</li>
+<li><strong>支持渠道</strong>：电子邮件、电话、专用 Slack</li>
+<li><strong>响应时间</strong>：关键：1 小时，高：4 小时，正常：24 小时</li>
+</ul>
+<h3 id="社区资源"><a class="header" href="#社区资源">社区资源</a></h3>
+<ul>
+<li><a href="https://github.com/your-org/go-on/discussions">GitHub 讨论</a></li>
+<li><a href="https://go-on.example.com/docs">文档</a></li>
+<li><a href="https://stackoverflow.com/questions/tagged/go-on">Stack Overflow</a></li>
+</ul>
+<h3 id="培训和认证"><a class="header" href="#培训和认证">培训和认证</a></h3>
+<ul>
+<li>管理员培训课程</li>
+<li>开发者认证计划</li>
+<li>企业团队的定制培训</li>
+</ul>
+<h2 id="下一步-2"><a class="header" href="#下一步-2">下一步</a></h2>
+<p>设置多用户服务器模式后，您可以：</p>
+<ol>
+<li>配置 <a href="deployment/high-availability.html">高可用性</a></li>
+<li>设置 <a href="deployment/disaster-recovery.html">灾难恢复</a></li>
+<li>实施 <a href="deployment/advanced-security.html">高级安全</a></li>
+<li>探索 <a href="#api-概述">API 文档</a></li>
+<li>加入 <a href="https://github.com/your-org/go-on/discussions/categories/enterprise">企业社区</a></li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="api-概述"><a class="header" href="#api-概述">API 概述</a></h1>
+<h2 id="简介"><a class="header" href="#简介">简介</a></h2>
+<p>go-on 为智能体编排、治理和生产操作提供了全面的 API 接口。API 按逻辑分组组织，对应系统的不同方面。</p>
+<h2 id="api-分组"><a class="header" href="#api-分组">API 分组</a></h2>
+<h3 id="1-核心运行时-api"><a class="header" href="#1-核心运行时-api">1. 核心运行时 API</a></h3>
+<ul>
+<li><strong>目的</strong>：系统初始化、关闭和基本运行时操作</li>
+<li><strong>协议</strong>：ACP over stdio/HTTP，MCP over stdio/HTTP</li>
+<li><strong>认证</strong>：API 密钥（本地模式可选，服务器模式必需）</li>
+</ul>
+<h3 id="2-安全和治理-api"><a class="header" href="#2-安全和治理-api">2. 安全和治理 API</a></h3>
+<ul>
+<li><strong>目的</strong>：安全策略、审计日志、合规性监控</li>
+<li><strong>协议</strong>：HTTP、RPC</li>
+<li><strong>认证</strong>：API 密钥、JWT 令牌（多用户模式）</li>
+</ul>
+<h3 id="3-可观测性-api"><a class="header" href="#3-可观测性-api">3. 可观测性 API</a></h3>
+<ul>
+<li><strong>目的</strong>：指标、追踪、日志、健康监控</li>
+<li><strong>协议</strong>：HTTP、OpenTelemetry</li>
+<li><strong>认证</strong>：API 密钥（指标端点可能公开）</li>
+</ul>
+<h3 id="4-可靠性-api"><a class="header" href="#4-可靠性-api">4. 可靠性 API</a></h3>
+<ul>
+<li><strong>目的</strong>：断路器、重试、维护操作</li>
+<li><strong>协议</strong>：HTTP、RPC</li>
+<li><strong>认证</strong>：API 密钥</li>
+</ul>
+<h3 id="5-工作流和任务-api"><a class="header" href="#5-工作流和任务-api">5. 工作流和任务 API</a></h3>
+<ul>
+<li><strong>目的</strong>：工作流执行、任务规划和管理</li>
+<li><strong>协议</strong>：HTTP、RPC</li>
+<li><strong>认证</strong>：API 密钥、JWT 令牌</li>
+</ul>
+<h3 id="6-学习和智能-api"><a class="header" href="#6-学习和智能-api">6. 学习和智能 API</a></h3>
+<ul>
+<li><strong>目的</strong>：机器学习、强化学习、自适应选择</li>
+<li><strong>协议</strong>：HTTP、RPC</li>
+<li><strong>认证</strong>：API 密钥</li>
+</ul>
+<h3 id="7-优化和操作-api"><a class="header" href="#7-优化和操作-api">7. 优化和操作 API</a></h3>
+<ul>
+<li><strong>目的</strong>：成本优化、性能调优、操作指标</li>
+<li><strong>协议</strong>：HTTP、RPC</li>
+<li><strong>认证</strong>：API 密钥</li>
+</ul>
+<h2 id="协议支持"><a class="header" href="#协议支持">协议支持</a></h2>
+<h3 id="acp智能体协调协议"><a class="header" href="#acp智能体协调协议">ACP（智能体协调协议）</a></h3>
+<ul>
+<li><strong>Over stdio</strong>：用于编辑器集成（Zed、VS Code）</li>
+<li><strong>Over HTTP</strong>：用于远程访问和服务器部署</li>
+<li><strong>特性</strong>：双向流、请求/响应、通知</li>
+</ul>
+<h3 id="mcp模型上下文协议"><a class="header" href="#mcp模型上下文协议">MCP（模型上下文协议）</a></h3>
+<ul>
+<li><strong>Over stdio</strong>：用于模型供应商集成</li>
+<li><strong>Over HTTP</strong>：用于基于 Web 的集成</li>
+<li><strong>特性</strong>：工具调用、上下文管理、流式传输</li>
+</ul>
+<h3 id="http-rest-api"><a class="header" href="#http-rest-api">HTTP REST API</a></h3>
+<ul>
+<li><strong>基础 URL</strong>：<code>http://localhost:8090</code>（默认）</li>
+<li><strong>Content-Type</strong>：<code>application/json</code></li>
+<li><strong>认证</strong>：Bearer 令牌或 API 密钥头</li>
+</ul>
+<h3 id="rpc远程过程调用"><a class="header" href="#rpc远程过程调用">RPC（远程过程调用）</a></h3>
+<ul>
+<li><strong>传输</strong>：HTTP/2 带 gRPC 或 JSON-RPC</li>
+<li><strong>序列化</strong>：Protocol Buffers 或 JSON</li>
+<li><strong>特性</strong>：双向流、取消、截止时间</li>
+</ul>
+<h2 id="认证"><a class="header" href="#认证">认证</a></h2>
+<h3 id="api-密钥"><a class="header" href="#api-密钥">API 密钥</a></h3>
+<pre><code class="language-bash"># 本地模式（可选）
+export GO_ON_ENTRY_API_KEY="your-api-key"
+
+# 服务器模式（必需）
+export GO_ON_SERVER_API_KEY="server-key"
+export GO_ON_ENTRY_API_KEY="entry-key"
+</code></pre>
+<h3 id="jwt-令牌多用户模式"><a class="header" href="#jwt-令牌多用户模式">JWT 令牌（多用户模式）</a></h3>
+<pre><code class="language-bash"># 获取令牌
+curl -X POST http://localhost:8090/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"user","password":"pass"}'
+
+# 使用令牌
+curl http://localhost:8090/api/v1/users/me \
+  -H "Authorization: Bearer &lt;jwt-token&gt;"
+</code></pre>
+<h3 id="oauth-20企业版"><a class="header" href="#oauth-20企业版">OAuth 2.0（企业版）</a></h3>
+<ul>
+<li><strong>供应商</strong>：Google、GitHub、Okta、Azure AD</li>
+<li><strong>范围</strong>：<code>read</code>、<code>write</code>、<code>admin</code></li>
+<li><strong>流程</strong>：授权码、客户端凭证</li>
+</ul>
+<h2 id="速率限制-1"><a class="header" href="#速率限制-1">速率限制</a></h2>
+<h3 id="默认限制"><a class="header" href="#默认限制">默认限制</a></h3>
+<ul>
+<li><strong>本地模式</strong>：每分钟 240 个请求，60 个突发</li>
+<li><strong>简单服务器</strong>：每分钟 1000 个请求，200 个突发</li>
+<li><strong>多用户服务器</strong>：每分钟 5000 个请求，1000 个突发</li>
+</ul>
+<h3 id="头部"><a class="header" href="#头部">头部</a></h3>
+<pre><code>X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 950
+X-RateLimit-Reset: 1614556800
+</code></pre>
+<h2 id="错误处理"><a class="header" href="#错误处理">错误处理</a></h2>
+<h3 id="http-状态码"><a class="header" href="#http-状态码">HTTP 状态码</a></h3>
+<ul>
+<li><code>200 OK</code>：成功</li>
+<li><code>400 Bad Request</code>：无效输入</li>
+<li><code>401 Unauthorized</code>：需要认证</li>
+<li><code>403 Forbidden</code>：权限不足</li>
+<li><code>404 Not Found</code>：资源未找到</li>
+<li><code>429 Too Many Requests</code>：超出速率限制</li>
+<li><code>500 Internal Server Error</code>：服务器错误</li>
+<li><code>503 Service Unavailable</code>：服务暂时不可用</li>
+</ul>
+<h3 id="错误响应格式"><a class="header" href="#错误响应格式">错误响应格式</a></h3>
+<pre><code class="language-json">{
+  "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "超出速率限制。请稍后重试。",
+    "details": {
+      "limit": 1000,
+      "remaining": 0,
+      "reset_at": "2024-01-01T00:00:00Z"
+    },
+    "request_id": "req_1234567890abcdef"
+  }
+}
+</code></pre>
+<h2 id="版本控制"><a class="header" href="#版本控制">版本控制</a></h2>
+<h3 id="api-版本头部"><a class="header" href="#api-版本头部">API 版本头部</a></h3>
+<pre><code class="language-http">Accept: application/vnd.go-on.v1+json
+</code></pre>
+<h3 id="url-版本控制"><a class="header" href="#url-版本控制">URL 版本控制</a></h3>
+<pre><code>http://localhost:8090/api/v1/health
+http://localhost:8090/api/v2/health
+</code></pre>
+<h3 id="弃用策略"><a class="header" href="#弃用策略">弃用策略</a></h3>
+<ul>
+<li><strong>警告</strong>：弃用的端点返回 <code>X-API-Deprecated: true</code> 头部</li>
+<li><strong>淘汰</strong>：弃用 6 个月后移除</li>
+<li><strong>迁移</strong>：文档提供迁移指南</li>
+</ul>
+<h2 id="分页"><a class="header" href="#分页">分页</a></h2>
+<h3 id="基于游标的分页"><a class="header" href="#基于游标的分页">基于游标的分页</a></h3>
+<pre><code class="language-json">{
+  "data": [...],
+  "pagination": {
+    "next_cursor": "eyJpZCI6IjEwMCJ9",
+    "has_more": true,
+    "total": 1000
+  }
+}
+</code></pre>
+<h3 id="限制和偏移"><a class="header" href="#限制和偏移">限制和偏移</a></h3>
+<pre><code>GET /api/v1/users?limit=20&amp;offset=40
+</code></pre>
+<h2 id="过滤和排序"><a class="header" href="#过滤和排序">过滤和排序</a></h2>
+<h3 id="过滤"><a class="header" href="#过滤">过滤</a></h3>
+<pre><code>GET /api/v1/logs?level=error&amp;since=2024-01-01T00:00:00Z
+</code></pre>
+<h3 id="排序"><a class="header" href="#排序">排序</a></h3>
+<pre><code>GET /api/v1/users?sort=created_at&amp;order=desc
+</code></pre>
+<h2 id="字段选择"><a class="header" href="#字段选择">字段选择</a></h2>
+<h3 id="部分响应"><a class="header" href="#部分响应">部分响应</a></h3>
+<pre><code>GET /api/v1/users/123?fields=id,name,email
+</code></pre>
+<h3 id="嵌套字段选择"><a class="header" href="#嵌套字段选择">嵌套字段选择</a></h3>
+<pre><code>GET /api/v1/projects/456?fields=id,name,tasks(id,title,status)
+</code></pre>
+<h2 id="websocket-支持"><a class="header" href="#websocket-支持">WebSocket 支持</a></h2>
+<h3 id="实时更新"><a class="header" href="#实时更新">实时更新</a></h3>
+<pre><code class="language-javascript">const ws = new WebSocket('ws://localhost:8090/ws');
+ws.onmessage = (event) =&gt; {
+  const data = JSON.parse(event.data);
+  console.log('更新:', data);
+};
+</code></pre>
+<h3 id="事件"><a class="header" href="#事件">事件</a></h3>
+<ul>
+<li><code>workflow.completed</code></li>
+<li><code>task.updated</code></li>
+<li><code>error.occurred</code></li>
+<li><code>health.status_changed</code></li>
+</ul>
+<h2 id="openapi-规范"><a class="header" href="#openapi-规范">OpenAPI 规范</a></h2>
+<h3 id="访问-openapi-文档"><a class="header" href="#访问-openapi-文档">访问 OpenAPI 文档</a></h3>
+<pre><code>http://localhost:8090/docs
+http://localhost:8090/openapi.json
+http://localhost:8090/openapi.yaml
+</code></pre>
+<h3 id="生成客户端-sdk"><a class="header" href="#生成客户端-sdk">生成客户端 SDK</a></h3>
+<pre><code class="language-bash"># TypeScript
+npx openapi-typescript http://localhost:8090/openapi.json --output client.ts
+
+# Python
+openapi-python-client generate --url http://localhost:8090/openapi.json
+
+# Go
+oapi-codegen -package api -generate types,client http://localhost:8090/openapi.json &gt; api.gen.go
+</code></pre>
+<h2 id="客户端库"><a class="header" href="#客户端库">客户端库</a></h2>
+<h3 id="官方库"><a class="header" href="#官方库">官方库</a></h3>
+<ul>
+<li><strong>TypeScript/JavaScript</strong>：<code>@go-on/client</code></li>
+<li><strong>Python</strong>：<code>go-on-client</code></li>
+<li><strong>Go</strong>：<code>github.com/your-org/go-on/client</code></li>
+<li><strong>Rust</strong>：<code>go-on-client</code> crate</li>
+</ul>
+<h3 id="社区库"><a class="header" href="#社区库">社区库</a></h3>
+<ul>
+<li><strong>Java</strong>：<code>go-on-java-client</code></li>
+<li><strong>C#</strong>：<code>GoOn.Client</code></li>
+<li><strong>Ruby</strong>：<code>go_on_ruby</code></li>
+</ul>
+<h2 id="测试"><a class="header" href="#测试">测试</a></h2>
+<h3 id="模拟服务器"><a class="header" href="#模拟服务器">模拟服务器</a></h3>
+<pre><code class="language-bash"># 启动模拟服务器
+go-on --mock --port 8080
+
+# 使用 curl 测试
+curl http://localhost:8080/health
+</code></pre>
+<h3 id="集成测试"><a class="header" href="#集成测试">集成测试</a></h3>
+<pre><code class="language-bash"># 运行 API 测试
+cargo test --test api
+
+# 运行特定测试组
+cargo test --test api_health
+</code></pre>
+<h2 id="性能-1"><a class="header" href="#性能-1">性能</a></h2>
+<h3 id="响应时间"><a class="header" href="#响应时间">响应时间</a></h3>
+<ul>
+<li><strong>健康检查</strong>：&lt; 100ms</li>
+<li><strong>简单请求</strong>：&lt; 500ms</li>
+<li><strong>复杂工作流</strong>：&lt; 5s</li>
+<li><strong>向量搜索</strong>：&lt; 2s</li>
+</ul>
+<h3 id="吞吐量"><a class="header" href="#吞吐量">吞吐量</a></h3>
+<ul>
+<li><strong>本地模式</strong>：~100 请求/秒</li>
+<li><strong>简单服务器</strong>：~500 请求/秒</li>
+<li><strong>多用户服务器</strong>：~2000 请求/秒</li>
+</ul>
+<h2 id="安全-3"><a class="header" href="#安全-3">安全</a></h2>
+<h3 id="tlsssl"><a class="header" href="#tlsssl">TLS/SSL</a></h3>
+<pre><code class="language-bash"># 生成自签名证书
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365
+
+# 在运行时中配置
+[runtime]
+tls_cert_path = "cert.pem"
+tls_key_path = "key.pem"
+</code></pre>
+<h3 id="cors-配置"><a class="header" href="#cors-配置">CORS 配置</a></h3>
+<pre><code class="language-toml">[security.cors]
+allowed_origins = ["https://example.com", "http://localhost:3000"]
+allowed_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+allowed_headers = ["Authorization", "Content-Type"]
+allow_credentials = true
+</code></pre>
+<h2 id="监控"><a class="header" href="#监控">监控</a></h2>
+<h3 id="健康检查-1"><a class="header" href="#健康检查-1">健康检查</a></h3>
+<pre><code>GET /health
+GET /health/ready
+GET /health/live
+</code></pre>
+<h3 id="指标"><a class="header" href="#指标">指标</a></h3>
+<pre><code>GET /metrics
+GET /metrics/prometheus
+</code></pre>
+<h3 id="追踪"><a class="header" href="#追踪">追踪</a></h3>
+<ul>
+<li><strong>Jaeger</strong>：<code>http://localhost:16686</code></li>
+<li><strong>Zipkin</strong>：<code>http://localhost:9411</code></li>
+<li><strong>OpenTelemetry</strong>：<code>http://localhost:4317</code></li>
+</ul>
+<h2 id="下一步-3"><a class="header" href="#下一步-3">下一步</a></h2>
+<p>探索特定 API 分组：</p>
+<ul>
+<li><a href="#核心运行时-api">核心运行时 API</a></li>
+<li><a href="#安全和治理-api">安全和治理 API</a></li>
+<li><a href="#可观测性-api">可观测性 API</a></li>
+<li><a href="#工作流和任务-api">工作流和任务 API</a></li>
+<li><a href="#学习和智能-api">学习和智能 API</a></li>
+<li><a href="#优化和操作-api">优化和操作 API</a></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="核心运行时-api"><a class="header" href="#核心运行时-api">核心运行时 API</a></h1>
+<h2 id="概述-3"><a class="header" href="#概述-3">概述</a></h2>
+<p>核心运行时 API 提供系统初始化、关闭、配置管理和基本运行时操作的端点。这些端点对于管理 go-on 运行时生命周期至关重要。</p>
+<h2 id="端点"><a class="header" href="#端点">端点</a></h2>
+<h3 id="健康检查-2"><a class="header" href="#健康检查-2">健康检查</a></h3>
+<h4 id="get-health"><a class="header" href="#get-health">GET /health</a></h4>
+<p>检查运行时的整体健康状态。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">GET /health HTTP/1.1
+Host: localhost:8090
+Accept: application/json
+</code></pre>
+<p><strong>查询参数：</strong></p>
+<ul>
+<li><code>verbose</code> (boolean, 可选)：包含详细的组件状态</li>
+<li><code>timeout</code> (integer, 可选)：超时时间（毫秒，默认：5000）</li>
+</ul>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "status": "healthy",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "version": "0.6.1",
+  "uptime_seconds": 3600,
+  "components": {
+    "database": "healthy",
+    "cache": "healthy",
+    "vector_store": "healthy",
+    "model_providers": {
+      "openai": "healthy",
+      "anthropic": "healthy"
+    }
+  }
+}
+</code></pre>
+<p><strong>状态码：</strong></p>
+<ul>
+<li><code>200 OK</code>：运行时健康</li>
+<li><code>503 Service Unavailable</code>：运行时不健康</li>
+</ul>
+<h4 id="get-healthready"><a class="header" href="#get-healthready">GET /health/ready</a></h4>
+<p>检查运行时是否准备好接受请求。</p>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "status": "ready",
+  "timestamp": "2024-01-01T00:00:00Z"
+}
+</code></pre>
+<h4 id="get-healthlive"><a class="header" href="#get-healthlive">GET /health/live</a></h4>
+<p>检查运行时进程是否存活（存活探针）。</p>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "status": "alive",
+  "timestamp": "2024-01-01T00:00:00Z"
+}
+</code></pre>
+<h3 id="运行时信息"><a class="header" href="#运行时信息">运行时信息</a></h3>
+<h4 id="get-runtimeinfo"><a class="header" href="#get-runtimeinfo">GET /runtime/info</a></h4>
+<p>获取详细的运行时信息。</p>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "version": "0.6.1",
+  "build_date": "2024-01-01T00:00:00Z",
+  "git_commit": "a1b2c3d4e5f6",
+  "features": ["backend-sqlite", "sqlite-vec"],
+  "protocols": ["acp_stdio", "acp_http", "mcp_stdio", "mcp_http"],
+  "config_path": "/path/to/config.toml",
+  "data_directory": "/path/to/data",
+  "start_time": "2024-01-01T00:00:00Z",
+  "uptime_seconds": 3600
+}
+</code></pre>
+<h4 id="get-runtimestats"><a class="header" href="#get-runtimestats">GET /runtime/stats</a></h4>
+<p>获取运行时统计信息。</p>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "requests": {
+    "total": 1000,
+    "successful": 950,
+    "failed": 50,
+    "rate_per_second": 10.5
+  },
+  "memory": {
+    "used_mb": 256,
+    "total_mb": 1024,
+    "peak_mb": 512
+  },
+  "cache": {
+    "hits": 800,
+    "misses": 200,
+    "hit_rate": 0.8,
+    "size": 5000,
+    "max_size": 10000
+  },
+  "vector_store": {
+    "entries": 1000,
+    "searches": 500,
+    "avg_search_time_ms": 150
+  }
+}
+</code></pre>
+<h3 id="配置管理"><a class="header" href="#配置管理">配置管理</a></h3>
+<h4 id="get-config"><a class="header" href="#get-config">GET /config</a></h4>
+<p>获取当前运行时配置。</p>
+<p><strong>查询参数：</strong></p>
+<ul>
+<li><code>include_secrets</code> (boolean, 可选)：包含密钥值（默认：false）</li>
+<li><code>format</code> (string, 可选)：输出格式：<code>json</code> 或 <code>toml</code>（默认：<code>json</code>）</li>
+</ul>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "default_phase": "coding",
+  "model_selection_mode": "adaptive",
+  "protocol": {
+    "mode": "adaptive"
+  },
+  "cache": {
+    "enabled": true,
+    "path": "acp_cache.sqlite3",
+    "default_ttl_seconds": 3600,
+    "max_entries": 5000
+  },
+  "vector": {
+    "enabled": true,
+    "auto_mode": true,
+    "path": "acp_vector.sqlite3",
+    "dimensions": 192
+  }
+}
+</code></pre>
+<h4 id="post-configreload"><a class="header" href="#post-configreload">POST /config/reload</a></h4>
+<p>从磁盘重新加载配置。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /config/reload HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "配置重新加载成功",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "changes": {
+    "added": [],
+    "modified": ["cache.max_entries"],
+    "removed": []
+  }
+}
+</code></pre>
+<h4 id="put-config"><a class="header" href="#put-config">PUT /config</a></h4>
+<p>更新运行时配置。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">PUT /config HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+
+{
+  "cache": {
+    "max_entries": 10000
+  }
+}
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "配置更新成功",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "requires_restart": false
+}
+</code></pre>
+<h3 id="初始化"><a class="header" href="#初始化">初始化</a></h3>
+<h4 id="post-initialize"><a class="header" href="#post-initialize">POST /initialize</a></h4>
+<p>使用新配置初始化运行时。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /initialize HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+
+{
+  "setup_level": "standard",
+  "config_overrides": {
+    "default_phase": "coding"
+  }
+}
+</code></pre>
+<p><strong>查询参数：</strong></p>
+<ul>
+<li><code>setup_level</code> (string, 可选)：<code>quick</code>、<code>standard</code> 或 <code>custom</code>（默认：<code>standard</code>）</li>
+<li><code>force</code> (boolean, 可选)：强制重新初始化（默认：false）</li>
+</ul>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "运行时初始化成功",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "config_path": "/path/to/config.toml",
+  "data_directory": "/path/to/data",
+  "components_initialized": ["database", "cache", "vector_store"]
+}
+</code></pre>
+<h3 id="关闭"><a class="header" href="#关闭">关闭</a></h3>
+<h4 id="post-shutdown"><a class="header" href="#post-shutdown">POST /shutdown</a></h4>
+<p>优雅地关闭运行时。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /shutdown HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+
+{
+  "timeout_seconds": 30,
+  "drain_connections": true
+}
+</code></pre>
+<p><strong>查询参数：</strong></p>
+<ul>
+<li><code>timeout_seconds</code> (integer, 可选)：优雅关闭的超时时间（默认：30）</li>
+<li><code>drain_connections</code> (boolean, 可选)：等待活动连接完成（默认：true）</li>
+</ul>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "关闭已启动",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "shutdown_timeout_seconds": 30
+}
+</code></pre>
+<h3 id="协议管理"><a class="header" href="#协议管理">协议管理</a></h3>
+<h4 id="get-protocols"><a class="header" href="#get-protocols">GET /protocols</a></h4>
+<p>获取可用的协议模式及其状态。</p>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "current_mode": "adaptive",
+  "available_modes": [
+    {
+      "name": "adaptive",
+      "description": "具有自适应路由的双栈能力",
+      "enabled": true,
+      "active": true
+    },
+    {
+      "name": "acp_stdio",
+      "description": "ACP over stdio",
+      "enabled": true,
+      "active": false
+    },
+    {
+      "name": "acp_http",
+      "description": "ACP over HTTP",
+      "enabled": true,
+      "active": false
+    },
+    {
+      "name": "mcp_stdio",
+      "description": "MCP over stdio",
+      "enabled": true,
+      "active": false
+    },
+    {
+      "name": "mcp_http",
+      "description": "MCP over HTTP",
+      "enabled": true,
+      "active": false
+    }
+  ]
+}
+</code></pre>
+<h4 id="post-protocolsmodeactivate"><a class="header" href="#post-protocolsmodeactivate">POST /protocols/{mode}/activate</a></h4>
+<p>激活特定的协议模式。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /protocols/acp_http/activate HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "协议模式已激活",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "previous_mode": "adaptive",
+  "new_mode": "acp_http",
+  "requires_restart": false
+}
+</code></pre>
+<h3 id="特性管理"><a class="header" href="#特性管理">特性管理</a></h3>
+<h4 id="get-features"><a class="header" href="#get-features">GET /features</a></h4>
+<p>获取启用的特性及其状态。</p>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "features": [
+    {
+      "name": "backend-sqlite",
+      "enabled": true,
+      "description": "SQLite 数据库支持",
+      "version": "0.39.0"
+    },
+    {
+      "name": "sqlite-vec",
+      "enabled": true,
+      "description": "SQLite 的向量扩展",
+      "version": "0.1.9"
+    },
+    {
+      "name": "otel",
+      "enabled": false,
+      "description": "OpenTelemetry 支持",
+      "version": null
+    }
+  ]
+}
+</code></pre>
+<h4 id="post-featuresnameenable"><a class="header" href="#post-featuresnameenable">POST /features/{name}/enable</a></h4>
+<p>启用特定特性。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /features/otel/enable HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "特性已启用",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "feature": "otel",
+  "requires_restart": true
+}
+</code></pre>
+<h4 id="post-featuresnamedisable"><a class="header" href="#post-featuresnamedisable">POST /features/{name}/disable</a></h4>
+<p>禁用特定特性。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /features/sqlite-vec/disable HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "特性已禁用",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "feature": "sqlite-vec",
+  "requires_restart": true
+}
+</code></pre>
+<h3 id="维护操作"><a class="header" href="#维护操作">维护操作</a></h3>
+<h4 id="post-maintenancegc"><a class="header" href="#post-maintenancegc">POST /maintenance/gc</a></h4>
+<p>运行垃圾回收。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /maintenance/gc HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+
+{
+  "components": ["cache", "vector_store"],
+  "aggressive": false
+}
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "垃圾回收完成",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "components": {
+    "cache": {
+      "entries_removed": 100,
+      "space_freed_mb": 10
+    },
+    "vector_store": {
+      "entries_removed": 50,
+      "space_freed_mb": 5
+    }
+  }
+}
+</code></pre>
+<h4 id="post-maintenancevacuum"><a class="header" href="#post-maintenancevacuum">POST /maintenance/vacuum</a></h4>
+<p>压缩数据库。</p>
+<p><strong>请求：</strong></p>
+<pre><code class="language-http">POST /maintenance/vacuum HTTP/1.1
+Host: localhost:8090
+Content-Type: application/json
+
+{
+  "databases": ["cache", "vector_store"],
+  "analyze": true
+}
+</code></pre>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "success": true,
+  "message": "压缩完成",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "databases": {
+    "cache": {
+      "size_before_mb": 100,
+      "size_after_mb": 80,
+      "space_freed_mb": 20
+    },
+    "vector_store": {
+      "size_before_mb": 200,
+      "size_after_mb": 150,
+      "space_freed_mb": 50
+    }
+  }
+}
+</code></pre>
+<h3 id="诊断"><a class="header" href="#诊断">诊断</a></h3>
+<h4 id="get-diagnostics"><a class="header" href="#get-diagnostics">GET /diagnostics</a></h4>
+<p>获取运行时诊断信息。</p>
+<p><strong>查询参数：</strong></p>
+<ul>
+<li><code>level</code> (string, 可选)：<code>basic</code>、<code>detailed</code> 或 <code>full</code>（默认：<code>basic</code>）</li>
+<li><code>include_logs</code> (boolean, 可选)：包含最近日志（默认：false）</li>
+</ul>
+<p><strong>响应：</strong></p>
+<pre><code class="language-json">{
+  "timestamp": "2024-01-01T00:00:00Z",
+  "system": {
+    "os": "Linux",
+    "arch": "x86_64",
+    "cpu_cores": 8,
+    "total_memory_mb": 16384,
+    "available_memory_mb": 8192
+  },
+  "runtime": {
+    "version": "0.6.1",
+    "uptime_seconds": 3600,
+    "threads": 12,
+    "memory_usage_mb": 256
+  },
+  "components": {
+    "database": {
+      "status": "healthy",
+      "connections": 5,
+      "size_mb": 100
+    },
+    "cache": {
+      "status": "healthy",
+      "entries": 5000,
+      "hit_rate": 0.85
+    }
+  },
+  "issues": [
+    {
+      "level": "warning",
+      "component": "vector_store",
+      "message": "向量存储接近容量限制",
+      "suggestion": "考虑增加 max_entries 或运行维护"
+    }
+  ]
+}
+</code></pre>
+<h2 id="websocket-端点"><a class="header" href="#websocket-端点">WebSocket 端点</a></h2>
+<h3 id="ws-wsruntime"><a class="header" href="#ws-wsruntime">WS /ws/runtime</a></h3>
+<p>实时运行时更新。</p>
+<p><strong>事件：</strong></p>
+<pre><code class="language-json">{
+  "type": "runtime.status_changed",
+  "data": {
+    "status": "healthy",
+    "timestamp": "2024-01-01T00:00:00Z"
+  }
+}
+</code></pre>
+<pre><code class="language-json">{
+  "type": "config.updated",
+  "data": {
+    "path": "cache.max_entries",
+    "old_value": 5000,
+    "new_value": 10000,
+    "timestamp": "2024-01-01T00:00:00Z"
+  }
+}
+</code></pre>
+<h2 id="命令行界面"><a class="header" href="#命令行界面">命令行界面</a></h2>
+<h3 id="健康检查-1-1"><a class="header" href="#健康检查-1-1">健康检查</a></h3>
+<pre><code class="language-bash">go-on --health
+go-on --health --verbose
+go-on --health --timeout 10000
+</code></pre>
+<h3 id="配置-3"><a class="header" href="#配置-3">配置</a></h3>
+<pre><code class="language-bash">go-on --config-show
+go-on --config-show --format toml
+go-on --config-reload
+go-on --config-update '{"cache.max_entries": 10000}'
+</code></pre>
+<h3 id="初始化-1"><a class="header" href="#初始化-1">初始化</a></h3>
+<pre><code class="language-bash">go-on --init
+go-on --init --setup-level standard
+go-on --init --config config.toml
+</code></pre>
+<h3 id="关闭-1"><a class="header" href="#关闭-1">关闭</a></h3>
+<pre><code class="language-bash">go-on --shutdown
+go-on --shutdown --timeout 60
+</code></pre>
+<h2 id="错误码"><a class="header" href="#错误码">错误码</a></h2>
+<h3 id="常见错误"><a class="header" href="#常见错误">常见错误</a></h3>
+<ul>
+<li><code>RUNTIME_NOT_INITIALIZED</code>：运行时未初始化</li>
+<li><code>CONFIG_INVALID</code>：配置无效或格式错误</li>
+<li><code>FEATURE_NOT_AVAILABLE</code>：请求的特性不可用</li>
+<li><code>PROTOCOL_NOT_SUPPORTED</code>：请求的协议不支持</li>
+<li><code>MAINTENANCE_IN_PROGRESS</code>：维护操作已在进行中</li>
+</ul>
+<h3 id="错误示例"><a class="header" href="#错误示例">错误示例</a></h3>
+<pre><code class="language-json">{
+  "error": {
+    "code": "RUNTIME_NOT_INITIALIZED",
+    "message": "运行时未初始化。请先运行 /initialize。",
+    "details": {
+      "required_action": "initialize"
+    }
+  }
+}
+</code></pre>
+<h2 id="速率限制-2"><a class="header" href="#速率限制-2">速率限制</a></h2>
+<h3 id="默认限制-1"><a class="header" href="#默认限制-1">默认限制</a></h3>
+<ul>
+<li>健康端点：每分钟 60 个请求</li>
+<li>配置端点：每分钟 30 个请求</li>
+<li>维护端点：每分钟 10 个请求</li>
+</ul>
+<h3 id="头部-1"><a class="header" href="#头部-1">头部</a></h3>
+<pre><code>X-RateLimit-Limit: 60
+X-RateLimit-Remaining: 55
+X-RateLimit-Reset: 1614556800
+</code></pre>
+<h2 id="安全考虑"><a class="header" href="#安全考虑">安全考虑</a></h2>
+<h3 id="认证-1"><a class="header" href="#认证-1">认证</a></h3>
+<ul>
+<li>本地模式：可选的 API 密钥</li>
+<li>服务器模式：必需的 API 密钥</li>
+<li>敏感操作：始终需要认证</li>
+</ul>
+<h3 id="授权"><a class="header" href="#授权">授权</a></h3>
+<ul>
+<li>健康端点：公开（只读）</li>
+<li>配置端点：需要管理员权限</li>
+<li>维护端点：需要管理员权限</li>
+</ul>
+<h3 id="审计日志"><a class="header" href="#审计日志">审计日志</a></h3>
+<p>所有配置更改和维护操作都记录到审计日志中。</p>
+<h2 id="最佳实践-1"><a class="header" href="#最佳实践-1">最佳实践</a></h2>
+<h3 id="健康监控"><a class="header" href="#健康监控">健康监控</a></h3>
+<ul>
+<li>使用 <code>/health</code> 进行就绪探针</li>
+<li>使用 <code>/health/live</code> 进行存活探针</li>
+<li>监控响应时间和错误率</li>
+</ul>
+<h3 id="配置管理-1"><a class="header" href="#配置管理-1">配置管理</a></h3>
+<ul>
+<li>使用版本控制管理配置文件</li>
+<li>先在暂存环境测试配置更改</li>
+<li>使用 <code>/config/reload</code> 进行动态更新</li>
+</ul>
+<h3 id="维护调度"><a class="header" href="#维护调度">维护调度</a></h3>
+<ul>
+<li>在非高峰时段安排维护</li>
+<li>运行压缩前监控磁盘空间</li>
+<li>重大维护操作前备份数据</li>
+</ul>
+<h2 id="下一步-4"><a class="header" href="#下一步-4">下一步</a></h2>
+<ul>
+<li>探索 <a href="#安全和治理-api">安全和治理 API</a></li>
+<li>了解 <a href="#可观测性-api">可观测性 API</a></li>
+<li>查看 <a href="#工作流和任务-api">工作流和任务 API</a></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="安全和治理-api"><a class="header" href="#安全和治理-api">安全和治理 API</a></h1>
+<p><em>文档即将推出。此 API 提供安全策略、审计日志、合规性监控和治理操作的端点。</em></p>
+<h2 id="概述-4"><a class="header" href="#概述-4">概述</a></h2>
+<p>安全和治理 API 为 go-on 部署提供安全管理、策略执行、审计跟踪维护和合规性监控功能。</p>
+<h2 id="主要特性"><a class="header" href="#主要特性">主要特性</a></h2>
+<ul>
+<li><strong>安全策略</strong>：定义和执行安全规则</li>
+<li><strong>审计日志</strong>：所有操作的全面审计跟踪</li>
+<li><strong>合规性监控</strong>：跟踪法规和标准的合规性</li>
+<li><strong>访问控制</strong>：基于角色的访问控制（RBAC）</li>
+<li><strong>事件响应</strong>：安全事件管理</li>
+</ul>
+<h2 id="端点-1"><a class="header" href="#端点-1">端点</a></h2>
+<h3 id="安全策略"><a class="header" href="#安全策略">安全策略</a></h3>
+<ul>
+<li><code>GET /security/policies</code> - 列出安全策略</li>
+<li><code>POST /security/policies</code> - 创建安全策略</li>
+<li><code>GET /security/policies/{id}</code> - 获取安全策略</li>
+<li><code>PUT /security/policies/{id}</code> - 更新安全策略</li>
+<li><code>DELETE /security/policies/{id}</code> - 删除安全策略</li>
+</ul>
+<h3 id="审计日志-1"><a class="header" href="#审计日志-1">审计日志</a></h3>
+<ul>
+<li><code>GET /audit/logs</code> - 查询审计日志</li>
+<li><code>GET /audit/logs/{id}</code> - 获取审计日志条目</li>
+<li><code>POST /audit/logs/export</code> - 导出审计日志</li>
+</ul>
+<h3 id="合规性"><a class="header" href="#合规性">合规性</a></h3>
+<ul>
+<li><code>GET /compliance/status</code> - 获取合规性状态</li>
+<li><code>POST /compliance/checks</code> - 运行合规性检查</li>
+<li><code>GET /compliance/reports</code> - 生成合规性报告</li>
+</ul>
+<h3 id="访问控制-1"><a class="header" href="#访问控制-1">访问控制</a></h3>
+<ul>
+<li><code>GET /access/roles</code> - 列出角色</li>
+<li><code>POST /access/roles</code> - 创建角色</li>
+<li><code>GET /access/permissions</code> - 列出权限</li>
+<li><code>POST /access/assignments</code> - 为用户分配角色</li>
+</ul>
+<h2 id="认证-2"><a class="header" href="#认证-2">认证</a></h2>
+<p>所有端点都需要具有适当权限的认证。</p>
+<h2 id="速率限制-3"><a class="header" href="#速率限制-3">速率限制</a></h2>
+<ul>
+<li>安全端点：每分钟 30 个请求</li>
+<li>审计端点：每分钟 60 个请求</li>
+<li>合规性端点：每分钟 20 个请求</li>
+</ul>
+<h2 id="下一步-5"><a class="header" href="#下一步-5">下一步</a></h2>
+<p>本文档正在开发中。请稍后查看完整的 API 参考。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="可观测性-api"><a class="header" href="#可观测性-api">可观测性 API</a></h1>
+<p><em>文档即将推出。此 API 提供指标、追踪、日志和健康监控的端点。</em></p>
+<h2 id="概述-5"><a class="header" href="#概述-5">概述</a></h2>
+<p>可观测性 API 为 go-on 部署提供全面的监控、追踪、日志记录和健康检查功能。</p>
+<h2 id="主要特性-1"><a class="header" href="#主要特性-1">主要特性</a></h2>
+<ul>
+<li><strong>指标收集</strong>：系统和应用指标</li>
+<li><strong>分布式追踪</strong>：端到端请求追踪</li>
+<li><strong>结构化日志</strong>：集中式日志管理</li>
+<li><strong>健康监控</strong>：系统健康和性能监控</li>
+<li><strong>告警</strong>：实时告警和通知</li>
+</ul>
+<h2 id="端点-2"><a class="header" href="#端点-2">端点</a></h2>
+<h3 id="指标-1"><a class="header" href="#指标-1">指标</a></h3>
+<ul>
+<li><code>GET /metrics</code> - 获取 JSON 格式的指标</li>
+<li><code>GET /metrics/prometheus</code> - 获取 Prometheus 格式的指标</li>
+<li><code>GET /metrics/summary</code> - 获取指标摘要</li>
+</ul>
+<h3 id="追踪-1"><a class="header" href="#追踪-1">追踪</a></h3>
+<ul>
+<li><code>GET /traces</code> - 列出追踪</li>
+<li><code>GET /traces/{id}</code> - 获取追踪详情</li>
+<li><code>POST /traces/search</code> - 搜索追踪</li>
+</ul>
+<h3 id="日志-1"><a class="header" href="#日志-1">日志</a></h3>
+<ul>
+<li><code>GET /logs</code> - 查询日志</li>
+<li><code>GET /logs/stream</code> - 实时流式传输日志</li>
+<li><code>POST /logs/export</code> - 导出日志</li>
+</ul>
+<h3 id="健康"><a class="header" href="#健康">健康</a></h3>
+<ul>
+<li><code>GET /health</code> - 整体健康状态</li>
+<li><code>GET /health/ready</code> - 就绪状态</li>
+<li><code>GET /health/live</code> - 存活状态</li>
+<li><code>GET /health/components</code> - 组件健康状态</li>
+</ul>
+<h3 id="告警-1"><a class="header" href="#告警-1">告警</a></h3>
+<ul>
+<li><code>GET /alerts</code> - 列出活动告警</li>
+<li><code>POST /alerts</code> - 创建告警</li>
+<li><code>GET /alerts/history</code> - 告警历史</li>
+</ul>
+<h2 id="认证-3"><a class="header" href="#认证-3">认证</a></h2>
+<p>大多数可观测性端点是公开的，但某些敏感数据可能需要认证。</p>
+<h2 id="速率限制-4"><a class="header" href="#速率限制-4">速率限制</a></h2>
+<ul>
+<li>指标端点：每分钟 120 个请求</li>
+<li>追踪端点：每分钟 60 个请求</li>
+<li>日志端点：每分钟 90 个请求</li>
+</ul>
+<h2 id="下一步-6"><a class="header" href="#下一步-6">下一步</a></h2>
+<p>本文档正在开发中。请稍后查看完整的 API 参考。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="工作流和任务-api"><a class="header" href="#工作流和任务-api">工作流和任务 API</a></h1>
+<p><em>文档即将推出。此 API 提供工作流执行、任务规划和任务管理的端点。</em></p>
+<h2 id="概述-6"><a class="header" href="#概述-6">概述</a></h2>
+<p>工作流和任务 API 支持复杂工作流的编排、任务规划、执行管理和结果跟踪。</p>
+<h2 id="主要特性-2"><a class="header" href="#主要特性-2">主要特性</a></h2>
+<ul>
+<li><strong>工作流编排</strong>：定义和执行复杂工作流</li>
+<li><strong>任务规划</strong>：智能任务规划和调度</li>
+<li><strong>执行管理</strong>：监控和控制任务执行</li>
+<li><strong>结果跟踪</strong>：跟踪工作流和任务结果</li>
+<li><strong>依赖管理</strong>：处理任务依赖和约束</li>
+</ul>
+<h2 id="端点-3"><a class="header" href="#端点-3">端点</a></h2>
+<h3 id="工作流"><a class="header" href="#工作流">工作流</a></h3>
+<ul>
+<li><code>GET /workflows</code> - 列出工作流</li>
+<li><code>POST /workflows</code> - 创建工作流</li>
+<li><code>GET /workflows/{id}</code> - 获取工作流</li>
+<li><code>PUT /workflows/{id}</code> - 更新工作流</li>
+<li><code>DELETE /workflows/{id}</code> - 删除工作流</li>
+<li><code>POST /workflows/{id}/execute</code> - 执行工作流</li>
+</ul>
+<h3 id="任务"><a class="header" href="#任务">任务</a></h3>
+<ul>
+<li><code>GET /tasks</code> - 列出任务</li>
+<li><code>POST /tasks</code> - 创建任务</li>
+<li><code>GET /tasks/{id}</code> - 获取任务</li>
+<li><code>PUT /tasks/{id}</code> - 更新任务</li>
+<li><code>DELETE /tasks/{id}</code> - 删除任务</li>
+<li><code>POST /tasks/{id}/execute</code> - 执行任务</li>
+</ul>
+<h3 id="执行"><a class="header" href="#执行">执行</a></h3>
+<ul>
+<li><code>GET /executions</code> - 列出执行</li>
+<li><code>GET /executions/{id}</code> - 获取执行详情</li>
+<li><code>POST /executions/{id}/cancel</code> - 取消执行</li>
+<li><code>GET /executions/{id}/results</code> - 获取执行结果</li>
+</ul>
+<h3 id="规划"><a class="header" href="#规划">规划</a></h3>
+<ul>
+<li><code>POST /plan</code> - 创建执行计划</li>
+<li><code>GET /plans/{id}</code> - 获取计划详情</li>
+<li><code>POST /plans/{id}/validate</code> - 验证计划</li>
+</ul>
+<h2 id="认证-4"><a class="header" href="#认证-4">认证</a></h2>
+<p>所有端点都需要具有适当权限的认证。</p>
+<h2 id="速率限制-5"><a class="header" href="#速率限制-5">速率限制</a></h2>
+<ul>
+<li>工作流端点：每分钟 60 个请求</li>
+<li>任务端点：每分钟 120 个请求</li>
+<li>执行端点：每分钟 90 个请求</li>
+</ul>
+<h2 id="下一步-7"><a class="header" href="#下一步-7">下一步</a></h2>
+<p>本文档正在开发中。请稍后查看完整的 API 参考。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="学习和智能-api"><a class="header" href="#学习和智能-api">学习和智能 API</a></h1>
+<p><em>文档即将推出。此 API 提供机器学习、强化学习、自适应选择和智能操作的端点。</em></p>
+<h2 id="概述-7"><a class="header" href="#概述-7">概述</a></h2>
+<p>学习和智能 API 为 go-on 部署提供机器学习能力、强化学习、自适应模型选择和智能决策功能。</p>
+<h2 id="主要特性-3"><a class="header" href="#主要特性-3">主要特性</a></h2>
+<ul>
+<li><strong>机器学习</strong>：模型训练和推理</li>
+<li><strong>强化学习</strong>：RL 算法和策略</li>
+<li><strong>自适应选择</strong>：智能模型和工具选择</li>
+<li><strong>知识蒸馏</strong>：知识提取和转移</li>
+<li><strong>智能路由</strong>：智能请求路由和负载均衡</li>
+</ul>
+<h2 id="端点-4"><a class="header" href="#端点-4">端点</a></h2>
+<h3 id="机器学习"><a class="header" href="#机器学习">机器学习</a></h3>
+<ul>
+<li><code>GET /ml/models</code> - 列出 ML 模型</li>
+<li><code>POST /ml/models</code> - 训练 ML 模型</li>
+<li><code>GET /ml/models/{id}</code> - 获取 ML 模型</li>
+<li><code>POST /ml/models/{id}/predict</code> - 进行预测</li>
+<li><code>POST /ml/models/{id}/evaluate</code> - 评估模型</li>
+</ul>
+<h3 id="强化学习"><a class="header" href="#强化学习">强化学习</a></h3>
+<ul>
+<li><code>GET /rl/policies</code> - 列出 RL 策略</li>
+<li><code>POST /rl/policies</code> - 创建 RL 策略</li>
+<li><code>GET /rl/policies/{id}</code> - 获取 RL 策略</li>
+<li><code>POST /rl/policies/{id}/train</code> - 训练 RL 策略</li>
+<li><code>POST /rl/policies/{id}/act</code> - 从策略获取动作</li>
+</ul>
+<h3 id="自适应选择"><a class="header" href="#自适应选择">自适应选择</a></h3>
+<ul>
+<li><code>GET /selector/status</code> - 获取选择器状态</li>
+<li><code>POST /selector/select</code> - 选择模型或工具</li>
+<li><code>GET /selector/history</code> - 获取选择历史</li>
+<li><code>POST /selector/train</code> - 训练选择器</li>
+</ul>
+<h3 id="知识"><a class="header" href="#知识">知识</a></h3>
+<ul>
+<li><code>GET /knowledge/bases</code> - 列出知识库</li>
+<li><code>POST /knowledge/bases</code> - 创建知识库</li>
+<li><code>GET /knowledge/bases/{id}</code> - 获取知识库</li>
+<li><code>POST /knowledge/bases/{id}/query</code> - 查询知识库</li>
+<li><code>POST /knowledge/distill</code> - 蒸馏知识</li>
+</ul>
+<h2 id="认证-5"><a class="header" href="#认证-5">认证</a></h2>
+<p>所有端点都需要具有适当权限的认证。</p>
+<h2 id="速率限制-6"><a class="header" href="#速率限制-6">速率限制</a></h2>
+<ul>
+<li>ML 端点：每分钟 30 个请求</li>
+<li>RL 端点：每分钟 20 个请求</li>
+<li>选择端点：每分钟 60 个请求</li>
+<li>知识端点：每分钟 40 个请求</li>
+</ul>
+<h2 id="下一步-8"><a class="header" href="#下一步-8">下一步</a></h2>
+<p>本文档正在开发中。请稍后查看完整的 API 参考。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="优化和操作-api"><a class="header" href="#优化和操作-api">优化和操作 API</a></h1>
+<p><em>文档即将推出。此 API 提供成本优化、性能调优、操作指标和系统优化的端点。</em></p>
+<h2 id="概述-8"><a class="header" href="#概述-8">概述</a></h2>
+<p>优化和操作 API 为 go-on 部署提供成本管理、性能优化、操作监控和系统调优功能。</p>
+<h2 id="主要特性-4"><a class="header" href="#主要特性-4">主要特性</a></h2>
+<ul>
+<li><strong>成本优化</strong>：监控和优化运营成本</li>
+<li><strong>性能调优</strong>：系统性能优化</li>
+<li><strong>操作指标</strong>：业务和操作指标</li>
+<li><strong>资源管理</strong>：资源分配和优化</li>
+<li><strong>质量保证</strong>：质量指标和改进</li>
+</ul>
+<h2 id="端点-5"><a class="header" href="#端点-5">端点</a></h2>
+<h3 id="成本优化-1"><a class="header" href="#成本优化-1">成本优化</a></h3>
+<ul>
+<li><code>GET /cost/status</code> - 获取成本状态</li>
+<li><code>GET /cost/breakdown</code> - 获取成本细分</li>
+<li><code>POST /cost/optimize</code> - 运行成本优化</li>
+<li><code>GET /cost/forecast</code> - 获取成本预测</li>
+<li><code>GET /cost/alerts</code> - 获取成本告警</li>
+</ul>
+<h3 id="性能-2"><a class="header" href="#性能-2">性能</a></h3>
+<ul>
+<li><code>GET /performance/metrics</code> - 获取性能指标</li>
+<li><code>POST /performance/analyze</code> - 分析性能</li>
+<li><code>POST /performance/optimize</code> - 优化性能</li>
+<li><code>GET /performance/baseline</code> - 获取性能基线</li>
+</ul>
+<h3 id="操作"><a class="header" href="#操作">操作</a></h3>
+<ul>
+<li><code>GET /ops/metrics</code> - 获取操作指标</li>
+<li><code>GET /ops/health</code> - 获取操作健康状态</li>
+<li><code>POST /ops/incidents</code> - 报告事件</li>
+<li><code>GET /ops/incidents</code> - 列出事件</li>
+<li><code>POST /ops/incidents/{id}/resolve</code> - 解决事件</li>
+</ul>
+<h3 id="质量"><a class="header" href="#质量">质量</a></h3>
+<ul>
+<li><code>GET /quality/metrics</code> - 获取质量指标</li>
+<li><code>POST /quality/checks</code> - 运行质量检查</li>
+<li><code>GET /quality/baseline</code> - 获取质量基线</li>
+<li><code>POST /quality/improve</code> - 运行质量改进</li>
+</ul>
+<h3 id="资源"><a class="header" href="#资源">资源</a></h3>
+<ul>
+<li><code>GET /resources/usage</code> - 获取资源使用情况</li>
+<li><code>POST /resources/allocate</code> - 分配资源</li>
+<li><code>GET /resources/limits</code> - 获取资源限制</li>
+<li><code>POST /resources/optimize</code> - 优化资源分配</li>
+</ul>
+<h2 id="认证-6"><a class="header" href="#认证-6">认证</a></h2>
+<p>所有端点都需要具有适当权限的认证。</p>
+<h2 id="速率限制-7"><a class="header" href="#速率限制-7">速率限制</a></h2>
+<ul>
+<li>成本端点：每分钟 30 个请求</li>
+<li>性能端点：每分钟 60 个请求</li>
+<li>操作端点：每分钟 90 个请求</li>
+<li>质量端点：每分钟 40 个请求</li>
+<li>资源端点：每分钟 50 个请求</li>
+</ul>
+<h2 id="下一步-9"><a class="header" href="#下一步-9">下一步</a></h2>
+<p>本文档正在开发中。请稍后查看完整的 API 参考。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="zed-接入"><a class="header" href="#zed-接入">Zed 接入</a></h1>
+<p>Zed 当前可以用两大类方式接入 <code>go-on</code>：</p>
+<ul>
+<li>ACP over stdio，由 Zed 直接拉起后端子进程</li>
+<li>HTTP 接入，由 <code>go-on</code> 作为本地长驻服务运行，Zed 指向它的 HTTP 面</li>
+</ul>
+<p>由于不同版本的 Zed 配置键名可能变化，下面的示例请按“传输方式、命令行、端点”来理解。即使将来具体字段名有调整，也应保持这些核心值不变。</p>
+<h2 id="方式一acp-over-stdio"><a class="header" href="#方式一acp-over-stdio">方式一：ACP over stdio</a></h2>
+<p>适合由 Zed 自己拉起 <code>go-on</code>。</p>
+<p>推荐命令：</p>
+<pre><code class="language-json">{
+  "agent_servers": {
+    "go-on-acp": {
+      "command": "go-on",
+      "args": [
+        "--config",
+        "/absolute/path/to/config.toml",
+        "--protocol-mode",
+        "acp_stdio",
+        "--verbose"
+      ]
+    }
+  }
+}
+</code></pre>
+<p>Windows 示例：</p>
+<pre><code class="language-json">{
+  "agent_servers": {
+    "go-on-acp": {
+      "command": "D:/Workspace/RustWorkspace/go-on/target/debug/go-on.exe",
+      "args": [
+        "--config",
+        "D:/Workspace/RustWorkspace/go-on/config.toml",
+        "--protocol-mode",
+        "acp_stdio"
+      ]
+    }
+  }
+}
+</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>希望由单个 Zed 窗口独占进程生命周期</li>
+<li>不需要多个客户端共享同一个后端</li>
+<li>想避免本地监听端口</li>
+</ul>
+<h2 id="方式二acp-over-http"><a class="header" href="#方式二acp-over-http">方式二：ACP over HTTP</a></h2>
+<p>适合共享长驻后端。</p>
+<p>先手动启动后端：</p>
+<pre><code class="language-bash">go-on --config config.toml --protocol-mode acp_http --acp-http-bind 127.0.0.1:8090
+</code></pre>
+<p>如果想让同一个后端同时兼顾 MCP 风格客户端，建议改成：</p>
+<pre><code class="language-bash">go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+</code></pre>
+<p>然后把 Zed 的 external-agent 风格配置指向运行时根地址：</p>
+<pre><code class="language-json">{
+  "agent_servers": {
+    "go-on-http": {
+      "url": "http://127.0.0.1:8090"
+    }
+  }
+}
+</code></pre>
+<p>ACP HTTP 的健康检查地址是：</p>
+<pre><code class="language-text">http://127.0.0.1:8090/health
+</code></pre>
+<h2 id="方式三通过-v1-走-mcp-或模型提供方风格-http"><a class="header" href="#方式三通过-v1-走-mcp-或模型提供方风格-http">方式三：通过 <code>/v1</code> 走 MCP 或模型提供方风格 HTTP</a></h2>
+<p>后端还暴露了 OpenAI 兼容端点：</p>
+<ul>
+<li><code>/v1/models</code></li>
+<li><code>/v1/model</code></li>
+<li><code>/v1/chat/completions</code></li>
+<li><code>/v1/responses</code></li>
+</ul>
+<p>如果你的 Zed 版本对应的是 OpenAI 兼容 provider 或 MCP 风格 LLM provider，那么应使用 <code>/v1</code> 基址。</p>
+<p>示例：</p>
+<pre><code class="language-json">{
+  "language_models": {
+    "go-on-local": {
+      "provider": "openai_compatible",
+      "api_url": "http://127.0.0.1:8090/v1",
+      "model": "auto"
+    }
+  }
+}
+</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>Zed 这一能力要求的是 OpenAI 兼容接口，而不是 ACP 传输</li>
+<li>希望同一个后端同时提供编辑器对话与 <code>/v1</code> 模型探测能力</li>
+</ul>
+<h2 id="如何选模式"><a class="header" href="#如何选模式">如何选模式</a></h2>
+<ul>
+<li>希望由 Zed 拉起进程，用 <code>acp_stdio</code>。</li>
+<li>希望 Zed 连接共享 ACP 服务，用 <code>acp_http</code>。</li>
+<li>希望一个后端同时服务多前端，优先用带 <code>--acp-http-bind</code> 的 <code>adaptive</code>。</li>
+<li>如果 Zed 这个入口本质上是 provider 配置，而不是 ACP agent，就走 <code>/v1</code> 模型提供方面。</li>
+</ul>
+<h2 id="接入前检查"><a class="header" href="#接入前检查">接入前检查</a></h2>
+<p>不要先怪 Zed 配置，先验证后端：</p>
+<pre><code class="language-bash">go-on --config config.toml --status
+go-on --config config.toml --validate-config
+</code></pre>
+<p>HTTP 模式下，至少手工确认：</p>
+<pre><code class="language-text">GET http://127.0.0.1:8090/health
+GET http://127.0.0.1:8090/v1/models
+</code></pre>
+<h2 id="常见失败模式"><a class="header" href="#常见失败模式">常见失败模式</a></h2>
+<ul>
+<li><code>/health</code> 能通，但 Zed 仍拒绝 ACP，多半是当前运行时模式偏 MCP-only。</li>
+<li><code>/v1/models</code> 能通，但实际聊天失败，多半是 Provider 没就绪，先看 <code>go-on --status</code>。</li>
+<li>stdio 模式一启动就失败，先检查可执行文件路径和 <code>config.toml</code> 路径。</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="vs-code-插件"><a class="header" href="#vs-code-插件">VS Code 插件</a></h1>
+<p>VS Code 插件是本仓库里功能最完整的编辑器接入面。它暴露了基于运行时的命令，可以探测运行时健康状态，也允许在设置中覆盖后端协议模式。</p>
+<h2 id="插件依赖什么"><a class="header" href="#插件依赖什么">插件依赖什么</a></h2>
+<p>插件需要：</p>
+<ul>
+<li>可访问的 <code>go-on</code> 可执行文件</li>
+<li>有效的 <code>config.toml</code></li>
+<li>与当前工作流匹配的协议模式</li>
+</ul>
+<p>插件清单当前暴露的协议覆盖值为：</p>
+<ul>
+<li><code>from_config</code></li>
+<li><code>adaptive</code></li>
+<li><code>acp_stdio</code></li>
+<li><code>acp_http</code></li>
+<li><code>mcp_stdio</code></li>
+<li><code>mcp_http</code></li>
+</ul>
+<p>其中 <code>from_config</code> 表示跟随后端配置，其余值表示显式强制覆盖。</p>
+<h2 id="首次接入建议"><a class="header" href="#首次接入建议">首次接入建议</a></h2>
+<ol>
+<li>先构建后端或准备好可执行文件。</li>
+<li>运行 <code>go-on --setup --setup-level standard</code>。</li>
+<li>如果自动发现不够稳定，再在 VS Code 设置中显式填写可执行文件路径和配置路径。</li>
+<li>除非在排查特定传输问题，否则协议模式保持 <code>from_config</code>。</li>
+</ol>
+<h2 id="各协议模式什么时候用"><a class="header" href="#各协议模式什么时候用">各协议模式什么时候用</a></h2>
+<ul>
+<li><code>from_config</code>：日常默认。</li>
+<li><code>adaptive</code>：希望一个运行时同时兼容多类探测时优先使用。</li>
+<li><code>acp_stdio</code>：插件应驱动拉起 stdio 运行时时使用。</li>
+<li><code>acp_http</code>：后端已作为共享本地 HTTP 服务运行时使用。</li>
+<li><code>mcp_stdio</code>：只有明确需要 MCP stdio 才用。</li>
+<li><code>mcp_http</code>：明确需要 <code>/v1</code> HTTP 语义时使用。</li>
+</ul>
+<h2 id="运行时健康面"><a class="header" href="#运行时健康面">运行时健康面</a></h2>
+<p>插件契约中的健康检查路径是：</p>
+<pre><code class="language-text">/health
+</code></pre>
+<p>OpenAI 兼容探测路径是：</p>
+<pre><code class="language-text">/v1/models
+</code></pre>
+<p>插件同时也知道这些路径：</p>
+<ul>
+<li><code>/v1/model</code></li>
+<li><code>/v1/chat/completions</code></li>
+<li><code>/v1/responses</code></li>
+</ul>
+<h2 id="实用工作区设置示例"><a class="header" href="#实用工作区设置示例">实用工作区设置示例</a></h2>
+<pre><code class="language-json">{
+  "go-on.runtime.protocolMode": "from_config",
+  "go-on.runtime.executablePath": "D:/Workspace/RustWorkspace/go-on/target/debug/go-on.exe",
+  "go-on.runtime.configPath": "D:/Workspace/RustWorkspace/go-on/config.toml"
+}
+</code></pre>
+<p>如果要强制共享 HTTP 运行时：</p>
+<pre><code class="language-json">{
+  "go-on.runtime.protocolMode": "acp_http"
+}
+</code></pre>
+<h2 id="实际排查顺序"><a class="header" href="#实际排查顺序">实际排查顺序</a></h2>
+<p>对插件来说，推荐按下面顺序排查：</p>
+<ol>
+<li><code>go-on --validate-config</code></li>
+<li><code>go-on --status</code></li>
+<li>检查 VS Code 设置里的 executable path</li>
+<li>检查 VS Code 设置里的 config path</li>
+<li>最后再看是否需要协议模式覆盖</li>
+</ol>
+<h2 id="什么时候选-http什么时候选-stdio"><a class="header" href="#什么时候选-http什么时候选-stdio">什么时候选 HTTP，什么时候选 stdio</a></h2>
+<p>优先选 HTTP：</p>
+<ul>
+<li>希望 GUI 与 VS Code 共享同一个后端</li>
+<li>希望手工探测 <code>/health</code> 与 <code>/v1/models</code></li>
+<li>希望后端作为长驻本地服务存在</li>
+</ul>
+<p>优先选 stdio：</p>
+<ul>
+<li>希望 VS Code 自己管理进程启停</li>
+<li>希望不同工作区完全隔离</li>
+</ul>
+<h2 id="常见失败模式-1"><a class="header" href="#常见失败模式-1">常见失败模式</a></h2>
+<ul>
+<li>插件能拉起可执行文件，但提示 provider not ready，问题多半在配置或凭证，不在传输层。</li>
+<li>选了 HTTP 模式但 <code>/health</code> 不通，说明后端并未用 <code>--acp-http-bind</code> 启动。</li>
+<li>强制 <code>mcp_http</code> 时，要确认当前消费该能力的插件路径确实需要 <code>/v1</code> 语义，而不是 ACP 语义。</li>
+</ul>
+<h2 id="可用命令"><a class="header" href="#可用命令">可用命令</a></h2>
+<p>插件在 VS Code 命令面板中注册了以下命令：</p>
+<p><strong>进程生命周期</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>命令</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>go-on.start</code></td><td>启动 Go-On 后端进程</td></tr>
+<tr><td><code>go-on.stop</code></td><td>停止运行中的后端进程</td></tr>
+<tr><td><code>go-on.shutdown</code></td><td>优雅关闭后端</td></tr>
+<tr><td><code>go-on.healthCheck</code></td><td>运行时健康检查</td></tr>
+<tr><td><code>go-on.healthProbes</code></td><td>查看所有健康探针详情</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>运行时诊断</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>命令</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>go-on.runtimeSelfModel</code></td><td>获取统一自画像视图：运行健康、漂移摘要、约束画像与建议动作</td></tr>
+<tr><td><code>go-on.runtimeStability</code></td><td>获取运行时稳定性快照</td></tr>
+<tr><td><code>go-on.providerStatus</code></td><td>获取 Provider 就绪状态、降级摘要与 Agent 依赖快照</td></tr>
+<tr><td><code>go-on.metricsGet</code></td><td>获取当前运行时指标</td></tr>
+<tr><td><code>go-on.metricsReset</code></td><td>重置运行时指标</td></tr>
+<tr><td><code>go-on.traceMetrics</code></td><td>获取 Trace 级指标</td></tr>
+<tr><td><code>go-on.traceGet</code></td><td>获取 Trace 条目</td></tr>
+<tr><td><code>go-on.observabilityAlerts</code></td><td>查看可观测性告警</td></tr>
+<tr><td><code>go-on.releaseReadiness</code></td><td>检查发布就绪门禁</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>治理与质量</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>命令</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>go-on.governanceStatus</code></td><td>获取治理状态</td></tr>
+<tr><td><code>go-on.governancePlanGet</code></td><td>获取当前治理计划</td></tr>
+<tr><td><code>go-on.governanceAuditRecent</code></td><td>查看最近审计条目</td></tr>
+<tr><td><code>go-on.qualityBaseline</code></td><td>获取质量基线快照</td></tr>
+<tr><td><code>go-on.securityBaseline</code></td><td>获取安全基线</td></tr>
+<tr><td><code>go-on.rlAlignmentEval</code></td><td>运行 RL 对齐离线评估</td></tr>
+<tr><td><code>go-on.hardnessStatus</code></td><td>获取任务难度状态</td></tr>
+<tr><td><code>go-on.costStatus</code></td><td>获取成本优化状态</td></tr>
+<tr><td><code>go-on.autotuneStatus</code></td><td>获取自动调参状态</td></tr>
+<tr><td><code>go-on.autotuneGet</code></td><td>获取自动调参参数</td></tr>
+<tr><td><code>go-on.autotuneReset</code></td><td>重置自动调参参数</td></tr>
+<tr><td><code>go-on.selectorStatus</code></td><td>获取模型选择器状态</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>工作流与任务</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>命令</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>go-on.workflowExecute</code></td><td>执行当前工作流</td></tr>
+<tr><td><code>go-on.taskPlan</code></td><td>规划任务</td></tr>
+<tr><td><code>go-on.taskExecute</code></td><td>执行已规划任务</td></tr>
+<tr><td><code>go-on.harnessStatus</code></td><td>获取测试套件状态</td></tr>
+<tr><td><code>go-on.primarySecondarySummary</code></td><td>获取主从 Agent 摘要</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>学习与优化</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>命令</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>go-on.learningSummary</code></td><td>获取学习循环摘要</td></tr>
+<tr><td><code>go-on.learningGuardrail</code></td><td>获取学习防护状态</td></tr>
+<tr><td><code>go-on.learningReplay</code></td><td>重放学习数据</td></tr>
+<tr><td><code>go-on.knowledgeDistill</code></td><td>运行知识蒸馏</td></tr>
+<tr><td><code>go-on.optimizationPeak</code></td><td>获取优化峰值状态</td></tr>
+<tr><td><code>go-on.buildRepro</code></td><td>运行构建可复现性检查</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>配置与运维</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>命令</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>go-on.configReload</code></td><td>重载运行时配置</td></tr>
+<tr><td><code>go-on.configBaseline</code></td><td>获取配置基线快照</td></tr>
+<tr><td><code>go-on.lockStatus</code></td><td>获取锁状态</td></tr>
+<tr><td><code>go-on.breakerStatus</code></td><td>获取熔断器状态</td></tr>
+<tr><td><code>go-on.breakerReset</code></td><td>重置熔断器</td></tr>
+<tr><td><code>go-on.breakerRecovery</code></td><td>运行熔断器恢复</td></tr>
+<tr><td><code>go-on.cacheClear</code></td><td>清空 ACP 缓存</td></tr>
+<tr><td><code>go-on.vectorClear</code></td><td>清空向量存储</td></tr>
+<tr><td><code>go-on.dataLifecycle</code></td><td>获取数据生命周期状态</td></tr>
+<tr><td><code>go-on.errorContract</code></td><td>获取错误契约摘要</td></tr>
+<tr><td><code>go-on.checkpointCreate</code></td><td>创建运行时检查点</td></tr>
+<tr><td><code>go-on.checkpointList</code></td><td>列出可用检查点</td></tr>
+<tr><td><code>go-on.conversationRollback</code></td><td>回滚到某个检查点</td></tr>
+<tr><td><code>go-on.maintenanceGc</code></td><td>运行垃圾回收</td></tr>
+<tr><td><code>go-on.actionCheck</code></td><td>检查动作安全性</td></tr>
+<tr><td><code>go-on.debugPanelGet</code></td><td>获取调试面板数据</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="进程输出通道"><a class="header" href="#进程输出通道">进程输出通道</a></h2>
+<p>所有 Go-On 进程输出（stdout、stderr、退出码、进程错误）均写入 VS Code 的 <strong>“Go-On”</strong> 输出通道。通过 <strong>查看 → 输出</strong> 打开，再从下拉菜单中选择 <strong>Go-On</strong> 即可查看。这是启动失败和运行时错误排查的首选入口。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="gui-控制台"><a class="header" href="#gui-控制台">GUI 控制台</a></h1>
+<p>GUI 是围绕后端构建的 Tauri 桌面控制台，目标是让运维和集成调试不必一直停留在终端里。</p>
+<h2 id="gui-依赖什么"><a class="header" href="#gui-依赖什么">GUI 依赖什么</a></h2>
+<p>GUI 持有并使用三个核心值：</p>
+<ul>
+<li>后端可执行文件路径</li>
+<li>工作目录</li>
+<li>工作目录中的运行时配置文件</li>
+</ul>
+<p>GUI 拉起后端进程时会以工作目录作为当前目录，因此要求 <code>config.toml</code> 就放在该目录下。</p>
+<h2 id="开发与构建命令"><a class="header" href="#开发与构建命令">开发与构建命令</a></h2>
+<p>在 <code>GUI/</code> 目录下：</p>
+<pre><code class="language-bash">npm install
+npm run dev
+</code></pre>
+<p>生产构建：</p>
+<pre><code class="language-bash">npm run build
+</code></pre>
+<p>桌面调试与打包：</p>
+<pre><code class="language-bash">npm run tauri dev
+npm run tauri build
+</code></pre>
+<h2 id="绑定后端"><a class="header" href="#绑定后端">绑定后端</a></h2>
+<p>GUI 可以自动发现后端可执行文件。自动绑定成功后，会把可执行文件所在目录作为工作目录，并把日志落到该目录下的 <code>go-on.log</code>。</p>
+<p>如果自动发现失败，就手工配置：</p>
+<ol>
+<li>填写后端可执行文件路径</li>
+<li>填写工作目录</li>
+<li>确保该目录下存在 <code>config.toml</code></li>
+</ol>
+<h2 id="配置与环境变量行为"><a class="header" href="#配置与环境变量行为">配置与环境变量行为</a></h2>
+<p>GUI 会直接管理：</p>
+<ul>
+<li><code>config.toml</code></li>
+<li><code>config.toml.autopilot-adaptive</code> 作为恢复默认模板来源</li>
+<li><code>.env.goon</code> 作为持久化环境变量文件</li>
+</ul>
+<p>因此，一条实用的 GUI 初始化路径是：</p>
+<ol>
+<li>绑定后端可执行文件</li>
+<li>必要时恢复默认配置</li>
+<li>通过 GUI 保存 Provider API Key</li>
+<li>启动后端进程</li>
+<li>检查集成探测状态</li>
+</ol>
+<h2 id="运行时进程行为"><a class="header" href="#运行时进程行为">运行时进程行为</a></h2>
+<p>GUI 启动后端时，会从当前配置的工作目录拉起该可执行文件，并把 stdout 与 stderr 都写到 <code>go-on.log</code>。</p>
+<p>因此最常见的操作错误是：二进制路径正确，但工作目录错误，导致配置文件找不到或加载了错误配置。</p>
+<h2 id="健康检查与集成探测"><a class="header" href="#健康检查与集成探测">健康检查与集成探测</a></h2>
+<p>GUI 当前会探测：</p>
+<ul>
+<li><code>/health</code> 上的 ACP 或运行时健康状态</li>
+<li><code>/v1/models</code> 上的 OpenAI 兼容模型列表</li>
+</ul>
+<p>这些探测会被解释成以下前端状态：</p>
+<ul>
+<li>Zed 的 ACP 或 A2A over HTTP</li>
+<li>Zed 的 MCP 或 <code>/v1</code> 模型提供方风格接入</li>
+<li>VS Code 插件运行时健康状态</li>
+</ul>
+<h2 id="gui-场景下推荐的后端模式"><a class="header" href="#gui-场景下推荐的后端模式">GUI 场景下推荐的后端模式</a></h2>
+<ul>
+<li><code>adaptive</code>：最推荐，适合 GUI 与 Zed、VS Code 共用一个后端。</li>
+<li><code>acp_http</code>：适合只关心 ACP over HTTP。</li>
+<li><code>mcp_http</code>：适合主要关注 <code>/v1</code> provider 兼容面。</li>
+</ul>
+<p>GUI 本身无论哪种模式都可以继续管理后端可执行文件，模式差异主要体现在 GUI 启动之后外部客户端还能做什么。</p>
+<h2 id="推荐操作顺序"><a class="header" href="#推荐操作顺序">推荐操作顺序</a></h2>
+<ol>
+<li>构建后端。</li>
+<li>启动 GUI。</li>
+<li>使用自动绑定，或手工填写可执行文件路径。</li>
+<li>确认工作目录中存在 <code>config.toml</code>。</li>
+<li>必要时把 API Key 保存到 <code>.env.goon</code>。</li>
+<li>启动后端。</li>
+<li>查看健康状态和集成探测结果。</li>
+</ol>
+<h2 id="故障排查"><a class="header" href="#故障排查">故障排查</a></h2>
+<ul>
+<li>如果启动时报文件错误，先重新检查可执行文件路径。</li>
+<li>如果启动成功但探测失败，优先检查协议模式和 Provider 就绪状态。</li>
+<li>如果 GUI 显示健康正常，但编辑器仍失败，就对照编辑器所需传输契约与当前运行时模式是否一致。</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="skills-扩展"><a class="header" href="#skills-扩展">Skills 扩展</a></h1>
+<p>Skills 系统为 go-on 运行时提供了一种轻量、类型安全的能力单元注册与分发机制，
+类似于 MCP Tools，但直接内嵌在运行时中，无需额外网络调用。</p>
+<hr>
+<h2 id="启用-skills"><a class="header" href="#启用-skills">启用 Skills</a></h2>
+<p>通过 <code>config.toml</code>（或 <code>config.production.toml</code>）中的单一开关控制：</p>
+<pre><code class="language-toml">[runtime]
+skills_enabled = true   # true = 启动时加载内置 skills（默认值）
+                        # false = 不加载（生产环境推荐）
+</code></pre>
+<blockquote>
+<p><strong>生产环境提示</strong>：<code>config.production.toml</code> 默认 <code>skills_enabled = false</code>，
+以减少暴露面。如有需要可显式开启。</p>
+</blockquote>
+<hr>
+<h2 id="内置-skills"><a class="header" href="#内置-skills">内置 Skills</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>名称</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>builtin.echo</code></td><td>原样返回输入值（冒烟测试用 skill）</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="skill-命名规则"><a class="header" href="#skill-命名规则">Skill 命名规则</a></h2>
+<p>通过内部 <code>SkillRegistry::register()</code> API 注册自定义 skill 时，名称必须满足：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>约束</th><th>规则</th></tr>
+</thead>
+<tbody>
+<tr><td>长度</td><td>1–64 字符</td></tr>
+<tr><td>允许字符</td><td><code>a-z</code>、<code>0-9</code>、<code>.</code>、<code>_</code>、<code>-</code></td></tr>
+<tr><td>唯一性</td><td>名称不可重复，重复注册将返回错误</td></tr>
+<tr><td>Schema</td><td><code>input_schema()</code> 必须返回 JSON <strong>对象</strong>（<code>{…}</code>）</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="实现自定义-skill"><a class="header" href="#实现自定义-skill">实现自定义 Skill</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::sync::Arc;
+use anyhow::Result;
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use crate::orchestration::skill::Skill;
+
+pub struct GreetSkill;
+
+#[async_trait]
+impl Skill for GreetSkill {
+    fn name(&amp;self) -&gt; &amp;str { "my.greet" }
+
+    fn description(&amp;self) -&gt; &amp;str { "根据给定名字返回问候语" }
+
+    fn input_schema(&amp;self) -&gt; Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" }
+            },
+            "required": ["name"]
+        })
+    }
+
+    async fn execute(&amp;self, input: &amp;Value) -&gt; Result&lt;Value&gt; {
+        let name = input["name"].as_str().unwrap_or("stranger");
+        Ok(json!({ "greeting": format!("你好，{name}！") }))
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>服务器启动后注册：</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>server.register_skill(Arc::new(GreetSkill));
+<span class="boring">}</span></code></pre>
+<blockquote>
+<p>注册失败（名称重复、命名不合法、Schema 非对象）仅记录 <code>WARN</code> 日志，
+不会导致服务器崩溃。</p>
+</blockquote>
+<hr>
+<h2 id="相关文档"><a class="header" href="#相关文档">相关文档</a></h2>
+<ul>
+<li><a href="#架构总览">架构总览</a></li>
+<li><a href="#后端-cli">后端 CLI</a></li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+
+    </div>
+    </body>
+</html>

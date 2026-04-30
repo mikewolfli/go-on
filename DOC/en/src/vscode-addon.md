@@ -1,0 +1,1 @@
+../../src/en/vscode-addon.md

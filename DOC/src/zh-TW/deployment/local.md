@@ -1,0 +1,290 @@
+# 本地模式部署
+
+## 概述
+
+本地模式（`profile-local`）是 go-on 的默認部署配置，專為單用戶開發環境設計。它提供了一個輕量級、自包含的運行時，具有基於 SQLite 的存儲和自適應向量能力。
+
+## 特性
+
+### 核心能力
+- **單用戶操作**：專為個人開發者設計
+- **SQLite 存儲**：基於本地文件的緩存和向量存儲
+- **自適應向量存儲**：當 `sqlite-vec` 可用時使用，否則回退到 JSON 嵌入
+- **零外部依賴**：無需數據庫服務器
+- **所有 14 條能力總線和 21 個 F-GAP 模塊已包含**：本地配置文件擁有完整的 Phase 4 功能
+
+### 存儲架構
+```
+本地模式存儲：
+├── 緩存：SQLite 數據庫 (acp_cache.sqlite3)
+├── 向量存儲：帶向量擴展的 SQLite
+└── 配置：本地 config.toml 文件
+```
+
+## 配置
+
+### 默認配置
+本地模式使用 `config/config.toml` 作為默認配置：
+
+```toml
+# config/config.toml（本地模式默認配置）
+default_phase = "coding"
+model_selection_mode = "adaptive"
+
+[protocol]
+mode = "adaptive"
+
+[cache]
+enabled = true
+path = "acp_cache.sqlite3"
+default_ttl_seconds = 3600
+max_entries = 5000
+
+[vector]
+enabled = true
+auto_mode = true
+path = "acp_vector.sqlite3"
+dimensions = 192
+min_query_chars = 80
+top_k = 2
+min_similarity = 0.82
+```
+
+### 特性標誌
+本地模式啟用以下 Cargo 特性：
+- `backend-sqlite`：SQLite 數據庫支持
+- `rusqlite`：帶捆綁 SQLite 的 SQLite 綁定
+- `sqlite-vec`：SQLite 向量擴展（可選）
+
+## 安裝
+
+### 從源碼構建
+```bash
+# 默認構建（profile-local）
+cargo build
+
+# 顯式本地模式構建
+cargo build --no-default-features -F profile-local
+
+# 包含所有特性
+cargo build --features "backend-sqlite"
+```
+
+### 二進制分發
+```bash
+# 下載預構建二進制文件
+curl -L https://github.com/your-org/go-on/releases/latest/download/go-on-x86_64-unknown-linux-gnu.tar.gz | tar xz
+
+# 設為可執行
+chmod +x go-on
+```
+
+## 設置
+
+### 初始配置
+```bash
+# 使用默認配置初始化
+cargo run -- --init --config config/config.toml
+
+# 檢查配置
+cargo run -- --check --config config/config.toml
+```
+
+### 可選設置級別
+```bash
+# 快速設置（最小化配置）
+cargo run -- --init --setup-level quick --config config/config.toml
+
+# 標準設置（推薦）
+cargo run -- --init --setup-level standard --config config/config.toml
+
+# 自定義設置（高級）
+cargo run -- --init --setup-level custom --config config/config.toml
+```
+
+## 運行
+
+### 啟動運行時
+```bash
+# 使用啟動腳本
+./scripts/start-go-on.sh
+
+# 直接執行
+cargo run -- --config config/config.toml
+
+# 使用特定協議模式
+cargo run -- --config config/config.toml --protocol-mode adaptive
+```
+
+### 健康檢查
+```bash
+# 默認健康端點
+curl http://127.0.0.1:8090/health
+
+# 詳細輸出
+curl http://127.0.0.1:8090/health?verbose=true
+```
+
+## 開發工作流
+
+### 典型使用模式
+1. **啟動運行時**：`./scripts/start-go-on.sh`
+2. **連接 IDE**：配置 Zed 或 VS Code 使用本地 go-on
+3. **開發**：使用 AI 輔助編碼功能
+4. **監控**：檢查健康端點狀態
+5. **停止**：使用 `./scripts/stop-go-on.sh` 或 Ctrl+C
+
+### IDE 集成
+- **Zed**：使用 ACP over stdio 或 HTTP
+- **VS Code**：使用 go-on 擴展與本地運行時
+- **GUI 控制台**：基於 Tauri 的桌面界面
+
+## 存儲管理
+
+### 緩存位置
+- **默認**：當前目錄下的 `acp_cache.sqlite3`
+- **自定義**：在配置中設置 `cache.path`
+- **大小限制**：默認 5000 條記錄
+
+### 向量存儲
+- **位置**：當前目錄下的 `acp_vector.sqlite3`
+- **維度**：192 維嵌入
+- **自動模式**：自動使用可用的向量擴展
+
+### 維護
+```bash
+# 清理緩存（手動）
+rm -f acp_cache.sqlite3 acp_cache.sqlite3-*
+
+# 重置向量存儲
+rm -f acp_vector.sqlite3
+
+# 壓縮 SQLite 數據庫
+sqlite3 acp_cache.sqlite3 "VACUUM;"
+sqlite3 acp_vector.sqlite3 "VACUUM;"
+```
+
+## 性能調優
+
+### 內存設置
+```toml
+[runtime]
+# 根據可用內存調整
+cache_max_memory_mb = 256
+vector_max_memory_mb = 512
+```
+
+### 併發
+```toml
+[concurrency]
+# 最大併發請求數
+max_inflight_requests = 32
+max_parallel_tasks = 8
+```
+
+### 超時
+```toml
+[timeouts]
+# 請求超時
+request_timeout_seconds = 120
+health_check_timeout_seconds = 30
+shutdown_timeout_seconds = 60
+```
+
+## 故障排除
+
+### 常見問題
+
+#### SQLite 錯誤
+```bash
+# 檢查 SQLite 版本
+sqlite3 --version
+
+# 修復損壞的數據庫
+sqlite3 acp_cache.sqlite3 ".recover" | sqlite3 acp_cache_fixed.sqlite3
+```
+
+#### 向量存儲問題
+```bash
+# 檢查 sqlite-vec 可用性
+cargo build --features "sqlite-vec"
+
+# 回退到 JSON 模式
+[vector]
+auto_mode = false
+use_json_fallback = true
+```
+
+#### 端口衝突
+```bash
+# 檢查端口使用情況
+lsof -i :8090
+
+# 在配置中更改端口
+[runtime]
+acp_http_bind_addr = "127.0.0.1:8091"
+```
+
+### 日誌
+```bash
+# 啟用調試日誌
+RUST_LOG=debug ./scripts/start-go-on.sh
+
+# 查看日誌
+tail -f go-on.log
+```
+
+## 遷移
+
+### 從舊版本遷移
+```bash
+# 備份現有數據
+cp acp_cache.sqlite3 acp_cache.sqlite3.backup
+cp acp_vector.sqlite3 acp_vector.sqlite3.backup
+
+# 運行遷移
+cargo run -- --migrate --config config/config.toml
+```
+
+### 遷移到其他部署模式
+本地模式可以遷移到：
+- **簡單服務器模式**：用於單服務器部署
+- **多用戶服務器模式**：用於生產多用戶環境
+
+## 最佳實踐
+
+### 安全
+- 將配置文件保存在版本控制中（排除密鑰）
+- 使用環境變量存儲 API 密鑰
+- 定期更新到最新版本
+
+### 性能
+- 將 SQLite 文件放在快速存儲上（SSD）
+- 監控磁盤空間使用情況
+- 定期維護（壓縮、分析）
+
+### 開發
+- 為不同項目使用單獨的配置
+- 備份重要的向量存儲
+- 使用不同的模型供應商進行測試
+
+## 限制
+
+### 已知約束
+- **僅限單用戶**：不支持併發多用戶訪問
+- **本地存儲**：性能取決於本地磁盤速度
+- **內存限制**：受可用系統內存限制
+- **無高可用性**：單點故障
+
+### 何時考慮其他模式
+考慮升級到：
+- **簡單服務器模式**：需要更好性能時
+- **多用戶服務器模式**：需要多用戶支持時
+
+## 下一步
+
+設置本地模式後，您可以：
+1. 探索 [API 文檔](../api/overview.md)
+2. 瞭解 [簡單服務器模式](./simple-server.md)
+3. 查看 [故障排除指南](../troubleshooting.md)
+4. 加入 [社區討論](https://github.com/your-org/go-on/discussions)

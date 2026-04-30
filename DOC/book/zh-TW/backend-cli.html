@@ -1,0 +1,557 @@
+<!DOCTYPE HTML>
+<html lang="zh" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>後端 CLI - go-on 文檔</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-03594683.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-a5a70d2b.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">go-on 文檔</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/mikewolfli/go-on" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/mikewolfli/go-on/edit/main/DOC/zh-TW/src/src/backend-cli.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="後端-cli"><a class="header" href="#後端-cli">後端 CLI</a></h1>
+<p>後端可執行文件是當前系統的權威控制面，負責運行時啟動、setup、健康檢查、任務規劃以及協議模式選擇。</p>
+<h2 id="調用方式"><a class="header" href="#調用方式">調用方式</a></h2>
+<p>生產或打包後的二進制：</p>
+<pre><code class="language-bash">go-on --config config.toml
+</code></pre>
+<p>開發階段：</p>
+<pre><code class="language-bash">cargo run -- --config config.toml
+</code></pre>
+<p>當前幫助入口形式為：</p>
+<pre><code class="language-text">Usage: go-on.exe [OPTIONS]
+</code></pre>
+<p>沒有子命令，所有操作由標誌驅動。</p>
+<h2 id="核心運行時選項"><a class="header" href="#核心運行時選項">核心運行時選項</a></h2>
+<h3 id="--config-config"><a class="header" href="#--config-config"><code>--config &lt;CONFIG&gt;</code></a></h3>
+<p>指定顯式配置文件路徑。如果省略，運行時將從可執行文件所在目錄解析 <code>config.toml</code>。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --config D:\go-on\config.toml
+</code></pre>
+<h3 id="--phase-phase"><a class="header" href="#--phase-phase"><code>--phase &lt;PHASE&gt;</code></a></h3>
+<p>選擇要運行的特定階段（phase）配置文件。當你的配置定義了多個階段行為，並希望使用一個確定的入口點時使用。</p>
+<h3 id="--verbose"><a class="header" href="#--verbose"><code>--verbose</code></a></h3>
+<p>啟用詳細日誌輸出。在診斷啟動、配置、傳輸或 Provider 就緒問題時首先使用此選項。</p>
+<h2 id="phase-與-sub-phase-配置"><a class="header" href="#phase-與-sub-phase-配置">Phase 與 Sub-Phase 配置</a></h2>
+<p>Phase 定義運行時執行的工作流階段。每個 phase 可以包含可選的 sub-phase，實現更精細的控制。</p>
+<h3 id="在-configtoml-中配置-phase"><a class="header" href="#在-configtoml-中配置-phase">在 config.toml 中配置 phase</a></h3>
+<p>Phase 在 <code>[phases.&lt;name&gt;]</code> 節中配置，由 <code>flow.phases</code> 列表引用：</p>
+<pre><code class="language-toml">[flow]
+# 執行順序。根據你的工作流增刪 phase。
+phases = ["think", "act", "check", "done"]
+
+[phases.think]
+description = "Think — 分析、規劃、收集上下文"
+# 分配給此 phase 的 agent（空 = setup wizard 會提示填寫）
+agents = []
+# 為 true 時，即使沒有配置 agent 也繼續執行
+fallback = true
+
+[phases.think.options]
+request_timeout_seconds = 120
+review_timeout_seconds = 60
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+phase_max_inflight = 8      # 此 phase 內最大併發任務數
+global_max_inflight = 128    # 所有 phase 全局最大併發任務數
+</code></pre>
+<h3 id="sub-phases子階段"><a class="header" href="#sub-phases子階段">Sub-phases（子階段）</a></h3>
+<p>Sub-phases 提供分層工作流分解。一個 phase 可以定義 <code>sub_phases</code> 列表，配合嵌套的 <code>[phases.&lt;parent&gt;.&lt;child&gt;]</code> 節：</p>
+<pre><code class="language-toml">[flow]
+phases = ["think", "act", "check", "done"]
+
+[phases.act]
+description = "主執行階段"
+agents = []
+fallback = true
+# Sub-phases 在此 phase 內按順序執行
+sub_phases = ["plan", "code", "test"]
+
+[phases.act.options]
+request_timeout_seconds = 300
+cache_enabled = true
+phase_max_inflight = 24
+
+[phases.act.plan]
+description = "實現計劃"
+agents = []
+fallback = true
+
+[phases.act.plan.options]
+request_timeout_seconds = 120
+phase_max_inflight = 4
+
+[phases.act.code]
+description = "編寫代碼"
+agents = []
+fallback = true
+
+[phases.act.code.options]
+request_timeout_seconds = 180
+phase_max_inflight = 12
+
+[phases.act.test]
+description = "運行測試"
+agents = []
+fallback = true
+
+[phases.act.test.options]
+request_timeout_seconds = 120
+phase_max_inflight = 8
+</code></pre>
+<p>Sub-phases 會繼承父級的 <code>options</code> 作為默認值，可在每個 sub-phase 中覆蓋。</p>
+<h3 id="phase-only-與-sub-phase-執行的區別"><a class="header" href="#phase-only-與-sub-phase-執行的區別">Phase-only 與 sub-phase 執行的區別</a></h3>
+<ul>
+<li><strong>無 sub-phases</strong>：每個 phase 按 <code>phases</code> 列表順序從上到下依次執行。</li>
+<li><strong>有 sub-phases</strong>：父 phase 先編排其 sub-phases 按順序執行，完成後才進入下一個父 phase。</li>
+<li>Sub-phases 是可選的——大多數工作流使用扁平 phase 即可。</li>
+</ul>
+<h3 id="內置-phase-預設文件"><a class="header" href="#內置-phase-預設文件">內置 phase 預設文件</a></h3>
+<p>項目內置四個預設配置文件，各有不同的 phase 設置：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>文件</th><th>Phases</th><th>適用場景</th></tr>
+</thead>
+<tbody>
+<tr><td><code>config.toml</code></td><td>think, act, check, done</td><td>通用工作流（默認）</td></tr>
+<tr><td><code>config.coding.toml</code></td><td>coding</td><td>IDE 集成（Zed、VS Code）</td></tr>
+<tr><td><code>config.simple-server.toml</code></td><td>think, act, check, done</td><td>單服務部署</td></tr>
+<tr><td><code>config.multi-users-server.toml</code></td><td>think, act, check, done</td><td>多用戶企業環境</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="使用特定-phase-配置"><a class="header" href="#使用特定-phase-配置">使用特定 phase 配置</a></h3>
+<pre><code class="language-bash"># 使用編碼階段配置與 IDE 配合
+go-on --config config.coding.toml --phase coding
+
+# 使用通用配置配合 HTTP 端點
+go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+</code></pre>
+<h3 id="創建自定義-phase"><a class="header" href="#創建自定義-phase">創建自定義 phase</a></h3>
+<p>你可以定義任意 phase 名稱——沒有內置限制：</p>
+<pre><code class="language-toml">[flow]
+phases = ["research", "draft", "review", "approve", "publish"]
+
+[phases.research]
+description = "收集信息和資料"
+agents = []
+fallback = true
+
+[phases.research.options]
+request_timeout_seconds = 180
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+phase_max_inflight = 4
+</code></pre>
+<h3 id="每個-phase-的關鍵選項"><a class="header" href="#每個-phase-的關鍵選項">每個 phase 的關鍵選項</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>選項</th><th>默認值</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>request_timeout_seconds</code></td><td>150</td><td>此 phase 中單個任務請求的最大時間</td></tr>
+<tr><td><code>review_timeout_seconds</code></td><td>60</td><td>此 phase 中審查的最大時間</td></tr>
+<tr><td><code>review_timeout_policy</code></td><td><code>"reject"</code></td><td>審查超時時的處理方式（<code>"reject"</code> 或 <code>"warn"</code>）</td></tr>
+<tr><td><code>review_min_response_chars</code></td><td>12</td><td>審查回覆的最小字符數</td></tr>
+<tr><td><code>cache_enabled</code></td><td>true</td><td>在此 phase 中啟用緩存查找</td></tr>
+<tr><td><code>vector_enabled</code></td><td>true</td><td>在此 phase 中啟用向量存儲查找</td></tr>
+<tr><td><code>summary_enabled</code></td><td>true</td><td>啟用對話摘要</td></tr>
+<tr><td><code>phase_max_inflight</code></td><td>24</td><td>此 phase 內最大併發任務數</td></tr>
+<tr><td><code>global_max_inflight</code></td><td>128</td><td>所有 phase 全局最大併發任務數</td></tr>
+<tr><td><code>autopilot_complexity</code></td><td><code>"auto"</code></td><td>複雜度模式：<code>"auto"</code>、<code>"simple"</code>、<code>"complex"</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="驗證與就緒檢查"><a class="header" href="#驗證與就緒檢查">驗證與就緒檢查</a></h2>
+<h3 id="--validate-config-或---doctor"><a class="header" href="#--validate-config-或---doctor"><code>--validate-config</code> 或 <code>--doctor</code></a></h3>
+<p>驗證配置並退出。在排查更大的運行時問題之前，這是最快的快速檢查。</p>
+<pre><code class="language-bash">go-on --config config.toml --validate-config
+</code></pre>
+<h3 id="--status-或---check"><a class="header" href="#--status-或---check"><code>--status</code> 或 <code>--check</code></a></h3>
+<p>打印已配置的 AI Provider 和運行時就緒狀態。</p>
+<p>在 setup 之後、編輯 <code>config.toml</code> 之後或附加編輯器客戶端之前使用。</p>
+<pre><code class="language-bash">go-on --status
+</code></pre>
+<h3 id="--healthcheck"><a class="header" href="#--healthcheck"><code>--healthcheck</code></a></h3>
+<p>生成運行時健康報告並持久化到 <code>.goon/</code> 下。當需要持久化的工件用於後續審查或分類時使用。</p>
+<pre><code class="language-bash">go-on --healthcheck
+</code></pre>
+<h2 id="setup-與推薦工作流"><a class="header" href="#setup-與推薦工作流">Setup 與推薦工作流</a></h2>
+<h3 id="--setup-或---init"><a class="header" href="#--setup-或---init"><code>--setup</code> 或 <code>--init</code></a></h3>
+<p>運行交互式設置嚮導。</p>
+<pre><code class="language-bash">go-on --setup
+</code></pre>
+<h3 id="--setup-profile-setup_profile"><a class="header" href="#--setup-profile-setup_profile"><code>--setup-profile &lt;SETUP_PROFILE&gt;</code></a></h3>
+<p>當前接受的值：<code>adaptive</code>。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --setup --setup-profile adaptive
+</code></pre>
+<h3 id="--setup-level-setup_level"><a class="header" href="#--setup-level-setup_level"><code>--setup-level &lt;SETUP_LEVEL&gt;</code></a></h3>
+<p>接受的值：</p>
+<ul>
+<li><code>quick</code></li>
+<li><code>standard</code></li>
+<li><code>custom</code></li>
+</ul>
+<p>實用指導：</p>
+<ul>
+<li><code>quick</code>：最小路徑，跳過額外的 Agent 提示。</li>
+<li><code>standard</code>：大多數用戶的最佳默認值。</li>
+<li><code>custom</code>：暴露更多手動決策。</li>
+</ul>
+<h3 id="--setup-secrets-setup_secrets"><a class="header" href="#--setup-secrets-setup_secrets"><code>--setup-secrets &lt;SETUP_SECRETS&gt;</code></a></h3>
+<p>接受的值：</p>
+<ul>
+<li><code>env</code></li>
+<li><code>keyring</code></li>
+<li><code>auto</code></li>
+</ul>
+<p><code>auto</code> 也接受 <code>autodetect</code>。</p>
+<h3 id="--apply-recommended"><a class="header" href="#--apply-recommended"><code>--apply-recommended</code></a></h3>
+<p>將 Provider 能力推薦應用到當前 <code>config.toml</code> 並退出。</p>
+<p>在接入新 Provider 或更改模型組合後使用。</p>
+<h3 id="--force"><a class="header" href="#--force"><code>--force</code></a></h3>
+<p>即使目標文件已存在也強制運行 setup。</p>
+<p>謹慎使用，尤其是當你精心維護了一個手寫的 <code>config.toml</code> 時。</p>
+<h2 id="本地模型註冊"><a class="header" href="#本地模型註冊">本地模型註冊</a></h2>
+<h3 id="--add-local-model-或---add-model"><a class="header" href="#--add-local-model-或---add-model"><code>--add-local-model</code> 或 <code>--add-model</code></a></h3>
+<p>在配置中添加或更新本地模型 Agent 條目。</p>
+<p>此標誌通常與下面的 <code>--local-model-*</code> 選項組合使用。</p>
+<h3 id="--local-model-name-name"><a class="header" href="#--local-model-name-name"><code>--local-model-name &lt;NAME&gt;</code></a></h3>
+<p>邏輯 Agent 名稱。</p>
+<h3 id="--local-model-url-url"><a class="header" href="#--local-model-url-url"><code>--local-model-url &lt;URL&gt;</code></a></h3>
+<p>本地 Provider 的端點 URL。</p>
+<h3 id="--local-model-type-type"><a class="header" href="#--local-model-type-type"><code>--local-model-type &lt;TYPE&gt;</code></a></h3>
+<p>Provider 類型。默認意圖為 <code>openai</code>。</p>
+<h3 id="--local-model-model-model_id"><a class="header" href="#--local-model-model-model_id"><code>--local-model-model &lt;MODEL_ID&gt;</code></a></h3>
+<p>要存儲在配置中的模型標識符。</p>
+<h3 id="--local-model-api-key-env-env_name"><a class="header" href="#--local-model-api-key-env-env_name"><code>--local-model-api-key-env &lt;ENV_NAME&gt;</code></a></h3>
+<p>可選的 API 密鑰環境變量字段。</p>
+<h3 id="--local-model-secret-key-env-env_name"><a class="header" href="#--local-model-secret-key-env-env_name"><code>--local-model-secret-key-env &lt;ENV_NAME&gt;</code></a></h3>
+<p>可選的密鑰環境變量字段。</p>
+<h3 id="--local-model-register-only"><a class="header" href="#--local-model-register-only"><code>--local-model-register-only</code></a></h3>
+<p>僅在 <code>[agents]</code> 下注冊本地模型，而不自動附加到 phase agent 列表。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --add-local-model \
+  --local-model-name ollama-local \
+  --local-model-url http://127.0.0.1:11434/v1 \
+  --local-model-type openai \
+  --local-model-model qwen2.5-coder \
+  --local-model-register-only
+</code></pre>
+<h2 id="secret-管理"><a class="header" href="#secret-管理">Secret 管理</a></h2>
+<h3 id="--secret-action"><a class="header" href="#--secret-action"><code>--secret &lt;ACTION&gt;</code></a></h3>
+<p>接受的動作：</p>
+<ul>
+<li><code>set</code></li>
+<li><code>get</code></li>
+<li><code>delete</code></li>
+<li><code>list</code></li>
+</ul>
+<h3 id="--secret-name-secret_name"><a class="header" href="#--secret-name-secret_name"><code>--secret-name &lt;SECRET_NAME&gt;</code></a></h3>
+<p>邏輯 Secret 目標的名稱。</p>
+<h3 id="--secret-value-secret_value"><a class="header" href="#--secret-value-secret_value"><code>--secret-value &lt;SECRET_VALUE&gt;</code></a></h3>
+<p>與 <code>set</code> 一起使用的 Secret 值。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --secret list
+go-on --secret set --secret-name openai --secret-value YOUR_KEY
+go-on --secret get --secret-name openai
+go-on --secret delete --secret-name openai
+</code></pre>
+<h2 id="規劃與製品檢查"><a class="header" href="#規劃與製品檢查">規劃與製品檢查</a></h2>
+<h3 id="--action-check-action_check"><a class="header" href="#--action-check-action_check"><code>--action-check &lt;ACTION_CHECK&gt;</code></a></h3>
+<p>針對 <code>.goon/</code> 製品運行操作檢查。</p>
+<p>幫助中描述的預期值：</p>
+<ul>
+<li><code>all</code></li>
+<li><code>spec</code></li>
+<li><code>qa</code></li>
+<li><code>retest</code></li>
+<li><code>final</code></li>
+</ul>
+<h3 id="--plan-task-plan_task"><a class="header" href="#--plan-task-plan_task"><code>--plan-task &lt;PLAN_TASK&gt;</code></a></h3>
+<p>為複雜任務構建並持久化一個受控的任務規劃製品。</p>
+<p>當你希望運行時在執行前物化一個持久的規劃對象時使用。</p>
+<h2 id="傳輸模式選擇"><a class="header" href="#傳輸模式選擇">傳輸模式選擇</a></h2>
+<h3 id="--protocol-mode-mode"><a class="header" href="#--protocol-mode-mode"><code>--protocol-mode &lt;MODE&gt;</code></a></h3>
+<p>接受的值：</p>
+<ul>
+<li><code>adaptive</code>（推薦默認）</li>
+<li><code>acp_stdio</code></li>
+<li><code>acp_http</code></li>
+<li><code>mcp_stdio</code></li>
+<li><code>mcp_http</code></li>
+</ul>
+<p>推薦用法：</p>
+<ul>
+<li><code>adaptive</code>：當多個客戶端可能連接時的最安全默認值；它保留雙棧請求路由並從運行時前提條件推導啟動傳輸。</li>
+<li><code>acp_stdio</code>：當編輯器將 <code>go-on</code> 作為子進程啟動時的最佳選擇。</li>
+<li><code>acp_http</code>：當 ACP 兼容客戶端需要一個共享的長時間運行後端時的最佳選擇。</li>
+<li><code>mcp_stdio</code>：僅當你的客戶端明確期望 MCP over stdio 時使用。</li>
+<li><code>mcp_http</code>：當你的客戶端需要 OpenAI 兼容的 <code>/v1</code> HTTP 端點時的最佳選擇。</li>
+</ul>
+<h3 id="--acp-http-bind-addr"><a class="header" href="#--acp-http-bind-addr"><code>--acp-http-bind &lt;ADDR&gt;</code></a></h3>
+<p>綁定 HTTP 監聽器並暴露：</p>
+<ul>
+<li><code>/health</code></li>
+<li><code>/chat</code></li>
+<li><code>/chat/stream</code></li>
+</ul>
+<p>實踐中，同一運行時也會暴露 OpenAI 兼容的 <code>/v1</code> 端點，用於 Zed 模型提供方風格的集成和運行時探測。</p>
+<p>示例：</p>
+<pre><code class="language-bash">go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+</code></pre>
+<h2 id="常用命令配方"><a class="header" href="#常用命令配方">常用命令配方</a></h2>
+<p>最小化 setup：</p>
+<pre><code class="language-bash">go-on --setup --setup-level standard --setup-secrets auto
+</code></pre>
+<p>驗證然後檢查就緒狀態：</p>
+<pre><code class="language-bash">go-on --config config.toml --validate-config
+go-on --config config.toml --status
+</code></pre>
+<p>為 GUI、Zed 和探測啟動共享的本地 HTTP 運行時：</p>
+<pre><code class="language-bash">go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+</code></pre>
+<p>為編輯器啟動的集成運行 ACP over stdio：</p>
+<pre><code class="language-bash">go-on --config config.toml --protocol-mode acp_stdio --verbose
+</code></pre>
+<h2 id="操作指導"><a class="header" href="#操作指導">操作指導</a></h2>
+<ul>
+<li>在假設傳輸層故障之前，先使用 <code>--validate-config</code>。</li>
+<li>在打開 GUI 或編輯器插件之前，先使用 <code>--status</code>。</li>
+<li>除非你有具體的客戶端契約要求僅 ACP 或僅 MCP 行為，否則使用 <code>adaptive</code>。</li>
+<li>在接入本地 OpenAI 兼容端點時，優先使用 <code>--add-local-model</code> 而不是手動編輯配置。</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="setup-wizard.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="deployment/local.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="setup-wizard.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="deployment/local.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

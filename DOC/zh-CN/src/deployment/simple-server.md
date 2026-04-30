@@ -1,0 +1,1 @@
+../../../src/zh-CN/deployment/simple-server.md
