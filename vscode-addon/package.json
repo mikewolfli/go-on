@@ -2,7 +2,7 @@
   "name": "go-on-vscode",
   "displayName": "Go-On VS Code Extension",
   "description": "VS Code extension for the Go-On Rust ACP proxy",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "engines": {
     "vscode": "^1.74.0"
   },

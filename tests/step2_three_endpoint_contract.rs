@@ -592,20 +592,20 @@ mod three_endpoint_contract_tests {
         // Backend health response shape
         let backend = json!({
             "status": "ok",
-            "version": "0.8.2",
+            "version": "0.8.3",
             "uptime_seconds": 3600
         });
 
         // GUI expected shape
         let gui = json!({
             "status": "ok",
-            "version": "0.8.2"
+            "version": "0.8.3"
         });
 
         // Addon expected shape
         let addon = json!({
             "status": "ok",
-            "version": "0.8.2"
+            "version": "0.8.3"
         });
 
         assert!(validate_health_contract(&backend).is_ok());
@@ -696,7 +696,7 @@ mod three_endpoint_contract_tests {
             "version": "1.0",
             "serverInfo": {
                 "name": "go-on",
-                "version": "0.8.2"
+                "version": "0.8.3"
             }
         });
 

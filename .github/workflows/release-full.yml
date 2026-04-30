@@ -26,24 +26,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
+            libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
             libgtk-3-dev
 
-      # ── Backend: build + clippy under all 3 profiles ───────────────────
-      - name: Build profile-local (release)
-        run: cargo build --release
-
-      - name: Clippy (3 profiles)
-        shell: bash
-        run: |
-          cargo clippy -F profile-local -- -D warnings
-          cargo clippy --no-default-features -F profile-simple-server -- -D warnings
-          cargo clippy --no-default-features -F profile-multi-users-server -- -D warnings
-
-      - name: Run full test suite (profile-local)
-        run: cargo test -F profile-local
+      # ── Backend: build release binary ─────────────────────────────────
+      # Checks (clippy, tests) are already run by build.yml on every push/PR.
+      - name: Build backend (release, profile-local)
+        run: cargo build --release --locked
 
       # ── GUI ────────────────────────────────────────────────────────────
       - name: Set up Node.js
@@ -54,7 +45,7 @@ jobs:
       - name: Build GUI
         working-directory: ./GUI
         run: |
-          npm install
+          npm ci
           npm run build
           npm run tauri build
 
@@ -62,7 +53,7 @@ jobs:
       - name: Build VS Code addon and package vsix
         working-directory: ./vscode-addon
         run: |
-          npm install
+          npm ci
           npm run compile
           npm test
           npx @vscode/vsce package --no-dependencies --out go-on-vscode.vsix

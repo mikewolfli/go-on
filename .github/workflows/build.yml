@@ -1,5 +1,5 @@
 ---
-name: Build Backend and GUI
+name: CI Gate (check + clippy + tests)
 on:
   workflow_dispatch:
   push:
@@ -72,50 +72,3 @@ jobs:
         run: npm --prefix GUI run build
       - name: GUI contract smoke
         run: npm --prefix GUI run test:contract
-
-      # ── Upload OS-specific artifact ───────────────────────────────────
-      - name: Upload backend artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: go-on-backend-${{ matrix.os }}
-          path: target/release/go-on
-  build:
-    name: Full Build
-    needs: gate
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Build backend (profile-local, release)
-        run: cargo build --release
-      - name: Build GUI
-        working-directory: ./GUI
-        run: |
-          npm ci
-          npm test
-          npm run build
-      - name: Build VS Code addon
-        working-directory: ./vscode-addon
-        run: |
-          npm ci
-          npm run compile
-          npm test
-      - name: Upload backend artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: go-on-backend-${{ matrix.os }}
-          path: target/release/go-on
-      - name: Upload GUI artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: go-on-gui-dist-${{ matrix.os }}
-          path: GUI/dist/
