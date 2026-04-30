@@ -49,6 +49,7 @@ impl fmt::Display for TransportChannel {
 
 /// Quality of Service level for a message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub enum QosLevel {
     /// At most once (fire and forget)
     AtMostOnce,

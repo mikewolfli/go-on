@@ -24,6 +24,7 @@ impl CrossProcessLock {
     fn lock(path: &Path) -> Self {
         let file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(true)
             .read(true)
             .write(true)
             .open(path)

@@ -2275,7 +2275,7 @@ async fn execute_single_subtask(
     );
     let startup_evidence = crate::orchestration::startup_context::get()
         .as_ref()
-        .map(|ctx| crate::orchestration::startup_context::summary_text(ctx))
+        .map(crate::orchestration::startup_context::summary_text)
         .filter(|s| !s.is_empty());
     let mut evidence_parts = Vec::new();
     if let Some(summary) = startup_evidence {

@@ -735,10 +735,10 @@ mod tests {
     #[test]
     fn test_forgetting_curve_decay_formula() {
         // Verifies: current_strength = original * exp(-decay * elapsed_hours)
-        let original = 1.0;
-        let decay_rate = 0.1;
-        let elapsed_hours = 10.0;
-        let strength = original * (-decay_rate * elapsed_hours as f64).exp();
+        let original: f64 = 1.0;
+        let decay_rate: f64 = 0.1;
+        let elapsed_hours: f64 = 10.0;
+        let strength = original * (-decay_rate * elapsed_hours).exp();
         let expected = (-1.0_f64).exp(); // e^-1 ≈ 0.3679
         assert!((strength - expected).abs() < 0.001);
     }

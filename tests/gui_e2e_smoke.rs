@@ -2,7 +2,6 @@
 /// Validates that the data contracts between GUI components and backend
 /// are consistent. These tests don't require a browser; they validate
 /// the JSON shapes that Vue components expect.
-
 #[cfg(test)]
 mod gui_e2e_smoke_tests {
     use serde_json::{json, Value};

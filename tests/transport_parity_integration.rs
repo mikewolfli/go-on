@@ -16,13 +16,12 @@ use fs2::FileExt;
 ///
 /// Schema version must be "blue24-platform-universal-v1" across all paths.
 use serde_json::{json, Value};
-use serial_test::serial;
 use std::fs;
 use std::io::Write;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
@@ -40,6 +39,7 @@ impl CrossProcessLock {
     fn lock(path: &Path) -> Self {
         let file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(true)
             .read(true)
             .write(true)
             .open(path)

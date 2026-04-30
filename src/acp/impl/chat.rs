@@ -3623,6 +3623,50 @@ fn record_trace_event(
     // Trace sink will be extended with persistent storage in a follow-up.
 }
 
+/// Run tool execution loop for full_auto mode
+/// This function integrates the tool execution loop from request.rs into the chat flow
+#[cfg(test)]
+#[allow(dead_code)]
+fn run_tool_execution_loop(task: &str, subtask: &str, record_index: usize) -> String {
+    // Simplified tool execution loop
+    format!(
+        "Tool execution loop for task: {} (subtask: {}, index: {})",
+        task, subtask, record_index
+    )
+}
+
+/// Extract model tool calls from response
+fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<String> {
+    // Simplified tool call extraction
+    let mut calls = Vec::new();
+    if response.contains("tool") || response.contains("function") || response.contains("call") {
+        calls.push("simulated_tool_call".to_string());
+    }
+    calls.truncate(max_calls);
+    calls
+}
+
+/// Execute model tool calls
+#[cfg(test)]
+#[allow(dead_code)]
+fn execute_tool_calls(
+    task: &str,
+    subtask: &str,
+    record_index: usize,
+    calls: &[String],
+) -> Vec<String> {
+    // Simplified tool execution
+    calls
+        .iter()
+        .map(|call| {
+            format!(
+                "Executed {} for task {} (subtask: {}, index: {})",
+                call, task, subtask, record_index
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -3993,48 +4037,4 @@ mod tests {
             "vector context must be injected into system message"
         );
     }
-}
-
-/// Run tool execution loop for full_auto mode
-/// This function integrates the tool execution loop from request.rs into the chat flow
-#[cfg(test)]
-#[allow(dead_code)]
-fn run_tool_execution_loop(task: &str, subtask: &str, record_index: usize) -> String {
-    // Simplified tool execution loop
-    format!(
-        "Tool execution loop for task: {} (subtask: {}, index: {})",
-        task, subtask, record_index
-    )
-}
-
-/// Extract model tool calls from response
-fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<String> {
-    // Simplified tool call extraction
-    let mut calls = Vec::new();
-    if response.contains("tool") || response.contains("function") || response.contains("call") {
-        calls.push("simulated_tool_call".to_string());
-    }
-    calls.truncate(max_calls);
-    calls
-}
-
-/// Execute model tool calls
-#[cfg(test)]
-#[allow(dead_code)]
-fn execute_tool_calls(
-    task: &str,
-    subtask: &str,
-    record_index: usize,
-    calls: &[String],
-) -> Vec<String> {
-    // Simplified tool execution
-    calls
-        .iter()
-        .map(|call| {
-            format!(
-                "Executed {} for task {} (subtask: {}, index: {})",
-                call, task, subtask, record_index
-            )
-        })
-        .collect()
 }

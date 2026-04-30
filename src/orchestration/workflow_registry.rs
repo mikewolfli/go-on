@@ -707,7 +707,9 @@ mod tests {
     #[test]
     fn test_match_disabled_profile_returns_none() {
         let mut registry = WorkflowRegistry::new_with_profile();
-        registry.profile_mut().map(|p| p.enabled = false);
+        if let Some(p) = registry.profile_mut() {
+            p.enabled = false;
+        }
         let ctx = TaskContext {
             task_type: "bug_fix".to_string(),
             complexity_score: 0.3,

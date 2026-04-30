@@ -1,8 +1,10 @@
-/// OpenCLAW Zero-Trust RBAC Module
-/// Implements Role-Based Access Control for multi-tenant deployments.
-///
-/// This provides a minimal but functional RBAC system that can be extended
-/// for full OpenCLAW compliance.
+#![allow(dead_code)]
+//! OpenCLAW Zero-Trust RBAC Module
+//! Implements Role-Based Access Control for multi-tenant deployments.
+//!
+//! This provides a minimal but functional RBAC system that can be extended
+//! for full OpenCLAW compliance.
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 

@@ -4,6 +4,7 @@
 //! Join nodes (sync point after parallel execution), and Condition nodes
 //! (branching based on condition evaluation). Designed for F-GAP-04.
 
+#![allow(dead_code)]
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

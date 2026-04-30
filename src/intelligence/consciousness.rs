@@ -542,7 +542,7 @@ mod tests {
         assert!(record.id.starts_with("reflexion-"));
         assert_eq!(record.trigger, "test trigger");
         assert_eq!(record.state_before, ConsciousnessState::Minimal);
-        assert_eq!(record.timestamp_ms > 0, true);
+        assert!(record.timestamp_ms > 0);
         assert!(!record.insights.is_empty());
     }
 

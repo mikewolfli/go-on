@@ -791,7 +791,7 @@ mod tests {
         assert_eq!(l0_counters.allow, 0);
 
         // Other layers should not have been touched.
-        assert!(profile.layers.get("L1CacheReuse").is_none());
+        assert!(!profile.layers.contains_key("L1CacheReuse"));
     }
 
     #[test]

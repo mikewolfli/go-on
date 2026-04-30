@@ -703,7 +703,7 @@ mod three_endpoint_contract_tests {
         assert!(validate_initialize_contract(&response).is_ok());
 
         // Protocol must be a recognized value
-        let valid_protocols = vec!["acp", "mcp", "auto"];
+        let valid_protocols = ["acp", "mcp", "auto"];
         assert!(valid_protocols.contains(&response["protocol"].as_str().unwrap()));
 
         // serverInfo must have name and version

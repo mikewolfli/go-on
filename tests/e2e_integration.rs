@@ -4,8 +4,7 @@
 /// Each test validates a specific cross-module flow, not individual components.
 ///
 /// These tests use the same RpcHarness pattern as acp_runtime_rpc_integration.
-use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -15,7 +14,6 @@ use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 use serde_json::{json, Value};
-use tempfile::tempdir;
 
 // ---------------------------------------------------------------------------
 // Cross-process file lock — serialises go-on child-process creation across
@@ -38,6 +36,7 @@ impl CrossProcessLock {
     fn lock(path: &Path) -> Self {
         let file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(true)
             .read(true)
             .write(true)
             .open(path)
@@ -362,7 +361,7 @@ mod e2e_tests {
         assert!(repair_readiness["governance_mode"].is_string());
         assert!(repair_readiness["reason"].is_string());
 
-        let valid_modes = vec!["assisted", "conservative", "manual", "disabled"];
+        let valid_modes = ["assisted", "conservative", "manual", "disabled"];
         let mode = repair_readiness["governance_mode"].as_str().unwrap();
         assert!(
             valid_modes.contains(&mode),
@@ -388,7 +387,7 @@ mod e2e_tests {
         if let Some(actions) = repair_history["actions"].as_array() {
             for action in actions {
                 assert!(action["result"].is_string());
-                let valid_results = vec!["success", "in_progress", "failed"];
+                let valid_results = ["success", "in_progress", "failed"];
                 assert!(valid_results.contains(&action["result"].as_str().unwrap()));
             }
         }

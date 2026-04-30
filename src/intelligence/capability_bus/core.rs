@@ -617,7 +617,7 @@ impl CapabilityBus {
     // Stage 1: Sensing — gather input from sub-buses
     // ------------------------------------------------------------------
 
-    pub fn sense(&self, task: &TaskContext) -> SensingOutput {
+    pub fn sense(&self, _task: &TaskContext) -> SensingOutput {
         let cap_agents = self
             .capability_graph
             .lock()

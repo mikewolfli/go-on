@@ -472,7 +472,7 @@ mod tests {
         let found = ledger.entries_between(ts - 1000, ts + 1000);
         assert_eq!(found.len(), 2, "both entries should be in the time window");
 
-        let found_none = ledger.entries_between(0, ts.checked_sub(100_000).unwrap_or(0));
+        let found_none = ledger.entries_between(0, ts.saturating_sub(100_000));
         assert_eq!(found_none.len(), 0, "no entries should match a past window");
     }
 
