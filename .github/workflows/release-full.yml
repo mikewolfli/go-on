@@ -67,9 +67,9 @@ jobs:
           mkdir -p "$PKG"
 
           # GUI binary (platform-specific)
-          GUI_BIN=$(find GUI/src-tauri/target/release/bundle -type f \( -name "go-on-gui" -o -name "go-on-gui.exe" -o -name "*.AppImage" -o -name "*.dmg" \) 2>/dev/null | head -1)
+          GUI_BIN=$(find GUI/src-tauri/target/release/bundle -type f \( -name "go-on-gui" -o -name "go-on-gui.exe" -o -name "*.AppImage" -o -name "*.dmg" \) 2>/dev/null | head -1 || true)
           if [ -z "$GUI_BIN" ]; then
-            GUI_BIN=$(find GUI/src-tauri/target/release -maxdepth 1 \( -name "go-on-gui" -o -name "go-on-gui.exe" \) 2>/dev/null | head -1)
+            GUI_BIN=$(find GUI/src-tauri/target/release -maxdepth 1 \( -name "go-on-gui" -o -name "go-on-gui.exe" \) 2>/dev/null | head -1 || true)
           fi
           [ -n "$GUI_BIN" ] && cp "$GUI_BIN" "$PKG/"
 
@@ -83,8 +83,8 @@ jobs:
           else
             cp target/release/go-on "$PKG/backend/" 2>/dev/null || true
           fi
-          cp -r RULES                               "$PKG/backend/"
-          cp -r languages                           "$PKG/backend/"
+          cp -r RULES                               "$PKG/backend/"  || true
+          cp -r languages                           "$PKG/backend/"  || true
           cp config/config.toml                     "$PKG/backend/"  || true
           cp config/config.coding.toml              "$PKG/backend/"  || true
           cp config/config.simple-server.toml       "$PKG/backend/"  || true
