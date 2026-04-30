@@ -435,6 +435,17 @@
     "error.circuit_breaker_already_registered": "斷路器 '{name}' 已註冊",
     "error.transport_already_running": "傳輸層已在運行",
     "error.transport_not_running": "傳輸層未在運行",
-    "error.transport_single_node": "單節點模式下傳輸層不可用"
+    "error.transport_single_node": "單節點模式下傳輸層不可用",
+    "error.checkpoint_message_too_large": "檢查點訊息超出最大支援大小",
+    "error.invalid_openai_chat_request": "無效的 OpenAI 聊天請求: {error}",
+    "error.imported_skill_not_found": "匯入的技能 '{name}' 未找到",
+    "error.tenant_limit_exceeded": "租戶 '{tenant_id}' 超出每日 API 呼叫限制 ({calls}/{limit})",
+    "error.policy_already_registered": "策略 '{name}' 已註冊",
+    "error.alert_not_found": "告警 '{alert_id}' 未找到",
+    "error.circuit_breaker_not_found": "斷路器 '{name}' 未找到",
+    "error.failover_group_not_found": "故障轉移組 '{name}' 未找到",
+    "error.token_not_found": "權杖 '{token_id}' 未找到",
+    "error.token_revoked": "權杖 '{token_id}' 已被撤銷",
+    "error.token_expired": "權杖 '{token_id}' 已於 {expires_at} 過期 (當前: {now})"
   }
 }

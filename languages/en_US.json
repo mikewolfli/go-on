@@ -435,6 +435,17 @@
     "error.circuit_breaker_already_registered": "Circuit breaker '{name}' is already registered",
     "error.transport_already_running": "Transport is already running",
     "error.transport_not_running": "Transport is not running",
-    "error.transport_single_node": "Transport is not available in single-node mode"
+    "error.transport_single_node": "Transport is not available in single-node mode",
+    "error.checkpoint_message_too_large": "checkpoint message exceeds maximum supported size",
+    "error.invalid_openai_chat_request": "invalid OpenAI chat request: {error}",
+    "error.imported_skill_not_found": "imported skill '{name}' not found",
+    "error.tenant_limit_exceeded": "tenant '{tenant_id}' exceeded daily API call limit ({calls}/{limit})",
+    "error.policy_already_registered": "policy '{name}' is already registered",
+    "error.alert_not_found": "alert '{alert_id}' not found",
+    "error.circuit_breaker_not_found": "Circuit breaker '{name}' not found",
+    "error.failover_group_not_found": "Failover group '{name}' not found",
+    "error.token_not_found": "Token '{token_id}' not found",
+    "error.token_revoked": "Token '{token_id}' has been revoked",
+    "error.token_expired": "Token '{token_id}' expired at {expires_at} (now: {now})"
   }
 }

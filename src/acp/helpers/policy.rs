@@ -23,7 +23,7 @@ fn extra_u64(options: Option<&PhaseOptions>, key: &str) -> Option<u64> {
         .and_then(|v| v.as_u64())
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-17 — reserved for future f64 extra policy parameters
 fn extra_f64(options: Option<&PhaseOptions>, key: &str) -> Option<f64> {
     options
         .and_then(|opts| opts.extra.get(key))
@@ -126,7 +126,7 @@ pub fn resolve_review_policy(
 }
 
 /// Convert required check names to ActionCheckKind enum values
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-17 — reserved for action gate integration
 pub fn action_check_kinds_from_policy(required_checks: &[String]) -> Vec<ActionCheckKind> {
     if required_checks.is_empty() {
         return Vec::new();
@@ -168,7 +168,7 @@ impl WorkGrade {
     }
 
     /// Convert work grade to string representation
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for serialization in policy reports
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Ask => "ask",
@@ -342,18 +342,6 @@ pub struct OptimizationPolicyOutcome {
     pub force_fail_fast: bool,
 }
 
-/// Default optimization modules
-#[allow(dead_code)]
-const DEFAULT_OPTIMIZATION_MODULES: &[&str] = &[
-    "workflow_optimizer",
-    "advanced_modules",
-    "reliability_optimizer",
-    "failure_prevention",
-    "speed_optimizer",
-    "cost_optimizer",
-    "adaptive_selector",
-];
-
 /// Check if module name is supported
 pub fn is_supported_optimization_module(name: &str) -> bool {
     matches!(
@@ -392,10 +380,15 @@ pub fn evaluate_optimization_policy(
 
     let mut attached_modules = if auto_attach {
         if requested_modules.is_empty() {
-            DEFAULT_OPTIMIZATION_MODULES
-                .iter()
-                .map(|name| (*name).to_string())
-                .collect::<Vec<_>>()
+            vec![
+                "workflow_optimizer".to_string(),
+                "advanced_modules".to_string(),
+                "reliability_optimizer".to_string(),
+                "failure_prevention".to_string(),
+                "speed_optimizer".to_string(),
+                "cost_optimizer".to_string(),
+                "adaptive_selector".to_string(),
+            ]
         } else {
             requested_modules.clone()
         }

@@ -9,6 +9,7 @@
 //! Each backend is optional. When a backend is `None`, its level is
 //! transparently skipped during lookup and store operations.
 
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, Mutex as StdMutex};
 
 use crate::cache::ResponseCache;
@@ -49,7 +50,7 @@ impl Default for CacheStrategy {
 // ---------------------------------------------------------------------------
 
 /// Runtime profile / metrics snapshot for the MemoryBus.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryBusProfile {
     /// Whether the bus is enabled.
     pub enabled: bool,

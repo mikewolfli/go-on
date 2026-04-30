@@ -6,6 +6,7 @@
 //! and intelligent execution mode recommendation based on task characteristics.
 
 use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,7 +17,7 @@ use crate::orchestration::flow::FlowManager;
 // ── Supporting types ────────────────────────────────────────────────────────
 
 /// Profile snapshot of the OrchestrationBus at a given point in time.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestrationBusProfile {
     /// Whether orchestration is enabled
     pub enabled: bool,

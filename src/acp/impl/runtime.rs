@@ -1236,7 +1236,7 @@ async fn handle_openai_chat_completions(
         Err(err) => {
             let payload = serde_json::json!({
                 "error": {
-                    "message": format!("invalid OpenAI chat request: {err}"),
+                    "message": tf("error.invalid_openai_chat_request", &[("error", &err.to_string())]),
                     "type": "invalid_request_error"
                 }
             });

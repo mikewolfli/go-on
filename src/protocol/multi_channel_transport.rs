@@ -18,6 +18,7 @@ use serde_json::Value;
 // ---------------------------------------------------------------------------
 
 /// Identifies the transport channel.
+#[allow(dead_code)] // F-GAP-29 — used by profile-multi-users-server
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum TransportChannel {
     /// Control channel — governance, policy, heartbeat
@@ -48,6 +49,7 @@ impl fmt::Display for TransportChannel {
 }
 
 /// Quality of Service level for a message.
+#[allow(dead_code)] // F-GAP-29 — used by profile-multi-users-server
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
 pub enum QosLevel {
@@ -60,6 +62,7 @@ pub enum QosLevel {
 }
 
 /// Priority of a message within its channel.
+#[allow(dead_code)] // F-GAP-29 — used by profile-multi-users-server
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MessagePriority {
     /// Must be processed immediately
@@ -73,6 +76,7 @@ pub enum MessagePriority {
 }
 
 /// Delivery guarantee status.
+#[allow(dead_code)] // F-GAP-29 — used by profile-multi-users-server
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DeliveryStatus {
     Pending,
@@ -87,6 +91,7 @@ pub enum DeliveryStatus {
 // ---------------------------------------------------------------------------
 
 /// A message to be transported over a channel.
+#[allow(dead_code)] // F-GAP-29 — used by profile-multi-users-server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelMessage {
     pub id: String,
@@ -104,6 +109,7 @@ pub struct ChannelMessage {
 }
 
 /// Statistics for a single channel.
+#[allow(dead_code)] // F-GAP-29 — used by profile-multi-users-server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelStats {
     pub channel: TransportChannel,
@@ -117,6 +123,7 @@ pub struct ChannelStats {
 }
 
 /// Channel configuration.
+#[allow(dead_code)] // F-GAP-29 — used by profile-multi-users-server
 #[derive(Debug, Clone)]
 pub struct ChannelConfig {
     pub max_queue_depth: usize, // Default: 10000
@@ -143,6 +150,7 @@ impl Default for ChannelConfig {
 }
 
 /// Transport profile snapshot.
+#[allow(dead_code)] // F-GAP-29 — used by profile-multi-users-server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportProfile {
     pub enabled: bool,
@@ -160,6 +168,7 @@ pub struct TransportProfile {
 // Internal state
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)] // F-GAP-29 — used by profile-multi-users-server
 struct TransportInner {
     config: ChannelConfig,
     queues: HashMap<TransportChannel, VecDeque<ChannelMessage>>,
@@ -181,11 +190,13 @@ struct TransportInner {
 ///
 /// Each channel is isolated with its own queue, config, and statistics.
 /// Messages are routed to the appropriate channel based on their `TransportChannel` type.
+#[allow(dead_code)] // F-GAP-29 — used by profile-multi-users-server
 pub struct MultiChannelTransport {
     inner: Arc<Mutex<TransportInner>>,
     next_message_id: AtomicU64,
 }
 
+#[allow(dead_code)] // F-GAP-29 — used by profile-multi-users-server
 impl MultiChannelTransport {
     // ── construction ──────────────────────────────────────────────────────
 

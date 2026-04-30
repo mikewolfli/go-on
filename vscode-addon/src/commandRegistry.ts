@@ -12,6 +12,7 @@ export interface ViewCommandRegistryDeps {
   switchSession: (_sessionName: string) => void;
   clearChat: () => void;
   exportChat: () => void;
+  sendRequest: (_method: string, _params?: unknown) => Promise<unknown>;
 }
 
 export function registerViewCommands(
@@ -144,24 +145,41 @@ export function registerViewCommands(
 
   const switchSessionCommand = vscode.commands.registerCommand(
     "go-on.switchSession",
-    () => {
-      Promise.resolve(
-        vscode.window.showQuickPick(["default", "session1", "session2"], {
-          placeHolder: "Select a chat session to switch to",
-        }),
-      )
-        .then((session) => {
-          if (session) {
-            deps.switchSession(session);
-          }
-        })
-        .catch((error: unknown) => {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          vscode.window.showErrorMessage(
-            `Failed to switch session: ${message}`,
-          );
+    async () => {
+      // Fetch sessions dynamically from backend via conversation.checkpoint.list RPC.
+      let sessionNames: string[] = ["default"];
+      try {
+        const result = await deps.sendRequest("conversation.checkpoint.list", {
+          conversation_id: "default",
         });
+        if (result && typeof result === "object" && "checkpoints" in result) {
+          const checkpoints = (result as Record<string, unknown>).checkpoints;
+          if (Array.isArray(checkpoints)) {
+            const names = new Set<string>(["default"]);
+            for (const cp of checkpoints) {
+              if (cp && typeof cp === "object") {
+                const cid = (cp as Record<string, unknown>).conversation_id;
+                if (typeof cid === "string" && cid.length > 0) {
+                  names.add(cid);
+                }
+              }
+            }
+            sessionNames = Array.from(names);
+          }
+        }
+      } catch {
+        // RPC failed — fall back to ["default"]
+        console.warn(
+          "go-on: failed to fetch session list from backend, using default",
+        );
+      }
+
+      const session = await vscode.window.showQuickPick(sessionNames, {
+        placeHolder: "Select a chat session to switch to",
+      });
+      if (session) {
+        deps.switchSession(session);
+      }
     },
   );
 

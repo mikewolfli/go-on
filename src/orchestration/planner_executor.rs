@@ -57,6 +57,9 @@ impl Planner {
             mode: ModeKind::FullAuto,
             agent: None,
             depends_on: vec!["plan-1".to_string()],
+            // NOTE: Structured constraint parsing (e.g. JSON constraint objects with
+            // timeout, budget, and tool allowlists) is a future enhancement.
+            // Currently only a plain u64 timeout string is supported.
             timeout_seconds: task
                 .constraints
                 .as_ref()
@@ -109,22 +112,43 @@ impl Executor {
             }
 
             // Find the runtime for this mode
-            let _runtime = _runtimes.iter().find(|(kind, _)| *kind == step.mode);
+            let runtime = _runtimes.iter().find(|(kind, _)| *kind == step.mode);
 
-            // Execute step via runtime
-            // (In full implementation, delegates to ModeRuntime::run)
-            completed.push(step.step_id.clone());
-
-            results.push((
-                step.step_id.clone(),
-                Ok(AgentTaskResult {
-                    success: true,
-                    output: Some(serde_json::json!({"step": step.step_id})),
-                    error: None,
-                    audit_log: None,
-                    pua_report: None,
-                }),
-            ));
+            match runtime {
+                Some((_kind, rt)) => {
+                    // Build a task envelope for this step
+                    let envelope = AgentTaskEnvelope {
+                        task_id: format!("plan-{}_{}", plan.plan_id, step.step_id),
+                        phase: "execution".to_string(),
+                        role: step.agent.clone().unwrap_or_else(|| "agent".to_string()),
+                        objective: step.description.clone(),
+                        constraints: None,
+                        evidence: None,
+                        input: serde_json::json!({
+                            "step": &step.step_id,
+                            "mode": format!("{:?}", _kind),
+                        }),
+                    };
+                    match rt.run(envelope) {
+                        Ok(result) => {
+                            completed.push(step.step_id.clone());
+                            results.push((step.step_id.clone(), Ok(result)));
+                        }
+                        Err(e) => {
+                            results.push((
+                                step.step_id.clone(),
+                                Err(format!("runtime execution failed: {}", e)),
+                            ));
+                        }
+                    }
+                }
+                None => {
+                    results.push((
+                        step.step_id.clone(),
+                        Err(format!("no runtime found for mode {:?}", step.mode)),
+                    ));
+                }
+            }
         }
 
         results
@@ -173,7 +197,33 @@ mod tests {
         let plan = Planner::plan(&task);
         let registry = AgentRegistry::default();
         let results = Executor::execute(&plan, &registry, &[]);
+        // With no runtimes:
+        // plan-1 (no deps) -> "no runtime found"
+        // exec-1 (depends on plan-1, which failed and was not added to completed) -> "dependencies not met"
+        // review-1 (depends on exec-1, ditto) -> "dependencies not met"
         assert_eq!(results.len(), 3);
-        assert!(results[0].1.is_ok());
+        assert!(results[0].1.is_err());
+        assert!(results[1].1.is_err());
+        assert!(results[2].1.is_err());
+    }
+
+    #[test]
+    fn test_execute_with_missing_dependency() {
+        // Create a plan where exec-1 depends on plan-1, but plan-1 will fail
+        // because there's no runtime. The dependency should still be tracked.
+        let task = make_task();
+        let plan = Planner::plan(&task);
+        let registry = AgentRegistry::default();
+        let results = Executor::execute(&plan, &registry, &[]);
+        // First step (plan-1) fails with "no runtime found"
+        assert!(results[0].1.is_err());
+        // Second step (exec-1) should have no runtime found (it depends on plan-1,
+        // but plan-1 isn't in completed since it errored)
+        // Actually: dependency check happens before runtime lookup.
+        // plan-1's step_id is "plan-1"; it's added to `completed` only on success.
+        // Since plan-1 fails, exec-1's dep isn't met -> "dependencies not met" error.
+        // Wait, looking at the code: if runtime returns Err, `completed.push` is NOT called.
+        // So exec-1 should get "dependencies not met".
+        assert!(results[1].1.is_err());
     }
 }

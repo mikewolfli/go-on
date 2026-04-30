@@ -314,7 +314,7 @@ pub(super) async fn handle_skill_remove(
     let mut store = open_skill_import_store(server)?;
     let removed = store.remove(&name);
     if !removed {
-        let reason = format!("imported skill '{}' not found", name);
+        let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
         record_skill_admin_audit("remove", &name, false, &reason);
         return send_error(server, request_id, -32602, reason, None).await;
     }
@@ -475,6 +475,45 @@ pub(super) async fn handle_phase(
         json!({
             "rate_limiter": rate_limiter,
             "inflight": inflight,
+        }),
+    )
+    .await
+}
+
+pub(super) async fn handle_models_list(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let models = server
+        .agent_registry
+        .as_ref()
+        .map(|registry| {
+            registry
+                .models()
+                .into_iter()
+                .flat_map(|(provider_name, _default_model, models)| {
+                    models.into_iter().map(move |m| {
+                        json!({
+                            "id": m.id,
+                            "name": m.name,
+                            "description": m.description,
+                            "provider": provider_name.clone(),
+                            "is_default": m.is_default,
+                            "capabilities": m.capabilities,
+                            "context_window": m.context_window,
+                        })
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "models": models
         }),
     )
     .await

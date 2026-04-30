@@ -64,6 +64,37 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
           case "deleteWorkflow":
             this._deleteWorkflow(message.workflowId);
             break;
+          case "showInputBox":
+            {
+              const result = await vscode.window.showInputBox({
+                prompt: message.prompt,
+                value: message.value,
+              });
+              this._view?.webview.postMessage({
+                type: "showInputBoxResult",
+                id: message.id,
+                value: result,
+              });
+            }
+            break;
+          case "showQuickPick":
+            {
+              const items: vscode.QuickPickItem[] = (message.items || []).map(
+                (item: { label: string; value: string }) => ({
+                  label: item.label,
+                  description: item.value,
+                }),
+              );
+              const picked = await vscode.window.showQuickPick(items, {
+                placeHolder: message.placeHolder,
+              });
+              this._view?.webview.postMessage({
+                type: "showQuickPickResult",
+                id: message.id,
+                value: picked?.description || null,
+              });
+            }
+            break;
         }
       },
       undefined,
@@ -140,7 +171,11 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
             });
             break;
           case "code":
-            // Code execution would be handled by the chat view
+            this._view?.webview.postMessage({
+              type: "stepResult",
+              stepId: step,
+              result: "Code execution not yet supported in this view",
+            });
             break;
           case "delay":
             await new Promise((resolve) =>

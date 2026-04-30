@@ -1,10 +1,10 @@
 /**
  * Configuration Manager for Go-On
  *
- * @deprecated This module is no longer actively used by the extension.
- * All configuration is managed through VS Code's workspace configuration
- * and the Go-On binary's own config.toml. This file is kept for reference
- * but may be removed in a future release.
+ * @deprecated This module is slated for removal but remains in use by settingsView.ts
+ * (TOML persistence for agents, phases, runtime, cache, vector, autotune settings)
+ * and extension.ts (initialization on activate). All new configuration should use
+ * VS Code's workspace configuration (`vscode.workspace.getConfiguration`).
  *
  * Handles all configuration management including:
  * - Reading/writing TOML configuration

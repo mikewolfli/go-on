@@ -8,6 +8,8 @@
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+
+use crate::i18n::runtime::tf;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -235,18 +237,27 @@ impl OmnipotentMode {
 
         let token = match tokens.get(token_id) {
             Some(t) => t,
-            None => return OmnipotentVerdict::Denied(format!("Token '{}' not found", token_id)),
+            None => {
+                return OmnipotentVerdict::Denied(tf(
+                    "error.token_not_found",
+                    &[("token_id", token_id)],
+                ))
+            }
         };
 
         if token.is_revoked {
-            return OmnipotentVerdict::Denied(format!("Token '{}' has been revoked", token_id));
+            return OmnipotentVerdict::Denied(tf("error.token_revoked", &[("token_id", token_id)]));
         }
 
         let now_ms = now_epoch_ms();
         if now_ms > token.expires_at {
-            return OmnipotentVerdict::Denied(format!(
-                "Token '{}' expired at {} (now: {})",
-                token_id, token.expires_at, now_ms
+            return OmnipotentVerdict::Denied(tf(
+                "error.token_expired",
+                &[
+                    ("token_id", token_id),
+                    ("expires_at", &token.expires_at.to_string()),
+                    ("now", &now_ms.to_string()),
+                ],
             ));
         }
 
@@ -414,7 +425,9 @@ mod tests {
     fn test_validate_unknown_token_denied() {
         let om = OmnipotentMode::new();
         let verdict = om.validate_token("nonexistent");
-        assert!(matches!(verdict, OmnipotentVerdict::Denied(ref s) if s.contains("not found")));
+        assert!(
+            matches!(verdict, OmnipotentVerdict::Denied(ref s) if s.contains("error.token_not_found") || s.contains("not found"))
+        );
     }
 
     #[test]

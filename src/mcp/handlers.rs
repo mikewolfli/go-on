@@ -43,6 +43,8 @@ impl McpServer {
             "tools/call" => self.handle_call_tool(&request).await,
             "resources/list" => self.handle_list_resources(&request).await,
             "resources/read" => self.handle_read_resource(&request).await,
+            "prompts/list" => self.handle_list_prompts(&request).await,
+            "prompts/get" => self.handle_get_prompt(&request).await,
             "agents/list" => self.handle_list_agents(&request).await,
             "models/list" => self.handle_list_models(&request).await,
             _ => {
@@ -243,5 +245,21 @@ impl McpServer {
             })
             .collect::<Vec<_>>();
         Ok(json!({ "models": models }))
+    }
+
+    /// Stub handler for `prompts/list`.
+    /// Returns an empty prompt list. Full prompt template support is a future enhancement.
+    async fn handle_list_prompts(&self, _request: &JsonRpcRequest) -> Result<Value> {
+        // Future enhancement: return prompt templates registered via the prompt registry
+        Ok(json!({ "prompts": [] }))
+    }
+
+    /// Stub handler for `prompts/get`.
+    /// Returns an empty result. Full prompt resolution is a future enhancement.
+    async fn handle_get_prompt(&self, _request: &JsonRpcRequest) -> Result<Value> {
+        // Future enhancement: resolve and return the requested prompt template
+        Ok(json!({
+            "messages": []
+        }))
     }
 }

@@ -1,3 +1,5 @@
+//! Audit — F-GAP-03
+//!
 //! Audit logging system for go-on (Phase 1/2)
 //!
 //! These structures are intentional framework definitions for Phase 0-9 architecture.

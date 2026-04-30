@@ -22,6 +22,7 @@
 //!   full peer set and shared‑entry machinery is active.
 
 use crate::i18n::runtime::tf;
+use serde::{Deserialize, Serialize};
 
 use std::collections::{HashMap, VecDeque};
 #[cfg(feature = "profile-multi-users-server")]
@@ -143,7 +144,7 @@ pub struct SharedMemoryEntry {
 }
 
 /// Snapshot of runtime metrics / profile.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistributedMemoryBusProfile {
     /// Whether the distributed bus is enabled.
     pub enabled: bool,

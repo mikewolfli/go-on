@@ -6,6 +6,16 @@
       <el-space direction="vertical" fill style="width: 100%">
         <el-text>{{ t("workflow.hint") }}</el-text>
 
+        <!-- Demo data warning -->
+        <el-alert
+          v-if="isUsingDemoData"
+          :title="t('common.offlineMode') || 'Backend Offline'"
+          :description="t('workflow.demoDataWarning') || 'Displaying placeholder demo data. Start the backend to see live workflow data.'"
+          type="warning"
+          show-icon
+          :closable="false"
+        />
+
         <!-- 任务列表 -->
         <el-card shadow="hover">
           <template #header>
@@ -170,11 +180,18 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkflow } from "../composables/useWorkflow";
+import { useRuntimeStore } from "../stores/runtime";
 
 const { t } = useI18n();
+const runtime = useRuntimeStore();
+
+// Demo/placeholder data indicator
+const isUsingDemoData = computed(
+  () => !runtime.status.running || runtime.offline,
+);
 
 const tasks = ref([
   {

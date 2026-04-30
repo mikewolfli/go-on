@@ -17,6 +17,7 @@
 //!                    Opt.   Prevent.   Opt.       Opt.
 //! ```
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -30,7 +31,7 @@ use crate::orchestration::workflow_optimizer::{
 // ---------------------------------------------------------------------------
 
 /// Profile / diagnostic snapshot of the optimisation bus state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationBusProfile {
     /// Whether the bus is currently enabled.
     pub enabled: bool,

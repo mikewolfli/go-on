@@ -210,6 +210,7 @@ impl DeterministicVerifier {
 // security implications, and requirement drift.
 
 /// Bias direction for adversarial probing.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdversarialBias {
     /// Probe for security vulnerabilities.
@@ -223,6 +224,7 @@ pub enum AdversarialBias {
 }
 
 /// A single adversarial finding.
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdversarialFinding {
     pub category: String,
@@ -232,6 +234,7 @@ pub struct AdversarialFinding {
 }
 
 /// Outcome of an adversarial verification pass.
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdversarialVerdict {
     pub passed: bool,
@@ -242,8 +245,10 @@ pub struct AdversarialVerdict {
 }
 
 /// Independent adversarial verifier that probes for weaknesses.
+#[cfg(test)]
 pub struct AdversarialVerifier;
 
+#[cfg(test)]
 impl AdversarialVerifier {
     /// Run an adversarial verification pass with the given bias.
     ///
@@ -427,6 +432,7 @@ impl AdversarialVerifier {
 // disagree, the arbitration strategy resolves the conflict.
 
 /// Possible arbitration outcomes.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArbitrationOutcome {
     /// Accept primary verdict.
@@ -440,6 +446,7 @@ pub enum ArbitrationOutcome {
 }
 
 /// Arbitration configuration.
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct ArbitrationConfig {
     /// Confidence threshold below which human review is required.
@@ -448,6 +455,7 @@ pub struct ArbitrationConfig {
     pub require_adversarial_on_high_risk: bool,
 }
 
+#[cfg(test)]
 impl Default for ArbitrationConfig {
     fn default() -> Self {
         Self {
@@ -468,6 +476,7 @@ impl Default for ArbitrationConfig {
 /// # Returns
 ///
 /// An `ArbitrationOutcome` indicating the resolution.
+#[cfg(test)]
 pub fn arbitrate(
     primary_verdict: &VerificationVerdict,
     adversarial_verdicts: &[AdversarialVerdict],

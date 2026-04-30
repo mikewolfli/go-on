@@ -166,6 +166,33 @@ export function useWorkflow() {
             conversations.checkpoints || totalExecuted.value,
           );
         }
+
+        // Populate tasks from backend if available
+        const backendTasks = data.panel.tasks;
+        if (Array.isArray(backendTasks) && backendTasks.length > 0) {
+          tasks.value = backendTasks.map((t: Record<string, unknown>) => ({
+            id: String(t.id || ""),
+            name: String(t.name || ""),
+            description: String(t.description || ""),
+            estimated_duration: String(t.estimated_duration || "-"),
+          }));
+        }
+
+        // Populate executionHistory from backend if available
+        const backendHistory =
+          data.panel.execution_history ?? data.panel.history;
+        if (Array.isArray(backendHistory) && backendHistory.length > 0) {
+          executionHistory.value = backendHistory.map(
+            (h: Record<string, unknown>) => ({
+              time: String(h.time || h.timestamp || "-"),
+              task_id: String(h.task_id || "-"),
+              task_name: String(h.task_name || "-"),
+              status: String(h.status || "unknown"),
+              duration: String(h.duration || "-"),
+              result: String(h.result || "-"),
+            }),
+          );
+        }
       }
       ElMessage.success(t("common.loaded"));
     } catch (err) {

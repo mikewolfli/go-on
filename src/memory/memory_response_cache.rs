@@ -1,10 +1,10 @@
-#![allow(dead_code)]
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub(crate) struct MemoryCachedResponse {
+    #[allow(dead_code)] // Bucket F — accessed via clone from get()
     pub(crate) response_text: String,
     expires_at: i64,
 }
@@ -15,6 +15,7 @@ pub struct MemoryResponseCache {
 }
 
 impl MemoryResponseCache {
+    #[allow(dead_code)] // Bucket F — used by agent response cache layer
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
         let mut guard = self.inner.lock().ok()?;
@@ -46,6 +47,7 @@ impl MemoryResponseCache {
         self.inner.lock().map(|guard| guard.len()).unwrap_or(0)
     }
 
+    #[allow(dead_code)] // Bucket F — used to store agent responses
     pub(crate) fn put(
         &self,
         key: String,

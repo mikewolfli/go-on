@@ -239,6 +239,12 @@ export const MessageKeys = {
   // RPC
   healthProbesFailed: "rpc.healthProbesFailed",
   lockStatusFailed: "rpc.lockStatusFailed",
+  healthProbesLabel: "rpc.healthProbesLabel",
+  lockStatusLabel: "rpc.lockStatusLabel",
+  enterMessage: "rpc.enterMessage",
+  messagePlaceholder: "rpc.messagePlaceholder",
+  missingEnvVars: "rpc.missingEnvVars",
+  noWorkspace: "rpc.noWorkspace",
 } as const;
 
 class I18nManager {

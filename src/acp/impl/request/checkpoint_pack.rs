@@ -104,23 +104,6 @@ pub(super) fn params_task(params: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-#[allow(dead_code)]
-pub(super) fn session_id_for_task(task: &str) -> String {
-    let compact = task
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .take(24)
-        .collect::<String>();
-    format!(
-        "clarify-{}",
-        if compact.is_empty() {
-            "session"
-        } else {
-            compact.as_str()
-        }
-    )
-}
-
 /// Create a checkpoint record and store it in the server's conversation state.
 ///
 /// Called from chat.rs and conversation.rs modules after a response is produced.

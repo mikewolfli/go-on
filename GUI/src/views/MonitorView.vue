@@ -169,13 +169,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { useRuntimeStore } from "../stores/runtime";
 import { useI18n } from "vue-i18n";
 const runtime = useRuntimeStore();
 const { t } = useI18n();
 const selfChecking = ref(false);
+
+onMounted(() => {
+  if (!runtime.status.running) {
+    runtime.refreshAll();
+  }
+});
 
 const healthScore = computed(() => {
   let score = 0;

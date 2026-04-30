@@ -48,14 +48,15 @@
   }
 
   // Copy code to clipboard
+  // NOTE: navigator.clipboard may be blocked by webview CSP.
+  // Delegate to extension host via postMessage for reliable clipboard access.
   window.copyCode = function (button) {
     const codeElement = button.previousElementSibling;
     const code = codeElement.textContent || codeElement.innerText;
-    navigator.clipboard.writeText(code).then(() => {
-      const originalText = button.textContent;
-      button.textContent = "✅";
-      setTimeout(() => (button.textContent = originalText), 1000);
-    });
+    vscode.postMessage({ type: "copyCode", code: code });
+    const originalText = button.textContent;
+    button.textContent = "✅";
+    setTimeout(() => (button.textContent = originalText), 1000);
   };
 
   // Run code functionality
@@ -218,6 +219,9 @@
   }
 
   // Enhanced message handling
+  // NOTE: Webview JS cannot access vscode i18n/localization APIs.
+  // User-facing strings below (typing indicator, session prompts) are hardcoded in English.
+  // Future improvement: pass localized strings from the extension via postMessage.
   function showTypingIndicator() {
     const indicator = document.createElement("div");
     indicator.className = "message assistant typing";
@@ -366,21 +370,26 @@
   });
 
   // Session management event listeners
+  // NOTE: prompt() is not native VS Code UX. Delegate to extension host.
   newSessionBtn.addEventListener("click", () => {
-    const sessionName = prompt("Enter a name for the new session:");
-    if (sessionName && sessionName.trim()) {
-      createNewSession(sessionName.trim());
-    }
+    vscode.postMessage({
+      type: "showInputBox",
+      prompt: "Enter a name for the new chat session",
+      id: "newSessionName",
+    });
   });
 
   sessionSelect.addEventListener("change", (e) => {
     switchSession(e.target.value);
   });
 
+  // NOTE: confirm() is not native VS Code UX. Delegate to extension host.
   clearSessionBtn.addEventListener("click", () => {
-    if (confirm(`Clear all messages in session "${currentSession}"?`)) {
-      vscode.postMessage({ type: "clearChat" });
-    }
+    vscode.postMessage({
+      type: "showConfirm",
+      message: `Clear all messages in session "${currentSession}"?`,
+      id: "clearChat",
+    });
   });
 
   exportSessionBtn.addEventListener("click", () => {
@@ -394,7 +403,12 @@
     switch (message.type) {
       case "addMessage":
         hideTypingIndicator();
-        addMessage(message.role, message.content, message.timestamp);
+        addMessage(
+          message.role,
+          message.content,
+          message.timestamp,
+          message.session,
+        );
         break;
       case "clearChat":
         clearChat();
@@ -413,6 +427,16 @@
         const statusBar = document.getElementById("status");
         statusBar.textContent = message.status;
         updateSessionIndicator();
+        break;
+      case "showInputBoxResult":
+        if (message.id === "newSessionName" && message.value) {
+          createNewSession(message.value.trim());
+        }
+        break;
+      case "showConfirmResult":
+        if (message.id === "clearChat" && message.confirmed) {
+          clearChat();
+        }
         break;
       case "newSession":
         createNewSession(message.sessionName);

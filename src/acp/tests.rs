@@ -101,48 +101,48 @@ mod test_suite {
         builder.build().expect("Failed to build test server")
     }
 
-    /// Test conversation checkpoint creation
+    /// Test conversation state is accessible on startup
     #[test]
-    fn test_create_conversation_checkpoint() {
+    fn test_conversation_state_initial() {
+        let server = phase_inference_server("coding", &["coding", "review"]);
+
+        // Verify conversation state is initialized and empty
+        let state = server.conversation_state.blocking_lock();
+        assert!(state.checkpoints.is_empty());
+        assert!(state.branch_heads.is_empty());
+    }
+
+    /// Test that conversation checkpoint creation via runtime_pack works (integration smoke test)
+    #[test]
+    fn test_conversation_checkpoint_creation_via_runtime_pack() {
+        use crate::acp::r#impl::request::checkpoint_pack::create_checkpoint_record;
+        use crate::agent::Message;
+
         let server = phase_inference_server("coding", &["coding", "review"]);
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let message = Message {
+            role: "user".to_string(),
+            content: "Test message".to_string(),
+        };
         let checkpoint = runtime
-            .block_on(
-                crate::acp::r#impl::conversation::create_conversation_checkpoint(
-                    &server,
-                    "conv-test",
-                    &crate::agent::Message {
-                        role: "user".to_string(),
-                        content: "Test message".to_string(),
-                    },
-                    Some("checkpoint note".to_string()),
-                    Some("main".to_string()),
-                ),
-            )
-            .expect("checkpoint created");
+            .block_on(create_checkpoint_record(
+                &server,
+                "conv-test",
+                "main",
+                vec![message],
+                Some("checkpoint note".to_string()),
+                None,
+            ))
+            .expect("checkpoint created via create_checkpoint_record");
 
         assert_eq!(checkpoint.conversation_id, "conv-test");
         assert_eq!(checkpoint.branch_id, "main");
         assert_eq!(checkpoint.messages.len(), 1);
+        assert!(!checkpoint.checkpoint_id.is_empty());
 
         let state = server.conversation_state.blocking_lock();
         assert_eq!(state.checkpoints.len(), 1);
         assert_eq!(state.checkpoints[0].checkpoint_id, checkpoint.checkpoint_id);
-        assert_eq!(
-            state.branch_heads.get("conv-test:main"),
-            Some(&checkpoint.checkpoint_id)
-        );
-    }
-
-    /// Test conversation state management
-    #[test]
-    fn test_conversation_state() {
-        let server = phase_inference_server("coding", &["coding", "review"]);
-
-        // Test that conversation state is accessible
-        // Note: conversation_state is Arc<Mutex<ConversationState>>
-        let state = server.conversation_state.blocking_lock();
-        assert!(state.checkpoints.is_empty());
     }
 
     /// Test server status reporting

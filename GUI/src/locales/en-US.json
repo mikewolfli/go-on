@@ -157,7 +157,8 @@
     "customArgs": "Custom Args",
     "runCustom": "Run Custom",
     "commandCompleted": "Command completed successfully.",
-    "commandFailed": "Command failed."
+    "commandFailed": "Command failed.",
+    "customArgsRequired": "Please enter command arguments"
   },
   "config": {
     "title": "Config",
@@ -466,7 +467,8 @@
     "firstPassRate": "First Pass Rate",
     "meanRepairIterations": "Mean Repair Iterations",
     "humanInterventionRate": "Human Intervention Rate",
-    "regressionRate": "Regression Rate"
+    "regressionRate": "Regression Rate",
+    "demoDataWarning": "Displaying placeholder demo data. Start the backend to see live workflow data."
   },
   "security": {
     "title": "Security",
@@ -510,9 +512,12 @@
     "auditRecentFailed": "Recent audit failed",
     "governanceStatusFailed": "Governance status check failed",
     "governanceToast": "Governance status: {status}",
+    "fixLocalOnlyWarning": "(Local-only action — backend RPC not yet available)",
     "confirmFix": "Confirm Fix",
     "fixWarning": "Are you sure you want to apply the recommended fix?",
     "fixSuccess": "Fix applied successfully.",
+    "fixRiskFailed": "Failed to apply fix. The backend may be unavailable.",
+    "settingsSavedLocally": "Settings saved locally only. Backend save failed.",
     "exportSuccess": "Exported successfully.",
     "risk1Title": "Sensitive Fields Unmasked",
     "risk1Desc": "One or more sensitive fields are exposed without masking.",
@@ -1118,65 +1123,6 @@
       "scorePoor": "Poor",
       "scoreUnknown": "Unknown"
     },
-    "ChatView": {
-      "title": "AI Chat",
-      "agentsBar": "Active Agents",
-      "noAgents": "No agents available",
-      "sessionsPanel": "Sessions",
-      "newSessionBtn": "New Session",
-      "noSessions": "No sessions yet",
-      "deleteSession": "Delete",
-      "deleteConfirm": "Delete this session?",
-      "sessionDeleted": "Session deleted",
-      "inputPlaceholder": "Type a message... (Ctrl+Enter to send)",
-      "sendBtn": "Send",
-      "thinking": "Thinking...",
-      "noMessages": "No messages yet. Start a conversation.",
-      "emptyHistory": "Conversation history will appear here",
-      "sessionSteps": "Workflow Steps",
-      "noSteps": "No steps recorded",
-      "errorNoContent": "Empty response received",
-      "attachFiles": "Attach files",
-      "filesAttached": "{n} file(s) attached",
-      "removeAllFiles": "Remove all",
-      "unsupportedFileType": "Unsupported file type: {type}",
-      "youLabel": "You",
-      "assistantLabel": "Assistant",
-      "systemLabel": "System",
-      "backendOnline": "Backend Online",
-      "backendOffline": "Backend Offline",
-      "modeLabel": "Mode",
-      "modePlan": "Plan",
-      "modeAgent": "Agent",
-      "modeEdit": "Edit",
-      "modeAuto": "Full Auto",
-      "linkLabel": "Link Type",
-      "linkLocal": "Local",
-      "linkServer": "Simple Server",
-      "linkMulti": "Multi Users",
-      "workflowLabel": "Workflow",
-      "workflowAuto": "Auto",
-      "workflowDev": "Dev",
-      "workflowGeneral": "General",
-      "workflowCustom": "Custom",
-      "copyMessage": "Copy",
-      "copySuccess": "Message copied",
-      "retryMessage": "Retry",
-      "deleteMessage": "Delete",
-      "messageDeleted": "Message deleted",
-      "stopGeneration": "Stop",
-      "scrollToBottom": "Scroll to bottom",
-      "exportChat": "Export Chat",
-      "exportSuccess": "Chat exported",
-      "clearHistory": "Clear History",
-      "clearConfirm": "Clear all messages?",
-      "historyCleared": "Conversation cleared",
-      "searchMessages": "Search messages...",
-      "noSearchResults": "No matching messages",
-      "modelLabel": "Model",
-      "tokenCount": "Tokens: {count}",
-      "elapsedTime": "Elapsed: {time}s"
-    },
     "SkillsView": {
       "title": "Skills",
       "createSkill": "Create Skill",
@@ -1235,5 +1181,19 @@
       "alwaysOnTop": "Always on Top",
       "closeConsole": "Close Console"
     }
+  },
+  "aiUsageView": {
+    "noSnapshotData": "No snapshot data available",
+    "noTrendData": "No trend data available",
+    "noPhaseData": "No phase heat data",
+    "noAgentData": "No agent heat data"
+  },
+  "monitorView": {
+    "noData": "No data available"
+  },
+  "language": {
+    "english": "English",
+    "simplifiedChinese": "简体中文",
+    "traditionalChinese": "繁體中文"
   }
 }

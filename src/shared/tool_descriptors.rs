@@ -118,7 +118,9 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
                 .and_then(|value| value.as_str())
                 .ok_or_else(|| anyhow::anyhow!("search_files requires arguments.pattern"))?;
         }
-        _ => {}
+        _ => {
+            tracing::warn!("unknown tool name passed to validation: {}", tool_name);
+        }
     }
     Ok(())
 }

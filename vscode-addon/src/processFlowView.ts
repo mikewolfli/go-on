@@ -81,6 +81,25 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
           case "importProcesses":
             await this._importProcesses(message.processes);
             break;
+          case "showInputBox":
+            {
+              const result = await vscode.window.showInputBox({
+                prompt: message.prompt,
+                value: message.value,
+              });
+              this._view?.webview.postMessage({
+                type: "showInputBoxResult",
+                id: message.id,
+                value: result,
+              });
+            }
+            break;
+          case "showWarningMessage":
+            vscode.window.showWarningMessage(message.message);
+            break;
+          case "showErrorMessage":
+            vscode.window.showErrorMessage(message.message);
+            break;
         }
       },
       undefined,
@@ -200,8 +219,13 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
             break;
           }
           case "code":
-            // Code execution result would be handled
-            stage.result = "Code execution completed";
+            this._view?.webview.postMessage({
+              type: "stageResult",
+              processId,
+              stageIndex: i,
+              result: "Code execution not yet supported in this view",
+            });
+            stage.result = "Code execution not yet supported in this view";
             break;
           case "delay":
             await new Promise((resolve) =>

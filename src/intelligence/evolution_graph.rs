@@ -5,6 +5,7 @@
 //! of agent capability maturity and automatic promotion/deprecation decisions.
 
 use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -71,7 +72,7 @@ pub struct EvolutionRecord {
 }
 
 /// Aggregate profile of the entire evolution graph.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EvolutionProfile {
     /// Total number of registered (agent, capability) pairs.
     pub total_capabilities: usize,

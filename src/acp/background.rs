@@ -452,7 +452,7 @@ pub async fn start_background_tasks(
 }
 
 /// Stop all background tasks
-#[expect(dead_code)]
+#[allow(dead_code)]
 pub async fn stop_background_tasks(shutdown_notify: Arc<Notify>) {
     shutdown_notify.notify_waiters();
 }

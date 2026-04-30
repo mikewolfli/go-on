@@ -85,6 +85,8 @@ fn is_acp_request(method: &str) -> bool {
             | "primary_secondary.summary"
             | "summary/primary_secondary"
             | "governance.status"
+            | "governance.remediate"
+            | "governance.config.save"
             | "capabilities.list"
             | "health.check"
              // diagnostics / ops also used by vscode-addon in ACP mode
@@ -96,6 +98,8 @@ fn is_acp_request(method: &str) -> bool {
             // MCP-bridge methods that ACP stdio also dispatches
             | "mcp.tools.list"
             | "mcp.tools.call"
+            | "models.list"
+            | "models/list"
     )
 }
 // Request handling implementation functions for ACP server
@@ -166,8 +170,9 @@ use crate::orchestration::skill_import::{
 };
 use crate::orchestration::task_router::TaskRouter;
 use crate::pua::{
-    load_learning_records, DynamicQualityCompass, LearningRecord, PuaExecutionReport,
-    PuaFeedbackCollector, PuaRuleEngine, PuaStageRequirement, TaskContext, TaskType,
+    load_learning_records, DynamicQualityCompass, LearningRecord, PuaEnforcementPlan,
+    PuaExecutionReport, PuaFeedbackCollector, PuaRuleEngine, PuaStageRequirement, TaskContext,
+    TaskType,
 };
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, build_workflow_generated_artifact,
@@ -207,7 +212,7 @@ mod runtime_pack;
 mod tools_pack;
 mod trace_pack;
 mod workflow_pack;
-use self::chat_pack::*;
+use self::chat_pack::{parse_messages, send_error, send_result};
 pub(crate) use self::checkpoint_pack::create_checkpoint_record;
 pub(crate) use self::checkpoint_pack::persist_checkpoint_metacognitive_loop;
 use self::checkpoint_pack::*;
@@ -744,6 +749,14 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                 "capabilities.list" => {
                     runtime_pack::handle_capabilities_list(server, request_id).await
                 }
+                "models.list" | "models/list" => {
+                    protocol_pack::handle_models_list(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
                 "governance.plan.get" => {
                     runtime_pack::handle_governance_plan_get(server, request_id).await
                 }
@@ -780,6 +793,22 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     .await
                 }
                 "health.check" => run_health_check(server).await,
+                "governance.remediate" => {
+                    runtime_pack::handle_governance_remediate(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "governance.config.save" => {
+                    runtime_pack::handle_governance_config_save(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
                 _ => {
                     send_error(
                         server,

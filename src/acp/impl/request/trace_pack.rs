@@ -162,12 +162,24 @@ pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
     let mut by_phase = serde_json::Map::new();
     for (phase, mut samples) in phase_buckets {
         samples.sort_unstable();
+        let p95 = if samples.is_empty() {
+            0
+        } else {
+            let rank = ((samples.len() - 1) as f64 * 0.95).round() as usize;
+            samples[rank.min(samples.len() - 1)]
+        };
+        let p99 = if samples.is_empty() {
+            0
+        } else {
+            let rank = ((samples.len() - 1) as f64 * 0.99).round() as usize;
+            samples[rank.min(samples.len() - 1)]
+        };
         by_phase.insert(
             phase,
             json!({
                 "count": samples.len(),
-                "p95_ms": percentile(&samples, 95.0),
-                "p99_ms": percentile(&samples, 99.0),
+                "p95_ms": p95,
+                "p99_ms": p99,
             }),
         );
     }
@@ -198,15 +210,6 @@ pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
             "runtime_probe_total": metrics.runtime_probe_timeout_total,
         },
     })
-}
-
-#[allow(dead_code)]
-pub(super) fn percentile(samples: &[u64], percentile: f64) -> u64 {
-    if samples.is_empty() {
-        return 0;
-    }
-    let rank = ((samples.len() - 1) as f64 * (percentile / 100.0)).round() as usize;
-    samples[rank.min(samples.len() - 1)]
 }
 
 pub(super) fn clone_artifact_ledger(server: &AcpServer) -> ArtifactLedger {

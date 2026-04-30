@@ -9,8 +9,6 @@ pub mod runtime;
 pub mod request;
 // Chat handling implementation functions
 pub mod chat;
-// Conversation handling implementation functions
-pub mod conversation;
 // Agent-related implementation functions
 pub mod agent;
 // I/O implementation functions

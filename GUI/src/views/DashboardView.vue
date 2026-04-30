@@ -60,8 +60,12 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted } from "vue";
 import { useRuntimeStore } from "../stores/runtime";
 import { useI18n } from "vue-i18n";
 const runtime = useRuntimeStore();
 const { t } = useI18n();
+onMounted(() => {
+  runtime.refreshAll();
+});
 </script>

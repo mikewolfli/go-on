@@ -1,4 +1,6 @@
-//! HarnessBus — Unified Strategy Engine (BLUE38 ARCH-13)
+//! HarnessBus — F-GAP-13
+//!
+//! Unified Strategy Engine (BLUE38 ARCH-13)
 //!
 //! Phased implementation — all types are public and ready for CapabilityBus
 //! integration. `dead_code` & `unused` warnings will resolve once wired into
@@ -45,6 +47,7 @@ use crate::governance::hardening::{
 };
 use crate::governance::pua::{PuaFeedbackCollector, PuaRuleEngine, TaskContext};
 use crate::governance::rationalization::{RationalizationAnnotation, SelfRationalizationGuard};
+use crate::governance::rbac::{AccessDecision, Permission, Principal, RbacEnforcer};
 use crate::governance::review_controls::{
     review_verdict, ReviewGateOutcome, ReviewTimeoutPolicy, ReviewVerdict,
 };
@@ -260,6 +263,19 @@ pub enum SandboxLevel {
     Basic,
     Strict,
     Isolated,
+}
+
+impl SandboxLevel {
+    /// Returns the numeric index of the sandbox level.
+    /// Higher values represent stricter isolation.
+    pub fn level_index(&self) -> u8 {
+        match self {
+            SandboxLevel::None => 0,
+            SandboxLevel::Basic => 1,
+            SandboxLevel::Strict => 2,
+            SandboxLevel::Isolated => 3,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -487,6 +503,7 @@ pub struct PuaGovernanceProfile {
     pub budget_violations: u64,
     pub sandbox_denials: u64,
     pub idempotency_hits: u64,
+    pub other_denials: u64,
     pub audit_entries_total: u64,
     pub current_active_policies: u32,
     pub current_escalation_level: String,
@@ -508,6 +525,7 @@ impl Default for PuaGovernanceProfile {
             budget_violations: 0,
             sandbox_denials: 0,
             idempotency_hits: 0,
+            other_denials: 0,
             audit_entries_total: 0,
             current_active_policies: 5,
             current_escalation_level: "normal".to_string(),
@@ -535,6 +553,7 @@ pub struct PolicyEvaluator {
     pub runtime_control: Arc<Mutex<OnlineControllerState>>,
     pub guard: Arc<Mutex<SelfRationalizationGuard>>,
     pub security_governor: Arc<SecurityGovernor>,
+    pub rbac_enforcer: Option<RbacEnforcer>,
 }
 
 impl PolicyEvaluator {
@@ -557,6 +576,7 @@ impl PolicyEvaluator {
             runtime_control,
             guard,
             security_governor: Arc::new(SecurityGovernor::new(SecurityGovernorConfig::default())),
+            rbac_enforcer: None,
         }
     }
 
@@ -594,9 +614,9 @@ impl PolicyEvaluator {
 
         // 4. Runtime control check (adaptive sliding window / P95 / UCB)
         if let Ok(mut ctrl) = self.runtime_control.lock() {
-            // Record the evaluation outcome for adaptive control
-            ctrl.record(true, 0);
             if ctrl.should_escalate() {
+                // Record the escalation for adaptive control metrics
+                ctrl.record(false, _start.elapsed().as_millis() as u64);
                 return PolicyVerdict::Escalate(EscalationReason {
                     reason: "runtime escalation triggered (failure rate or P95 latency threshold)"
                         .to_string(),
@@ -606,19 +626,26 @@ impl PolicyEvaluator {
         }
 
         // 5. Review policy check (verify verdict from review_controls)
-        let _timeout_policy = ReviewTimeoutPolicy::from_options(None);
-        let _timeout_duration = crate::governance::review_controls::review_timeout(None, None);
-        let _verdict = Self::resolve_review_policy("APPROVE", 1);
-        let _outcome =
+        // TODO(placeholder): currently resolves against a static "APPROVE" response;
+        // wire to the task's actual review verdict once the review pipeline is integrated.
+        if self.governance.quality_compass.enabled {
+            tracing::debug!(
+                "review gate using placeholder APPROVE path — wire to task review verdict"
+            );
+        }
+        let timeout_policy = ReviewTimeoutPolicy::from_options(None);
+        let timeout_duration = crate::governance::review_controls::review_timeout(None, None);
+        let verdict = Self::resolve_review_policy("APPROVE", 1);
+        let outcome =
             ReviewGateOutcome::Approved(vec![crate::governance::review_controls::ReviewDecision {
                 reviewer: "system".to_string(),
                 verdict: "APPROVE".to_string(),
                 response: "approved by policy".to_string(),
             }]);
-        let _rejected = ReviewGateOutcome::Rejected(Vec::new());
-        let _degraded = ReviewGateOutcome::Degraded(Vec::new());
-        if _verdict.is_approved() {
-            let _review_result = match _outcome {
+        let _rejected_example = ReviewGateOutcome::Rejected(Vec::new());
+        let _degraded_example = ReviewGateOutcome::Degraded(Vec::new());
+        if verdict.is_approved() {
+            let review_result = match outcome {
                 ReviewGateOutcome::Approved(ref decisions)
                 | ReviewGateOutcome::Rejected(ref decisions)
                 | ReviewGateOutcome::Degraded(ref decisions) => decisions
@@ -626,22 +653,9 @@ impl PolicyEvaluator {
                     .map(|d| d.reviewer.as_str())
                     .unwrap_or("none"),
             };
-            let _ = match _rejected {
-                ReviewGateOutcome::Approved(ref decisions)
-                | ReviewGateOutcome::Rejected(ref decisions)
-                | ReviewGateOutcome::Degraded(ref decisions) => decisions
-                    .first()
-                    .map(|d| d.verdict.as_str())
-                    .unwrap_or("none"),
-            };
-            let _ = match _degraded {
-                ReviewGateOutcome::Approved(ref decisions)
-                | ReviewGateOutcome::Rejected(ref decisions)
-                | ReviewGateOutcome::Degraded(ref decisions) => decisions
-                    .first()
-                    .map(|d| d.response.as_str())
-                    .unwrap_or("none"),
-            };
+            let _reviewer = review_result;
+            let _ = timeout_policy;
+            let _ = timeout_duration;
         }
 
         // 6. Self-rationalization guard (low confidence check)
@@ -689,7 +703,10 @@ impl PolicyEvaluator {
             }
         }
 
-        // 8. All checks passed
+        // 8. All checks passed — record success for adaptive control
+        if let Ok(mut ctrl) = self.runtime_control.lock() {
+            ctrl.record(true, _start.elapsed().as_millis() as u64);
+        }
         PolicyVerdict::Allow
     }
 
@@ -755,14 +772,55 @@ impl PolicyEvaluator {
         }
     }
 
-    /// Permission check (delegates to PolicyBundle).
-    fn check_permission(&self, _tool: &str, _args: &Value) -> bool {
-        true
+    /// Permission check (delegates to RBAC enforcer when configured, falls back to allow-all).
+    fn check_permission(&self, tool: &str, _args: &Value) -> bool {
+        if let Some(ref rbac) = self.rbac_enforcer {
+            // Map tool name to Permission.  Write-tools require Write, exec-tools require Execute,
+            // everything else requires Read.
+            let required_perm = match tool {
+                "write_file" | "apply_patch" | "create_directory" | "delete_path" => {
+                    Permission::Write
+                }
+                "run_tests" | "execute_command" | "terminal" => Permission::Execute,
+                _ => Permission::Read,
+            };
+            // Build a principal from whatever context we have — for now use a default
+            // "harness" principal with the "user" role (least-privilege for tool calls).
+            let mut principal = Principal::new("harness", vec!["user"], None);
+            rbac.resolve_permissions(&mut principal);
+            match rbac.check_access(&principal, &required_perm) {
+                AccessDecision::Allow => {
+                    tracing::debug!(
+                        tool = %tool,
+                        required = ?required_perm,
+                        "RBAC: access granted"
+                    );
+                    true
+                }
+                decision => {
+                    tracing::warn!(
+                        tool = %tool,
+                        required = ?required_perm,
+                        decision = ?decision,
+                        "RBAC: access denied"
+                    );
+                    false
+                }
+            }
+        } else {
+            tracing::debug!("RBAC enforcer not configured — allowing all tools (F-GAP-13)");
+            true
+        }
     }
 
     /// Determine whether a re-examination is needed (self-rationalization helper).
     pub fn needs_reexamine(&self, _ctx: &TaskContext) -> bool {
         false
+    }
+
+    /// Inject an RBAC enforcer for multi-tenant permission checks.
+    pub fn set_rbac_enforcer(&mut self, enforcer: RbacEnforcer) {
+        self.rbac_enforcer = Some(enforcer);
     }
 
     /// Resolve a raw response string into a governance-level review verdict.
@@ -851,7 +909,7 @@ impl HarnessBus {
                     match v.kind.as_str() {
                         "red_line" => p.red_line_blocks = p.red_line_blocks.saturating_add(1),
                         "budget" => p.budget_violations = p.budget_violations.saturating_add(1),
-                        _ => {}
+                        _ => p.other_denials = p.other_denials.saturating_add(1),
                     }
                 }
                 PolicyVerdict::Escalate(_) => p.escalate_count = p.escalate_count.saturating_add(1),
@@ -922,15 +980,15 @@ impl HarnessBus {
         AgentExecutionPolicy {
             timeout: self.evaluator.dispatch.timeout_policy.default_timeout,
             max_tool_calls: self.evaluator.execution.budget.max_tool_calls as u32,
-            allow_file_write: (self.evaluator.governance.sandbox_level as usize) >= 2,
-            allow_shell: (self.evaluator.governance.sandbox_level as usize) >= 3,
+            allow_file_write: self.evaluator.governance.sandbox_level.level_index() as usize >= 2,
+            allow_shell: self.evaluator.governance.sandbox_level.level_index() as usize >= 3,
             allow_network: true,
-            review_level: if (self.evaluator.governance.sandbox_level as usize) >= 2 {
+            review_level: if self.evaluator.governance.sandbox_level.level_index() as usize >= 2 {
                 ReviewLevel::Manual
             } else {
                 ReviewLevel::Auto
             },
-            audit_level: if (self.evaluator.governance.sandbox_level as usize) >= 2 {
+            audit_level: if self.evaluator.governance.sandbox_level.level_index() as usize >= 2 {
                 AuditLevel::Verbose
             } else {
                 AuditLevel::Standard

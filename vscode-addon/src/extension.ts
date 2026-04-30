@@ -553,6 +553,8 @@ export function activate(context: vscode.ExtensionContext) {
       chatProvider.switchSession(sessionName),
     clearChat: () => chatProvider.clearChat(),
     exportChat: () => chatProvider.exportChat(),
+    sendRequest: (method: string, params?: unknown) =>
+      goOnManager.sendRequest(method, params),
   });
   const rpcCommands = registerRpcCommands({
     isRunning: () => goOnManager.isRunning(),
@@ -714,10 +716,14 @@ export function activate(context: vscode.ExtensionContext) {
     false,
   );
   if (autoOpenChat && !hasOpenedChat) {
-    setTimeout(() => {
-      void vscode.commands.executeCommand("go-on.openChat");
+    setTimeout(async () => {
+      try {
+        await vscode.commands.executeCommand("go-on.openChat");
+        await context.globalState.update("go-on.hasOpenedChatOnce", true);
+      } catch {
+        // Auto-open failed (e.g., binary not found) — don't mark as opened so it retries next time
+      }
     }, 300);
-    void context.globalState.update("go-on.hasOpenedChatOnce", true);
   }
 }
 

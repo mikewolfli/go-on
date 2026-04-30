@@ -20,6 +20,7 @@
 //!              └── SkillRegistry (orchestration::skill)
 //! ```
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -81,7 +82,7 @@ impl ToolStats {
 // ---------------------------------------------------------------------------
 
 /// High-level health / status snapshot of the ToolBus.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolBusProfile {
     pub enabled: bool,
     pub total_tools: u32,

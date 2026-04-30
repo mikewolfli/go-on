@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::i18n::runtime::tf;
+
 /// Categories of drift that the system monitors.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum DriftType {
@@ -181,7 +183,10 @@ impl DriftProtectionEngine {
             .lock()
             .map_err(|e| anyhow::anyhow!("failed to lock policies: {}", e))?;
         if policies.contains_key(&policy.name) {
-            bail!("policy '{}' is already registered", policy.name);
+            bail!(tf(
+                "error.policy_already_registered",
+                &[("name", &policy.name)]
+            ));
         }
         policies.insert(policy.name.clone(), policy);
         Ok(())
@@ -356,7 +361,9 @@ impl DriftProtectionEngine {
         let alert = alerts
             .iter_mut()
             .find(|a| a.id == alert_id)
-            .ok_or_else(|| anyhow::anyhow!("alert '{}' not found", alert_id))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(tf("error.alert_not_found", &[("alert_id", alert_id)]))
+            })?;
         alert.resolved = true;
         alert.resolved_ms = Some(current_time_ms());
         Ok(())
@@ -585,7 +592,10 @@ mod tests {
         let result = engine.register_policy(policy);
         assert!(result.is_err());
         let err = result.err().unwrap();
-        assert!(err.to_string().contains("already registered"));
+        assert!(
+            err.to_string().contains("error.policy_already_registered")
+                || err.to_string().contains("already registered")
+        );
     }
 
     // ------------------------------------------------------------------
@@ -705,7 +715,10 @@ mod tests {
         let result = engine.resolve_alert("nonexistent-alert-id");
         assert!(result.is_err());
         let err = result.err().unwrap();
-        assert!(err.to_string().contains("not found"));
+        assert!(
+            err.to_string().contains("error.alert_not_found")
+                || err.to_string().contains("not found")
+        );
     }
 
     // ------------------------------------------------------------------

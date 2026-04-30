@@ -17,7 +17,7 @@ use crate::{
 
 /// Requirement gate decision
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — preserved for legacy gate decision compatibility
 pub struct RequirementGateDecision {
     /// Whether the gate is blocked
     pub blocked: bool,
@@ -86,7 +86,7 @@ impl RequirementGateFacadeDecision {
 
 /// Learning clarification metrics
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — reserved for clarification learning feedback loop
 pub struct LearningClarificationMetrics {
     /// Number of clarification rounds
     pub rounds: u32,
@@ -97,7 +97,7 @@ pub struct LearningClarificationMetrics {
 }
 
 /// Parse string list from JSON Value
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — reserved for contract parsing utility
 fn parse_string_list(value: Option<&Value>) -> Vec<String> {
     value
         .and_then(|v| v.as_array())
@@ -112,7 +112,7 @@ fn parse_string_list(value: Option<&Value>) -> Vec<String> {
 }
 
 /// Get current timestamp
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — reserved for timestamp contract generation
 fn now_ts() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -195,7 +195,7 @@ pub fn requirement_missing_fields(contract: &RequirementContractArtifact) -> Vec
 }
 
 /// Generate clarification questions from missing fields
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — reserved for interactive clarification flow
 pub fn requirement_questions_from_missing(missing_fields: &[String]) -> Vec<String> {
     missing_fields
         .iter()

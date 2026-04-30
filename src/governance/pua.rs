@@ -1,3 +1,5 @@
+//! Pua — F-GAP-20
+//!
 //! PUA enforcement model shared across routing, execution, verification, and review.
 
 use serde::{Deserialize, Serialize};

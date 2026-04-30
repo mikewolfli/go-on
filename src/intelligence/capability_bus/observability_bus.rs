@@ -29,6 +29,7 @@
 //! All internal state is protected by `Arc<Mutex<…>>`, making `ObservabilityBus`
 //! safe to share across asynchronous boundaries.
 
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
@@ -88,7 +89,7 @@ pub struct ErrorRateStats {
 }
 
 /// High-level observability profile returned by [`ObservabilityBus::system_health`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ObservabilityBusProfile {
     /// Whether the bus is active (default `true` on construction).
     pub enabled: bool,

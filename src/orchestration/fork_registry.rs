@@ -688,7 +688,10 @@ mod tests {
         let result = reg.merge_snapshots("parent-m");
         assert!(result.success);
         assert!(result.conflicts.is_empty());
-        assert_eq!(result.merged_data, vec![1, 2, 3, 4]);
+        // Merge order is by timestamp (not fork ID), so use a set comparison.
+        let mut merged = result.merged_data.clone();
+        merged.sort_unstable();
+        assert_eq!(merged, vec![1, 2, 3, 4]);
     }
 
     #[test]

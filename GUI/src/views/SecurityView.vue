@@ -480,17 +480,27 @@ async function auditSensitiveFields() {
 }
 
 async function fixRisk(riskId: string) {
-  ElMessageBox.confirm(t("security.confirmFix"), t("security.fixWarning"), {
-    confirmButtonText: t("common.confirm"),
-    cancelButtonText: t("common.cancel"),
-    type: "warning",
-  })
-    .then(() => {
-      ElMessage.success(t("security.fixSuccess"));
-      // Remove risk from list
-      const idx = risks.findIndex((r) => r.id === riskId);
-      if (idx >= 0) {
-        risks.splice(idx, 1);
+  ElMessageBox.confirm(
+    t("security.confirmFix") + " " + t("security.fixLocalOnlyWarning"),
+    t("security.fixWarning"),
+    {
+      confirmButtonText: t("common.confirm"),
+      cancelButtonText: t("common.cancel"),
+      type: "warning",
+    },
+  )
+    .then(async () => {
+      try {
+        const { invokeRuntimeRpc } = await import("../services/bridge");
+        await invokeRuntimeRpc("governance.remediate", JSON.stringify({ risk_id: riskId }));
+        // Only remove locally if backend confirms the fix
+        const idx = risks.findIndex((r) => r.id === riskId);
+        if (idx >= 0) {
+          risks.splice(idx, 1);
+        }
+        ElMessage.success(t("security.fixSuccess"));
+      } catch (err) {
+        ElMessage.error(t("security.fixRiskFailed") || `Failed to fix risk: ${normalizeErrorMessage(err)}`);
       }
     })
     .catch(() => {
@@ -522,7 +532,27 @@ function convertToCSV(data: Array<Record<string, unknown>>): string {
 }
 
 async function saveSecurity() {
-  ElMessage.success(t("security.settingsSaved"));
+  try {
+    const { invokeRuntimeRpc } = await import("../services/bridge");
+    await invokeRuntimeRpc(
+      "governance.config.save",
+      JSON.stringify({
+        auto_mask_sensitive: autoMaskSensitive.value,
+        audit_enabled: auditEnabled.value,
+      }),
+    );
+    ElMessage.success(t("security.settingsSaved"));
+  } catch {
+    // Backend save failed — persist locally as fallback
+    localStorage.setItem(
+      "goon.gui.securitySettings",
+      JSON.stringify({
+        autoMaskSensitive: autoMaskSensitive.value,
+        auditEnabled: auditEnabled.value,
+      }),
+    );
+    ElMessage.warning(t("security.settingsSavedLocally") || "Settings saved locally only");
+  }
 }
 
 onMounted(async () => {

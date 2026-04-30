@@ -490,7 +490,10 @@ impl HyperResilienceEngine {
                         format!("Circuit breaker '{}' reset to closed", target),
                     )
                 } else {
-                    (false, format!("Circuit breaker '{}' not found", target))
+                    (
+                        false,
+                        tf("error.circuit_breaker_not_found", &[("name", target)]),
+                    )
                 }
             }
             SelfHealingAction::PromoteReplica => {
@@ -510,7 +513,10 @@ impl HyperResilienceEngine {
                         format!("Promoted replica '{}' for group '{}'", new_leader, target),
                     )
                 } else {
-                    (false, format!("Failover group '{}' not found", target))
+                    (
+                        false,
+                        tf("error.failover_group_not_found", &[("name", target)]),
+                    )
                 }
             }
             _ => {

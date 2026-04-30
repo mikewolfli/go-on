@@ -106,6 +106,9 @@ export class GoOnManager {
     cwd: string,
     protocolMode: string,
   ): Promise<void> {
+    if (this._shutdownInProgress) {
+      throw new Error("Go-On is shutting down. Please wait and try again.");
+    }
     if (this.process) {
       throw new Error("Go-On is already running");
     }
@@ -296,6 +299,13 @@ export class GoOnManager {
       this._outputChannel?.appendLine(
         `[reconnect] Attempt ${this._reconnectAttempts} failed: ${error}`,
       );
+      // Schedule next retry if attempts remain and we still have startup config
+      if (
+        this._reconnectAttempts < this.maxReconnectAttempts &&
+        this._startupConfig
+      ) {
+        setTimeout(() => void this.attemptReconnect(), 2000);
+      }
     }
   }
 

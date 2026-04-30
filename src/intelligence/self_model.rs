@@ -6,6 +6,7 @@
 
 use crate::i18n::runtime::tf;
 use anyhow::{bail, Result};
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
@@ -94,7 +95,7 @@ impl Default for SelfModelConfig {
 }
 
 /// A runtime summary / profile of the self-model's current state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelfModelProfile {
     /// Whether the system identity has been set.
     pub identity_set: bool,

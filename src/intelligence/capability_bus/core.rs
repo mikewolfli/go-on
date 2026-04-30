@@ -722,6 +722,9 @@ impl CapabilityBus {
                     confidence: 0.0,
                     duration_ms: start.elapsed().as_millis() as u64,
                     recommended_mode: "ask".to_string(),
+                    // TODO(placeholder): available_tools is empty because no agent is
+                    // selected when the policy denies; wire to a default/fallback tool
+                    // set when the governance model supports degraded-mode tool access.
                     #[cfg(feature = "sub-bus-tool")]
                     available_tools: vec![],
                 };

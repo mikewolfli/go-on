@@ -1,4 +1,5 @@
-#![allow(dead_code)]
+//! Rbac — F-GAP-15
+//!
 //! OpenCLAW Zero-Trust RBAC Module
 //! Implements Role-Based Access Control for multi-tenant deployments.
 //!
@@ -27,6 +28,7 @@ impl BuiltinRole {
         }
     }
 
+    #[allow(dead_code)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "admin" => Some(BuiltinRole::Admin),
@@ -70,6 +72,7 @@ pub enum Permission {
 }
 
 impl Permission {
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             Permission::Read => "read",
@@ -83,6 +86,7 @@ impl Permission {
         }
     }
 
+    #[allow(dead_code)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "read" => Some(Permission::Read),
@@ -122,6 +126,7 @@ impl Principal {
         self.permissions.contains(permission)
     }
 
+    #[allow(dead_code)]
     pub fn has_role(&self, role: &str) -> bool {
         self.roles.iter().any(|r| r == role)
     }
@@ -175,12 +180,14 @@ impl RbacEnforcer {
     }
 
     /// Register a custom role with specific permissions
+    #[allow(dead_code)]
     pub fn register_role(&mut self, role: &str, permissions: Vec<Permission>) {
         self.role_permissions
             .insert(role.to_string(), permissions.into_iter().collect());
     }
 
     /// Add a tenant
+    #[allow(dead_code)]
     pub fn add_tenant(&mut self, tenant_id: &str) {
         self.tenants.insert(tenant_id.to_string());
     }
@@ -264,10 +271,12 @@ impl RbacEnforcer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn role_count(&self) -> usize {
         self.role_permissions.len()
     }
 
+    #[allow(dead_code)]
     pub fn tenant_count(&self) -> usize {
         self.tenants.len()
     }

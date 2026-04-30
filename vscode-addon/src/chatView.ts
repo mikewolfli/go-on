@@ -136,6 +136,46 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           case "switchSession":
             this._switchSession(message.sessionName);
             break;
+          case "showInputBox":
+            vscode.window
+              .showInputBox({
+                prompt: message.prompt,
+                placeHolder: message.placeHolder,
+                value: message.value || "",
+              })
+              .then((value) => {
+                this._view?.webview.postMessage({
+                  type: "showInputBoxResult",
+                  id: message.id,
+                  value: value,
+                });
+              });
+            break;
+          case "showConfirm":
+            vscode.window
+              .showWarningMessage(
+                message.message,
+                { modal: true },
+                "OK",
+                "Cancel",
+              )
+              .then((selection) => {
+                this._view?.webview.postMessage({
+                  type: "showConfirmResult",
+                  id: message.id,
+                  confirmed: selection === "OK",
+                  workflowId: message.workflowId,
+                });
+              });
+            break;
+          case "copyCode":
+            vscode.env.clipboard.writeText(message.code).then(() => {
+              void vscode.window.setStatusBarMessage(
+                "Code copied to clipboard",
+                2000,
+              );
+            });
+            break;
           case "getSessions":
             this._sendSessionsList();
             break;
@@ -167,7 +207,17 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
       });
 
       // Build content array per OpenAI Vision API format
-      let messagesPayload;
+      let messagesPayload: Array<{
+        role: string;
+        content:
+          | string
+          | Array<{
+              type: string;
+              text?: string;
+              image_url?: { url: string; detail: string };
+              file_data?: { data: string; filename: string; mime_type: string };
+            }>;
+      }>;
       if (!attachments || attachments.length === 0) {
         // Backward compatible: plain text
         messagesPayload = [{ role: "user", content: text }];
@@ -176,12 +226,27 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         const content: (
           | { type: "text"; text: string }
           | { type: "image_url"; image_url: { url: string; detail: string } }
+          | {
+              type: "file";
+              file_data: { data: string; filename: string; mime_type: string };
+            }
         )[] = [{ type: "text", text }];
         for (const a of attachments) {
-          content.push({
-            type: "image_url",
-            image_url: { url: a.dataUrl, detail: "auto" },
-          });
+          if (a.type && a.type.startsWith("image/")) {
+            content.push({
+              type: "image_url",
+              image_url: { url: a.dataUrl, detail: "auto" },
+            });
+          } else {
+            content.push({
+              type: "file",
+              file_data: {
+                data: a.dataUrl,
+                filename: a.name || "attachment",
+                mime_type: a.type || "application/octet-stream",
+              },
+            });
+          }
         }
         messagesPayload = [{ role: "user", content }];
       }

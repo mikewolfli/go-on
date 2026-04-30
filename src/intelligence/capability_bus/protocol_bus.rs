@@ -4,6 +4,7 @@
 //! It tracks active transport mode, protocol health, and latency statistics
 //! to enable intelligent protocol recommendations for task execution.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -55,7 +56,7 @@ impl LatencyStats {
 }
 
 /// Profile snapshot for the ProtocolBus.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProtocolBusProfile {
     /// Whether the protocol bus is enabled.
     pub enabled: bool,

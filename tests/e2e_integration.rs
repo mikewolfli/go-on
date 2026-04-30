@@ -103,7 +103,29 @@ impl E2eHarness {
         let lock_path = cross_process_lock_path();
         let _cross_process_lock = CrossProcessLock::lock(&lock_path);
 
+        // Determine project root by walking up from the binary path until
+        // we find the Cargo.toml that belongs to this workspace.
+        // `CARGO_BIN_EXE_go-on` points to `<project>/target/debug/go-on`.
+        let mut project_root = PathBuf::from(binary_path());
+        // Pop the file name first (go-on), then walk up.
+        project_root.pop();
+        loop {
+            if project_root.join("Cargo.toml").exists() {
+                break;
+            }
+            if !project_root.pop() {
+                // Fallback: use CWD.
+                project_root = std::env::current_dir().unwrap_or_default();
+                break;
+            }
+        }
+
+        let config_path = project_root.join("config").join("config.toml");
+
         let mut child = Command::new(binary_path())
+            .current_dir(&project_root)
+            .arg("--config")
+            .arg(config_path.to_str().expect("config path is valid UTF-8"))
             .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
             .env("GO_ON_LOG", "error")
             .stdin(Stdio::piped())

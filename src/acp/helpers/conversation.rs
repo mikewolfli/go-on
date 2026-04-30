@@ -53,7 +53,7 @@ pub struct ConversationState {
 
 /// Approval strategy enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(dead_code)]
+#[allow(dead_code)] // F-GAP-17 — planned wiring for conversation approval strategy
 pub enum ApprovalStrategy {
     /// No approval required
     None,
@@ -71,7 +71,7 @@ impl ApprovalStrategy {
 }
 
 /// Observe latency in histogram
-#[expect(dead_code)]
+#[allow(dead_code)] // F-GAP-09 — reserved for standalone histogram integration
 pub fn observe_latency_histogram(
     duration: Duration,
     count: &mut u64,
@@ -92,7 +92,7 @@ pub fn observe_latency_histogram(
 }
 
 /// Extract task description from messages
-#[expect(dead_code)]
+#[allow(dead_code)] // F-GAP-16 — reserved for multi-agent routing pipeline
 pub fn extract_task_description(messages: &[Message]) -> String {
     messages
         .iter()
@@ -106,7 +106,7 @@ pub fn extract_task_description(messages: &[Message]) -> String {
 }
 
 /// Check for pipeline gate violations
-#[expect(dead_code)]
+#[allow(dead_code)] // F-GAP-17 — planned wiring for pipeline gate enforcement
 pub fn pipeline_gate_violation(
     analyzed_task: &TaskCharacteristics,
     routing: &RoutingDecision,
@@ -141,7 +141,7 @@ pub fn pipeline_gate_violation(
 }
 
 /// Touch conversation order (move to most recent)
-#[cfg_attr(not(test), expect(dead_code))]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
     if let Ok(mut guard) = order.lock() {
         if let Some(position) = guard.iter().position(|item| item == conversation_id) {
@@ -152,7 +152,7 @@ pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: 
 }
 
 /// Evict oldest conversation
-#[expect(dead_code)]
+#[allow(dead_code)] // F-GAP-11 — reserved for LRU eviction in storage layer
 pub fn evict_oldest_conversation(
     store: &mut HashMap<String, ConversationState>,
     order: &StdMutex<Vec<String>>,
@@ -176,7 +176,7 @@ pub fn evict_oldest_conversation(
 }
 
 /// Enforce checkpoint capacity
-#[expect(dead_code)]
+#[allow(dead_code)] // F-GAP-11 — reserved for checkpoint capacity enforcement
 pub fn enforce_checkpoint_capacity(
     state: &mut ConversationState,
     incoming: usize,
@@ -222,7 +222,7 @@ pub fn stream_would_exceed_limits(
 }
 
 /// Validate storage key
-#[expect(dead_code)]
+#[allow(dead_code)] // F-GAP-11 — reserved for storage key validation
 pub fn validate_storage_key(
     value: &str,
     field: &str,
@@ -249,7 +249,7 @@ pub fn validate_storage_key(
 }
 
 /// Calculate total characters in checkpoint messages
-#[expect(dead_code)]
+#[allow(dead_code)] // F-GAP-11 — reserved for checkpoint size tracking
 pub fn checkpoint_message_chars(messages: &[Message]) -> usize {
     messages.iter().map(|msg| msg.content.chars().count()).sum()
 }
@@ -282,7 +282,7 @@ pub fn repair_conversation_branch_heads(state: &mut ConversationState) {
 }
 
 /// Calculate branch head adjustment counts
-#[expect(dead_code)]
+#[allow(dead_code)] // F-GAP-11 — reserved for branch tracking diagnostics
 pub fn branch_head_adjustment_counts(
     before: &HashMap<String, String>,
     after: &HashMap<String, String>,
@@ -301,7 +301,7 @@ pub fn branch_head_adjustment_counts(
 }
 
 /// Infer PUA stage from event type and phase
-#[expect(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — reserved for PUA stage inference
 pub fn infer_pua_stage(event_type: &str, phase: &str) -> Option<String> {
     if event_type.starts_with("phase.") {
         return Some(phase.to_string());
@@ -310,7 +310,7 @@ pub fn infer_pua_stage(event_type: &str, phase: &str) -> Option<String> {
 }
 
 /// Normalize trace attributes
-#[expect(dead_code)]
+#[allow(dead_code)] // F-GAP-06 — reserved for trace attribute normalization
 pub fn normalize_trace_attributes(
     event_type: &str,
     phase: &str,

@@ -1,3 +1,5 @@
+//! Hardening — F-GAP-08
+//!
 //! Phase 9: Production Hardening and Safety
 //! These structures are intentional framework definitions for Phase 0-9 architecture.
 //! Budget enforcement, quotas, and policies will be applied by the execution engine
@@ -11,6 +13,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+use crate::i18n::runtime::tf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskBudget {
@@ -78,9 +82,13 @@ impl TenantBudgetEnforcer {
 
         let calls = self.api_call_usage.get(tenant_id).copied().unwrap_or(0);
         if calls >= quota.daily_api_call_limit {
-            return Err(format!(
-                "tenant '{}' exceeded daily API call limit ({}/{})",
-                tenant_id, calls, quota.daily_api_call_limit
+            return Err(tf(
+                "error.tenant_limit_exceeded",
+                &[
+                    ("tenant_id", tenant_id),
+                    ("calls", &calls.to_string()),
+                    ("limit", &quota.daily_api_call_limit.to_string()),
+                ],
             ));
         }
 

@@ -157,7 +157,8 @@
     "customArgs": "自定義參數，例如 --init --setup-level quick",
     "runCustom": "執行自定義",
     "commandCompleted": "命令執行完成",
-    "commandFailed": "命令執行失敗"
+    "commandFailed": "命令執行失敗",
+    "customArgsRequired": "請輸入命令參數"
   },
   "config": {
     "title": "服務路徑",
@@ -466,7 +467,8 @@
     "firstPassRate": "首次通過率",
     "meanRepairIterations": "平均修復迭代次數",
     "humanInterventionRate": "人工干預率",
-    "regressionRate": "回歸率"
+    "regressionRate": "回歸率",
+    "demoDataWarning": "當前顯示的是佔位演示資料。請啟動後端以查看即時工作流資料。"
   },
   "security": {
     "title": "安全與憑據治理",
@@ -510,9 +512,12 @@
     "auditRecentFailed": "governance.audit.recent 調用失敗: {error}",
     "governanceStatusFailed": "governance.status 調用失敗: {error}",
     "governanceToast": "治理: {state}（{level}），規則={rules}",
+    "fixLocalOnlyWarning": "（僅本地操作 — 後端 RPC 尚未就緒）",
     "confirmFix": "確定要應用安全修復嗎？",
     "fixWarning": "此操作可能影響服務配置",
     "fixSuccess": "安全修復已應用",
+    "fixRiskFailed": "修復失敗，後端可能不可用",
+    "settingsSavedLocally": "設定僅儲存到本地，後端儲存失敗",
     "exportSuccess": "審計日誌已導出",
     "risk1Title": "API Key 以明文存儲在配置中",
     "risk1Desc": "建議改用環境變量存儲",
@@ -1118,65 +1123,6 @@
       "scorePoor": "較差",
       "scoreUnknown": "未知"
     },
-    "ChatView": {
-      "title": "AI 對話",
-      "agentsBar": "活躍智能體",
-      "noAgents": "暫無可用智能體",
-      "sessionsPanel": "會話",
-      "newSessionBtn": "新建會話",
-      "noSessions": "暫無會話",
-      "deleteSession": "刪除",
-      "deleteConfirm": "刪除此會話？",
-      "sessionDeleted": "會話已刪除",
-      "inputPlaceholder": "輸入消息...（Ctrl+Enter 發送）",
-      "sendBtn": "發送",
-      "thinking": "思考中...",
-      "noMessages": "暫無消息，開始對話吧。",
-      "emptyHistory": "對話歷史將顯示在這裡",
-      "sessionSteps": "工作流步驟",
-      "noSteps": "暫無步驟記錄",
-      "errorNoContent": "收到空響應",
-      "attachFiles": "上傳文件",
-      "filesAttached": "已附加 {n} 個文件",
-      "removeAllFiles": "全部移除",
-      "unsupportedFileType": "不支持的文件類型：{type}",
-      "youLabel": "你",
-      "assistantLabel": "助手",
-      "systemLabel": "系統",
-      "backendOnline": "後端在線",
-      "backendOffline": "後端離線",
-      "modeLabel": "模式",
-      "modePlan": "規劃",
-      "modeAgent": "代理",
-      "modeEdit": "編輯",
-      "modeAuto": "全自動",
-      "linkLabel": "鏈接類型",
-      "linkLocal": "本地",
-      "linkServer": "簡單服務器",
-      "linkMulti": "多用戶",
-      "workflowLabel": "工作流",
-      "workflowAuto": "自動",
-      "workflowDev": "開發",
-      "workflowGeneral": "通用",
-      "workflowCustom": "自定義",
-      "copyMessage": "複製",
-      "copySuccess": "消息已複製",
-      "retryMessage": "重試",
-      "deleteMessage": "刪除",
-      "messageDeleted": "消息已刪除",
-      "stopGeneration": "停止生成",
-      "scrollToBottom": "滾動到底部",
-      "exportChat": "導出對話",
-      "exportSuccess": "對話已導出",
-      "clearHistory": "清空歷史",
-      "clearConfirm": "清空所有消息？",
-      "historyCleared": "對話已清空",
-      "searchMessages": "搜索消息...",
-      "noSearchResults": "未找到匹配消息",
-      "modelLabel": "模型",
-      "tokenCount": "Token：{count}",
-      "elapsedTime": "耗時：{time}秒"
-    },
     "SkillsView": {
       "title": "技能管理",
       "createSkill": "創建技能",
@@ -1235,5 +1181,19 @@
       "alwaysOnTop": "置頂顯示",
       "closeConsole": "關閉小窗"
     }
+  },
+  "aiUsageView": {
+    "noSnapshotData": "無快照數據",
+    "noTrendData": "無趨勢數據",
+    "noPhaseData": "無階段熱圖數據",
+    "noAgentData": "無Agent熱圖數據"
+  },
+  "monitorView": {
+    "noData": "暫無數據"
+  },
+  "language": {
+    "english": "English",
+    "simplifiedChinese": "簡體中文",
+    "traditionalChinese": "繁體中文"
   }
 }

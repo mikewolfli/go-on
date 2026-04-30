@@ -1,3 +1,5 @@
+//! Rationalization — F-GAP-22
+//!
 //! S4: Self-Rationalization Guard
 //!
 //! Detects low-confidence outputs with weak evidence and flags them for re-examination.
