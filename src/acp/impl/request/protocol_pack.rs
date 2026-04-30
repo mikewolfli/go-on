@@ -340,6 +340,62 @@ pub(super) async fn handle_skill_remove(
     .await
 }
 
+pub(super) async fn handle_skill_create(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let name = match parse_skill_name_param(&params) {
+        Ok(name) => name,
+        Err(err) => {
+            record_skill_admin_audit("create", "skill.create", false, &err.to_string());
+            return send_error(server, request_id, -32602, err.to_string(), None).await;
+        }
+    };
+    let description = params
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| anyhow::anyhow!("missing required param: description"))?;
+    let prompt_template = params
+        .get("prompt_template")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| anyhow::anyhow!("missing required param: prompt_template"))?;
+    let input_schema: std::collections::HashMap<String, String> = params
+        .get("input_schema")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let result = {
+        let mut registry = server
+            .skill_registry
+            .lock()
+            .map_err(|err| anyhow::anyhow!("skill registry lock error: {}", err))?;
+        registry.create_skill_from_prompt(&name, &description, &prompt_template, input_schema)
+    };
+    // Lock is dropped before await
+    if let Err(err) = result {
+        record_skill_admin_audit("create", &name, false, &err.to_string());
+        return send_error(server, request_id, -32602, err.to_string(), None).await;
+    }
+
+    record_skill_admin_audit("create", &name, true, "created skill from prompt template");
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "name": name,
+        }),
+    )
+    .await
+}
+
 fn governance_action_label(action: GovernanceAction) -> &'static str {
     match action {
         GovernanceAction::Read => "read",

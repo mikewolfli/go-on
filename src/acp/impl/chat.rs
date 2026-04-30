@@ -3669,11 +3669,16 @@ fn execute_tool_calls(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(feature = "backend-postgres"))]
     use std::collections::HashMap;
+    #[cfg(not(feature = "backend-postgres"))]
     use std::sync::{Arc, Mutex};
 
+    #[cfg(not(feature = "backend-postgres"))]
     use async_trait::async_trait;
+    #[cfg(not(feature = "backend-postgres"))]
     use serde_json::json;
+    #[cfg(not(feature = "backend-postgres"))]
     use serde_json::Value;
 
     #[cfg(not(feature = "backend-postgres"))]
@@ -3682,7 +3687,10 @@ mod tests {
     use crate::acp::server::ServerBuilder;
     #[cfg(not(feature = "backend-postgres"))]
     use crate::agent::AgentRegistry;
-    use crate::agent::{Agent, Message, StreamingSender};
+    use crate::agent::Message;
+    #[cfg(not(feature = "backend-postgres"))]
+    use crate::agent::{Agent, StreamingSender};
+    #[cfg(not(feature = "backend-postgres"))]
     use crate::config::{AppConfig, FlowConfig, PhaseConfig, PhaseOptions, VectorConfig};
     #[cfg(not(feature = "backend-postgres"))]
     use crate::flow::FlowManager;
@@ -3693,11 +3701,13 @@ mod tests {
 
     use super::build_phase_summary;
 
+    #[cfg(not(feature = "backend-postgres"))]
     struct RecordingAgent {
         seen_messages: Arc<Mutex<Vec<Message>>>,
         output: String,
     }
 
+    #[cfg(not(feature = "backend-postgres"))]
     #[async_trait]
     impl Agent for RecordingAgent {
         async fn chat(
@@ -3715,6 +3725,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "backend-postgres"))]
     fn test_config() -> AppConfig {
         let mut phases = HashMap::new();
         phases.insert(

@@ -277,15 +277,15 @@ mod e2e_tests {
         let resp = harness.request(1, "health", None);
 
         let result = resp.get("result").expect("health should return result");
-        assert!(result.get("status").is_some(), "health should have status");
 
-        // Verify platform_mode is valid
-        if let Some(profile) = result.get("capability_profile") {
-            let mode = profile.get("platform_mode").and_then(|m| m.as_str());
+        // Health response uses lifecycle.is_healthy instead of a top-level status field
+        if let Some(lifecycle) = result.get("lifecycle") {
             assert!(
-                mode.is_some(),
-                "capability_profile should have platform_mode"
+                lifecycle.get("is_healthy").is_some(),
+                "health.lifecycle should have is_healthy"
             );
+        } else {
+            panic!("health response should have lifecycle");
         }
 
         harness.wait_for_exit(Duration::from_secs(5));

@@ -6,23 +6,26 @@
         <el-space>
           <el-tag v-if="runtime.logsStale" type="warning">{{ t("common.staleData") }}</el-tag>
           <el-select v-model="selectedLevel" size="small" style="width:110px" clearable :placeholder="t('logs.level')">
-            <el-option v-for="lvl in logLevels" :key="lvl" :label="lvl" :value="lvl" />
+                <el-option v-for="lvl in logLevels" :key="lvl" :label="lvl" :value="lvl" />
           </el-select>
           <el-input v-model="keyword" size="small" :placeholder="t('logs.filter')" style="width: 200px" />
           <el-button size="small" @click="toggleAutoScroll" :type="autoScroll ? 'primary' : 'default'">
-            {{ autoScroll ? 'Auto-Scroll ON' : 'Auto-Scroll OFF' }}
+            {{ autoScroll ? t('views.LogsView.autoScroll') + ' ON' : t('views.LogsView.autoScroll') + ' OFF' }}
           </el-button>
           <el-button size="small" :disabled="filteredLines.length === 0" @click="exportLogs">
-            {{ t('logs.export') || 'Export' }}
+            {{ t('logs.export') }}
           </el-button>
-          <el-badge v-if="hasServerSearch" :value="'API'" type="info" style="vertical-align:middle">
-            <el-tag size="small" type="info" effect="plain">{{ t('logs.serverSearch') || 'Srv' }}</el-tag>
+          <el-badge v-if="hasServerSearch" :value="t('common.name')" type="info" style="vertical-align:middle">
+            <el-tag size="small" type="info" effect="plain">{{ t('logs.serverSearch') }}</el-tag>
           </el-badge>
           <el-button size="small" @click="runtime.refreshLogs(300)">{{ t("app.refresh") }}</el-button>
         </el-space>
       </div>
     </template>
     <div ref="logContainer" style="max-height: 65vh; overflow:auto; font-family: Consolas, monospace; font-size: 12px;">
+      <div v-if="!runtime.logs.lines.length && !runtime.loading" style="text-align:center;padding:20px;color:#999;">
+        {{ t('views.LogsView.noLogs') || 'No log entries yet' }}
+      </div>
       <div v-for="(line, idx) in filteredLines" :key="idx">
         <span style="color:#999">{{ formatTimestamp(idx) }}</span>
         <span :class="logLevelClass(line)">{{ line }}</span>
@@ -33,6 +36,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, nextTick, watch } from "vue";
+import { ElMessage } from "element-plus";
 import { useRuntimeStore } from "../stores/runtime";
 import { useI18n } from "vue-i18n";
 

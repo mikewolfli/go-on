@@ -107,10 +107,12 @@ pub fn invoke_runtime_rpc(
 
     let result = rx
         .recv_timeout(Duration::from_secs(12))
-        .map_err(|_| "rpc timeout".to_string())?;
+        .map_err(|_| "rpc timeout".to_string());
 
     let _ = child.kill();
     let _ = child.wait();
+
+    let result = result?;
 
     match result {
         Ok(v) => {

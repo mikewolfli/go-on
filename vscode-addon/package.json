@@ -44,6 +44,11 @@
         "title": "Check Go-On Health"
       },
       {
+        "command": "go-on.healthProbes",
+        "title": "Check Go-On Health Probes",
+        "icon": "$(heartbeat)"
+      },
+      {
         "command": "go-on.diagnose",
         "title": "Diagnose Go-On Runtime"
       },
@@ -233,6 +238,11 @@
         "icon": "$(pulse)"
       },
       {
+        "command": "go-on.governanceStatus",
+        "title": "Get Governance Status (RPC)",
+        "icon": "$(book)"
+      },
+      {
         "command": "go-on.governancePlanGet",
         "title": "Get Governance Plan (RPC)",
         "icon": "$(book)"
@@ -361,6 +371,46 @@
         "command": "go-on.actionCheck",
         "title": "Action Check (RPC)",
         "icon": "$(pass)"
+      },
+      {
+        "command": "go-on.refreshStatusMonitor",
+        "title": "Refresh Status Monitor",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "go-on.keyringSet",
+        "title": "Keyring: Set Secret",
+        "icon": "$(key)"
+      },
+      {
+        "command": "go-on.keyringGet",
+        "title": "Keyring: Get Secret",
+        "icon": "$(key)"
+      },
+      {
+        "command": "go-on.keyringDelete",
+        "title": "Keyring: Delete Secret",
+        "icon": "$(key)"
+      },
+      {
+        "command": "go-on.keyringList",
+        "title": "Keyring: List Secrets",
+        "icon": "$(key)"
+      },
+      {
+        "command": "go-on.applyDefaultConfigTemplate",
+        "title": "Apply Default Config Template",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "go-on.updateWorkflowMapping",
+        "title": "Update Workflow Mapping",
+        "icon": "$(symbol-method)"
+      },
+      {
+        "command": "go-on.updateRules",
+        "title": "Update Rules Markdown",
+        "icon": "$(note)"
       }
     ],
     "views": {
@@ -646,10 +696,9 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "npx tsc -p ./ && cp -r src/locales out/locales",
-    "postcompile": "cp -r src/locales out/locales",
-    "watch": "npx tsc -watch -p ./",
-    "watch:locales": "npx tsc -watch -p ./ & nodemon --watch src/locales --ext json -x 'cp -r src/locales out/locales'",
+    "compile": "npx tsc -p ./ && mkdir -p out/locales && cp -r src/locales/. out/locales",
+    "watch": "npx tsc --watch -p ./",
+    "watch:locales": "npx tsc --watch -p ./ & nodemon --watch src/locales --ext json -x 'cp -r src/locales/. out/locales'",
     "lint": "eslint src --ext ts",
     "check": "npm run compile && npm run lint",
     "test:contract": "node ./scripts/contract-smoke.js",
@@ -663,7 +712,8 @@
     "eslint": "^8.28.0",
     "@typescript-eslint/eslint-plugin": "^5.42.0",
     "@typescript-eslint/parser": "^5.42.0",
-    "typescript": "^4.9.4"
+    "typescript": "^4.9.4",
+    "nodemon": "^3.0.0"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",

@@ -1,5 +1,10 @@
 <template>
-  <el-space direction="vertical" fill style="width: 100%">
+  <!-- Loading state -->
+  <div v-if="loading && !liveness.ok" style="text-align:center;padding:40px;color:#999;">
+    {{ t('common.loading') || 'Loading...' }}
+  </div>
+
+  <el-space v-else direction="vertical" fill style="width: 100%">
     <el-card>
       <template #header>{{ t("healthBreakdown.title") }}</template>
 
@@ -52,7 +57,7 @@
               {{ lockStatus.slowWaitTotal }}
             </el-descriptions-item>
             <el-descriptions-item :label="t('healthBreakdown.maxWait')">
-              {{ lockStatus.maxWaitMs.toFixed(2) }} ms
+              {{ (lockStatus.maxWaitMs ?? 0).toFixed(2) }} ms
             </el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -192,7 +197,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from "vue";
+import { onMounted, ref, reactive, computed } from "vue";
 import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
 import { getBreakerStatus, getRuntimeSelfModel } from "../services/rpcService";
@@ -382,6 +387,9 @@ async function refreshBreakdown() {
   }
 }
 
-// Initialize
-refreshBreakdown();
+onMounted(() => {
+  refreshBreakdown().catch((err) => {
+    console.warn("HealthBreakdown: initial refresh failed (backend may be offline)", err);
+  });
+});
 </script>

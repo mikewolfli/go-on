@@ -1,5 +1,10 @@
 <template>
-  <div class="mini-root">
+  <!-- Loading state -->
+  <div v-if="runtime.loading && !runtime.status.running" class="mini-root" style="align-items:center;justify-content:center;">
+    <div>{{ t('common.loading') }}</div>
+  </div>
+
+  <div v-else class="mini-root">
     <div class="mini-head">
       <strong>{{ t("mini.title") }}</strong>
       <el-tag size="small" :type="runtime.status.running ? 'success' : 'danger'">
@@ -7,9 +12,9 @@
       </el-tag>
     </div>
     <div class="mini-grid">
-      <div class="metric"><span>{{ t("mini.rpm") }}</span><b>{{ runtime.aiUsage.requestsPerMinute }}</b></div>
-      <div class="metric"><span>{{ t("mini.success") }}</span><b>{{ runtime.aiUsage.successRate.toFixed(2) }}%</b></div>
-      <div class="metric"><span>{{ t("mini.latency") }}</span><b>{{ runtime.aiUsage.avgLatencyMs.toFixed(1) }} ms</b></div>
+      <div class="metric"><span>{{ t("mini.rpm") }}</span><b>{{ (runtime.aiUsage.requestsPerMinute ?? 0).toLocaleString() }}</b></div>
+      <div class="metric"><span>{{ t("mini.success") }}</span><b>{{ (runtime.aiUsage.successRate ?? 0).toFixed(2) }}%</b></div>
+      <div class="metric"><span>{{ t("mini.latency") }}</span><b>{{ (runtime.aiUsage.avgLatencyMs ?? 0).toFixed(1) }} ms</b></div>
       <div class="metric"><span>{{ t("mini.health") }}</span><b>{{ runtime.health.ok ? t("mini.ok") : t("mini.notOk") }}</b></div>
     </div>
     <div class="mini-actions">
@@ -20,7 +25,7 @@
     <div class="mini-statusbar">
       <span>{{ t("mini.statusbar") }}</span>
       <span>PID {{ runtime.status.pid ?? '-' }}</span>
-      <span>Uptime {{ runtime.status.uptimeSeconds ?? 0 }}s</span>
+      <span>Uptime {{ (runtime.status.uptimeSeconds ?? 0).toLocaleString() }}s</span>
     </div>
   </div>
 </template>
@@ -40,12 +45,12 @@ async function backToMainWindow() {
   try {
     await switchToMainWindow();
   } catch {
-    await router.push("/dashboard");
+    await router.push("/");
   }
 }
 
 async function openMainRoute() {
-  await router.push("/dashboard");
+  await router.push("/");
 }
 
 onMounted(() => runtime.startStatusPolling());

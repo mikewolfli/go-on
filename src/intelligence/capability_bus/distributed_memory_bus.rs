@@ -910,8 +910,6 @@ fn local_node_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "profile-multi-users-server")]
-    use std::time::Duration;
 
     fn make_bus(max: usize) -> DistributedMemoryBus {
         DistributedMemoryBus::new(max)

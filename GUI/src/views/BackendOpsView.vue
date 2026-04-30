@@ -108,10 +108,10 @@ async function callCustom() {
 
 async function callDangerous(method: "shutdown" | "cache.clear" | "vector.clear" | "breaker.reset") {
   const consequences: Record<string, string> = {
-    "shutdown": "This will stop the backend process and interrupt current requests.",
-    "cache.clear": "This will clear runtime cache data.",
-    "vector.clear": "This will clear vector storage data.",
-    "breaker.reset": "This will force-reset breaker states."
+    "shutdown": t("views.BackendOpsView.shutdownConfirm"),
+    "cache.clear": t("views.BackendOpsView.cacheClearConfirm"),
+    "vector.clear": t("views.BackendOpsView.vectorClearConfirm"),
+    "breaker.reset": t("views.BackendOpsView.breakerResetConfirm")
   };
 
   const confirmed = await ElMessageBox.confirm(

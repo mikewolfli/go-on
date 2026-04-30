@@ -3,6 +3,10 @@ name = "go-on"
 version = "0.8.3"
 edition = "2021"
 
+[lib]
+name = "go_on"
+path = "src/lib.rs"
+
 [features]
 # ── Build profiles ───────────────────────────────────────────────────────────
 # profile-local         : single-user local tool; SQLite cache + adaptive vector store

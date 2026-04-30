@@ -198,9 +198,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from "vue";
+import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
-import { ElMessage, ElIcon } from "element-plus";
+import { ElMessage } from "element-plus";
 import { Document } from "@element-plus/icons-vue";
 import { useRuntimeStore } from "../stores/runtime";
 import { defaultRuntimeBaseUrl } from "../services/protocolContract";
@@ -214,6 +214,9 @@ const runtime = useRuntimeStore();
 //   To preserve messages across routes, either:
 //   - Wrap <ChatView /> with <keep-alive> in the parent router-view/tabs, or
 //   - Migrate session/message state to a Pinia store (e.g. `useChatStore`).
+// Track current AbortController for cleanup on unmount
+const currentAbortController = ref<AbortController | null>(null);
+
 const inputText = ref("");
 const loading = ref(false);
 const messageAreaRef = ref<HTMLElement | null>(null);
@@ -383,7 +386,12 @@ async function sendMessage() {
 
   try {
     const baseUrl = defaultRuntimeBaseUrl;
+    // Cancel previous request if any
+    if (currentAbortController.value) {
+      currentAbortController.value.abort();
+    }
     const controller = new AbortController();
+    currentAbortController.value = controller;
     const timeoutId = window.setTimeout(() => controller.abort(), 120000);
 
     const response = await fetch(`${baseUrl}/v1/chat/completions`, {
@@ -398,6 +406,7 @@ async function sendMessage() {
     });
 
     window.clearTimeout(timeoutId);
+    currentAbortController.value = null;
     if (!response.ok) {
       const errText = await response.text();
       throw new Error(`HTTP ${response.status}: ${errText}`);
@@ -435,6 +444,14 @@ function scrollToBottom() {
 onMounted(() => {
   if (!sessions.value.length) {
     newSession();
+  }
+});
+
+onUnmounted(() => {
+  // Abort any in-flight request to prevent memory leaks
+  if (currentAbortController.value) {
+    currentAbortController.value.abort();
+    currentAbortController.value = null;
   }
 });
 </script>

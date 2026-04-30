@@ -1,4 +1,4 @@
 export interface RuntimeManagerLike {
-    isRunning(): boolean;
-    sendRequest(_method: string, _params?: unknown): Promise<unknown>;
+  isRunning(): boolean;
+  sendRequest(_method: string, _params?: unknown): Promise<unknown>;
 }

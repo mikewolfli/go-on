@@ -152,6 +152,11 @@ pub fn new_acp_server(
 
             if server.runtime_config.skills_enabled {
                 server.register_skill(Arc::new(crate::orchestration::skill::EchoSkill));
+                server.register_skill(Arc::new(
+                    crate::orchestration::skill::SkillCreatorSkill::new(
+                        server.skill_registry.clone(),
+                    ),
+                ));
             }
 
             // Wire the new modules' state from CapabilityBus into the server's

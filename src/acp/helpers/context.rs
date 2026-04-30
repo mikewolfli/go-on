@@ -158,25 +158,6 @@ fn extract_host_port(url: &str) -> Option<(String, u16)> {
     Some((host_port.to_string(), 80))
 }
 
-/// Work grade classification
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
-#[allow(dead_code)]
-pub enum WorkGrade {
-    Ask,
-    Edit,
-    Agent,
-    Safeguard,
-    FullAuto,
-}
-
-/// Test function to verify module works
-#[cfg(test)]
-#[allow(dead_code)]
-pub fn test_function() -> &'static str {
-    "context module is working"
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

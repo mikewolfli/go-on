@@ -532,6 +532,40 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
     }))
 }
 
+pub(super) async fn handle_capabilities_list(
+    server: &AcpServer,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let capability_profile = server
+        .capability_bus
+        .as_ref()
+        .map(|cb| {
+            let p = cb.capability_bus_profile();
+            serde_json::json!({
+                "enabled": p.enabled,
+                "routing_count": p.routing_count,
+                "capability_graph_agents": p.capability_graph_agents,
+                "knowledge_insights_count": p.knowledge_insights_count,
+                "workflow_presets_count": p.workflow_presets_count,
+                "provenance_entries_count": p.provenance_entries_count,
+            })
+        })
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "enabled": false,
+            })
+        });
+
+    send_result(
+        server,
+        request_id,
+        serde_json::json!({
+            "capabilities": capability_profile,
+        }),
+    )
+    .await
+}
+
 pub(super) async fn handle_health_probes(
     server: &AcpServer,
     request_id: Option<Value>,

@@ -39,6 +39,7 @@
         <el-select :model-value="locale" size="small" style="width: 120px" @change="onLocaleChange">
           <el-option :label="t('language.english')" value="en-US" />
           <el-option :label="t('language.simplifiedChinese')" value="zh-CN" />
+          <el-option :label="t('language.traditionalChinese')" value="zh-TW" />
         </el-select>
       </el-header>
 
@@ -102,6 +103,13 @@
               >
                 <SecurityView />
               </el-tab-pane>
+              <el-tab-pane
+                v-if="!runtime.status.running || runtime.activeFeatures.skills_enabled || runtime.activeFeatures.skills_import"
+                :label="t('menu.skills')"
+                name="skills"
+              >
+                <SkillsView />
+              </el-tab-pane>
             </el-tabs>
           </el-tab-pane>
 
@@ -153,11 +161,13 @@ import ProvidersView from "./views/ProvidersView.vue";
 import BackendOpsView from "./views/BackendOpsView.vue";
 import AutoTuneView from "./views/AutoTuneView.vue";
 import WorkflowView from "./views/WorkflowView.vue";
+import SkillsView from "./views/SkillsView.vue";
 import SecurityView from "./views/SecurityView.vue";
 import ChatView from "./views/ChatView.vue";
 import OnboardingGuide from "./components/OnboardingGuide.vue";
 
 const runtime = useRuntimeStore();
+const router = useRouter();
 const route = useRoute();
 const isMiniRoute = computed(() => route.path === "/mini");
 const { t } = useI18n();
@@ -187,7 +197,7 @@ function handleMonitorOnlyChanged(e: Event) {
 }
 
 function onLocaleChange(value: string) {
-  if (value === "en-US" || value === "zh-CN") {
+  if (value === "en-US" || value === "zh-CN" || value === "zh-TW") {
     setLocale(value);
     locale.value = value;
   }
@@ -230,7 +240,7 @@ async function onSwitchToMiniWindow() {
     await switchToMiniWindow();
   } catch {
     // In browser preview fallback to in-window mini route.
-    useRouter().push("/mini");
+    router.push("/mini");
   }
 }
 

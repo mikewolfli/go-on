@@ -10,7 +10,8 @@
     "miniConsole": "浮动小窗",
     "language": {
       "english": "English",
-      "simplifiedChinese": "简体中文"
+      "simplifiedChinese": "简体中文",
+      "traditionalChinese": "繁體中文"
     },
     "toggleTheme": "切换深色/浅色模式",
     "monitorOnlyBanner": "监控模式 · GUI 不会自动启动后台",
@@ -28,6 +29,7 @@
     "backendOps": "后端运维",
     "autoTune": "自动调优",
     "workflow": "工作流",
+    "skills": "技能",
     "security": "安全治理"
   },
   "nav": {
@@ -66,6 +68,8 @@
     "endpoint": "端点",
     "code": "状态码",
     "ai": "AI 使用",
+    "noData": "后端未运行 - 无数据",
+    "loading": "加载中...",
     "rpm": "每分钟请求",
     "success": "成功率",
     "latency": "平均时延"
@@ -108,7 +112,8 @@
     "timeoutCount": "超时次数",
     "rateLimitCount": "限流次数",
     "breakerCount": "熔断次数",
-    "upstreamFailureCount": "上游失败次数"
+    "upstreamFailureCount": "上游失败次数",
+    "noData": "后端未运行"
   },
   "aiUsage": {
     "snapshot": "AI 使用快照",
@@ -131,7 +136,10 @@
   },
   "logs": {
     "title": "日志",
-    "filter": "过滤关键字"
+    "filter": "过滤关键字",
+    "level": "级别",
+    "export": "导出",
+    "serverSearch": "服务端"
   },
   "setup": {
     "title": "引导命令快捷入口",
@@ -435,6 +443,7 @@
     "taskId": "任务 ID",
     "executionPlan": "执行计划",
     "confirmExecute": "确认并执行",
+    "duration": "耗时",
     "history": "执行历史",
     "currentStatus": "当前状态",
     "activeWorkflows": "活跃工作流",
@@ -445,7 +454,19 @@
     "taskStarted": "任务已启动",
     "workflowStarted": "工作流已启动",
     "planGenerated": "计划已生成。",
-    "error": "错误：{error}"
+    "error": "错误：{error}",
+    "nextAction": "下一步动作",
+    "patchSet": "补丁集",
+    "gate": "关卡",
+    "requirementGate": "需求关卡",
+    "reviewGate": "审查关卡",
+    "repairStatus": "修复状态",
+    "repairTargets": "修复目标数",
+    "taskSuccessRate": "任务成功率",
+    "firstPassRate": "首次通过率",
+    "meanRepairIterations": "平均修复迭代次数",
+    "humanInterventionRate": "人工干预率",
+    "regressionRate": "回归率"
   },
   "security": {
     "title": "安全与凭据治理",
@@ -547,6 +568,7 @@
     "description": "描述",
     "cancelled": "已取消",
     "refreshed": "已刷新",
+    "loading": "加载中...",
     "offlineMode": "离线模式",
     "offlineModeHint": "服务离线中。显示最后已知的状态。",
     "staleData": "过时数据",
@@ -959,6 +981,9 @@
       "runCustomBtn": "执行",
       "dangerZone": "危险操作区",
       "shutdownBtn": "关闭后端",
+      "breakerResetConfirm": "这将强制重置熔断器状态。",
+      "cacheClearConfirm": "这将清除运行时缓存数据。",
+      "vectorClearConfirm": "这将清除向量存储数据。",
       "shutdownConfirm": "确定要关闭后端吗？",
       "shutdownTyping": "输入 'shutdown' 以确认",
       "breakerResetBtn": "重置熔断器",
@@ -1151,6 +1176,36 @@
       "modelLabel": "模型",
       "tokenCount": "Token：{count}",
       "elapsedTime": "耗时：{time}秒"
+    },
+    "SkillsView": {
+      "title": "技能管理",
+      "createSkill": "创建技能",
+      "importSkill": "导入技能",
+      "empty": "暂无技能。请创建或导入一个技能。",
+      "version": "版本",
+      "importedAt": "导入时间",
+      "enable": "启用",
+      "disable": "禁用",
+      "remove": "删除",
+      "namePlaceholder": "技能名称",
+      "descPlaceholder": "简短描述技能的功能",
+      "promptTemplate": "提示模板",
+      "promptPlaceholder": "输入提示模板（使用 {input} 注入变量）",
+      "inputSchema": "输入模式",
+      "schemaPlaceholder": "key1=string\nkey2=number",
+      "schemaHint": "输入 JSON 或 key=value 格式",
+      "sourceUrl": "来源 URL",
+      "urlPlaceholder": "https://github.com/... 或 https://example.com/skill.json",
+      "toastToggleSuccess": "技能状态切换成功",
+      "toastRemoveSuccess": "技能已删除",
+      "toastCreateSuccess": "技能创建成功",
+      "toastImportSuccess": "技能导入成功",
+      "toastFillRequired": "请填写所有必填字段",
+      "toastSchemaInvalid": "输入模式格式无效",
+      "toastCreateFailed": "创建技能失败",
+      "toastImportFailed": "导入技能失败",
+      "toastToggleFailed": "切换技能状态失败",
+      "toastRemoveFailed": "删除技能失败"
     },
     "MiniConsoleView": {
       "title": "浮动小窗",

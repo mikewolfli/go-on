@@ -2,7 +2,10 @@ use go_on::i18n::{current_language, init_i18n, set_language, t, tf, Language};
 
 fn main() {
     // 初始化i18n系统
-    let languages_dir = std::path::Path::new("languages");
+    let languages_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("languages");
     if let Err(e) = init_i18n(languages_dir) {
         eprintln!("Failed to initialize i18n: {}", e);
         return;

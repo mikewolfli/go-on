@@ -47,18 +47,21 @@ export function useWorkflow() {
     regressionRate: 0,
   });
 
-  function hydrateExecutionInsights(payload: any) {
-    const result = payload?.result ?? payload ?? {};
+  function hydrateExecutionInsights(payload: Record<string, unknown>) {
+    const result = (payload?.result ?? payload ?? {}) as Record<
+      string,
+      unknown
+    >;
     latestRunMode.value = String(result?.run_mode || "assisted");
     latestGates.value = (result?.gates || {}) as Record<string, unknown>;
 
-    const cycle = result?.execution_cycle || {};
+    const cycle = (result?.execution_cycle || {}) as Record<string, unknown>;
     latestAutoRepair.value = (cycle?.auto_repair || {}) as Record<
       string,
       unknown
     >;
     const cycles = Array.isArray(cycle?.cycles) ? cycle.cycles : [];
-    latestCycleTimeline.value = cycles.map((item: any) => ({
+    latestCycleTimeline.value = cycles.map((item: Record<string, unknown>) => ({
       iteration: Number(item?.iteration || 0),
       status: String(item?.status || "unknown"),
       next_action: String(item?.next_action || "-"),
@@ -68,22 +71,26 @@ export function useWorkflow() {
   }
 
   function requirementGateStatus(): string {
-    const gate = latestGates.value as Record<string, any>;
-    return String(gate?.requirement?.status || gate?.gate || "-");
+    const gate = latestGates.value as Record<string, unknown>;
+    return String(
+      (gate?.requirement as Record<string, unknown>)?.status ||
+        gate?.gate ||
+        "-",
+    );
   }
 
   function reviewGateStatus(): string {
-    const gate = latestGates.value as Record<string, any>;
+    const gate = latestGates.value as Record<string, unknown>;
     return String(gate?.status2 || "-");
   }
 
   function repairStatusText(): string {
-    const repair = latestAutoRepair.value as Record<string, any>;
+    const repair = latestAutoRepair.value as Record<string, unknown>;
     return String(repair?.status || "-");
   }
 
   function repairTargetCount(): number {
-    const repair = latestAutoRepair.value as Record<string, any>;
+    const repair = latestAutoRepair.value as Record<string, unknown>;
     const targets = Array.isArray(repair?.target_subtasks)
       ? repair.target_subtasks
       : [];

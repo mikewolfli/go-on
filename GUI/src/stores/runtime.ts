@@ -56,6 +56,7 @@ export const useRuntimeStore = defineStore("runtime", {
     logsTimer: undefined as number | undefined,
     statusPollingInFlight: false,
     logsPollingInFlight: false,
+    refreshAllInProgress: false,
     loading: false,
     activeFeatures: {} as Partial<RuntimeFeatures>,
     lastError: "",
@@ -206,22 +207,32 @@ export const useRuntimeStore = defineStore("runtime", {
       }
     },
     async refreshAll() {
+      if (this.refreshAllInProgress) {
+        return;
+      }
+      this.refreshAllInProgress = true;
       this.loading = true;
-      await Promise.all([
-        this.refreshStatus(),
-        this.refreshHealth(),
-        this.refreshAiUsage(),
-        this.refreshUsageHeatmap(),
-        this.refreshEditorIntegrations(),
-        this.refreshEndpointHealthStats(),
-        this.refreshFeatures(),
-      ]);
-      this.loading = false;
+      try {
+        await Promise.all([
+          this.refreshStatus(),
+          this.refreshHealth(),
+          this.refreshAiUsage(),
+          this.refreshUsageHeatmap(),
+          this.refreshEditorIntegrations(),
+          this.refreshEndpointHealthStats(),
+          this.refreshFeatures(),
+        ]);
+      } finally {
+        this.refreshAllInProgress = false;
+        this.loading = false;
+      }
     },
     startStatusPolling() {
       this.stopStatusPolling();
       const generation = ++this.statusPollingGeneration;
-      void this.refreshAll();
+
+      // Set up the interval first to prevent orphaned timer if
+      // stopStatusPolling() is called during the initial refresh.
       this.statusTimer = window.setInterval(async () => {
         if (generation !== this.statusPollingGeneration) {
           return;
@@ -236,6 +247,12 @@ export const useRuntimeStore = defineStore("runtime", {
           this.statusPollingInFlight = false;
         }
       }, this.statusPollingMs);
+
+      // Initial refresh (non-blocking)
+      this.statusPollingInFlight = true;
+      this.refreshAll().finally(() => {
+        this.statusPollingInFlight = false;
+      });
     },
     stopStatusPolling() {
       this.statusPollingGeneration += 1;
@@ -248,7 +265,9 @@ export const useRuntimeStore = defineStore("runtime", {
     startLogsPolling(lines = 200) {
       this.stopLogsPolling();
       const generation = ++this.logsPollingGeneration;
-      void this.refreshLogs(lines);
+
+      // Set up the interval first to prevent orphaned timer if
+      // stopLogsPolling() is called during the initial refresh.
       this.logsTimer = window.setInterval(async () => {
         if (generation !== this.logsPollingGeneration) {
           return;
@@ -263,6 +282,12 @@ export const useRuntimeStore = defineStore("runtime", {
           this.logsPollingInFlight = false;
         }
       }, this.logsPollingMs);
+
+      // Initial refresh (non-blocking)
+      this.logsPollingInFlight = true;
+      this.refreshLogs(lines).finally(() => {
+        this.logsPollingInFlight = false;
+      });
     },
     stopLogsPolling() {
       this.logsPollingGeneration += 1;

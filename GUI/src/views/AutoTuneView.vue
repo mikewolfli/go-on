@@ -119,7 +119,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from "vue";
+import { onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useI18n } from "vue-i18n";
 import { invokeRuntimeRpc } from "../services/bridge";
@@ -156,33 +156,34 @@ async function refreshStatus() {
     const result = await invokeRuntimeRpc("autotune.get", "{}");
     rawOutput.value = result;
 
-    let data: any;
+    let data: Record<string, unknown>;
     try {
-      data = JSON.parse(result);
+      const parsed = JSON.parse(result);
+      data = typeof parsed === "object" && parsed !== null ? parsed as Record<string, unknown> : {};
     } catch {
       ElMessage.error(`Invalid JSON response: ${result?.slice(0, 200)}`);
       rawOutput.value = result;
       return;
     }
     if (data.ok) {
-      tuningEnabled.value = data.enabled || true;
-      tuningUptime.value = data.uptime_hours || 0;
-      adjustmentCount.value = data.adjustment_count || 0;
-      improvement.value = data.improvement_percent || 0;
+      tuningEnabled.value = Boolean(data.enabled ?? true);
+      tuningUptime.value = Number(data.uptime_hours ?? 0);
+      adjustmentCount.value = Number(data.adjustment_count ?? 0);
+      improvement.value = Number(data.improvement_percent ?? 0);
 
-      if (data.config && Array.isArray(data.config)) {
-        currentConfig.value = data.config;
+      if (Array.isArray(data.config)) {
+        currentConfig.value = data.config as Array<{ name: string; value: number; baseline: number; delta: string; impact: string }>;
       }
 
-      if (data.history && Array.isArray(data.history)) {
-        tuningHistory.value = data.history;
+      if (Array.isArray(data.history)) {
+        tuningHistory.value = data.history as Array<{ time: string; type: string; adjustment: string; result: string }>;
       }
 
-      if (data.recommendations && Array.isArray(data.recommendations)) {
-        recommendations.value = data.recommendations.map((rec: any) => ({
-          type: rec.type || "info",
-          title: rec.title || "",
-          description: rec.description || "",
+      if (Array.isArray(data.recommendations)) {
+        recommendations.value = (data.recommendations as Array<Record<string, unknown>>).map((rec) => ({
+          type: String(rec.type || "info"),
+          title: String(rec.title || ""),
+          description: String(rec.description || ""),
         }));
       }
     }
@@ -220,6 +221,9 @@ async function resetTuning() {
   });
 }
 
-// Initialize
-refreshStatus();
+onMounted(() => {
+  refreshStatus().catch((err) => {
+    console.warn("AutoTune: initial refresh failed (backend may be offline)", err);
+  });
+});
 </script>

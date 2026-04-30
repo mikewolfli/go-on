@@ -14,31 +14,36 @@ export function useCrashHandler(options: CrashHandlerOptions) {
   const cooldownMs = options.crashCooldownMs ?? 60000;
 
   async function register() {
-    unlistenCrash = await listen<{ message: string; timestamp: string }>("service-crash", async (event) => {
-      const payload = event.payload;
-      const now = Date.now();
-      const crashKey = payload.message;
-      if (crashKey === lastCrashKey && now - lastCrashAt < cooldownMs) {
-        return;
-      }
-      lastCrashKey = crashKey;
-      lastCrashAt = now;
+    // Unregister any previous listener to prevent leaks on multiple calls
+    unregister();
+    unlistenCrash = await listen<{ message: string; timestamp: string }>(
+      "service-crash",
+      async (event) => {
+        const payload = event.payload;
+        const now = Date.now();
+        const crashKey = payload.message;
+        if (crashKey === lastCrashKey && now - lastCrashAt < cooldownMs) {
+          return;
+        }
+        lastCrashKey = crashKey;
+        lastCrashAt = now;
 
-      try {
-        await ElMessageBox.confirm(
-          `${payload.message}\n${options.t("toast.recoverPrompt")}`,
-          options.t("toast.serviceCrashed"),
-          {
-            confirmButtonText: options.t("toast.recoverNow"),
-            cancelButtonText: options.t("toast.later"),
-            type: "error",
-          },
-        );
-        await options.onRecover();
-      } catch {
-        ElMessage.warning(options.t("toast.recoverDeferred"));
-      }
-    });
+        try {
+          await ElMessageBox.confirm(
+            `${payload.message}\n${options.t("toast.recoverPrompt")}`,
+            options.t("toast.serviceCrashed"),
+            {
+              confirmButtonText: options.t("toast.recoverNow"),
+              cancelButtonText: options.t("toast.later"),
+              type: "error",
+            },
+          );
+          await options.onRecover();
+        } catch {
+          ElMessage.warning(options.t("toast.recoverDeferred"));
+        }
+      },
+    );
   }
 
   function unregister() {

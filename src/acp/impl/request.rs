@@ -80,10 +80,12 @@ fn is_acp_request(method: &str) -> bool {
                 | "skill.disable"
                 | "skill.list_imported"
                 | "skill.remove"
+                | "skill.create"
             | "phase.policy.replay"
             | "primary_secondary.summary"
             | "summary/primary_secondary"
             | "governance.status"
+            | "capabilities.list"
             | "health.check"
              // diagnostics / ops also used by vscode-addon in ACP mode
              | "metrics.reset"
@@ -414,6 +416,14 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                 "skill.list_imported" => {
                     protocol_pack::handle_skill_list_imported(server, request_id).await
                 }
+                "skill.create" => {
+                    protocol_pack::handle_skill_create(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
                 "skill.remove" => {
                     protocol_pack::handle_skill_remove(
                         server,
@@ -730,6 +740,9 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                         request_id,
                     )
                     .await
+                }
+                "capabilities.list" => {
+                    runtime_pack::handle_capabilities_list(server, request_id).await
                 }
                 "governance.plan.get" => {
                     runtime_pack::handle_governance_plan_get(server, request_id).await

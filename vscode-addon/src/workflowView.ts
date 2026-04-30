@@ -1,209 +1,230 @@
-import * as vscode from 'vscode';
-import { RuntimeManagerLike } from './managerTypes';
+import * as vscode from "vscode";
+import { RuntimeManagerLike } from "./managerTypes";
+import { t, MessageKeys } from "./i18n";
 
 interface WorkflowStep {
-    type: 'chat' | 'code' | 'delay';
-    prompt?: string;
-    delay?: number;
+  type: "chat" | "code" | "delay";
+  prompt?: string;
+  delay?: number;
 }
 
 interface WorkflowData {
-    name: string;
-    steps: WorkflowStep[];
-    id?: string;
-    created?: string;
-    status?: 'created' | 'running' | 'completed' | 'failed';
+  name: string;
+  steps: WorkflowStep[];
+  id?: string;
+  created?: string;
+  status?: "created" | "running" | "completed" | "failed";
 }
 
 type WorkflowStore = Record<string, WorkflowData>;
 
 export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
-    public static readonly viewType = 'go-on-workflow';
-    private _view?: vscode.WebviewView;
-    private _messageSubscription?: vscode.Disposable;
-    private readonly manager: RuntimeManagerLike;
-    private readonly context: vscode.ExtensionContext;
+  public static readonly viewType = "go-on-workflow";
+  private _view?: vscode.WebviewView;
+  private _messageSubscription?: vscode.Disposable;
+  private readonly manager: RuntimeManagerLike;
+  private readonly context: vscode.ExtensionContext;
 
-    constructor(
-        private readonly _extensionUri: vscode.Uri,
-        _manager: RuntimeManagerLike,
-        _context: vscode.ExtensionContext
-    ) {
-        this.manager = _manager;
-        this.context = _context;
-        this.context.subscriptions.push(new vscode.Disposable(() => this._messageSubscription?.dispose()));
+  constructor(
+    private readonly _extensionUri: vscode.Uri,
+    _manager: RuntimeManagerLike,
+    _context: vscode.ExtensionContext,
+  ) {
+    this.manager = _manager;
+    this.context = _context;
+    this.context.subscriptions.push(
+      new vscode.Disposable(() => this._messageSubscription?.dispose()),
+    );
+  }
+
+  public resolveWebviewView(
+    webviewView: vscode.WebviewView,
+    _context: vscode.WebviewViewResolveContext,
+    _token: vscode.CancellationToken,
+  ) {
+    this._view = webviewView;
+
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this._extensionUri],
+    };
+
+    webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+
+    this._messageSubscription?.dispose();
+    this._messageSubscription = webviewView.webview.onDidReceiveMessage(
+      async (message) => {
+        switch (message.type) {
+          case "createWorkflow":
+            await this._createWorkflow(message.workflowData);
+            break;
+          case "runWorkflow":
+            await this._runWorkflow(message.workflowId);
+            break;
+          case "deleteWorkflow":
+            this._deleteWorkflow(message.workflowId);
+            break;
+        }
+      },
+      undefined,
+    );
+  }
+
+  private getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  private async _createWorkflow(workflowData: WorkflowData) {
+    const workflows = this.context.globalState.get<WorkflowStore>(
+      "go-on-workflows",
+      {},
+    );
+    const workflowId = `workflow_${Date.now()}`;
+    workflows[workflowId] = {
+      ...workflowData,
+      id: workflowId,
+      created: new Date().toISOString(),
+      status: "created",
+    };
+    await this.context.globalState.update("go-on-workflows", workflows);
+
+    this._view?.webview.postMessage({
+      type: "workflowCreated",
+      workflow: workflows[workflowId],
+    });
+
+    vscode.window.showInformationMessage(
+      `Workflow "${workflowData.name}" created successfully!`,
+    );
+  }
+
+  private async _runWorkflow(workflowId: string) {
+    const workflows = this.context.globalState.get<WorkflowStore>(
+      "go-on-workflows",
+      {},
+    );
+    const workflow = workflows[workflowId];
+
+    if (!workflow) {
+      vscode.window.showErrorMessage("Workflow not found");
+      return;
     }
 
-    public resolveWebviewView(
-        webviewView: vscode.WebviewView,
-        _context: vscode.WebviewViewResolveContext,
-        _token: vscode.CancellationToken,
-    ) {
-        this._view = webviewView;
+    // Update status
+    workflow.status = "running";
+    await this.context.globalState.update("go-on-workflows", workflows);
 
-        webviewView.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [
-                this._extensionUri
-            ]
-        };
+    this._view?.webview.postMessage({
+      type: "workflowStatusUpdate",
+      workflowId,
+      status: "running",
+    });
 
-        webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
-
-        this._messageSubscription?.dispose();
-        this._messageSubscription = webviewView.webview.onDidReceiveMessage(
-            async (message) => {
-                switch (message.type) {
-                    case 'createWorkflow':
-                        await this._createWorkflow(message.workflowData);
-                        break;
-                    case 'runWorkflow':
-                        await this._runWorkflow(message.workflowId);
-                        break;
-                    case 'deleteWorkflow':
-                        this._deleteWorkflow(message.workflowId);
-                        break;
-                }
-            },
-            undefined
-        );
-    }
-
-    private getErrorMessage(error: unknown): string {
-        return error instanceof Error ? error.message : String(error);
-    }
-
-    private async _createWorkflow(workflowData: WorkflowData) {
-        const workflows = this.context.globalState.get<WorkflowStore>('go-on-workflows', {});
-        const workflowId = `workflow_${Date.now()}`;
-        workflows[workflowId] = {
-            ...workflowData,
-            id: workflowId,
-            created: new Date().toISOString(),
-            status: 'created'
-        };
-        await this.context.globalState.update('go-on-workflows', workflows);
-
+    try {
+      // Execute workflow steps
+      for (let i = 0; i < workflow.steps.length; i++) {
+        const step = workflow.steps[i];
 
         this._view?.webview.postMessage({
-            type: 'workflowCreated',
-            workflow: workflows[workflowId]
+          type: "stepStatusUpdate",
+          workflowId,
+          stepIndex: i,
+          status: "running",
         });
 
-        vscode.window.showInformationMessage(`Workflow "${workflowData.name}" created successfully!`);
-    }
-
-    private async _runWorkflow(workflowId: string) {
-        const workflows = this.context.globalState.get<WorkflowStore>('go-on-workflows', {});
-        const workflow = workflows[workflowId];
-
-
-        if (!workflow) {
-            vscode.window.showErrorMessage('Workflow not found');
-            return;
+        // Execute step based on type
+        switch (step.type) {
+          case "chat":
+            await this.manager.sendRequest("chat", {
+              messages: [{ role: "user", content: step.prompt }],
+            });
+            break;
+          case "code":
+            // Code execution would be handled by the chat view
+            break;
+          case "delay":
+            await new Promise((resolve) =>
+              setTimeout(resolve, Number(step.delay || 0) * 1000),
+            );
+            break;
         }
-
-        // Update status
-        workflow.status = 'running';
-        await this.context.globalState.update('go-on-workflows', workflows);
 
         this._view?.webview.postMessage({
-            type: 'workflowStatusUpdate',
-            workflowId,
-            status: 'running'
+          type: "stepStatusUpdate",
+          workflowId,
+          stepIndex: i,
+          status: "completed",
         });
+      }
 
-        try {
-            // Execute workflow steps
-            for (let i = 0; i < workflow.steps.length; i++) {
-                const step = workflow.steps[i];
+      workflow.status = "completed";
+      await this.context.globalState.update("go-on-workflows", workflows);
 
-                this._view?.webview.postMessage({
-                    type: 'stepStatusUpdate',
-                    workflowId,
-                    stepIndex: i,
-                    status: 'running'
-                });
+      this._view?.webview.postMessage({
+        type: "workflowStatusUpdate",
+        workflowId,
+        status: "completed",
+      });
 
-                // Execute step based on type
-                switch (step.type) {
-                    case 'chat':
-                        await this.manager.sendRequest('chat', {
-                            messages: [{ role: 'user', content: step.prompt }]
-                        });
-                        break;
-                    case 'code':
-                        // Code execution would be handled by the chat view
-                        break;
-                    case 'delay':
-                        await new Promise(resolve => setTimeout(resolve, Number(step.delay || 0) * 1000));
-                        break;
-                }
+      vscode.window.showInformationMessage(
+        `Workflow "${workflow.name}" completed successfully!`,
+      );
+    } catch (error: unknown) {
+      workflow.status = "failed";
+      await this.context.globalState.update("go-on-workflows", workflows);
+      const message = this.getErrorMessage(error);
 
-                this._view?.webview.postMessage({
-                    type: 'stepStatusUpdate',
-                    workflowId,
-                    stepIndex: i,
-                    status: 'completed'
-                });
-            }
+      this._view?.webview.postMessage({
+        type: "workflowStatusUpdate",
+        workflowId,
+        status: "failed",
+        error: message,
+      });
 
-            workflow.status = 'completed';
-            await this.context.globalState.update('go-on-workflows', workflows);
-
-            this._view?.webview.postMessage({
-                type: 'workflowStatusUpdate',
-                workflowId,
-                status: 'completed'
-            });
-
-            vscode.window.showInformationMessage(`Workflow "${workflow.name}" completed successfully!`);
-
-        } catch (error: unknown) {
-            workflow.status = 'failed';
-            await this.context.globalState.update('go-on-workflows', workflows);
-            const message = this.getErrorMessage(error);
-
-            this._view?.webview.postMessage({
-                type: 'workflowStatusUpdate',
-                workflowId,
-                status: 'failed',
-                error: message
-            });
-
-            vscode.window.showErrorMessage(`Workflow failed: ${message}`);
-        }
+      vscode.window.showErrorMessage(`Workflow failed: ${message}`);
     }
+  }
 
-    private async _deleteWorkflow(workflowId: string) {
-        try {
-            const workflows = this.context.globalState.get<WorkflowStore>('go-on-workflows', {});
-            delete workflows[workflowId];
-            await this.context.globalState.update('go-on-workflows', workflows);
+  private async _deleteWorkflow(workflowId: string) {
+    try {
+      const workflows = this.context.globalState.get<WorkflowStore>(
+        "go-on-workflows",
+        {},
+      );
+      delete workflows[workflowId];
+      await this.context.globalState.update("go-on-workflows", workflows);
 
-            this._view?.webview.postMessage({
-                type: 'workflowDeleted',
-                workflowId
-            });
+      this._view?.webview.postMessage({
+        type: "workflowDeleted",
+        workflowId,
+      });
 
-            vscode.window.showInformationMessage('Workflow deleted successfully!');
-        } catch (error) {
-            vscode.window.showErrorMessage(`Failed to delete workflow: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        }
+      vscode.window.showInformationMessage("Workflow deleted successfully!");
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Failed to delete workflow: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
     }
+  }
 
-    private _getHtmlForWebview(webview: vscode.Webview) {
-        const styleResetUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'reset.css'));
-        const styleVSCodeUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'vscode.css'));
-        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'workflow.js'));
+  private _getHtmlForWebview(webview: vscode.Webview) {
+    const styleResetUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, "media", "reset.css"),
+    );
+    const styleVSCodeUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, "media", "vscode.css"),
+    );
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, "media", "workflow.js"),
+    );
 
-        const nonce = getNonce();
+    const nonce = getNonce();
 
-        return `<!DOCTYPE html>
+    return `<!DOCTYPE html>
             <html lang="en">
             <head>
                 <meta charset="UTF-8">
-                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}';">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <link href="${styleResetUri}" rel="stylesheet">
                 <link href="${styleVSCodeUri}" rel="stylesheet">
@@ -287,20 +308,21 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
             </head>
             <body>
                 <div class="workflow-container">
-                    <button class="create-btn" id="createWorkflowBtn">Create New Workflow</button>
+                    <button class="create-btn" id="createWorkflowBtn">${t(MessageKeys.createNewWorkflow)}</button>
                     <div class="workflow-list" id="workflowList"></div>
                 </div>
                 <script nonce="${nonce}" src="${scriptUri}"></script>
             </body>
             </html>`;
-    }
+  }
 }
 
 function getNonce() {
-    let text = '';
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    for (let i = 0; i < 32; i++) {
-        text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
-    return text;
+  let text = "";
+  const possible =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let i = 0; i < 32; i++) {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  }
+  return text;
 }

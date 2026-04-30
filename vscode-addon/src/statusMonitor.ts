@@ -11,6 +11,7 @@ export class StatusMonitor {
   private readonly maxFailures = 3;
   private healthCheckInFlight = false;
   private failureWarningShown = false;
+  private _configListener: vscode.Disposable | undefined;
 
   constructor(manager: RuntimeManagerLike) {
     this.manager = manager;
@@ -32,8 +33,6 @@ export class StatusMonitor {
       }
     });
   }
-
-  private _configListener: vscode.Disposable | undefined;
 
   private async updateStatus() {
     const isRunning = this.manager.isRunning();

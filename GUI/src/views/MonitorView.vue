@@ -1,5 +1,20 @@
 <template>
-  <el-space direction="vertical" fill style="width: 100%">
+  <!-- Loading state -->
+  <div v-if="runtime.loading && !runtime.status.running" style="text-align:center;padding:40px;color:#999;">
+    {{ t('common.loading') || 'Loading...' }}
+  </div>
+
+  <!-- Error/Empty state -->
+  <el-alert
+    v-else-if="!runtime.status.running"
+    :title="t('common.offlineMode')"
+    :description="runtime.lastError || t('monitorView.noData')"
+    type="warning"
+    show-icon
+    :closable="false"
+  />
+
+  <el-space v-else direction="vertical" fill style="width: 100%">
     <el-card>
       <template #header>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
@@ -53,8 +68,8 @@
       <el-descriptions :column="2" border>
         <el-descriptions-item :label="t('monitor.serviceRunning')">{{ runtime.status.running }}</el-descriptions-item>
         <el-descriptions-item :label="t('monitor.healthOk')">{{ runtime.health.ok }}</el-descriptions-item>
-        <el-descriptions-item :label="t('monitor.requestsPerMinute')">{{ runtime.aiUsage.requestsPerMinute }}</el-descriptions-item>
-        <el-descriptions-item :label="t('monitor.successRate')">{{ runtime.aiUsage.successRate.toFixed(2) }}%</el-descriptions-item>
+        <el-descriptions-item :label="t('monitor.requestsPerMinute')">{{ (runtime.aiUsage.requestsPerMinute ?? 0).toLocaleString() }}</el-descriptions-item>
+        <el-descriptions-item :label="t('monitor.successRate')">{{ (runtime.aiUsage.successRate ?? 0).toFixed(2) }}%</el-descriptions-item>
         <el-descriptions-item :label="t('monitor.timeoutCount')">{{ runtime.aiUsage.timeoutCount }}</el-descriptions-item>
         <el-descriptions-item :label="t('monitor.rateLimitCount')">{{ runtime.aiUsage.rateLimitCount }}</el-descriptions-item>
         <el-descriptions-item :label="t('monitor.breakerCount')">{{ runtime.aiUsage.breakerCount }}</el-descriptions-item>
@@ -69,7 +84,7 @@
           <el-tag v-if="runtime.endpointHealthStatsStale" type="warning">{{ t("common.staleData") }}</el-tag>
         </div>
       </template>
-      <el-table :data="runtime.endpointHealthStats" size="small" height="220">
+      <el-table v-if="(runtime.endpointHealthStats ?? []).length > 0" :data="runtime.endpointHealthStats" size="small" height="220">
         <el-table-column prop="endpoint" :label="t('monitor.endpoint')" min-width="220" />
         <el-table-column prop="total" :label="t('monitor.total')" width="90" />
         <el-table-column prop="successRate" :label="t('monitor.successRate')" width="140">
@@ -88,7 +103,7 @@
           <el-tag v-if="runtime.usageHeatmapStale" type="warning">{{ t("common.staleData") }}</el-tag>
         </div>
       </template>
-      <el-table :data="runtime.usageHeatmap.trend" size="small" height="260">
+      <el-table v-if="(runtime.usageHeatmap.trend ?? []).length > 0" :data="runtime.usageHeatmap.trend" size="small" height="260">
         <el-table-column prop="secondBucket" :label="t('monitor.timeBucket')" width="160">
           <template #default="scope">{{ scope.row.secondBucket }}s</template>
         </el-table-column>
@@ -103,7 +118,7 @@
           <el-tag v-if="runtime.editorIntegrationsStale" type="warning">{{ t("common.staleData") }}</el-tag>
         </div>
       </template>
-      <el-table :data="runtime.editorIntegrations" size="small" height="260">
+      <el-table v-if="(runtime.editorIntegrations ?? []).length > 0" :data="runtime.editorIntegrations" size="small" height="260">
         <el-table-column prop="editor" :label="t('monitor.editor')" width="120" />
         <el-table-column prop="interfaceName" :label="t('monitor.interfaceType')" min-width="180" />
         <el-table-column prop="protocolMode" :label="t('monitor.protocolMode')" width="120" />
@@ -135,6 +150,21 @@
         </el-table-column>
       </el-table>
     </el-card>
+
+    <!-- Endpoint health no data -->
+    <div v-if="!(runtime.endpointHealthStats ?? []).length && runtime.status.running" style="text-align:center;padding:20px;color:#999;">
+      {{ t('views.MonitorView.noIntegrationData') }}
+    </div>
+
+    <!-- Trend no data -->
+    <div v-if="!(runtime.usageHeatmap.trend ?? []).length && runtime.status.running" style="text-align:center;padding:20px;color:#999;">
+      {{ t('views.MonitorView.noTrendData') }}
+    </div>
+
+    <!-- Integrations no data -->
+    <div v-if="!(runtime.editorIntegrations ?? []).length && runtime.status.running" style="text-align:center;padding:20px;color:#999;">
+      {{ t('views.MonitorView.noIntegrationData') }}
+    </div>
   </el-space>
 </template>
 

@@ -11,3 +11,11 @@
 
 pub mod runtime;
 pub mod watcher;
+
+// Re-export commonly used i18n functions so consumers can write
+// `use go_on::i18n::{t, tf, Language, …}` instead of drilling into `runtime`.
+// The `allow` is needed because the binary (`main.rs`) has its own `mod i18n`
+// compilation unit that doesn't reference these re-exports directly;
+// they are consumed by library consumers (e.g. `test_i18n`).
+#[allow(unused_imports)]
+pub use runtime::{current_language, init_i18n, set_language, t, tf, Language};

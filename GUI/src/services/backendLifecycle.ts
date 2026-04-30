@@ -13,6 +13,9 @@ import { i18n } from "../locales";
 
 export const MAX_BACKEND_CONFIGURE_ATTEMPTS = 5;
 
+/** Guard to prevent rapid double-clicks from spawning multiple backend processes. */
+let starting = false;
+
 export function classifyStartupError(error: unknown): string {
   const message = normalizeErrorMessage(error);
   const raw = message.toLowerCase();
@@ -71,80 +74,92 @@ export async function startBackendWithChecks() {
 }
 
 export async function ensureBackendAndStart() {
-  const localAuto = await autoConfigureBackendPath();
-  if (localAuto.linked) {
-    await startBackendWithChecks();
-    ElMessage.success(i18n.global.t("backend.autoDetectedAndLinked"));
+  if (starting) {
     return;
   }
-
-  for (let attempt = 1; attempt <= MAX_BACKEND_CONFIGURE_ATTEMPTS; attempt++) {
-    const exists = await backendExecutableExists();
-    if (exists) {
+  starting = true;
+  try {
+    const localAuto = await autoConfigureBackendPath();
+    if (localAuto.linked) {
       await startBackendWithChecks();
+      ElMessage.success(i18n.global.t("backend.autoDetectedAndLinked"));
       return;
     }
 
-    await ElMessageBox.alert(
-      i18n.global.t("backend.executableNotFound", {
-        attempt: String(attempt),
-        max: String(MAX_BACKEND_CONFIGURE_ATTEMPTS),
-      }),
-      i18n.global.t("backend.configureBackendPath"),
-      {
-        confirmButtonText: "Select Directory",
-        closeOnClickModal: false,
-        closeOnPressEscape: false,
-      },
-    );
+    for (
+      let attempt = 1;
+      attempt <= MAX_BACKEND_CONFIGURE_ATTEMPTS;
+      attempt++
+    ) {
+      const exists = await backendExecutableExists();
+      if (exists) {
+        await startBackendWithChecks();
+        return;
+      }
 
-    const picked = await openDialog({
-      multiple: false,
-      directory: true,
-      title: "Select directory containing go-on",
-    });
-
-    if (!picked) {
-      ElMessage.warning(
-        i18n.global.t("backend.noDirectorySelected", {
+      await ElMessageBox.alert(
+        i18n.global.t("backend.executableNotFound", {
           attempt: String(attempt),
           max: String(MAX_BACKEND_CONFIGURE_ATTEMPTS),
         }),
+        i18n.global.t("backend.configureBackendPath"),
+        {
+          confirmButtonText: "Select Directory",
+          closeOnClickModal: false,
+          closeOnPressEscape: false,
+        },
       );
-      continue;
+
+      const picked = await openDialog({
+        multiple: false,
+        directory: true,
+        title: "Select directory containing go-on",
+      });
+
+      if (!picked) {
+        ElMessage.warning(
+          i18n.global.t("backend.noDirectorySelected", {
+            attempt: String(attempt),
+            max: String(MAX_BACKEND_CONFIGURE_ATTEMPTS),
+          }),
+        );
+        continue;
+      }
+
+      const inputPath = Array.isArray(picked) ? picked[0] : picked;
+      if (!inputPath || !String(inputPath).trim()) {
+        ElMessage.warning(i18n.global.t("backend.pathCannotBeEmpty"));
+        continue;
+      }
+
+      try {
+        await configureServiceByDirectory(String(inputPath));
+      } catch (error) {
+        ElMessage.error(
+          i18n.global.t("backend.failedToResolve", {
+            error: normalizeErrorMessage(error),
+          }),
+        );
+        continue;
+      }
+
+      const configuredExists = await backendExecutableExists();
+      if (!configuredExists) {
+        ElMessage.error(i18n.global.t("backend.pathInvalid"));
+        continue;
+      }
+
+      await startBackendWithChecks();
+      ElMessage.success(i18n.global.t("backend.started"));
+      return;
     }
 
-    const inputPath = Array.isArray(picked) ? picked[0] : picked;
-    if (!inputPath || !String(inputPath).trim()) {
-      ElMessage.warning(i18n.global.t("backend.pathCannotBeEmpty"));
-      continue;
-    }
-
-    try {
-      await configureServiceByDirectory(String(inputPath));
-    } catch (error) {
-      ElMessage.error(
-        i18n.global.t("backend.failedToResolve", {
-          error: normalizeErrorMessage(error),
-        }),
-      );
-      continue;
-    }
-
-    const configuredExists = await backendExecutableExists();
-    if (!configuredExists) {
-      ElMessage.error(i18n.global.t("backend.pathInvalid"));
-      continue;
-    }
-
-    await startBackendWithChecks();
-    ElMessage.success(i18n.global.t("backend.started"));
-    return;
+    throw new Error(
+      "Maximum retry attempts reached. Please manually set the backend path in the config page.",
+    );
+  } finally {
+    starting = false;
   }
-
-  throw new Error(
-    "Maximum retry attempts reached. Please manually set the backend path in the config page.",
-  );
 }
 
 export async function bootstrapBackend(monitorOnly: boolean) {

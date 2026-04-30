@@ -460,10 +460,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(statusMonitor);
 
   // Initialize advanced edit provider
-  const _advancedEditProvider = new GoOnAdvancedEditProvider(
-    goOnManager,
-    context,
-  );
+  new GoOnAdvancedEditProvider(goOnManager, context);
 
   // Register webview providers
   const chatProvider = new GoOnChatViewProvider(
@@ -515,7 +512,9 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  vscode.window.registerTreeDataProvider("go-on-status", statusProvider);
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("go-on-status", statusProvider),
+  );
 
   const coreCommands = registerCoreCommands({
     context,
@@ -562,67 +561,97 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   // Refresh status monitor command
-  let refreshStatusMonitorCommand = vscode.commands.registerCommand(
+  const refreshStatusMonitorCommand = vscode.commands.registerCommand(
     "go-on.refreshStatusMonitor",
     () => {
       statusMonitor.refresh();
     },
   );
 
-  let keyringSetCommand = vscode.commands.registerCommand(
+  const keyringSetCommand = vscode.commands.registerCommand(
     "go-on.keyringSet",
     async (payload?: { name?: string; value?: string }) => {
-      const name = payload?.name;
-      const value = payload?.value;
-      if (!name || value === undefined) {
-        throw new Error("keyring set requires name and value");
+      try {
+        const name = payload?.name;
+        const value = payload?.value;
+        if (!name || value === undefined) {
+          throw new Error("keyring set requires name and value");
+        }
+        await runGoOnSecretCommand(context, "set", name, value);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(`keyring set failed: ${message}`);
       }
-      await runGoOnSecretCommand(context, "set", name, value);
     },
   );
 
-  let keyringGetCommand = vscode.commands.registerCommand(
+  const keyringGetCommand = vscode.commands.registerCommand(
     "go-on.keyringGet",
     async (payload?: { name?: string }) => {
-      const name = payload?.name;
-      if (!name) {
-        throw new Error("keyring get requires name");
+      try {
+        const name = payload?.name;
+        if (!name) {
+          throw new Error("keyring get requires name");
+        }
+        return await runGoOnSecretCommand(context, "get", name);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(`keyring get failed: ${message}`);
+        return undefined;
       }
-      return await runGoOnSecretCommand(context, "get", name);
     },
   );
 
-  let keyringDeleteCommand = vscode.commands.registerCommand(
+  const keyringDeleteCommand = vscode.commands.registerCommand(
     "go-on.keyringDelete",
     async (payload?: { name?: string }) => {
-      const name = payload?.name;
-      if (!name) {
-        throw new Error("keyring delete requires name");
+      try {
+        const name = payload?.name;
+        if (!name) {
+          throw new Error("keyring delete requires name");
+        }
+        await runGoOnSecretCommand(context, "delete", name);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(`keyring delete failed: ${message}`);
       }
-      await runGoOnSecretCommand(context, "delete", name);
     },
   );
 
-  let keyringListCommand = vscode.commands.registerCommand(
+  const keyringListCommand = vscode.commands.registerCommand(
     "go-on.keyringList",
     async () => {
-      return await runGoOnSecretCommand(context, "list");
+      try {
+        return await runGoOnSecretCommand(context, "list");
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(`keyring list failed: ${message}`);
+        return undefined;
+      }
     },
   );
 
-  let applyDefaultConfigCommand = vscode.commands.registerCommand(
+  const applyDefaultConfigCommand = vscode.commands.registerCommand(
     "go-on.applyDefaultConfigTemplate",
     async (payload?: { template?: string }) => {
-      const template = payload?.template;
-      if (!template) {
-        throw new Error("template is required");
+      try {
+        const template = payload?.template;
+        if (!template) {
+          throw new Error("template is required");
+        }
+        const configPath = await applyDefaultConfigTemplate(context, template);
+        return configPath;
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(
+          `Apply config template failed: ${message}`,
+        );
+        return undefined;
       }
-      const configPath = await applyDefaultConfigTemplate(context, template);
-      return configPath;
     },
   );
 
-  let updateWorkflowMappingCommand = vscode.commands.registerCommand(
+  const updateWorkflowMappingCommand = vscode.commands.registerCommand(
     "go-on.updateWorkflowMapping",
     async (payload?: {
       defaultPhase?: string;
@@ -646,7 +675,7 @@ export function activate(context: vscode.ExtensionContext) {
     },
   );
 
-  let updateRulesCommand = vscode.commands.registerCommand(
+  const updateRulesCommand = vscode.commands.registerCommand(
     "go-on.updateRules",
     async (payload?: {
       globalRules?: string[];

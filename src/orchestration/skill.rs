@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -588,6 +588,85 @@ impl Skill for EchoSkill {
 
     async fn execute(&self, input: &Value) -> Result<Value> {
         Ok(input.clone())
+    }
+}
+
+/// Built-in skill-creator skill.
+///
+/// Describes how to create new skills. This skill serves as a reference
+/// that instructs the AI to use the `skill.create` RPC to dynamically
+/// create new reusable skills from a natural language description.
+///
+/// Registered as `"skill-creator"` when `runtime.skills_enabled = true`.
+pub struct SkillCreatorSkill {
+    /// Reference to the skill registry for creating skills.
+    pub registry: Arc<Mutex<SkillRegistry>>,
+}
+
+#[async_trait]
+impl Skill for SkillCreatorSkill {
+    fn name(&self) -> &str {
+        "skill-creator"
+    }
+
+    fn description(&self) -> &str {
+        "Creates a new reusable skill from a natural language description"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "description": {"type": "string"},
+                "prompt_template": {"type": "string"},
+                "input_schema": {"type": "object"}
+            },
+            "required": ["name", "description", "prompt_template"]
+        })
+    }
+
+    async fn execute(&self, input: &Value) -> Result<Value> {
+        let name = input.get("name").and_then(Value::as_str).unwrap_or("");
+        let description = input
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let prompt_template = input
+            .get("prompt_template")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let input_schema: HashMap<String, String> = input
+            .get("input_schema")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        if name.is_empty() || description.is_empty() || prompt_template.is_empty() {
+            anyhow::bail!("Missing required fields: name, description, prompt_template");
+        }
+
+        {
+            let mut registry = self
+                .registry
+                .lock()
+                .map_err(|e| anyhow::anyhow!("skill registry lock error: {e}"))?;
+            registry.create_skill_from_prompt(name, description, prompt_template, input_schema)?;
+        }
+        // Lock is dropped before Ok()
+
+        Ok(json!({
+            "success": true,
+            "summary": format!("Skill '{}' created successfully", name),
+            "name": name,
+            "description": description,
+        }))
+    }
+}
+
+impl SkillCreatorSkill {
+    /// Create a new SkillCreatorSkill with a reference to the skill registry.
+    pub fn new(registry: Arc<Mutex<SkillRegistry>>) -> Self {
+        Self { registry }
     }
 }
 

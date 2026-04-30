@@ -89,7 +89,7 @@ import { useI18n } from "vue-i18n";
 import { configureService, runCliCommand, serviceStatus } from "../services/bridge";
 import { openDialog } from "../services/dialog";
 import { normalizeErrorMessage } from "../utils/errors";
-import ConfigWizard, { type ConfigWizardDraft } from "../components/ConfigWizard.vue";
+import ConfigWizard from "../components/ConfigWizard.vue";
 
 const MONITOR_ONLY_KEY = "goon.gui.monitorOnly";
 const PROTOCOL_MODE_KEY = "goon.gui.protocolMode";
@@ -170,7 +170,12 @@ onMounted(async () => {
   };
 });
 
-function applyWizard(draft: ConfigWizardDraft) {
+function applyWizard(draft: {
+  executablePath: string;
+  workingDir: string;
+  protocolMode: string;
+  monitorOnly: boolean;
+}) {
   executablePath.value = draft.executablePath;
   workingDir.value = draft.workingDir;
   protocolMode.value = draft.protocolMode;

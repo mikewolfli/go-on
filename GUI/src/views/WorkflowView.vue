@@ -97,34 +97,34 @@
         <el-card shadow="hover">
           <template #header>
             <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-              <span>Execution Cycle Timeline</span>
-              <el-tag size="small" type="info">{{ latestRunMode }}</el-tag>
-            </div>
+                <span>{{ t('views.WorkflowView.cycleTimeline') }}</span>
+                <el-tag size="small" type="info">{{ latestRunMode }}</el-tag>
+              </div>
           </template>
           <el-table :data="latestCycleTimeline" border stripe>
-            <el-table-column prop="iteration" label="Iteration" width="100" />
-            <el-table-column prop="status" label="Status" width="130" />
-            <el-table-column prop="next_action" label="Next Action" />
-            <el-table-column prop="patch_set_size" label="Patch Set" width="120" />
-            <el-table-column prop="test_gate_result" label="Gate" width="120" />
+            <el-table-column prop="iteration" :label="t('common.name') + ' #'" width="100" />
+            <el-table-column prop="status" :label="t('common.status')" width="130" />
+            <el-table-column prop="next_action" :label="t('workflow.nextAction') || 'Next Action'" />
+            <el-table-column prop="patch_set_size" :label="t('workflow.patchSet') || 'Patch Set'" width="120" />
+            <el-table-column prop="test_gate_result" :label="t('workflow.gate') || 'Gate'" width="120" />
           </el-table>
         </el-card>
 
         <el-card shadow="hover">
           <template #header>
-            <span>Gate Matrix / Auto Repair Trace</span>
+            <span>{{ t('views.WorkflowView.gateMatrix') }}</span>
           </template>
           <el-descriptions :columns="2" border>
-            <el-descriptions-item label="Requirement Gate">
+            <el-descriptions-item :label="t('workflow.requirementGate') || 'Requirement Gate'">
               {{ requirementGateStatus() }}
             </el-descriptions-item>
-            <el-descriptions-item label="Review Gate">
+            <el-descriptions-item :label="t('workflow.reviewGate') || 'Review Gate'">
               {{ reviewGateStatus() }}
             </el-descriptions-item>
-            <el-descriptions-item label="Repair Status">
+            <el-descriptions-item :label="t('workflow.repairStatus') || 'Repair Status'">
               {{ repairStatusText() }}
             </el-descriptions-item>
-            <el-descriptions-item label="Repair Targets">
+            <el-descriptions-item :label="t('workflow.repairTargets') || 'Repair Targets'">
               {{ repairTargetCount() }}
             </el-descriptions-item>
           </el-descriptions>
@@ -133,25 +133,25 @@
         <el-card shadow="hover">
           <template #header>
             <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-              <span>Benchmark Indicators</span>
-              <el-button size="small" :loading="loadingPeak" @click="refreshPeakIndicators">Refresh</el-button>
+              <span>{{ t('views.WorkflowView.benchmarkIndicators') }}</span>
+              <el-button size="small" :loading="loadingPeak" @click="refreshPeakIndicators">{{ t('common.refresh') }}</el-button>
             </div>
           </template>
           <el-descriptions :columns="2" border>
-            <el-descriptions-item label="Task Success Rate">
-              {{ peakIndicators.taskSuccessRate.toFixed(4) }}
+            <el-descriptions-item :label="t('workflow.taskSuccessRate') || 'Task Success Rate'">
+              {{ (peakIndicators.taskSuccessRate ?? 0).toFixed(4) }}
             </el-descriptions-item>
-            <el-descriptions-item label="First Pass Rate">
-              {{ peakIndicators.firstPassRate.toFixed(4) }}
+            <el-descriptions-item :label="t('workflow.firstPassRate') || 'First Pass Rate'">
+              {{ (peakIndicators.firstPassRate ?? 0).toFixed(4) }}
             </el-descriptions-item>
-            <el-descriptions-item label="Mean Repair Iterations">
-              {{ peakIndicators.meanRepairIterations.toFixed(4) }}
+            <el-descriptions-item :label="t('workflow.meanRepairIterations') || 'Mean Repair Iterations'">
+              {{ (peakIndicators.meanRepairIterations ?? 0).toFixed(4) }}
             </el-descriptions-item>
-            <el-descriptions-item label="Human Intervention Rate">
-              {{ peakIndicators.humanInterventionRate.toFixed(4) }}
+            <el-descriptions-item :label="t('workflow.humanInterventionRate') || 'Human Intervention Rate'">
+              {{ (peakIndicators.humanInterventionRate ?? 0).toFixed(4) }}
             </el-descriptions-item>
-            <el-descriptions-item label="Regression Rate">
-              {{ peakIndicators.regressionRate.toFixed(4) }}
+            <el-descriptions-item :label="t('workflow.regressionRate') || 'Regression Rate'">
+              {{ (peakIndicators.regressionRate ?? 0).toFixed(4) }}
             </el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -170,7 +170,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkflow } from "../composables/useWorkflow";
 
@@ -265,7 +265,12 @@ function onConfirmExecutePlan() {
   confirmExecutePlan(tasks, executionHistory);
 }
 
-// Initialize
-loadTasks(tasks, executionHistory);
-refreshPeakIndicators();
+onMounted(() => {
+  loadTasks(tasks, executionHistory).catch((err) => {
+    console.warn("WorkflowView: loadTasks failed (backend may be offline)", err);
+  });
+  refreshPeakIndicators().catch((err) => {
+    console.warn("WorkflowView: refreshPeakIndicators failed (backend may be offline)", err);
+  });
+});
 </script>

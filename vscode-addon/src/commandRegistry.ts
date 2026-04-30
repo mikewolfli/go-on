@@ -121,15 +121,23 @@ export function registerViewCommands(
   const newSessionCommand = vscode.commands.registerCommand(
     "go-on.newSession",
     () => {
-      vscode.window
-        .showInputBox({
+      Promise.resolve(
+        vscode.window.showInputBox({
           prompt: "Enter a name for the new chat session",
           placeHolder: "My Session",
-        })
+        }),
+      )
         .then((sessionName) => {
           if (sessionName) {
             deps.createSession(sessionName);
           }
+        })
+        .catch((error: unknown) => {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          vscode.window.showErrorMessage(
+            `Failed to create session: ${message}`,
+          );
         });
     },
   );
@@ -137,14 +145,22 @@ export function registerViewCommands(
   const switchSessionCommand = vscode.commands.registerCommand(
     "go-on.switchSession",
     () => {
-      vscode.window
-        .showQuickPick(["default", "session1", "session2"], {
+      Promise.resolve(
+        vscode.window.showQuickPick(["default", "session1", "session2"], {
           placeHolder: "Select a chat session to switch to",
-        })
+        }),
+      )
         .then((session) => {
           if (session) {
             deps.switchSession(session);
           }
+        })
+        .catch((error: unknown) => {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          vscode.window.showErrorMessage(
+            `Failed to switch session: ${message}`,
+          );
         });
     },
   );

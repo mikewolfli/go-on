@@ -59,6 +59,7 @@ export function registerCoreCommands(
     "go-on.diagnose",
     async () => {
       const output = vscode.window.createOutputChannel("Go-On Diagnosis");
+      deps.context.subscriptions.push(output);
       output.show(true);
       output.appendLine("=== Go-On Diagnosis Report ===");
       output.appendLine(`Time: ${new Date().toISOString()}`);

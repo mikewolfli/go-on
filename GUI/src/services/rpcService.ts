@@ -113,6 +113,12 @@ export interface ProviderStatusResult {
       endpoint_status?: string;
       missing_envs?: string[];
     }>;
+    registry_catalog?: Array<{
+      agent?: string;
+      default_model?: string;
+      available_models?: number;
+    }>;
+    timestamp?: number;
   };
 }
 
@@ -181,8 +187,24 @@ export interface ReleaseReadinessResult {
 
 export interface HealthProbesResult {
   probes?: {
-    liveness?: { ok?: boolean; status?: string; uptime_seconds?: number };
-    readiness?: { ok?: boolean; status?: string; generated_at?: number };
+    liveness?: {
+      ok?: boolean;
+      status?: string;
+      shutting_down?: boolean;
+      uptime_seconds?: number;
+    };
+    readiness?: {
+      ok?: boolean;
+      status?: string;
+      overall_status?: string;
+      generated_at?: number;
+    };
+    summary?: {
+      healthy?: number;
+      warn?: number;
+      error?: number;
+      skipped?: number;
+    };
     locks?: {
       status?: string;
       components_tracked?: number;
@@ -200,16 +222,38 @@ export interface HealthProbesResult {
     dependencies?: Array<{
       name?: string;
       status?: string;
-      details?: {
-        entries?: number;
-        memory_entries?: number;
-        summary_entries?: number;
-      };
+      message?: string;
+      details?: Record<string, unknown>;
     }>;
-    circuit_breakers?: Array<{ state?: string; failure_count?: number }>;
+    circuit_breakers?: Array<{
+      name?: string;
+      state?: string;
+      failure_count?: number;
+      success_count?: number;
+      last_state_change?: string | null;
+      total_failures?: number;
+      total_successes?: number;
+    }>;
     rate_limiter?: {
-      buckets?: Array<{ used_percent?: number }>;
+      tracked?: number;
+      buckets?: Array<{
+        phase?: string;
+        tokens?: number;
+        capacity?: number;
+        used_percent?: number;
+      }>;
     };
+    token_cache?: {
+      l1?: { hits?: number; misses?: number };
+      l2?: { hits?: number; misses?: number };
+      l3?: { hits?: number; misses?: number };
+      overall?: {
+        hit_rate?: number;
+        total_tokens_saved?: number;
+        total_entries?: number;
+      };
+    };
+    timestamp?: number;
   };
 }
 
@@ -226,6 +270,13 @@ export interface RuntimeSelfModelResult {
         config_warnings?: number;
         strict_violations?: number;
       };
+      checks?: Array<{
+        name?: string;
+        status?: string;
+        description?: string;
+      }>;
+      recommendation?: string;
+      timestamp?: number;
     };
     drift?: {
       alert?: boolean;
@@ -235,15 +286,61 @@ export interface RuntimeSelfModelResult {
     decision?: {
       recommended_mode?: string;
       fallback_triggered?: boolean;
+      readiness_status?: string;
+      stability_level?: string;
+      safe_restart_ready?: boolean;
     };
+    constraints?: {
+      shutdown_requested?: boolean;
+      health_errors?: number;
+      health_warnings?: number;
+      config_warnings?: number;
+      strict_violations?: number;
+    };
+    meta_cognition?: {
+      self_consistency_score?: number;
+      goal_stability?: string;
+      capability_boundary?: {
+        known_limits?: string[];
+        confidence_envelope?: string;
+      };
+      metacognitive_loop?: {
+        active?: boolean;
+        last_reflection?: string;
+        reflection_trigger?: string;
+      };
+      world_model?: {
+        runtime_state_known?: boolean;
+        environment_stable?: boolean;
+        adaptation_needed?: boolean;
+      };
+      schema_version?: string;
+    };
+    warnings?: unknown[];
     recommendations?: string[];
+    source_methods?: string[];
+    timestamp?: number;
+    learning_profile?: Record<string, unknown>;
+    knowledge_refinement?: Record<string, unknown>;
   };
 }
 
 export interface BreakerStatusResult {
+  ok?: boolean;
+  open_count?: number;
   degraded_count?: number;
   degraded_services?: Array<{
+    name?: string;
     recommended_action?: string;
+  }>;
+  breakers?: Array<{
+    name?: string;
+    state?: string;
+    failure_count?: number;
+    success_count?: number;
+    last_state_change?: string | null;
+    total_failures?: number;
+    total_successes?: number;
   }>;
 }
 
@@ -302,7 +399,10 @@ export interface SkillImportSourceLocal {
   sha256?: string;
 }
 
-export type SkillImportSource = SkillImportSourceGithub | SkillImportSourceUrl | SkillImportSourceLocal;
+export type SkillImportSource =
+  | SkillImportSourceGithub
+  | SkillImportSourceUrl
+  | SkillImportSourceLocal;
 
 export interface ImportedSkillRecord {
   name?: string;
@@ -332,12 +432,18 @@ export interface SkillRemoveResult {
   name?: string;
 }
 
+export interface SkillCreateResult {
+  ok?: boolean;
+  name?: string;
+}
+
 function parseRpcJson(raw: string): unknown {
   try {
     return JSON.parse(raw || "{}");
   } catch (error) {
     const preview = (raw || "").slice(0, 200);
-    const reason = error instanceof Error ? error.message : "unknown parse error";
+    const reason =
+      error instanceof Error ? error.message : "unknown parse error";
     throw new Error(`Invalid RPC JSON response: ${reason}. preview=${preview}`);
   }
 }
@@ -368,7 +474,11 @@ function unwrapResult<T>(payload: unknown): T {
   if (errorMessage) {
     throw new Error(errorMessage);
   }
-  if (payload && typeof payload === "object" && "result" in (payload as Record<string, unknown>)) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "result" in (payload as Record<string, unknown>)
+  ) {
     const result = (payload as Record<string, unknown>).result;
     if (result !== undefined) {
       const nestedErrorMessage = rpcErrorMessage(result);
@@ -391,8 +501,12 @@ export async function getGovernanceStatus(): Promise<GovernanceStatusResult> {
   return callRpcJson<GovernanceStatusResult>("governance.status", {});
 }
 
-export async function getGovernanceAuditRecent(limit = 20): Promise<GovernanceAuditRecentResult> {
-  return callRpcJson<GovernanceAuditRecentResult>("governance.audit.recent", { limit });
+export async function getGovernanceAuditRecent(
+  limit = 20,
+): Promise<GovernanceAuditRecentResult> {
+  return callRpcJson<GovernanceAuditRecentResult>("governance.audit.recent", {
+    limit,
+  });
 }
 
 export async function getProviderStatus(): Promise<ProviderStatusResult> {
@@ -407,7 +521,9 @@ export async function getHealthProbes(): Promise<HealthProbesResult> {
   return callRpcJson<HealthProbesResult>("health.probes", {});
 }
 
-export async function getRuntimeSelfModel(params: Record<string, unknown> = {}): Promise<RuntimeSelfModelResult> {
+export async function getRuntimeSelfModel(
+  params: Record<string, unknown> = {},
+): Promise<RuntimeSelfModelResult> {
   return callRpcJson<RuntimeSelfModelResult>("runtime.self_model", params);
 }
 
@@ -419,15 +535,23 @@ export async function getMetrics(): Promise<MetricsResult> {
   return callRpcJson<MetricsResult>("metrics.get", {});
 }
 
-export async function callTaskPlan(task: string, params: Record<string, unknown> = {}): Promise<TaskPlanResult> {
+export async function callTaskPlan(
+  task: string,
+  params: Record<string, unknown> = {},
+): Promise<TaskPlanResult> {
   return callRpcJson<TaskPlanResult>("task.plan", { task, ...params });
 }
 
-export async function callTaskExecute(task: string, params: Record<string, unknown> = {}): Promise<TaskExecuteResult> {
+export async function callTaskExecute(
+  task: string,
+  params: Record<string, unknown> = {},
+): Promise<TaskExecuteResult> {
   return callRpcJson<TaskExecuteResult>("task.execute", { task, ...params });
 }
 
-export async function importSkill(source: SkillImportSource): Promise<SkillImportResult> {
+export async function importSkill(
+  source: SkillImportSource,
+): Promise<SkillImportResult> {
   return callRpcJson<SkillImportResult>("skill.import", { source });
 }
 
@@ -435,14 +559,29 @@ export async function listImportedSkills(): Promise<SkillListImportedResult> {
   return callRpcJson<SkillListImportedResult>("skill.list_imported", {});
 }
 
-export async function enableImportedSkill(name: string): Promise<SkillImportResult> {
+export async function enableImportedSkill(
+  name: string,
+): Promise<SkillImportResult> {
   return callRpcJson<SkillImportResult>("skill.enable", { name });
 }
 
-export async function disableImportedSkill(name: string): Promise<SkillImportResult> {
+export async function disableImportedSkill(
+  name: string,
+): Promise<SkillImportResult> {
   return callRpcJson<SkillImportResult>("skill.disable", { name });
 }
 
-export async function removeImportedSkill(name: string): Promise<SkillRemoveResult> {
+export async function removeImportedSkill(
+  name: string,
+): Promise<SkillRemoveResult> {
   return callRpcJson<SkillRemoveResult>("skill.remove", { name });
+}
+
+export async function createSkill(source: {
+  name: string;
+  description: string;
+  prompt_template: string;
+  input_schema: Record<string, string>;
+}): Promise<SkillCreateResult> {
+  return callRpcJson<SkillCreateResult>("skill.create", source);
 }

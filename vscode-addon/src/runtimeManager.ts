@@ -233,21 +233,23 @@ export class GoOnManager {
     this._reconnectAttempts = 0;
     this._startupConfig = undefined;
 
-    if (this.process) {
+    const proc = this.process;
+    if (proc) {
       // Graceful shutdown: send SIGTERM first
-      this.process.kill("SIGTERM");
+      proc.kill("SIGTERM");
 
       // If process doesn't exit within 5 seconds, force kill
+      // Use local variable so timer still works after this.process is cleared
       const forceKillTimer = setTimeout(() => {
-        if (this.process) {
+        if (proc) {
           this._outputChannel?.appendLine(
             "[shutdown] SIGTERM timeout, sending SIGKILL",
           );
-          this.process.kill("SIGKILL");
+          proc.kill("SIGKILL");
         }
       }, 5000);
 
-      this.process.on("close", () => {
+      proc.on("close", () => {
         clearTimeout(forceKillTimer);
       });
       this.process = null;
@@ -385,18 +387,17 @@ export class GoOnManager {
 
     try {
       const report = asRecord(
-        await this.sendRequest("runtime.health", undefined, {
+        await this.sendRequest("health.probes", undefined, {
           skipProviderGuard: true,
         }),
       );
 
-      const componentsValue = Array.isArray(report.components)
-        ? report.components
-        : Array.isArray(asRecord(report.report).components)
-          ? (asRecord(report.report).components as unknown[])
-          : [];
+      const probes = asRecord(report.probes);
+      const dependencies = Array.isArray(probes.dependencies)
+        ? (probes.dependencies as unknown[])
+        : [];
 
-      const providerComponent = componentsValue
+      const providerComponent = dependencies
         .map((component) => asRecord(component))
         .find((component) => component.name === "provider_dependencies");
 

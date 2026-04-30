@@ -1,5 +1,20 @@
 <template>
-  <el-row :gutter="16">
+  <!-- Loading state -->
+  <div v-if="runtime.loading && !runtime.status.running" style="text-align:center;padding:40px;color:#999;">
+    {{ t('common.loading') || 'Loading...' }}
+  </div>
+
+  <!-- Error/Empty state (backend not running) -->
+  <el-alert
+    v-else-if="!runtime.status.running"
+    :title="t('common.offlineMode')"
+    :description="runtime.lastError || t('aiUsageView.noSnapshotData')"
+    type="warning"
+    show-icon
+    :closable="false"
+  />
+
+  <el-row v-else :gutter="16">
     <el-col :span="12">
       <el-card>
         <template #header>
@@ -10,9 +25,9 @@
         </template>
         <el-descriptions :column="1" border>
           <el-descriptions-item :label="t('aiUsage.timestamp')">{{ runtime.aiUsage.timestamp }}</el-descriptions-item>
-          <el-descriptions-item :label="t('aiUsage.requestsPerMinute')">{{ runtime.aiUsage.requestsPerMinute }}</el-descriptions-item>
-          <el-descriptions-item :label="t('aiUsage.successRate')">{{ runtime.aiUsage.successRate.toFixed(2) }}%</el-descriptions-item>
-          <el-descriptions-item :label="t('aiUsage.avgLatency')">{{ runtime.aiUsage.avgLatencyMs.toFixed(2) }} ms</el-descriptions-item>
+          <el-descriptions-item :label="t('aiUsage.requestsPerMinute')">{{ (runtime.aiUsage.requestsPerMinute ?? 0).toLocaleString() }}</el-descriptions-item>
+          <el-descriptions-item :label="t('aiUsage.successRate')">{{ (runtime.aiUsage.successRate ?? 0).toFixed(2) }}%</el-descriptions-item>
+          <el-descriptions-item :label="t('aiUsage.avgLatency')">{{ (runtime.aiUsage.avgLatencyMs ?? 0).toFixed(2) }} ms</el-descriptions-item>
         </el-descriptions>
       </el-card>
     </el-col>
@@ -35,30 +50,33 @@
             <el-tag v-if="runtime.usageHeatmapStale" type="warning">{{ t("common.staleData") }}</el-tag>
           </div>
         </template>
-        <el-table :data="runtime.usageHeatmap.trend" size="small" height="220">
+        <el-table v-if="(runtime.usageHeatmap.trend ?? []).length > 0" :data="runtime.usageHeatmap.trend" size="small" height="220">
           <el-table-column prop="secondBucket" :label="t('aiUsage.timeBucket')" width="160">
-            <template #default="scope">{{ scope.row.secondBucket }}s</template>
+            <template #default="scope">{{ scope.row?.secondBucket ?? '-' }}s</template>
           </el-table-column>
           <el-table-column prop="count" :label="t('aiUsage.events')" />
         </el-table>
+        <div v-else style="text-align:center;padding:20px;color:#999;">{{ t('aiUsageView.noTrendData') || 'No trend data' }}</div>
       </el-card>
     </el-col>
     <el-col :span="12" style="margin-top:16px;">
       <el-card>
         <template #header>{{ t("aiUsage.phaseHeat") }}</template>
-        <el-table :data="runtime.usageHeatmap.phaseTop" size="small" height="240">
+        <el-table v-if="(runtime.usageHeatmap.phaseTop ?? []).length > 0" :data="runtime.usageHeatmap.phaseTop" size="small" height="240">
           <el-table-column prop="name" :label="t('aiUsage.dimension')" />
           <el-table-column prop="count" :label="t('aiUsage.count')" width="120" />
         </el-table>
+        <div v-else style="text-align:center;padding:20px;color:#999;">{{ t('aiUsageView.noPhaseData') || 'No phase data' }}</div>
       </el-card>
     </el-col>
     <el-col :span="12" style="margin-top:16px;">
       <el-card>
         <template #header>{{ t("aiUsage.agentHeat") }}</template>
-        <el-table :data="runtime.usageHeatmap.agentTop" size="small" height="240">
+        <el-table v-if="(runtime.usageHeatmap.agentTop ?? []).length > 0" :data="runtime.usageHeatmap.agentTop" size="small" height="240">
           <el-table-column prop="name" :label="t('aiUsage.dimension')" />
           <el-table-column prop="count" :label="t('aiUsage.count')" width="120" />
         </el-table>
+        <div v-else style="text-align:center;padding:20px;color:#999;">{{ t('aiUsageView.noAgentData') || 'No agent data' }}</div>
       </el-card>
     </el-col>
   </el-row>

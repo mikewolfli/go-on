@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { spawn } from "child_process";
 
 import { RuntimeManagerLike } from "./managerTypes";
+import { t, MessageKeys } from "./i18n";
 
 type ChatRole = "user" | "assistant" | "error";
 
@@ -37,6 +38,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     this._loadSessions();
     this.context.subscriptions.push(
       new vscode.Disposable(() => this._messageSubscription?.dispose()),
+      this._executionOutput,
     );
   }
 
@@ -574,7 +576,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
             <html lang="en">
             <head>
                 <meta charset="UTF-8">
-                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}';">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <link href="${styleResetUri}" rel="stylesheet">
                 <link href="${styleVSCodeUri}" rel="stylesheet">
@@ -822,15 +824,15 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
             <body>
                 <div class="chat-container">
                     <div class="status-bar" id="status">
-                        ${this.manager.isRunning() ? "🟢 Go-On Connected" : "🔴 Go-On Disconnected"}
+                        ${this.manager.isRunning() ? "🟢 " + t(MessageKeys.goOnStarted) : "🔴 " + t(MessageKeys.goOnStopped)}
                     </div>
                     <div class="session-controls">
                         <select class="session-select" id="sessionSelect">
                             <option value="default">default</option>
                         </select>
-                        <button class="session-btn" id="newSessionBtn" title="New Session">➕</button>
-                        <button class="session-btn" id="clearSessionBtn" title="Clear Session">🗑️</button>
-                        <button class="session-btn" id="exportSessionBtn" title="Export Session">📤</button>
+                        <button class="session-btn" id="newSessionBtn" title="${t(MessageKeys.newSession)}">➕</button>
+                        <button class="session-btn" id="clearSessionBtn" title="${t(MessageKeys.clearChat)}">🗑️</button>
+                        <button class="session-btn" id="exportSessionBtn" title="${t(MessageKeys.export)}">📤</button>
                     </div>
                     <div class="chat-messages" id="messages"></div>
                         <div class="attachment-preview" id="attachmentPreview" style="display:none">
@@ -839,9 +841,9 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                         </div>
                         <div class="chat-input-container">
                             <input type="file" id="fileInput" accept="image/*,.pdf,.txt,.md" multiple style="display:none" />
-                            <button class="chat-attach" id="attachBtn" title="Attach files">📎</button>
-                            <input type="text" class="chat-input" id="messageInput" placeholder="Type your message..." />
-                            <button class="chat-send" id="sendButton">Send</button>
+                            <button class="chat-attach" id="attachBtn" title="${t(MessageKeys.attachFiles)}">📎</button>
+                            <input type="text" class="chat-input" id="messageInput" placeholder="${t(MessageKeys.inputPlaceholder)}" />
+                            <button class="chat-send" id="sendButton">${t(MessageKeys.sendMessage)}</button>
                         </div>
                 </div>
                 <script nonce="${nonce}" src="${scriptUri}"></script>
