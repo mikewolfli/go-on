@@ -1018,7 +1018,7 @@ impl HarnessBus {
     pub fn evaluate_token_gate(&self, ctx: &GateContext) -> TokenGateVerdict {
         self.token_chain
             .lock()
-            .map(|mut chain| chain.evaluate(ctx))
+            .map(|chain| chain.evaluate(ctx))
             .unwrap_or(TokenGateVerdict::Allow)
     }
 

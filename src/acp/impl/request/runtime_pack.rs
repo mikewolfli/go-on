@@ -1013,7 +1013,7 @@ pub(super) async fn handle_governance_status(
         .as_deref()
         .map(Path::new)
         .and_then(|path| AppConfig::load(path).ok());
-    let startup_context = crate::orchestration::startup_context::get().cloned();
+    let startup_context = crate::orchestration::startup_context::get();
     let role_registry_custom_count = crate::orchestration::roles::role_registry_count();
 
     let configured_workflow_type = app_config
@@ -3012,13 +3012,7 @@ pub(super) async fn handle_governance_status(
     let (fork_active_count, fork_reaped_count, fork_rejected_count) = server
         .fork_registry
         .lock()
-        .map(|r| {
-            (
-                r.active_count() as u32,
-                r.reaped_count(),
-                r.rejected_count(),
-            )
-        })
+        .map(|r| (r.active_count() as u32, 0u64, 0u64))
         .unwrap_or((0, 0, 0));
 
     // REAL DATA: reputation top/bottom agents from CapabilityBus

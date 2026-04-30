@@ -8,9 +8,9 @@
 
 ## Version
 
-- Core runtime: **0.8.1**
-- GUI desktop: **0.8.1**
-- VS Code addon: **0.8.1**
+- Core runtime: **0.8.2**
+- GUI desktop: **0.8.2**
+- VS Code addon: **0.8.2**
 
 ## Build Profiles
 

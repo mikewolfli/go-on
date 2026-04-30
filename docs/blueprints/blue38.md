@@ -3,6 +3,8 @@
 更新时间：2026-04-27（第三轮修复后）
 
 > **注意**：本文档经过多轮深度扫描，覆盖全部 42 个 Blueprint + 8 个 Design 文件。
+> 
+> **§7 更新说明**：本节 8 个此前标记为"待实现"/"需从零实现"的优先级项（P0-3~P0-5、P1-2、P2-1、P2-3~P2-5）已在代码库中全部实现，本节已更新状态以反映当前代码实际情况。
 > 额外检查项包括：`src/governance/mod.rs 残留 dead_code`、`src/acp/impl/request/runtime_pack.rs`
 > 和 `ops_pack.rs` 中 BLUE34/BLUE35 的布尔门控链、`cargo clippy -D warnings` 的 17 个 lint、
 > 以及 2 个测试失败。以下全部所列均为可验证的真实差距。
@@ -1570,16 +1572,16 @@ BLUE35 从 FUTURE 文档中提取了 16 个可执行步骤。但以下 FUTURE �
 |:------:|:----:|------|:----:|
 | ✅ P0-1 | **ARCH-13** | **CapabilityBus 能力总线** | ✅ 已完成 — sense→decide→feedback→evolve 闭环；HarnessBus + CapabilityBus + WorkflowRegistry + StartupContext 全链路集成；governance.status 实时 17+11 指标 |
 | ✅ P0-2 | ARCH-00 | SelfRationalizationGuard 接入主链路 | ✅ 已完成 — `#[allow(dead_code)]` 已移除；通过 HarnessBus::evaluate() → PolicyEvaluator → CapabilityBus::decide() → process_chat_request 全链路接入；governance.status 实时 counters |
-| P0-3 | F-GAP-01 | Think-Act-Observe 工具循环 | 待实现 — 需从零开发 |
-| P0-4 | F-GAP-03 | 持久化任务状态与恢复 | 待实现 — 需从零开发 |
-| P0-5 | F-GAP-02 | 结构化审查 + 对抗性验证器 | 待实现 — 需从零开发 |
+| ✅ P0-3 | F-GAP-01 | Think-Act-Observe 工具循环 | ✅ 已完成 — `execute_loop()` 在 `src/orchestration/tool.rs` + `process_chat_request` 中实现 |
+| ✅ P0-4 | F-GAP-03 | 持久化任务状态与恢复 | ✅ 已完成 — `TaskGraphStore` SQLite/Postgres 双后端在 `src/orchestration/task_graph_store.rs` |
+| ✅ P0-5 | F-GAP-02 | 结构化审查 + 对抗性验证器 | ✅ 已完成 — `AdversarialVerifier` 4 种偏见类型 + `arbitrate` 在 `src/intelligence/verification.rs` |
 
 ### P1 — 高优先级
 
 | 优先级 | 编号 | 内容 | 状态 |
 |:------:|:----:|------|:----:|
 | ✅ P1-1 | ARCH-01 | AgentRole → CapabilityBus 集成 | ✅ 已完成 — RoleRegistry 从 config.toml 自动加载；`install_role_registry()` 在 `AppConfig::load()` 中调用；TaskRouter::get_role_specs 对 Custom 角色从 RoleRegistry 动态查询 |
-| P1-2 | ARCH-02 | TaskScheduler → CapabilityBus 集成 | 桩已删除 — 需从零重新实现 |
+| ✅ P1-2 | ARCH-02 | TaskScheduler → CapabilityBus 集成 | ✅ 已完成 — 双级调度器 978 行在 `src/orchestration/scheduler.rs` |
 | ✅ P1-3 | ARCH-07 | CapabilityGraph → CapabilityBus 集成 | ✅ 已完成 — AgentRegistry::from_config 自动注册 agent；CapabilityBus::sense() 查询 total_agents()；decide() 使用 agents_with_tag()；governance.status 实时 edge_count/node_count |
 | ✅ P1-4 | ARCH-08 | ReputationStore → CapabilityBus 集成 | ✅ 已完成 — CapabilityBus::feedback() 写入 ReputationStore (EMA 评分)；decide() 读取评分选 agent；governance.status 实时 top_agent/bottom_agent |
 
@@ -1587,11 +1589,11 @@ BLUE35 从 FUTURE 文档中提取了 16 个可执行步骤。但以下 FUTURE �
 
 | 优先级 | 编号 | 内容 | 状态 |
 |:------:|:----:|------|:----:|
-| P2-1 | ARCH-04 | TokenLayers L0-L5 门控 | 桩已删除 — 需从零重新实现 |
+| ✅ P2-1 | ARCH-04 | TokenLayers L0-L5 门控 | ✅ 已完成 — L0-L5 全门控，接入 HarnessBus 在 `src/orchestration/token_layers.rs` |
 | ✅ P2-2 | ARCH-12 | WorkflowRegistry → CapabilityBus 集成 | ✅ 已完成 — CapabilityBus 新增 workflow_registry 字段；decide() Step B2 工作流匹配路由；new_acp_server 创建并传入 |
-| P2-3 | F-GAP-04 | 图谱执行（fan-out/join） | ExecutionGraph 已删除（纯死代码）— 需从零实现 |
-| P2-4 | F-GAP-05 | 规划器-执行器分离 | 待实现 |
-| P2-5 | F-GAP-06 | 评估套件 | 待实现 |
+| ✅ P2-3 | F-GAP-04 | 图谱执行（fan-out/join） | ✅ 已完成 — DAG + Branch/Join/Condition 在 `src/orchestration/execution_graph.rs` |
+| ✅ P2-4 | F-GAP-05 | 规划器-执行器分离 | ✅ 已完成 — `Planner` + `Executor` 在 `src/orchestration/planner_executor.rs` |
+| ✅ P2-5 | F-GAP-06 | 评估套件 | ✅ 已完成 — `BenchmarkSuite` + `ReplayEngine` 在 `src/intelligence/evaluation.rs` |
 | ✅ P2-6 | §6.2 | governance.status 0 值清理 | ✅ 已完成 — HarnessBus 17 指标 + CapabilityBus 11 指标全部实时；self_rationalization/capability_graph/node_reputation 实时；仅 BLUE34 就绪桩字段仍为 0 |
 | ✅ P2-7 | §6.4 | Clippy lint 修复 | ✅ 已完成 — 17 个 lint 已全部修复（3 profile 下 `-D warnings` 零 error） |
 | ✅ P2-8 | §6.5 | 测试失败修复 | ✅ 已完成 — 2 个失败测试已修复（238/238 passing） |

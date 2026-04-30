@@ -1580,7 +1580,7 @@ async fn start_server(
         ..Default::default()
     };
     tokio::spawn(async move {
-        crate::orchestration::startup_context::load(&startup_cfg).await;
+        let _ = crate::orchestration::startup_context::load(&startup_cfg).await;
     });
 
     let (cache, vector_store, (autotune_state, autotune_config, autotune_state_path)) = tokio::try_join!(

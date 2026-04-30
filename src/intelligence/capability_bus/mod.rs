@@ -29,10 +29,17 @@
 //! 5. **Evolution** — update Q-table, decay exploration rate
 
 pub mod core;
+#[cfg(feature = "sub-bus-distributed-memory")]
 pub mod distributed_memory_bus;
+#[cfg(feature = "sub-bus-memory")]
 pub mod memory_bus;
+#[cfg(feature = "sub-bus-observability")]
 pub mod observability_bus;
+#[cfg(feature = "sub-bus-optimization")]
 pub mod optimization_bus;
+#[cfg(feature = "sub-bus-orchestration")]
 pub mod orchestration_bus;
+#[cfg(feature = "sub-bus-protocol")]
 pub mod protocol_bus;
+#[cfg(feature = "sub-bus-tool")]
 pub mod tool_bus;

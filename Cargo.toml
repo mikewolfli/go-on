@@ -1,14 +1,17 @@
 [package]
 name = "go-on"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2021"
 
 [features]
 # ── Build profiles ───────────────────────────────────────────────────────────
 # profile-local         : single-user local tool; SQLite cache + adaptive vector store
 #                         (`sqlite-vec` when available, JSON embedding fallback otherwise)
+#                         Only minimal sub-buses (core dual buses: HarnessBus + CapabilityBus)
 # profile-simple-server : single-server deployment; SQLite cache + required `sqlite-vec`
+#                         Core dual buses + orchestration/reputation
 # profile-multi-users-server: multi-user production; PostgreSQL cache + pgvector
+#                         All sub-buses
 #
 # Build examples:
 #   cargo build                                        # default = profile-local
@@ -16,9 +19,19 @@ edition = "2021"
 #   cargo build --no-default-features -F profile-simple-server
 #   cargo build --no-default-features -F profile-multi-users-server
 default = ["profile-local"]
+
+# Sub-bus feature gates for profile-specific compilation
+sub-bus-tool = []
+sub-bus-observability = []
+sub-bus-optimization = []
+sub-bus-memory = []
+sub-bus-protocol = []
+sub-bus-orchestration = []
+sub-bus-distributed-memory = []
+
 profile-local = ["backend-sqlite"]
-profile-simple-server = ["backend-sqlite"]
-profile-multi-users-server = ["backend-postgres"]
+profile-simple-server = ["backend-sqlite", "sub-bus-orchestration"]
+profile-multi-users-server = ["backend-postgres", "sub-bus-tool", "sub-bus-observability", "sub-bus-optimization", "sub-bus-memory", "sub-bus-protocol", "sub-bus-orchestration", "sub-bus-distributed-memory"]
 backend-sqlite = ["dep:rusqlite", "dep:sqlite-vec"]
 backend-postgres = ["dep:postgres", "dep:pgvector"]
 # Legacy aliases kept for backward compatibility
@@ -61,3 +74,5 @@ windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win
 
 [dev-dependencies]
 tempfile = "3"
+fs2 = "0.4"
+serial_test = "3"

@@ -1,0 +1,742 @@
+{
+  "general": {
+    "goOn": "Go-On",
+    "extensionName": "Go-On VS Code 扩展",
+    "extensionDescription": "一款智能 AI 驱动的开发助手，为您的编辑器带来多代理工作流、高级代码编辑和对话式 AI 能力。",
+    "settings": "设置",
+    "start": "启动",
+    "stop": "停止",
+    "status": "状态",
+    "running": "运行中",
+    "stopped": "已停止",
+    "loading": "加载中...",
+    "error": "错误",
+    "warning": "警告",
+    "info": "信息",
+    "success": "成功",
+    "enabled": "已启用",
+    "disabled": "已禁用",
+    "on": "开",
+    "off": "关",
+    "yes": "是",
+    "no": "否",
+    "ok": "确定",
+    "close": "关闭",
+    "refresh": "刷新",
+    "reload": "重新加载",
+    "retry": "重试",
+    "back": "返回",
+    "forward": "前进",
+    "next": "下一步",
+    "previous": "上一步",
+    "search": "搜索",
+    "filter": "筛选",
+    "clear": "清除",
+    "select": "选择",
+    "deselect": "取消选择",
+    "all": "全部",
+    "none": "无",
+    "default": "默认",
+    "custom": "自定义",
+    "advanced": "高级",
+    "basic": "基本",
+    "more": "更多",
+    "less": "更少",
+    "showMore": "显示更多",
+    "showLess": "显示更少",
+    "confirm": "确认",
+    "cancel": "取消",
+    "save": "保存",
+    "apply": "应用",
+    "reset": "重置",
+    "undo": "撤销",
+    "redo": "重做",
+    "delete": "删除",
+    "rename": "重命名",
+    "edit": "编辑",
+    "add": "添加",
+    "remove": "移除",
+    "update": "更新",
+    "create": "创建",
+    "copy": "复制",
+    "paste": "粘贴",
+    "cut": "剪切",
+    "download": "下载",
+    "upload": "上传",
+    "export": "导出",
+    "import": "导入"
+  },
+  "commands": {
+    "start": {
+      "title": "启动 Go-On 代理",
+      "category": "Go-On"
+    },
+    "stop": {
+      "title": "停止 Go-On 代理",
+      "category": "Go-On"
+    },
+    "sendRequest": {
+      "title": "发送聊天请求到 Go-On",
+      "category": "Go-On"
+    },
+    "healthCheck": {
+      "title": "检查 Go-On 健康状态",
+      "category": "Go-On"
+    },
+    "diagnose": {
+      "title": "诊断 Go-On 运行时",
+      "category": "Go-On"
+    },
+    "breakerStatus": {
+      "title": "检查断路器状态",
+      "category": "Go-On"
+    },
+    "cacheClear": {
+      "title": "清除缓存",
+      "category": "Go-On"
+    },
+    "vectorClear": {
+      "title": "清除向量记忆",
+      "category": "Go-On"
+    },
+    "configReload": {
+      "title": "重新加载配置",
+      "category": "Go-On"
+    },
+    "shutdown": {
+      "title": "关闭 Go-On",
+      "category": "Go-On"
+    },
+    "openChat": {
+      "title": "打开 Go-On 聊天",
+      "category": "Go-On"
+    },
+    "closeChat": {
+      "title": "关闭 Go-On 聊天",
+      "category": "Go-On"
+    },
+    "openSettings": {
+      "title": "打开 Go-On 设置",
+      "category": "Go-On"
+    },
+    "openConfigWizard": {
+      "title": "打开 Go-On 配置向导",
+      "category": "Go-On"
+    },
+    "clearChat": {
+      "title": "清除聊天记录",
+      "category": "Go-On"
+    },
+    "exportChat": {
+      "title": "导出聊天记录",
+      "category": "Go-On"
+    },
+    "newSession": {
+      "title": "新建聊天会话",
+      "category": "Go-On"
+    },
+    "switchSession": {
+      "title": "切换聊天会话",
+      "category": "Go-On"
+    },
+    "createWorkflow": {
+      "title": "创建工作流",
+      "category": "Go-On"
+    },
+    "runWorkflow": {
+      "title": "运行工作流",
+      "category": "Go-On"
+    },
+    "editCode": {
+      "title": "高级代码编辑",
+      "category": "Go-On"
+    },
+    "refactorCode": {
+      "title": "重构代码",
+      "category": "Go-On"
+    },
+    "showProcessFlow": {
+      "title": "显示流程",
+      "category": "Go-On"
+    },
+    "workflowExecute": {
+      "title": "执行工作流 (RPC)",
+      "category": "Go-On"
+    },
+    "taskPlan": {
+      "title": "规划任务 (RPC)",
+      "category": "Go-On"
+    },
+    "taskExecute": {
+      "title": "执行任务 (RPC)",
+      "category": "Go-On"
+    },
+    "learningSummary": {
+      "title": "获取学习摘要 (RPC)",
+      "category": "Go-On"
+    },
+    "learningGuardrail": {
+      "title": "获取学习护栏 (RPC)",
+      "category": "Go-On"
+    },
+    "learningReplay": {
+      "title": "获取学习回放 (RPC)",
+      "category": "Go-On"
+    },
+    "knowledgeDistill": {
+      "title": "运行知识蒸馏 (RPC)",
+      "category": "Go-On"
+    },
+    "rlAlignmentEval": {
+      "title": "运行 RL 对齐离线评估 (RPC)",
+      "category": "Go-On"
+    },
+    "hardnessStatus": {
+      "title": "获取难度路由状态 (RPC)",
+      "category": "Go-On"
+    },
+    "costStatus": {
+      "title": "获取令牌成本治理状态 (RPC)",
+      "category": "Go-On"
+    },
+    "configBaseline": {
+      "title": "获取配置基线冻结状态 (RPC)",
+      "category": "Go-On"
+    },
+    "errorContract": {
+      "title": "获取错误合约 (RPC)",
+      "category": "Go-On"
+    },
+    "buildRepro": {
+      "title": "获取可重现构建包 (RPC)",
+      "category": "Go-On"
+    },
+    "dataLifecycle": {
+      "title": "获取数据生命周期治理 (RPC)",
+      "category": "Go-On"
+    },
+    "optimizationPeak": {
+      "title": "获取一次性优化峰值 (RPC)",
+      "category": "Go-On"
+    },
+    "runtimeSelfModel": {
+      "title": "获取运行时自模型 (RPC)",
+      "category": "Go-On"
+    },
+    "providerStatus": {
+      "title": "获取提供程序状态基线 (RPC)",
+      "category": "Go-On"
+    },
+    "releaseReadiness": {
+      "title": "获取发布就绪关卡 (RPC)",
+      "category": "Go-On"
+    },
+    "runtimeStability": {
+      "title": "检查运行时稳定性基线 (RPC)",
+      "category": "Go-On"
+    },
+    "autotuneStatus": {
+      "title": "获取自动调优状态 (RPC)",
+      "category": "Go-On"
+    },
+    "governancePlanGet": {
+      "title": "获取治理计划 (RPC)",
+      "category": "Go-On"
+    },
+    "governanceAuditRecent": {
+      "title": "获取最新治理审计 (RPC)",
+      "category": "Go-On"
+    },
+    "skillListImported": {
+      "title": "列出已导入技能 (RPC)",
+      "category": "Go-On"
+    },
+    "skillImportLocal": {
+      "title": "导入本地技能清单 (RPC)",
+      "category": "Go-On"
+    },
+    "skillToggle": {
+      "title": "启用/禁用/移除导入的技能 (RPC)",
+      "category": "Go-On"
+    },
+    "lockStatus": {
+      "title": "获取锁监控状态 (RPC)",
+      "category": "Go-On"
+    },
+    "selectorStatus": {
+      "title": "获取选择器状态 (RPC)",
+      "category": "Go-On"
+    },
+    "autotuneGet": {
+      "title": "获取自动调优参数 (RPC)",
+      "category": "Go-On"
+    },
+    "autotuneReset": {
+      "title": "重置自动调优状态 (RPC)",
+      "category": "Go-On"
+    },
+    "metricsGet": {
+      "title": "获取运行时指标 (RPC)",
+      "category": "Go-On"
+    },
+    "metricsReset": {
+      "title": "重置运行时指标 (RPC)",
+      "category": "Go-On"
+    },
+    "traceMetrics": {
+      "title": "获取追踪指标 (RPC)",
+      "category": "Go-On"
+    },
+    "qualityBaseline": {
+      "title": "获取质量基线 (RPC)",
+      "category": "Go-On"
+    },
+    "harnessStatus": {
+      "title": "获取测试框架状态 (RPC)",
+      "category": "Go-On"
+    },
+    "traceGet": {
+      "title": "获取追踪事件 (RPC)",
+      "category": "Go-On"
+    },
+    "observabilityAlerts": {
+      "title": "获取可观测性告警 (RPC)",
+      "category": "Go-On"
+    },
+    "securityBaseline": {
+      "title": "获取安全基线 (RPC)",
+      "category": "Go-On"
+    },
+    "breakerReset": {
+      "title": "重置断路器 (RPC)",
+      "category": "Go-On"
+    },
+    "breakerRecovery": {
+      "title": "恢复降级断路器 (RPC)",
+      "category": "Go-On"
+    },
+    "maintenanceGc": {
+      "title": "运行维护垃圾回收 (RPC)",
+      "category": "Go-On"
+    },
+    "checkpointCreate": {
+      "title": "创建对话检查点 (RPC)",
+      "category": "Go-On"
+    },
+    "checkpointList": {
+      "title": "列出对话检查点 (RPC)",
+      "category": "Go-On"
+    },
+    "conversationRollback": {
+      "title": "回滚对话 (RPC)",
+      "category": "Go-On"
+    },
+    "primarySecondarySummary": {
+      "title": "主/副代理摘要 (RPC)",
+      "category": "Go-On"
+    },
+    "debugPanelGet": {
+      "title": "调试面板 (RPC)",
+      "category": "Go-On"
+    },
+    "actionCheck": {
+      "title": "操作检查 (RPC)",
+      "category": "Go-On"
+    },
+    "healthProbes": {
+      "title": "健康探针 (RPC)",
+      "category": "Go-On"
+    },
+    "refreshStatusMonitor": {
+      "title": "刷新状态监控",
+      "category": "Go-On"
+    },
+    "keyringSet": {
+      "title": "设置密钥环密文",
+      "category": "Go-On"
+    },
+    "keyringGet": {
+      "title": "获取密钥环密文",
+      "category": "Go-On"
+    },
+    "keyringDelete": {
+      "title": "删除密钥环密文",
+      "category": "Go-On"
+    },
+    "keyringList": {
+      "title": "列出密钥环密文",
+      "category": "Go-On"
+    },
+    "applyDefaultConfigTemplate": {
+      "title": "应用默认配置模板",
+      "category": "Go-On"
+    },
+    "updateWorkflowMapping": {
+      "title": "更新工作流映射",
+      "category": "Go-On"
+    },
+    "updateRules": {
+      "title": "更新规则",
+      "category": "Go-On"
+    }
+  },
+  "views": {
+    "goOnStatus": {
+      "name": "Go-On 状态",
+      "contextualTitle": "Go-On 代理状态"
+    },
+    "goOnChat": {
+      "name": "聊天",
+      "contextualTitle": "Go-On 聊天"
+    },
+    "goOnSettings": {
+      "name": "设置",
+      "contextualTitle": "Go-On 设置"
+    },
+    "goOnWorkflow": {
+      "name": "工作流",
+      "contextualTitle": "Go-On 工作流"
+    },
+    "goOnProcessFlow": {
+      "name": "流程",
+      "contextualTitle": "Go-On 流程"
+    }
+  },
+  "viewContainers": {
+    "activitybar": {
+      "title": "Go-On"
+    }
+  },
+  "config": {
+    "title": "Go-On",
+    "configPath": {
+      "description": "Go-On 配置文件的路径"
+    },
+    "executablePath": {
+      "description": "Go-On 可执行文件的路径"
+    },
+    "autoDownloadBinary": {
+      "description": "当 executablePath 不存在时，自动从 GitHub 发布页下载 Go-On 运行时（默认禁用）"
+    },
+    "releaseRepository": {
+      "description": "用于下载运行时资源的 GitHub 仓库（owner/repo）"
+    },
+    "releaseTag": {
+      "description": "要下载的发布标签（例如 v0.4.6）。使用 latest 获取最新版本"
+    },
+    "autoStart": {
+      "description": "工作区打开时自动启动 Go-On"
+    },
+    "autoOpenChat": {
+      "description": "首次激活时自动打开聊天面板（可能会抢占焦点）"
+    },
+    "protocolMode": {
+      "description": "运行时启动协议模式覆盖，作为 --protocol-mode 参数传递",
+      "enumDescriptions": {
+        "from_config": "使用 config.toml 中的 [protocol].mode",
+        "adaptive": "自适应访问模式",
+        "acp_stdio": "强制 ACP over STDIO",
+        "acp_http": "强制 ACP over HTTP",
+        "mcp_stdio": "强制 MCP over STDIO",
+        "mcp_http": "强制 MCP over HTTP"
+      }
+    },
+    "chatMaxHistory": {
+      "description": "聊天历史中保留的最大消息数"
+    },
+    "chatModel": {
+      "description": "用于聊天的默认 AI 模型/提供商",
+      "enumDescriptions": {
+        "auto": "根据配置自动选择",
+        "copilot": "GitHub Copilot（本地）",
+        "deepseek": "DeepSeek",
+        "wenxin": "文心 / ERNIE-Bot",
+        "openai": "OpenAI（GPT-4o 等）",
+        "doubao": "豆包（字节跳动）",
+        "anthropic": "Anthropic Claude",
+        "gemini": "Google Gemini",
+        "groq": "Groq（快速推理）",
+        "mistral": "Mistral AI",
+        "minimax": "MiniMax",
+        "glm": "智谱 GLM",
+        "yi": "01.AI  Yi",
+        "moonshot": "月之暗面 Kimi",
+        "qianfan": "百度千帆",
+        "qwen": "阿里通义千问",
+        "hunyuan": "腾讯混元"
+      }
+    },
+    "chatTemperature": {
+      "description": "聊天回复的温度（0.0 = 确定性，2.0 = 非常随机）"
+    },
+    "chatMaxTokens": {
+      "description": "聊天回复的最大令牌数"
+    },
+    "chatStreaming": {
+      "description": "启用实时聊天的流式响应"
+    },
+    "cacheEnabled": {
+      "description": "启用响应缓存"
+    },
+    "vectorEnabled": {
+      "description": "启用向量记忆以提供上下文"
+    },
+    "healthInterval": {
+      "description": "健康检查间隔（秒）"
+    },
+    "uiTheme": {
+      "description": "扩展的 UI 主题",
+      "enumDescriptions": {
+        "auto": "跟随 VS Code 主题",
+        "light": "浅色主题",
+        "dark": "深色主题"
+      }
+    },
+    "uiFontSize": {
+      "description": "聊天界面的字体大小"
+    },
+    "advancedAIContext": {
+      "description": "高级 AI 编辑命令使用的基础系统提示"
+    },
+    "advancedAIShowDiffByDefault": {
+      "description": "高级编辑或重构后默认显示差异视图"
+    },
+    "language": {
+      "description": "Go-On 运行时界面使用的语言",
+      "enumDescriptions": {
+        "en": "英文",
+        "zh_CN": "简体中文",
+        "zh_TW": "繁体中文"
+      }
+    }
+  },
+  "runtime": {
+    "runtime": "运行时",
+    "runtimeSettings": "运行时设置",
+    "maintenanceInterval": "维护间隔（秒）",
+    "healthInterval": "健康检查间隔（秒）",
+    "shutdownDrain": "关闭清空时间（秒）",
+    "cacheSettings": "缓存设置",
+    "vectorSettings": "向量数据库设置",
+    "autotuneSettings": "自动优化设置",
+    "providerConfig": "提供商配置",
+    "agentConfig": "代理配置",
+    "phaseConfig": "阶段配置",
+    "flowConfig": "流程配置"
+  },
+  "execution": {
+    "executionSettings": "执行设置",
+    "startGoOn": "启动 Go-On",
+    "stopGoOn": "停止 Go-On",
+    "healthCheck": "健康检查",
+    "clearCache": "清除缓存",
+    "clearVector": "清除向量记忆",
+    "reloadConfig": "重新加载配置",
+    "diagnose": "诊断运行时"
+  },
+  "workflow": {
+    "workflow": "工作流",
+    "phases": "阶段",
+    "agents": "代理",
+    "addPhase": "添加阶段",
+    "editPhase": "编辑阶段",
+    "deletePhase": "删除阶段",
+    "workflowName": "工作流名称",
+    "workflowDescription": "工作流描述",
+    "executeWorkflow": "执行工作流",
+    "workflowRunning": "工作流运行中...",
+    "workflowCompleted": "工作流已完成",
+    "workflowFailed": "工作流失败",
+    "selectWorkflow": "在工作流面板中选择要运行的工作流",
+    "planTask": "规划任务",
+    "executeTask": "执行任务"
+  },
+  "chat": {
+    "chat": "聊天",
+    "chatMaxHistory": "最大聊天历史",
+    "chatModel": "聊天模型",
+    "chatTemperature": "温度",
+    "chatTimeout": "超时（秒）",
+    "chatMaxTokens": "最大令牌数",
+    "chatStreaming": "流式传输",
+    "inputPlaceholder": "在此输入您的消息...",
+    "sendMessage": "发送",
+    "clearChat": "清除聊天",
+    "newSession": "新建会话",
+    "switchSession": "切换会话",
+    "sessionName": "会话名称",
+    "sessionNamePlaceholder": "我的会话",
+    "selectSession": "选择要切换到的聊天会话",
+    "exportChat": "导出聊天记录",
+    "noMessages": "暂无消息。开始对话吧！",
+    "thinking": "思考中...",
+    "responseReceived": "收到回复",
+    "requestFailed": "请求失败: {0}",
+    "responseLabel": "回复: {0}"
+  },
+  "configWizard": {
+    "title": "Go-On 配置向导",
+    "subtitle": "先选择使用场景与推荐协议，再保存当前工作区运行时设置。",
+    "step1": "场景",
+    "step2": "协议",
+    "step3": "确认",
+    "next": "下一步",
+    "previous": "上一步",
+    "recommended": "推荐",
+    "protocolMode": "协议模式",
+    "localTitle": "本地开发",
+    "localDesc": "适合单机单用户的日常开发。",
+    "sharedTitle": "共享服务",
+    "sharedDesc": "适合多用户或多工具共享一个常驻后端。",
+    "editorTitle": "编辑器插件",
+    "editorDesc": "适合由编辑器以子进程方式拉起 go-on。",
+    "adaptiveDesc": "双栈能力与自适应路由。",
+    "acpStdioDesc": "面向编辑器子进程集成的 ACP over stdio。",
+    "acpHttpDesc": "面向共享常驻后端的 ACP over HTTP。",
+    "mcpStdioDesc": "当客户端明确要求时使用 MCP over stdio。",
+    "mcpHttpDesc": "面向 OpenAI 兼容 /v1 端点的 MCP over HTTP。"
+  },
+  "messages": {
+    "successfullySaved": "保存成功",
+    "errorSaving": "保存配置时出错",
+    "unsavedChanges": "您有未保存的更改",
+    "goOnStarted": "Go-On 代理已启动。",
+    "goOnStopped": "Go-On 代理已停止。",
+    "goOnStartedWithoutKeys": "Go-On 代理已启动但未配置 API 密钥。使用云代理前请在设置中配置提供商密钥。",
+    "goOnStartFailed": "启动 Go-On 失败: {0}",
+    "goOnStartFailedMissingEnv": "启动 Go-On 失败：缺少环境变量（{0}）。请在设置中配置提供商密钥。",
+    "goOnNotRunning": "Go-On 未运行。请先启动。",
+    "goOnShutdown": "已发起关闭。",
+    "goOnShutdownFailed": "关闭失败: {0}",
+    "cacheCleared": "缓存已清除。",
+    "cacheClearFailed": "缓存清除失败: {0}",
+    "vectorCleared": "向量记忆已清除。",
+    "vectorClearFailed": "向量记忆清除失败: {0}",
+    "configReloaded": "配置已重新加载。",
+    "configReloadFailed": "配置重新加载失败: {0}",
+    "healthCheckResult": "健康状态: {0}",
+    "healthCheckFailed": "健康检查失败: {0}",
+    "breakerStatusResult": "断路器状态: {0}",
+    "breakerStatusFailed": "断路器状态检查失败: {0}",
+    "diagnosisCompleted": "Go-On 诊断完成。",
+    "diagnosisIssue": "Go-On 诊断完成但存在问题。请查看 \"Go-On Diagnosis\" 输出。",
+    "chatClosedBackendStopped": "Go-On 聊天已关闭。运行中的后端已停止。",
+    "chatClosedBackendAlreadyStopped": "Go-On 聊天已关闭。后端已处于停止状态。",
+    "executableNotReady": "Go-On 可执行文件未就绪: {0}。请在设置中设置有效的 .exe、.bat 或 .sh 路径。",
+    "chatViewNotAvailable": "Go-On 聊天视图尚不可用。安装/更新扩展后请重新加载窗口。",
+    "settingsViewNotAvailable": "Go-On 设置视图尚不可用。安装/更新扩展后请重新加载窗口。",
+    "workflowViewNotAvailable": "Go-On 工作流视图尚不可用。安装/更新扩展后请重新加载窗口。",
+    "processFlowViewNotAvailable": "Go-On 流程视图尚不可用。安装/更新扩展后请重新加载窗口。",
+    "healthCheckWarning": "Go-On：健康检查失败，但监控仍在运行，后端恢复响应后将自动恢复。",
+    "reconnectMaxAttempts": "Go-On：后端进程崩溃，{0} 次重连尝试均失败。请手动重启。",
+    "reconnectAttempting": "Go-On：后端进程崩溃。正在尝试重连（{0}/{1}）...",
+    "reconnectSucceeded": "Go-On：重连成功。",
+    "requestTimeout": "请求超时",
+    "providerNotReady": "未配置可用的 AI 提供商。正在打开设置向导。",
+    "workspaceRequired": "未打开工作区文件夹。",
+    "runtimeInitFailed": "Go-On：配置初始化失败: {0}",
+    "keyringSetRequired": "设置密钥环需要名称和值",
+    "keyringGetRequired": "获取密钥环需要名称",
+    "keyringDeleteRequired": "删除密钥环需要名称",
+    "templateRequired": "需要提供模板",
+    "workflowMappingRequired": "需要提供工作流映射数据",
+    "rulesPayloadRequired": "需要提供规则数据"
+  },
+  "diagnosis": {
+    "title": "Go-On 诊断报告",
+    "time": "时间: {0}",
+    "workspace": "工作区: {0}",
+    "runtimeBinaryCheck": "运行时二进制检查",
+    "executableCheck": "{0} 可执行文件: {1}",
+    "runtimeResolveFailed": "运行时解析失败: {0}",
+    "configFileCheck": "配置文件检查",
+    "configCheck": "{0} 配置: {1}",
+    "configResolveFailed": "配置解析失败: {0}",
+    "protocolModeCheck": "协议模式检查",
+    "protocolModeLabel": "配置的协议模式: {0}",
+    "runtimeHealthProbe": "运行时健康探针",
+    "notRunning": "Go-On 运行时未运行（跳过 RPC 探针）",
+    "healthProbeSuccess": "runtime.health: {0}",
+    "healthProbeFailed": "runtime.health 失败: {0}",
+    "diagnosisComplete": "=== 诊断完成 ==="
+  },
+  "statusBar": {
+    "runningTooltip": "Go-On 后端正在运行。点击打开聊天。",
+    "stoppedTooltip": "点击打开聊天。后端可在聊天/设置中配置。",
+    "healthCheckFailedTooltip": "Go-On 状态：健康检查失败（{0}/{1}）\n监控将继续自动运行。\n点击打开聊天",
+    "healthTooltip": "Go-On 状态：健康\n上次健康检查: {0}\n{1}\n点击打开聊天",
+    "text": "Go-On 聊天"
+  },
+  "rpc": {
+    "healthProbesLabel": "health.probes: liveness={0}, readiness={1}, lock={2}, poisoned={3}, slow={4}, timeout={5}, agent_timeout={6}, review_timeout={7}, probe_timeout={8}, error={9}, warn={10}",
+    "lockStatusLabel": "lock.status: status={0}, tracked={1}, poisoned={2}, recovered={3}, slow_waits={4}, max_wait_ms={5}, top={6}",
+    "lockStatusFailed": "lock.status 失败: {0}",
+    "healthProbesFailed": "health.probes 失败: {0}",
+    "enterMessage": "输入您的消息",
+    "messagePlaceholder": "在此输入您的聊天消息...",
+    "missingEnvVars": "缺少环境变量: {0}",
+    "noWorkspace": "未打开工作区文件夹"
+  },
+  "credentials": {
+    "credentials": "凭证",
+    "apiKey": "API 密钥",
+    "secretKey": "秘密密钥",
+    "keyringSecrets": "密钥环密文",
+    "setSecret": "设置密文",
+    "getSecret": "获取密文",
+    "deleteSecret": "删除密文",
+    "listSecrets": "列出密文"
+  },
+  "help": {
+    "help": "帮助",
+    "documentation": "文档",
+    "about": "关于",
+    "version": "版本",
+    "releaseNotes": "发布说明",
+    "reportIssue": "报告问题",
+    "githubRepo": "GitHub 仓库"
+  },
+  "language": {
+    "language": "语言",
+    "simplifiedChinese": "简体中文",
+    "traditionalChinese": "繁体中文",
+    "english": "英文",
+    "localeChanged": "语言已更改为 {0}。部分更改将在重新加载窗口后生效。"
+  },
+  "editing": {
+    "advancedEdit": "高级代码编辑",
+    "refactorCode": "重构代码",
+    "selectCode": "选择要编辑或重构的代码",
+    "noCodeSelected": "未选择代码。请先在编辑器中选中代码。",
+    "editPrompt": "描述您要进行的更改",
+    "refactorPrompt": "描述您要如何重构所选代码",
+    "applyingChanges": "正在应用更改...",
+    "changesApplied": "更改已成功应用",
+    "changesFailed": "应用更改失败: {0}",
+    "showDiff": "显示差异",
+    "acceptChanges": "接受更改",
+    "rejectChanges": "拒绝更改"
+  },
+  "processFlow": {
+    "processFlow": "流程",
+    "showProcessFlow": "显示流程",
+    "noActiveWorkflow": "没有正在运行的工作流",
+    "workflowInProgress": "工作流进行中...",
+    "phaseCompleted": "阶段已完成: {0}",
+    "phaseFailed": "阶段失败: {0}",
+    "agentRunning": "代理运行中: {0}",
+    "agentCompleted": "代理已完成: {0}"
+  },
+  "advanced": {
+    "governancePlan": "治理计划",
+    "governanceAudit": "治理审计",
+    "governanceStatus": "治理状态",
+    "skillManagement": "技能管理",
+    "importSkill": "导入技能",
+    "toggleSkill": "切换技能",
+    "securityBaseline": "安全基线",
+    "releaseReadiness": "发布就绪",
+    "qualityBaseline": "质量基线",
+    "observabilityAlerts": "可观测性告警"
+  }
+}

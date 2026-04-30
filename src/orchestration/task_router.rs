@@ -348,7 +348,7 @@ impl TaskRouter {
 
         // Try to match task characteristics to a workflow preset
         let task_type_str = format!("{:?}", characteristics.task_type).to_lowercase();
-        let preset = workflow_registry.get(&task_type_str);
+        let preset = workflow_registry.find(&task_type_str);
 
         if let Some(p) = preset {
             decision.recommended_safeguards.push(format!(

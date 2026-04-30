@@ -29,12 +29,19 @@ use crate::agents::factory::{AgentFactory, AgentFactoryConfig};
 use crate::governance::hardening::TenantBudgetEnforcer;
 use crate::governance::harness_bus::{AgentExecutionPolicy, HarnessBus, PolicyVerdict};
 use crate::governance::pua::TaskContext;
+#[cfg(feature = "sub-bus-distributed-memory")]
 use crate::intelligence::capability_bus::distributed_memory_bus::DistributedMemoryBus;
+#[cfg(feature = "sub-bus-memory")]
 use crate::intelligence::capability_bus::memory_bus::MemoryBus;
+#[cfg(feature = "sub-bus-observability")]
 use crate::intelligence::capability_bus::observability_bus::ObservabilityBus;
+#[cfg(feature = "sub-bus-optimization")]
 use crate::intelligence::capability_bus::optimization_bus::OptimizationBus;
+#[cfg(feature = "sub-bus-orchestration")]
 use crate::intelligence::capability_bus::orchestration_bus::OrchestrationBus;
+#[cfg(feature = "sub-bus-protocol")]
 use crate::intelligence::capability_bus::protocol_bus::ProtocolBus;
+#[cfg(feature = "sub-bus-tool")]
 use crate::intelligence::capability_bus::tool_bus::ToolBus;
 use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::intelligence::consciousness::ConsciousnessMetrics;
@@ -212,20 +219,35 @@ pub struct CapabilityBusProfile {
     pub workflow_presets_count: usize,
     pub provenance_entries_count: usize,
     // Phase 4 sub-bus metrics
+    #[cfg(feature = "sub-bus-tool")]
     pub tool_bus_tools: u32,
+    #[cfg(feature = "sub-bus-tool")]
     pub tool_bus_skills: u32,
+    #[cfg(feature = "sub-bus-tool")]
     pub tool_bus_calls: u64,
+    #[cfg(feature = "sub-bus-observability")]
     pub observability_tracked_agents: u32,
+    #[cfg(feature = "sub-bus-observability")]
     pub observability_system_error_rate: f64,
+    #[cfg(feature = "sub-bus-optimization")]
     pub optimization_total: u64,
+    #[cfg(feature = "sub-bus-optimization")]
     pub optimization_circuit_breaker_trips: u64,
+    #[cfg(feature = "sub-bus-protocol")]
     pub protocol_active_transport: String,
+    #[cfg(feature = "sub-bus-protocol")]
     pub protocol_healthy_count: u32,
+    #[cfg(feature = "sub-bus-orchestration")]
     pub orchestration_active_flows: u32,
+    #[cfg(feature = "sub-bus-orchestration")]
     pub orchestration_available_modes: u32,
+    #[cfg(feature = "sub-bus-memory")]
     pub memory_cache_hit_rate: f64,
+    #[cfg(feature = "sub-bus-memory")]
     pub memory_total_entries: u32,
+    #[cfg(feature = "sub-bus-distributed-memory")]
     pub distributed_memory_peers: u32,
+    #[cfg(feature = "sub-bus-distributed-memory")]
     pub distributed_memory_shared: u32,
     /// Number of skill evolution records
     pub skill_evolution_count: u32,
@@ -254,20 +276,35 @@ impl Default for CapabilityBusProfile {
             event_history_len: 0,
             workflow_presets_count: 0,
             provenance_entries_count: 0,
+            #[cfg(feature = "sub-bus-tool")]
             tool_bus_tools: 0,
+            #[cfg(feature = "sub-bus-tool")]
             tool_bus_skills: 0,
+            #[cfg(feature = "sub-bus-tool")]
             tool_bus_calls: 0,
+            #[cfg(feature = "sub-bus-observability")]
             observability_tracked_agents: 0,
+            #[cfg(feature = "sub-bus-observability")]
             observability_system_error_rate: 0.0,
+            #[cfg(feature = "sub-bus-optimization")]
             optimization_total: 0,
+            #[cfg(feature = "sub-bus-optimization")]
             optimization_circuit_breaker_trips: 0,
+            #[cfg(feature = "sub-bus-protocol")]
             protocol_active_transport: "auto".to_string(),
+            #[cfg(feature = "sub-bus-protocol")]
             protocol_healthy_count: 0,
+            #[cfg(feature = "sub-bus-orchestration")]
             orchestration_active_flows: 0,
+            #[cfg(feature = "sub-bus-orchestration")]
             orchestration_available_modes: 0,
+            #[cfg(feature = "sub-bus-memory")]
             memory_cache_hit_rate: 0.0,
+            #[cfg(feature = "sub-bus-memory")]
             memory_total_entries: 0,
+            #[cfg(feature = "sub-bus-distributed-memory")]
             distributed_memory_peers: 0,
+            #[cfg(feature = "sub-bus-distributed-memory")]
             distributed_memory_shared: 0,
             skill_evolution_count: 0,
             agent_factory_active_instances: 0,
@@ -329,24 +366,31 @@ pub struct CapabilityBus {
 
     // ── Phase 4 sub-buses ────────────────────────────────────────────────
     /// ToolBus — unified tool/skill invocation with capability-aware routing
+    #[cfg(feature = "sub-bus-tool")]
     pub tool_bus: ToolBus,
 
     /// ObservabilityBus — unified trace/metric/audit coordination
+    #[cfg(feature = "sub-bus-observability")]
     pub observability_bus: ObservabilityBus,
 
     /// OptimizationBus — cost, speed, reliability optimization coordination
+    #[cfg(feature = "sub-bus-optimization")]
     pub optimization_bus: OptimizationBus,
 
     /// MemoryBus — unified cache coordination (L1 memory → L2 SQLite → L3 vector)
+    #[cfg(feature = "sub-bus-memory")]
     pub memory_bus: MemoryBus,
 
     /// ProtocolBus — protocol-aware routing and health tracking
+    #[cfg(feature = "sub-bus-protocol")]
     pub protocol_bus: ProtocolBus,
 
     /// OrchestrationBus — unified flow/task/mode coordination
+    #[cfg(feature = "sub-bus-orchestration")]
     pub orchestration_bus: OrchestrationBus,
 
     /// DistributedMemoryBus — cross-node memory sharing
+    #[cfg(feature = "sub-bus-distributed-memory")]
     pub distributed_memory_bus: DistributedMemoryBus,
 
     max_event_history: usize,
@@ -409,17 +453,24 @@ impl CapabilityBus {
             schema_registry: Arc::new(Mutex::new(SchemaRegistry::new())),
             tenant_budget: Arc::new(Mutex::new(TenantBudgetEnforcer::new())),
             optimizer_registry: Arc::new(Mutex::new(OptimizerRegistry::new())),
+            #[cfg(feature = "sub-bus-tool")]
             tool_bus: ToolBus::new(
                 Arc::new(Mutex::new(crate::orchestration::tool::ToolRegistry::new())),
                 Arc::new(Mutex::new(
                     crate::orchestration::skill::SkillRegistry::default(),
                 )),
             ),
+            #[cfg(feature = "sub-bus-observability")]
             observability_bus: ObservabilityBus::new(),
+            #[cfg(feature = "sub-bus-optimization")]
             optimization_bus: OptimizationBus::default(),
+            #[cfg(feature = "sub-bus-memory")]
             memory_bus: MemoryBus::new(None, None, None, None),
+            #[cfg(feature = "sub-bus-protocol")]
             protocol_bus: ProtocolBus::new(),
+            #[cfg(feature = "sub-bus-orchestration")]
             orchestration_bus: OrchestrationBus::new(None),
+            #[cfg(feature = "sub-bus-distributed-memory")]
             distributed_memory_bus: DistributedMemoryBus::new(5000),
             max_event_history: 100,
             consciousness: ConsciousnessMetrics::new(Default::default()),
@@ -482,42 +533,49 @@ impl CapabilityBus {
     // ── Phase 4 sub-bus builder methods ───────────────────────────────────
 
     /// Attach a ToolBus to the CapabilityBus
+    #[cfg(feature = "sub-bus-tool")]
     pub fn with_tool_bus(mut self, tool_bus: ToolBus) -> Self {
         self.tool_bus = tool_bus;
         self
     }
 
     /// Attach an ObservabilityBus to the CapabilityBus
+    #[cfg(feature = "sub-bus-observability")]
     pub fn with_observability_bus(mut self, bus: ObservabilityBus) -> Self {
         self.observability_bus = bus;
         self
     }
 
     /// Attach an OptimizationBus to the CapabilityBus
+    #[cfg(feature = "sub-bus-optimization")]
     pub fn with_optimization_bus(mut self, bus: OptimizationBus) -> Self {
         self.optimization_bus = bus;
         self
     }
 
     /// Attach a MemoryBus to the CapabilityBus
+    #[cfg(feature = "sub-bus-memory")]
     pub fn with_memory_bus(mut self, bus: MemoryBus) -> Self {
         self.memory_bus = bus;
         self
     }
 
     /// Attach a ProtocolBus to the CapabilityBus
+    #[cfg(feature = "sub-bus-protocol")]
     pub fn with_protocol_bus(mut self, bus: ProtocolBus) -> Self {
         self.protocol_bus = bus;
         self
     }
 
     /// Attach an OrchestrationBus to the CapabilityBus
+    #[cfg(feature = "sub-bus-orchestration")]
     pub fn with_orchestration_bus(mut self, bus: OrchestrationBus) -> Self {
         self.orchestration_bus = bus;
         self
     }
 
     /// Attach a DistributedMemoryBus to the CapabilityBus
+    #[cfg(feature = "sub-bus-distributed-memory")]
     pub fn with_distributed_memory_bus(mut self, bus: DistributedMemoryBus) -> Self {
         self.distributed_memory_bus = bus;
         self
@@ -580,32 +638,44 @@ impl CapabilityBus {
             .unwrap_or_default();
 
         // Phase 4: Query ObservabilityBus for healthy agents
+        #[cfg(feature = "sub-bus-observability")]
         let healthy = self.observability_bus.healthy_agents(0.5);
+        #[cfg(not(feature = "sub-bus-observability"))]
+        let _healthy = Vec::<String>::new();
 
         // Phase 4: Query OrchestrationBus for available modes
+        #[cfg(feature = "sub-bus-orchestration")]
         let modes = self.orchestration_bus.available_modes();
+        #[cfg(not(feature = "sub-bus-orchestration"))]
+        let _modes = Vec::<String>::new();
 
         // Phase 4: Get optimization recommendation
+        #[cfg(any(feature = "sub-bus-optimization", feature = "sub-bus-protocol"))]
         let task_type_str = format!("{:?}", task.task_type);
+        #[cfg(any(feature = "sub-bus-optimization", feature = "sub-bus-protocol"))]
         let token_estimate = (task.file_count * 512) as u64;
+        #[cfg(feature = "sub-bus-optimization")]
         let opt =
             self.optimization_bus
                 .recommend(&task_type_str, token_estimate.max(1024), "balanced");
 
         // Phase 4: Protocol recommendation (used for routing diagnostics)
-        let proto_reco = self
-            .protocol_bus
-            .recommend_protocol(&task_type_str, token_estimate.max(1024));
-        self.record_event(
-            "sense",
-            None,
-            None,
-            "protocol_recommend",
-            serde_json::json!({
-                "preferred_protocol": proto_reco.preferred_protocol,
-                "confidence": proto_reco.confidence,
-            }),
-        );
+        #[cfg(feature = "sub-bus-protocol")]
+        {
+            let proto_reco = self
+                .protocol_bus
+                .recommend_protocol(&task_type_str, token_estimate.max(1024));
+            self.record_event(
+                "sense",
+                None,
+                None,
+                "protocol_recommend",
+                serde_json::json!({
+                    "preferred_protocol": proto_reco.preferred_protocol,
+                    "confidence": proto_reco.confidence,
+                }),
+            );
+        }
 
         // Send a heartbeat through the transport layer
         if let Ok(transport) = self.transport.lock() {
@@ -617,8 +687,11 @@ impl CapabilityBus {
             capability_agent_count: cap_agents,
             reputation_snapshot: rep_snapshot,
             recent_agents: _learning_rates,
+            #[cfg(feature = "sub-bus-observability")]
             healthy_agents: healthy,
+            #[cfg(feature = "sub-bus-orchestration")]
             available_modes: modes,
+            #[cfg(feature = "sub-bus-optimization")]
             optimization: Some(opt),
         }
     }
@@ -648,6 +721,7 @@ impl CapabilityBus {
                     confidence: 0.0,
                     duration_ms: start.elapsed().as_millis() as u64,
                     recommended_mode: "ask".to_string(),
+                    #[cfg(feature = "sub-bus-tool")]
                     available_tools: vec![],
                 };
             }
@@ -666,6 +740,7 @@ impl CapabilityBus {
                     confidence: 0.0,
                     duration_ms: start.elapsed().as_millis() as u64,
                     recommended_mode: "ask".to_string(),
+                    #[cfg(feature = "sub-bus-tool")]
                     available_tools: vec![],
                 };
             }
@@ -726,7 +801,7 @@ impl CapabilityBus {
                     "bugfix" | "featureadd" | "refactor" | "securitypatch" => "dev",
                     _ => "general",
                 };
-                registry.get(mapped_name).cloned()
+                registry.find(mapped_name).cloned()
             })
         });
 
@@ -758,16 +833,23 @@ impl CapabilityBus {
             .unwrap_or(0.5);
 
         // Phase 4: Get recommended execution mode from OrchestrationBus
+        #[cfg(any(feature = "sub-bus-orchestration", feature = "sub-bus-tool"))]
         let task_type_str = format!("{:?}", task.task_type);
+        #[cfg(feature = "sub-bus-orchestration")]
         let recommended_mode = self
             .orchestration_bus
             .recommend_mode(&task_type_str, task.risk_score);
+        #[cfg(not(feature = "sub-bus-orchestration"))]
+        let recommended_mode = "auto".to_string();
 
         // Phase 4: Get available tools for the selected agent via ToolBus
+        #[cfg(feature = "sub-bus-tool")]
         let available_tools = selected_agent
             .as_ref()
             .map(|agent| self.tool_bus.agent_tool_match(agent, &task_type_str))
             .unwrap_or_default();
+        #[cfg(not(feature = "sub-bus-tool"))]
+        let available_tools = Vec::<String>::new();
 
         self.record_event(
             "decision",
@@ -779,9 +861,11 @@ impl CapabilityBus {
                 "recommended_mode": recommended_mode,
                 "available_tools": available_tools.len(),
                 "candidate_agents": candidate_agents.len(),
-                "healthy_agents": sensing.healthy_agents.len(),
             }),
         );
+
+        #[cfg(feature = "sub-bus-observability")]
+        let _healthy_agents_count = sensing.healthy_agents.len();
 
         if let Ok(mut p) = self.profile.lock() {
             p.routing_count = p.routing_count.saturating_add(1);
@@ -803,6 +887,7 @@ impl CapabilityBus {
             confidence,
             duration_ms: start.elapsed().as_millis() as u64,
             recommended_mode,
+            #[cfg(feature = "sub-bus-tool")]
             available_tools,
         }
     }
@@ -859,11 +944,16 @@ impl CapabilityBus {
 
         // Step 2: Execute via ToolBus
         let start = Instant::now();
+        #[cfg(feature = "sub-bus-tool")]
         let result = self.tool_bus.execute_tool(tool_name, input);
+        #[cfg(not(feature = "sub-bus-tool"))]
+        let result: anyhow::Result<crate::orchestration::tool::ToolOutput> =
+            Err(anyhow::anyhow!("ToolBus not available in this profile"));
         let duration_ms = start.elapsed().as_millis() as u64;
         let success = result.is_ok();
 
         // Step 3: Record execution in ObservabilityBus
+        #[cfg(feature = "sub-bus-observability")]
         self.observability_bus.record_trace(
             "capability_bus",
             "tool_call",
@@ -874,6 +964,7 @@ impl CapabilityBus {
         );
 
         // Step 4: Record outcome in ToolBus
+        #[cfg(feature = "sub-bus-tool")]
         self.tool_bus
             .record_tool_call(tool_name, success, duration_ms);
 
@@ -893,24 +984,37 @@ impl CapabilityBus {
     /// Check if an agent is healthy via ObservabilityBus and OptimizationBus
     pub fn is_agent_healthy(&self, agent: &str) -> bool {
         // Check circuit breaker via OptimizationBus
+        #[cfg(feature = "sub-bus-optimization")]
         if self.optimization_bus.is_circuit_broken(agent) {
             return false;
         }
         // Check error rate via ObservabilityBus
+        #[cfg(feature = "sub-bus-observability")]
         if let Some(err_rate) = self.observability_bus.agent_error_rate(agent) {
             if err_rate.error_rate > 0.5 {
                 return false;
             }
         }
+        #[cfg(not(any(feature = "sub-bus-optimization", feature = "sub-bus-observability")))]
+        let _ = agent;
         true
     }
 
     /// Get recommended execution mode via OrchestrationBus
     pub fn recommended_mode(&self, task_type: &str, complexity: f64) -> String {
-        self.orchestration_bus.recommend_mode(task_type, complexity)
+        #[cfg(feature = "sub-bus-orchestration")]
+        {
+            return self.orchestration_bus.recommend_mode(task_type, complexity);
+        }
+        #[cfg(not(feature = "sub-bus-orchestration"))]
+        {
+            let _ = (task_type, complexity);
+            "auto".to_string()
+        }
     }
 
     /// Get optimization recommendation for a task
+    #[cfg(feature = "sub-bus-optimization")]
     pub fn optimization_recommendation(
         &self,
         task_type: &str,
@@ -941,7 +1045,9 @@ impl CapabilityBus {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
+        #[cfg(feature = "sub-bus-orchestration")]
         let flow_id = format!("{}::{}", task_type, task_id);
+        #[cfg(feature = "sub-bus-orchestration")]
         let _ = self.orchestration_bus.start_flow(&flow_id, task_id);
 
         // 1. Write to learning bus
@@ -963,6 +1069,7 @@ impl CapabilityBus {
         }
 
         // 3. Write to ObservabilityBus
+        #[cfg(feature = "sub-bus-observability")]
         self.observability_bus.record_trace(
             agent,
             task_type,
@@ -973,16 +1080,22 @@ impl CapabilityBus {
         );
 
         // 4. Write to OptimizationBus
+        #[cfg(feature = "sub-bus-optimization")]
         self.optimization_bus
             .record_execution(agent, duration_ms, token_cost, success);
 
         // 4b. Update ProtocolBus with runtime latency on active transport.
-        let active_transport = self.protocol_bus.active_transport();
-        self.protocol_bus
-            .record_protocol_latency(&active_transport, duration_ms);
+        #[cfg(feature = "sub-bus-protocol")]
+        {
+            let active_transport = self.protocol_bus.active_transport();
+            self.protocol_bus
+                .record_protocol_latency(&active_transport, duration_ms);
+        }
 
         // 4c. Persist execution summary to MemoryBus L1/L2.
+        #[cfg(any(feature = "sub-bus-memory", feature = "sub-bus-distributed-memory"))]
         let memory_key = format!("{}::{}", task_type, task_id);
+        #[cfg(any(feature = "sub-bus-memory", feature = "sub-bus-distributed-memory"))]
         let memory_value = serde_json::json!({
             "agent": agent,
             "success": success,
@@ -992,6 +1105,7 @@ impl CapabilityBus {
         })
         .to_string()
         .into_bytes();
+        #[cfg(feature = "sub-bus-memory")]
         self.memory_bus.store(
             &memory_key,
             memory_value,
@@ -999,17 +1113,20 @@ impl CapabilityBus {
         );
 
         // 4d. Persist execution summary to DistributedMemoryBus and share.
-        let dist_id = self.distributed_memory_bus.store_local(
-            &memory_key,
-            &format!(
-                "agent={} success={} quality={:.3}",
-                agent, success, quality_score
-            ),
-            vec![task_type.to_string(), agent.to_string()],
-            quality_score,
-            300_000,
-        );
-        let _ = self.distributed_memory_bus.share_with_peers(&dist_id);
+        #[cfg(feature = "sub-bus-distributed-memory")]
+        {
+            let dist_id = self.distributed_memory_bus.store_local(
+                &memory_key,
+                &format!(
+                    "agent={} success={} quality={:.3}",
+                    agent, success, quality_score
+                ),
+                vec![task_type.to_string(), agent.to_string()],
+                quality_score,
+                300_000,
+            );
+            let _ = self.distributed_memory_bus.share_with_peers(&dist_id);
+        }
 
         // 5. Record event
         let outcome = if success { "success" } else { "failure" };
@@ -1037,6 +1154,7 @@ impl CapabilityBus {
         ));
 
         // 7. Complete orchestration flow lifecycle for this task.
+        #[cfg(feature = "sub-bus-orchestration")]
         self.orchestration_bus.complete_flow(&flow_id, task_id);
     }
 
@@ -1324,36 +1442,58 @@ impl CapabilityBus {
             p.provenance_entries_count = self.provenance_ledger.len();
 
             // Phase 4 sub-bus profile enrichment
-            let tb = self.tool_bus.profile();
-            p.tool_bus_tools = tb.total_tools;
-            p.tool_bus_skills = tb.total_skills;
-            p.tool_bus_calls = tb.total_calls;
+            #[cfg(feature = "sub-bus-tool")]
+            {
+                let tb = self.tool_bus.profile();
+                p.tool_bus_tools = tb.total_tools;
+                p.tool_bus_skills = tb.total_skills;
+                p.tool_bus_calls = tb.total_calls;
+            }
 
-            let ob = self.observability_bus.system_health();
-            p.observability_tracked_agents = ob.tracked_agents;
-            p.observability_system_error_rate = ob.system_error_rate;
+            #[cfg(feature = "sub-bus-observability")]
+            {
+                let ob = self.observability_bus.system_health();
+                p.observability_tracked_agents = ob.tracked_agents;
+                p.observability_system_error_rate = ob.system_error_rate;
+            }
 
-            let opt = self.optimization_bus.profile();
-            p.optimization_total = opt.total_optimizations;
-            p.optimization_circuit_breaker_trips = opt.circuit_breaker_trips;
+            #[cfg(feature = "sub-bus-optimization")]
+            {
+                let opt = self.optimization_bus.profile();
+                p.optimization_total = opt.total_optimizations;
+                p.optimization_circuit_breaker_trips = opt.circuit_breaker_trips;
+            }
 
-            let pb = self.protocol_bus.profile();
-            p.protocol_active_transport = pb.active_transport;
-            p.protocol_healthy_count = pb.healthy_protocols;
+            #[cfg(feature = "sub-bus-protocol")]
+            {
+                let pb = self.protocol_bus.profile();
+                p.protocol_active_transport = pb.active_transport;
+                p.protocol_healthy_count = pb.healthy_protocols;
+            }
 
-            let orb = self.orchestration_bus.profile();
-            p.orchestration_active_flows = orb.active_flows;
-            p.orchestration_available_modes = orb.available_modes;
+            #[cfg(feature = "sub-bus-orchestration")]
+            {
+                let orb = self.orchestration_bus.profile();
+                p.orchestration_active_flows = orb.active_flows;
+                p.orchestration_available_modes = orb.available_modes;
+            }
 
-            let mb = self.memory_bus.profile();
-            p.memory_cache_hit_rate = mb.cache_hit_rate;
-            p.memory_total_entries = mb.vector_docs_count + mb.memory_entries;
+            #[cfg(feature = "sub-bus-memory")]
+            {
+                let mb = self.memory_bus.profile();
+                p.memory_cache_hit_rate = mb.cache_hit_rate;
+                p.memory_total_entries = mb.vector_docs_count + mb.memory_entries;
+            }
 
-            let dmb = self.distributed_memory_bus.profile();
-            p.distributed_memory_peers = dmb.remote_peers;
-            p.distributed_memory_shared = dmb.shared_entries;
+            #[cfg(feature = "sub-bus-distributed-memory")]
+            {
+                let dmb = self.distributed_memory_bus.profile();
+                p.distributed_memory_peers = dmb.remote_peers;
+                p.distributed_memory_shared = dmb.shared_entries;
+            }
 
             // Skill evolution metrics
+            #[cfg(feature = "sub-bus-tool")]
             if let Ok(skills) = self.tool_bus.skill_registry_ref().lock() {
                 p.skill_evolution_count = skills
                     .evolution_history
@@ -1396,10 +1536,13 @@ pub struct SensingOutput {
     pub reputation_snapshot: Vec<crate::intelligence::reputation::ReputationRecord>,
     pub recent_agents: Vec<String>,
     /// Phase 4: healthy agents from ObservabilityBus
+    #[cfg(feature = "sub-bus-observability")]
     pub healthy_agents: Vec<String>,
     /// Phase 4: available modes from OrchestrationBus
+    #[cfg(feature = "sub-bus-orchestration")]
     pub available_modes: Vec<String>,
     /// Phase 4: optimization recommendation
+    #[cfg(feature = "sub-bus-optimization")]
     pub optimization:
         Option<crate::intelligence::capability_bus::optimization_bus::OptimizationRecommendation>,
 }
@@ -1414,6 +1557,7 @@ pub struct DecisionOutput {
     /// Phase 4: recommended execution mode
     pub recommended_mode: String,
     /// Phase 4: tools available for the selected agent
+    #[cfg(feature = "sub-bus-tool")]
     pub available_tools: Vec<String>,
 }
 

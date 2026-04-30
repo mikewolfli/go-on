@@ -4,90 +4,220 @@
  *
  * Supports: Simplified Chinese (zh_CN), Traditional Chinese (zh_TW), English (en_US)
  * Auto-detects VS Code language and provides translations for the UI
+ *
+ * Locale files are stored in:
+ *   src/locales/en-US.json
+ *   src/locales/zh-CN.json
+ *   src/locales/zh-TW.json
+ *
+ * Usage:
+ *   import { t } from './i18n';
+ *   t('general.goOn')            // => "Go-On"
+ *   t('commands.start.title')    // => "Start Go-On Proxy"
+ *   t('messages.goOnStartFailed', 'some error') // => "Failed to start Go-On: some error"
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.i18n = exports.MessageKeys = void 0;
-// Message keys enumeration
+exports.i18n = exports.t = exports.MessageKeys = void 0;
+const fs = require("fs");
+const path = require("path");
+// Message keys enumeration for autocomplete and type safety
 exports.MessageKeys = {
     // General
-    goOn: 'general.goOn',
-    settings: 'general.settings',
-    start: 'general.start',
-    stop: 'general.stop',
-    status: 'general.status',
-    running: 'general.running',
-    stopped: 'general.stopped',
+    goOn: "general.goOn",
+    extensionName: "general.extensionName",
+    extensionDescription: "general.extensionDescription",
+    settings: "general.settings",
+    start: "general.start",
+    stop: "general.stop",
+    status: "general.status",
+    running: "general.running",
+    stopped: "general.stopped",
+    loading: "general.loading",
+    error: "general.error",
+    warning: "general.warning",
+    info: "general.info",
+    success: "general.success",
+    enabled: "general.enabled",
+    disabled: "general.disabled",
+    yes: "general.yes",
+    no: "general.no",
+    ok: "general.ok",
+    close: "general.close",
+    refresh: "general.refresh",
+    reload: "general.reload",
+    retry: "general.retry",
+    back: "general.back",
+    forward: "general.forward",
+    next: "general.next",
+    previous: "general.previous",
+    save: "general.save",
+    cancel: "general.cancel",
+    reset: "general.reset",
+    apply: "general.apply",
+    delete: "general.delete",
+    edit: "general.edit",
+    add: "general.add",
+    confirm: "general.confirm",
+    search: "general.search",
+    filter: "general.filter",
+    clear: "general.clear",
+    select: "general.select",
+    export: "general.export",
+    import: "general.import",
+    undo: "general.undo",
+    redo: "general.redo",
     // Runtime
-    runtime: 'runtime.runtime',
-    runtimeSettings: 'runtime.runtimeSettings',
-    maintenanceInterval: 'runtime.maintenanceInterval',
-    healthInterval: 'runtime.healthInterval',
-    shutdownDrain: 'runtime.shutdownDrain',
-    cacheSettings: 'runtime.cacheSettings',
-    vectorSettings: 'runtime.vectorSettings',
-    autotuneSettings: 'runtime.autotuneSettings',
+    runtime: "runtime.runtime",
+    runtimeSettings: "runtime.runtimeSettings",
+    maintenanceInterval: "runtime.maintenanceInterval",
+    healthInterval: "runtime.healthInterval",
+    shutdownDrain: "runtime.shutdownDrain",
+    cacheSettings: "runtime.cacheSettings",
+    vectorSettings: "runtime.vectorSettings",
+    autotuneSettings: "runtime.autotuneSettings",
+    providerConfig: "runtime.providerConfig",
+    agentConfig: "runtime.agentConfig",
+    phaseConfig: "runtime.phaseConfig",
+    flowConfig: "runtime.flowConfig",
     // Execution
-    executionSettings: 'execution.executionSettings',
-    startGoOn: 'execution.startGoOn',
-    stopGoOn: 'execution.stopGoOn',
-    healthCheck: 'execution.healthCheck',
-    clearCache: 'execution.clearCache',
+    executionSettings: "execution.executionSettings",
+    startGoOn: "execution.startGoOn",
+    stopGoOn: "execution.stopGoOn",
+    healthCheck: "execution.healthCheck",
+    clearCache: "execution.clearCache",
+    clearVector: "execution.clearVector",
+    reloadConfig: "execution.reloadConfig",
+    diagnose: "execution.diagnose",
     // Workflow
-    workflow: 'workflow.workflow',
-    phases: 'workflow.phases',
-    agents: 'workflow.agents',
-    addPhase: 'workflow.addPhase',
-    editPhase: 'workflow.editPhase',
-    deletePhase: 'workflow.deletePhase',
+    workflow: "workflow.workflow",
+    phases: "workflow.phases",
+    agents: "workflow.agents",
+    addPhase: "workflow.addPhase",
+    editPhase: "workflow.editPhase",
+    deletePhase: "workflow.deletePhase",
+    workflowName: "workflow.workflowName",
+    workflowDescription: "workflow.workflowDescription",
+    executeWorkflow: "workflow.executeWorkflow",
+    workflowRunning: "workflow.workflowRunning",
+    workflowCompleted: "workflow.workflowCompleted",
+    workflowFailed: "workflow.workflowFailed",
+    selectWorkflow: "workflow.selectWorkflow",
+    planTask: "workflow.planTask",
+    executeTask: "workflow.executeTask",
     // Configuration
-    configuration: 'configuration.configuration',
-    configPath: 'configuration.configPath',
-    executablePath: 'configuration.executablePath',
-    autoDownloadBinary: 'configuration.autoDownloadBinary',
-    releaseRepository: 'configuration.releaseRepository',
-    releaseTag: 'configuration.releaseTag',
-    autoStart: 'configuration.autoStart',
+    configuration: "configuration.configuration",
+    configPath: "configuration.configPath",
+    executablePath: "configuration.executablePath",
+    autoDownloadBinary: "configuration.autoDownloadBinary",
+    releaseRepository: "configuration.releaseRepository",
+    releaseTag: "configuration.releaseTag",
+    autoStart: "configuration.autoStart",
     // Chat
-    chat: 'chat.chat',
-    chatMaxHistory: 'chat.chatMaxHistory',
-    chatModel: 'chat.chatModel',
-    chatTemperature: 'chat.chatTemperature',
-    chatTimeout: 'chat.chatTimeout',
-    // Buttons
-    save: 'buttons.save',
-    cancel: 'buttons.cancel',
-    reset: 'buttons.reset',
-    apply: 'buttons.apply',
-    delete: 'buttons.delete',
-    edit: 'buttons.edit',
-    add: 'buttons.add',
+    chat: "chat.chat",
+    chatMaxHistory: "chat.chatMaxHistory",
+    chatModel: "chat.chatModel",
+    chatTemperature: "chat.chatTemperature",
+    chatTimeout: "chat.chatTimeout",
+    chatMaxTokens: "chat.chatMaxTokens",
+    chatStreaming: "chat.chatStreaming",
+    inputPlaceholder: "chat.inputPlaceholder",
+    sendMessage: "chat.sendMessage",
+    clearChat: "chat.clearChat",
+    newSession: "chat.newSession",
+    switchSession: "chat.switchSession",
+    sessionName: "chat.sessionName",
+    sessionNamePlaceholder: "chat.sessionNamePlaceholder",
+    selectSession: "chat.selectSession",
+    noMessages: "chat.noMessages",
+    thinking: "chat.thinking",
+    responseReceived: "chat.responseReceived",
+    requestFailed: "chat.requestFailed",
+    responseLabel: "chat.responseLabel",
+    // Config Wizard
+    configWizardTitle: "configWizard.title",
+    configWizardSubtitle: "configWizard.subtitle",
+    configWizardStep1: "configWizard.step1",
+    configWizardStep2: "configWizard.step2",
+    configWizardStep3: "configWizard.step3",
     // Messages
-    successfullySaved: 'messages.successfullySaved',
-    errorSaving: 'messages.errorSaving',
-    unsavedChanges: 'messages.unsavedChanges',
+    successfullySaved: "messages.successfullySaved",
+    errorSaving: "messages.errorSaving",
+    unsavedChanges: "messages.unsavedChanges",
+    goOnStarted: "messages.goOnStarted",
+    goOnStopped: "messages.goOnStopped",
+    goOnNotRunning: "messages.goOnNotRunning",
+    cacheCleared: "messages.cacheCleared",
+    vectorCleared: "messages.vectorCleared",
+    configReloaded: "messages.configReloaded",
+    goOnShutdown: "messages.goOnShutdown",
+    diagnosisCompleted: "messages.diagnosisCompleted",
     // Language
-    language: 'language.language',
-    simplifiedChinese: 'language.simplifiedChinese',
-    traditionalChinese: 'language.traditionalChinese',
-    english: 'language.english',
+    language: "language.language",
+    simplifiedChinese: "language.simplifiedChinese",
+    traditionalChinese: "language.traditionalChinese",
+    english: "language.english",
     // Credentials
-    credentials: 'credentials.credentials',
-    apiKey: 'credentials.apiKey',
-    secretKey: 'credentials.secretKey',
-    keyringSecrets: 'credentials.keyringSecrets',
-    setSecret: 'credentials.setSecret',
-    getSecret: 'credentials.getSecret',
-    deleteSecret: 'credentials.deleteSecret',
+    credentials: "credentials.credentials",
+    apiKey: "credentials.apiKey",
+    secretKey: "credentials.secretKey",
+    keyringSecrets: "credentials.keyringSecrets",
+    setSecret: "credentials.setSecret",
+    getSecret: "credentials.getSecret",
+    deleteSecret: "credentials.deleteSecret",
+    listSecrets: "credentials.listSecrets",
     // Help
-    help: 'help.help',
-    documentation: 'help.documentation',
-    about: 'help.about',
-    version: 'help.version',
+    help: "help.help",
+    documentation: "help.documentation",
+    about: "help.about",
+    version: "help.version",
+    releaseNotes: "help.releaseNotes",
+    reportIssue: "help.reportIssue",
+    githubRepo: "help.githubRepo",
+    // StatusBar
+    statusBarText: "statusBar.text",
+    statusBarRunningTooltip: "statusBar.runningTooltip",
+    statusBarStoppedTooltip: "statusBar.stoppedTooltip",
+    // Editing
+    advancedEdit: "editing.advancedEdit",
+    refactorCode: "editing.refactorCode",
+    noCodeSelected: "editing.noCodeSelected",
+    editPrompt: "editing.editPrompt",
+    refactorPrompt: "editing.refactorPrompt",
+    applyingChanges: "editing.applyingChanges",
+    changesApplied: "editing.changesApplied",
+    changesFailed: "editing.changesFailed",
+    showDiff: "editing.showDiff",
+    acceptChanges: "editing.acceptChanges",
+    rejectChanges: "editing.rejectChanges",
+    // Process Flow
+    processFlow: "processFlow.processFlow",
+    showProcessFlow: "processFlow.showProcessFlow",
+    noActiveWorkflow: "processFlow.noActiveWorkflow",
+    workflowInProgress: "processFlow.workflowInProgress",
+    phaseCompleted: "processFlow.phaseCompleted",
+    phaseFailed: "processFlow.phaseFailed",
+    agentRunning: "processFlow.agentRunning",
+    agentCompleted: "processFlow.agentCompleted",
+    // Advanced
+    governancePlan: "advanced.governancePlan",
+    governanceAudit: "advanced.governanceAudit",
+    governanceStatus: "advanced.governanceStatus",
+    skillManagement: "advanced.skillManagement",
+    importSkill: "advanced.importSkill",
+    toggleSkill: "advanced.toggleSkill",
+    securityBaseline: "advanced.securityBaseline",
+    releaseReadiness: "advanced.releaseReadiness",
+    qualityBaseline: "advanced.qualityBaseline",
+    observabilityAlerts: "advanced.observabilityAlerts",
+    // RPC
+    healthProbesFailed: "rpc.healthProbesFailed",
+    lockStatusFailed: "rpc.lockStatusFailed",
 };
 class I18nManager {
     constructor() {
-        this.currentLanguage = 'en_US';
+        this.currentLanguage = "en_US";
         this.messages = {};
+        this.loadedLocales = new Set();
         this.detectLanguage();
     }
     static getInstance() {
@@ -103,64 +233,272 @@ class I18nManager {
         const env = process.env;
         const lang = env.VSCODE_NLS_CONFIG
             ? JSON.parse(env.VSCODE_NLS_CONFIG).locale
-            : env.LANG || env.LANGUAGE || 'en';
-        if (lang.includes('zh_CN') || lang.includes('zh-CN') || lang.includes('chinese-PRC')) {
-            this.currentLanguage = 'zh_CN';
+            : env.LANG || env.LANGUAGE || "en";
+        if (lang.includes("zh_CN") ||
+            lang.includes("zh-CN") ||
+            lang.includes("chinese-PRC")) {
+            this.currentLanguage = "zh_CN";
         }
-        else if (lang.includes('zh_TW') || lang.includes('zh-TW') || lang.includes('chinese-Taiwan')) {
-            this.currentLanguage = 'zh_TW';
+        else if (lang.includes("zh_TW") ||
+            lang.includes("zh-TW") ||
+            lang.includes("chinese-Taiwan")) {
+            this.currentLanguage = "zh_TW";
         }
         else {
-            this.currentLanguage = 'en_US';
+            this.currentLanguage = "en_US";
         }
         this.loadMessages(this.currentLanguage);
     }
     /**
-     * Load messages for the specified language
+     * Map internal language code to locale file name
      */
-    loadMessages(language) {
+    languageToLocale(language) {
         switch (language) {
-            case 'zh_CN':
-                this.messages = zhCN_Messages;
-                break;
-            case 'zh_TW':
-                this.messages = zhTW_Messages;
-                break;
-            case 'en_US':
+            case "zh_CN":
+                return "zh-CN";
+            case "zh_TW":
+                return "zh-TW";
+            case "en_US":
             default:
-                this.messages = enUS_Messages;
-                break;
+                return "en-US";
         }
     }
     /**
-     * Get translated message
+     * Load messages from locale JSON file
+     */
+    loadMessages(language) {
+        const localeName = this.languageToLocale(language);
+        if (this.loadedLocales.has(localeName) &&
+            this.messages &&
+            Object.keys(this.messages).length > 0) {
+            return; // Already loaded
+        }
+        // Try to load from the locales directory
+        const localePath = path.resolve(__dirname, "locales", `${localeName}.json`);
+        try {
+            if (fs.existsSync(localePath)) {
+                const content = fs.readFileSync(localePath, "utf-8");
+                this.messages = JSON.parse(content);
+                this.loadedLocales.add(localeName);
+                return;
+            }
+        }
+        catch {
+            // Fall through to fallback messages
+        }
+        // Fallback: try relative path for development
+        try {
+            const devPath = path.resolve(__dirname, "..", "src", "locales", `${localeName}.json`);
+            if (fs.existsSync(devPath)) {
+                const content = fs.readFileSync(devPath, "utf-8");
+                this.messages = JSON.parse(content);
+                this.loadedLocales.add(localeName);
+                return;
+            }
+        }
+        catch {
+            // Fall through to hardcoded fallback
+        }
+        // If all else fails, use built-in minimal fallback
+        this.messages = this.getFallbackMessages(language);
+    }
+    /**
+     * Load a specific locale file by language code (useful for dynamic switching)
+     */
+    loadLocale(language) {
+        this.currentLanguage = language;
+        this.loadedLocales.clear();
+        this.loadMessages(language);
+    }
+    /**
+     * Get translated message by dot-separated key path
      */
     getMessage(key, ...params) {
-        const keys = key.split('.');
+        const keys = key.split(".");
         let value = this.messages;
         for (const k of keys) {
-            if (typeof value === 'object' && value !== null && k in value) {
+            if (typeof value === "object" &&
+                value !== null &&
+                k in value) {
                 value = value[k];
             }
             else {
-                return key; // Return key if not found
+                // Key not found, try fallback English
+                return this.getFallbackValue(key, ...params);
             }
         }
-        if (typeof value === 'string') {
-            // Simple parameter substitution
+        if (typeof value === "string") {
             let result = value;
             params.forEach((param, index) => {
                 result = result.replace(`{${index}}`, String(param));
             });
             return result;
         }
+        // If value is an object (not a leaf string), return the key
+        if (typeof value === "object" && value !== null) {
+            return key;
+        }
         return key;
+    }
+    /**
+     * Fallback to English locale if key not found in current language
+     */
+    getFallbackValue(key, ...params) {
+        // Try loading the English locale as fallback
+        if (this.currentLanguage !== "en_US") {
+            const enPath = path.resolve(__dirname, "locales", "en-US.json");
+            try {
+                if (fs.existsSync(enPath)) {
+                    const content = fs.readFileSync(enPath, "utf-8");
+                    const enMessages = JSON.parse(content);
+                    const keys = key.split(".");
+                    let value = enMessages;
+                    for (const k of keys) {
+                        if (typeof value === "object" &&
+                            value !== null &&
+                            k in value) {
+                            value = value[k];
+                        }
+                        else {
+                            return key;
+                        }
+                    }
+                    if (typeof value === "string") {
+                        let result = value;
+                        params.forEach((param, index) => {
+                            result = result.replace(`{${index}}`, String(param));
+                        });
+                        return result;
+                    }
+                }
+            }
+            catch {
+                return key;
+            }
+        }
+        return key;
+    }
+    /**
+     * Minimal hardcoded fallback messages when locale files can't be loaded
+     */
+    getFallbackMessages(language) {
+        const general = {
+            goOn: "Go-On",
+            settings: language === "zh_CN"
+                ? "设置"
+                : language === "zh_TW"
+                    ? "設定"
+                    : "Settings",
+            start: language === "zh_CN" ? "启动" : language === "zh_TW" ? "啟動" : "Start",
+            stop: language === "zh_CN" ? "停止" : language === "zh_TW" ? "停止" : "Stop",
+            status: "Status",
+            running: language === "zh_CN"
+                ? "运行中"
+                : language === "zh_TW"
+                    ? "執行中"
+                    : "Running",
+            stopped: language === "zh_CN"
+                ? "已停止"
+                : language === "zh_TW"
+                    ? "已停止"
+                    : "Stopped",
+            save: "Save",
+            cancel: "Cancel",
+            delete: "Delete",
+            edit: "Edit",
+            add: "Add",
+            ok: "OK",
+            close: "Close",
+            error: "Error",
+            warning: "Warning",
+            loading: "Loading...",
+            success: "Success",
+            enabled: "Enabled",
+            disabled: "Disabled",
+            yes: "Yes",
+            no: "No",
+            refresh: "Refresh",
+            reload: "Reload",
+            retry: "Retry",
+            back: "Back",
+            next: "Next",
+            previous: "Previous",
+            search: "Search",
+            filter: "Filter",
+            clear: "Clear",
+            select: "Select",
+            confirm: "Confirm",
+            apply: "Apply",
+            reset: "Reset",
+            export: "Export",
+            import: "Import",
+            more: "More",
+            less: "Less",
+            default: "Default",
+            custom: "Custom",
+            advanced: "Advanced",
+            basic: "Basic",
+        };
+        const commands = {
+            start: { title: "Start Go-On Proxy", category: "Go-On" },
+            stop: { title: "Stop Go-On Proxy", category: "Go-On" },
+            openChat: { title: "Open Go-On Chat", category: "Go-On" },
+            openSettings: { title: "Open Go-On Settings", category: "Go-On" },
+            healthCheck: { title: "Check Go-On Health", category: "Go-On" },
+            diagnose: { title: "Diagnose Go-On Runtime", category: "Go-On" },
+            cacheClear: { title: "Clear Cache", category: "Go-On" },
+            vectorClear: { title: "Clear Vector Memory", category: "Go-On" },
+            configReload: { title: "Reload Configuration", category: "Go-On" },
+            shutdown: { title: "Shutdown Go-On", category: "Go-On" },
+            clearChat: { title: "Clear Chat History", category: "Go-On" },
+            exportChat: { title: "Export Chat History", category: "Go-On" },
+            newSession: { title: "New Chat Session", category: "Go-On" },
+            editCode: { title: "Advanced Code Edit", category: "Go-On" },
+            refactorCode: { title: "Refactor Code", category: "Go-On" },
+        };
+        const messages = {
+            successfullySaved: "Successfully saved",
+            errorSaving: "Error saving configuration",
+            unsavedChanges: "You have unsaved changes",
+            goOnStarted: "Go-On proxy started.",
+            goOnStopped: "Go-On proxy stopped.",
+            goOnNotRunning: "Go-On is not running. Start it first.",
+            goOnShutdown: "Shutdown initiated.",
+            cacheCleared: "Cache cleared.",
+            vectorCleared: "Vector memory cleared.",
+            configReloaded: "Configuration reloaded.",
+            diagnosisCompleted: "Go-On diagnosis completed.",
+        };
+        return {
+            general,
+            commands,
+            messages,
+            runtime: {},
+            execution: {},
+            workflow: {},
+            configuration: {},
+            chat: {},
+            configWizard: {},
+            diagnosis: {},
+            statusBar: {},
+            rpc: {},
+            credentials: {},
+            help: {},
+            language: {},
+            editing: {},
+            processFlow: {},
+            advanced: {},
+            views: {},
+            viewContainers: {},
+            config: {},
+        };
     }
     /**
      * Set language (will trigger language change)
      */
     setLanguage(language) {
         this.currentLanguage = language;
+        this.loadedLocales.clear();
         this.loadMessages(language);
     }
     /**
@@ -175,334 +513,31 @@ class I18nManager {
     getLanguageCodeForApp() {
         return this.currentLanguage;
     }
+    /**
+     * Reload messages (useful when locale files change)
+     */
+    reloadMessages() {
+        this.loadedLocales.clear();
+        this.loadMessages(this.currentLanguage);
+    }
 }
-// Message definitions
-const enUS_Messages = {
-    general: {
-        goOn: 'Go-On',
-        settings: 'Settings',
-        start: 'Start',
-        stop: 'Stop',
-        status: 'Status',
-        running: 'Running',
-        stopped: 'Stopped',
-    },
-    runtime: {
-        runtime: 'Runtime',
-        runtimeSettings: 'Runtime Settings',
-        maintenanceInterval: 'Maintenance Interval (seconds)',
-        healthInterval: 'Health Check Interval (seconds)',
-        shutdownDrain: 'Shutdown Drain (seconds)',
-        cacheSettings: 'Cache Settings',
-        vectorSettings: 'Vector Database Settings',
-        autotuneSettings: 'Auto-tune Settings',
-    },
-    execution: {
-        executionSettings: 'Execution Settings',
-        startGoOn: 'Start Go-On',
-        stopGoOn: 'Stop Go-On',
-        healthCheck: 'Health Check',
-        clearCache: 'Clear Cache',
-    },
-    workflow: {
-        workflow: 'Workflow',
-        phases: 'Phases',
-        agents: 'Agents',
-        addPhase: 'Add Phase',
-        editPhase: 'Edit Phase',
-        deletePhase: 'Delete Phase',
-    },
-    configuration: {
-        configuration: 'Configuration',
-        configPath: 'Configuration File Path',
-        executablePath: 'Executable Path',
-        autoDownloadBinary: 'Auto Download Binary',
-        releaseRepository: 'Release Repository',
-        releaseTag: 'Release Tag',
-        autoStart: 'Auto Start',
-        wizard: {
-            title: 'Go-On Configuration Wizard',
-            subtitle: 'Choose a usage scenario and recommended protocol mode, then save the workspace runtime settings.',
-            step1: 'Scenario',
-            step2: 'Protocol',
-            step3: 'Review',
-            next: 'Next',
-            previous: 'Previous',
-            recommended: 'Recommended',
-            protocolMode: 'Protocol Mode',
-            localTitle: 'Local Dev',
-            localDesc: 'Single-user daily development on one machine.',
-            sharedTitle: 'Shared Server',
-            sharedDesc: 'One long-running backend shared across users or tools.',
-            editorTitle: 'Editor Plugin',
-            editorDesc: 'Best when the editor launches go-on as a child process.',
-            adaptiveDesc: 'Dual-stack capability with adaptive routing.',
-            acpStdioDesc: 'ACP over stdio for child-process editor integrations.',
-            acpHttpDesc: 'ACP over HTTP for one shared long-running backend.',
-            mcpStdioDesc: 'MCP over stdio when the client explicitly expects it.',
-            mcpHttpDesc: 'MCP over HTTP for OpenAI-compatible /v1 endpoints.'
-        }
-    },
-    chat: {
-        chat: 'Chat',
-        chatMaxHistory: 'Max Chat History',
-        chatModel: 'Chat Model',
-        chatTemperature: 'Temperature',
-        chatTimeout: 'Timeout (seconds)',
-    },
-    buttons: {
-        save: 'Save',
-        cancel: 'Cancel',
-        reset: 'Reset',
-        apply: 'Apply',
-        delete: 'Delete',
-        edit: 'Edit',
-        add: 'Add',
-    },
-    messages: {
-        successfullySaved: 'Successfully saved',
-        errorSaving: 'Error saving',
-        unsavedChanges: 'You have unsaved changes',
-    },
-    language: {
-        language: 'Language',
-        simplifiedChinese: 'Simplified Chinese',
-        traditionalChinese: 'Traditional Chinese',
-        english: 'English',
-    },
-    credentials: {
-        credentials: 'Credentials',
-        apiKey: 'API Key',
-        secretKey: 'Secret Key',
-        keyringSecrets: 'Keyring Secrets',
-        setSecret: 'Set Secret',
-        getSecret: 'Get Secret',
-        deleteSecret: 'Delete Secret',
-    },
-    help: {
-        help: 'Help',
-        documentation: 'Documentation',
-        about: 'About',
-        version: 'Version',
-    }
-};
-const zhCN_Messages = {
-    general: {
-        goOn: 'Go-On',
-        settings: '设置',
-        start: '启动',
-        stop: '停止',
-        status: '状态',
-        running: '运行中',
-        stopped: '已停止',
-    },
-    runtime: {
-        runtime: '运行时',
-        runtimeSettings: '运行时设置',
-        maintenanceInterval: '维护间隔(秒)',
-        healthInterval: '健康检查间隔(秒)',
-        shutdownDrain: '关闭清空时间(秒)',
-        cacheSettings: '缓存设置',
-        vectorSettings: '向量数据库设置',
-        autotuneSettings: '自动优化设置',
-    },
-    execution: {
-        executionSettings: '执行设置',
-        startGoOn: '启动 Go-On',
-        stopGoOn: '停止 Go-On',
-        healthCheck: '健康检查',
-        clearCache: '清空缓存',
-    },
-    workflow: {
-        workflow: '工作流',
-        phases: '阶段',
-        agents: '代理',
-        addPhase: '添加阶段',
-        editPhase: '编辑阶段',
-        deletePhase: '删除阶段',
-    },
-    configuration: {
-        configuration: '配置',
-        configPath: '配置文件路径',
-        executablePath: '可执行文件路径',
-        autoDownloadBinary: '自动下载二进制',
-        releaseRepository: '发布仓库',
-        releaseTag: '发布标签',
-        autoStart: '自动启动',
-        wizard: {
-            title: 'Go-On 配置向导',
-            subtitle: '先选择使用场景与推荐协议，再保存当前工作区运行时设置。',
-            step1: '场景',
-            step2: '协议',
-            step3: '确认',
-            next: '下一步',
-            previous: '上一步',
-            recommended: '推荐',
-            protocolMode: '协议模式',
-            localTitle: '本地开发',
-            localDesc: '适合单机单用户的日常开发。',
-            sharedTitle: '共享服务',
-            sharedDesc: '适合多用户或多工具共享一个常驻后端。',
-            editorTitle: '编辑器插件',
-            editorDesc: '适合由编辑器以子进程方式拉起 go-on。',
-            adaptiveDesc: '双栈能力与自适应路由。',
-            acpStdioDesc: '面向编辑器子进程集成的 ACP over stdio。',
-            acpHttpDesc: '面向共享常驻后端的 ACP over HTTP。',
-            mcpStdioDesc: '当客户端明确要求时使用 MCP over stdio。',
-            mcpHttpDesc: '面向 OpenAI 兼容 /v1 端点的 MCP over HTTP。'
-        }
-    },
-    chat: {
-        chat: '聊天',
-        chatMaxHistory: '最大聊天历史',
-        chatModel: '聊天模型',
-        chatTemperature: '温度',
-        chatTimeout: '超时(秒)',
-    },
-    buttons: {
-        save: '保存',
-        cancel: '取消',
-        reset: '重置',
-        apply: '应用',
-        delete: '删除',
-        edit: '编辑',
-        add: '添加',
-    },
-    messages: {
-        successfullySaved: '保存成功',
-        errorSaving: '保存出错',
-        unsavedChanges: '您有未保存的更改',
-    },
-    language: {
-        language: '语言',
-        simplifiedChinese: '简体中文',
-        traditionalChinese: '繁体中文',
-        english: '英文',
-    },
-    credentials: {
-        credentials: '凭证',
-        apiKey: 'API 密钥',
-        secretKey: '密钥',
-        keyringSecrets: '密钥环机密',
-        setSecret: '设置机密',
-        getSecret: '获取机密',
-        deleteSecret: '删除机密',
-    },
-    help: {
-        help: '帮助',
-        documentation: '文档',
-        about: '关于',
-        version: '版本',
-    }
-};
-const zhTW_Messages = {
-    general: {
-        goOn: 'Go-On',
-        settings: '設定',
-        start: '啟動',
-        stop: '停止',
-        status: '狀態',
-        running: '執行中',
-        stopped: '已停止',
-    },
-    runtime: {
-        runtime: '運行時',
-        runtimeSettings: '運行時設定',
-        maintenanceInterval: '維護間隔(秒)',
-        healthInterval: '健康檢查間隔(秒)',
-        shutdownDrain: '關閉清空時間(秒)',
-        cacheSettings: '快取設定',
-        vectorSettings: '向量資料庫設定',
-        autotuneSettings: '自動最佳化設定',
-    },
-    execution: {
-        executionSettings: '執行設定',
-        startGoOn: '啟動 Go-On',
-        stopGoOn: '停止 Go-On',
-        healthCheck: '健康檢查',
-        clearCache: '清空快取',
-    },
-    workflow: {
-        workflow: '工作流程',
-        phases: '階段',
-        agents: '代理',
-        addPhase: '新增階段',
-        editPhase: '編輯階段',
-        deletePhase: '刪除階段',
-    },
-    configuration: {
-        configuration: '設定',
-        configPath: '設定檔案路徑',
-        executablePath: '執行檔路徑',
-        autoDownloadBinary: '自動下載二進位',
-        releaseRepository: '發行儲存庫',
-        releaseTag: '發行標籤',
-        autoStart: '自動啟動',
-        wizard: {
-            title: 'Go-On 設定精靈',
-            subtitle: '先選擇使用情境與建議協議，再保存目前工作區的運行時設定。',
-            step1: '情境',
-            step2: '協議',
-            step3: '確認',
-            next: '下一步',
-            previous: '上一步',
-            recommended: '推薦',
-            protocolMode: '協議模式',
-            localTitle: '本機開發',
-            localDesc: '適合單機單使用者的日常開發。',
-            sharedTitle: '共享服務',
-            sharedDesc: '適合多使用者或多工具共用同一常駐後端。',
-            editorTitle: '編輯器外掛',
-            editorDesc: '適合由編輯器以子程序方式啟動 go-on。',
-            adaptiveDesc: '雙棧能力與自適應路由。',
-            acpStdioDesc: '面向編輯器子程序整合的 ACP over stdio。',
-            acpHttpDesc: '面向共享常駐後端的 ACP over HTTP。',
-            mcpStdioDesc: '當客戶端明確要求時使用 MCP over stdio。',
-            mcpHttpDesc: '面向 OpenAI 相容 /v1 端點的 MCP over HTTP。'
-        }
-    },
-    chat: {
-        chat: '聊天',
-        chatMaxHistory: '最大聊天記錄',
-        chatModel: '聊天模型',
-        chatTemperature: '溫度',
-        chatTimeout: '逾時(秒)',
-    },
-    buttons: {
-        save: '保存',
-        cancel: '取消',
-        reset: '重置',
-        apply: '套用',
-        delete: '刪除',
-        edit: '編輯',
-        add: '新增',
-    },
-    messages: {
-        successfullySaved: '保存成功',
-        errorSaving: '保存出錯',
-        unsavedChanges: '您有未保存的變更',
-    },
-    language: {
-        language: '語言',
-        simplifiedChinese: '簡體中文',
-        traditionalChinese: '繁體中文',
-        english: '英文',
-    },
-    credentials: {
-        credentials: '認證項目',
-        apiKey: 'API 金鑰',
-        secretKey: '秘密金鑰',
-        keyringSecrets: '金鑰環秘密',
-        setSecret: '設定秘密',
-        getSecret: '取得秘密',
-        deleteSecret: '刪除秘密',
-    },
-    help: {
-        help: '說明',
-        documentation: '文件',
-        about: '關於',
-        version: '版本',
-    }
-};
-exports.i18n = I18nManager.getInstance();
+// Singleton instance
+const i18nManager = I18nManager.getInstance();
+/**
+ * Shorthand translation function
+ *
+ * @param key - Dot-separated key path (e.g. "commands.start.title")
+ * @param params - Optional parameters for {0}, {1}, etc. substitution
+ * @returns Translated string
+ *
+ * @example
+ *   t('general.goOn')                          // => "Go-On"
+ *   t('messages.goOnStartFailed', 'timeout')   // => "Failed to start Go-On: timeout"
+ */
+function t(key, ...params) {
+    return i18nManager.getMessage(key, ...params);
+}
+exports.t = t;
+exports.i18n = i18nManager;
+exports.default = t;
 //# sourceMappingURL=i18n.js.map

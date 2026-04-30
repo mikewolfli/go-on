@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::optimization::failure_prevention::FailurePrevention;
 use crate::orchestration::workflow_optimizer::{
-    CostOptimizer as WfCostOptimizer, WorkflowOptimizer,
+    CostOptimizer as WfCostOptimizer, OptimizationContext, WorkflowOptimizerPlugin,
 };
 
 // ---------------------------------------------------------------------------
@@ -119,9 +119,16 @@ impl CostEstimator {
     }
 
     /// Suggest cost-optimised agent (delegates to workflow CostOptimizer logic).
-    fn suggest_cheaper_agent(&self, _task_type: &str, _token_count: u64) -> Option<String> {
-        let recs = self.inner.optimize("plan", 0.95, 5000.0);
-        if recs.iter().any(|r| r.strategy == "downgrade_model_tier") {
+    fn suggest_cheaper_agent(&self, _task_type: &str, token_count: u64) -> Option<String> {
+        let ctx = OptimizationContext {
+            workflow_type: _task_type.to_string(),
+            phases: vec![],
+            history: vec![],
+            token_usage: token_count,
+            latency_ms: 5000,
+        };
+        let recs = self.inner.optimize(&ctx);
+        if recs.suggestion_type == "downgrade_model_tier" {
             Some("claude-haiku".to_string())
         } else {
             None

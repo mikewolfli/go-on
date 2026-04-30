@@ -2,7 +2,7 @@
   "name": "go-on-vscode",
   "displayName": "Go-On VS Code Extension",
   "description": "VS Code extension for the Go-On Rust ACP proxy",
-  "version": "0.8.1",
+  "version": "0.8.2"
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -646,8 +646,10 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "npx tsc -p ./",
+    "compile": "npx tsc -p ./ && cp -r src/locales out/locales",
+    "postcompile": "cp -r src/locales out/locales",
     "watch": "npx tsc -watch -p ./",
+    "watch:locales": "npx tsc -watch -p ./ & nodemon --watch src/locales --ext json -x 'cp -r src/locales out/locales'",
     "lint": "eslint src --ext ts",
     "check": "npm run compile && npm run lint",
     "test:contract": "node ./scripts/contract-smoke.js",

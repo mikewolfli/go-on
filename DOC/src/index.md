@@ -1,6 +1,6 @@
 # go-on Documentation
 
-This book documents the current `0.8.1` architecture and usage model of `go-on`.
+This book documents the current `0.8.2` architecture and usage model of `go-on`.
 
 The runtime has completed **Phase 4** (FutureDesign) — 100% of 21 F-GAP modules implemented,
 all 38 capability dimensions at ★★★★★, and 14-bus architecture fully operational.

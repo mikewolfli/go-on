@@ -1,4 +1,6 @@
 #![allow(clippy::await_holding_lock)]
+
+use fs2::FileExt;
 /// Transport parity gate — BLUE25
 ///
 /// Verifies that all four transport paths inject `platform_context` consistently:
@@ -14,14 +16,43 @@
 ///
 /// Schema version must be "blue24-platform-universal-v1" across all paths.
 use serde_json::{json, Value};
+use serial_test::serial;
 use std::fs;
 use std::io::Write;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
+
+// ---------------------------------------------------------------------------
+// Cross-process file lock — serialises go-on child-process creation across
+// all test binaries so that integration tests cannot stack concurrent child
+// processes that contend for CPU and ports.
+// ---------------------------------------------------------------------------
+
+struct CrossProcessLock {
+    _file: std::fs::File,
+}
+
+impl CrossProcessLock {
+    fn lock(path: &Path) -> Self {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(path)
+            .expect("failed to open/create cross-process lock file");
+        file.lock_exclusive()
+            .expect("failed to acquire cross-process lock");
+        Self { _file: file }
+    }
+}
+
+fn cross_process_lock_path() -> PathBuf {
+    std::env::temp_dir().join(".go-on-integration-suite.lock")
+}
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -75,6 +106,7 @@ fallback = true
 struct HttpHarness {
     child: Child,
     base_url: String,
+    _cross_process_lock: CrossProcessLock,
 }
 
 impl HttpHarness {
@@ -83,6 +115,16 @@ impl HttpHarness {
     }
 
     fn spawn_with_mode(config_path: &Path, bind_addr: String, mode: &str) -> Self {
+        let lock = CrossProcessLock::lock(&cross_process_lock_path());
+        Self::spawn_with_mode_and_lock(config_path, bind_addr, mode, lock)
+    }
+
+    fn spawn_with_mode_and_lock(
+        config_path: &Path,
+        bind_addr: String,
+        mode: &str,
+        lock: CrossProcessLock,
+    ) -> Self {
         let child = Command::new(binary_path())
             .arg("--config")
             .arg(config_path)
@@ -98,7 +140,11 @@ impl HttpHarness {
             .expect("failed to spawn go-on http harness");
 
         let base_url = format!("http://{bind_addr}");
-        HttpHarness { child, base_url }
+        HttpHarness {
+            child,
+            base_url,
+            _cross_process_lock: lock,
+        }
     }
 }
 

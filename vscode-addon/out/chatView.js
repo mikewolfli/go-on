@@ -69,6 +69,9 @@ class GoOnChatViewProvider {
                 case "sendMessage":
                     await this._handleSendMessage(message.text);
                     break;
+                case "sendMessageWithAttachments":
+                    await this._handleSendMessage(message.text, message.attachments);
+                    break;
                 case "clearChat":
                     this._clearCurrentSession();
                     break;
@@ -90,7 +93,7 @@ class GoOnChatViewProvider {
             }
         }, undefined);
     }
-    async _handleSendMessage(text) {
+    async _handleSendMessage(text, attachments) {
         if (!this._view)
             return;
         try {
@@ -106,9 +109,26 @@ class GoOnChatViewProvider {
                 type: "addMessage",
                 ...userMessage,
             });
+            // Build content array per OpenAI Vision API format
+            let messagesPayload;
+            if (!attachments || attachments.length === 0) {
+                // Backward compatible: plain text
+                messagesPayload = [{ role: "user", content: text }];
+            }
+            else {
+                // Multi-modal content with text + images/files
+                const content = [{ type: "text", text }];
+                for (const a of attachments) {
+                    content.push({
+                        type: "image_url",
+                        image_url: { url: a.dataUrl, detail: "auto" },
+                    });
+                }
+                messagesPayload = [{ role: "user", content }];
+            }
             // Send to Go-On
             const result = await this.manager.sendRequest("chat", {
-                messages: [{ role: "user", content: text }],
+                messages: messagesPayload,
             });
             const responseText = this._extractResponseText(result);
             // Add response to current session
@@ -536,6 +556,19 @@ class GoOnChatViewProvider {
                         display: flex;
                         gap: 5px;
                     }
+                    .chat-attach {
+                        padding: 8px 10px;
+                        background: var(--vscode-button-secondaryBackground);
+                        color: var(--vscode-button-secondaryForeground);
+                        border: 1px solid var(--vscode-button-border);
+                        border-radius: 3px;
+                        cursor: pointer;
+                        font-size: 1em;
+                        line-height: 1;
+                    }
+                    .chat-attach:hover {
+                        background: var(--vscode-button-secondaryHoverBackground);
+                    }
                     .chat-input {
                         flex: 1;
                         padding: 8px;
@@ -557,6 +590,65 @@ class GoOnChatViewProvider {
                     }
                     .chat-send:hover {
                         background: var(--vscode-button-hoverBackground);
+                    }
+                    .attachment-preview {
+                        display: flex;
+                        align-items: flex-start;
+                        gap: 6px;
+                        padding: 6px 8px;
+                        margin-bottom: 6px;
+                        background: var(--vscode-editor-background);
+                        border: 1px solid var(--vscode-panel-border);
+                        border-radius: 3px;
+                    }
+                    .attachment-list {
+                        display: flex;
+                        flex-wrap: wrap;
+                        gap: 6px;
+                        flex: 1;
+                    }
+                    .attachment-item {
+                        display: flex;
+                        align-items: center;
+                        gap: 4px;
+                        padding: 3px 6px;
+                        background: var(--vscode-badge-background);
+                        color: var(--vscode-badge-foreground);
+                        border-radius: 3px;
+                        font-size: 0.8em;
+                        max-width: 180px;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        white-space: nowrap;
+                    }
+                    .attachment-item img.attachment-thumb {
+                        width: 24px;
+                        height: 24px;
+                        object-fit: cover;
+                        border-radius: 2px;
+                    }
+                    .attachment-item .attachment-icon {
+                        font-size: 1.1em;
+                    }
+                    .attachment-item .attachment-name {
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        white-space: nowrap;
+                    }
+                    .attachment-clear {
+                        padding: 2px 6px;
+                        background: transparent;
+                        color: var(--vscode-input-foreground);
+                        border: 1px solid var(--vscode-panel-border);
+                        border-radius: 3px;
+                        cursor: pointer;
+                        font-size: 0.9em;
+                        line-height: 1;
+                        opacity: 0.7;
+                    }
+                    .attachment-clear:hover {
+                        opacity: 1;
+                        background: var(--vscode-list-hoverBackground);
                     }
                     .status-bar {
                         padding: 5px;
@@ -609,10 +701,16 @@ class GoOnChatViewProvider {
                         <button class="session-btn" id="exportSessionBtn" title="Export Session">📤</button>
                     </div>
                     <div class="chat-messages" id="messages"></div>
-                    <div class="chat-input-container">
-                        <input type="text" class="chat-input" id="messageInput" placeholder="Type your message..." />
-                        <button class="chat-send" id="sendButton">Send</button>
-                    </div>
+                        <div class="attachment-preview" id="attachmentPreview" style="display:none">
+                            <div class="attachment-list" id="attachmentList"></div>
+                            <button class="attachment-clear" id="clearAttachmentsBtn">✕</button>
+                        </div>
+                        <div class="chat-input-container">
+                            <input type="file" id="fileInput" accept="image/*,.pdf,.txt,.md" multiple style="display:none" />
+                            <button class="chat-attach" id="attachBtn" title="Attach files">📎</button>
+                            <input type="text" class="chat-input" id="messageInput" placeholder="Type your message..." />
+                            <button class="chat-send" id="sendButton">Send</button>
+                        </div>
                 </div>
                 <script nonce="${nonce}" src="${scriptUri}"></script>
             </body>

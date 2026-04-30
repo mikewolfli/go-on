@@ -36,6 +36,7 @@ use crate::orchestration::planner_executor::Planner;
 use crate::orchestration::prompt_layers::PromptAssembler;
 use crate::orchestration::task_router::{TaskRouter, TaskType};
 use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
+use crate::orchestration::workflow_optimizer::OptimizationContext;
 use crate::pua::PuaEnforcementPlan;
 
 use crate::intelligence::verification::{
@@ -503,6 +504,8 @@ pub(crate) async fn process_chat_request(
             has_cache_hit: false,
             confidence_score: 0.8,
             request_text: String::new(),
+            max_input_tokens: None,
+            max_output_tokens: None,
         };
         let verdict = harness.evaluate_token_gate(&gate_ctx);
         if matches!(
@@ -654,6 +657,7 @@ pub(crate) async fn process_chat_request(
 
     let mut capability_selected_agent: Option<String> = None;
     let mut capability_recommended_mode: Option<String> = None;
+    #[allow(unused_mut)]
     let mut capability_optimization_hint: Option<Value> = None;
 
     // ── CapabilityBus agent selection ──────────────────────────────────
@@ -670,6 +674,7 @@ pub(crate) async fn process_chat_request(
         let decision = cb.decide(&task_ctx, &sensing);
         capability_selected_agent = decision.selected_agent.clone();
         capability_recommended_mode = Some(decision.recommended_mode.clone());
+        #[cfg(feature = "sub-bus-optimization")]
         let opt = cb.optimization_recommendation(
             &phase.phase_name,
             (params.messages.len() as u64).saturating_mul(512),
@@ -679,13 +684,16 @@ pub(crate) async fn process_chat_request(
                 "balanced"
             },
         );
-        capability_optimization_hint = Some(serde_json::json!({
-            "suggested_agent": opt.suggested_agent,
-            "estimated_cost": opt.estimated_cost,
-            "estimated_duration_ms": opt.estimated_duration_ms,
-            "reliability_score": opt.reliability_score,
-            "confidence": opt.confidence,
-        }));
+        #[cfg(feature = "sub-bus-optimization")]
+        {
+            capability_optimization_hint = Some(serde_json::json!({
+                "suggested_agent": opt.suggested_agent,
+                "estimated_cost": opt.estimated_cost,
+                "estimated_duration_ms": opt.estimated_duration_ms,
+                "reliability_score": opt.reliability_score,
+                "confidence": opt.confidence,
+            }));
+        }
         if let Some(ref agent) = decision.selected_agent {
             // Move the CapabilityBus-recommended agent to the front of the list
             let _ = reorder_agents_with_priority(&mut resolved.agents, agent);
@@ -867,7 +875,7 @@ pub(crate) async fn process_chat_request(
     // project-level context (README excerpt, build commands, recent commits).
     let agent_messages = {
         if let Some(ctx) = crate::orchestration::startup_context::get() {
-            let summary = crate::orchestration::startup_context::summary_text(ctx);
+            let summary = crate::orchestration::startup_context::summary_text(&ctx);
             if !summary.is_empty() {
                 let startup_msg = format!("[startup context]\n{}", summary);
                 merge_context_into_messages(&agent_messages, Some(startup_msg))
@@ -1870,7 +1878,7 @@ pub(crate) async fn process_chat_request(
         if let Ok(reg) = server.optimizer_registry.lock() {
             // Use a rolling success rate from the capability bus if available,
             // otherwise default to 1.0 for the current request.
-            let historical_success_rate = server
+            let _historical_success_rate = server
                 .capability_bus
                 .as_ref()
                 .and_then(|cb| {
@@ -1880,16 +1888,22 @@ pub(crate) async fn process_chat_request(
                         .and_then(|lb| lb.agent_success_rate(&selected_agent))
                 })
                 .unwrap_or(1.0);
-            reg.optimize_all(&phase.phase_name, historical_success_rate, elapsed as f64)
-                .into_iter()
-                .map(|r| {
-                    serde_json::json!({
-                        "strategy": r.strategy,
-                        "expected_improvement": r.expected_improvement,
-                        "description": r.description,
-                    })
+            reg.optimize_all(&OptimizationContext {
+                workflow_type: phase.phase_name.clone(),
+                phases: vec![phase.phase_name.clone()],
+                history: vec![],
+                token_usage: 0,
+                latency_ms: elapsed,
+            })
+            .into_iter()
+            .map(|r| {
+                serde_json::json!({
+                    "strategy": r.suggestion_type,
+                    "expected_improvement": r.estimated_improvement,
+                    "description": r.description,
                 })
-                .collect()
+            })
+            .collect()
         } else {
             vec![]
         }
@@ -1932,12 +1946,8 @@ pub(crate) async fn process_chat_request(
     // isolation boundaries.  Completed forks are cleaned up immediately
     // so the registry stays within its capacity.
     let fork_id = {
-        if let Ok(mut fr) = server.fork_registry.lock() {
-            let id = fr.register(
-                &conversation_id,
-                crate::orchestration::fork_registry::IsolationLevel::Light,
-                crate::orchestration::fork_registry::ForkBudget::default(),
-            );
+        if let Ok(fr) = server.fork_registry.lock() {
+            let id = fr.register(&conversation_id);
             if let Some(ref fid) = id {
                 fr.complete(fid);
             }

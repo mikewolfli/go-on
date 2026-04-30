@@ -1,6 +1,6 @@
 [project]
 name = "go-on-sdk"
-version = "0.8.1"
+version = "0.8.2"
 description = "Python SDK for go-on (ACP/MCP agent orchestration runtime) — Phase 4, 14-bus architecture"
 requires-python = ">=3.9"
 dependencies = ["httpx>=0.27"]

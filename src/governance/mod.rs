@@ -9,6 +9,7 @@ pub mod hardening;
 pub mod harness_bus;
 pub mod pua;
 pub mod rationalization;
+pub mod rbac;
 pub mod review_controls;
 pub mod runtime_controls;
 pub mod security_governor;

@@ -4,17 +4,49 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use fs2::FileExt;
 use reqwest::header::CONTENT_TYPE;
 use serde_json::{json, Value};
+use serial_test::serial;
 use tempfile::tempdir;
+
+// ---------------------------------------------------------------------------
+// Cross-process file lock — serialises go-on child-process creation across
+// all test binaries so that integration tests cannot stack concurrent child
+// processes that contend for CPU and ports.
+// ---------------------------------------------------------------------------
+
+struct CrossProcessLock {
+    _file: std::fs::File,
+}
+
+impl CrossProcessLock {
+    fn lock(path: &Path) -> Self {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(path)
+            .expect("failed to open/create cross-process lock file");
+        file.lock_exclusive()
+            .expect("failed to acquire cross-process lock");
+        Self { _file: file }
+    }
+}
+
+fn cross_process_lock_path() -> PathBuf {
+    std::env::temp_dir().join(".go-on-integration-suite.lock")
+}
 
 struct HttpHarness {
     child: Child,
     bind_addr: String,
+    _cross_process_lock: CrossProcessLock,
 }
 
 impl HttpHarness {
     fn spawn(config_path: &Path, bind_addr: String) -> Self {
+        let lock = CrossProcessLock::lock(&cross_process_lock_path());
         let child = Command::new(binary_path())
             .arg("--config")
             .arg(config_path)
@@ -27,7 +59,11 @@ impl HttpHarness {
             .spawn()
             .expect("failed to spawn go-on http harness");
 
-        Self { child, bind_addr }
+        Self {
+            child,
+            bind_addr,
+            _cross_process_lock: lock,
+        }
     }
 
     fn base_url(&self) -> String {
@@ -133,6 +169,7 @@ async fn wait_healthy(client: &reqwest::Client, base_url: &str, timeout: Duratio
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn openai_http_request_matrix_regression() {
     let dir = tempdir().expect("failed to create tempdir");
     let config_path = dir.path().join("config.toml");
@@ -260,6 +297,7 @@ async fn openai_http_request_matrix_regression() {
 /// Phase R1 baseline: verify /v1/responses returns a structured `response` object,
 /// and that missing required fields return a Responses-style error.
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn responses_api_r1_minimal_request() {
     let dir = tempdir().expect("failed to create tempdir");
     let config_path = dir.path().join("config.toml");
@@ -1566,6 +1604,7 @@ async fn responses_api_r1_minimal_request() {
 /// Phase R4: golden field matrix — field completeness and event ordering assertions
 /// separated from validation-edge-case tests for clarity and faster triage.
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn responses_api_r4_complete_field_matrix() {
     let dir = tempdir().expect("failed to create tempdir");
     let config_path = dir.path().join("config.toml");
@@ -1766,6 +1805,7 @@ async fn responses_api_r4_complete_field_matrix() {
 
 /// Phase R4.1: route contract assertions for root capabilities and unsupported methods.
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn responses_api_r4_route_contracts() {
     let dir = tempdir().expect("failed to create tempdir");
     let config_path = dir.path().join("config.toml");
@@ -1851,6 +1891,7 @@ async fn responses_api_r4_route_contracts() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn responses_api_stream_degrades_setup_unavailable() {
     let dir = tempdir().expect("failed to create tempdir");
     let config_path = dir.path().join("config.toml");
@@ -1994,6 +2035,7 @@ async fn responses_api_stream_degrades_setup_unavailable() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn responses_api_non_stream_degrades_setup_unavailable() {
     let dir = tempdir().expect("failed to create tempdir");
     let config_path = dir.path().join("config.toml");

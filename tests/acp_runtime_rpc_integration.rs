@@ -7,8 +7,55 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use fs2::FileExt;
 use serde_json::{json, Value};
+use serial_test::serial;
 use tempfile::tempdir;
+
+// ---------------------------------------------------------------------------
+// Cross-process file lock — serialises go-on child-process creation across
+// all test binaries so that integration tests cannot stack concurrent child
+// processes that contend for CPU and cause artificial timeouts.
+// ---------------------------------------------------------------------------
+
+/// An exclusive advisory file lock held across the lifetime of a test harness.
+/// Because all test binaries build the same lock-file path, processes from
+/// *different* test files serialise against each other (the in-process
+/// `Mutex` only serialises threads within the same binary).
+struct CrossProcessLock {
+    _file: std::fs::File,
+}
+
+impl CrossProcessLock {
+    /// Acquire an exclusive lock, blocking until it is available.
+    /// Uses `fs2::FileExt::lock_exclusive` which calls `flock(LOCK_EX)` on Unix
+    /// or `LockFile` on Windows.
+    fn lock(path: &Path) -> Self {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(path)
+            .expect("failed to open/create cross-process lock file");
+
+        file.lock_exclusive()
+            .expect("failed to acquire cross-process lock");
+
+        Self { _file: file }
+    }
+}
+
+// The lock is released automatically when `_file` is dropped because
+// `fs2::FileExt::lock_exclusive` holds the lock on the fd and closing
+// the fd (via `Drop`) releases the lock on Unix.
+
+/// Return the path of the shared cross-process lock file.
+///
+/// Uses the system temporary directory so that all test binaries (which run
+/// as separate OS processes) see the same lock file path.
+fn cross_process_lock_path() -> PathBuf {
+    std::env::temp_dir().join(".go-on-integration-suite.lock")
+}
 
 struct RpcHarness {
     child: Child,
@@ -20,8 +67,14 @@ struct RpcHarness {
     stderr_lines: Arc<Mutex<Vec<String>>>,
     // Serialize this integration suite to avoid flaky child-process pipe races.
     _suite_guard: MutexGuard<'static, ()>,
+    // Cross-process file lock that serialises go-on child-process creation
+    // across *all* test binaries (crates in tests/), preventing CPU contention
+    // that would otherwise cause artificial timeouts in timing-sensitive tests.
+    _cross_process_lock: CrossProcessLock,
 }
 
+// Keep the in-process suite guard as well – it serialises threads *within*
+// the binary, which is cheaper than the file lock for intra-binary ordering.
 static RPC_SUITE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn suite_guard() -> &'static Mutex<()> {
@@ -30,10 +83,16 @@ fn suite_guard() -> &'static Mutex<()> {
 
 impl RpcHarness {
     fn spawn(config_path: &Path) -> Self {
-        let suite_guard = match suite_guard().lock() {
+        let _suite_guard = match suite_guard().lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
+        // Acquire the cross-process lock BEFORE spawning the child.
+        // This guarantees that only one go-on process runs at a time across
+        // all test binaries, eliminating CPU-starvation-induced timeouts.
+        let lock_path = cross_process_lock_path();
+        let _cross_process_lock = CrossProcessLock::lock(&lock_path);
+
         let mut child = Command::new(binary_path())
             .arg("--config")
             .arg(config_path)
@@ -89,7 +148,8 @@ impl RpcHarness {
             stdin: Some(stdin),
             stdout_rx,
             stderr_lines,
-            _suite_guard: suite_guard,
+            _suite_guard,
+            _cross_process_lock,
         }
     }
 
@@ -5025,6 +5085,7 @@ fn rpc_chat_provider_failure_degrades_to_fallback_agent() {
 }
 
 #[test]
+#[serial]
 fn rpc_chat_review_timeout_collision_reports_timeout_and_gate_outcome() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");

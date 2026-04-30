@@ -262,7 +262,9 @@ pub fn new_acp_server(
                 capability_bus: Some(Arc::clone(&capability_bus)),
                 provenance_ledger: Some(provenance_ledger),
                 fork_registry: Arc::new(StdMutex::new(
-                    crate::orchestration::fork_registry::ForkRegistry::new(100),
+                    crate::orchestration::fork_registry::ForkRegistry::new(
+                        crate::orchestration::fork_registry::ForkConfig::default(),
+                    ),
                 )),
                 planner: crate::orchestration::planner_executor::Planner,
                 executor: crate::orchestration::planner_executor::Executor,

@@ -26,7 +26,7 @@ use crate::intelligence::token_cache::TokenMultiLevelCache;
 use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::memory_response_cache::MemoryResponseCache;
 use crate::observability::telemetry::TelemetryRuntime;
-use crate::orchestration::fork_registry::ForkRegistry;
+use crate::orchestration::fork_registry::{ForkConfig, ForkRegistry};
 use crate::orchestration::promotion_plugin::PromotionRegistry;
 use crate::orchestration::prompt_layers::PromptAssembler;
 use crate::orchestration::scheduler::AgentWorkerScheduler;
@@ -559,7 +559,7 @@ impl ServerBuilder {
             artifact_ledger,
             harness_bus: self.harness_bus,
             capability_bus: self.capability_bus,
-            fork_registry: Arc::new(StdMutex::new(ForkRegistry::new(100))),
+            fork_registry: Arc::new(StdMutex::new(ForkRegistry::new(ForkConfig::default()))),
             planner: crate::orchestration::planner_executor::Planner,
             executor: crate::orchestration::planner_executor::Executor,
             evaluation_suite: Arc::new(StdMutex::new(

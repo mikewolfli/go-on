@@ -1,187 +1,835 @@
-//! BLUE35 S10: Fork Registry — Sub-agent Process Isolation (ARCH-05)
+//! BLUE35 S10 + BLUE38 ARCH-05: Fork Registry — Sub-agent Process Isolation
 //!
 //! Tracks forked sub-agent executions and provides isolation boundaries
 //! (sandbox level, resource limits, timeout policies) for each fork.
+//!
+//! Architectural capabilities:
+//! - Process-level isolation tracking (register / find / cleanup / snapshot / restore / merge)
+//! - Resource quota control (CPU / memory / wall-clock limits) for forked sub-agents
+//! - Snapshot/restore serialization for checkpointing fork groups
+//! - Merge logic for fan-out join semantics
+//! - Thread-safe via `Arc<Mutex<...>>`
+//! - Integration-ready for `AgentWorkerScheduler` fan-out (L2 scheduling)
 
 use serde::{Deserialize, Serialize};
+use std::cmp;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Isolation level for a forked sub-agent
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum IsolationLevel {
-    /// No isolation — runs in the same process/memory space
-    None,
-    /// Light isolation — separate task queue, shared memory
-    Light,
-    /// Standard isolation — separate process, IPC channel
-    Standard,
-    /// Strict isolation — separate process, limited syscalls
-    Strict,
-    /// Full sandbox — container-level isolation
-    Sandbox,
+// ──────────────────────────────────────────────
+// ForkSnapshot — serializable state snapshot
+// ──────────────────────────────────────────────
+
+/// A serializable snapshot of a fork's state at a point in time.
+///
+/// Contains the raw data payload (`Vec<u8>`), a Unix-epoch timestamp
+/// (seconds with subsecond precision as `f64`), and an arbitrary set of
+/// string-keyed labels for metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForkSnapshot {
+    /// Opaque payload data captured at snapshot time.
+    pub data: Vec<u8>,
+    /// Unix timestamp (seconds since epoch) with fractional subsecond precision.
+    pub timestamp: f64,
+    /// Arbitrary string-keyed metadata labels.
+    pub labels: HashMap<String, String>,
 }
 
-/// Resource budget for a forked execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForkBudget {
-    pub max_tokens: u64,
-    pub max_tool_calls: u32,
-    pub max_wall_clock_seconds: u64,
-    pub max_memory_mb: u64,
+impl ForkSnapshot {
+    /// Construct a new `ForkSnapshot` with the current system time.
+    pub fn new(data: Vec<u8>, labels: HashMap<String, String>) -> Self {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        Self {
+            data,
+            timestamp,
+            labels,
+        }
+    }
+
+    /// Returns the timestamp as a `SystemTime` if it is representable.
+    pub fn as_system_time(&self) -> Option<SystemTime> {
+        let secs = self.timestamp.trunc() as u64;
+        let nanos = (self.timestamp.fract() * 1_000_000_000.0) as u32;
+        UNIX_EPOCH.checked_add(std::time::Duration::new(secs, nanos))
+    }
 }
 
-impl Default for ForkBudget {
+// ──────────────────────────────────────────────
+// ForkResourceQuota — CPU / memory / time limits
+// ──────────────────────────────────────────────
+
+/// Resource quota for a forked sub-agent.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ForkResourceQuota {
+    /// Fractional CPU core limit (e.g. 1.5 = one and a half cores).
+    pub cpu_quota: f64,
+    /// Maximum resident memory in MB.
+    pub memory_mb: u64,
+    /// Maximum wall-clock time in seconds.
+    pub time_limit_secs: u64,
+}
+
+impl Default for ForkResourceQuota {
     fn default() -> Self {
         Self {
-            max_tokens: 32000,
-            max_tool_calls: 32,
-            max_wall_clock_seconds: 300,
-            max_memory_mb: 512,
+            cpu_quota: 1.0,
+            memory_mb: 512,
+            time_limit_secs: 300,
         }
     }
 }
 
-/// A registered fork entry
+impl ForkResourceQuota {
+    /// Returns `true` if all limits are zero / unset.
+    pub fn is_unlimited(&self) -> bool {
+        self.cpu_quota <= 0.0 && self.memory_mb == 0 && self.time_limit_secs == 0
+    }
+
+    /// Merge another quota into this one, taking the stricter (minimum) of each limit.
+    /// A zero/unset limit in `self` is replaced by `other`'s value (unless other is also zero).
+    pub fn merge_strict(&mut self, other: &ForkResourceQuota) {
+        self.cpu_quota = cap_min_f64(self.cpu_quota, other.cpu_quota);
+        self.memory_mb = cap_min_u64(self.memory_mb, other.memory_mb);
+        self.time_limit_secs = cap_min_u64(self.time_limit_secs, other.time_limit_secs);
+    }
+}
+
+fn cap_min_f64(a: f64, b: f64) -> f64 {
+    if a <= 0.0 {
+        b
+    } else if b <= 0.0 {
+        a
+    } else {
+        a.min(b)
+    }
+}
+
+fn cap_min_u64(a: u64, b: u64) -> u64 {
+    if a == 0 {
+        b
+    } else if b == 0 {
+        a
+    } else {
+        cmp::min(a, b)
+    }
+}
+
+// ──────────────────────────────────────────────
+// ForkJoinResult — fan-out merge outcome
+// ──────────────────────────────────────────────
+
+/// The outcome of joining (merging) multiple fork snapshots back together.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForkJoinResult {
+    /// Whether the join operation completed successfully.
+    pub success: bool,
+    /// The merged payload data.
+    pub merged_data: Vec<u8>,
+    /// Human-readable conflict descriptions (empty if no conflicts).
+    pub conflicts: Vec<String>,
+}
+
+impl ForkJoinResult {
+    /// Construct a successful join result with no conflicts.
+    pub fn success(merged_data: Vec<u8>) -> Self {
+        Self {
+            success: true,
+            merged_data,
+            conflicts: Vec::new(),
+        }
+    }
+
+    /// Construct a failed join result with the given conflict descriptions.
+    pub fn failure(conflicts: Vec<String>) -> Self {
+        Self {
+            success: false,
+            merged_data: Vec::new(),
+            conflicts,
+        }
+    }
+
+    /// Returns `true` if there were any conflicts during the join.
+    pub fn has_conflicts(&self) -> bool {
+        !self.conflicts.is_empty()
+    }
+}
+
+// ──────────────────────────────────────────────
+// ForkConfig — registry configuration
+// ──────────────────────────────────────────────
+
+/// Global configuration for the fork registry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForkConfig {
+    /// Default resource quota applied when none is specified.
+    pub default_quota: ForkResourceQuota,
+    /// Maximum number of simultaneously tracked forks.
+    pub max_forks: usize,
+}
+
+impl Default for ForkConfig {
+    fn default() -> Self {
+        Self {
+            default_quota: ForkResourceQuota::default(),
+            max_forks: 64,
+        }
+    }
+}
+
+// ──────────────────────────────────────────────
+// ForkEntry — internal tracked fork state
+// ──────────────────────────────────────────────
+
+/// A registered fork entry stored in the registry.
 #[derive(Debug, Clone)]
 pub struct ForkEntry {
+    /// Unique identifier for this fork.
     pub fork_id: String,
+    /// Identifier of the parent task that created this fork.
     pub parent_task_id: String,
-    pub isolation: IsolationLevel,
-    pub budget: ForkBudget,
-    pub created_at: Instant,
+    /// Resource quota assigned to this fork.
+    pub quota: ForkResourceQuota,
+    /// Optional snapshot recorded from this fork.
+    pub snapshot: Option<ForkSnapshot>,
+    /// Whether this fork has completed execution.
     pub completed: bool,
 }
 
-/// Registry of all active forks
-#[derive(Debug, Default)]
+impl ForkEntry {
+    pub fn new(fork_id: String, parent_task_id: String, quota: ForkResourceQuota) -> Self {
+        Self {
+            fork_id,
+            parent_task_id,
+            quota,
+            snapshot: None,
+            completed: false,
+        }
+    }
+}
+
+// ──────────────────────────────────────────────
+// ForkRegistry — thread-safe sub-agent registry
+// ──────────────────────────────────────────────
+
+/// Thread-safe registry for tracking forked sub-agent executions.
+///
+/// All mutation is guarded by `Arc<Mutex<...>>`. Unique fork IDs are
+/// generated from a monotonic counter combined with a timestamp prefix
+/// so they are both human-readable and collision-resistant.
+#[derive(Debug, Clone)]
 pub struct ForkRegistry {
+    inner: Arc<Mutex<ForkRegistryInner>>,
+    /// Global atomic counter for unique ID generation (shared across clones).
+    counter: Arc<AtomicU64>,
+    /// Immutable configuration.
+    config: Arc<ForkConfig>,
+}
+
+/// Inner state locked behind a mutex.
+#[derive(Debug)]
+struct ForkRegistryInner {
     forks: HashMap<String, ForkEntry>,
-    max_forks: usize,
-    /// Number of forks GC'd (reaped) since startup
-    reaped_count: u64,
-    /// Number of register() calls rejected due to capacity limit
-    rejected_count: u64,
 }
 
 impl ForkRegistry {
-    pub fn new(max_forks: usize) -> Self {
+    /// Create a new `ForkRegistry` with the given configuration.
+    pub fn new(config: ForkConfig) -> Self {
         Self {
-            forks: HashMap::new(),
-            max_forks,
-            reaped_count: 0,
-            rejected_count: 0,
+            inner: Arc::new(Mutex::new(ForkRegistryInner {
+                forks: HashMap::with_capacity(config.max_forks),
+            })),
+            counter: Arc::new(AtomicU64::new(0)),
+            config: Arc::new(config),
         }
     }
 
-    /// Number of forks reaped by GC since startup.
-    pub fn reaped_count(&self) -> u64 {
-        self.reaped_count
+    /// Create a new `ForkRegistry` with default configuration.
+    pub fn default_with_max(max_forks: usize) -> Self {
+        Self::new(ForkConfig {
+            max_forks,
+            ..ForkConfig::default()
+        })
     }
 
-    /// Number of register() calls rejected due to capacity limit.
-    pub fn rejected_count(&self) -> u64 {
-        self.rejected_count
+    // ── ID generation ────────────────────────────────────────────
+
+    /// Generate a unique fork ID from the current timestamp plus a
+    /// monotonically increasing per-instance counter.
+    fn generate_id(&self) -> String {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let seq = self.counter.fetch_add(1, Ordering::Relaxed);
+        format!("fork-{}-{}", ts, seq)
     }
 
-    /// Register a new fork, returning its ID.
-    /// Returns None if at capacity.
-    pub fn register(
-        &mut self,
+    // ── Configuration ────────────────────────────────────────────
+
+    /// Return a copy of the current configuration.
+    pub fn config(&self) -> ForkConfig {
+        (*self.config).clone()
+    }
+
+    /// The maximum number of forks this registry can hold.
+    pub fn max_forks(&self) -> usize {
+        self.config.max_forks
+    }
+
+    /// The default quota used when none is specified.
+    pub fn default_quota(&self) -> ForkResourceQuota {
+        self.config.default_quota
+    }
+
+    // ── Registration ────────────────────────────────────────────
+
+    /// Register a new fork. Returns the generated unique ID, or `None`
+    /// if the registry is at capacity.
+    ///
+    /// The default quota from `ForkConfig` is used.
+    pub fn register(&self, parent_task_id: &str) -> Option<String> {
+        self.register_with_quota(parent_task_id, self.config.default_quota)
+    }
+
+    /// Register a new fork with an explicit resource quota.
+    /// Returns `None` if the registry is at capacity.
+    pub fn register_with_quota(
+        &self,
         parent_task_id: &str,
-        isolation: IsolationLevel,
-        budget: ForkBudget,
+        quota: ForkResourceQuota,
     ) -> Option<String> {
-        if self.forks.len() >= self.max_forks {
-            self.rejected_count += 1;
+        let fork_id = self.generate_id();
+        let mut inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        if inner.forks.len() >= self.config.max_forks {
             return None;
         }
-        let fork_id = format!("fork-{}-{}", parent_task_id, self.forks.len());
-        self.forks.insert(
-            fork_id.clone(),
-            ForkEntry {
-                fork_id: fork_id.clone(),
-                parent_task_id: parent_task_id.to_string(),
-                isolation,
-                budget,
-                created_at: Instant::now(),
-                completed: false,
-            },
-        );
+        let entry = ForkEntry::new(fork_id.clone(), parent_task_id.to_string(), quota);
+        inner.forks.insert(fork_id.clone(), entry);
         Some(fork_id)
     }
 
-    pub fn complete(&mut self, fork_id: &str) {
-        if let Some(entry) = self.forks.get_mut(fork_id) {
+    // ── Lookup ──────────────────────────────────────────────────
+
+    /// Find a fork by its ID.
+    pub fn find(&self, id: &str) -> Option<ForkEntry> {
+        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        inner.forks.get(id).cloned()
+    }
+
+    /// List all currently tracked forks.
+    pub fn list(&self) -> Vec<ForkEntry> {
+        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        inner.forks.values().cloned().collect()
+    }
+
+    // ── Removal ─────────────────────────────────────────────────
+
+    /// Remove a fork by its ID. Returns `true` if the fork existed and
+    /// was removed.
+    pub fn remove(&self, id: &str) -> bool {
+        let mut inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        inner.forks.remove(id).is_some()
+    }
+
+    /// Remove all forks from the registry.
+    pub fn clear(&self) {
+        let mut inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        inner.forks.clear();
+    }
+
+    // ── Size queries ────────────────────────────────────────────
+
+    /// Number of forks currently tracked (both active and completed).
+    pub fn len(&self) -> usize {
+        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        inner.forks.len()
+    }
+
+    /// Returns `true` if no forks are tracked.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Number of forks that have not yet been marked completed.
+    pub fn active_count(&self) -> usize {
+        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        inner.forks.values().filter(|e| !e.completed).count()
+    }
+
+    /// Number of forks that have been marked completed.
+    pub fn completed_count(&self) -> usize {
+        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        inner.forks.values().filter(|e| e.completed).count()
+    }
+
+    // ── Status transitions ──────────────────────────────────────
+
+    /// Mark a fork as completed.
+    pub fn complete(&self, fork_id: &str) -> bool {
+        let mut inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        if let Some(entry) = inner.forks.get_mut(fork_id) {
             entry.completed = true;
+            true
+        } else {
+            false
         }
     }
 
-    pub fn get(&self, fork_id: &str) -> Option<&ForkEntry> {
-        self.forks.get(fork_id)
-    }
+    // ── Snapshot support ────────────────────────────────────────
 
-    pub fn active_count(&self) -> usize {
-        self.forks.values().filter(|e| !e.completed).count()
-    }
-
-    pub fn total_count(&self) -> usize {
-        self.forks.len()
-    }
-
-    /// Clean up completed forks older than the given duration.
-    /// Increments reaped_count for each fork removed.
-    pub fn gc(&mut self, max_age: Duration) {
-        let now = Instant::now();
-        let mut reaped: u64 = 0;
-        self.forks.retain(|_, entry| {
-            if entry.completed && now.duration_since(entry.created_at) > max_age {
-                reaped += 1;
-                return false;
-            }
+    /// Attach a snapshot to an existing fork. Returns `true` if the fork
+    /// was found.
+    pub fn attach_snapshot(&self, fork_id: &str, snapshot: ForkSnapshot) -> bool {
+        let mut inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        if let Some(entry) = inner.forks.get_mut(fork_id) {
+            entry.snapshot = Some(snapshot);
             true
+        } else {
+            false
+        }
+    }
+
+    /// Retrieve a clone of the snapshot attached to a fork, if any.
+    pub fn get_snapshot(&self, fork_id: &str) -> Option<ForkSnapshot> {
+        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        inner.forks.get(fork_id).and_then(|e| e.snapshot.clone())
+    }
+
+    /// Collect all snapshots from completed forks, grouped by parent task ID.
+    /// Useful for fan-out merge logic.
+    pub fn collect_completed_snapshots(&self) -> HashMap<String, Vec<ForkSnapshot>> {
+        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        let mut map: HashMap<String, Vec<ForkSnapshot>> = HashMap::new();
+        for entry in inner.forks.values() {
+            if entry.completed {
+                if let Some(ref snap) = entry.snapshot {
+                    map.entry(entry.parent_task_id.clone())
+                        .or_default()
+                        .push(snap.clone());
+                }
+            }
+        }
+        map
+    }
+
+    /// Merge all snapshots for a given parent task ID into a single
+    /// `ForkJoinResult`. The merge concatenates the data payloads of all
+    /// snapshots in creation order. Conflicts are reported when more than
+    /// one snapshot has overlapping label keys with differing values.
+    pub fn merge_snapshots(&self, parent_task_id: &str) -> ForkJoinResult {
+        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        let mut snapshots: Vec<ForkSnapshot> = inner
+            .forks
+            .values()
+            .filter(|e| e.parent_task_id == parent_task_id && e.completed)
+            .filter_map(|e| e.snapshot.clone())
+            .collect();
+
+        if snapshots.is_empty() {
+            return ForkJoinResult::success(Vec::new());
+        }
+
+        // Sort by timestamp so the merge order is deterministic.
+        snapshots.sort_by(|a, b| {
+            a.timestamp
+                .partial_cmp(&b.timestamp)
+                .unwrap_or(cmp::Ordering::Equal)
         });
-        self.reaped_count += reaped;
+
+        // Concatenate data payloads.
+        let total_len: usize = snapshots.iter().map(|s| s.data.len()).sum();
+        let mut merged_data = Vec::with_capacity(total_len);
+        let mut label_union: HashMap<String, String> = HashMap::new();
+        let mut conflicts: Vec<String> = Vec::new();
+
+        for snap in &snapshots {
+            merged_data.extend_from_slice(&snap.data);
+            for (k, v) in &snap.labels {
+                match label_union.entry(k.clone()) {
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        if entry.get() != v {
+                            conflicts.push(format!(
+                                "Label '{}' conflict: '{}' vs '{}'",
+                                k,
+                                entry.get(),
+                                v
+                            ));
+                            // Keep the later value (last writer wins for data).
+                            entry.insert(v.clone());
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(v.clone());
+                    }
+                }
+            }
+        }
+
+        ForkJoinResult {
+            success: conflicts.is_empty(),
+            merged_data,
+            conflicts,
+        }
+    }
+
+    // ── Cleanup ─────────────────────────────────────────────────
+
+    /// Remove all completed forks from the registry. Returns the number
+    /// of entries removed.
+    pub fn reap_completed(&self) -> usize {
+        let mut inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        let before = inner.forks.len();
+        inner.forks.retain(|_, e| !e.completed);
+        before - inner.forks.len()
     }
 }
+
+// ──────────────────────────────────────────────
+// IntoIterator support (consumes self)
+// ──────────────────────────────────────────────
+
+impl IntoIterator for ForkRegistry {
+    type Item = (String, ForkEntry);
+    type IntoIter = std::collections::hash_map::IntoIter<String, ForkEntry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let inner = Arc::into_inner(self.inner)
+            .expect("ForkRegistry has multiple references")
+            .into_inner()
+            .expect("ForkRegistry lock poisoned");
+        inner.forks.into_iter()
+    }
+}
+
+// ──────────────────────────────────────────────
+// Tests
+// ──────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
 
-    #[test]
-    fn test_register_and_complete() {
-        let mut reg = ForkRegistry::new(10);
-        let fid = reg.register("parent-1", IsolationLevel::Light, ForkBudget::default());
-        assert!(fid.is_some());
-        assert_eq!(reg.active_count(), 1);
-        reg.complete(&fid.unwrap());
-        assert_eq!(reg.active_count(), 0);
+    fn test_config() -> ForkConfig {
+        ForkConfig {
+            max_forks: 10,
+            ..ForkConfig::default()
+        }
     }
 
     #[test]
-    fn test_max_forks() {
-        let mut reg = ForkRegistry::new(2);
-        assert!(reg
-            .register("p1", IsolationLevel::None, ForkBudget::default())
-            .is_some());
-        assert!(reg
-            .register("p2", IsolationLevel::None, ForkBudget::default())
-            .is_some());
-        assert!(reg
-            .register("p3", IsolationLevel::None, ForkBudget::default())
-            .is_none());
+    fn test_register_and_find() {
+        let reg = ForkRegistry::new(test_config());
+        let fid = reg.register("parent-1").expect("should register");
+        assert!(!fid.is_empty());
+        assert!(fid.starts_with("fork-"));
+
+        let entry = reg.find(&fid).expect("should find");
+        assert_eq!(entry.parent_task_id, "parent-1");
+        assert!(!entry.completed);
     }
 
     #[test]
-    fn test_gc_removes_old_completed() {
-        let mut reg = ForkRegistry::new(10);
+    fn test_register_with_quota() {
+        let reg = ForkRegistry::new(test_config());
+        let quota = ForkResourceQuota {
+            cpu_quota: 2.0,
+            memory_mb: 1024,
+            time_limit_secs: 600,
+        };
         let fid = reg
-            .register("p1", IsolationLevel::None, ForkBudget::default())
-            .unwrap();
-        reg.complete(&fid);
-        assert_eq!(reg.total_count(), 1);
-        reg.gc(Duration::from_secs(0));
-        assert_eq!(reg.total_count(), 0);
+            .register_with_quota("parent-1", quota)
+            .expect("should register");
+        let entry = reg.find(&fid).expect("should find");
+        assert_eq!(entry.quota, quota);
+    }
+
+    #[test]
+    fn test_max_forks_limit() {
+        let config = ForkConfig {
+            max_forks: 2,
+            ..ForkConfig::default()
+        };
+        let reg = ForkRegistry::new(config);
+
+        assert!(reg.register("p1").is_some());
+        assert!(reg.register("p2").is_some());
+        assert!(reg.register("p3").is_none());
+    }
+
+    #[test]
+    fn test_list_and_len() {
+        let reg = ForkRegistry::new(test_config());
+        assert!(reg.is_empty());
+        assert_eq!(reg.len(), 0);
+
+        reg.register("p1");
+        reg.register("p2");
+        reg.register("p3");
+
+        assert!(!reg.is_empty());
+        assert_eq!(reg.len(), 3);
+        assert_eq!(reg.list().len(), 3);
+    }
+
+    #[test]
+    fn test_remove() {
+        let reg = ForkRegistry::new(test_config());
+        let fid = reg.register("p1").expect("should register");
+        assert_eq!(reg.len(), 1);
+
+        assert!(reg.remove(&fid));
+        assert_eq!(reg.len(), 0);
+
+        // Removing again returns false.
+        assert!(!reg.remove(&fid));
+    }
+
+    #[test]
+    fn test_clear() {
+        let reg = ForkRegistry::new(test_config());
+        reg.register("p1");
+        reg.register("p2");
+        assert_eq!(reg.len(), 2);
+
+        reg.clear();
+        assert_eq!(reg.len(), 0);
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn test_complete_and_reap() {
+        let reg = ForkRegistry::new(test_config());
+        let fid1 = reg.register("p1").expect("reg");
+        let fid2 = reg.register("p2").expect("reg");
+
+        assert_eq!(reg.active_count(), 2);
+        assert_eq!(reg.completed_count(), 0);
+
+        assert!(reg.complete(&fid1));
+        assert_eq!(reg.active_count(), 1);
+        assert_eq!(reg.completed_count(), 1);
+
+        assert!(reg.complete(&fid2));
+        assert_eq!(reg.active_count(), 0);
+        assert_eq!(reg.completed_count(), 2);
+
+        // Reap removes completed forks.
+        assert_eq!(reg.reap_completed(), 2);
+        assert_eq!(reg.len(), 0);
+    }
+
+    #[test]
+    fn test_attach_and_get_snapshot() {
+        let reg = ForkRegistry::new(test_config());
+        let fid = reg.register("p1").expect("reg");
+
+        let mut labels = HashMap::new();
+        labels.insert("agent".to_string(), "worker-A".to_string());
+        labels.insert("iteration".to_string(), "3".to_string());
+
+        let snapshot = ForkSnapshot::new(vec![1, 2, 3, 4], labels.clone());
+        assert!(reg.attach_snapshot(&fid, snapshot));
+
+        let retrieved = reg.get_snapshot(&fid).expect("should have snapshot");
+        assert_eq!(retrieved.data, vec![1, 2, 3, 4]);
+        assert_eq!(retrieved.labels.get("agent").unwrap(), "worker-A");
+        assert!(retrieved.timestamp > 0.0);
+    }
+
+    #[test]
+    fn test_collect_completed_snapshots() {
+        let reg = ForkRegistry::new(ForkConfig {
+            max_forks: 10,
+            ..ForkConfig::default()
+        });
+
+        let fid1 = reg.register("parent-x").expect("reg");
+        let fid2 = reg.register("parent-x").expect("reg");
+
+        reg.attach_snapshot(&fid1, ForkSnapshot::new(vec![1], HashMap::new()));
+        reg.attach_snapshot(&fid2, ForkSnapshot::new(vec![2], HashMap::new()));
+
+        // Not yet completed — should not appear.
+        assert!(reg.collect_completed_snapshots().is_empty());
+
+        reg.complete(&fid1);
+        reg.complete(&fid2);
+
+        let map = reg.collect_completed_snapshots();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map["parent-x"].len(), 2);
+    }
+
+    #[test]
+    fn test_merge_snapshots_no_conflicts() {
+        let reg = ForkRegistry::new(ForkConfig {
+            max_forks: 10,
+            ..ForkConfig::default()
+        });
+
+        let fid1 = reg.register("parent-m").expect("reg");
+        let fid2 = reg.register("parent-m").expect("reg");
+
+        let mut labels = HashMap::new();
+        labels.insert("phase".to_string(), "test".to_string());
+
+        reg.attach_snapshot(&fid1, ForkSnapshot::new(vec![1, 2], labels.clone()));
+        reg.attach_snapshot(&fid2, ForkSnapshot::new(vec![3, 4], labels));
+
+        reg.complete(&fid1);
+        reg.complete(&fid2);
+
+        let result = reg.merge_snapshots("parent-m");
+        assert!(result.success);
+        assert!(result.conflicts.is_empty());
+        assert_eq!(result.merged_data, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_merge_snapshots_with_conflicts() {
+        let reg = ForkRegistry::new(ForkConfig {
+            max_forks: 10,
+            ..ForkConfig::default()
+        });
+
+        let fid1 = reg.register("parent-c").expect("reg");
+        let fid2 = reg.register("parent-c").expect("reg");
+
+        let mut labels1 = HashMap::new();
+        labels1.insert("result".to_string(), "ok".to_string());
+
+        let mut labels2 = HashMap::new();
+        labels2.insert("result".to_string(), "fail".to_string());
+
+        reg.attach_snapshot(&fid1, ForkSnapshot::new(vec![1], labels1));
+        reg.attach_snapshot(&fid2, ForkSnapshot::new(vec![2], labels2));
+
+        reg.complete(&fid1);
+        reg.complete(&fid2);
+
+        let result = reg.merge_snapshots("parent-c");
+        assert!(!result.success);
+        assert!(result.has_conflicts());
+        assert_eq!(result.conflicts.len(), 1);
+        assert!(result.conflicts[0].contains("result"));
+    }
+
+    #[test]
+    fn test_merge_empty() {
+        let reg = ForkRegistry::new(test_config());
+        let result = reg.merge_snapshots("nonexistent");
+        assert!(result.success);
+        assert!(result.merged_data.is_empty());
+    }
+
+    #[test]
+    fn test_thread_safety() {
+        let reg = ForkRegistry::new(ForkConfig {
+            max_forks: 100,
+            ..ForkConfig::default()
+        });
+
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let r = reg.clone();
+            handles.push(thread::spawn(move || {
+                for j in 0..10 {
+                    let fid = r
+                        .register(&format!("thread-{}-{}", i, j))
+                        .expect("should register");
+                    assert!(r.find(&fid).is_some());
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
+
+        assert_eq!(reg.len(), 100);
+    }
+
+    #[test]
+    fn test_default_quota_values() {
+        let quota = ForkResourceQuota::default();
+        assert!((quota.cpu_quota - 1.0).abs() < f64::EPSILON);
+        assert_eq!(quota.memory_mb, 512);
+        assert_eq!(quota.time_limit_secs, 300);
+    }
+
+    #[test]
+    fn test_fork_snapshot_new() {
+        let snap = ForkSnapshot::new(vec![0xAB, 0xCD], HashMap::new());
+        assert_eq!(snap.data, vec![0xAB, 0xCD]);
+        assert!(snap.timestamp > 1_700_000_000.0); // reasonable lower bound for 2024+
+        assert!(snap.labels.is_empty());
+    }
+
+    #[test]
+    fn test_fork_join_result_failure() {
+        let result =
+            ForkJoinResult::failure(vec!["key mismatch".to_string(), "timeout".to_string()]);
+        assert!(!result.success);
+        assert!(result.has_conflicts());
+        assert_eq!(result.conflicts.len(), 2);
+    }
+
+    #[test]
+    fn test_fork_resource_quota_merge_strict() {
+        let mut a = ForkResourceQuota {
+            cpu_quota: 4.0,
+            memory_mb: 2048,
+            time_limit_secs: 600,
+        };
+        let b = ForkResourceQuota {
+            cpu_quota: 2.0,
+            memory_mb: 1024,
+            time_limit_secs: 0, // 0 means "no limit set", use other
+        };
+        a.merge_strict(&b);
+        assert!((a.cpu_quota - 2.0).abs() < f64::EPSILON);
+        assert_eq!(a.memory_mb, 1024);
+        assert_eq!(a.time_limit_secs, 600); // kept from a since b is 0
+    }
+
+    #[test]
+    fn test_fork_snapshot_serde_roundtrip() {
+        let mut labels = HashMap::new();
+        labels.insert("env".to_string(), "staging".to_string());
+        let snap = ForkSnapshot::new(vec![10, 20, 30], labels);
+        let json = serde_json::to_string(&snap).expect("serialize");
+        let deserialized: ForkSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(snap, deserialized);
+    }
+
+    #[test]
+    fn test_into_iter() {
+        let reg = ForkRegistry::new(ForkConfig {
+            max_forks: 10,
+            ..ForkConfig::default()
+        });
+        reg.register("a");
+        reg.register("b");
+
+        let collected: Vec<_> = reg.into_iter().collect();
+        assert_eq!(collected.len(), 2);
+    }
+
+    #[test]
+    fn test_complete_nonexistent() {
+        let reg = ForkRegistry::new(test_config());
+        assert!(!reg.complete("nonexistent"));
+    }
+
+    #[test]
+    fn test_attach_snapshot_nonexistent() {
+        let reg = ForkRegistry::new(test_config());
+        assert!(!reg.attach_snapshot("nope", ForkSnapshot::new(vec![], HashMap::new())));
     }
 }

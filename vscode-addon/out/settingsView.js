@@ -151,6 +151,7 @@ function upsertPhaseAgents(content, phase, agents) {
 class GoOnSettingsViewProvider {
     constructor(_extensionUri, _manager, _context) {
         this._extensionUri = _extensionUri;
+        this._runtimeFeatures = {};
         this._commandMessageMap = {
             startGoOn: 'go-on.start',
             stopGoOn: 'go-on.stop',
@@ -213,6 +214,22 @@ class GoOnSettingsViewProvider {
             }
         }, undefined);
         this._sendCurrentSettings();
+        if (this.manager.isRunning?.()) {
+            this._refreshRuntimeFeatures().catch(() => undefined);
+        }
+    }
+    async _refreshRuntimeFeatures() {
+        try {
+            const response = await this.manager.sendRequest('runtime.features', {});
+            const features = (typeof response === 'object' && response !== null ? response['features'] : undefined);
+            if (features && typeof features === 'object') {
+                this._runtimeFeatures = features;
+                this._view?.webview.postMessage({ type: 'runtimeFeatures', features: this._runtimeFeatures });
+            }
+        }
+        catch {
+            // not fatal — keep previous features
+        }
     }
     _getErrorMessage(error) {
         return error instanceof Error ? error.message : String(error);
@@ -1239,14 +1256,14 @@ class GoOnSettingsViewProvider {
                         <button class="action-button" id="healthProbes">Health Probes</button>
                         <button class="action-button" id="lockStatus">Lock Status</button>
                         <button class="action-button" id="observabilityAlerts">Observability Alerts</button>
-                        <button class="action-button" id="securityBaseline">Security Baseline</button>
-                        <button class="action-button" id="harnessStatus">Harness Status</button>
+                        <button class="action-button" id="securityBaseline" data-feature="entry_auth,production_strict">Security Baseline</button>
+                        <button class="action-button" id="harnessStatus" data-feature="harness_bus">Harness Status</button>
                         <button class="action-button" id="breakerStatus">Breaker Status</button>
                         <button class="action-button" id="breakerRecovery">Breaker Recovery</button>
-                        <button class="action-button danger" id="clearCache">Clear Cache</button>
-                        <button class="action-button danger" id="clearVector">Clear Vector</button>
+                        <button class="action-button danger" id="clearCache" data-feature="response_cache">Clear Cache</button>
+                        <button class="action-button danger" id="clearVector" data-feature="vector_store">Clear Vector</button>
                         <button class="action-button" id="reloadConfig">Reload Config</button>
-                        <button class="action-button" id="workflowExecute">Workflow Execute</button>
+                        <button class="action-button" id="workflowExecute" data-feature="skills_enabled,skills_import">Workflow Execute</button>
                         <button class="action-button" id="taskPlan">Task Plan</button>
                         <button class="action-button" id="taskExecute">Task Execute</button>
                         <button class="action-button" id="learningSummary">Learning Summary</button>
@@ -1263,7 +1280,7 @@ class GoOnSettingsViewProvider {
                         <button class="action-button" id="optimizationPeak">Optimization Peak</button>
                         <button class="action-button" id="releaseReadiness">Release Readiness</button>
                         <button class="action-button" id="runtimeStability">Runtime Stability</button>
-                        <button class="action-button" id="autotuneStatus">Autotune Status</button>
+                        <button class="action-button" id="autotuneStatus" data-feature="autotune">Autotune Status</button>
                         <button class="action-button" id="governanceStatus">Governance Status</button>
                         <button class="action-button" id="governancePlanGet">Governance Plan</button>
                         <button class="action-button" id="governanceAuditRecent">Governance Audit</button>

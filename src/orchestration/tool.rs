@@ -1346,13 +1346,12 @@ mod tests {
     #[test]
     fn tao_loop_with_empty_preferred_tools_falls_back_to_registry_and_completes() {
         // When preferred_tools is empty, execute_loop falls back to registry.names().
-        // We use a registry with only safe tools (no RunTestsTool which triggers cargo test).
         // ToolRegistry's tools field is private, so we create from ToolRegistry::new()
         // and simply test that the loop handles empty preferred_tools gracefully.
-        // Use inspect_git_diff which is safe and succeeds on any input.
+        // Use AlwaysPassTool which never depends on environment state.
         let mut registry = ToolRegistry::new_empty();
-        registry.register(InspectGitDiffTool);
-        let input = tool_input(serde_json::json!({"directory": ".", "test": true}));
+        registry.register(AlwaysPassTool);
+        let input = tool_input(serde_json::json!({"dummy": true}));
         let config = LoopConfig::default();
 
         let (decision, trace) = execute_loop(
