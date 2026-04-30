@@ -65,6 +65,23 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
             case "deleteWorkflow":
               this._deleteWorkflow(message.workflowId);
               break;
+            case "showConfirm":
+              vscode.window
+                .showWarningMessage(
+                  message.message,
+                  { modal: true },
+                  "OK",
+                  "Cancel",
+                )
+                .then((selection) => {
+                  this._view?.webview.postMessage({
+                    type: "showConfirmResult",
+                    id: message.id,
+                    confirmed: selection === "OK",
+                    workflowId: message.workflowId,
+                  });
+                });
+              break;
             case "showInputBox":
               {
                 const result = await vscode.window.showInputBox({
@@ -114,7 +131,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async _createWorkflow(workflowData: WorkflowData) {
-    const workflows = this.context.globalState.get<WorkflowStore>(
+    const workflows = this.context.workspaceState.get<WorkflowStore>(
       "go-on-workflows",
       {},
     );
@@ -125,7 +142,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
       created: new Date().toISOString(),
       status: "created",
     };
-    await this.context.globalState.update("go-on-workflows", workflows);
+    await this.context.workspaceState.update("go-on-workflows", workflows);
 
     this._view?.webview.postMessage({
       type: "workflowCreated",
@@ -138,7 +155,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async _runWorkflow(workflowId: string) {
-    const workflows = this.context.globalState.get<WorkflowStore>(
+    const workflows = this.context.workspaceState.get<WorkflowStore>(
       "go-on-workflows",
       {},
     );
@@ -151,7 +168,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
 
     // Update status
     workflow.status = "running";
-    await this.context.globalState.update("go-on-workflows", workflows);
+    await this.context.workspaceState.update("go-on-workflows", workflows);
 
     this._view?.webview.postMessage({
       type: "workflowStatusUpdate",
@@ -201,7 +218,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
       }
 
       workflow.status = "completed";
-      await this.context.globalState.update("go-on-workflows", workflows);
+      await this.context.workspaceState.update("go-on-workflows", workflows);
 
       this._view?.webview.postMessage({
         type: "workflowStatusUpdate",
@@ -214,7 +231,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
       );
     } catch (error: unknown) {
       workflow.status = "failed";
-      await this.context.globalState.update("go-on-workflows", workflows);
+      await this.context.workspaceState.update("go-on-workflows", workflows);
       const message = this.getErrorMessage(error);
 
       this._view?.webview.postMessage({
@@ -230,12 +247,12 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
 
   private async _deleteWorkflow(workflowId: string) {
     try {
-      const workflows = this.context.globalState.get<WorkflowStore>(
+      const workflows = this.context.workspaceState.get<WorkflowStore>(
         "go-on-workflows",
         {},
       );
       delete workflows[workflowId];
-      await this.context.globalState.update("go-on-workflows", workflows);
+      await this.context.workspaceState.update("go-on-workflows", workflows);
 
       this._view?.webview.postMessage({
         type: "workflowDeleted",

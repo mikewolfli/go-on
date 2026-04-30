@@ -40,7 +40,7 @@ export class GoOnAdvancedEditProvider {
             const actions: vscode.CodeAction[] = [];
 
             // Add Go-On specific code actions
-            if (range.isEmpty) {
+            if (!range.isEmpty) {
               actions.push(this.createExplainCodeAction(document, range));
               actions.push(this.createRefactorCodeAction(document, range));
               actions.push(this.createOptimizeCodeAction(document, range));

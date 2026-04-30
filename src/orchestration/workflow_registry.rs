@@ -337,16 +337,6 @@ impl WorkflowRegistry {
     pub fn is_empty(&self) -> bool {
         self.presets.is_empty()
     }
-
-    // -----------------------------------------------------------------------
-    // Legacy convenience
-    // -----------------------------------------------------------------------
-
-    /// Legacy alias for `find`.
-    #[deprecated(since = "0.1.0", note = "Use `find` instead")]
-    pub fn get(&self, name: &str) -> Option<&WorkflowPreset> {
-        self.find(name)
-    }
 }
 
 // ---------------------------------------------------------------------------

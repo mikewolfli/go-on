@@ -310,6 +310,19 @@ onMounted(async () => {
   if (localStorage.getItem(ONBOARDING_SEEN_KEY) !== "true") {
     showOnboarding.value = true;
   }
+  // Restore tab state on mount
+  const savedMainTab = localStorage.getItem("goon.gui.activeMainTab");
+  if (savedMainTab) activeMainTab.value = savedMainTab;
+  const savedMonitorSubTab = localStorage.getItem("goon.gui.activeMonitorSubTab");
+  if (savedMonitorSubTab) activeMonitorSubTab.value = savedMonitorSubTab;
+  const savedConfigSubTab = localStorage.getItem("goon.gui.activeConfigSubTab");
+  if (savedConfigSubTab) activeConfigSubTab.value = savedConfigSubTab;
+
+  // Watch and persist tab state
+  watch(activeMainTab, (val) => localStorage.setItem("goon.gui.activeMainTab", val));
+  watch(activeMonitorSubTab, (val) => localStorage.setItem("goon.gui.activeMonitorSubTab", val));
+  watch(activeConfigSubTab, (val) => localStorage.setItem("goon.gui.activeConfigSubTab", val));
+
   await registerCrashHandler();
 });
 

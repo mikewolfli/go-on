@@ -16,8 +16,8 @@
         borderLeft: activeTab === item.tabName ? '3px solid #1a73e8' : 'none',
         transition: 'all 0.3s',
       }"
-      @mouseenter="(e) => (e.target as HTMLElement).style.backgroundColor = '#e8f0fe'"
-      @mouseleave="(e) => (e.target as HTMLElement).style.backgroundColor = activeTab === item.tabName ? '#1a73e8' : 'transparent'"
+      @mouseenter="handleItemMouseEnter"
+      @mouseleave="handleItemMouseLeave"
     >
       <div style="font-size: 20px; margin-bottom: 4px">{{ item.icon }}</div>
       <div style="font-size: 10px; word-break: break-all">{{ item.shortLabel }}</div>
@@ -60,8 +60,8 @@
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
       z-index: 800;
     "
-    @mouseenter="(e) => (e.target as HTMLElement).style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.2)'"
-    @mouseleave="(e) => (e.target as HTMLElement).style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15)'"
+    @mouseenter="handleFloatButtonMouseEnter"
+    @mouseleave="handleFloatButtonMouseLeave"
     :title="t('quickNav.title')"
   >
     ☰
@@ -107,6 +107,28 @@ function navigate(tabName: string) {
   if (item) {
     emit("navigate", item.mainTab, item.subTab);
   }
+}
+
+function handleItemMouseEnter(e: MouseEvent) {
+  const target = e.currentTarget as HTMLElement;
+  target.style.backgroundColor = '#e8f0fe';
+}
+
+function handleItemMouseLeave(e: MouseEvent) {
+  const target = e.currentTarget as HTMLElement;
+  const btn = target as HTMLButtonElement;
+  const tabName = btn.title ? quickNavItems.value.find(i => i.label === btn.title)?.tabName : undefined;
+  target.style.backgroundColor = tabName && props.activeTab === tabName ? '#1a73e8' : 'transparent';
+}
+
+function handleFloatButtonMouseEnter(e: MouseEvent) {
+  const target = e.currentTarget as HTMLElement;
+  target.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.2)';
+}
+
+function handleFloatButtonMouseLeave(e: MouseEvent) {
+  const target = e.currentTarget as HTMLElement;
+  target.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15)';
 }
 
 function toggleQuickNav() {

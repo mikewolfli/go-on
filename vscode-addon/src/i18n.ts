@@ -407,14 +407,38 @@ class I18nManager {
    * Fallback to English locale if key not found in current language
    */
   private getFallbackValue(key: string, ...params: unknown[]): string {
-    // Try loading the English locale as fallback
+    const keys = key.split(".");
+
+    // Try hardcoded fallback messages first (always available for any language)
+    const messages = this.getFallbackMessages(this.currentLanguage);
+    let result: unknown = messages;
+    for (const k of keys) {
+      if (
+        typeof result === "object" &&
+        result !== null &&
+        k in (result as Record<string, unknown>)
+      ) {
+        result = (result as Record<string, unknown>)[k];
+      } else {
+        result = undefined;
+        break;
+      }
+    }
+    if (typeof result === "string") {
+      let output = result;
+      params.forEach((param, index) => {
+        output = output.replace(`{${index}}`, String(param));
+      });
+      return output;
+    }
+
+    // Fall back to English locale file if not already English
     if (this.currentLanguage !== "en_US") {
       const enPath = path.resolve(__dirname, "locales", "en-US.json");
       try {
         if (fs.existsSync(enPath)) {
           const content = fs.readFileSync(enPath, "utf-8");
           const enMessages = JSON.parse(content) as I18nMessages;
-          const keys = key.split(".");
           let value: unknown = enMessages;
           for (const k of keys) {
             if (
@@ -428,17 +452,18 @@ class I18nManager {
             }
           }
           if (typeof value === "string") {
-            let result = value;
+            let output = value as string;
             params.forEach((param, index) => {
-              result = result.replace(`{${index}}`, String(param));
+              output = output.replace(`{${index}}`, String(param));
             });
-            return result;
+            return output;
           }
         }
       } catch {
         return key;
       }
     }
+
     return key;
   }
 

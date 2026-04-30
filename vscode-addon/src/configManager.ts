@@ -158,7 +158,14 @@ class ConfigManager {
   private async loadFromFile(filePath: string): Promise<void> {
     try {
       const content = await fs.readFile(filePath, "utf-8");
-      this.config = this.parseTOML(content);
+      try {
+        this.config = this.parseTOML(content);
+      } catch (e) {
+        console.warn(
+          `configManager: Failed to parse TOML config: ${e}. Using defaults.`,
+        );
+        this.createDefaultConfig();
+      }
     } catch {
       this.createDefaultConfig();
     }
@@ -247,6 +254,27 @@ class ConfigManager {
         } else {
           config[key] = value;
         }
+      }
+    }
+
+    // Check that the parsed config has actual content
+    if (
+      Object.keys(config).length === 0 ||
+      (Object.keys(config).length === 1 &&
+        Object.keys(config.agents).length === 0 &&
+        Object.keys(config.phases).length === 0)
+    ) {
+      const sectionKeys = Object.keys(config).filter(
+        (k) => k !== "agents" && k !== "phases",
+      );
+      if (
+        sectionKeys.length === 0 &&
+        Object.keys(config.agents).length === 0 &&
+        Object.keys(config.phases).length === 0
+      ) {
+        console.warn(
+          "configManager: TOML file appears empty or malformed, using defaults",
+        );
       }
     }
 

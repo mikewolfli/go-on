@@ -122,7 +122,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async _loadProcesses() {
-    const processes = this.context.globalState.get<ProcessStore>(
+    const processes = this.context.workspaceState.get<ProcessStore>(
       "go-on-processes",
       {},
     );
@@ -138,7 +138,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const processes = this.context.globalState.get<ProcessStore>(
+    const processes = this.context.workspaceState.get<ProcessStore>(
       "go-on-processes",
       {},
     );
@@ -148,7 +148,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    await this.context.globalState.update("go-on-processes", processes);
+    await this.context.workspaceState.update("go-on-processes", processes);
 
     this._view?.webview.postMessage({
       type: "processesLoaded",
@@ -159,7 +159,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async _createProcess(processData: ProcessData) {
-    const processes = this.context.globalState.get<ProcessStore>(
+    const processes = this.context.workspaceState.get<ProcessStore>(
       "go-on-processes",
       {},
     );
@@ -173,7 +173,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
       stages: processData.stages || [],
     };
 
-    await this.context.globalState.update("go-on-processes", processes);
+    await this.context.workspaceState.update("go-on-processes", processes);
 
     this._view?.webview.postMessage({
       type: "processCreated",
@@ -186,7 +186,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async _runProcess(processId: string) {
-    const processes = this.context.globalState.get<ProcessStore>(
+    const processes = this.context.workspaceState.get<ProcessStore>(
       "go-on-processes",
       {},
     );
@@ -198,7 +198,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     }
 
     process.status = "running";
-    await this.context.globalState.update("go-on-processes", processes);
+    await this.context.workspaceState.update("go-on-processes", processes);
 
     this._view?.webview.postMessage({
       type: "processStatusUpdate",
@@ -267,7 +267,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
 
       process.status = "completed";
       process.completedAt = new Date().toISOString();
-      await this.context.globalState.update("go-on-processes", processes);
+      await this.context.workspaceState.update("go-on-processes", processes);
 
       this._view?.webview.postMessage({
         type: "processStatusUpdate",
@@ -282,7 +282,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
       process.status = "failed";
       const message = this.getErrorMessage(error);
       process.error = message;
-      await this.context.globalState.update("go-on-processes", processes);
+      await this.context.workspaceState.update("go-on-processes", processes);
 
       this._view?.webview.postMessage({
         type: "processStatusUpdate",
@@ -299,7 +299,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     processId: string,
     updates: Partial<ProcessData>,
   ) {
-    const processes = this.context.globalState.get<ProcessStore>(
+    const processes = this.context.workspaceState.get<ProcessStore>(
       "go-on-processes",
       {},
     );
@@ -327,7 +327,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
 
     try {
       Object.assign(processes[processId], updates);
-      await this.context.globalState.update("go-on-processes", processes);
+      await this.context.workspaceState.update("go-on-processes", processes);
 
       this._view?.webview.postMessage({
         type: "processUpdated",

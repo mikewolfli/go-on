@@ -36,7 +36,7 @@
                 {{ t("security.providerReadyLabel") }}: {{ providerReadyCount }}/{{ providerConfiguredCount }}
               </el-tag>
               <el-tag :type="releaseBlockedGateCount > 0 ? 'warning' : 'success'">
-                {{ t("security.releaseReadinessLabel") }}: {{ releaseReadinessStatus }} ({{ multiUserMode }} / {{ multiUserReady ? 'ready' : 'blocked' }} / lifecycle={{ multiUserLifecycleReady ? 'ready' : 'blocked' }} / consistency={{ dualTrackConsistencyReady ? 'ready' : 'blocked' }} / {{ multiUserSource }} / {{ blockedGateNamesText || '-' }})
+                {{ releaseReadinessDisplay }}
               </el-tag>
               <el-tag type="info">
                 schema: g={{ governanceSchemaVersion }} / r={{ readinessSchemaVersion }}
@@ -169,7 +169,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, reactive } from "vue";
+import { onMounted, ref, reactive, computed } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useI18n } from "vue-i18n";
 import {
@@ -220,6 +220,10 @@ const sensitiveFields = ref<Array<{ name: string; location: string; status: stri
 const risks = reactive<Array<{ id: string; type: "warning" | "info" | "success"; title: string; description: string; action: boolean }>>([]);
 
 const auditLogs = ref<Array<{ timestamp: string; action: string; resource: string; user: string; result: string }>>([]);
+
+const releaseReadinessDisplay = computed(() => {
+  return `${releaseReadinessStatus.value} (${multiUserMode.value} / ${multiUserReady.value ? "ready" : "blocked"} / lifecycle=${multiUserLifecycleReady.value ? "ready" : "blocked"} / consistency=${dualTrackConsistencyReady.value ? "ready" : "blocked"} / ${multiUserSource.value} / ${blockedGateNamesText.value || "-"})`;
+});
 
 const recommendations = ref([
   {
@@ -525,7 +529,7 @@ async function exportAuditLog() {
     URL.revokeObjectURL(url);
     ElMessage.success(t("security.exportSuccess"));
   } catch (err) {
-    ElMessage.error(`Error: ${normalizeErrorMessage(err)}`);
+    ElMessage.error(normalizeErrorMessage(err));
   }
 }
 

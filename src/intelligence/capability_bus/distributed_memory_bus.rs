@@ -23,6 +23,7 @@
 
 use crate::i18n::runtime::tf;
 use serde::{Deserialize, Serialize};
+use tracing;
 
 use std::collections::{HashMap, VecDeque};
 #[cfg(feature = "profile-multi-users-server")]
@@ -599,7 +600,7 @@ impl DistributedMemoryBus {
                     }
 
                     if let Err(e) = result {
-                        eprintln!("[dmb-transport] Sync error: {}", e);
+                        tracing::warn!("[dmb-transport] Sync error: {}", e);
                         if let Ok(mut s) = stats.lock() {
                             s.total_errors = s.total_errors.wrapping_add(1);
                             s.last_sync_status = SyncStatus::Failed(e.to_string());
@@ -792,7 +793,7 @@ impl DistributedMemoryBus {
         // Simulate sending to each peer
         for (node_id, address) in &peers {
             // Simulated HTTP POST of JSON payload
-            eprintln!(
+            tracing::info!(
                 "[dmb-transport] SYNC to peer {} @ {}: {} entries, {} bytes",
                 node_id,
                 address,

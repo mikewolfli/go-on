@@ -562,11 +562,19 @@ export function activate(context: vscode.ExtensionContext) {
       goOnManager.sendRequest(method, params),
   });
 
-  // Refresh status monitor command
+  // Refresh status monitor command (internal)
   const refreshStatusMonitorCommand = vscode.commands.registerCommand(
     "go-on.refreshStatusMonitor",
     () => {
       statusMonitor.refresh();
+    },
+  );
+
+  // Internal command called by GoOnManager.updateStatus() to refresh tree data
+  const refreshStatusTreeCommand = vscode.commands.registerCommand(
+    "go-on-status.refresh",
+    () => {
+      statusProvider.refresh();
     },
   );
 
@@ -698,6 +706,7 @@ export function activate(context: vscode.ExtensionContext) {
     ...viewCommands,
     ...rpcCommands,
     refreshStatusMonitorCommand,
+    refreshStatusTreeCommand,
     keyringSetCommand,
     keyringGetCommand,
     keyringDeleteCommand,

@@ -595,7 +595,8 @@ pub(crate) async fn process_chat_request(
         "default"
     };
     let phase = resolved.phase.clone();
-    reorder_chat_agents_by_runtime_score(server, &phase.phase_name, &mut resolved.agents);
+    let phase_name = &phase.phase_name;
+    reorder_chat_agents_by_runtime_score(server, phase_name, &mut resolved.agents);
 
     // ── SchemaRegistry task envelope validation (F-GAP-07) ─────────────
     // Validate the resolved phase's role schemas against the incoming
@@ -605,7 +606,7 @@ pub(crate) async fn process_chat_request(
             if let Some(schema) = sr.get(role_name) {
                 let input_val = serde_json::json!({
                     "mode": params.mode,
-                    "phase": phase.phase_name,
+                    "phase": phase_name,
                     "message_count": params.messages.len(),
                 });
                 match schema.validate_input(&input_val) {
@@ -631,7 +632,7 @@ pub(crate) async fn process_chat_request(
             layer: crate::orchestration::prompt_layers::PromptLayer::L1SystemPrompt,
             content: format!(
                 "You are a helpful assistant operating in phase '{}' with mode '{}'.",
-                phase.phase_name, params.mode
+                phase_name, params.mode
             ),
             priority: 100,
         },
@@ -676,7 +677,7 @@ pub(crate) async fn process_chat_request(
         capability_recommended_mode = Some(decision.recommended_mode.clone());
         #[cfg(feature = "sub-bus-optimization")]
         let opt = cb.optimization_recommendation(
-            &phase.phase_name,
+            phase_name,
             (params.messages.len() as u64).saturating_mul(512),
             if params.mode.eq_ignore_ascii_case("full_auto") {
                 "high"
@@ -732,7 +733,7 @@ pub(crate) async fn process_chat_request(
         if let Ok(mut state) = agent_switch_state().lock() {
             state
                 .primary_agent_by_phase
-                .insert(phase.phase_name.clone(), primary);
+                .insert(phase_name.clone(), primary);
         }
     }
 
@@ -744,12 +745,12 @@ pub(crate) async fn process_chat_request(
             if let Ok(mut state) = agent_switch_state().lock() {
                 state
                     .forced_agent_by_phase
-                    .insert(phase.phase_name.clone(), preferred);
+                    .insert(phase_name.clone(), preferred);
             }
         }
     } else if let Ok(state) = agent_switch_state().lock() {
-        if let Some(forced) = state.forced_agent_by_phase.get(&phase.phase_name) {
-            let primary = state.primary_agent_by_phase.get(&phase.phase_name);
+        if let Some(forced) = state.forced_agent_by_phase.get(phase_name) {
+            let primary = state.primary_agent_by_phase.get(phase_name);
             if let Some(primary_name) = primary {
                 // Auto-recover strategy: always probe primary first, then fallback agent.
                 let _ = reorder_agents_with_priority(&mut resolved.agents, forced);
@@ -779,7 +780,7 @@ pub(crate) async fn process_chat_request(
             let allowed = server
                 .phase_rate_limiter
                 .lock()
-                .map(|guard| guard.allow(&phase.phase_name, rpm_limit, burst))
+                .map(|guard| guard.allow(phase_name, rpm_limit, burst))
                 .unwrap_or(true);
             if !allowed {
                 anyhow::bail!("rate limited");
@@ -859,7 +860,7 @@ pub(crate) async fn process_chat_request(
     };
 
     let vector_context =
-        load_vector_context(server, &phase.phase_name, phase.options.as_ref(), params).await;
+        load_vector_context(server, phase_name, phase.options.as_ref(), params).await;
     let agent_messages = merge_context_into_messages(
         &params.messages,
         build_vector_context_message(
@@ -993,7 +994,7 @@ pub(crate) async fn process_chat_request(
                 if let Some(ref observer) = stream_observer {
                     let meta = StreamEventMeta {
                         agent_name: &selected_agent,
-                        phase_name: &phase.phase_name,
+                        phase_name,
                         trace_id: &trace.trace_id,
                     };
                     let total_chars = response_text.chars().count();
@@ -1058,7 +1059,7 @@ pub(crate) async fn process_chat_request(
                 StreamNotificationContext {
                     stream_observer: stream_observer.clone(),
                     agent_name: &agent_name,
-                    phase_name: &phase.phase_name,
+                    phase_name,
                     trace_id: &trace.trace_id,
                 },
                 agent,
@@ -1072,7 +1073,7 @@ pub(crate) async fn process_chat_request(
                 Ok(output) => {
                     if let Ok(mut ctrl) = server.online_controller.lock() {
                         ctrl.record_agent_outcome(
-                            &phase.phase_name,
+                            phase_name,
                             &agent_name,
                             true,
                             attempt_started.elapsed().as_millis() as u64,
@@ -1127,7 +1128,7 @@ pub(crate) async fn process_chat_request(
                     }));
                     if let Ok(mut ctrl) = server.online_controller.lock() {
                         ctrl.record_agent_outcome(
-                            &phase.phase_name,
+                            phase_name,
                             &agent_name,
                             false,
                             attempt_started.elapsed().as_millis() as u64,
@@ -1142,7 +1143,7 @@ pub(crate) async fn process_chat_request(
     if !cache_hit && response_text.is_empty() && last_err.is_none() {
         anyhow::bail!(
             "no healthy agent produced a response for phase '{}'",
-            phase.phase_name
+            phase_name
         );
     }
 
@@ -1161,22 +1162,18 @@ pub(crate) async fn process_chat_request(
             });
 
         if let Ok(mut ctrl) = server.online_controller.lock() {
-            ctrl.record_phase_outcome(
-                &phase.phase_name,
-                false,
-                started.elapsed().as_millis() as u64,
-            );
+            ctrl.record_phase_outcome(phase_name, false, started.elapsed().as_millis() as u64);
         }
 
         if all_attempts_quota_limited {
             let switch_prompt = format!(
                 "All available agents hit token/quota limits in phase '{}'. Choose another agent via options.preferred_agent and retry.",
-                phase.phase_name
+                phase_name
             );
             return Ok(json!({
                 "done": false,
                 "mode": params.mode,
-                "phase": phase.phase_name,
+                "phase": phase_name,
                 "phase_origin": phase_origin,
                 "requires_user_action": true,
                 "action": "switch_agent",
@@ -1199,22 +1196,18 @@ pub(crate) async fn process_chat_request(
     if let Some(primary) = configured_primary_agent {
         if selected_agent == primary {
             if let Ok(mut state) = agent_switch_state().lock() {
-                state.forced_agent_by_phase.remove(&phase.phase_name);
+                state.forced_agent_by_phase.remove(phase_name);
             }
         }
     }
 
     if let Ok(mut ctrl) = server.online_controller.lock() {
-        ctrl.record_phase_outcome(
-            &phase.phase_name,
-            true,
-            started.elapsed().as_millis() as u64,
-        );
+        ctrl.record_phase_outcome(phase_name, true, started.elapsed().as_millis() as u64);
     }
 
     persist_vector_memory(
         server,
-        &phase.phase_name,
+        phase_name,
         phase.options.as_ref(),
         params,
         &response_text,
@@ -1241,7 +1234,7 @@ pub(crate) async fn process_chat_request(
         server,
         &conversation_id,
         &branch_id,
-        &phase.phase_name,
+        phase_name,
         &selected_agent,
         params,
         &response_text,
@@ -1258,7 +1251,7 @@ pub(crate) async fn process_chat_request(
             "schema_version": "blue25-metacognitive-loop-v1",
             "cycle_count": 1,
             "checkpoint_id": checkpoint.checkpoint_id,
-            "last_reflection": format!("{}:{}", phase.phase_name, selected_agent),
+            "last_reflection": format!("{}:{}", phase_name, selected_agent),
             "reflection_trigger": "response_completed",
             "last_selected_agent": selected_agent,
             "response_chars": response_text.chars().count(),
@@ -1271,7 +1264,7 @@ pub(crate) async fn process_chat_request(
         server,
         &conversation_id,
         &branch_id,
-        &phase.phase_name,
+        phase_name,
         params,
         &selected_agent,
         &candidate_agents,
@@ -1286,7 +1279,7 @@ pub(crate) async fn process_chat_request(
             stream_observer.as_ref(),
             StreamEventMeta {
                 agent_name: &selected_agent,
-                phase_name: &phase.phase_name,
+                phase_name,
                 trace_id: &trace.trace_id,
             },
             &estimate_token_economy(&params.messages, &response_text),
@@ -1304,7 +1297,7 @@ pub(crate) async fn process_chat_request(
         ),
         event_type: "phase.agent".to_string(),
         task_id: "chat".to_string(),
-        phase: phase.phase_name.clone(),
+        phase: phase_name.clone(),
         agent: Some(selected_agent.clone()),
         tool: None,
         status: "ok".to_string(),
@@ -1345,14 +1338,14 @@ pub(crate) async fn process_chat_request(
                     // Build a ToolInput from the task context
                     let tool_input = ToolInput {
                         task_id: "chat".to_string(),
-                        phase: phase.phase_name.clone(),
+                        phase: phase_name.clone(),
                         agent_role: selected_agent.clone(),
                         objective: task_description.clone(),
                         constraints: None,
                         evidence: None,
                         payload: serde_json::json!({
                             "task": task_description,
-                            "phase": phase.phase_name,
+                            "phase": phase_name,
                         }),
                         allowed_base_dir: None,
                     };
@@ -1505,7 +1498,7 @@ pub(crate) async fn process_chat_request(
                 input: json!({
                     "task": task_description,
                     "mode": params.mode,
-                    "phase": phase.phase_name
+                    "phase": phase_name
                 }),
                 output: Some(json!({
                     "response": response_text,
@@ -1766,7 +1759,7 @@ pub(crate) async fn process_chat_request(
         "conversation_id": conversation_id,
         "branch_id": branch_id,
         "mode": params.mode,
-        "phase": phase.phase_name,
+        "phase": phase_name,
         "phase_origin": phase_origin,
         "agent": selected_agent,
         "duration_ms": started.elapsed().as_millis() as u64,
@@ -1815,7 +1808,7 @@ pub(crate) async fn process_chat_request(
             .unwrap_or(0);
         cb.feedback(
             &selected_agent,
-            &phase.phase_name,
+            phase_name,
             &conversation_id,
             true,
             elapsed,
@@ -1824,9 +1817,9 @@ pub(crate) async fn process_chat_request(
         );
         // Also update the reinforcement learning loop with the outcome
         cb.evolve(
-            &(phase.phase_name.clone(), selected_agent.clone()),
+            &(phase_name.clone(), selected_agent.clone()),
             "execute",
-            &(phase.phase_name.clone(), selected_agent.clone()),
+            &(phase_name.clone(), selected_agent.clone()),
             used_tokens,
             true,
             1.0,
@@ -1893,8 +1886,8 @@ pub(crate) async fn process_chat_request(
                 })
                 .unwrap_or(1.0);
             reg.optimize_all(&OptimizationContext {
-                workflow_type: phase.phase_name.clone(),
-                phases: vec![phase.phase_name.clone()],
+                workflow_type: phase_name.clone(),
+                phases: vec![phase_name.clone()],
                 history: vec![],
                 token_usage: 0,
                 latency_ms: elapsed,
@@ -1920,7 +1913,7 @@ pub(crate) async fn process_chat_request(
     let execution_plan = {
         let envelope = crate::agent::AgentTaskEnvelope {
             task_id: conversation_id.clone(),
-            phase: phase.phase_name.clone(),
+            phase: phase_name.clone(),
             role: selected_agent.clone(),
             objective: params
                 .messages

@@ -309,6 +309,11 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  public dispose() {
+    this._messageSubscription?.dispose();
+    this._executionOutput?.dispose();
+  }
+
   public clearChat() {
     this._clearCurrentSession();
   }

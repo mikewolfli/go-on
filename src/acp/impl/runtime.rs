@@ -2335,6 +2335,9 @@ async fn route_http_get(socket: &mut TcpStream, server: &AcpServer, path: &str) 
 ///
 /// `body_initial_part` is the portion of the body already in the initial buffer read.
 #[allow(clippy::question_mark)]
+// Intentional — early return for the !path check and JSON parse error below,
+// where we write an error response to the socket before returning Ok(path).
+// Using `?` would propagate the error upward without writing the response.
 async fn route_http_post(
     socket: &mut TcpStream,
     server: Arc<AcpServer>,

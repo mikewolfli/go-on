@@ -750,7 +750,7 @@ mod tests {
             ..Default::default()
         };
         let verdict = chain.evaluate(&ctx);
-        eprintln!("L5 test - got verdict: {:?}", verdict);
+        tracing::debug!("L5 test - got verdict: {:?}", verdict);
         assert!(matches!(verdict, TokenGateVerdict::RequireApproval(_)));
     }
 

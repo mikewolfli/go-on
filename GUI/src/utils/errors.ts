@@ -1,4 +1,7 @@
-export function normalizeErrorMessage(error: unknown, fallback = "Unknown error"): string {
+export function normalizeErrorMessage(
+  error: unknown,
+  fallback = "Unknown error",
+): string {
   if (error instanceof Error) {
     return error.message || fallback;
   }
@@ -13,6 +16,10 @@ export function normalizeErrorMessage(error: unknown, fallback = "Unknown error"
   }
 }
 
-export function prefixErrorMessage(prefix: string, error: unknown, fallback = "Unknown error"): string {
+function prefixErrorMessage(
+  prefix: string,
+  error: unknown,
+  fallback = "Unknown error",
+): string {
   return `${prefix}${normalizeErrorMessage(error, fallback)}`;
 }

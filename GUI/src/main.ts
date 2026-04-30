@@ -9,6 +9,7 @@ import "./styles/dark.css";
 const app = createApp(App);
 
 // Global error handler
+// NOTE: English is intentional here — this is a last-resort handler where i18n may not be initialized.
 app.config.errorHandler = (err, instance, info) => {
   console.error("Unhandled Vue error:", err, info);
   ElMessage.error(
