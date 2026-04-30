@@ -617,7 +617,8 @@ impl CapabilityBus {
     // Stage 1: Sensing — gather input from sub-buses
     // ------------------------------------------------------------------
 
-    pub fn sense(&self, _task: &TaskContext) -> SensingOutput {
+    #[allow(unused_variables)]
+    pub fn sense(&self, task: &TaskContext) -> SensingOutput {
         let cap_agents = self
             .capability_graph
             .lock()
@@ -1004,7 +1005,7 @@ impl CapabilityBus {
     pub fn recommended_mode(&self, task_type: &str, complexity: f64) -> String {
         #[cfg(feature = "sub-bus-orchestration")]
         {
-            return self.orchestration_bus.recommend_mode(task_type, complexity);
+            self.orchestration_bus.recommend_mode(task_type, complexity)
         }
         #[cfg(not(feature = "sub-bus-orchestration"))]
         {
