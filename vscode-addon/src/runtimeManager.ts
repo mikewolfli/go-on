@@ -205,7 +205,7 @@ export class GoOnManager {
         this.process = null;
 
         // Reject all pending requests — process exited unexpectedly
-        for (const [id, pending] of this.pendingRequests) {
+        for (const [, pending] of this.pendingRequests) {
           pending.reject(new Error("Go-On process exited unexpectedly"));
         }
         this.pendingRequests.clear();

@@ -163,6 +163,7 @@ export function registerViewCommands(
         }
       } catch {
         // RPC failed — fall back to ["default"]
+        // eslint-disable-next-line no-console
         console.warn(
           "go-on: failed to fetch session list from backend, using default",
         );

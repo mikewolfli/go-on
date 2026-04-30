@@ -161,6 +161,7 @@ class ConfigManager {
       try {
         this.config = this.parseTOML(content);
       } catch (e) {
+        // eslint-disable-next-line no-console
         console.warn(
           `configManager: Failed to parse TOML config: ${e}. Using defaults.`,
         );
@@ -272,6 +273,7 @@ class ConfigManager {
         Object.keys(config.agents).length === 0 &&
         Object.keys(config.phases).length === 0
       ) {
+        // eslint-disable-next-line no-console
         console.warn(
           "configManager: TOML file appears empty or malformed, using defaults",
         );
