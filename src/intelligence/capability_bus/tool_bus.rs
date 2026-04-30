@@ -427,7 +427,7 @@ impl ToolBus {
 ///
 /// Only available under the `profile-multi-users-server` feature flag.
 #[cfg(feature = "profile-multi-users-server")]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-16 — planned wiring: capability bus / orchestration
 pub fn import_remote_skill(
     tool_bus: &Arc<Mutex<ToolBus>>,
     endpoint: &str,

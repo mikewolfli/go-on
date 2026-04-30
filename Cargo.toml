@@ -54,15 +54,13 @@ thiserror = "2.0.18"
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
 async-trait = "0.1"
-toml = "1.1.0"
-env = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-tracing-appender = "0.2"
 opentelemetry-stdout = "0.31"
 lazy_static = "1.4"
 rusqlite = { version = "0.39.0", features = ["bundled"], optional = true }
 sha2 = "0.11.0"
+toml = "1.1.0"
 keyring = { version = "3", features = ["apple-native"] }
 opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }

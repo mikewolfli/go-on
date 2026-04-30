@@ -199,7 +199,7 @@ impl PromotionPlugin for ThresholdPromotion {
 /// When `evidence_quality` exceeds a configurable threshold, the promotion
 /// multiplier is scaled linearly up to a configurable maximum.  All promotion
 /// events are tracked in an internal history map.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-12 — reserved for future agent factory / skill wiring
 pub struct EvidenceWeightedPromotion {
     /// Minimum evidence quality required to trigger promotion (0.0–1.0).
     pub threshold: f64,
@@ -217,7 +217,7 @@ pub(crate) struct PromotionHistoryEntry {
     reason: String,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-12 — reserved for future agent factory / skill wiring
 impl EvidenceWeightedPromotion {
     pub fn new(threshold: f64, max_multiplier: f64) -> Self {
         Self {
@@ -294,7 +294,7 @@ impl PromotionPlugin for EvidenceWeightedPromotion {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-12 — reserved for future agent factory / skill wiring
 impl EvidenceWeightedPromotion {
     /// Return a snapshot of the promotion history for a given agent.
     pub fn history_for(&self, agent: &str) -> Vec<PromotionHistoryEntry> {

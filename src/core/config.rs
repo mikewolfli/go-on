@@ -1521,6 +1521,8 @@ impl AppConfig {
     ///
     /// # Returns
     /// * `Result<Self>` - Returns Ok(Self) if loaded successfully, or an error if something goes wrong
+    #[must_use]
+    #[allow(clippy::double_must_use)]
     pub fn load(path: &Path) -> Result<Self> {
         let content = fs::read_to_string(path).with_context(|| {
             tf(
@@ -1601,6 +1603,8 @@ impl AppConfig {
     ///
     /// # Returns
     /// * `Result<()>` - Returns Ok(()) if validation passes, or an error if validation fails
+    #[must_use]
+    #[allow(clippy::double_must_use)]
     pub fn validate(&self) -> Result<()> {
         if self.flow.phases.is_empty() {
             anyhow::bail!("{}", tf("error.flow_phases_empty", &[]));

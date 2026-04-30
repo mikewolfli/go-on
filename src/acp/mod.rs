@@ -19,17 +19,14 @@ pub mod r#impl;
 pub mod prelude;
 pub mod server;
 
-// Re-export for convenience
-#[allow(unused_imports)]
-pub use background::*;
-#[allow(unused_imports)]
-pub use helpers::*;
-#[allow(unused_imports)]
+// Re-export only the items that external consumers need.
+// NOTE: Changing this to explicit re-exports would help detect dead code.
 pub use prelude::*;
+// `AcpServer` / `ServerBuilder` are re-exported for downstream consumers; allow unused here.
 #[allow(unused_imports)]
-pub use r#impl::*;
+pub use server::AcpServer;
 #[allow(unused_imports)]
-pub use server::*;
+pub use server::ServerBuilder;
 
 // Note: The tests module is only available in test configuration
 #[cfg(test)]

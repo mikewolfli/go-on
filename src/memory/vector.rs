@@ -77,6 +77,7 @@ enum SqliteVectorMode {
 }
 
 #[cfg(not(feature = "backend-postgres"))]
+#[derive(Debug)]
 pub struct VectorStore {
     /// SQLite connection (mutex-protected)
     conn: Mutex<Connection>,
@@ -754,6 +755,17 @@ pub struct VectorStore {
     client: Mutex<Client>,
     dimensions: usize,
     max_entries: usize,
+}
+
+#[cfg(feature = "backend-postgres")]
+impl std::fmt::Debug for VectorStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VectorStore")
+            .field("client", &"<postgres Client>")
+            .field("dimensions", &self.dimensions)
+            .field("max_entries", &self.max_entries)
+            .finish()
+    }
 }
 
 #[cfg(feature = "backend-postgres")]

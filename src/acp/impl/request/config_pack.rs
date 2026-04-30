@@ -177,10 +177,17 @@ fn normalize_protocol_mode_for_baseline(raw: &str) -> String {
 }
 
 fn load_config_document(config_path: &Path) -> std::result::Result<toml::Value, String> {
-    let raw =
-        fs::read_to_string(config_path).map_err(|err| format!("failed_to_read_config:{}", err))?;
+    let raw = fs::read_to_string(config_path).map_err(|err| {
+        tf(
+            "error.config_read_failed",
+            &[
+                ("path", &config_path.display().to_string()),
+                ("error", &err.to_string()),
+            ],
+        )
+    })?;
     raw.parse::<toml::Value>()
-        .map_err(|err| format!("failed_to_parse_toml:{}", err))
+        .map_err(|err| tf("error.config_parse_failed", &[("error", &err.to_string())]))
 }
 
 fn extract_runtime_explicit_keys(document: &toml::Value) -> HashSet<String> {

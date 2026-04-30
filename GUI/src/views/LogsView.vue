@@ -88,7 +88,7 @@ const filteredLines = computed(() => {
 });
 
 // Auto-scroll: watch filteredLines and scroll to bottom
-watch(filteredLines, () => {
+const stopWatchingLogs = watch(filteredLines, () => {
   if (autoScroll.value) {
     void nextTick(() => {
       if (logContainer.value) {
@@ -120,7 +120,10 @@ function exportLogs() {
 }
 
 onMounted(() => runtime.startLogsPolling(300));
-onUnmounted(() => runtime.stopLogsPolling());
+onUnmounted(() => {
+  runtime.stopLogsPolling();
+  stopWatchingLogs();
+});
 </script>
 
 <style scoped>

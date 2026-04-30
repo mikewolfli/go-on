@@ -115,7 +115,9 @@
 
           <!-- Chat Tab -->
           <el-tab-pane :label="t('tab.chat')" name="chat">
-            <ChatView />
+            <keep-alive>
+              <ChatView />
+            </keep-alive>
           </el-tab-pane>
         </el-tabs>
       </el-main>

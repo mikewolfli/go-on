@@ -214,7 +214,7 @@ pub struct TransportProfile {
 #[derive(Debug, Clone)]
 struct QueuedMessage {
     message: TransportMessage,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-10 — reserved for future multi-channel transport wiring
     status: DeliveryStatus,
     retries_remaining: u32,
     enqueued_ms: u64,

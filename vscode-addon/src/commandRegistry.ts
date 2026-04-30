@@ -121,25 +121,19 @@ export function registerViewCommands(
 
   const newSessionCommand = vscode.commands.registerCommand(
     "go-on.newSession",
-    () => {
-      Promise.resolve(
-        vscode.window.showInputBox({
+    async () => {
+      try {
+        const sessionName = await vscode.window.showInputBox({
           prompt: "Enter a name for the new chat session",
           placeHolder: "My Session",
-        }),
-      )
-        .then((sessionName) => {
-          if (sessionName) {
-            deps.createSession(sessionName);
-          }
-        })
-        .catch((error: unknown) => {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          vscode.window.showErrorMessage(
-            `Failed to create session: ${message}`,
-          );
         });
+        if (sessionName) {
+          deps.createSession(sessionName);
+        }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(`Failed to create session: ${message}`);
+      }
     },
   );
 

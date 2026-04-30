@@ -28,8 +28,9 @@ impl BuiltinRole {
         }
     }
 
+    #[cfg(test)]
     #[allow(dead_code)]
-    pub fn from_str(s: &str) -> Option<Self> {
+    fn from_str(s: &str) -> Option<Self> {
         match s {
             "admin" => Some(BuiltinRole::Admin),
             "user" => Some(BuiltinRole::User),
@@ -72,8 +73,9 @@ pub enum Permission {
 }
 
 impl Permission {
+    #[cfg(test)]
     #[allow(dead_code)]
-    pub fn as_str(&self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Permission::Read => "read",
             Permission::Write => "write",
@@ -86,8 +88,9 @@ impl Permission {
         }
     }
 
+    #[cfg(test)]
     #[allow(dead_code)]
-    pub fn from_str(s: &str) -> Option<Self> {
+    fn from_str(s: &str) -> Option<Self> {
         match s {
             "read" => Some(Permission::Read),
             "write" => Some(Permission::Write),
@@ -126,8 +129,9 @@ impl Principal {
         self.permissions.contains(permission)
     }
 
+    #[cfg(test)]
     #[allow(dead_code)]
-    pub fn has_role(&self, role: &str) -> bool {
+    fn has_role(&self, role: &str) -> bool {
         self.roles.iter().any(|r| r == role)
     }
 }
@@ -146,6 +150,7 @@ pub struct RbacEnforcer {
     /// Role -> permissions mapping
     role_permissions: HashMap<String, HashSet<Permission>>,
     /// Tenants (optional multi-tenant support)
+    #[allow(dead_code)] // F-GAP-15 — tenant isolation for multi-tenant deployment
     tenants: HashSet<String>,
 }
 
@@ -180,14 +185,12 @@ impl RbacEnforcer {
     }
 
     /// Register a custom role with specific permissions
-    #[allow(dead_code)]
     pub fn register_role(&mut self, role: &str, permissions: Vec<Permission>) {
         self.role_permissions
             .insert(role.to_string(), permissions.into_iter().collect());
     }
 
     /// Add a tenant
-    #[allow(dead_code)]
     pub fn add_tenant(&mut self, tenant_id: &str) {
         self.tenants.insert(tenant_id.to_string());
     }
@@ -271,13 +274,15 @@ impl RbacEnforcer {
         }
     }
 
+    #[cfg(test)]
     #[allow(dead_code)]
-    pub fn role_count(&self) -> usize {
+    fn role_count(&self) -> usize {
         self.role_permissions.len()
     }
 
+    #[cfg(test)]
     #[allow(dead_code)]
-    pub fn tenant_count(&self) -> usize {
+    fn tenant_count(&self) -> usize {
         self.tenants.len()
     }
 }

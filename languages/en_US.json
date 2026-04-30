@@ -446,6 +446,8 @@
     "error.failover_group_not_found": "Failover group '{name}' not found",
     "error.token_not_found": "Token '{token_id}' not found",
     "error.token_revoked": "Token '{token_id}' has been revoked",
-    "error.token_expired": "Token '{token_id}' expired at {expires_at} (now: {now})"
+    "error.token_expired": "Token '{token_id}' expired at {expires_at} (now: {now})",
+    "error.acp_mode_unsupported": "ACP mode does not support method: {method}",
+    "error.mcp_mode_unsupported": "MCP mode does not support method: {method}"
   }
 }

@@ -44,15 +44,19 @@
             </el-space>
             <el-row :gutter="16">
               <el-col :span="6">
+                <!-- el-statistic is deprecated in Element Plus but still works -->
                 <el-statistic :title="t('security.overallScore')" :value="overallScore" suffix="/100" />
               </el-col>
               <el-col :span="6">
+                <!-- el-statistic is deprecated in Element Plus but still works -->
                 <el-statistic :title="t('security.credsScore')" :value="credsScore" suffix="/100" />
               </el-col>
               <el-col :span="6">
+                <!-- el-statistic is deprecated in Element Plus but still works -->
                 <el-statistic :title="t('security.auditScore')" :value="auditScore" suffix="/100" />
               </el-col>
               <el-col :span="6">
+                <!-- el-statistic is deprecated in Element Plus but still works -->
                 <el-statistic :title="t('security.configScore')" :value="configScore" suffix="/100" />
               </el-col>
             </el-row>
@@ -173,6 +177,8 @@ import {
   getGovernanceStatus,
   getProviderStatus,
   getReleaseReadiness,
+  remediateRisk,
+  saveGovernanceConfig,
   type GovernanceAuditEvent,
 } from "../services/rpcService";
 import { normalizeErrorMessage } from "../utils/errors";
@@ -491,8 +497,7 @@ async function fixRisk(riskId: string) {
   )
     .then(async () => {
       try {
-        const { invokeRuntimeRpc } = await import("../services/bridge");
-        await invokeRuntimeRpc("governance.remediate", JSON.stringify({ risk_id: riskId }));
+        await remediateRisk(riskId);
         // Only remove locally if backend confirms the fix
         const idx = risks.findIndex((r) => r.id === riskId);
         if (idx >= 0) {
@@ -533,14 +538,10 @@ function convertToCSV(data: Array<Record<string, unknown>>): string {
 
 async function saveSecurity() {
   try {
-    const { invokeRuntimeRpc } = await import("../services/bridge");
-    await invokeRuntimeRpc(
-      "governance.config.save",
-      JSON.stringify({
-        auto_mask_sensitive: autoMaskSensitive.value,
-        audit_enabled: auditEnabled.value,
-      }),
-    );
+    await saveGovernanceConfig({
+      autoMaskSensitive: autoMaskSensitive.value,
+      auditEnabled: auditEnabled.value,
+    });
     ElMessage.success(t("security.settingsSaved"));
   } catch {
     // Backend save failed — persist locally as fallback

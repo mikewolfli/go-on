@@ -14,18 +14,14 @@ mod tools;
 #[cfg(test)]
 mod tests;
 
-#[allow(unused_imports)]
-pub use schema::{
-    JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpResource, McpTool, ServerInfo, TextBlock,
-    ToolUseBlock,
-};
+pub use schema::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpResource, McpTool, ServerInfo};
 pub use tools::error_codes;
 
 /// MCP Protocol Version
 pub const MCP_VERSION: &str = "2024-11-05";
 
 /// MCP Server implementation
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-10 — planned wiring: multi-channel transport
 pub struct McpServer {
     pub(crate) agent_registry: Arc<AgentRegistry>,
     pub(crate) tool_registry: Arc<ToolRegistry>,
@@ -75,7 +71,7 @@ impl McpServer {
     }
 
     /// Get a reference to the token cache if available
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-09 — planned wiring: memory/caching accessor
     pub fn token_cache(&self) -> Option<&Arc<TokenMultiLevelCache>> {
         self.acp_server.as_ref().map(|s| &s.cache.token_cache)
     }

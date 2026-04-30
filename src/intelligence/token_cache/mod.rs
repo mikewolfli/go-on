@@ -559,13 +559,21 @@ pub struct TemplatePattern {
 pub struct L3TemplateCache {
     /// Known templates by structure signature
     templates: HashMap<String, TemplatePattern>,
+    /// Disk path for future template persistence
+    #[allow(dead_code)] // F-GAP-09 — planned wiring for persistence
+    store_path: Option<String>,
 }
 
 impl L3TemplateCache {
     pub fn new(store_path: &str) -> Self {
-        let _ = store_path;
+        let store_path = if store_path.is_empty() {
+            None
+        } else {
+            Some(store_path.to_string())
+        };
         Self {
             templates: HashMap::new(),
+            store_path,
         }
     }
 

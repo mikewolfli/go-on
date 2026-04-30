@@ -75,6 +75,7 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use tracing::warn;
 
 // ---------------------------------------------------------------------------
 // Bus event record — each operation produces a traceable event
@@ -1198,13 +1199,15 @@ impl CapabilityBus {
 
         // Record success/failure knowledge
         if success {
-            let _ = self.experience.lock().map(|mut exp| {
+            if let Err(e) = self.experience.lock().map(|mut exp| {
                 exp.add_success_case(SuccessCase {
                     objective: format!("state_{:?}", state),
                     strategy: format!("action_{}", action),
                     confidence: quality_score,
                 })
-            });
+            }) {
+                warn!("failed to record success case for state {:?}: {}", state, e);
+            }
         }
 
         // --- Cognitive module integration ---

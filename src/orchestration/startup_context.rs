@@ -30,7 +30,7 @@ use tracing::debug;
 ///
 /// Returned by `startup_context_profile()` for the `/governance/status` endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — reserved for future governance/review wiring
 pub struct StartupContextProfile {
     /// Whether the startup context loader is enabled in config
     pub enabled: bool,
@@ -105,7 +105,7 @@ pub fn get() -> Option<StartupContext> {
 
 /// Reset the cached startup context. Only available in tests.
 #[cfg(test)]
-pub fn reset_cache() {
+fn reset_cache() {
     if let Ok(mut guard) = STARTUP_CONTEXT.lock() {
         *guard = None;
     }
@@ -552,7 +552,7 @@ pub fn summary_text(ctx: &StartupContext) -> String {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Build a `StartupContextProfile` from the cached context and configuration.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — reserved for future governance/review wiring
 pub fn startup_context_profile(
     ctx: &StartupContext,
     cfg: &StartupContextConfig,

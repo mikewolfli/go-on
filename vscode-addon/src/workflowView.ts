@@ -54,47 +54,55 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     this._messageSubscription?.dispose();
     this._messageSubscription = webviewView.webview.onDidReceiveMessage(
       async (message) => {
-        switch (message.type) {
-          case "createWorkflow":
-            await this._createWorkflow(message.workflowData);
-            break;
-          case "runWorkflow":
-            await this._runWorkflow(message.workflowId);
-            break;
-          case "deleteWorkflow":
-            this._deleteWorkflow(message.workflowId);
-            break;
-          case "showInputBox":
-            {
-              const result = await vscode.window.showInputBox({
-                prompt: message.prompt,
-                value: message.value,
-              });
-              this._view?.webview.postMessage({
-                type: "showInputBoxResult",
-                id: message.id,
-                value: result,
-              });
-            }
-            break;
-          case "showQuickPick":
-            {
-              const items: vscode.QuickPickItem[] = (message.items || []).map(
-                (item: { label: string; value: string }) => ({
-                  label: item.label,
-                  description: item.value,
-                }),
-              );
-              const picked = await vscode.window.showQuickPick(items, {
-                placeHolder: message.placeHolder,
-              });
-              this._view?.webview.postMessage({
-                type: "showQuickPickResult",
-                id: message.id,
-                value: picked?.description || null,
-              });
-            }
-            break;
+        try {
+          switch (message.type) {
+            case "createWorkflow":
+              await this._createWorkflow(message.workflowData);
+              break;
+            case "runWorkflow":
+              await this._runWorkflow(message.workflowId);
+              break;
+            case "deleteWorkflow":
+              this._deleteWorkflow(message.workflowId);
+              break;
+            case "showInputBox":
+              {
+                const result = await vscode.window.showInputBox({
+                  prompt: message.prompt,
+                  value: message.value,
+                });
+                this._view?.webview.postMessage({
+                  type: "showInputBoxResult",
+                  id: message.id,
+                  value: result,
+                });
+              }
+              break;
+            case "showQuickPick":
+              {
+                const items: vscode.QuickPickItem[] = (message.items || []).map(
+                  (item: { label: string; value: string }) => ({
+                    label: item.label,
+                    description: item.value,
+                  }),
+                );
+                const picked = await vscode.window.showQuickPick(items, {
+                  placeHolder: message.placeHolder,
+                });
+                this._view?.webview.postMessage({
+                  type: "showQuickPickResult",
+                  id: message.id,
+                  value: picked?.description || null,
+                });
+              }
+              break;
+          }
+        } catch (error: unknown) {
+          const message_text =
+            error instanceof Error ? error.message : String(error);
+          void vscode.window.showErrorMessage(
+            `Workflow error: ${message_text}`,
+          );
         }
       },
       undefined,
@@ -235,7 +243,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
       });
 
       vscode.window.showInformationMessage("Workflow deleted successfully!");
-    } catch (error) {
+    } catch (error: unknown) {
       vscode.window.showErrorMessage(
         `Failed to delete workflow: ${error instanceof Error ? error.message : "Unknown error"}`,
       );

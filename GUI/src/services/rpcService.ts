@@ -585,3 +585,80 @@ export async function createSkill(source: {
 }): Promise<SkillCreateResult> {
   return callRpcJson<SkillCreateResult>("skill.create", source);
 }
+
+export async function remediateRisk(
+  riskId: string,
+): Promise<Record<string, unknown>> {
+  return callRpcJson<Record<string, unknown>>("governance.remediate", {
+    risk_id: riskId,
+  });
+}
+
+export async function saveGovernanceConfig(params: {
+  autoMaskSensitive?: boolean;
+  auditEnabled?: boolean;
+}): Promise<Record<string, unknown>> {
+  return callRpcJson<Record<string, unknown>>("governance.config.save", params);
+}
+
+export async function getDebugPanel(): Promise<Record<string, unknown>> {
+  return callRpcJson<Record<string, unknown>>("debug_panel.get", {});
+}
+
+export interface CheckpointListResult {
+  checkpoints?: Array<{
+    conversation_id?: string;
+    checkpoint_id?: string;
+    timestamp?: number;
+    summary?: string;
+  }>;
+}
+
+export async function getCheckpointList(
+  conversationId: string,
+): Promise<CheckpointListResult> {
+  return callRpcJson<CheckpointListResult>("conversation.checkpoint.list", {
+    conversation_id: conversationId,
+  });
+}
+
+export interface OptimizationPeakResult {
+  peak?: {
+    indicators?: {
+      task_success_rate?: number;
+      first_pass_rate?: number;
+      mean_repair_iterations?: number;
+      human_intervention_rate?: number;
+      regression_rate?: number;
+    };
+    gates?: Array<{ name?: string; passed?: boolean }>;
+    status?: string;
+    overall_pass?: boolean;
+    version?: string;
+  };
+}
+
+export async function getOptimizationPeak(): Promise<OptimizationPeakResult> {
+  return callRpcJson<OptimizationPeakResult>("optimization.peak", {});
+}
+
+export interface RuntimeFeatures {
+  harness_bus?: boolean;
+  capability_bus?: boolean;
+  vector_store?: boolean;
+  response_cache?: boolean;
+  autotune?: boolean;
+  skills_enabled?: boolean;
+  skills_import?: boolean;
+  entry_auth?: boolean;
+  otel?: boolean;
+  production_strict?: boolean;
+}
+
+export async function getRuntimeFeatures(): Promise<RuntimeFeatures> {
+  const result = await callRpcJson<{ features?: RuntimeFeatures }>(
+    "runtime.features",
+    {},
+  );
+  return result?.features ?? ({} as RuntimeFeatures);
+}

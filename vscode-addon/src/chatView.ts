@@ -58,23 +58,26 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private _saveSessions() {
+  private async _saveSessions() {
     const sessionsObject: Record<string, ChatMessage[]> = {};
     for (const [sessionName, messages] of this._sessions) {
       sessionsObject[sessionName] = messages;
     }
-    this.context.globalState.update("go-on-chat-sessions", sessionsObject);
+    await this.context.globalState.update(
+      "go-on-chat-sessions",
+      sessionsObject,
+    );
   }
 
   private _getCurrentSessionMessages(): ChatMessage[] {
     return this._sessions.get(this._currentSession) || [];
   }
 
-  private _addMessageToCurrentSession(message: ChatMessage) {
+  private async _addMessageToCurrentSession(message: ChatMessage) {
     const messages = this._getCurrentSessionMessages();
     messages.push(message);
     this._sessions.set(this._currentSession, messages);
-    this._saveSessions();
+    await this._saveSessions();
   }
 
   private _extractResponseText(result: unknown): string | undefined {
@@ -114,71 +117,74 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     this._messageSubscription?.dispose();
     this._messageSubscription = webviewView.webview.onDidReceiveMessage(
       async (message) => {
-        switch (message.type) {
-          case "sendMessage":
-            await this._handleSendMessage(message.text);
-            break;
-          case "sendMessageWithAttachments":
-            await this._handleSendMessage(message.text, message.attachments);
-            break;
-          case "clearChat":
-            this._clearCurrentSession();
-            break;
-          case "exportChat":
-            this._exportCurrentSession();
-            break;
-          case "runCode":
-            await this._handleRunCode(message.code, message.language);
-            break;
-          case "newSession":
-            this._createNewSession(message.sessionName);
-            break;
-          case "switchSession":
-            this._switchSession(message.sessionName);
-            break;
-          case "showInputBox":
-            vscode.window
-              .showInputBox({
-                prompt: message.prompt,
-                placeHolder: message.placeHolder,
-                value: message.value || "",
-              })
-              .then((value) => {
+        try {
+          switch (message.type) {
+            case "sendMessage":
+              await this._handleSendMessage(message.text);
+              break;
+            case "sendMessageWithAttachments":
+              await this._handleSendMessage(message.text, message.attachments);
+              break;
+            case "clearChat":
+              await this._clearCurrentSession();
+              break;
+            case "exportChat":
+              this._exportCurrentSession();
+              break;
+            case "runCode":
+              await this._handleRunCode(message.code, message.language);
+              break;
+            case "newSession":
+              await this._createNewSession(message.sessionName);
+              break;
+            case "switchSession":
+              await this._switchSession(message.sessionName);
+              break;
+            case "showInputBox":
+              {
+                const value = await vscode.window.showInputBox({
+                  prompt: message.prompt,
+                  placeHolder: message.placeHolder,
+                  value: message.value || "",
+                });
                 this._view?.webview.postMessage({
                   type: "showInputBoxResult",
                   id: message.id,
-                  value: value,
+                  value,
                 });
-              });
-            break;
-          case "showConfirm":
-            vscode.window
-              .showWarningMessage(
-                message.message,
-                { modal: true },
-                "OK",
-                "Cancel",
-              )
-              .then((selection) => {
+              }
+              break;
+            case "showConfirm":
+              {
+                const selection = await vscode.window.showWarningMessage(
+                  message.message,
+                  { modal: true },
+                  "OK",
+                  "Cancel",
+                );
                 this._view?.webview.postMessage({
                   type: "showConfirmResult",
                   id: message.id,
                   confirmed: selection === "OK",
                   workflowId: message.workflowId,
                 });
-              });
-            break;
-          case "copyCode":
-            vscode.env.clipboard.writeText(message.code).then(() => {
+              }
+              break;
+            case "copyCode":
+              await vscode.env.clipboard.writeText(message.code);
               void vscode.window.setStatusBarMessage(
                 "Code copied to clipboard",
                 2000,
               );
-            });
-            break;
-          case "getSessions":
-            this._sendSessionsList();
-            break;
+              break;
+            case "getSessions":
+              this._sendSessionsList();
+              break;
+          }
+        } catch (error: unknown) {
+          const message_text =
+            error instanceof Error ? error.message : String(error);
+          void vscode.window.showErrorMessage(`Chat error: ${message_text}`);
         }
       },
       undefined,
@@ -555,7 +561,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private _createNewSession(sessionName: string) {
+  private async _createNewSession(sessionName: string) {
     if (this._sessions.has(sessionName)) {
       this._view?.webview.postMessage({
         type: "error",
@@ -565,11 +571,11 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     this._sessions.set(sessionName, []);
-    this._saveSessions();
-    this._switchSession(sessionName);
+    await this._saveSessions();
+    await this._switchSession(sessionName);
   }
 
-  private _switchSession(sessionName: string) {
+  private async _switchSession(sessionName: string) {
     if (!this._sessions.has(sessionName)) {
       this._view?.webview.postMessage({
         type: "error",
@@ -588,16 +594,16 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private _clearCurrentSession() {
+  private async _clearCurrentSession() {
     this._sessions.set(this._currentSession, []);
-    this._saveSessions();
+    await this._saveSessions();
 
     this._view?.webview.postMessage({
       type: "clearChat",
     });
   }
 
-  private _exportCurrentSession() {
+  private async _exportCurrentSession() {
     const messages = this._getCurrentSessionMessages();
     const exportData = {
       session: this._currentSession,
@@ -605,14 +611,11 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
       messages,
     };
 
-    vscode.workspace
-      .openTextDocument({
-        content: JSON.stringify(exportData, null, 2),
-        language: "json",
-      })
-      .then((doc) => {
-        vscode.window.showTextDocument(doc);
-      });
+    const doc = await vscode.workspace.openTextDocument({
+      content: JSON.stringify(exportData, null, 2),
+      language: "json",
+    });
+    void vscode.window.showTextDocument(doc);
   }
 
   private _sendSessionsList() {

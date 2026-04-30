@@ -35,7 +35,7 @@
         cursor: pointer;
         font-size: 16px;
       "
-      :title="showQuickNav ? 'Collapse' : 'Expand'"
+      :title="showQuickNav ? t('quickNav.collapse') : t('quickNav.expand')"
     >
       {{ showQuickNav ? "◀" : "▶" }}
     </button>
@@ -62,7 +62,7 @@
     "
     @mouseenter="(e) => (e.target as HTMLElement).style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.2)'"
     @mouseleave="(e) => (e.target as HTMLElement).style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15)'"
-    title="Quick Navigation"
+    :title="t('quickNav.title')"
   >
     ☰
   </button>
@@ -98,6 +98,7 @@ const quickNavItems = computed(() => [
   { tabName: "backend-ops", label: t("nav.ops"), shortLabel: t("nav.opsShort"), icon: "🛠️", mainTab: "config", subTab: "backend-ops" },
   { tabName: "autotune", label: t("nav.autoTune"), shortLabel: t("nav.autoTuneShort"), icon: "⚡", mainTab: "config", subTab: "autotune" },
   { tabName: "workflow", label: t("nav.workflow"), shortLabel: t("nav.workflowShort"), icon: "🔄", mainTab: "config", subTab: "workflow" },
+  { tabName: "skills", label: t("nav.skills"), shortLabel: t("nav.skillsShort"), icon: "🧠", mainTab: "config", subTab: "skills" },
   { tabName: "security", label: t("nav.security"), shortLabel: t("nav.securityShort"), icon: "🔒", mainTab: "config", subTab: "security" },
 ]);
 
@@ -110,12 +111,12 @@ function navigate(tabName: string) {
 
 function toggleQuickNav() {
   showQuickNav.value = !showQuickNav.value;
-  localStorage.setItem("go-on-gui-quicknav", showQuickNav.value.toString());
+  localStorage.setItem("goon.gui.quicknav.collapsed", (!showQuickNav.value).toString());
 }
 
-// Restore state from localStorage
-const saved = localStorage.getItem("go-on-gui-quicknav");
-if (saved === "false") {
+// Restore state from localStorage (stores "true" when collapsed)
+const saved = localStorage.getItem("goon.gui.quicknav.collapsed");
+if (saved === "true") {
   showQuickNav.value = false;
 }
 </script>

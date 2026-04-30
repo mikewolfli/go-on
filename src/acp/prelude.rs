@@ -27,34 +27,34 @@ use crate::roles::AgentRole;
 // ============================================================================
 
 /// Default circuit breaker failure threshold
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub const DEFAULT_BREAKER_FAILURE_THRESHOLD: u32 = 3;
 /// Default circuit breaker open time in seconds
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub const DEFAULT_BREAKER_OPEN_SECONDS: i64 = 60;
 /// Maximum conversation ID length
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub const MAX_CONVERSATION_ID_LEN: usize = 128;
 /// Maximum branch ID length
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub const MAX_BRANCH_ID_LEN: usize = 64;
 /// Maximum checkpoint ID length
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub const MAX_CHECKPOINT_ID_LEN: usize = 128;
 /// Maximum checkpoints per conversation
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub const MAX_CHECKPOINTS_PER_CONVERSATION: usize = 256;
 /// Maximum checkpoint message characters
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub const MAX_CHECKPOINT_MESSAGE_CHARS: usize = 64_000;
 /// Maximum conversations tracked
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub const MAX_CONVERSATIONS_TRACKED: usize = 512;
 /// Maximum stream chunks
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub const MAX_STREAM_CHUNKS: usize = 4_096;
 /// Maximum stream characters
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub const MAX_STREAM_CHARS: usize = 256_000;
 
 pub const ACP_LOCK_RUNTIME_CONFIG: &str = "runtime_config";
@@ -71,7 +71,7 @@ pub const ACP_LOCK_INFLIGHT_LIMITER: &str = "inflight_limiter";
 const ACP_LOCK_SLOW_WAIT_THRESHOLD: Duration = Duration::from_millis(5);
 
 /// Histogram buckets for latency measurements (seconds)
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub const HISTOGRAM_BUCKETS_SECONDS: [f64; 10] = [
     0.001, // 1ms
     0.005, // 5ms
@@ -124,7 +124,7 @@ pub struct ConversationState {
 
 /// Conversation prune result
 #[derive(Debug, Clone, Serialize, Default)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — planned wiring
 pub struct ConversationPruneResult {
     /// Number of conversations removed
     pub removed: usize,
@@ -403,10 +403,10 @@ pub struct LifecycleSnapshot {
 }
 
 /// Maintenance snapshot
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct MaintenanceSnapshot {
     /// Whether maintenance is running
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-03 — planned wiring
     pub running: bool,
     /// Total maintenance cycles completed
     pub cycles_total: u64,
@@ -438,29 +438,6 @@ pub struct MaintenanceSnapshot {
     pub maintenance_in_progress: bool,
 }
 
-impl Default for MaintenanceSnapshot {
-    fn default() -> Self {
-        let now = now_ts();
-        Self {
-            running: false,
-            cycles_total: 0,
-            last_started_at: None,
-            last_completed_at: None,
-            last_memory_expired_removed: 0,
-            last_sqlite_expired_removed: 0,
-            last_cache_vacuumed: false,
-            last_vector_vacuumed: false,
-            last_error: None,
-            last_maintenance: now,
-            maintenance_interval: 3600,
-            next_maintenance_due: now + 3600,
-            tasks_completed: 0,
-            tasks_failed: 0,
-            maintenance_in_progress: false,
-        }
-    }
-}
-
 /// Server status structure
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerStatus {
@@ -480,7 +457,7 @@ pub struct ServerStatus {
 #[derive(Debug, Clone)]
 pub struct ReviewTimeoutPolicy {
     /// Timeout in seconds
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-03 — planned wiring
     pub timeout_seconds: Option<u64>,
     /// Whether to fail on timeout
     pub fail_on_timeout: bool,
@@ -488,7 +465,7 @@ pub struct ReviewTimeoutPolicy {
 
 /// Review gate outcome
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — planned wiring
 pub struct ReviewGateOutcome {
     /// Whether the review passed
     pub passed: bool,
@@ -502,7 +479,7 @@ pub struct ReviewGateOutcome {
 
 /// Review decision
 #[derive(Debug, Clone, Serialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — planned wiring
 pub struct ReviewDecision {
     /// Reviewer name
     pub reviewer: String,
@@ -514,7 +491,8 @@ pub struct ReviewDecision {
 
 /// Review verdict enum
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
+#[non_exhaustive]
+#[allow(dead_code)] // F-GAP-02 — planned wiring
 pub enum ReviewVerdict {
     /// Review passed
     Pass,
@@ -526,7 +504,7 @@ pub enum ReviewVerdict {
 
 impl ReviewVerdict {
     /// Convert to string
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-02 — planned wiring
     pub fn as_str(&self) -> &'static str {
         match self {
             ReviewVerdict::Pass => "pass",
@@ -538,7 +516,7 @@ impl ReviewVerdict {
 
 /// Chat parameters structure
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — planned wiring
 pub struct ChatParams {
     /// Chat mode (e.g., "ask", "edit", "agent", "safeguard", "full_auto")
     pub mode: String,
@@ -556,7 +534,7 @@ pub struct ChatParams {
 
 /// Task characteristics
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — planned wiring
 pub struct TaskCharacteristics {
     /// Task complexity (simple, medium, complex)
     pub complexity: String,
@@ -574,7 +552,7 @@ pub struct TaskCharacteristics {
 
 /// Routing decision
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-02 — planned wiring
 pub struct RoutingDecision {
     /// Selected roles in execution order
     pub roles: Vec<AgentRole>,
@@ -607,7 +585,6 @@ pub struct RoutingDecision {
 // ============================================================================
 
 /// Get current timestamp in seconds
-#[allow(dead_code)]
 pub fn now_ts() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -624,13 +601,13 @@ pub fn now_ts_ms() -> i64 {
 }
 
 /// Calculate checkpoint message characters
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub fn checkpoint_message_chars(messages: &[Message]) -> usize {
     messages.iter().map(|m| m.content.chars().count()).sum()
 }
 
 /// Touch conversation order (update LRU)
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
     if let Ok(mut guard) = order.lock() {
         // Remove if exists
@@ -645,7 +622,6 @@ pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: 
 }
 
 /// Enforce checkpoint capacity
-#[allow(dead_code)]
 pub fn enforce_checkpoint_capacity(
     state: &mut ConversationState,
     incoming: usize,
@@ -675,7 +651,7 @@ pub fn enforce_checkpoint_capacity(
 }
 
 /// Evict oldest conversation
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-01 — planned wiring
 pub fn evict_oldest_conversation(
     store: &mut HashMap<String, ConversationState>,
     order: &StdMutex<Vec<String>>,
@@ -717,7 +693,7 @@ struct CircuitBreakerState {
 
 /// Circuit breaker stage
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-04 — planned wiring
 enum CircuitBreakerStage {
     #[default]
     Closed,
@@ -738,7 +714,8 @@ impl Default for CircuitBreakerState {
 }
 
 /// Circuit breaker admission result
-#[allow(dead_code)]
+#[non_exhaustive]
+#[allow(dead_code)] // F-GAP-04 — planned wiring
 pub enum CircuitBreakerAdmission {
     Closed,
     Rejected {

@@ -394,7 +394,7 @@ impl Skill for PromptBasedSkill {
 impl PromptBasedSkill {
     /// Convenience method: wraps this skill into `Arc<dyn Skill>` for registry registration.
     /// Not called internally but kept as a public utility for consumers.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — planned wiring: skill system
     pub fn boxed(self) -> Arc<dyn Skill> {
         Arc::new(self)
     }
@@ -438,7 +438,7 @@ impl Skill for ComposedSkill {
 impl ComposedSkill {
     /// Convenience method: wraps this skill into `Arc<dyn Skill>` for registry registration.
     /// Not called internally but kept as a public utility for consumers.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — planned wiring: skill system
     pub fn boxed(self) -> Arc<dyn Skill> {
         Arc::new(self)
     }

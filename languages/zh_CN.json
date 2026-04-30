@@ -446,6 +446,8 @@
     "error.failover_group_not_found": "故障转移组 '{name}' 未找到",
     "error.token_not_found": "令牌 '{token_id}' 未找到",
     "error.token_revoked": "令牌 '{token_id}' 已被撤销",
-    "error.token_expired": "令牌 '{token_id}' 已于 {expires_at} 过期 (当前: {now})"
+    "error.token_expired": "令牌 '{token_id}' 已于 {expires_at} 过期 (当前: {now})",
+    "error.acp_mode_unsupported": "ACP 模式不支持方法: {method}",
+    "error.mcp_mode_unsupported": "MCP 模式不支持方法: {method}"
   }
 }

@@ -1,6 +1,6 @@
 /// Step 2 Auto-Repair Loop Integration for Workflow Pack
 /// Adds repair decision and governance control for workflow execution failures
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-07 — planned wiring: workflow execution auto-repair
 fn should_enable_auto_repair_for_workflow(
     failure_count: usize,
     governance_config: Option<&Value>,
@@ -29,7 +29,7 @@ fn should_enable_auto_repair_for_workflow(
     !matches!(execution_mode, "manual" | "safeguard")
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-07 — planned wiring: workflow execution auto-repair
 fn enrich_response_with_repair_readiness(
     mut response: Value,
     failure_count: usize,

@@ -1,7 +1,7 @@
 <template>
   <transition name="slide-fade">
     <div
-      v-if="runtime.offline || runtime.hasStaleData"
+      v-show="runtime.offline || runtime.hasStaleData"
       style="
         background-color: #fff3cd;
         border: 1px solid #ffc107;

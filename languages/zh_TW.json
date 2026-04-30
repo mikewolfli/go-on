@@ -446,6 +446,8 @@
     "error.failover_group_not_found": "故障轉移組 '{name}' 未找到",
     "error.token_not_found": "權杖 '{token_id}' 未找到",
     "error.token_revoked": "權杖 '{token_id}' 已被撤銷",
-    "error.token_expired": "權杖 '{token_id}' 已於 {expires_at} 過期 (當前: {now})"
+    "error.token_expired": "權杖 '{token_id}' 已於 {expires_at} 過期 (當前: {now})",
+    "error.acp_mode_unsupported": "ACP 模式不支持方法: {method}",
+    "error.mcp_mode_unsupported": "MCP 模式不支持方法: {method}"
   }
 }

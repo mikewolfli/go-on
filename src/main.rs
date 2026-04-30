@@ -1079,11 +1079,10 @@ async fn initialize_cache(
             }
         }
 
-        #[cfg(not(all(
-            feature = "profile-local",
-            not(feature = "profile-simple-server"),
-            not(feature = "profile-multi-users-server")
-        )))]
+        #[cfg(any(
+            feature = "profile-simple-server",
+            feature = "profile-multi-users-server"
+        ))]
         return result;
     }
 }
@@ -1158,11 +1157,10 @@ async fn initialize_vector_store(
             }
         }
 
-        #[cfg(not(all(
-            feature = "profile-local",
-            not(feature = "profile-simple-server"),
-            not(feature = "profile-multi-users-server")
-        )))]
+        #[cfg(any(
+            feature = "profile-simple-server",
+            feature = "profile-multi-users-server"
+        ))]
         return result;
     }
 }
@@ -1580,7 +1578,9 @@ async fn start_server(
         ..Default::default()
     };
     tokio::spawn(async move {
-        let _ = crate::orchestration::startup_context::load(&startup_cfg).await;
+        if let Err(e) = crate::orchestration::startup_context::load(&startup_cfg).await {
+            warn!("startup context loading failed: {}", e);
+        }
     });
 
     let (cache, vector_store, (autotune_state, autotune_config, autotune_state_path)) = tokio::try_join!(

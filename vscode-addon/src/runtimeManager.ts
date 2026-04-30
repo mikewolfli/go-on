@@ -203,6 +203,13 @@ export class GoOnManager {
         this._outputChannel?.appendLine(`[exit] code ${code}`);
         const failedBeforeStartup = !resolved;
         this.process = null;
+
+        // Reject all pending requests — process exited unexpectedly
+        for (const [id, pending] of this.pendingRequests) {
+          pending.reject(new Error("Go-On process exited unexpectedly"));
+        }
+        this.pendingRequests.clear();
+
         this.updateStatus();
 
         if (startupTimeout) {

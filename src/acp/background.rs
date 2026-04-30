@@ -45,6 +45,7 @@ pub struct MaintenanceCycleResult {
 ///
 /// Groups all shared state handles needed by the background maintenance loop
 /// into a single struct, eliminating the previous 12-parameter function signature.
+#[derive(Debug)]
 pub struct BackgroundContext {
     pub lock_monitor: Arc<AcpLockMonitor>,
     pub runtime_config: Arc<std::sync::Mutex<RuntimeConfig>>,
@@ -452,8 +453,8 @@ pub async fn start_background_tasks(
 }
 
 /// Stop all background tasks
-#[allow(dead_code)]
-pub async fn stop_background_tasks(shutdown_notify: Arc<Notify>) {
+#[allow(dead_code)] // F-GAP-03 — planned wiring: lifecycle/background task orchestration
+pub fn stop_background_tasks(shutdown_notify: Arc<Notify>) {
     shutdown_notify.notify_waiters();
 }
 

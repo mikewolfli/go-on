@@ -44,6 +44,7 @@ use std::path::Path;
 
 /// SQLite-based response cache
 #[cfg(not(feature = "backend-postgres"))]
+#[derive(Debug)]
 pub struct ResponseCache {
     /// SQLite connection (mutex-protected)
     conn: Mutex<Connection>,
@@ -376,6 +377,17 @@ pub struct ResponseCache {
     client: Mutex<Client>,
     default_ttl_seconds: u64,
     max_entries: usize,
+}
+
+#[cfg(feature = "backend-postgres")]
+impl std::fmt::Debug for ResponseCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResponseCache")
+            .field("client", &"<postgres Client>")
+            .field("default_ttl_seconds", &self.default_ttl_seconds)
+            .field("max_entries", &self.max_entries)
+            .finish()
+    }
 }
 
 #[cfg(feature = "backend-postgres")]

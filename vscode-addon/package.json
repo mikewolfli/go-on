@@ -4,7 +4,7 @@
   "description": "VS Code extension for the Go-On Rust ACP proxy",
   "version": "0.8.3",
   "engines": {
-    "vscode": "^1.74.0"
+    "vscode": "^1.90.0"
   },
   "extensionKind": [
     "ui"
@@ -705,7 +705,7 @@
     "test": "npm run compile && npm run test:contract"
   },
   "devDependencies": {
-    "@types/vscode": "^1.74.0",
+    "@types/vscode": "^1.90.0",
     "@types/node": "16.x",
     "@types/adm-zip": "^0.5.7",
     "@types/tar": "^6.1.13",

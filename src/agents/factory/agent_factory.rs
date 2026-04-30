@@ -46,10 +46,10 @@ pub struct SubAgentInstance {
     /// Configuration overrides applied on top of the template's defaults.
     pub config_overrides: HashMap<String, String>,
     /// Current status of the agent instance.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — reserved for future metrics exposure
     pub status: String,
     /// Runtime metrics for this instance.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — reserved for future metrics exposure
     pub metrics: HashMap<String, u64>,
 }
 

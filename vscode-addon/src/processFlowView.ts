@@ -68,38 +68,46 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     this._messageSubscription?.dispose();
     this._messageSubscription = webviewView.webview.onDidReceiveMessage(
       async (message) => {
-        switch (message.type) {
-          case "createProcess":
-            await this._createProcess(message.processData);
-            break;
-          case "runProcess":
-            await this._runProcess(message.processId);
-            break;
-          case "updateProcess":
-            await this._updateProcess(message.processId, message.updates);
-            break;
-          case "importProcesses":
-            await this._importProcesses(message.processes);
-            break;
-          case "showInputBox":
-            {
-              const result = await vscode.window.showInputBox({
-                prompt: message.prompt,
-                value: message.value,
-              });
-              this._view?.webview.postMessage({
-                type: "showInputBoxResult",
-                id: message.id,
-                value: result,
-              });
-            }
-            break;
-          case "showWarningMessage":
-            vscode.window.showWarningMessage(message.message);
-            break;
-          case "showErrorMessage":
-            vscode.window.showErrorMessage(message.message);
-            break;
+        try {
+          switch (message.type) {
+            case "createProcess":
+              await this._createProcess(message.processData);
+              break;
+            case "runProcess":
+              await this._runProcess(message.processId);
+              break;
+            case "updateProcess":
+              await this._updateProcess(message.processId, message.updates);
+              break;
+            case "importProcesses":
+              await this._importProcesses(message.processes);
+              break;
+            case "showInputBox":
+              {
+                const result = await vscode.window.showInputBox({
+                  prompt: message.prompt,
+                  value: message.value,
+                });
+                this._view?.webview.postMessage({
+                  type: "showInputBoxResult",
+                  id: message.id,
+                  value: result,
+                });
+              }
+              break;
+            case "showWarningMessage":
+              vscode.window.showWarningMessage(message.message);
+              break;
+            case "showErrorMessage":
+              vscode.window.showErrorMessage(message.message);
+              break;
+          }
+        } catch (error: unknown) {
+          const message_text =
+            error instanceof Error ? error.message : String(error);
+          void vscode.window.showErrorMessage(
+            `Process Flow error: ${message_text}`,
+          );
         }
       },
       undefined,

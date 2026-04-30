@@ -246,7 +246,7 @@ pub struct AdversarialVerdict {
 
 /// Independent adversarial verifier that probes for weaknesses.
 #[cfg(test)]
-pub struct AdversarialVerifier;
+struct AdversarialVerifier;
 
 #[cfg(test)]
 impl AdversarialVerifier {
@@ -254,7 +254,7 @@ impl AdversarialVerifier {
     ///
     /// The verifier examines content from the specified angle and returns
     /// findings along with a pass/fail verdict.
-    pub fn verify(content: &str, bias: AdversarialBias) -> AdversarialVerdict {
+    fn verify(content: &str, bias: AdversarialBias) -> AdversarialVerdict {
         let mut findings: Vec<AdversarialFinding> = Vec::new();
         let lower = content.to_ascii_lowercase();
 
@@ -414,7 +414,7 @@ impl AdversarialVerifier {
     /// Run multi-bias adversarial verification.
     ///
     /// Executes all four biases and returns the combined result.
-    pub fn verify_all(content: &str) -> Vec<AdversarialVerdict> {
+    fn verify_all(content: &str) -> Vec<AdversarialVerdict> {
         vec![
             Self::verify(content, AdversarialBias::Security),
             Self::verify(content, AdversarialBias::Logic),
@@ -434,7 +434,7 @@ impl AdversarialVerifier {
 /// Possible arbitration outcomes.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArbitrationOutcome {
+enum ArbitrationOutcome {
     /// Accept primary verdict.
     AcceptPrimary,
     /// Accept adversarial verdict.
@@ -448,7 +448,7 @@ pub enum ArbitrationOutcome {
 /// Arbitration configuration.
 #[cfg(test)]
 #[derive(Debug, Clone)]
-pub struct ArbitrationConfig {
+struct ArbitrationConfig {
     /// Confidence threshold below which human review is required.
     pub human_review_threshold: f64,
     /// Whether to require adversarial verification on high-risk content.
@@ -477,7 +477,7 @@ impl Default for ArbitrationConfig {
 ///
 /// An `ArbitrationOutcome` indicating the resolution.
 #[cfg(test)]
-pub fn arbitrate(
+fn arbitrate(
     primary_verdict: &VerificationVerdict,
     adversarial_verdicts: &[AdversarialVerdict],
     config: &ArbitrationConfig,

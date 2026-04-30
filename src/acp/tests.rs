@@ -115,7 +115,7 @@ mod test_suite {
     /// Test that conversation checkpoint creation via runtime_pack works (integration smoke test)
     #[test]
     fn test_conversation_checkpoint_creation_via_runtime_pack() {
-        use crate::acp::r#impl::request::checkpoint_pack::create_checkpoint_record;
+        use crate::acp::r#impl::request::create_checkpoint_record;
         use crate::agent::Message;
 
         let server = phase_inference_server("coding", &["coding", "review"]);
@@ -124,16 +124,14 @@ mod test_suite {
             role: "user".to_string(),
             content: "Test message".to_string(),
         };
-        let checkpoint = runtime
-            .block_on(create_checkpoint_record(
-                &server,
-                "conv-test",
-                "main",
-                vec![message],
-                Some("checkpoint note".to_string()),
-                None,
-            ))
-            .expect("checkpoint created via create_checkpoint_record");
+        let checkpoint = runtime.block_on(create_checkpoint_record(
+            &server,
+            "conv-test",
+            "main",
+            vec![message],
+            Some("checkpoint note".to_string()),
+            None,
+        ));
 
         assert_eq!(checkpoint.conversation_id, "conv-test");
         assert_eq!(checkpoint.branch_id, "main");

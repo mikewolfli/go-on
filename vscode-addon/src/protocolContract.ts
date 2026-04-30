@@ -390,6 +390,8 @@ const fallbackContract: ProtocolContract = {
 };
 
 function loadProtocolContract(): ProtocolContract {
+  // NOTE: __dirname is used because VS Code extensions use CommonJS.
+  // If migrating to ESM, use: `import.meta.url` + `fileURLToPath`.
   const contractPath = path.resolve(
     __dirname,
     "..",

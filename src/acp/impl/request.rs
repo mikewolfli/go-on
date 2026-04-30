@@ -256,7 +256,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     server,
                     request.id,
                     -32601,
-                    format!("ACP mode does not support method: {}", method),
+                    tf("error.acp_mode_unsupported", &[("method", method)]),
                     None,
                 )
                 .await;
@@ -268,7 +268,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     server,
                     request.id,
                     -32601,
-                    format!("MCP mode does not support method: {}", method),
+                    tf("error.mcp_mode_unsupported", &[("method", method)]),
                     None,
                 )
                 .await;

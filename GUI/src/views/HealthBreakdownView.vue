@@ -1,7 +1,7 @@
 <template>
   <!-- Loading state -->
   <div v-if="loading && !liveness.ok" style="text-align:center;padding:40px;color:#999;">
-    {{ t('common.loading') || 'Loading...' }}
+    {{ t('common.loading') }}
   </div>
 
   <el-space v-else direction="vertical" fill style="width: 100%">
@@ -190,6 +190,7 @@
         <el-divider />
 
         <!-- Overall Score -->
+        <!-- el-statistic is deprecated in Element Plus but still works -->
         <el-statistic :title="t('healthBreakdown.overallScore')" :value="overallScore" suffix="/100" />
       </el-space>
     </el-card>

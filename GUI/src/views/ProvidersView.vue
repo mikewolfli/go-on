@@ -54,7 +54,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
 import {
@@ -241,7 +241,7 @@ async function importCopilotToken() {
   }
 }
 
-watch(
+const stopWatchingProvider = watch(
   provider,
   async (nextProvider, previousProvider) => {
     syncEnvVar(previousProvider);
@@ -249,6 +249,10 @@ watch(
   },
   { flush: "post" }
 );
+
+onUnmounted(() => {
+  stopWatchingProvider();
+});
 
 onMounted(async () => {
   await reloadProviderCatalog();

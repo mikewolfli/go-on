@@ -91,7 +91,7 @@ pub fn new_acp_server(
     // SchemaRegistry, TenantBudgetEnforcer, OptimizerRegistry, PromptAssembler, and
     // PromotionRegistry with sensible defaults.
     // Create HarnessBus and CapabilityBus to wire into the server
-    let harness_bus = {
+    let mut harness_bus = {
         let config_path_ref = config_path.as_deref().map(Path::new);
         let storage_path = config_path_ref
             .and_then(|p| p.parent())
@@ -107,6 +107,33 @@ pub fn new_acp_server(
             ))
         }
     };
+    // Inject RBAC enforcer into the harness bus
+    use crate::governance::rbac::{Permission, RbacEnforcer};
+    {
+        let mut enforcer = RbacEnforcer::new();
+        enforcer.register_role(
+            "admin",
+            vec![
+                Permission::Read,
+                Permission::Write,
+                Permission::Execute,
+                Permission::Admin,
+                Permission::ManageUsers,
+                Permission::ManageConfig,
+                Permission::Audit,
+            ],
+        );
+        enforcer.register_role(
+            "user",
+            vec![Permission::Read, Permission::Write, Permission::Execute],
+        );
+        enforcer.register_role("viewer", vec![Permission::Read]);
+        // The Arc has strong count 1 at this point, so get_mut succeeds
+        if let Some(bus) = Arc::get_mut(&mut harness_bus) {
+            bus.set_rbac_enforcer(enforcer);
+        }
+    }
+
     let workflow_registry = Arc::new(std::sync::Mutex::new(
         crate::orchestration::workflow_registry::WorkflowRegistry::new(),
     ));
@@ -144,7 +171,12 @@ pub fn new_acp_server(
                     config,
                 ));
                 for agent_name in registry.names() {
-                    let _ = s.register_worker(&agent_name, &agent_name);
+                    if let Err(e) = s.register_worker(&agent_name, &agent_name) {
+                        warn!(
+                            "failed to register worker for agent '{}': {}",
+                            agent_name, e
+                        );
+                    }
                 }
                 s
             };
@@ -435,7 +467,8 @@ pub fn routing_handles(server: &AcpServer) -> Result<(Arc<FlowManager>, Arc<Agen
 }
 
 /// Get cache handle
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-09 — planned wiring: memory/caching accessor
+#[must_use]
 pub fn cache_handle(server: &AcpServer) -> Option<Arc<crate::cache::ResponseCache>> {
     server.cache.response_cache.clone()
 }
@@ -454,19 +487,21 @@ pub fn artifact_ledger(_server: &AcpServer) -> crate::reinforcement::ArtifactLed
 }
 
 /// Get vector store handle
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-08 — planned wiring: learning/intelligence accessor
+#[must_use]
 pub fn vector_store_handle(server: &AcpServer) -> Option<Arc<VectorStore>> {
     server.cache.vector_store.clone()
 }
 
 /// Get vector configuration snapshot
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-08 — planned wiring: learning/intelligence accessor
 pub fn vector_config_snapshot(server: &AcpServer) -> Option<VectorConfig> {
     server.vector_config.clone()
 }
 
 /// Get autotune handle
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-08 — planned wiring: learning/intelligence accessor
+#[must_use]
 pub fn autotune_handle(server: &AcpServer) -> Option<Arc<tokio::sync::Mutex<AutoTuneState>>> {
     server.autotune.clone()
 }
@@ -2190,7 +2225,7 @@ struct ParsedHttpRequest<'a> {
     path: &'a str,
     header_part: &'a str,
     body_initial_part: &'a str,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-05 — reserved for planner/executor adaptive signal
     adaptive_signal: &'static str,
 }
 
@@ -2499,7 +2534,7 @@ async fn route_http_post(
 }
 
 /// Write a standard HTTP JSON response. Thin wrapper for consistency.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-03 — planned wiring: lifecycle/utility
 async fn write_http_response(
     socket: &mut TcpStream,
     status: u16,

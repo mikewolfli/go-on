@@ -927,7 +927,9 @@ pub(crate) async fn process_chat_request(
             retries: 0,
             max_retries: 3,
         };
-        let _ = sched.level1.submit(task);
+        if let Err(e) = sched.level1.submit(task) {
+            tracing::warn!("scheduler submit failed: {}", e);
+        }
     }
 
     // ── Token cache lookup ──────────────────────────────────────────────
@@ -1795,7 +1797,9 @@ pub(crate) async fn process_chat_request(
     // Mark the scheduled task as completed so the active-worker counter
     // decrements and queue depth reflects the true in-flight load.
     if let Some(ref sched) = server.scheduler {
-        let _ = sched.level1.complete(&sched_task_id);
+        if let Err(e) = sched.level1.complete(&sched_task_id) {
+            tracing::warn!("scheduler complete failed: {}", e);
+        }
     }
 
     // ── CapabilityBus feedback on execution outcome ────────────────────
@@ -2123,6 +2127,7 @@ async fn emit_stream_chunk(
     }
 
     if let Some(sender) = &observer.sse_sender {
+        // NOTE: This SSE frame structure should match helpers/metrics::stream_chunk_notification
         let _ = sender.send(StreamFrame {
             event: "chunk".to_string(),
             payload: json!({
@@ -2171,6 +2176,7 @@ async fn emit_stream_done(
     }
 
     if let Some(sender) = &observer.sse_sender {
+        // NOTE: This SSE frame structure should match helpers/metrics::stream_done_notification
         let _ = sender.send(StreamFrame {
             event: "done".to_string(),
             payload: json!({
@@ -2793,7 +2799,7 @@ async fn generate_phase_summary_text(
         },
     ];
 
-    let result = run_agent_collecting(
+    let result = match run_agent_collecting(
         server,
         StreamNotificationContext {
             stream_observer: None,
@@ -2808,7 +2814,13 @@ async fn generate_phase_summary_text(
         Some(Duration::from_secs(timeout_seconds)),
     )
     .await
-    .ok()?;
+    {
+        Ok(text) => text,
+        Err(e) => {
+            tracing::warn!("phase summary generation failed: {}", e);
+            return None;
+        }
+    };
 
     let compact = result.trim();
     if compact.is_empty() {

@@ -34,6 +34,7 @@
       </template>
       <el-row :gutter="16" style="margin-bottom: 12px;">
         <el-col :span="8">
+          <!-- el-statistic is deprecated in Element Plus but still works -->
           <el-statistic :title="t('monitor.healthScore')" :value="healthScore" suffix="/100" />
         </el-col>
         <el-col :span="8">

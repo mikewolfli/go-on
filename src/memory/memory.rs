@@ -69,6 +69,7 @@ pub struct MemoryPromotionReport {
 }
 
 /// Memory store with policy management
+#[derive(Debug)]
 pub struct MemoryStore {
     entries: HashMap<String, MemoryEntry>,
     policy: MemoryPolicy,

@@ -436,11 +436,22 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
 
     const goOnConfig = vscode.workspace.getConfiguration("go-on");
     const relativeKey = key.replace(/^go-on\./, "");
-    await goOnConfig.update(
-      relativeKey,
-      value,
-      vscode.ConfigurationTarget.Workspace,
-    );
+
+    // Keys with runtime./cache./vector./autotune. prefixes are TOML-only settings;
+    // skip the VS Code config update to avoid dual-write race conditions.
+    const isTomlOnly =
+      relativeKey.startsWith("runtime.") ||
+      relativeKey.startsWith("cache.") ||
+      relativeKey.startsWith("vector.") ||
+      relativeKey.startsWith("autotune.");
+
+    if (!isTomlOnly) {
+      await goOnConfig.update(
+        relativeKey,
+        value,
+        vscode.ConfigurationTarget.Workspace,
+      );
+    }
 
     if (relativeKey.startsWith("runtime.")) {
       await this._updateRuntimeSetting(

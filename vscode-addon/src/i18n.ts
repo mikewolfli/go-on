@@ -115,13 +115,13 @@ export const MessageKeys = {
   executeTask: "workflow.executeTask",
 
   // Configuration
-  configuration: "configuration.configuration",
-  configPath: "configuration.configPath",
-  executablePath: "configuration.executablePath",
-  autoDownloadBinary: "configuration.autoDownloadBinary",
-  releaseRepository: "configuration.releaseRepository",
-  releaseTag: "configuration.releaseTag",
-  autoStart: "configuration.autoStart",
+  configuration: "config.title",
+  configPath: "config.configPath",
+  executablePath: "config.executablePath",
+  autoDownloadBinary: "config.autoDownloadBinary",
+  releaseRepository: "config.releaseRepository",
+  releaseTag: "config.releaseTag",
+  autoStart: "config.autoStart",
 
   // Chat
   chat: "chat.chat",

@@ -1610,7 +1610,7 @@ struct SubtaskRunResult {
     response_excerpt: String,
     tool_loop_used: bool,
     tool_observations: Vec<String>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-14 — reserved for self-rationalization audit trail
     audit_log_json: Option<String>,
 }
 

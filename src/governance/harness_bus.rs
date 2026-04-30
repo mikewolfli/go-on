@@ -80,6 +80,7 @@ use std::time::{Duration, Instant};
 
 /// How CapabilityBus selects the next agent
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum RoutingStrategy {
     RoundRobin,
     Weighted,
@@ -148,6 +149,7 @@ impl Default for DispatchPolicy {
 
 /// Execution mode for sub-agents
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ExecutionMode {
     #[default]
     Auto,
@@ -156,6 +158,7 @@ pub enum ExecutionMode {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ToolUsagePolicy {
     #[default]
     AllowAll,
@@ -165,6 +168,7 @@ pub enum ToolUsagePolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FileWritePolicy {
     AllowAll,
     AllowPath(Vec<String>),
@@ -178,6 +182,7 @@ impl Default for FileWritePolicy {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum CodeExecutionPolicy {
     AllowAll,
     #[default]
@@ -186,6 +191,7 @@ pub enum CodeExecutionPolicy {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ReviewRequirement {
     None,
     #[default]
@@ -202,6 +208,7 @@ pub enum AuditLevel {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FailureStrategy {
     #[default]
     Retry,
@@ -210,6 +217,7 @@ pub enum FailureStrategy {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DegradationStrategy {
     #[default]
     None,
@@ -218,6 +226,7 @@ pub enum DegradationStrategy {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ReviewLevel {
     None,
     #[default]
@@ -405,6 +414,7 @@ impl Default for AgentExecutionPolicy {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum PolicyVerdict {
     Allow,
     Deny(PolicyViolation),
@@ -1216,6 +1226,11 @@ impl HarnessBus {
             "phase_parallelism_cap": outcome.phase_parallelism_cap,
             "force_fail_fast": outcome.force_fail_fast,
         })
+    }
+
+    /// Inject an RBAC enforcer into the policy evaluator.
+    pub fn set_rbac_enforcer(&mut self, enforcer: crate::governance::rbac::RbacEnforcer) {
+        self.evaluator.set_rbac_enforcer(enforcer);
     }
 
     /// Extract an optional `u64` value from a JSON options map.

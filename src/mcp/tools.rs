@@ -15,7 +15,7 @@ pub mod error_codes {
     /// JSON-RPC Parse error
     pub const PARSE_ERROR: i32 = -32700;
     /// JSON-RPC Invalid Request
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-10 — reserved for future MCP error handling
     pub const INVALID_REQUEST: i32 = -32600;
     /// JSON-RPC Method not found
     pub const METHOD_NOT_FOUND: i32 = -32601;
@@ -24,9 +24,9 @@ pub mod error_codes {
     /// JSON-RPC Internal error
     pub const INTERNAL_ERROR: i32 = -32603;
     /// Server error start range
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-10 — reserved for future MCP error handling
     pub const SERVER_ERROR_START: i32 = -32099;
     /// Server error end range
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-10 — reserved for future MCP error handling
     pub const SERVER_ERROR_END: i32 = -32000;
 }

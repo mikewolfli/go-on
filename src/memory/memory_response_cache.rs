@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct MemoryCachedResponse {
     #[allow(dead_code)] // Bucket F — accessed via clone from get()
     pub(crate) response_text: String,
     expires_at: i64,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct MemoryResponseCache {
     inner: StdMutex<HashMap<String, MemoryCachedResponse>>,
 }

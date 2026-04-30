@@ -131,6 +131,7 @@
                 size="small"
                 :disabled="loading"
                 :title="t('chat.attachImage')"
+                :aria-label="t('chat.attachImage')"
                 class="upload-button"
               >
                 <svg t="1743266093421" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="2549" width="16" height="16"><path d="M928 64H96C42.98 64 0 106.98 0 160v704c0 53.02 42.98 96 96 96h832c53.02 0 96-42.98 96-96V160c0-53.02-42.98-96-96-96z m32 800c0 17.673-14.327 32-32 32H96c-17.673 0-32-14.327-32-32V160c0-17.673 14.327-32 32-32h832c17.673 0 32 14.327 32 32v704z" fill="currentColor" p-id="2550"></path><path d="M384 480l-128 192h512l-192-256-128 160zM256 320c-35.346 0-64 28.654-64 64s28.654 64 64 64 64-28.654 64-64-28.654-64-64-64z" fill="currentColor" p-id="2551"></path></svg>
@@ -150,6 +151,7 @@
               type="primary"
               :loading="loading"
               :disabled="(!inputText.trim() && !attachments.length) || !isBackendRunning"
+              :aria-label="t('chat.send')"
               @click="sendMessage"
               class="send-button"
             >
@@ -198,7 +200,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
+import { ref, computed, onActivated, onMounted, onUnmounted, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
 import { ElMessage } from "element-plus";
 import { Document } from "@element-plus/icons-vue";
@@ -421,6 +423,7 @@ async function sendMessage() {
     };
     session.messages.push(assistantMsg);
   } catch (err) {
+    currentAbortController.value = null;
     const errorMsg: ChatMessage = {
       id: `m${Date.now()}_e`,
       role: "assistant",
@@ -440,6 +443,13 @@ function scrollToBottom() {
     messageAreaRef.value.scrollTop = messageAreaRef.value.scrollHeight;
   }
 }
+
+onActivated(() => {
+  // When returning to the chat tab, refresh the active session display
+  if (activeSessionId.value) {
+    nextTick(() => scrollToBottom());
+  }
+});
 
 onMounted(() => {
   if (!sessions.value.length) {

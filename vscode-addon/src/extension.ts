@@ -744,14 +744,6 @@ async function syncLanguageToApp(language: string): Promise<void> {
       return;
     }
 
-    // Create a language configuration object for the app
-    // Store language preference in app settings
-    await config.update(
-      "language",
-      language,
-      vscode.ConfigurationTarget.Global,
-    );
-
     // Log successful sync
     goOnOutput.appendLine(
       `Language synchronized: VS Code ${language} -> App ${language}`,

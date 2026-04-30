@@ -161,7 +161,7 @@ async function refreshStatus() {
       const parsed = JSON.parse(result);
       data = typeof parsed === "object" && parsed !== null ? parsed as Record<string, unknown> : {};
     } catch {
-      ElMessage.error(`Invalid JSON response: ${result?.slice(0, 200)}`);
+      ElMessage.error(`${t("autoTune.loadingError")}: ${result?.slice(0, 200)}`);
       rawOutput.value = result;
       return;
     }
@@ -190,7 +190,7 @@ async function refreshStatus() {
 
     ElMessage.success(t("common.refreshed"));
   } catch (err) {
-    ElMessage.error(`Error: ${err}`);
+    ElMessage.error(`${t("autoTune.loadingError")}: ${err}`);
   } finally {
     loading.value = false;
   }
@@ -212,7 +212,7 @@ async function resetTuning() {
       ElMessage.success(t("autoTune.resetSuccess"));
       await refreshStatus();
     } catch (err) {
-      ElMessage.error(`Error: ${err}`);
+      ElMessage.error(`${t("autoTune.resetError")}: ${err}`);
     } finally {
       resetting.value = false;
     }

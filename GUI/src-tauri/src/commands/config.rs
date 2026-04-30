@@ -108,7 +108,7 @@ struct GithubDeviceCodeResponse {
     device_code: String,
     user_code: String,
     verification_uri: String,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-13 — reserved for future security governor wiring
     verification_uri_complete: Option<String>,
     expires_in: u64,
     interval: Option<u64>,
