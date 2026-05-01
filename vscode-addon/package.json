@@ -705,15 +705,15 @@
     "test": "npm run compile && npm run test:contract"
   },
   "devDependencies": {
-    "@types/vscode": "^1.90.0",
-    "@types/node": "16.x",
     "@types/adm-zip": "^0.5.7",
+    "@types/node": "16.x",
     "@types/tar": "^6.1.13",
-    "eslint": "^8.28.0",
+    "@types/vscode": "^1.90.0",
     "@typescript-eslint/eslint-plugin": "^5.42.0",
     "@typescript-eslint/parser": "^5.42.0",
-    "typescript": "^4.9.4",
-    "nodemon": "^3.0.0"
+    "eslint": "^8.28.0",
+    "nodemon": "^3.0.0",
+    "typescript": "^4.9.5"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",

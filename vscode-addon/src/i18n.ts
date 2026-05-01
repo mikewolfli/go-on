@@ -116,12 +116,12 @@ export const MessageKeys = {
 
   // Configuration
   configuration: "config.title",
-  configPath: "config.configPath",
-  executablePath: "config.executablePath",
-  autoDownloadBinary: "config.autoDownloadBinary",
-  releaseRepository: "config.releaseRepository",
-  releaseTag: "config.releaseTag",
-  autoStart: "config.autoStart",
+  configPath: "config.configPath.description",
+  executablePath: "config.executablePath.description",
+  autoDownloadBinary: "config.autoDownloadBinary.description",
+  releaseRepository: "config.releaseRepository.description",
+  releaseTag: "config.releaseTag.description",
+  autoStart: "config.autoStart.description",
 
   // Chat
   chat: "chat.chat",
@@ -159,12 +159,16 @@ export const MessageKeys = {
   unsavedChanges: "messages.unsavedChanges",
   goOnStarted: "messages.goOnStarted",
   goOnStopped: "messages.goOnStopped",
+  goOnStartedWithoutKeys: "messages.goOnStartedWithoutKeys",
+  goOnStartFailed: "messages.goOnStartFailed",
   goOnNotRunning: "messages.goOnNotRunning",
   cacheCleared: "messages.cacheCleared",
   vectorCleared: "messages.vectorCleared",
   configReloaded: "messages.configReloaded",
   goOnShutdown: "messages.goOnShutdown",
   diagnosisCompleted: "messages.diagnosisCompleted",
+  diagnosisIssue: "messages.diagnosisIssue",
+  noWorkspaceFolderOpen: "messages.noWorkspaceFolderOpen",
 
   // Language
   language: "language.language",
@@ -245,6 +249,7 @@ export const MessageKeys = {
   messagePlaceholder: "rpc.messagePlaceholder",
   missingEnvVars: "rpc.missingEnvVars",
   noWorkspace: "rpc.noWorkspace",
+  goOnNotRunningRpc: "messages.goOnNotRunningRpc",
 } as const;
 
 class I18nManager {

@@ -176,6 +176,8 @@
     "workingDir": "工作目录",
     "pickFile": "选择文件",
     "pickDirectory": "选择目录",
+    "pickExecutableDialogTitle": "选择 go-on 后台可执行文件",
+    "pickWorkingDirDialogTitle": "选择工作目录",
     "protocolMode": "协议模式",
     "protocolModeFromConfig": "from_config（从 config.toml 读取）",
     "protocolModeFromConfigDesc": "不传 --protocol-mode，运行时直接使用配置文件中的 [protocol].mode。",

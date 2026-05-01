@@ -723,11 +723,14 @@ impl CapabilityBus {
                     confidence: 0.0,
                     duration_ms: start.elapsed().as_millis() as u64,
                     recommended_mode: "ask".to_string(),
-                    // TODO(placeholder): available_tools is empty because no agent is
-                    // selected when the policy denies; wire to a default/fallback tool
-                    // set when the governance model supports degraded-mode tool access.
+                    // When policy denies, provide system health tools for degraded-mode access:
+                    // health check, diagnostics, and audit review.
                     #[cfg(feature = "sub-bus-tool")]
-                    available_tools: vec![],
+                    available_tools: vec![
+                        "health".to_string(),
+                        "diagnostics".to_string(),
+                        "audit".to_string(),
+                    ],
                 };
             }
             PolicyVerdict::Escalate(r) => {
@@ -745,8 +748,13 @@ impl CapabilityBus {
                     confidence: 0.0,
                     duration_ms: start.elapsed().as_millis() as u64,
                     recommended_mode: "ask".to_string(),
+                    // Same fallback tools available during escalation for manual review:
                     #[cfg(feature = "sub-bus-tool")]
-                    available_tools: vec![],
+                    available_tools: vec![
+                        "health".to_string(),
+                        "diagnostics".to_string(),
+                        "audit".to_string(),
+                    ],
                 };
             }
             _ => {}

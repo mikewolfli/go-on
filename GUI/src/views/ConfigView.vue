@@ -186,7 +186,7 @@ async function pickExecutable() {
   const picked = await openDialog({
     multiple: false,
     directory: false,
-    title: "选择 go-on 后台可执行文件",
+    title: t("config.pickExecutableDialogTitle"),
     filters: [
       { name: "Executable", extensions: ["exe", "bin", ""] },
       { name: "All Files", extensions: ["*"] },
@@ -206,7 +206,7 @@ async function pickWorkingDir() {
   const picked = await openDialog({
     multiple: false,
     directory: true,
-    title: "选择工作目录",
+    title: t("config.pickWorkingDirDialogTitle"),
   });
 
   if (!picked) {

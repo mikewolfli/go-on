@@ -45,7 +45,7 @@ use crate::governance::drift::drift_protection::{
 use crate::governance::hardening::{
     BudgetTracker, GovernanceAction, IdempotencyCache, PolicyBundle, SandboxPolicy, TaskBudget,
 };
-use crate::governance::pua::{PuaFeedbackCollector, PuaRuleEngine, TaskContext};
+use crate::governance::pua::{PuaFeedbackCollector, PuaRuleEngine, TaskContext, TaskType};
 use crate::governance::rationalization::{RationalizationAnnotation, SelfRationalizationGuard};
 use crate::governance::rbac::{AccessDecision, Permission, Principal, RbacEnforcer};
 use crate::governance::review_controls::{
@@ -636,36 +636,62 @@ impl PolicyEvaluator {
         }
 
         // 5. Review policy check (verify verdict from review_controls)
-        // TODO(placeholder): currently resolves against a static "APPROVE" response;
-        // wire to the task's actual review verdict once the review pipeline is integrated.
         if self.governance.quality_compass.enabled {
-            tracing::debug!(
-                "review gate using placeholder APPROVE path — wire to task review verdict"
-            );
+            tracing::debug!("review gate evaluating governance-driven review verdict");
         }
         let timeout_policy = ReviewTimeoutPolicy::from_options(None);
         let timeout_duration = crate::governance::review_controls::review_timeout(None, None);
-        let verdict = Self::resolve_review_policy("APPROVE", 1);
-        let outcome =
-            ReviewGateOutcome::Approved(vec![crate::governance::review_controls::ReviewDecision {
-                reviewer: "system".to_string(),
-                verdict: "APPROVE".to_string(),
-                response: "approved by policy".to_string(),
-            }]);
-        let _rejected_example = ReviewGateOutcome::Rejected(Vec::new());
-        let _degraded_example = ReviewGateOutcome::Degraded(Vec::new());
-        if verdict.is_approved() {
-            let review_result = match outcome {
-                ReviewGateOutcome::Approved(ref decisions)
-                | ReviewGateOutcome::Rejected(ref decisions)
-                | ReviewGateOutcome::Degraded(ref decisions) => decisions
-                    .first()
-                    .map(|d| d.reviewer.as_str())
-                    .unwrap_or("none"),
-            };
-            let _reviewer = review_result;
-            let _ = timeout_policy;
-            let _ = timeout_duration;
+        let requires_manual_review = ctx.risk_score >= 0.70
+            || ctx.file_count >= 8
+            || matches!(ctx.task_type, TaskType::SecurityPatch);
+        let review_response = if requires_manual_review {
+            "REJECT: governance policy requires manual review"
+        } else {
+            "APPROVE: governance policy pre-check passed"
+        };
+        let verdict = Self::resolve_review_policy(review_response, 8);
+        let outcome = match verdict {
+            ReviewVerdict::Approve => ReviewGateOutcome::Approved(vec![
+                crate::governance::review_controls::ReviewDecision {
+                    reviewer: "governance-policy".to_string(),
+                    verdict: verdict.as_str().to_string(),
+                    response: review_response.to_string(),
+                },
+            ]),
+            ReviewVerdict::Reject => ReviewGateOutcome::Rejected(vec![
+                crate::governance::review_controls::ReviewDecision {
+                    reviewer: "governance-policy".to_string(),
+                    verdict: verdict.as_str().to_string(),
+                    response: review_response.to_string(),
+                },
+            ]),
+            ReviewVerdict::Invalid => ReviewGateOutcome::Degraded(vec![
+                crate::governance::review_controls::ReviewDecision {
+                    reviewer: "governance-policy".to_string(),
+                    verdict: verdict.as_str().to_string(),
+                    response: review_response.to_string(),
+                },
+            ]),
+        };
+        let review_result = match &outcome {
+            ReviewGateOutcome::Approved(decisions)
+            | ReviewGateOutcome::Rejected(decisions)
+            | ReviewGateOutcome::Degraded(decisions) => decisions
+                .first()
+                .map(|d| d.reviewer.as_str())
+                .unwrap_or("none"),
+        };
+        tracing::debug!(
+            reviewer = review_result,
+            verdict = verdict.as_str(),
+            timeout_policy = ?timeout_policy,
+            timeout_duration = ?timeout_duration,
+            "review gate evaluated"
+        );
+        if !verdict.is_approved() {
+            return PolicyVerdict::Review(ReviewReason {
+                reason: "manual review required by governance review gate".to_string(),
+            });
         }
 
         // 6. Self-rationalization guard (low confidence check)

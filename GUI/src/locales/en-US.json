@@ -176,6 +176,8 @@
     "workingDir": "Working Directory",
     "pickFile": "Pick File",
     "pickDirectory": "Pick Directory",
+    "pickExecutableDialogTitle": "Select Go-On backend executable",
+    "pickWorkingDirDialogTitle": "Select working directory",
     "protocolMode": "Protocol Mode",
     "protocolModeFromConfig": "From config file",
     "protocolModeFromConfigDesc": "Use the protocol mode defined in the project configuration file.",

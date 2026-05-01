@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { i18n, MessageKeys } from "./i18n";
 
 export interface ViewCommandRegistryDeps {
   revealGoOnView: (
@@ -124,8 +125,8 @@ export function registerViewCommands(
     async () => {
       try {
         const sessionName = await vscode.window.showInputBox({
-          prompt: "Enter a name for the new chat session",
-          placeHolder: "My Session",
+          prompt: i18n.getMessage(MessageKeys.newSession),
+          placeHolder: i18n.getMessage(MessageKeys.sessionNamePlaceholder),
         });
         if (sessionName) {
           deps.createSession(sessionName);
@@ -170,7 +171,7 @@ export function registerViewCommands(
       }
 
       const session = await vscode.window.showQuickPick(sessionNames, {
-        placeHolder: "Select a chat session to switch to",
+        placeHolder: i18n.getMessage(MessageKeys.selectSession),
       });
       if (session) {
         deps.switchSession(session);

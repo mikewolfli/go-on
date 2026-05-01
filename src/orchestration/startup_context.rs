@@ -29,8 +29,8 @@ use tracing::debug;
 /// Governance-metrics snapshot of the startup context loader.
 ///
 /// Returned by `startup_context_profile()` for the `/governance/status` endpoint.
+/// Exported via all 5 protocol modes (auto/acp-stdio/acp-http/mcp-stdio/mcp-http).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[allow(dead_code)] // F-GAP-02 — reserved for future governance/review wiring
 pub struct StartupContextProfile {
     /// Whether the startup context loader is enabled in config
     pub enabled: bool,

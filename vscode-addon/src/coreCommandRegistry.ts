@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
+import { i18n, MessageKeys } from "./i18n";
 
 interface RuntimeResolution {
   executablePath: string;
@@ -46,7 +47,9 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 async function ensureRunning(deps: CoreCommandRegistryDeps): Promise<boolean> {
   if (!deps.isRunning()) {
-    vscode.window.showErrorMessage("Go-On is not running. Start it first.");
+    vscode.window.showErrorMessage(
+      i18n.getMessage(MessageKeys.goOnNotRunningRpc),
+    );
     return false;
   }
   return true;
@@ -67,9 +70,11 @@ export function registerCoreCommands(
       const config = vscode.workspace.getConfiguration("go-on");
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
       if (!workspaceFolder) {
-        output.appendLine("✗ No workspace folder open");
+        output.appendLine(
+          `✗ ${i18n.getMessage(MessageKeys.noWorkspaceFolderOpen)}`,
+        );
         vscode.window.showWarningMessage(
-          'Go-On diagnosis completed with issues. See "Go-On Diagnosis" output.',
+          i18n.getMessage(MessageKeys.diagnosisIssue),
         );
         return;
       }
@@ -137,7 +142,9 @@ export function registerCoreCommands(
       }
 
       output.appendLine("\n=== Diagnosis Complete ===");
-      vscode.window.showInformationMessage("Go-On diagnosis completed.");
+      vscode.window.showInformationMessage(
+        i18n.getMessage(MessageKeys.diagnosisCompleted),
+      );
     },
   );
 
@@ -151,7 +158,9 @@ export function registerCoreCommands(
       );
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
       if (!workspaceFolder) {
-        vscode.window.showErrorMessage("No workspace folder open.");
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.noWorkspaceFolderOpen),
+        );
         return;
       }
 
@@ -181,7 +190,9 @@ export function registerCoreCommands(
 
       try {
         await tryStart();
-        vscode.window.showInformationMessage("Go-On proxy started.");
+        vscode.window.showInformationMessage(
+          i18n.getMessage(MessageKeys.goOnStarted),
+        );
       } catch (error: unknown) {
         const errorMessage = getErrorMessage(error);
         const missingEnvVars = deps.parseMissingEnvVariableNames(errorMessage);
@@ -191,7 +202,7 @@ export function registerCoreCommands(
             deps.setRuntimeEnvOverrides(envValues);
             await tryStart();
             vscode.window.showWarningMessage(
-              "Go-On proxy started without API keys. Configure provider keys in Settings before using cloud agents.",
+              i18n.getMessage(MessageKeys.goOnStartedWithoutKeys),
             );
             return;
           } catch (retryError: unknown) {
@@ -212,7 +223,7 @@ export function registerCoreCommands(
         }
 
         vscode.window.showErrorMessage(
-          `Failed to start Go-On: ${errorMessage}`,
+          i18n.getMessage(MessageKeys.goOnStartFailed, [errorMessage]),
         );
         throw error;
       }
@@ -221,7 +232,9 @@ export function registerCoreCommands(
 
   const stopCommand = vscode.commands.registerCommand("go-on.stop", () => {
     deps.stop();
-    vscode.window.showInformationMessage("Go-On proxy stopped.");
+    vscode.window.showInformationMessage(
+      i18n.getMessage(MessageKeys.goOnStopped),
+    );
   });
 
   const sendRequestCommand = vscode.commands.registerCommand(
@@ -232,8 +245,8 @@ export function registerCoreCommands(
       }
 
       const message = await vscode.window.showInputBox({
-        prompt: "Enter your message",
-        placeHolder: "Type your chat message here...",
+        prompt: i18n.getMessage(MessageKeys.enterMessage),
+        placeHolder: i18n.getMessage(MessageKeys.messagePlaceholder),
       });
 
       if (!message) {
@@ -249,7 +262,9 @@ export function registerCoreCommands(
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `Request failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.requestFailed, [
+            getErrorMessage(error),
+          ]),
         );
       }
     },
