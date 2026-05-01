@@ -1123,7 +1123,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
   public async showConfigWizard() {
     const panel = vscode.window.createWebviewPanel(
       "goOnConfigWizard",
-      i18n.getMessage("configuration.wizard.title"),
+      i18n.getMessage(MessageKeys.configWizardTitle),
       vscode.ViewColumn.One,
       { enableScripts: true },
     );
@@ -1177,7 +1177,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         await this._sendCurrentSettings();
 
         vscode.window.showInformationMessage(
-          i18n.getMessage("messages.successfullySaved"),
+          i18n.getMessage(MessageKeys.successfullySaved),
         );
         panel.dispose();
       },
@@ -1207,7 +1207,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}';">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${i18n.getMessage("configuration.wizard.title")}</title>
+    <title>${i18n.getMessage(MessageKeys.configWizardTitle)}</title>
     <style>
         body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); padding: 20px; }
         .header { margin-bottom: 16px; }
@@ -1237,53 +1237,53 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
     <div class="header">
-        <div class="title">${i18n.getMessage("configuration.wizard.title")}</div>
-        <div class="subtitle">${i18n.getMessage("configuration.wizard.subtitle")}</div>
+        <div class="title">${i18n.getMessage(MessageKeys.configWizardTitle)}</div>
+        <div class="subtitle">${i18n.getMessage(MessageKeys.configWizardSubtitle)}</div>
     </div>
     <div class="steps">
-        <div class="step active" data-step-indicator="0">${i18n.getMessage("configuration.wizard.step1")}</div>
-        <div class="step" data-step-indicator="1">${i18n.getMessage("configuration.wizard.step2")}</div>
-        <div class="step" data-step-indicator="2">${i18n.getMessage("configuration.wizard.step3")}</div>
+        <div class="step active" data-step-indicator="0">${i18n.getMessage(MessageKeys.configWizardStep1)}</div>
+        <div class="step" data-step-indicator="1">${i18n.getMessage(MessageKeys.configWizardStep2)}</div>
+        <div class="step" data-step-indicator="2">${i18n.getMessage(MessageKeys.configWizardStep3)}</div>
     </div>
     <div id="step0">
         <div class="cards">
             <div class="card selected" data-scenario="local">
-                <div class="card-title">${i18n.getMessage("configuration.wizard.localTitle")}</div>
-                <div class="card-desc">${i18n.getMessage("configuration.wizard.localDesc")}</div>
+                <div class="card-title">${i18n.getMessage(MessageKeys.configWizardLocalTitle)}</div>
+                <div class="card-desc">${i18n.getMessage(MessageKeys.configWizardLocalDesc)}</div>
             </div>
             <div class="card" data-scenario="shared">
-                <div class="card-title">${i18n.getMessage("configuration.wizard.sharedTitle")}</div>
-                <div class="card-desc">${i18n.getMessage("configuration.wizard.sharedDesc")}</div>
+                <div class="card-title">${i18n.getMessage(MessageKeys.configWizardSharedTitle)}</div>
+                <div class="card-desc">${i18n.getMessage(MessageKeys.configWizardSharedDesc)}</div>
             </div>
             <div class="card" data-scenario="editor">
-                <div class="card-title">${i18n.getMessage("configuration.wizard.editorTitle")}</div>
-                <div class="card-desc">${i18n.getMessage("configuration.wizard.editorDesc")}</div>
+                <div class="card-title">${i18n.getMessage(MessageKeys.configWizardEditorTitle)}</div>
+                <div class="card-desc">${i18n.getMessage(MessageKeys.configWizardEditorDesc)}</div>
             </div>
         </div>
     </div>
     <div id="step1" hidden>
         <div class="modes">
             <div class="card" data-mode="from_config"><div class="card-title">from_config</div><div class="card-desc">Follow project config.toml</div></div>
-            <div class="card selected" data-mode="adaptive"><div class="card-title">adaptive</div><div class="card-desc">${i18n.getMessage("configuration.wizard.adaptiveDesc")}</div><span class="recommended">${i18n.getMessage("configuration.wizard.recommended")}</span></div>
-            <div class="card" data-mode="acp_stdio"><div class="card-title">acp_stdio</div><div class="card-desc">${i18n.getMessage("configuration.wizard.acpStdioDesc")}</div></div>
-            <div class="card" data-mode="acp_http"><div class="card-title">acp_http</div><div class="card-desc">${i18n.getMessage("configuration.wizard.acpHttpDesc")}</div></div>
-            <div class="card" data-mode="mcp_stdio"><div class="card-title">mcp_stdio</div><div class="card-desc">${i18n.getMessage("configuration.wizard.mcpStdioDesc")}</div></div>
-            <div class="card" data-mode="mcp_http"><div class="card-title">mcp_http</div><div class="card-desc">${i18n.getMessage("configuration.wizard.mcpHttpDesc")}</div></div>
+            <div class="card selected" data-mode="adaptive"><div class="card-title">adaptive</div><div class="card-desc">${i18n.getMessage(MessageKeys.configWizardAdaptiveDesc)}</div><span class="recommended">${i18n.getMessage(MessageKeys.configWizardRecommended)}</span></div>
+            <div class="card" data-mode="acp_stdio"><div class="card-title">acp_stdio</div><div class="card-desc">${i18n.getMessage(MessageKeys.configWizardAcpStdioDesc)}</div></div>
+            <div class="card" data-mode="acp_http"><div class="card-title">acp_http</div><div class="card-desc">${i18n.getMessage(MessageKeys.configWizardAcpHttpDesc)}</div></div>
+            <div class="card" data-mode="mcp_stdio"><div class="card-title">mcp_stdio</div><div class="card-desc">${i18n.getMessage(MessageKeys.configWizardMcpStdioDesc)}</div></div>
+            <div class="card" data-mode="mcp_http"><div class="card-title">mcp_http</div><div class="card-desc">${i18n.getMessage(MessageKeys.configWizardMcpHttpDesc)}</div></div>
         </div>
     </div>
     <div id="step2" hidden>
         <div class="review">
-            <div class="review-item"><div class="review-label">${i18n.getMessage("configuration.configPath")}</div><div class="review-value" id="review-config-path"></div></div>
-            <div class="review-item"><div class="review-label">${i18n.getMessage("configuration.executablePath")}</div><div class="review-value" id="review-executable-path"></div></div>
-            <div class="review-item"><div class="review-label">${i18n.getMessage("configuration.autoStart")}</div><div class="review-value" id="review-auto-start"></div></div>
-            <div class="review-item"><div class="review-label">${i18n.getMessage("configuration.wizard.protocolMode")}</div><div class="review-value" id="review-protocol-mode"></div></div>
+            <div class="review-item"><div class="review-label">${i18n.getMessage(MessageKeys.configPath)}</div><div class="review-value" id="review-config-path"></div></div>
+            <div class="review-item"><div class="review-label">${i18n.getMessage(MessageKeys.executablePath)}</div><div class="review-value" id="review-executable-path"></div></div>
+            <div class="review-item"><div class="review-label">${i18n.getMessage(MessageKeys.autoStart)}</div><div class="review-value" id="review-auto-start"></div></div>
+            <div class="review-item"><div class="review-label">${i18n.getMessage(MessageKeys.configWizardProtocolMode)}</div><div class="review-value" id="review-protocol-mode"></div></div>
         </div>
     </div>
     <div class="actions">
         <button class="ghost" id="cancel-btn">${i18n.getMessage(MessageKeys.cancel)}</button>
         <div>
-            <button class="ghost" id="prev-btn" disabled>${i18n.getMessage("configuration.wizard.previous")}</button>
-            <button class="primary" id="next-btn">${i18n.getMessage("configuration.wizard.next")}</button>
+            <button class="ghost" id="prev-btn" disabled>${i18n.getMessage(MessageKeys.configWizardPrevious)}</button>
+            <button class="primary" id="next-btn">${i18n.getMessage(MessageKeys.configWizardNext)}</button>
         </div>
     </div>
     <script nonce="${nonce}">

@@ -1006,7 +1006,6 @@ fn detect_ai_onboarding_state(config_path: &std::path::Path) -> Result<Option<Ai
     Ok(None)
 }
 
-#[allow(unused_variables)]
 async fn initialize_cache(
     config_path: PathBuf,
     cache_cfg: Option<crate::config::CacheConfig>,
@@ -1017,6 +1016,7 @@ async fn initialize_cache(
     if !cache_cfg.enabled {
         return Ok(None);
     }
+    tracing::trace!(config_path = %config_path.display(), "initializing response cache");
 
     // ── PostgreSQL backend (profile-multi-users-server) ──────────────────────
     #[cfg(feature = "backend-postgres")]
@@ -1087,7 +1087,6 @@ async fn initialize_cache(
     }
 }
 
-#[allow(unused_variables)]
 async fn initialize_vector_store(
     config_path: PathBuf,
     vector_cfg: Option<crate::config::VectorConfig>,
@@ -1098,6 +1097,7 @@ async fn initialize_vector_store(
     if !vector_cfg.enabled {
         return Ok(None);
     }
+    tracing::trace!(config_path = %config_path.display(), "initializing vector store");
 
     // ── PostgreSQL backend (profile-multi-users-server) ──────────────────────
     #[cfg(feature = "backend-postgres")]

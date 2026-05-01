@@ -658,8 +658,6 @@ pub(crate) async fn process_chat_request(
 
     let mut capability_selected_agent: Option<String> = None;
     let mut capability_recommended_mode: Option<String> = None;
-    #[allow(unused_mut)]
-    let mut capability_optimization_hint: Option<Value> = None;
 
     // ── CapabilityBus agent selection ──────────────────────────────────
     // If a CapabilityBus is present, use its sense/decide pipeline to
@@ -675,26 +673,30 @@ pub(crate) async fn process_chat_request(
         let decision = cb.decide(&task_ctx, &sensing);
         capability_selected_agent = decision.selected_agent.clone();
         capability_recommended_mode = Some(decision.recommended_mode.clone());
+
+        // Compute optimization hint under the feature gate; None otherwise.
         #[cfg(feature = "sub-bus-optimization")]
-        let opt = cb.optimization_recommendation(
-            phase_name,
-            (params.messages.len() as u64).saturating_mul(512),
-            if params.mode.eq_ignore_ascii_case("full_auto") {
-                "high"
-            } else {
-                "balanced"
-            },
-        );
-        #[cfg(feature = "sub-bus-optimization")]
-        {
-            capability_optimization_hint = Some(serde_json::json!({
+        let capability_optimization_hint: Option<Value> = {
+            let opt = cb.optimization_recommendation(
+                phase_name,
+                (params.messages.len() as u64).saturating_mul(512),
+                if params.mode.eq_ignore_ascii_case("full_auto") {
+                    "high"
+                } else {
+                    "balanced"
+                },
+            );
+            Some(serde_json::json!({
                 "suggested_agent": opt.suggested_agent,
                 "estimated_cost": opt.estimated_cost,
                 "estimated_duration_ms": opt.estimated_duration_ms,
                 "reliability_score": opt.reliability_score,
                 "confidence": opt.confidence,
-            }));
-        }
+            }))
+        };
+        #[cfg(not(feature = "sub-bus-optimization"))]
+        let capability_optimization_hint: Option<Value> = None;
+
         if let Some(ref agent) = decision.selected_agent {
             // Move the CapabilityBus-recommended agent to the front of the list
             let _ = reorder_agents_with_priority(&mut resolved.agents, agent);

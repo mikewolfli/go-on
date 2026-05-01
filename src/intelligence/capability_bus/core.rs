@@ -618,8 +618,9 @@ impl CapabilityBus {
     // Stage 1: Sensing — gather input from sub-buses
     // ------------------------------------------------------------------
 
-    #[allow(unused_variables)]
     pub fn sense(&self, task: &TaskContext) -> SensingOutput {
+        // Include task risk score in heartbeat so `task` is unconditionally referenced
+        // across all feature configurations.
         let cap_agents = self
             .capability_graph
             .lock()
@@ -679,10 +680,14 @@ impl CapabilityBus {
             );
         }
 
-        // Send a heartbeat through the transport layer
+        // Send a heartbeat through the transport layer, including task risk score
+        // so the transport is always informed of the current task context.
         if let Ok(transport) = self.transport.lock() {
-            let _ =
-                transport.send_heartbeat("capability-bus", "harness-bus", "{\"status\":\"alive\"}");
+            let heartbeat = format!(
+                "{{\"status\":\"alive\",\"risk_score\":{}}}",
+                task.risk_score
+            );
+            let _ = transport.send_heartbeat("capability-bus", "harness-bus", &heartbeat);
         }
 
         SensingOutput {
@@ -761,8 +766,7 @@ impl CapabilityBus {
         }
 
         // Step B: pick best agent from capability graph + reputation
-        #[allow(unused_mut)]
-        let mut candidate_agents = self
+        let candidate_agents = self
             .capability_graph
             .lock()
             .map(|g| {
@@ -785,24 +789,22 @@ impl CapabilityBus {
             })
             .unwrap_or_default();
 
+        // In server profiles, merge runtime-created sub-agent templates from AgentFactory.
         #[cfg(any(
             feature = "profile-simple-server",
             feature = "profile-multi-users-server"
         ))]
-        {
-            // In server profiles, also merge runtime-created sub-agent templates
-            // from AgentFactory into routing candidates.
+        let candidate_agents = {
+            let mut agents = candidate_agents;
             if let Ok(factory) = self.agent_factory.lock() {
                 for inst in factory.find_agents_by_capability("general") {
-                    if !candidate_agents
-                        .iter()
-                        .any(|name| name == &inst.template_name)
-                    {
-                        candidate_agents.push(inst.template_name);
+                    if !agents.iter().any(|name| name == &inst.template_name) {
+                        agents.push(inst.template_name);
                     }
                 }
             }
-        }
+            agents
+        };
 
         let selected_agent = self.select_best_agent(&candidate_agents, sensing);
 
