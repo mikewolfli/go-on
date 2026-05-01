@@ -109,7 +109,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     if (this.onViewResolved) {
       Promise.resolve(this.onViewResolved()).catch((error) => {
         void vscode.window.showWarningMessage(
-          `Go-On: Failed to initialize runtime: ${error instanceof Error ? error.message : String(error)}`,
+          t(MessageKeys.chatInitFailed, error instanceof Error ? error.message : String(error)),
         );
       });
     }
@@ -173,7 +173,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
             case "copyCode":
               await vscode.env.clipboard.writeText(message.code);
               void vscode.window.setStatusBarMessage(
-                "Code copied to clipboard",
+                t(MessageKeys.codeCopied),
                 2000,
               );
               break;
@@ -184,7 +184,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         } catch (error: unknown) {
           const message_text =
             error instanceof Error ? error.message : String(error);
-          void vscode.window.showErrorMessage(`Chat error: ${message_text}`);
+          void vscode.window.showErrorMessage(t(MessageKeys.chatError, message_text));
         }
       },
       undefined,
@@ -216,13 +216,13 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
       let messagesPayload: Array<{
         role: string;
         content:
-          | string
-          | Array<{
-              type: string;
-              text?: string;
-              image_url?: { url: string; detail: string };
-              file_data?: { data: string; filename: string; mime_type: string };
-            }>;
+        | string
+        | Array<{
+          type: string;
+          text?: string;
+          image_url?: { url: string; detail: string };
+          file_data?: { data: string; filename: string; mime_type: string };
+        }>;
       }>;
       if (!attachments || attachments.length === 0) {
         // Backward compatible: plain text
@@ -233,9 +233,9 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           | { type: "text"; text: string }
           | { type: "image_url"; image_url: { url: string; detail: string } }
           | {
-              type: "file";
-              file_data: { data: string; filename: string; mime_type: string };
-            }
+            type: "file";
+            file_data: { data: string; filename: string; mime_type: string };
+          }
         )[] = [{ type: "text", text }];
         for (const a of attachments) {
           if (a.type && a.type.startsWith("image/")) {
@@ -335,7 +335,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         );
         this._view.webview.postMessage({
           type: "codeResult",
-          result: "Execution canceled by user.",
+          result: t(MessageKeys.executionCanceled),
         });
         return;
       }
@@ -363,7 +363,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           result = await this._executeShellCode(code);
           break;
         default:
-          result = `Code execution not supported for ${language}`;
+          result = t(MessageKeys.codeExecutionNotSupported, language);
       }
 
       this._executionOutput.appendLine(
@@ -379,7 +379,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     } catch (error: unknown) {
       this._view.webview.postMessage({
         type: "codeResult",
-        result: `Execution failed: ${this._getErrorMessage(error)}`,
+        result: t(MessageKeys.executionFailed, this._getErrorMessage(error)),
       });
       this._executionOutput.appendLine(
         `[error] ${new Date().toISOString()} ${this._getErrorMessage(error)}`,
@@ -392,10 +392,10 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     language: string,
   ): Promise<boolean> {
     const preview = code.trim().replace(/\s+/g, " ").slice(0, 120);
-    const executeOption = "Execute";
-    const cancelOption = "Cancel";
+    const executeOption = t(MessageKeys.execute);
+    const cancelOption = t(MessageKeys.cancel);
     const choice = await vscode.window.showWarningMessage(
-      `Go-On is about to execute local ${language} code. Preview: ${preview || "<empty>"}`,
+      t(MessageKeys.codeExecutionConfirm, language, preview || "<empty>"),
       { modal: true },
       executeOption,
       cancelOption,

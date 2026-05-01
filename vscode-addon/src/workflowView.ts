@@ -118,7 +118,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
           const message_text =
             error instanceof Error ? error.message : String(error);
           void vscode.window.showErrorMessage(
-            `Workflow error: ${message_text}`,
+            t(MessageKeys.workflowError, message_text),
           );
         }
       },
@@ -150,7 +150,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     });
 
     vscode.window.showInformationMessage(
-      `Workflow "${workflowData.name}" created successfully!`,
+      t(MessageKeys.workflowCreatedSuccess, workflowData.name),
     );
   }
 
@@ -162,7 +162,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     const workflow = workflows[workflowId];
 
     if (!workflow) {
-      vscode.window.showErrorMessage("Workflow not found");
+      vscode.window.showErrorMessage(t(MessageKeys.workflowNotFound));
       return;
     }
 
@@ -199,7 +199,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
             this._view?.webview.postMessage({
               type: "stepResult",
               stepId: step,
-              result: "Code execution not yet supported in this view",
+              result: t(MessageKeys.workflowCodeNotSupported),
             });
             break;
           case "delay":
@@ -227,7 +227,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
       });
 
       vscode.window.showInformationMessage(
-        `Workflow "${workflow.name}" completed successfully!`,
+        t(MessageKeys.workflowCompletedSuccess, workflow.name),
       );
     } catch (error: unknown) {
       workflow.status = "failed";
@@ -241,7 +241,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
         error: message,
       });
 
-      vscode.window.showErrorMessage(`Workflow failed: ${message}`);
+      vscode.window.showErrorMessage(t(MessageKeys.workflowExecutionFailed, message));
     }
   }
 
@@ -259,10 +259,10 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
         workflowId,
       });
 
-      vscode.window.showInformationMessage("Workflow deleted successfully!");
+      vscode.window.showInformationMessage(t(MessageKeys.workflowDeletedSuccess));
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        `Failed to delete workflow: ${error instanceof Error ? error.message : "Unknown error"}`,
+        t(MessageKeys.workflowDeleteFailed, error instanceof Error ? error.message : String(error)),
       );
     }
   }

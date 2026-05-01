@@ -133,7 +133,7 @@ export function registerViewCommands(
         }
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`Failed to create session: ${message}`);
+        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.createSessionFailed, [message]));
       }
     },
   );

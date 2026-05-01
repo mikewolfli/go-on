@@ -258,7 +258,7 @@ export function registerCoreCommands(
           messages: [{ role: "user", content: message }],
         });
         vscode.window.showInformationMessage(
-          `Response: ${JSON.stringify(result)}`,
+          i18n.getMessage(MessageKeys.responseLabel, [JSON.stringify(result)]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
@@ -276,11 +276,11 @@ export function registerCoreCommands(
       try {
         const result = await deps.sendRequest("runtime.health");
         vscode.window.showInformationMessage(
-          `Health: ${JSON.stringify(result)}`,
+          i18n.getMessage(MessageKeys.healthCheckResult, [JSON.stringify(result)]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `Health check failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.healthCheckFailed, [getErrorMessage(error)]),
         );
       }
     },
@@ -303,11 +303,23 @@ export function registerCoreCommands(
         const timeouts = asRecord(probes.timeouts);
 
         vscode.window.showInformationMessage(
-          `health.probes: liveness=${String(liveness.status ?? "unknown")}, readiness=${String(readiness.status ?? "unknown")}, lock=${String(locks.status ?? "unknown")}, poisoned=${Number(locks.poisoned_total ?? 0)}, slow=${Number(locks.slow_wait_total ?? 0)}, timeout=${String(timeouts.status ?? "unknown")}, agent_timeout=${Number(timeouts.agent_request_total ?? 0)}, review_timeout=${Number(timeouts.review_gate_total ?? 0)}, probe_timeout=${Number(timeouts.runtime_probe_total ?? 0)}, error=${Number(summary.error ?? 0)}, warn=${Number(summary.warn ?? 0)}`,
+          i18n.getMessage(MessageKeys.healthProbesLabel, [
+            String(liveness.status ?? "unknown"),
+            String(readiness.status ?? "unknown"),
+            String(locks.status ?? "unknown"),
+            String(locks.poisoned_total ?? 0),
+            String(locks.slow_wait_total ?? 0),
+            String(timeouts.status ?? "unknown"),
+            String(timeouts.agent_request_total ?? 0),
+            String(timeouts.review_gate_total ?? 0),
+            String(timeouts.runtime_probe_total ?? 0),
+            String(summary.error ?? 0),
+            String(summary.warn ?? 0),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `health.probes failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.healthProbesFailed, [getErrorMessage(error)]),
         );
       }
     },
@@ -334,11 +346,19 @@ export function registerCoreCommands(
             : "-";
 
         vscode.window.showInformationMessage(
-          `lock.status: status=${String(locks.status ?? "unknown")}, tracked=${Number(locks.components_tracked ?? 0)}, poisoned=${Number(locks.poisoned_total ?? 0)}, recovered=${Number(locks.recovered_total ?? 0)}, slow_waits=${Number(locks.slow_wait_total ?? 0)}, max_wait_ms=${Number(locks.max_wait_ms ?? 0).toFixed(3)}, top=${topLabel}`,
+          i18n.getMessage(MessageKeys.lockStatusLabel, [
+            String(locks.status ?? "unknown"),
+            String(locks.components_tracked ?? 0),
+            String(locks.poisoned_total ?? 0),
+            String(locks.recovered_total ?? 0),
+            String(locks.slow_wait_total ?? 0),
+            Number(locks.max_wait_ms ?? 0).toFixed(3),
+            topLabel,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `lock.status failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.lockStatusFailed, [getErrorMessage(error)]),
         );
       }
     },
@@ -350,11 +370,11 @@ export function registerCoreCommands(
       try {
         const result = await deps.sendRequest("breaker.status");
         vscode.window.showInformationMessage(
-          `Breaker Status: ${JSON.stringify(result)}`,
+          i18n.getMessage(MessageKeys.breakerStatusResult, [JSON.stringify(result)]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `Breaker status check failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.breakerStatusFailed, [getErrorMessage(error)]),
         );
       }
     },
@@ -365,10 +385,10 @@ export function registerCoreCommands(
     async () => {
       try {
         await deps.sendRequest("cache.clear");
-        vscode.window.showInformationMessage("Cache cleared.");
+        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.cacheCleared));
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `Cache clear failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.cacheClearFailed, [getErrorMessage(error)]),
         );
       }
     },
@@ -379,10 +399,10 @@ export function registerCoreCommands(
     async () => {
       try {
         await deps.sendRequest("vector.clear");
-        vscode.window.showInformationMessage("Vector memory cleared.");
+        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.vectorCleared));
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `Vector clear failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.vectorClearFailed, [getErrorMessage(error)]),
         );
       }
     },
@@ -393,10 +413,10 @@ export function registerCoreCommands(
     async () => {
       try {
         await deps.sendRequest("config.reload");
-        vscode.window.showInformationMessage("Configuration reloaded.");
+        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.configReloaded));
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `Config reload failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.configReloadFailed, [getErrorMessage(error)]),
         );
       }
     },
@@ -407,10 +427,10 @@ export function registerCoreCommands(
     async () => {
       try {
         await deps.sendRequest("shutdown");
-        vscode.window.showInformationMessage("Shutdown initiated.");
+        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.goOnShutdown));
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `Shutdown failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.goOnShutdownFailed, [getErrorMessage(error)]),
         );
       }
     },

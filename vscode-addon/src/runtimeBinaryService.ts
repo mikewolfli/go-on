@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { i18n, MessageKeys } from './i18n';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
@@ -224,7 +225,7 @@ export async function ensureProvidersTomlForConfig(
         }
         await fsPromises.mkdir(targetDir, { recursive: true });
         await fsPromises.copyFile(candidate, targetProvidersPath);
-        vscode.window.showInformationMessage(`Go-On providers catalog synced: ${targetProvidersPath}`);
+        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.providersCatalogSynced, [targetProvidersPath]));
         return;
     }
 }
@@ -250,7 +251,7 @@ export async function resolveConfigPath(
         await fsPromises.mkdir(path.dirname(workspaceConfigPath), { recursive: true });
         await fsPromises.copyFile(workspaceConfigTemplatePath, workspaceConfigPath);
         await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, workspaceConfigPath);
-        vscode.window.showInformationMessage(`Go-On config created from workspace template: ${workspaceConfigPath}`);
+        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.configFromWorkspaceTemplate, [workspaceConfigPath]));
         return workspaceConfigPath;
     }
 
@@ -259,7 +260,7 @@ export async function resolveConfigPath(
         await fsPromises.mkdir(path.dirname(workspaceConfigPath), { recursive: true });
         await fsPromises.copyFile(bundledConfigTemplatePath, workspaceConfigPath);
         await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, workspaceConfigPath);
-        vscode.window.showInformationMessage(`Go-On config created from runtime template: ${workspaceConfigPath}`);
+        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.configFromRuntimeTemplate, [workspaceConfigPath]));
         return workspaceConfigPath;
     }
 
@@ -273,11 +274,11 @@ async function promptForManualBinaryPath(
     workspaceRoot: string | undefined,
     reason: string
 ): Promise<RuntimeResolution> {
-    const selectOption = 'Select Local Binary';
-    const openSettingsOption = 'Open Go-On Settings';
-    const cancelOption = 'Cancel';
+    const selectOption = i18n.getMessage(MessageKeys.selectLocalBinary);
+    const openSettingsOption = i18n.getMessage(MessageKeys.openGoOnSettings);
+    const cancelOption = i18n.getMessage(MessageKeys.cancel);
     const choice = await vscode.window.showErrorMessage(
-        `Failed to download Go-On runtime: ${reason}`,
+        i18n.getMessage(MessageKeys.downloadFailed, [reason]),
         selectOption,
         openSettingsOption,
         cancelOption
@@ -333,7 +334,7 @@ async function promptForManualBinaryPath(
         workspaceRoot ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global
     );
 
-    vscode.window.showInformationMessage(`Using local Go-On binary: ${selectedPath}`);
+    vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.usingLocalBinary, [selectedPath]));
     return {
         executablePath: selectedPath,
         runtimeDir: path.dirname(selectedPath)
@@ -401,7 +402,7 @@ export async function ensureGoOnBinary(
 
     const checksumUrl = downloadUrl + '.sha256';
 
-    vscode.window.showInformationMessage(`Go-On runtime not found. Downloading ${assetName} from ${releaseRepository} (${releaseTag})...`);
+    vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.runtimeDownloading, [assetName, releaseRepository, releaseTag]));
     try {
         await downloadFile(downloadUrl, archivePath);
         await verifyArchiveChecksum(archivePath, checksumUrl);
@@ -430,7 +431,7 @@ export async function ensureGoOnBinary(
         throw new Error(`Resolved runtime is not executable: ${executablePath}.`);
     }
 
-    vscode.window.showInformationMessage('Go-On runtime download complete. Chat is ready to use.');
+    vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.runtimeDownloadComplete));
 
     return { executablePath, runtimeDir };
 }
