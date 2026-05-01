@@ -337,6 +337,11 @@ export const MessageKeys = {
   promptCheckpointId: "rpc.promptCheckpointId",
   promptCheckpointIdPlaceholder: "rpc.promptCheckpointIdPlaceholder",
   goOnNotRunningRpc: "messages.goOnNotRunningRpc",
+  keyringSetFailed: "messages.keyringSetFailed",
+  keyringGetFailed: "messages.keyringGetFailed",
+  keyringDeleteFailed: "messages.keyringDeleteFailed",
+  keyringListFailed: "messages.keyringListFailed",
+  processFlowFailed: "messages.processFlowFailed",
 } as const;
 
 class I18nManager {

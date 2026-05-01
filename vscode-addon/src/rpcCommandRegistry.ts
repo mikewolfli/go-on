@@ -960,11 +960,11 @@ export function registerRpcCommands(
           .join(", ");
 
         vscode.window.showInformationMessage(
-          `runtime.stability: score=${Number(stability.score ?? 0)}, level=${stability.level ?? "unknown"}, safe_restart=${Boolean(stability.safe_restart_ready)}, health_errors=${Number(summary.health_errors ?? 0)}, health_warnings=${Number(summary.health_warnings ?? 0)}, config_warnings=${Number(summary.config_warnings ?? 0)}, strict_violations=${Number(summary.strict_violations ?? 0)}, checks=[${checkSummary}]`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["runtime.stability", `score=${Number(stability.score ?? 0)}, level=${stability.level ?? "unknown"}, safe_restart=${Boolean(stability.safe_restart_ready)}, health_errors=${Number(summary.health_errors ?? 0)}, health_warnings=${Number(summary.health_warnings ?? 0)}, config_warnings=${Number(summary.config_warnings ?? 0)}, strict_violations=${Number(summary.strict_violations ?? 0)}, checks=[${checkSummary}]`]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `runtime.stability failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["runtime.stability", getErrorMessage(error)]),
         );
       }
     },
@@ -989,11 +989,11 @@ export function registerRpcCommands(
         const recommendations = asArray(selfModel.recommendations);
 
         vscode.window.showInformationMessage(
-          `runtime.self_model: readiness=${String(readiness.status ?? "unknown")}, stability=${String(stability.level ?? "unknown")}, safe_restart=${Boolean(stability.safe_restart_ready)}, mode=${String(decision.recommended_mode ?? "unknown")}, drift_alert=${Boolean(drift.alert)}, drift_diff=${Number(drift.absolute_diff ?? 0).toFixed(4)}, recommendations=${recommendations.length}`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["runtime.self_model", `readiness=${String(readiness.status ?? "unknown")}, stability=${String(stability.level ?? "unknown")}, safe_restart=${Boolean(stability.safe_restart_ready)}, mode=${String(decision.recommended_mode ?? "unknown")}, drift_alert=${Boolean(drift.alert)}, drift_diff=${Number(drift.absolute_diff ?? 0).toFixed(4)}, recommendations=${recommendations.length}`]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `runtime.self_model failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["runtime.self_model", getErrorMessage(error)]),
         );
       }
     },
@@ -1010,11 +1010,11 @@ export function registerRpcCommands(
         const providerStatus = asRecord(result.provider_status);
         const summary = asRecord(providerStatus.summary);
         vscode.window.showInformationMessage(
-          `provider.status: status=${String(providerStatus.status ?? "unknown")}, ready=${Number(summary.ready ?? 0)}, degraded=${Number(summary.degraded ?? 0)}, configured=${Number(summary.configured ?? 0)}, coverage=${Number(summary.coverage_percent ?? 0)}%`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["provider.status", `status=${String(providerStatus.status ?? "unknown")}, ready=${Number(summary.ready ?? 0)}, degraded=${Number(summary.degraded ?? 0)}, configured=${Number(summary.configured ?? 0)}, coverage=${Number(summary.coverage_percent ?? 0)}%`]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `provider.status failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["provider.status", getErrorMessage(error)]),
         );
       }
     },
@@ -1047,11 +1047,11 @@ export function registerRpcCommands(
           "unknown",
         );
         vscode.window.showInformationMessage(
-          `release.readiness: status=${String(readiness.status ?? "unknown")}, schema=${readinessSchema}, overall=${Boolean(readiness.overall_pass)}, blocked=${Number(readiness.blocked_gate_count ?? 0)}, blocked_names=${blockedGateNames || "-"}, open_breakers=${Number(summary.open_breakers ?? 0)}, degraded_services=${Number(summary.degraded_services ?? 0)}, multi_user_mode=${String(multiUser.mode ?? "single_user")}, multi_user_ready=${Boolean(multiUser.release_gate_ready ?? false)}, multi_user_lifecycle_ready=${Boolean(lifecycle.ready ?? summary.multi_user_lifecycle_ready ?? false)}, dual_track_ready=${Boolean(dualTrack.ready ?? summary.dual_track_consistency_ready ?? false)}, multi_user_source=${String(inference.source ?? summary.multi_user_inference_source ?? "default")}`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["release.readiness", `status=${String(readiness.status ?? "unknown")}, schema=${readinessSchema}, overall=${Boolean(readiness.overall_pass)}, blocked=${Number(readiness.blocked_gate_count ?? 0)}, blocked_names=${blockedGateNames || "-"}, open_breakers=${Number(summary.open_breakers ?? 0)}, degraded_services=${Number(summary.degraded_services ?? 0)}, multi_user_mode=${String(multiUser.mode ?? "single_user")}, multi_user_ready=${Boolean(multiUser.release_gate_ready ?? false)}, multi_user_lifecycle_ready=${Boolean(lifecycle.ready ?? summary.multi_user_lifecycle_ready ?? false)}, dual_track_ready=${Boolean(dualTrack.ready ?? summary.dual_track_consistency_ready ?? false)}, multi_user_source=${String(inference.source ?? summary.multi_user_inference_source ?? "default")}`]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `release.readiness failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["release.readiness", getErrorMessage(error)]),
         );
       }
     },
@@ -1074,11 +1074,11 @@ export function registerRpcCommands(
         const adversarial = asRecord(suites.adversarial);
         const longChain = asRecord(suites.long_chain);
         vscode.window.showInformationMessage(
-          `harness.status: total=${Number(harness.scenario_total ?? 0)}, smoke=${Number(smoke.count ?? 0)}, regression=${Number(regression.count ?? 0)}, adversarial=${Number(adversarial.count ?? 0)}, long_chain=${Number(longChain.count ?? 0)}, seed=${Number(harness.fixed_seed ?? 0)}`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["harness.status", `total=${Number(harness.scenario_total ?? 0)}, smoke=${Number(smoke.count ?? 0)}, regression=${Number(regression.count ?? 0)}, adversarial=${Number(adversarial.count ?? 0)}, long_chain=${Number(longChain.count ?? 0)}, seed=${Number(harness.fixed_seed ?? 0)}`]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `harness.status failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["harness.status", getErrorMessage(error)]),
         );
       }
     },
@@ -1093,11 +1093,11 @@ export function registerRpcCommands(
       try {
         const result = await deps.sendRequest("trace.get", {});
         vscode.window.showInformationMessage(
-          `trace.get: ${JSON.stringify(result)}`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["trace.get", JSON.stringify(result)]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `trace.get failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["trace.get", getErrorMessage(error)]),
         );
       }
     },
@@ -1118,11 +1118,11 @@ export function registerRpcCommands(
         const topCode =
           items.length > 0 ? String(asRecord(items[0]).code ?? "-") : "-";
         vscode.window.showInformationMessage(
-          `observability.alerts: critical=${Number(alerts.critical ?? 0)}, warn=${Number(alerts.warn ?? 0)}, info=${Number(alerts.info ?? 0)}, top=${topCode}`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["observability.alerts", `critical=${Number(alerts.critical ?? 0)}, warn=${Number(alerts.warn ?? 0)}, info=${Number(alerts.info ?? 0)}, top=${topCode}`]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `observability.alerts failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["observability.alerts", getErrorMessage(error)]),
         );
       }
     },
@@ -1145,11 +1145,11 @@ export function registerRpcCommands(
         const riskCount = Number(baseline.risk_count ?? 0);
         const strict = Boolean(productionStrict.enabled ?? false);
         vscode.window.showInformationMessage(
-          `security.baseline: level=${level}, ingress=${ingress}, strict=${strict}, risks=${riskCount}`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["security.baseline", `level=${level}, ingress=${ingress}, strict=${strict}, risks=${riskCount}`]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `security.baseline failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["security.baseline", getErrorMessage(error)]),
         );
       }
     },
@@ -1162,8 +1162,8 @@ export function registerRpcCommands(
         return;
       }
       const agent = await vscode.window.showInputBox({
-        prompt: "Agent name to reset circuit breaker for",
-        placeHolder: "e.g. copilot, deepseek, gemini",
+        prompt: i18n.getMessage(MessageKeys.promptBreakerAgent),
+        placeHolder: i18n.getMessage(MessageKeys.promptBreakerAgentPlaceholder),
       });
       if (!agent) {
         return;
@@ -1171,11 +1171,11 @@ export function registerRpcCommands(
       try {
         const result = await deps.sendRequest("breaker.reset", { agent });
         vscode.window.showInformationMessage(
-          `breaker.reset: ${JSON.stringify(result)}`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["breaker.reset", JSON.stringify(result)]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `breaker.reset failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["breaker.reset", getErrorMessage(error)]),
         );
       }
     },
@@ -1189,9 +1189,8 @@ export function registerRpcCommands(
       }
 
       const target = await vscode.window.showInputBox({
-        prompt:
-          "Optional agent name to recover (leave empty for all degraded services)",
-        placeHolder: "e.g. copilot, deepseek, gemini",
+        prompt: i18n.getMessage(MessageKeys.promptRecoveryAgent),
+        placeHolder: i18n.getMessage(MessageKeys.promptBreakerAgentPlaceholder),
       });
       if (target === undefined) {
         return;
@@ -1205,11 +1204,11 @@ export function registerRpcCommands(
         const recoveredCount = Number(result.recovered_count ?? 0);
         const remaining = Number(result.remaining_degraded_count ?? 0);
         vscode.window.showInformationMessage(
-          `breaker.recovery: recovered=${recoveredCount}, remaining_degraded=${remaining}`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["breaker.recovery", `recovered=${recoveredCount}, remaining_degraded=${remaining}`]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `breaker.recovery failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["breaker.recovery", getErrorMessage(error)]),
         );
       }
     },
@@ -1223,10 +1222,10 @@ export function registerRpcCommands(
       }
       try {
         await deps.sendRequest("maintenance.gc");
-        vscode.window.showInformationMessage("Maintenance GC completed.");
+        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.maintenanceGcCompleted));
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `maintenance.gc failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["maintenance.gc", getErrorMessage(error)]),
         );
       }
     },
@@ -1239,15 +1238,15 @@ export function registerRpcCommands(
         return;
       }
       const conversationId = await vscode.window.showInputBox({
-        prompt: "Conversation ID",
-        placeHolder: "e.g. default-session",
+        prompt: i18n.getMessage(MessageKeys.promptConversationId),
+        placeHolder: i18n.getMessage(MessageKeys.promptConversationIdPlaceholder),
       });
       if (!conversationId) {
         return;
       }
       const message = await vscode.window.showInputBox({
-        prompt: "Checkpoint message",
-        placeHolder: "Describe current conversation state",
+        prompt: i18n.getMessage(MessageKeys.promptCheckpointMessage),
+        placeHolder: i18n.getMessage(MessageKeys.promptCheckpointMessagePlaceholder),
       });
       if (!message) {
         return;
@@ -1261,11 +1260,11 @@ export function registerRpcCommands(
           },
         );
         vscode.window.showInformationMessage(
-          `Checkpoint created: ${JSON.stringify(result)}`,
+          i18n.getMessage(MessageKeys.checkpointCreated, [JSON.stringify(result)]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `checkpoint.create failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["checkpoint.create", getErrorMessage(error)]),
         );
       }
     },
@@ -1278,8 +1277,8 @@ export function registerRpcCommands(
         return;
       }
       const conversationId = await vscode.window.showInputBox({
-        prompt: "Conversation ID",
-        placeHolder: "e.g. default-session",
+        prompt: i18n.getMessage(MessageKeys.promptConversationId),
+        placeHolder: i18n.getMessage(MessageKeys.promptConversationIdPlaceholder),
       });
       if (!conversationId) {
         return;
@@ -1289,11 +1288,11 @@ export function registerRpcCommands(
           conversation_id: conversationId,
         });
         vscode.window.showInformationMessage(
-          `Checkpoints: ${JSON.stringify(result)}`,
+          i18n.getMessage(MessageKeys.checkpointsResult, [JSON.stringify(result)]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `checkpoint.list failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["checkpoint.list", getErrorMessage(error)]),
         );
       }
     },
@@ -1306,15 +1305,15 @@ export function registerRpcCommands(
         return;
       }
       const checkpointId = await vscode.window.showInputBox({
-        prompt: "Checkpoint ID to roll back to",
-        placeHolder: "e.g. ckpt-001",
+        prompt: i18n.getMessage(MessageKeys.promptCheckpointId),
+        placeHolder: i18n.getMessage(MessageKeys.promptCheckpointIdPlaceholder),
       });
       if (!checkpointId) {
         return;
       }
       const conversationId = await vscode.window.showInputBox({
-        prompt: "Conversation ID",
-        placeHolder: "e.g. default-session",
+        prompt: i18n.getMessage(MessageKeys.promptConversationId),
+        placeHolder: i18n.getMessage(MessageKeys.promptConversationIdPlaceholder),
       });
       if (!conversationId) {
         return;
@@ -1325,11 +1324,11 @@ export function registerRpcCommands(
           checkpoint_id: checkpointId,
         });
         vscode.window.showInformationMessage(
-          `Rolled back: ${JSON.stringify(result)}`,
+          i18n.getMessage(MessageKeys.rolledBack, [JSON.stringify(result)]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `conversation.rollback failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["conversation.rollback", getErrorMessage(error)]),
         );
       }
     },
@@ -1344,11 +1343,11 @@ export function registerRpcCommands(
       try {
         const result = await deps.sendRequest("primary_secondary.summary", {});
         vscode.window.showInformationMessage(
-          `primary_secondary.summary: ${JSON.stringify(result)}`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["primary_secondary.summary", JSON.stringify(result)]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `primary_secondary.summary failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["primary_secondary.summary", getErrorMessage(error)]),
         );
       }
     },
@@ -1365,11 +1364,11 @@ export function registerRpcCommands(
         const panel = asRecord(result.panel);
         const conversations = asRecord(panel.conversations);
         vscode.window.showInformationMessage(
-          `debug_panel.get: conversations=${Number(conversations.count ?? 0)}, checkpoints=${Number(conversations.checkpoints ?? 0)}`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["debug_panel.get", `conversations=${Number(conversations.count ?? 0)}, checkpoints=${Number(conversations.checkpoints ?? 0)}`]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `debug_panel.get failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["debug_panel.get", getErrorMessage(error)]),
         );
       }
     },
@@ -1387,11 +1386,11 @@ export function registerRpcCommands(
         );
         const report = asRecord(result.report);
         vscode.window.showInformationMessage(
-          `action.check: ok=${Boolean(result.ok)}, checks=${Number(report.total_checks ?? 0)}`,
+          i18n.getMessage(MessageKeys.rpcCommandResult, ["action.check", `ok=${Boolean(result.ok)}, checks=${Number(report.total_checks ?? 0)}`]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          `action.check failed: ${getErrorMessage(error)}`,
+          i18n.getMessage(MessageKeys.rpcCommandFailed, ["action.check", getErrorMessage(error)]),
         );
       }
     },

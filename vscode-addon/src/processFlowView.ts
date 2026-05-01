@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { RuntimeManagerLike } from "./managerTypes";
-import { i18n } from "./i18n";
+import { i18n, MessageKeys } from "./i18n";
 
 interface ProcessStage {
   type: "chat" | "code" | "delay" | "manual";
@@ -291,7 +291,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
         error: message,
       });
 
-      vscode.window.showErrorMessage(`Process failed: ${message}`);
+      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.processFlowFailed, [message]));
     }
   }
 

@@ -8,7 +8,7 @@ import { StatusMonitor } from "./statusMonitor";
 import { GoOnWorkflowViewProvider } from "./workflowView";
 import { GoOnProcessFlowViewProvider } from "./processFlowView";
 import { GoOnAdvancedEditProvider } from "./advancedEdit";
-import { i18n } from "./i18n";
+import { i18n, MessageKeys } from "./i18n";
 import { configManager } from "./configManager";
 import { revealGoOnView } from "./viewRouter";
 import { registerViewCommands } from "./commandRegistry";
@@ -590,7 +590,7 @@ export function activate(context: vscode.ExtensionContext) {
         await runGoOnSecretCommand(context, "set", name, value);
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`keyring set failed: ${message}`);
+        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.keyringSetFailed, [message]));
       }
     },
   );
@@ -606,7 +606,7 @@ export function activate(context: vscode.ExtensionContext) {
         return await runGoOnSecretCommand(context, "get", name);
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`keyring get failed: ${message}`);
+        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.keyringGetFailed, [message]));
         return undefined;
       }
     },
@@ -623,7 +623,7 @@ export function activate(context: vscode.ExtensionContext) {
         await runGoOnSecretCommand(context, "delete", name);
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`keyring delete failed: ${message}`);
+        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.keyringDeleteFailed, [message]));
       }
     },
   );
@@ -635,7 +635,7 @@ export function activate(context: vscode.ExtensionContext) {
         return await runGoOnSecretCommand(context, "list");
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`keyring list failed: ${message}`);
+        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.keyringListFailed, [message]));
         return undefined;
       }
     },
