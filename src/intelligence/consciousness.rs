@@ -416,13 +416,16 @@ impl ConsciousnessMetrics {
             };
 
             if avg >= 0.8 {
+                // TODO: i18n - hardcoded English string for insight generation
                 insights.push(format!("Strong {:?}: sustained awareness at {:.2}", t, avg));
             } else if avg >= 0.5 {
+                // TODO: i18n - hardcoded English string for insight generation
                 insights.push(format!(
                     "Developing {:?}: current awareness at {:.2}",
                     t, avg
                 ));
             } else if avg > 0.0 {
+                // TODO: i18n - hardcoded English string for insight generation
                 insights.push(format!(
                     "Weak {:?}: current awareness only at {:.2}",
                     t, avg
@@ -431,6 +434,7 @@ impl ConsciousnessMetrics {
         }
 
         if insights.is_empty() {
+            // TODO: i18n - hardcoded English string for insight generation
             insights.push("No awareness data available yet.".to_string());
         }
 

@@ -517,6 +517,7 @@ export async function getReleaseReadiness(): Promise<ReleaseReadinessResult> {
   return callRpcJson<ReleaseReadinessResult>("release.readiness", {});
 }
 
+// TODO: planned for future use
 export async function getHealthProbes(): Promise<HealthProbesResult> {
   return callRpcJson<HealthProbesResult>("health.probes", {});
 }
@@ -535,6 +536,7 @@ export async function getMetrics(): Promise<MetricsResult> {
   return callRpcJson<MetricsResult>("metrics.get", {});
 }
 
+// TODO: planned for future use
 export async function callTaskPlan(
   task: string,
   params: Record<string, unknown> = {},
@@ -542,6 +544,7 @@ export async function callTaskPlan(
   return callRpcJson<TaskPlanResult>("task.plan", { task, ...params });
 }
 
+// TODO: planned for future use
 export async function callTaskExecute(
   task: string,
   params: Record<string, unknown> = {},
@@ -614,6 +617,7 @@ export interface CheckpointListResult {
   }>;
 }
 
+// TODO: planned for future use
 export async function getCheckpointList(
   conversationId: string,
 ): Promise<CheckpointListResult> {
@@ -638,6 +642,7 @@ export interface OptimizationPeakResult {
   };
 }
 
+// TODO: planned for future use
 export async function getOptimizationPeak(): Promise<OptimizationPeakResult> {
   return callRpcJson<OptimizationPeakResult>("optimization.peak", {});
 }
@@ -655,6 +660,7 @@ export interface RuntimeFeatures {
   production_strict?: boolean;
 }
 
+// TODO: planned for future use
 export async function getRuntimeFeatures(): Promise<RuntimeFeatures> {
   const result = await callRpcJson<{ features?: RuntimeFeatures }>(
     "runtime.features",

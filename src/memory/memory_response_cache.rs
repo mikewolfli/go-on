@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
 pub(crate) struct MemoryCachedResponse {
-    #[allow(dead_code)] // Bucket F — accessed via clone from get()
+    #[allow(dead_code)] // F-GAP-01 — accessed via clone from get()
     pub(crate) response_text: String,
     expires_at: i64,
 }
@@ -15,7 +15,7 @@ pub struct MemoryResponseCache {
 }
 
 impl MemoryResponseCache {
-    #[allow(dead_code)] // Bucket F — used by agent response cache layer
+    #[allow(dead_code)] // F-GAP-02 — used by agent response cache layer
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
         let mut guard = self.inner.lock().ok()?;
@@ -47,7 +47,7 @@ impl MemoryResponseCache {
         self.inner.lock().map(|guard| guard.len()).unwrap_or(0)
     }
 
-    #[allow(dead_code)] // Bucket F — used to store agent responses
+    #[allow(dead_code)] // F-GAP-03 — used to store agent responses
     pub(crate) fn put(
         &self,
         key: String,

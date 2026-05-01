@@ -49,7 +49,7 @@ use crate::governance::pua::{PuaFeedbackCollector, PuaRuleEngine, TaskContext, T
 use crate::governance::rationalization::{RationalizationAnnotation, SelfRationalizationGuard};
 use crate::governance::rbac::{AccessDecision, Permission, Principal, RbacEnforcer};
 use crate::governance::review_controls::{
-    review_verdict, ReviewGateOutcome, ReviewTimeoutPolicy, ReviewVerdict,
+    review_verdict, ReviewGateOutcome, ReviewTimeoutPolicyKind, ReviewVerdict,
 };
 use crate::governance::runtime_controls::OnlineControllerState;
 use crate::governance::security_governor::{SecurityGovernor, SecurityGovernorConfig};
@@ -639,7 +639,7 @@ impl PolicyEvaluator {
         if self.governance.quality_compass.enabled {
             tracing::debug!("review gate evaluating governance-driven review verdict");
         }
-        let timeout_policy = ReviewTimeoutPolicy::from_options(None);
+        let timeout_policy = ReviewTimeoutPolicyKind::from_options(None);
         let timeout_duration = crate::governance::review_controls::review_timeout(None, None);
         let requires_manual_review = ctx.risk_score >= 0.70
             || ctx.file_count >= 8

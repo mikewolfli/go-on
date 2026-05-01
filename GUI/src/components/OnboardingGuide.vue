@@ -61,7 +61,7 @@
           show-icon
         />
         <div class="action-row">
-          <el-button type="primary" @click="$emit('startService')">
+          <el-button type="primary" @click="$emit('start-service')">
             {{ t("onboarding.actions.startRuntime") }}
           </el-button>
           <el-button @click="openTab('config', 'config')">{{ t("onboarding.actions.openConfig") }}</el-button>
@@ -143,7 +143,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
   complete: [];
-  startService: [];
+  "start-service": [];
   navigate: [payload: { mainTab: MainTab; subTab?: MonitorSubTab | ConfigSubTab }];
 }>();
 

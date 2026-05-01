@@ -11,7 +11,7 @@
 **状态**: ✅ **通过**
 
 ```
-> go-on-vscode@0.8.3 compile
+> go-on-vscode@0.8.4 compile
 > npx tsc -p ./ && mkdir -p out/locales && cp -r src/locales/. out/locales
 ```
 

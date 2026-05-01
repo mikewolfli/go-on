@@ -17,6 +17,9 @@ pub(crate) struct ReviewDecision {
     pub(crate) response: String,
 }
 
+/// Governance-internal review verdict.
+/// This enum uses `Approve`/`Reject` semantics (distinct from
+/// the public `acp::prelude::ReviewVerdict` which uses `Pass`/`Fail`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReviewVerdict {
     Approve,
@@ -45,12 +48,15 @@ pub(crate) enum ReviewGateOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReviewTimeoutPolicy {
+/// Governance-internal timeout policy kind.
+/// This is an enum (not a struct) used to express policy decisions
+/// during review-timeout evaluation in the governance layer.
+pub(crate) enum ReviewTimeoutPolicyKind {
     Reject,
     DegradeSingle,
 }
 
-impl ReviewTimeoutPolicy {
+impl ReviewTimeoutPolicyKind {
     pub(crate) fn from_options(options: Option<&PhaseOptions>) -> Self {
         let value = options
             .and_then(|opts| opts.extra.get("review_timeout_policy"))

@@ -151,10 +151,10 @@ export function registerViewCommands(
   const switchSessionCommand = vscode.commands.registerCommand(
     "go-on.switchSession",
     async () => {
-      // Fetch sessions dynamically from backend via conversation.checkpoint.list RPC.
+      // Fetch sessions dynamically from backend via checkpoint.list RPC.
       let sessionNames: string[] = ["default"];
       try {
-        const result = await deps.sendRequest("conversation.checkpoint.list", {
+        const result = await deps.sendRequest("checkpoint.list", {
           conversation_id: "default",
         });
         if (result && typeof result === "object" && "checkpoints" in result) {

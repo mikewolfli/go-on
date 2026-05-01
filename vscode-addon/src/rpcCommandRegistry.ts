@@ -40,13 +40,15 @@ export function registerRpcCommands(
   const workflowExecuteRpcCommand = vscode.commands.registerCommand(
     "go-on.workflowExecute",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
       const objective = await vscode.window.showInputBox({
         prompt: i18n.getMessage(MessageKeys.promptWorkflowObjective),
-        placeHolder: i18n.getMessage(MessageKeys.promptWorkflowObjectivePlaceholder),
+        placeHolder: i18n.getMessage(
+          MessageKeys.promptWorkflowObjectivePlaceholder,
+        ),
       });
       if (!objective) {
         return;
@@ -57,11 +59,17 @@ export function registerRpcCommands(
           task: objective,
         });
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandCompleted, ["workflow.execute", JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.rpcCommandCompleted, [
+            "workflow.execute",
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["workflow.execute", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "workflow.execute",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -70,7 +78,7 @@ export function registerRpcCommands(
   const taskPlanRpcCommand = vscode.commands.registerCommand(
     "go-on.taskPlan",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -85,11 +93,17 @@ export function registerRpcCommands(
       try {
         const result = await deps.sendRequest("task.plan", { task });
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandCompleted, ["task.plan", JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.rpcCommandCompleted, [
+            "task.plan",
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["task.plan", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "task.plan",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -98,7 +112,7 @@ export function registerRpcCommands(
   const taskExecuteRpcCommand = vscode.commands.registerCommand(
     "go-on.taskExecute",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -130,11 +144,17 @@ export function registerRpcCommands(
           tgCkpt?.resume_eligible ?? false,
         );
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandCompleted, ["task.execute", `checkpoint=${ckptId}, resume_eligible=${resumeEligible}`]),
+          i18n.getMessage(MessageKeys.rpcCommandCompleted, [
+            "task.execute",
+            `checkpoint=${ckptId}, resume_eligible=${resumeEligible}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["task.execute", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "task.execute",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -143,18 +163,24 @@ export function registerRpcCommands(
   const learningSummaryRpcCommand = vscode.commands.registerCommand(
     "go-on.learningSummary",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
       try {
         const result = await deps.sendRequest("learning.summary");
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["learning.summary", JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "learning.summary",
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["learning.summary", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "learning.summary",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -163,7 +189,7 @@ export function registerRpcCommands(
   const learningGuardrailRpcCommand = vscode.commands.registerCommand(
     "go-on.learningGuardrail",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -175,11 +201,17 @@ export function registerRpcCommands(
         const stats = asRecord(guardrail.stats);
         const warnings = asArray(guardrail.warnings).length;
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["learning.guardrail", `status=${String(guardrail.status ?? "unknown")}, samples=${Number(stats.records_total ?? 0)}, parseable=${(Number(stats.parseable_ratio ?? 0) * 100).toFixed(1)}%, quality=${(Number(stats.quality_ratio ?? 0) * 100).toFixed(1)}%, high_risk=${Number(stats.high_risk_records ?? 0)}, warnings=${warnings}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "learning.guardrail",
+            `status=${String(guardrail.status ?? "unknown")}, samples=${Number(stats.records_total ?? 0)}, parseable=${(Number(stats.parseable_ratio ?? 0) * 100).toFixed(1)}%, quality=${(Number(stats.quality_ratio ?? 0) * 100).toFixed(1)}%, high_risk=${Number(stats.high_risk_records ?? 0)}, warnings=${warnings}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["learning.guardrail", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "learning.guardrail",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -188,7 +220,7 @@ export function registerRpcCommands(
   const learningReplayRpcCommand = vscode.commands.registerCommand(
     "go-on.learningReplay",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -202,11 +234,17 @@ export function registerRpcCommands(
         const pua = Number(replay.pua_events ?? 0);
         const hasBus = replay.latest_learning_bus ? "yes" : "no";
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["learning.replay", `records=${records}, workflow=${workflow}, pua=${pua}, latest_bus=${hasBus}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "learning.replay",
+            `records=${records}, workflow=${workflow}, pua=${pua}, latest_bus=${hasBus}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["learning.replay", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "learning.replay",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -215,7 +253,7 @@ export function registerRpcCommands(
   const knowledgeDistillRpcCommand = vscode.commands.registerCommand(
     "go-on.knowledgeDistill",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -235,11 +273,17 @@ export function registerRpcCommands(
         const conflicts = asRecord(layers.conflicts);
         const tombstones = asRecord(layers.tombstones);
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["knowledge.distill", `evidence=${Number(evidence.records_total ?? 0)}, summary=${Number(summary.sampled_events ?? 0)}, strategy=${Number(strategy.rules_total ?? 0)}, conflicts=${Number(conflicts.count ?? 0)}, tombstones_added=${Number(tombstones.added_count ?? 0)}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "knowledge.distill",
+            `evidence=${Number(evidence.records_total ?? 0)}, summary=${Number(summary.sampled_events ?? 0)}, strategy=${Number(strategy.rules_total ?? 0)}, conflicts=${Number(conflicts.count ?? 0)}, tombstones_added=${Number(tombstones.added_count ?? 0)}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["knowledge.distill", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "knowledge.distill",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -248,7 +292,7 @@ export function registerRpcCommands(
   const rlAlignmentEvalRpcCommand = vscode.commands.registerCommand(
     "go-on.rlAlignmentEval",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -261,11 +305,17 @@ export function registerRpcCommands(
         const comparison = asRecord(offlineEval.comparison);
         const drift = asRecord(offlineEval.drift);
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["rl.alignment.offline_eval", `samples=${Number(offlineEval.samples_total ?? 0)}, uplift=${Number(comparison.reward_uplift ?? 0).toFixed(4)}, pass=${Boolean(comparison.passes)}, drift=${Number(drift.absolute_diff ?? 0).toFixed(4)}, alert=${Boolean(drift.alert)}, mode=${String(decision.recommended_mode ?? "conservative")}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "rl.alignment.offline_eval",
+            `samples=${Number(offlineEval.samples_total ?? 0)}, uplift=${Number(comparison.reward_uplift ?? 0).toFixed(4)}, pass=${Boolean(comparison.passes)}, drift=${Number(drift.absolute_diff ?? 0).toFixed(4)}, alert=${Boolean(drift.alert)}, mode=${String(decision.recommended_mode ?? "conservative")}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["rl.alignment.offline_eval", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "rl.alignment.offline_eval",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -274,7 +324,7 @@ export function registerRpcCommands(
   const hardnessStatusRpcCommand = vscode.commands.registerCommand(
     "go-on.hardnessStatus",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -301,11 +351,17 @@ export function registerRpcCommands(
         const hardness = asRecord(result.hardness);
         const budget = asRecord(hardness.budget);
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["hardness.status", `level=${String(hardness.level ?? "unknown")}, score=${Number(hardness.score ?? 0).toFixed(1)}, timeout=${Number(budget.timeout_seconds ?? 0)}s, parallelism_cap=${Number(budget.parallelism_cap ?? 1)}, mode=${String(budget.recommended_mode ?? "agent")}, reviews=${Number(budget.required_reviews ?? 1)}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "hardness.status",
+            `level=${String(hardness.level ?? "unknown")}, score=${Number(hardness.score ?? 0).toFixed(1)}, timeout=${Number(budget.timeout_seconds ?? 0)}s, parallelism_cap=${Number(budget.parallelism_cap ?? 1)}, mode=${String(budget.recommended_mode ?? "agent")}, reviews=${Number(budget.required_reviews ?? 1)}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["hardness.status", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "hardness.status",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -314,7 +370,7 @@ export function registerRpcCommands(
   const costStatusRpcCommand = vscode.commands.registerCommand(
     "go-on.costStatus",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -346,11 +402,17 @@ export function registerRpcCommands(
         const routing = asRecord(cost.routing);
         const telemetry = asRecord(cost.telemetry);
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["cost.status", `class=${String(budget.budget_class ?? "unknown")}, input=${Number(budget.input_tokens_estimate ?? 0)}, output=${Number(budget.output_tokens_budget ?? 0)}, total=${Number(budget.total_tokens_budget ?? 0)}, compress=${Boolean(compression.triggered)}, tier=${String(routing.preferred_model_tier ?? "economy")}, est_cost=${Number(telemetry.estimated_total_cost ?? 0).toFixed(4)}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "cost.status",
+            `class=${String(budget.budget_class ?? "unknown")}, input=${Number(budget.input_tokens_estimate ?? 0)}, output=${Number(budget.output_tokens_budget ?? 0)}, total=${Number(budget.total_tokens_budget ?? 0)}, compress=${Boolean(compression.triggered)}, tier=${String(routing.preferred_model_tier ?? "economy")}, est_cost=${Number(telemetry.estimated_total_cost ?? 0).toFixed(4)}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["cost.status", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "cost.status",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -359,7 +421,7 @@ export function registerRpcCommands(
   const configBaselineRpcCommand = vscode.commands.registerCommand(
     "go-on.configBaseline",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -380,11 +442,17 @@ export function registerRpcCommands(
         const legacyCount = Number(migration.legacy_key_count ?? 0);
         const explicitCount = Number(file.runtime_explicit_field_count ?? 0);
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["config.baseline", `status=${status}, mode=${configuredMode}, capability=${capability}, dispatch=${dispatch}, transport=${transport}, strict=${strictEnabled ? "on" : "off"}, runtime_explicit=${explicitCount}, legacy_keys=${legacyCount}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "config.baseline",
+            `status=${status}, mode=${configuredMode}, capability=${capability}, dispatch=${dispatch}, transport=${transport}, strict=${strictEnabled ? "on" : "off"}, runtime_explicit=${explicitCount}, legacy_keys=${legacyCount}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["config.baseline", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "config.baseline",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -393,7 +461,7 @@ export function registerRpcCommands(
   const errorContractRpcCommand = vscode.commands.registerCommand(
     "go-on.errorContract",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -408,11 +476,17 @@ export function registerRpcCommands(
           return retry.retryable === true;
         }).length;
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["error.contract", `version=${version}, kinds=${kinds.length}, retryable_kinds=${retryableKinds}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "error.contract",
+            `version=${version}, kinds=${kinds.length}, retryable_kinds=${retryableKinds}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["error.contract", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "error.contract",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -421,7 +495,7 @@ export function registerRpcCommands(
   const buildReproRpcCommand = vscode.commands.registerCommand(
     "go-on.buildRepro",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -437,11 +511,17 @@ export function registerRpcCommands(
         const status = String(build.status ?? "unknown");
         const commit = String(buildMeta.git_commit_short ?? "-");
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["build.repro", `status=${status}, required=${requiredPresent}/${requiredTotal}, commit=${commit}, release_items=${items.length}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "build.repro",
+            `status=${status}, required=${requiredPresent}/${requiredTotal}, commit=${commit}, release_items=${items.length}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["build.repro", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "build.repro",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -450,7 +530,7 @@ export function registerRpcCommands(
   const dataLifecycleRpcCommand = vscode.commands.registerCommand(
     "go-on.dataLifecycle",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -466,11 +546,17 @@ export function registerRpcCommands(
         const targetCount = asArray(storage.targets).length;
         const alerts = asArray(waterline.alerts).length;
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["data.lifecycle", `status=${status}, total_bytes=${totalBytes}, targets=${targetCount}, alerts=${alerts}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "data.lifecycle",
+            `status=${status}, total_bytes=${totalBytes}, targets=${targetCount}, alerts=${alerts}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["data.lifecycle", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "data.lifecycle",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -479,7 +565,7 @@ export function registerRpcCommands(
   const optimizationPeakRpcCommand = vscode.commands.registerCommand(
     "go-on.optimizationPeak",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -499,11 +585,17 @@ export function registerRpcCommands(
         const status = String(peak.status ?? "unknown");
         const version = String(peak.version ?? "-");
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["optimization.peak", `status=${status}, overall_pass=${overallPass}, gates=${passed}/${gates.length}, version=${version}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "optimization.peak",
+            `status=${status}, overall_pass=${overallPass}, gates=${passed}/${gates.length}, version=${version}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["optimization.peak", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "optimization.peak",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -512,18 +604,24 @@ export function registerRpcCommands(
   const autotuneStatusRpcCommand = vscode.commands.registerCommand(
     "go-on.autotuneStatus",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
       try {
         const result = await deps.sendRequest("autotune.status");
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["autotune.status", JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "autotune.status",
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["autotune.status", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "autotune.status",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -532,7 +630,7 @@ export function registerRpcCommands(
   const selectorStatusRpcCommand = vscode.commands.registerCommand(
     "go-on.selectorStatus",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -543,11 +641,17 @@ export function registerRpcCommands(
         const models = asArray(selector.models);
         const topModel = models.length > 0 ? asRecord(models[0]) : {};
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["selector.status", `mode=${mode}, exploration_bias=${Number(selector.exploration_bias ?? 0).toFixed(2)}, tracked_models=${Number(selector.tracked_models ?? 0)}, total_observations=${Number(selector.total_observations ?? 0)}, top_model=${String(topModel.model_id ?? "-")}, top_score=${Number(topModel.ucb_score ?? 0).toFixed(3)}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "selector.status",
+            `mode=${mode}, exploration_bias=${Number(selector.exploration_bias ?? 0).toFixed(2)}, tracked_models=${Number(selector.tracked_models ?? 0)}, total_observations=${Number(selector.total_observations ?? 0)}, top_model=${String(topModel.model_id ?? "-")}, top_score=${Number(topModel.ucb_score ?? 0).toFixed(3)}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["selector.status", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "selector.status",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -556,7 +660,7 @@ export function registerRpcCommands(
   const governanceStatusRpcCommand = vscode.commands.registerCommand(
     "go-on.governanceStatus",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -590,15 +694,21 @@ export function registerRpcCommands(
         const dualTrackReady = Boolean(dualTrack.ready ?? false);
         const governanceSchema = String(
           governance.schema_version ??
-          artifactContract.schema_version ??
-          "unknown",
+            artifactContract.schema_version ??
+            "unknown",
         );
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["governance.status", `governance=${governance.status ?? "unknown"}, schema=${governanceSchema}, strict=${strictEnabled ? "on" : "off"}, strict_violations=${strictViolations}, entry_auth=${entryAuthEnabled ? "on" : "off"}, entry_key=${entryAuthKeyConfigured ? "set" : "missing"}, entry_rpm=${entryRateLimit}, multi_user_mode=${multiUserMode}, multi_user_ready=${multiUserReady}, multi_user_lifecycle_ready=${multiUserLifecycleReady}, dual_track_ready=${dualTrackReady}, multi_user_source=${multiUserSource}, rules=${rules.version ?? "-"}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "governance.status",
+            `governance=${governance.status ?? "unknown"}, schema=${governanceSchema}, strict=${strictEnabled ? "on" : "off"}, strict_violations=${strictViolations}, entry_auth=${entryAuthEnabled ? "on" : "off"}, entry_key=${entryAuthKeyConfigured ? "set" : "missing"}, entry_rpm=${entryRateLimit}, multi_user_mode=${multiUserMode}, multi_user_ready=${multiUserReady}, multi_user_lifecycle_ready=${multiUserLifecycleReady}, dual_track_ready=${dualTrackReady}, multi_user_source=${multiUserSource}, rules=${rules.version ?? "-"}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["governance.status", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "governance.status",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -607,7 +717,7 @@ export function registerRpcCommands(
   const governancePlanGetRpcCommand = vscode.commands.registerCommand(
     "go-on.governancePlanGet",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -619,11 +729,17 @@ export function registerRpcCommands(
         const stageReq = asArray(plan.stage_requirements).length;
         const safeguards = asArray(plan.mandatory_safeguards).length;
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["governance.plan.get", `escalation=${escalationLevel}, red_lines=${redLines}, stage_requirements=${stageReq}, safeguards=${safeguards}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "governance.plan.get",
+            `escalation=${escalationLevel}, red_lines=${redLines}, stage_requirements=${stageReq}, safeguards=${safeguards}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["governance.plan.get", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "governance.plan.get",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -632,7 +748,7 @@ export function registerRpcCommands(
   const governanceAuditRecentRpcCommand = vscode.commands.registerCommand(
     "go-on.governanceAuditRecent",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -662,11 +778,17 @@ export function registerRpcCommands(
           events.length > 0 ? asRecord(events[events.length - 1]).action : "-";
         const latestAction = String(latestRaw ?? "-");
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["governance.audit.recent", `events=${events.length}, latest_action=${latestAction}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "governance.audit.recent",
+            `events=${events.length}, latest_action=${latestAction}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["governance.audit.recent", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "governance.audit.recent",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -675,28 +797,32 @@ export function registerRpcCommands(
   const skillListImportedRpcCommand = vscode.commands.registerCommand(
     "go-on.skillListImported",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
-        const result = asRecord(
-          await deps.sendRequest("skill.list_imported", {}),
-        );
+        const result = asRecord(await deps.sendRequest("skill.list", {}));
         const skills = asArray(result.skills);
         const enabled = Number(
           result.enabled ??
-          skills.filter((item) => asRecord(item).enabled === true).length,
+            skills.filter((item) => asRecord(item).enabled === true).length,
         );
         const total = Number(result.total ?? skills.length);
         const disabled = Number(
           result.disabled ?? Math.max(0, total - enabled),
         );
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["skill.list_imported", `total=${total}, enabled=${enabled}, disabled=${disabled}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "skill.list",
+            `total=${total}, enabled=${enabled}, disabled=${disabled}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["skill.list_imported", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "skill.list",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -705,12 +831,14 @@ export function registerRpcCommands(
   const skillImportLocalRpcCommand = vscode.commands.registerCommand(
     "go-on.skillImportLocal",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       const manifestPath = await vscode.window.showInputBox({
         prompt: i18n.getMessage(MessageKeys.promptSkillManifestPath),
-        placeHolder: i18n.getMessage(MessageKeys.promptSkillManifestPathPlaceholder),
+        placeHolder: i18n.getMessage(
+          MessageKeys.promptSkillManifestPathPlaceholder,
+        ),
       });
       if (!manifestPath) {
         return;
@@ -731,11 +859,17 @@ export function registerRpcCommands(
         );
         const skill = asRecord(result.skill);
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["skill.import", `name=${String(skill.name ?? "-")}, version=${String(skill.version ?? "-")}, enabled=${Boolean(skill.enabled)}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "skill.import",
+            `name=${String(skill.name ?? "-")}, version=${String(skill.version ?? "-")}, enabled=${Boolean(skill.enabled)}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["skill.import", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "skill.import",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -744,7 +878,7 @@ export function registerRpcCommands(
   const skillToggleRpcCommand = vscode.commands.registerCommand(
     "go-on.skillToggle",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -778,16 +912,25 @@ export function registerRpcCommands(
         const skill = asRecord(result.skill);
         if (action === "remove") {
           vscode.window.showInformationMessage(
-            i18n.getMessage(MessageKeys.rpcCommandResult, ["skill.remove", `name=${name}, removed=${removed}`]),
+            i18n.getMessage(MessageKeys.rpcCommandResult, [
+              "skill.remove",
+              `name=${name}, removed=${removed}`,
+            ]),
           );
           return;
         }
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, [method, `name=${String(skill.name ?? name)}, enabled=${Boolean(skill.enabled)}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            method,
+            `name=${String(skill.name ?? name)}, enabled=${Boolean(skill.enabled)}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["skill", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "skill",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -796,17 +939,23 @@ export function registerRpcCommands(
   const autotuneGetRpcCommand = vscode.commands.registerCommand(
     "go-on.autotuneGet",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
         const result = await deps.sendRequest("autotune.get");
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["autotune.get", JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "autotune.get",
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["autotune.get", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "autotune.get",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -815,7 +964,7 @@ export function registerRpcCommands(
   const autotuneResetRpcCommand = vscode.commands.registerCommand(
     "go-on.autotuneReset",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       const confirmAutotune = await vscode.window.showWarningMessage(
@@ -829,11 +978,17 @@ export function registerRpcCommands(
       try {
         const result = await deps.sendRequest("autotune.reset", {});
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["autotune.reset", JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "autotune.reset",
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["autotune.reset", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "autotune.reset",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -842,17 +997,23 @@ export function registerRpcCommands(
   const metricsGetRpcCommand = vscode.commands.registerCommand(
     "go-on.metricsGet",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
         const metrics = asRecord(await deps.sendRequest("metrics.get"));
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["metrics", `chat=${Number(metrics.chat_requests_total ?? 0)}, failed=${Number(metrics.failed_requests ?? 0)}, agent_timeout=${Number(metrics.agent_timeout_failures_total ?? 0)}, review_timeout=${Number(metrics.review_gate_timeout_total ?? 0)}, probe_timeout=${Number(metrics.runtime_probe_timeout_total ?? 0)}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "metrics",
+            `chat=${Number(metrics.chat_requests_total ?? 0)}, failed=${Number(metrics.failed_requests ?? 0)}, agent_timeout=${Number(metrics.agent_timeout_failures_total ?? 0)}, review_timeout=${Number(metrics.review_gate_timeout_total ?? 0)}, probe_timeout=${Number(metrics.runtime_probe_timeout_total ?? 0)}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["metrics.get", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "metrics.get",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -861,7 +1022,7 @@ export function registerRpcCommands(
   const metricsResetRpcCommand = vscode.commands.registerCommand(
     "go-on.metricsReset",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       const confirmMetrics = await vscode.window.showWarningMessage(
@@ -874,10 +1035,15 @@ export function registerRpcCommands(
       }
       try {
         await deps.sendRequest("metrics.reset");
-        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.metricsResetCompleted));
+        vscode.window.showInformationMessage(
+          i18n.getMessage(MessageKeys.metricsResetCompleted),
+        );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["metrics.reset", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "metrics.reset",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -886,7 +1052,7 @@ export function registerRpcCommands(
   const traceMetricsRpcCommand = vscode.commands.registerCommand(
     "go-on.traceMetrics",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
@@ -894,11 +1060,17 @@ export function registerRpcCommands(
         const timeouts = asRecord(trace.timeouts);
         const topN = asArray(trace.slow_requests_top_n).length;
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["trace.metrics", `buffered=${Number(trace.buffered_events ?? 0)}, slow_top_n=${topN}, agent_timeout=${Number(timeouts.agent_request_total ?? 0)}, review_timeout=${Number(timeouts.review_gate_total ?? 0)}, probe_timeout=${Number(timeouts.runtime_probe_total ?? 0)}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "trace.metrics",
+            `buffered=${Number(trace.buffered_events ?? 0)}, slow_top_n=${topN}, agent_timeout=${Number(timeouts.agent_request_total ?? 0)}, review_timeout=${Number(timeouts.review_gate_total ?? 0)}, probe_timeout=${Number(timeouts.runtime_probe_total ?? 0)}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["trace.metrics", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "trace.metrics",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -907,7 +1079,7 @@ export function registerRpcCommands(
   const qualityBaselineRpcCommand = vscode.commands.registerCommand(
     "go-on.qualityBaseline",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
@@ -931,11 +1103,17 @@ export function registerRpcCommands(
         }
 
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["quality.baseline", `healthy=${Boolean(lifecycle.is_healthy)}, total=${Number(metrics.total_requests ?? 0)}, success=${Number(metrics.successful_requests ?? 0)}, failed=${Number(metrics.failed_requests ?? 0)}, avg_ms=${Number(metrics.avg_request_duration_ms ?? 0).toFixed(1)}, buffered=${Number(trace.buffered_events ?? 0)}, scenarios=${scenarioCount}, agent_timeout=${Number(timeouts.agent_request_total ?? 0)}, review_timeout=${Number(timeouts.review_gate_total ?? 0)}, probe_timeout=${Number(timeouts.runtime_probe_total ?? 0)}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "quality.baseline",
+            `healthy=${Boolean(lifecycle.is_healthy)}, total=${Number(metrics.total_requests ?? 0)}, success=${Number(metrics.successful_requests ?? 0)}, failed=${Number(metrics.failed_requests ?? 0)}, avg_ms=${Number(metrics.avg_request_duration_ms ?? 0).toFixed(1)}, buffered=${Number(trace.buffered_events ?? 0)}, scenarios=${scenarioCount}, agent_timeout=${Number(timeouts.agent_request_total ?? 0)}, review_timeout=${Number(timeouts.review_gate_total ?? 0)}, probe_timeout=${Number(timeouts.runtime_probe_total ?? 0)}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["quality.baseline", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "quality.baseline",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -944,7 +1122,7 @@ export function registerRpcCommands(
   const runtimeStabilityRpcCommand = vscode.commands.registerCommand(
     "go-on.runtimeStability",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
@@ -960,11 +1138,17 @@ export function registerRpcCommands(
           .join(", ");
 
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["runtime.stability", `score=${Number(stability.score ?? 0)}, level=${stability.level ?? "unknown"}, safe_restart=${Boolean(stability.safe_restart_ready)}, health_errors=${Number(summary.health_errors ?? 0)}, health_warnings=${Number(summary.health_warnings ?? 0)}, config_warnings=${Number(summary.config_warnings ?? 0)}, strict_violations=${Number(summary.strict_violations ?? 0)}, checks=[${checkSummary}]`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "runtime.stability",
+            `score=${Number(stability.score ?? 0)}, level=${stability.level ?? "unknown"}, safe_restart=${Boolean(stability.safe_restart_ready)}, health_errors=${Number(summary.health_errors ?? 0)}, health_warnings=${Number(summary.health_warnings ?? 0)}, config_warnings=${Number(summary.config_warnings ?? 0)}, strict_violations=${Number(summary.strict_violations ?? 0)}, checks=[${checkSummary}]`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["runtime.stability", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "runtime.stability",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -973,7 +1157,7 @@ export function registerRpcCommands(
   const runtimeSelfModelRpcCommand = vscode.commands.registerCommand(
     "go-on.runtimeSelfModel",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
@@ -989,11 +1173,17 @@ export function registerRpcCommands(
         const recommendations = asArray(selfModel.recommendations);
 
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["runtime.self_model", `readiness=${String(readiness.status ?? "unknown")}, stability=${String(stability.level ?? "unknown")}, safe_restart=${Boolean(stability.safe_restart_ready)}, mode=${String(decision.recommended_mode ?? "unknown")}, drift_alert=${Boolean(drift.alert)}, drift_diff=${Number(drift.absolute_diff ?? 0).toFixed(4)}, recommendations=${recommendations.length}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "runtime.self_model",
+            `readiness=${String(readiness.status ?? "unknown")}, stability=${String(stability.level ?? "unknown")}, safe_restart=${Boolean(stability.safe_restart_ready)}, mode=${String(decision.recommended_mode ?? "unknown")}, drift_alert=${Boolean(drift.alert)}, drift_diff=${Number(drift.absolute_diff ?? 0).toFixed(4)}, recommendations=${recommendations.length}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["runtime.self_model", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "runtime.self_model",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1002,7 +1192,7 @@ export function registerRpcCommands(
   const providerStatusRpcCommand = vscode.commands.registerCommand(
     "go-on.providerStatus",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
@@ -1010,11 +1200,17 @@ export function registerRpcCommands(
         const providerStatus = asRecord(result.provider_status);
         const summary = asRecord(providerStatus.summary);
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["provider.status", `status=${String(providerStatus.status ?? "unknown")}, ready=${Number(summary.ready ?? 0)}, degraded=${Number(summary.degraded ?? 0)}, configured=${Number(summary.configured ?? 0)}, coverage=${Number(summary.coverage_percent ?? 0)}%`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "provider.status",
+            `status=${String(providerStatus.status ?? "unknown")}, ready=${Number(summary.ready ?? 0)}, degraded=${Number(summary.degraded ?? 0)}, configured=${Number(summary.configured ?? 0)}, coverage=${Number(summary.coverage_percent ?? 0)}%`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["provider.status", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "provider.status",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1023,7 +1219,7 @@ export function registerRpcCommands(
   const releaseReadinessRpcCommand = vscode.commands.registerCommand(
     "go-on.releaseReadiness",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
@@ -1042,16 +1238,22 @@ export function registerRpcCommands(
           .join("|");
         const readinessSchema = String(
           readiness.schema_version ??
-          artifactContract.schema_version ??
-          readiness.version ??
-          "unknown",
+            artifactContract.schema_version ??
+            readiness.version ??
+            "unknown",
         );
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["release.readiness", `status=${String(readiness.status ?? "unknown")}, schema=${readinessSchema}, overall=${Boolean(readiness.overall_pass)}, blocked=${Number(readiness.blocked_gate_count ?? 0)}, blocked_names=${blockedGateNames || "-"}, open_breakers=${Number(summary.open_breakers ?? 0)}, degraded_services=${Number(summary.degraded_services ?? 0)}, multi_user_mode=${String(multiUser.mode ?? "single_user")}, multi_user_ready=${Boolean(multiUser.release_gate_ready ?? false)}, multi_user_lifecycle_ready=${Boolean(lifecycle.ready ?? summary.multi_user_lifecycle_ready ?? false)}, dual_track_ready=${Boolean(dualTrack.ready ?? summary.dual_track_consistency_ready ?? false)}, multi_user_source=${String(inference.source ?? summary.multi_user_inference_source ?? "default")}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "release.readiness",
+            `status=${String(readiness.status ?? "unknown")}, schema=${readinessSchema}, overall=${Boolean(readiness.overall_pass)}, blocked=${Number(readiness.blocked_gate_count ?? 0)}, blocked_names=${blockedGateNames || "-"}, open_breakers=${Number(summary.open_breakers ?? 0)}, degraded_services=${Number(summary.degraded_services ?? 0)}, multi_user_mode=${String(multiUser.mode ?? "single_user")}, multi_user_ready=${Boolean(multiUser.release_gate_ready ?? false)}, multi_user_lifecycle_ready=${Boolean(lifecycle.ready ?? summary.multi_user_lifecycle_ready ?? false)}, dual_track_ready=${Boolean(dualTrack.ready ?? summary.dual_track_consistency_ready ?? false)}, multi_user_source=${String(inference.source ?? summary.multi_user_inference_source ?? "default")}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["release.readiness", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "release.readiness",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1060,7 +1262,7 @@ export function registerRpcCommands(
   const harnessStatusRpcCommand = vscode.commands.registerCommand(
     "go-on.harnessStatus",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
@@ -1074,11 +1276,17 @@ export function registerRpcCommands(
         const adversarial = asRecord(suites.adversarial);
         const longChain = asRecord(suites.long_chain);
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["harness.status", `total=${Number(harness.scenario_total ?? 0)}, smoke=${Number(smoke.count ?? 0)}, regression=${Number(regression.count ?? 0)}, adversarial=${Number(adversarial.count ?? 0)}, long_chain=${Number(longChain.count ?? 0)}, seed=${Number(harness.fixed_seed ?? 0)}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "harness.status",
+            `total=${Number(harness.scenario_total ?? 0)}, smoke=${Number(smoke.count ?? 0)}, regression=${Number(regression.count ?? 0)}, adversarial=${Number(adversarial.count ?? 0)}, long_chain=${Number(longChain.count ?? 0)}, seed=${Number(harness.fixed_seed ?? 0)}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["harness.status", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "harness.status",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1087,17 +1295,23 @@ export function registerRpcCommands(
   const traceGetRpcCommand = vscode.commands.registerCommand(
     "go-on.traceGet",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
         const result = await deps.sendRequest("trace.get", {});
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["trace.get", JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "trace.get",
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["trace.get", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "trace.get",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1106,7 +1320,7 @@ export function registerRpcCommands(
   const observabilityAlertsRpcCommand = vscode.commands.registerCommand(
     "go-on.observabilityAlerts",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
@@ -1118,11 +1332,17 @@ export function registerRpcCommands(
         const topCode =
           items.length > 0 ? String(asRecord(items[0]).code ?? "-") : "-";
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["observability.alerts", `critical=${Number(alerts.critical ?? 0)}, warn=${Number(alerts.warn ?? 0)}, info=${Number(alerts.info ?? 0)}, top=${topCode}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "observability.alerts",
+            `critical=${Number(alerts.critical ?? 0)}, warn=${Number(alerts.warn ?? 0)}, info=${Number(alerts.info ?? 0)}, top=${topCode}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["observability.alerts", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "observability.alerts",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1131,7 +1351,7 @@ export function registerRpcCommands(
   const securityBaselineRpcCommand = vscode.commands.registerCommand(
     "go-on.securityBaseline",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
@@ -1145,11 +1365,17 @@ export function registerRpcCommands(
         const riskCount = Number(baseline.risk_count ?? 0);
         const strict = Boolean(productionStrict.enabled ?? false);
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["security.baseline", `level=${level}, ingress=${ingress}, strict=${strict}, risks=${riskCount}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "security.baseline",
+            `level=${level}, ingress=${ingress}, strict=${strict}, risks=${riskCount}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["security.baseline", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "security.baseline",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1158,7 +1384,7 @@ export function registerRpcCommands(
   const breakerResetRpcCommand = vscode.commands.registerCommand(
     "go-on.breakerReset",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       const agent = await vscode.window.showInputBox({
@@ -1171,11 +1397,17 @@ export function registerRpcCommands(
       try {
         const result = await deps.sendRequest("breaker.reset", { agent });
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["breaker.reset", JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "breaker.reset",
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["breaker.reset", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "breaker.reset",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1184,7 +1416,7 @@ export function registerRpcCommands(
   const breakerRecoveryRpcCommand = vscode.commands.registerCommand(
     "go-on.breakerRecovery",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
 
@@ -1204,11 +1436,17 @@ export function registerRpcCommands(
         const recoveredCount = Number(result.recovered_count ?? 0);
         const remaining = Number(result.remaining_degraded_count ?? 0);
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["breaker.recovery", `recovered=${recoveredCount}, remaining_degraded=${remaining}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "breaker.recovery",
+            `recovered=${recoveredCount}, remaining_degraded=${remaining}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["breaker.recovery", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "breaker.recovery",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1217,15 +1455,20 @@ export function registerRpcCommands(
   const maintenanceGcRpcCommand = vscode.commands.registerCommand(
     "go-on.maintenanceGc",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
         await deps.sendRequest("maintenance.gc");
-        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.maintenanceGcCompleted));
+        vscode.window.showInformationMessage(
+          i18n.getMessage(MessageKeys.maintenanceGcCompleted),
+        );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["maintenance.gc", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "maintenance.gc",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1234,19 +1477,23 @@ export function registerRpcCommands(
   const checkpointCreateRpcCommand = vscode.commands.registerCommand(
     "go-on.checkpointCreate",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       const conversationId = await vscode.window.showInputBox({
         prompt: i18n.getMessage(MessageKeys.promptConversationId),
-        placeHolder: i18n.getMessage(MessageKeys.promptConversationIdPlaceholder),
+        placeHolder: i18n.getMessage(
+          MessageKeys.promptConversationIdPlaceholder,
+        ),
       });
       if (!conversationId) {
         return;
       }
       const message = await vscode.window.showInputBox({
         prompt: i18n.getMessage(MessageKeys.promptCheckpointMessage),
-        placeHolder: i18n.getMessage(MessageKeys.promptCheckpointMessagePlaceholder),
+        placeHolder: i18n.getMessage(
+          MessageKeys.promptCheckpointMessagePlaceholder,
+        ),
       });
       if (!message) {
         return;
@@ -1260,11 +1507,16 @@ export function registerRpcCommands(
           },
         );
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.checkpointCreated, [JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.checkpointCreated, [
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["checkpoint.create", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "checkpoint.create",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1273,26 +1525,33 @@ export function registerRpcCommands(
   const checkpointListRpcCommand = vscode.commands.registerCommand(
     "go-on.checkpointList",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       const conversationId = await vscode.window.showInputBox({
         prompt: i18n.getMessage(MessageKeys.promptConversationId),
-        placeHolder: i18n.getMessage(MessageKeys.promptConversationIdPlaceholder),
+        placeHolder: i18n.getMessage(
+          MessageKeys.promptConversationIdPlaceholder,
+        ),
       });
       if (!conversationId) {
         return;
       }
       try {
-        const result = await deps.sendRequest("conversation.checkpoint.list", {
+        const result = await deps.sendRequest("checkpoint.list", {
           conversation_id: conversationId,
         });
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.checkpointsResult, [JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.checkpointsResult, [
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["checkpoint.list", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "checkpoint.list",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1301,7 +1560,7 @@ export function registerRpcCommands(
   const conversationRollbackRpcCommand = vscode.commands.registerCommand(
     "go-on.conversationRollback",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       const checkpointId = await vscode.window.showInputBox({
@@ -1313,7 +1572,9 @@ export function registerRpcCommands(
       }
       const conversationId = await vscode.window.showInputBox({
         prompt: i18n.getMessage(MessageKeys.promptConversationId),
-        placeHolder: i18n.getMessage(MessageKeys.promptConversationIdPlaceholder),
+        placeHolder: i18n.getMessage(
+          MessageKeys.promptConversationIdPlaceholder,
+        ),
       });
       if (!conversationId) {
         return;
@@ -1328,7 +1589,10 @@ export function registerRpcCommands(
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["conversation.rollback", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "conversation.rollback",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1337,17 +1601,23 @@ export function registerRpcCommands(
   const primarySecondarySummaryRpcCommand = vscode.commands.registerCommand(
     "go-on.primarySecondarySummary",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
         const result = await deps.sendRequest("primary_secondary.summary", {});
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["primary_secondary.summary", JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "primary_secondary.summary",
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["primary_secondary.summary", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "primary_secondary.summary",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1356,19 +1626,25 @@ export function registerRpcCommands(
   const debugPanelGetRpcCommand = vscode.commands.registerCommand(
     "go-on.debugPanelGet",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
-        const result = asRecord(await deps.sendRequest("debug_panel.get", {}));
+        const result = asRecord(await deps.sendRequest("debug.panel.get", {}));
         const panel = asRecord(result.panel);
         const conversations = asRecord(panel.conversations);
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["debug_panel.get", `conversations=${Number(conversations.count ?? 0)}, checkpoints=${Number(conversations.checkpoints ?? 0)}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "debug.panel.get",
+            `conversations=${Number(conversations.count ?? 0)}, checkpoints=${Number(conversations.checkpoints ?? 0)}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["debug_panel.get", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "debug.panel.get",
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -1377,7 +1653,7 @@ export function registerRpcCommands(
   const actionCheckRpcCommand = vscode.commands.registerCommand(
     "go-on.actionCheck",
     async () => {
-      if (!await ensureRunning(deps)) {
+      if (!(await ensureRunning(deps))) {
         return;
       }
       try {
@@ -1386,11 +1662,17 @@ export function registerRpcCommands(
         );
         const report = asRecord(result.report);
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rpcCommandResult, ["action.check", `ok=${Boolean(result.ok)}, checks=${Number(report.total_checks ?? 0)}`]),
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "action.check",
+            `ok=${Boolean(result.ok)}, checks=${Number(report.total_checks ?? 0)}`,
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.rpcCommandFailed, ["action.check", getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "action.check",
+            getErrorMessage(error),
+          ]),
         );
       }
     },

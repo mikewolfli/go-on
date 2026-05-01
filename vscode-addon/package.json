@@ -2,7 +2,7 @@
   "name": "go-on-vscode",
   "displayName": "Go-On VS Code Extension",
   "description": "VS Code extension for the Go-On Rust ACP proxy",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -12,14 +12,7 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-    "onStartupFinished",
-    "onView:go-on-status",
-    "onView:go-on-chat",
-    "onView:go-on-settings",
-    "onView:go-on-workflow",
-    "onView:go-on-process-flow"
-  ],
+  "activationEvents": [],
   "main": "./out/extension.js",
   "repository": {
     "type": "git",
@@ -411,6 +404,11 @@
         "command": "go-on.updateRules",
         "title": "Update Rules Markdown",
         "icon": "$(note)"
+      },
+      {
+        "command": "go-on-status.refresh",
+        "title": "Refresh Status Tree",
+        "icon": "$(refresh)"
       }
     ],
     "views": {

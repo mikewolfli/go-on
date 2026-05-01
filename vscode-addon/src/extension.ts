@@ -760,7 +760,6 @@ export function deactivate() {
  */
 async function syncLanguageToApp(language: string): Promise<void> {
   try {
-    const _config = vscode.workspace.getConfiguration("go-on");
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
 
     if (!workspaceFolder) {

@@ -38,15 +38,15 @@ fn error_code_for(err: &anyhow::Error) -> i32 {
 impl McpServer {
     pub async fn handle_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
         let result = match request.method.as_str() {
-            "initialize" => self.handle_initialize(&request).await,
-            "tools/list" => self.handle_list_tools(&request).await,
+            "initialize" => Ok(self.handle_initialize(&request).await),
+            "tools/list" => Ok(self.handle_list_tools(&request).await),
             "tools/call" => self.handle_call_tool(&request).await,
-            "resources/list" => self.handle_list_resources(&request).await,
+            "resources/list" => Ok(self.handle_list_resources(&request).await),
             "resources/read" => self.handle_read_resource(&request).await,
-            "prompts/list" => self.handle_list_prompts(&request).await,
-            "prompts/get" => self.handle_get_prompt(&request).await,
-            "agents/list" => self.handle_list_agents(&request).await,
-            "models/list" => self.handle_list_models(&request).await,
+            "prompts/list" => Ok(self.handle_list_prompts(&request).await),
+            "prompts/get" => Ok(self.handle_get_prompt(&request).await),
+            "agents/list" => Ok(self.handle_list_agents(&request).await),
+            "models/list" => Ok(self.handle_list_models(&request).await),
             _ => {
                 warn!("MCP: unknown method '{}'", request.method);
                 let error_data =
@@ -91,8 +91,8 @@ impl McpServer {
         })
     }
 
-    async fn handle_initialize(&self, _request: &JsonRpcRequest) -> Result<Value> {
-        Ok(json!({
+    async fn handle_initialize(&self, _request: &JsonRpcRequest) -> Value {
+        json!({
             "protocolVersion": MCP_VERSION,
             "capabilities": {
                 "resources": {},
@@ -103,10 +103,10 @@ impl McpServer {
                 "name": self.server_info.name,
                 "version": self.server_info.version,
             }
-        }))
+        })
     }
 
-    async fn handle_list_tools(&self, _request: &JsonRpcRequest) -> Result<Value> {
+    async fn handle_list_tools(&self, _request: &JsonRpcRequest) -> Value {
         let tools = self
             .tool_registry
             .names()
@@ -115,7 +115,7 @@ impl McpServer {
             .collect::<Vec<_>>();
 
         info!("MCP: Listing {} tools", tools.len());
-        Ok(json!({ "tools": tools }))
+        json!({ "tools": tools })
     }
 
     async fn handle_call_tool(&self, request: &JsonRpcRequest) -> Result<Value> {
@@ -174,7 +174,7 @@ impl McpServer {
         }))
     }
 
-    async fn handle_list_resources(&self, _request: &JsonRpcRequest) -> Result<Value> {
+    async fn handle_list_resources(&self, _request: &JsonRpcRequest) -> Value {
         let resources = vec![
             McpResource {
                 uri: "go-on://agents".to_string(),
@@ -190,7 +190,7 @@ impl McpServer {
             },
         ];
 
-        Ok(json!({ "resources": resources }))
+        json!({ "resources": resources })
     }
 
     async fn handle_read_resource(&self, request: &JsonRpcRequest) -> Result<Value> {
@@ -225,12 +225,12 @@ impl McpServer {
         }
     }
 
-    async fn handle_list_agents(&self, _request: &JsonRpcRequest) -> Result<Value> {
+    async fn handle_list_agents(&self, _request: &JsonRpcRequest) -> Value {
         info!("MCP: Listing available agents from agent_registry");
-        Ok(json!({ "agents": self.agent_registry.names() }))
+        json!({ "agents": self.agent_registry.names() })
     }
 
-    async fn handle_list_models(&self, _request: &JsonRpcRequest) -> Result<Value> {
+    async fn handle_list_models(&self, _request: &JsonRpcRequest) -> Value {
         info!("MCP: Listing available models");
         let models = self
             .agent_registry
@@ -244,22 +244,22 @@ impl McpServer {
                 })
             })
             .collect::<Vec<_>>();
-        Ok(json!({ "models": models }))
+        json!({ "models": models })
     }
 
     /// Stub handler for `prompts/list`.
     /// Returns an empty prompt list. Full prompt template support is a future enhancement.
-    async fn handle_list_prompts(&self, _request: &JsonRpcRequest) -> Result<Value> {
+    async fn handle_list_prompts(&self, _request: &JsonRpcRequest) -> Value {
         // Future enhancement: return prompt templates registered via the prompt registry
-        Ok(json!({ "prompts": [] }))
+        json!({ "prompts": [] })
     }
 
     /// Stub handler for `prompts/get`.
     /// Returns an empty result. Full prompt resolution is a future enhancement.
-    async fn handle_get_prompt(&self, _request: &JsonRpcRequest) -> Result<Value> {
+    async fn handle_get_prompt(&self, _request: &JsonRpcRequest) -> Value {
         // Future enhancement: resolve and return the requested prompt template
-        Ok(json!({
+        json!({
             "messages": []
-        }))
+        })
     }
 }

@@ -33,7 +33,7 @@ jobs:
       - name: Clippy (profile-local, deny warnings)
         run: cargo clippy -F profile-local -- -D warnings
       - name: Unit tests (profile-local)
-        run: cargo test -F profile-local --bin go-on
+        run: cargo test -F profile-local --lib
 
       # ── Profile: simple-server ────────────────────────────────────────
       - name: Clippy (profile-simple-server, deny warnings)
@@ -67,7 +67,7 @@ jobs:
       - name: VS Code addon compile + lint
         run: npm --prefix vscode-addon run check
       - name: VS Code addon contract smoke
-        run: node vscode-addon/scripts/contract-smoke.js
+        run: npm --prefix vscode-addon run test:contract
       - name: GUI build
         run: npm --prefix GUI run build
       - name: GUI contract smoke

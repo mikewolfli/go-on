@@ -37,6 +37,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Verify project structure
+        shell: bash
+        run: |
+          echo "Current working directory: $(pwd)"
+          echo "Checking for required directories..."
+          test -d RULES || (echo "ERROR: RULES directory not found" && exit 1)
+          test -d languages || (echo "ERROR: languages directory not found" && exit 1)
+          echo "✓ Project structure verified"
+
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -52,9 +61,14 @@ jobs:
           set -euxo pipefail
           STAGE_DIR="dist/stage"
           mkdir -p "$STAGE_DIR"
+          
+          # Copy binary
           cp "target/${{ matrix.target }}/release/${{ matrix.executable }}" "$STAGE_DIR/${{ matrix.executable }}"
-          cp config.toml.autopilot-adaptive "$STAGE_DIR/config.toml.autopilot-adaptive"
-          cp config.toml.autopilot-adaptive "$STAGE_DIR/config.toml"
+          
+          # Copy supporting files (fail early if missing)
+          if [ ! -d RULES ]; then echo "ERROR: RULES not found in $(pwd)"; exit 1; fi
+          if [ ! -d languages ]; then echo "ERROR: languages not found in $(pwd)"; exit 1; fi
+          
           cp -R RULES "$STAGE_DIR/RULES"
           cp -R languages "$STAGE_DIR/languages"
           tar -czf "dist/${{ matrix.archive }}" -C "$STAGE_DIR" .
@@ -63,10 +77,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          if (-Not (Test-Path "RULES")) { Write-Error "RULES not found in $(Get-Location)"; exit 1 }
+          if (-Not (Test-Path "languages")) { Write-Error "languages not found in $(Get-Location)"; exit 1 }
+          
           New-Item -ItemType Directory -Force -Path dist/stage | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.executable }}" "dist/stage/${{ matrix.executable }}"
-          Copy-Item "config.toml.autopilot-adaptive" "dist/stage/config.toml.autopilot-adaptive"
-          Copy-Item "config.toml.autopilot-adaptive" "dist/stage/config.toml"
           Copy-Item "RULES" "dist/stage/RULES" -Recurse
           Copy-Item "languages" "dist/stage/languages" -Recurse
           Compress-Archive -Path "dist/stage/*" -DestinationPath "dist/${{ matrix.archive }}" -Force

@@ -1,11 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import { i18n, MessageKeys } from "./i18n";
-
-interface RuntimeResolution {
-  executablePath: string;
-  runtimeDir: string;
-}
+import { RuntimeResolution } from "./runtimeBinaryService";
 
 interface CoreCommandRegistryDeps {
   context: vscode.ExtensionContext;

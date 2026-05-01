@@ -58,7 +58,7 @@ jobs:
         run: |
           npm ci
           npm run compile
-          npm test
+          npm run test
           npx @vscode/vsce package --no-dependencies --out go-on-vscode.vsix
 
       # ── Package ────────────────────────────────────────────────────────

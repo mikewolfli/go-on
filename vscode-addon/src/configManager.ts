@@ -1,11 +1,6 @@
 /**
  * Configuration Manager for Go-On
  *
- * @deprecated This module is slated for removal but remains in use by settingsView.ts
- * (TOML persistence for agents, phases, runtime, cache, vector, autotune settings)
- * and extension.ts (initialization on activate). All new configuration should use
- * VS Code's workspace configuration (`vscode.workspace.getConfiguration`).
- *
  * Handles all configuration management including:
  * - Reading/writing TOML configuration
  * - Syncing with Go-On application
@@ -569,5 +564,4 @@ class ConfigManager {
   }
 }
 
-/** @deprecated Not actively used by the extension anymore. Kept for reference. */
 export const configManager = ConfigManager.getInstance();

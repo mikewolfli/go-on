@@ -265,7 +265,8 @@ export const MessageKeys = {
   editingSelectCodeToEdit: "editing.selectCodeToEdit",
   editingChooseActionPlaceholder: "editing.chooseActionPlaceholder",
   editingNoResponseFromAi: "editing.noResponseFromAi",
-  editingChooseResultDisplayPlaceholder: "editing.chooseResultDisplayPlaceholder",
+  editingChooseResultDisplayPlaceholder:
+    "editing.chooseResultDisplayPlaceholder",
   editingResultApplied: "editing.resultApplied",
   editingOriginalRefactoredDiffTitle: "editing.originalRefactoredDiffTitle",
   editingResultReplaceSelection: "editing.resultReplaceSelection",
@@ -782,5 +783,3 @@ export function t(key: string, ...params: unknown[]): string {
 }
 
 export const i18n = i18nManager;
-
-export default t;

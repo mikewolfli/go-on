@@ -77,7 +77,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
               await this._runProcess(message.processId);
               break;
             case "updateProcess":
-              await this._updateProcess(message.processId, message.updates);
+              await this._updateProcess(message);
               break;
             case "importProcesses":
               await this._importProcesses(message.processes);
@@ -134,7 +134,9 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
 
   private async _importProcesses(imported: Record<string, ProcessData>) {
     if (!imported || typeof imported !== "object") {
-      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.processFlowInvalidImportData));
+      vscode.window.showErrorMessage(
+        i18n.getMessage(MessageKeys.processFlowInvalidImportData),
+      );
       return;
     }
 
@@ -155,7 +157,9 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
       processes,
     });
 
-    vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.processFlowImported));
+    vscode.window.showInformationMessage(
+      i18n.getMessage(MessageKeys.processFlowImported),
+    );
   }
 
   private async _createProcess(processData: ProcessData) {
@@ -181,7 +185,9 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     });
 
     vscode.window.showInformationMessage(
-      i18n.getMessage(MessageKeys.processFlowCreatedSuccess, [processData.name]),
+      i18n.getMessage(MessageKeys.processFlowCreatedSuccess, [
+        processData.name,
+      ]),
     );
   }
 
@@ -193,7 +199,9 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     const process = processes[processId];
 
     if (!process) {
-      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.processFlowProcessNotFound));
+      vscode.window.showErrorMessage(
+        i18n.getMessage(MessageKeys.processFlowProcessNotFound),
+      );
       return;
     }
 
@@ -242,13 +250,15 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
             break;
           case "manual":
             // Wait for manual confirmation
-            await new Promise((resolve) => {
-              vscode.window
-                .showInformationMessage(
-                  `Process "${process.name}" - Stage ${i + 1}: ${stage.name}`,
-                  "Continue",
-                )
-                .then(() => resolve(void 0));
+            await new Promise<void>((resolve) => {
+              const thenable = vscode.window.showInformationMessage(
+                `Process "${process.name}" - Stage ${i + 1}: ${stage.name}`,
+                "Continue",
+              );
+              Promise.resolve(thenable).then(
+                () => resolve(),
+                () => resolve(),
+              );
             });
             break;
         }
@@ -276,7 +286,9 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
       });
 
       vscode.window.showInformationMessage(
-        i18n.getMessage(MessageKeys.processFlowCompletedSuccess, [process.name]),
+        i18n.getMessage(MessageKeys.processFlowCompletedSuccess, [
+          process.name,
+        ]),
       );
     } catch (error: unknown) {
       process.status = "failed";
@@ -291,14 +303,17 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
         error: message,
       });
 
-      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.processFlowFailed, [message]));
+      vscode.window.showErrorMessage(
+        i18n.getMessage(MessageKeys.processFlowFailed, [message]),
+      );
     }
   }
 
-  private async _updateProcess(
-    processId: string,
-    updates: Partial<ProcessData>,
-  ) {
+  private async _updateProcess(message: {
+    processId: string;
+    updates: Partial<ProcessData>;
+  }) {
+    const { processId, updates } = message;
     const processes = this.context.workspaceState.get<ProcessStore>(
       "go-on-processes",
       {},
@@ -306,12 +321,16 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
 
     // Validate input
     if (!processId) {
-      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.processFlowInvalidProcessId));
+      vscode.window.showErrorMessage(
+        i18n.getMessage(MessageKeys.processFlowInvalidProcessId),
+      );
       return;
     }
 
     if (!processes[processId]) {
-      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.processFlowProcessNotFound));
+      vscode.window.showErrorMessage(
+        i18n.getMessage(MessageKeys.processFlowProcessNotFound),
+      );
       return;
     }
 
@@ -321,7 +340,9 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
       updates.stages &&
       !Array.isArray(updates.stages)
     ) {
-      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.processFlowInvalidStagesFormat));
+      vscode.window.showErrorMessage(
+        i18n.getMessage(MessageKeys.processFlowInvalidStagesFormat),
+      );
       return;
     }
 

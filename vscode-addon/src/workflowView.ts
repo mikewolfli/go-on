@@ -131,7 +131,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     return error instanceof Error ? error.message : String(error);
   }
 
-  private async _createWorkflow(workflowData: WorkflowData) {
+  private async _createWorkflow(workflowData: WorkflowData): Promise<void> {
     const workflows = this.context.workspaceState.get<WorkflowStore>(
       "go-on-workflows",
       {},
@@ -155,7 +155,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     );
   }
 
-  private async _runWorkflow(workflowId: string) {
+  private async _runWorkflow(workflowId: string): Promise<void> {
     const workflows = this.context.workspaceState.get<WorkflowStore>(
       "go-on-workflows",
       {},
@@ -248,7 +248,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async _deleteWorkflow(workflowId: string) {
+  private async _deleteWorkflow(workflowId: string): Promise<void> {
     try {
       const workflows = this.context.workspaceState.get<WorkflowStore>(
         "go-on-workflows",

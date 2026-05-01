@@ -185,6 +185,34 @@ import { normalizeErrorMessage } from "../utils/errors";
 
 const { t } = useI18n();
 
+// Score penalty constants
+const MAX_GOVERNANCE_PENALTY = 45;
+const PENALTY_PUA_FAILED = 8;
+const PENALTY_BREAKER_OPEN = 10;
+const PENALTY_WARNING = 4;
+const PENALTY_STRICT_VIOLATION = 12;
+const PENALTY_PROVIDER_DEGRADED = 6;
+const PENALTY_RELEASE_BLOCKED_GATE = 8;
+const PENALTY_STRICT_DISABLED = 6;
+const PENALTY_ENTRY_AUTH_DISABLED = 8;
+const PENALTY_ENTRY_AUTH_KEY_MISSING = 10;
+const MIN_GOVERNANCE_SCORE = 40;
+const BASE_HEALTHY_SCORE = 100;
+const BASE_UNHEALTHY_SCORE = 65;
+const MIN_CREDS_SCORE = 40;
+const PENALTY_CREDS_WARNING = 8;
+const PENALTY_CREDS_VIOLATION = 10;
+const BASE_CREDS_SCORE = 90;
+const MIN_AUDIT_SCORE = 35;
+const PENALTY_AUDIT_PUA = 10;
+const PENALTY_AUDIT_BREAKER = 6;
+const BASE_AUDIT_SCORE = 95;
+const MIN_CONFIG_SCORE = 35;
+const PENALTY_CONFIG_WARNING = 9;
+const PENALTY_CONFIG_VIOLATION = 12;
+const PENALTY_CONFIG_STRICT_DISABLED = 8;
+const BASE_CONFIG_SCORE = 95;
+
 const overallScore = ref(65);
 const credsScore = ref(60);
 const auditScore = ref(60);
@@ -347,21 +375,21 @@ async function refreshGovernanceStatus() {
     }
 
     const governancePenalty = Math.min(
-      45,
-      puaFailed * 8 +
-        breakerOpen * 10 +
-        warningCount * 4 +
-        strictViolationCount * 12 +
-        providerDegradedCount.value * 6 +
-        releaseBlockedGateCount.value * 8 +
-        (strictEnabled.value ? 0 : 6) +
-        (entryAuthEnabled.value ? 0 : 8) +
-        (entryAuthKeyConfigured.value || !entryAuthEnabled.value ? 0 : 10),
+      MAX_GOVERNANCE_PENALTY,
+      puaFailed * PENALTY_PUA_FAILED +
+        breakerOpen * PENALTY_BREAKER_OPEN +
+        warningCount * PENALTY_WARNING +
+        strictViolationCount * PENALTY_STRICT_VIOLATION +
+        providerDegradedCount.value * PENALTY_PROVIDER_DEGRADED +
+        releaseBlockedGateCount.value * PENALTY_RELEASE_BLOCKED_GATE +
+        (strictEnabled.value ? 0 : PENALTY_STRICT_DISABLED) +
+        (entryAuthEnabled.value ? 0 : PENALTY_ENTRY_AUTH_DISABLED) +
+        (entryAuthKeyConfigured.value || !entryAuthEnabled.value ? 0 : PENALTY_ENTRY_AUTH_KEY_MISSING),
     );
-    overallScore.value = Math.max(40, runtimeHealthy ? 100 - governancePenalty : 65 - governancePenalty);
-    credsScore.value = Math.max(40, 90 - warningCount * 8 - strictViolationCount * 10);
-    auditScore.value = Math.max(35, 95 - puaFailed * 10 - breakerOpen * 6);
-    configScore.value = Math.max(35, 95 - warningCount * 9 - strictViolationCount * 12 - (strictEnabled.value ? 0 : 8));
+    overallScore.value = Math.max(MIN_GOVERNANCE_SCORE, runtimeHealthy ? BASE_HEALTHY_SCORE - governancePenalty : BASE_UNHEALTHY_SCORE - governancePenalty);
+    credsScore.value = Math.max(MIN_CREDS_SCORE, BASE_CREDS_SCORE - warningCount * PENALTY_CREDS_WARNING - strictViolationCount * PENALTY_CREDS_VIOLATION);
+    auditScore.value = Math.max(MIN_AUDIT_SCORE, BASE_AUDIT_SCORE - puaFailed * PENALTY_AUDIT_PUA - breakerOpen * PENALTY_AUDIT_BREAKER);
+    configScore.value = Math.max(MIN_CONFIG_SCORE, BASE_CONFIG_SCORE - warningCount * PENALTY_CONFIG_WARNING - strictViolationCount * PENALTY_CONFIG_VIOLATION - (strictEnabled.value ? 0 : PENALTY_CONFIG_STRICT_DISABLED));
 
     const files = Array.isArray(governance.rules?.files) ? governance.rules.files : [];
     sensitiveFields.value = files.map((item) => ({

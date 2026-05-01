@@ -15,11 +15,3 @@ export function normalizeErrorMessage(
     return String(error ?? fallback);
   }
 }
-
-function prefixErrorMessage(
-  prefix: string,
-  error: unknown,
-  fallback = "Unknown error",
-): string {
-  return `${prefix}${normalizeErrorMessage(error, fallback)}`;
-}

@@ -1,6 +1,6 @@
 [package]
 name = "go-on"
-version = "0.8.3"
+version = "0.8.4"
 edition = "2021"
 
 [lib]
@@ -21,9 +21,9 @@ path = "src/lib.rs"
 # profile-multi-users-server: multi-user production; PostgreSQL cache + pgvector
 #                             All sub-buses (tool, observability, optimization, memory, protocol, orchestration, distributed-memory)
 #
-# Compile-time validation enforced in src/main.rs via #[cfg] assertions:
-# - Exactly one profile must be enabled (enforced at compile time)
-# - Attempting multiple profiles will fail compilation
+# Compile-time validation is implicit via Cargo's feature conflict mechanics.
+# Only one profile should be selected at a time (enforced by convention).
+# No explicit #[cfg] assertions exist in main.rs.
 #
 # Build examples:
 #   cargo build                                                    # uses default profile-local

@@ -453,29 +453,13 @@ pub struct ServerStatus {
     pub timestamp: i64,
 }
 
-/// Review timeout policy
-#[derive(Debug, Clone)]
-pub struct ReviewTimeoutPolicy {
-    /// Timeout in seconds
-    #[allow(dead_code)] // F-GAP-03 — planned wiring
-    pub timeout_seconds: Option<u64>,
-    /// Whether to fail on timeout
-    pub fail_on_timeout: bool,
-}
+/// Re-export of `ReviewTimeoutPolicy` from the agent implementation module.
+/// The canonical definition lives in `crate::acp::impl::agent`.
+pub use crate::acp::r#impl::agent::ReviewTimeoutPolicy;
 
-/// Review gate outcome
-#[derive(Debug, Clone)]
-#[allow(dead_code)] // F-GAP-02 — planned wiring
-pub struct ReviewGateOutcome {
-    /// Whether the review passed
-    pub passed: bool,
-    /// Review comments
-    pub comments: Vec<String>,
-    /// Reviewer agent name
-    pub reviewer: String,
-    /// Review duration in milliseconds
-    pub duration_ms: u64,
-}
+/// Re-export of `ReviewGateOutcome` from the agent implementation module.
+/// The canonical definition lives in `crate::acp::impl::agent`.
+pub use crate::acp::r#impl::agent::ReviewGateOutcome;
 
 /// Review decision
 #[derive(Debug, Clone, Serialize)]
@@ -490,6 +474,10 @@ pub struct ReviewDecision {
 }
 
 /// Review verdict enum
+///
+/// This public enum uses `Pass`/`Fail`/`Invalid` semantics.
+/// There is a separate governance-internal `ReviewVerdict` in
+/// `crate::governance::review_controls` that uses `Approve`/`Reject`/`Invalid`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 #[allow(dead_code)] // F-GAP-02 — planned wiring

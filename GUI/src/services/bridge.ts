@@ -17,6 +17,13 @@ const DEFAULT_INVOKE_TIMEOUT_MS = 15000;
 const STARTUP_INVOKE_TIMEOUT_MS = 20000;
 const RUNTIME_RPC_TIMEOUT_MS = 30000;
 
+// Cache TTL values (milliseconds)
+const HEALTH_CACHE_TTL_MS = 3000;
+const USAGE_SNAPSHOT_CACHE_TTL_MS = 5000;
+const HEATMAP_CACHE_TTL_MS = 5000;
+const ENDPOINT_STATS_CACHE_TTL_MS = 5000;
+const EDITOR_STATUS_CACHE_TTL_MS = 5000;
+
 function buildCacheMetadata(
   cached: boolean,
   cachedAt: number,
@@ -202,6 +209,7 @@ export async function configureService(
   );
 }
 
+// TODO: planned for future use
 export async function configureServiceByExecutable(executablePath: string) {
   return invokeWithTimeout<void>(
     "configure_service_by_executable",
@@ -230,6 +238,7 @@ export async function autoConfigureBackendPath() {
   );
 }
 
+// TODO: planned for future use
 export async function exitApp() {
   return invokeWithTimeout<void>("exit_app");
 }
@@ -336,7 +345,7 @@ export async function checkHealthWithMeta(
   return withCacheMeta(
     cacheKey,
     () => invokeWithTimeout<HealthSnapshot>("check_health", { endpoint }),
-    3000,
+    HEALTH_CACHE_TTL_MS,
   );
 }
 
@@ -351,7 +360,7 @@ export async function getAiUsageSnapshotWithMeta() {
   return withCacheMeta(
     "ai_usage",
     () => invokeWithTimeout<AiUsageSnapshot>("get_ai_usage_snapshot"),
-    5000,
+    USAGE_SNAPSHOT_CACHE_TTL_MS,
   );
 }
 
@@ -365,7 +374,7 @@ export async function getUsageHeatmapWithMeta(windowSeconds = 300) {
     cacheKey,
     () =>
       invokeWithTimeout<UsageHeatmap>("get_usage_heatmap", { windowSeconds }),
-    5000,
+    HEATMAP_CACHE_TTL_MS,
   );
 }
 
@@ -377,7 +386,7 @@ export async function getEndpointHealthStatsWithMeta() {
   return withCacheMeta(
     "endpoint_stats",
     () => invokeWithTimeout<EndpointHealthStat[]>("get_endpoint_health_stats"),
-    5000,
+    ENDPOINT_STATS_CACHE_TTL_MS,
   );
 }
 
@@ -392,7 +401,7 @@ export async function getEditorIntegrationStatusWithMeta() {
       invokeWithTimeout<EditorIntegrationStatus[]>(
         "get_editor_integration_status",
       ),
-    5000,
+    EDITOR_STATUS_CACHE_TTL_MS,
   );
 }
 
@@ -417,10 +426,12 @@ export async function runCliCommand(command: string) {
   );
 }
 
+// TODO: planned for future use
 export async function showMiniConsole() {
   return invokeWithTimeout<void>("show_mini_console");
 }
 
+// TODO: planned for future use
 export async function hideMiniConsole() {
   return invokeWithTimeout<void>("hide_mini_console");
 }

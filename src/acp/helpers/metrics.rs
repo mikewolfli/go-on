@@ -119,6 +119,7 @@ pub fn histogram_prometheus_lines(
 
 /// Classify agent failure type
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn classify_agent_failure(err: &anyhow::Error) -> &'static str {
     let msg = err.to_string().to_ascii_lowercase();
     if msg.contains("timed out") || msg.contains("timeout") {
@@ -132,6 +133,7 @@ pub fn classify_agent_failure(err: &anyhow::Error) -> &'static str {
 
 /// Get current timestamp in seconds
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn now_ts() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -141,6 +143,7 @@ pub fn now_ts() -> i64 {
 
 /// Get current timestamp in milliseconds
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
