@@ -66,21 +66,22 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
               this._deleteWorkflow(message.workflowId);
               break;
             case "showConfirm":
-              vscode.window
-                .showWarningMessage(
+              try {
+                const selection = await vscode.window.showWarningMessage(
                   message.message,
                   { modal: true },
                   "OK",
                   "Cancel",
-                )
-                .then((selection) => {
-                  this._view?.webview.postMessage({
-                    type: "showConfirmResult",
-                    id: message.id,
-                    confirmed: selection === "OK",
-                    workflowId: message.workflowId,
-                  });
+                );
+                this._view?.webview.postMessage({
+                  type: "showConfirmResult",
+                  id: message.id,
+                  confirmed: selection === "OK",
+                  workflowId: message.workflowId,
                 });
+              } catch {
+                // View may be disposed; silently ignore
+              }
               break;
             case "showInputBox":
               {
@@ -241,7 +242,9 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
         error: message,
       });
 
-      vscode.window.showErrorMessage(t(MessageKeys.workflowExecutionFailed, message));
+      vscode.window.showErrorMessage(
+        t(MessageKeys.workflowExecutionFailed, message),
+      );
     }
   }
 
@@ -259,10 +262,15 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
         workflowId,
       });
 
-      vscode.window.showInformationMessage(t(MessageKeys.workflowDeletedSuccess));
+      vscode.window.showInformationMessage(
+        t(MessageKeys.workflowDeletedSuccess),
+      );
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        t(MessageKeys.workflowDeleteFailed, error instanceof Error ? error.message : String(error)),
+        t(
+          MessageKeys.workflowDeleteFailed,
+          error instanceof Error ? error.message : String(error),
+        ),
       );
     }
   }

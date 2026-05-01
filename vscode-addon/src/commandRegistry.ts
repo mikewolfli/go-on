@@ -27,6 +27,7 @@ export function registerViewCommands(
       } catch (error: unknown) {
         await deps.revealGoOnView("settings");
         const message = error instanceof Error ? error.message : String(error);
+        // TODO: i18n - hardcoded English string
         vscode.window.showWarningMessage(
           `Go-On executable is not ready: ${message}. Please set a valid .exe, .bat, or .sh path in Settings.`,
         );
@@ -35,6 +36,7 @@ export function registerViewCommands(
 
       const opened = await deps.revealGoOnView("chat");
       if (!opened) {
+        // TODO: i18n - hardcoded English string
         vscode.window.showWarningMessage(
           "Go-On Chat view is not available yet. Reload Window after installing/updating the extension.",
         );
@@ -50,10 +52,12 @@ export function registerViewCommands(
 
       if (deps.isRunning()) {
         deps.stop();
+        // TODO: i18n - hardcoded English string
         vscode.window.showInformationMessage(
           "Go-On chat closed. Running backend was stopped.",
         );
       } else {
+        // TODO: i18n - hardcoded English string
         vscode.window.showInformationMessage(
           "Go-On chat closed. Backend was already stopped.",
         );
@@ -66,6 +70,7 @@ export function registerViewCommands(
     async () => {
       const opened = await deps.revealGoOnView("settings");
       if (!opened) {
+        // TODO: i18n - hardcoded English string
         vscode.window.showWarningMessage(
           "Go-On Settings view is not available yet. Reload Window after installing/updating the extension.",
         );
@@ -78,6 +83,7 @@ export function registerViewCommands(
     async () => {
       const opened = await deps.revealGoOnView("workflow");
       if (!opened) {
+        // TODO: i18n - hardcoded English string
         vscode.window.showWarningMessage(
           "Go-On Workflow view is not available yet. Reload Window after installing/updating the extension.",
         );
@@ -88,6 +94,7 @@ export function registerViewCommands(
   const runWorkflowCommand = vscode.commands.registerCommand(
     "go-on.runWorkflow",
     () => {
+      // TODO: i18n - hardcoded English string
       vscode.window.showInformationMessage(
         "Select a workflow to run from the Workflow panel",
       );
@@ -99,6 +106,7 @@ export function registerViewCommands(
     async () => {
       const opened = await deps.revealGoOnView("process-flow");
       if (!opened) {
+        // TODO: i18n - hardcoded English string
         vscode.window.showWarningMessage(
           "Go-On Process Flow view is not available yet. Reload Window after installing/updating the extension.",
         );
@@ -133,7 +141,9 @@ export function registerViewCommands(
         }
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.createSessionFailed, [message]));
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.createSessionFailed, [message]),
+        );
       }
     },
   );

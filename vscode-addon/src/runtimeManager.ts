@@ -48,6 +48,7 @@ export class GoOnManager {
   private _reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 3;
   private _shutdownInProgress = false;
+  private _closeListener: (() => void) | null = null;
   private _startupConfig?: {
     configPath: string;
     executablePath: string;
@@ -259,11 +260,22 @@ export class GoOnManager {
         }
       }, 5000);
 
-      proc.on("close", () => {
+      // Remove previous close listener if any (shouldn't happen, but be safe)
+      this._closeListener?.();
+      const closeHandler = () => {
         clearTimeout(forceKillTimer);
-      });
+      };
+      proc.on("close", closeHandler);
+      this._closeListener = () => {
+        proc.off("close", closeHandler);
+        this._closeListener = null;
+      };
       this.process = null;
     }
+    // Clean up close listener
+    this._closeListener?.();
+    this._closeListener = null;
+
     this.updateStatus();
     this._shutdownInProgress = false;
   }

@@ -658,6 +658,10 @@ pub(crate) async fn process_chat_request(
 
     let mut capability_selected_agent: Option<String> = None;
     let mut capability_recommended_mode: Option<String> = None;
+    #[cfg(feature = "sub-bus-optimization")]
+    let mut capability_optimization_hint: Option<Value> = None;
+    #[cfg(not(feature = "sub-bus-optimization"))]
+    let capability_optimization_hint: Option<Value> = None;
 
     // ── CapabilityBus agent selection ──────────────────────────────────
     // If a CapabilityBus is present, use its sense/decide pipeline to
@@ -674,9 +678,9 @@ pub(crate) async fn process_chat_request(
         capability_selected_agent = decision.selected_agent.clone();
         capability_recommended_mode = Some(decision.recommended_mode.clone());
 
-        // Compute optimization hint under the feature gate; None otherwise.
+        // Compute optimization hint under the feature gate.
         #[cfg(feature = "sub-bus-optimization")]
-        let capability_optimization_hint: Option<Value> = {
+        {
             let opt = cb.optimization_recommendation(
                 phase_name,
                 (params.messages.len() as u64).saturating_mul(512),
@@ -686,16 +690,14 @@ pub(crate) async fn process_chat_request(
                     "balanced"
                 },
             );
-            Some(serde_json::json!({
+            capability_optimization_hint = Some(serde_json::json!({
                 "suggested_agent": opt.suggested_agent,
                 "estimated_cost": opt.estimated_cost,
                 "estimated_duration_ms": opt.estimated_duration_ms,
                 "reliability_score": opt.reliability_score,
                 "confidence": opt.confidence,
-            }))
-        };
-        #[cfg(not(feature = "sub-bus-optimization"))]
-        let capability_optimization_hint: Option<Value> = None;
+            }));
+        }
 
         if let Some(ref agent) = decision.selected_agent {
             // Move the CapabilityBus-recommended agent to the front of the list

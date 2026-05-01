@@ -350,9 +350,11 @@ fn emit_config_warnings(warnings: &[ConfigWarning], mirror_stderr: bool) {
             severity, warning.code, warning.message
         );
         if mirror_stderr {
-            eprintln!(
+            tracing::warn!(
                 "config warning [{}:{}] {}",
-                severity, warning.code, warning.message
+                severity,
+                warning.code,
+                warning.message
             );
         }
     }

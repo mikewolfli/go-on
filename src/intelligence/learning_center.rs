@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
@@ -194,6 +194,17 @@ impl LearningCenterInner {
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Acquire a lock on the inner mutex, recovering from poison.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("learning_center mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// Thread-safe continuous learning center.
 #[allow(dead_code)] // F-GAP-08 — planned wiring
 pub struct ContinuousLearningCenter {
@@ -230,7 +241,7 @@ impl ContinuousLearningCenter {
         reward: f64,
         context: ExperienceContext,
     ) -> String {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = now_ms();
         let id = generate_id("exp", &mut inner.next_experience_id);
         let importance = LearningCenterInner::importance(reward, now, now);
@@ -288,13 +299,13 @@ impl ContinuousLearningCenter {
 
     /// Retrieves a learning experience by its ID.
     pub fn get_experience(&self, id: &str) -> Option<LearningExperience> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.experiences.iter().find(|e| e.id == id).cloned()
     }
 
     /// Queries experiences by task type and/or tags.
     pub fn query_experiences(&self, task_type: &str, tags: &[String]) -> Vec<LearningExperience> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner
             .experiences
             .iter()
@@ -314,7 +325,7 @@ impl ContinuousLearningCenter {
     /// and an average importance above the threshold, a `ConsolidatedKnowledge`
     /// entry is created (or updated if one already exists for that pattern).
     pub fn consolidate(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = now_ms();
 
         // Group experiences by task_type — clone all data we need outside the lock.
@@ -393,7 +404,7 @@ impl ContinuousLearningCenter {
 
     /// Retrieves a consolidated knowledge chunk by its pattern.
     pub fn get_knowledge(&self, pattern: &str) -> Option<ConsolidatedKnowledge> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         if let Some(k) = inner.consolidated.iter_mut().find(|k| k.pattern == pattern) {
             k.last_accessed_ms = now_ms();
             k.access_count += 1;
@@ -405,7 +416,7 @@ impl ContinuousLearningCenter {
 
     /// Lists consolidated knowledge chunks matching the given tags.
     pub fn list_knowledge(&self, tags: &[String]) -> Vec<ConsolidatedKnowledge> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = now_ms();
         let results: Vec<ConsolidatedKnowledge> = inner
             .consolidated
@@ -430,7 +441,7 @@ impl ContinuousLearningCenter {
     /// Returns the top `config.replay_batch_size` experiences sorted by importance,
     /// updating access counts on related consolidated knowledge.
     pub fn replay_batch(&self) -> Vec<LearningExperience> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         inner.replay_count += 1;
 
         // Sort by importance descending, take top N.
@@ -460,13 +471,13 @@ impl ContinuousLearningCenter {
 
     /// Retrieves the performance history for a specific task type.
     pub fn task_performance(&self, task_type: &str) -> Option<TaskPerformanceHistory> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.task_performance.get(task_type).cloned()
     }
 
     /// Returns performance histories for all tracked task types.
     pub fn all_task_performance(&self) -> Vec<TaskPerformanceHistory> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let mut results: Vec<TaskPerformanceHistory> =
             inner.task_performance.values().cloned().collect();
         results.sort_by(|a, b| a.task_type.cmp(&b.task_type));
@@ -478,7 +489,7 @@ impl ContinuousLearningCenter {
     /// Uses linear regression on the last 20 rewards. If the slope is < -0.05,
     /// the task type is considered to be in a forgetting state.
     pub fn detect_forgetting(&self, task_type: &str) -> bool {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         if let Some(perf) = inner.task_performance.get(task_type) {
             if perf.recent_rewards.len() < 20 {
                 return false;
@@ -496,7 +507,7 @@ impl ContinuousLearningCenter {
 
     /// Returns a profile snapshot of the learning center's current state.
     pub fn profile(&self) -> LearningCenterProfile {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let total_experiences = inner.experiences.len();
         let consolidated_count = inner.consolidated.len();
         let tracked_task_types = inner.task_performance.len();
@@ -531,7 +542,7 @@ impl ContinuousLearningCenter {
     /// Returns a copy of the current configuration.
     #[allow(dead_code)] // F-GAP-08 — planned wiring
     pub fn config(&self) -> LearningCenterConfig {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.config.clone()
     }
 }

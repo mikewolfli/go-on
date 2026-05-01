@@ -9,12 +9,14 @@ import "./styles/dark.css";
 const app = createApp(App);
 
 // Global error handler
-// NOTE: English is intentional here — this is a last-resort handler where i18n may not be initialized.
-app.config.errorHandler = (err, instance, info) => {
-  console.error("Unhandled Vue error:", err, info);
-  ElMessage.error(
-    "An unexpected error occurred. Please check the console for details.",
-  );
+app.config.errorHandler = (err, _instance, info) => {
+  if (import.meta.env.DEV) {
+    console.error("Unhandled Vue error:", err, info);
+  }
+  const message =
+    i18n.global.t("error.unexpected") ||
+    "An unexpected error occurred. Please check the console for details.";
+  ElMessage.error(message);
 };
 
 app.use(createPinia());

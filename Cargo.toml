@@ -8,23 +8,31 @@ name = "go_on"
 path = "src/lib.rs"
 
 [features]
-# ── Build profiles ───────────────────────────────────────────────────────────
-# profile-local         : single-user local tool; SQLite cache + adaptive vector store
-#                         (`sqlite-vec` when available, JSON embedding fallback otherwise)
-#                         Only minimal sub-buses (core dual buses: HarnessBus + CapabilityBus)
-# profile-simple-server : single-server deployment; SQLite cache + required `sqlite-vec`
-#                         Core dual buses + orchestration/reputation
+# ── Build profiles (MUTUALLY EXCLUSIVE) ──────────────────────────────────────
+# Exactly ONE profile must be selected. Default is profile-local.
+#
+# profile-local: single-user local tool; SQLite cache + adaptive vector store
+#                Only minimal sub-buses (core dual buses: HarnessBus + CapabilityBus)
+#                Fastest startup, minimal dependencies
+#
+# profile-simple-server: single-server deployment; SQLite cache + required sqlite-vec
+#                        Core dual buses + orchestration/reputation
+#
 # profile-multi-users-server: multi-user production; PostgreSQL cache + pgvector
-#                         All sub-buses
+#                             All sub-buses (tool, observability, optimization, memory, protocol, orchestration, distributed-memory)
+#
+# Compile-time validation enforced in src/main.rs via #[cfg] assertions:
+# - Exactly one profile must be enabled (enforced at compile time)
+# - Attempting multiple profiles will fail compilation
 #
 # Build examples:
-#   cargo build                                        # default = profile-local
-#   cargo build --no-default-features -F profile-local
-#   cargo build --no-default-features -F profile-simple-server
-#   cargo build --no-default-features -F profile-multi-users-server
+#   cargo build                                                    # uses default profile-local
+#   cargo build --no-default-features --features profile-local
+#   cargo build --no-default-features --features profile-simple-server
+#   cargo build --no-default-features --features profile-multi-users-server
 default = ["profile-local"]
 
-# Sub-bus feature gates for profile-specific compilation
+# Sub-bus feature gates (profile-conditional compilation)
 sub-bus-tool = []
 sub-bus-observability = []
 sub-bus-optimization = []
@@ -33,12 +41,16 @@ sub-bus-protocol = []
 sub-bus-orchestration = []
 sub-bus-distributed-memory = []
 
+# Profile definitions (mutually exclusive via compile-time assertions)
 profile-local = ["backend-sqlite"]
 profile-simple-server = ["backend-sqlite", "sub-bus-orchestration"]
 profile-multi-users-server = ["backend-postgres", "sub-bus-tool", "sub-bus-observability", "sub-bus-optimization", "sub-bus-memory", "sub-bus-protocol", "sub-bus-orchestration", "sub-bus-distributed-memory"]
+
+# Backend implementations
 backend-sqlite = ["dep:rusqlite", "dep:sqlite-vec"]
 backend-postgres = ["dep:postgres", "dep:pgvector"]
-# Legacy aliases kept for backward compatibility
+
+# Legacy aliases (kept for backward compatibility)
 local-acp-sqlite = ["profile-local"]
 server-mcp-postgres = ["profile-multi-users-server"]
 

@@ -183,6 +183,9 @@ let previousRunning = runtime.status.running;
 const MONITOR_ONLY_KEY = "goon.gui.monitorOnly";
 const ONBOARDING_SEEN_KEY = "goon.gui.onboardingSeen";
 let stopRunningWatch: (() => void) | undefined;
+let stopWatchMainTab: (() => void) | undefined;
+let stopWatchMonitorSub: (() => void) | undefined;
+let stopWatchConfigSub: (() => void) | undefined;
 
 const monitorOnly = ref(localStorage.getItem(MONITOR_ONLY_KEY) === "true");
 const { register: registerCrashHandler, unregister: unregisterCrashHandler } = useCrashHandler({
@@ -319,9 +322,9 @@ onMounted(async () => {
   if (savedConfigSubTab) activeConfigSubTab.value = savedConfigSubTab;
 
   // Watch and persist tab state
-  watch(activeMainTab, (val) => localStorage.setItem("goon.gui.activeMainTab", val));
-  watch(activeMonitorSubTab, (val) => localStorage.setItem("goon.gui.activeMonitorSubTab", val));
-  watch(activeConfigSubTab, (val) => localStorage.setItem("goon.gui.activeConfigSubTab", val));
+  stopWatchMainTab = watch(activeMainTab, (val) => localStorage.setItem("goon.gui.activeMainTab", val));
+  stopWatchMonitorSub = watch(activeMonitorSubTab, (val) => localStorage.setItem("goon.gui.activeMonitorSubTab", val));
+  stopWatchConfigSub = watch(activeConfigSubTab, (val) => localStorage.setItem("goon.gui.activeConfigSubTab", val));
 
   await registerCrashHandler();
 });
@@ -330,6 +333,18 @@ onUnmounted(() => {
   runtime.stopStatusPolling();
   window.removeEventListener("goon:monitor-only-changed", handleMonitorOnlyChanged);
   unregisterCrashHandler();
+  if (stopWatchMainTab) {
+    stopWatchMainTab();
+    stopWatchMainTab = undefined;
+  }
+  if (stopWatchMonitorSub) {
+    stopWatchMonitorSub();
+    stopWatchMonitorSub = undefined;
+  }
+  if (stopWatchConfigSub) {
+    stopWatchConfigSub();
+    stopWatchConfigSub = undefined;
+  }
   if (stopRunningWatch) {
     stopRunningWatch();
     stopRunningWatch = undefined;

@@ -197,6 +197,7 @@
     "save": "Save",
     "saved": "Configuration saved.",
     "executablePathPlaceholder": "D:/Workspace/RustWorkspace/go-on/go-on.exe",
+    "workingDirPlaceholder": "D:/Workspace/RustWorkspace/go-on",
     "wizard": {
       "open": "Open Wizard",
       "title": "Configuration Wizard",
@@ -1205,6 +1206,9 @@
   },
   "monitorView": {
     "noData": "No data available"
+  },
+  "error": {
+    "unexpected": "An unexpected error occurred. Please check the console for details."
   },
   "language": {
     "english": "English",

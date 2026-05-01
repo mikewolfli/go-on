@@ -10,6 +10,8 @@
   window.addEventListener("message", (event) => {
     const message = event.data;
 
+    // NOTE: "loadSettings" is not triggered by the backend (settings are sent as "settingsData" instead).
+    // This handler is kept for forward-compatibility if the backend ever sends direct setting values.
     if (message.type === "loadSettings") {
       loadSettings(message.settings);
     } else if (message.type === "settingsData") {

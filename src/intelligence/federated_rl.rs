@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ── ID generation ───────────────────────────────────────────────────────────
@@ -196,6 +196,17 @@ struct Inner {
 
 // ── FederatedRL engine ──────────────────────────────────────────────────────
 
+/// Acquire a lock on the inner mutex, recovering from poison.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("federated_rl mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// Thread-safe federated reinforcement learning engine.
 ///
 /// Manages cross-node policy submission, distillation round orchestration,
@@ -232,7 +243,7 @@ impl FederatedRL {
         reward_avg: f64,
         sample_count: u64,
     ) -> String {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let id = generate_policy_id();
         let ts = now_ms();
 
@@ -264,7 +275,7 @@ impl FederatedRL {
 
     /// Get policy details by id.
     pub fn get_policy(&self, id: &str) -> Result<PolicyEntry> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner
             .policies
             .get(id)
@@ -276,7 +287,7 @@ impl FederatedRL {
     ///
     /// When `task_type_filter` is `None`, all policies are returned.
     pub fn list_policies(&self, task_type_filter: Option<&str>) -> Vec<PolicyEntry> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         match task_type_filter {
             Some(tt) => inner
                 .policies
@@ -290,7 +301,7 @@ impl FederatedRL {
 
     /// Get the policy with the highest average reward for a given task type.
     pub fn best_policy(&self, task_type: &str) -> Option<PolicyEntry> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner
             .policies
             .values()
@@ -305,7 +316,7 @@ impl FederatedRL {
     ///
     /// Returns the generated round id. The round begins in `Pending` status.
     pub fn start_distillation_round(&self) -> String {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let id = generate_round_id();
         let rn = inner.next_round_number;
         inner.next_round_number += 1;
@@ -330,7 +341,7 @@ impl FederatedRL {
     /// The policy must exist and must not have been contributed to this round
     /// already.
     pub fn contribute_to_round(&self, round_id: &str, policy_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         // Validate the policy exists.
         if !inner.policies.contains_key(policy_id) {
@@ -384,7 +395,7 @@ impl FederatedRL {
     /// - Total sample count across contributors must meet
     ///   `config.min_samples_for_merge`.
     pub fn complete_round(&self, round_id: &str) -> Result<DistillationRound> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         // Step 1 — resolve the round and validate its status.
         let has_pending_round = inner.rounds.contains_key(round_id);
@@ -489,7 +500,7 @@ impl FederatedRL {
 
     /// Get distillation round details by id.
     pub fn get_round(&self, id: &str) -> Result<DistillationRound> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner
             .rounds
             .get(id)
@@ -499,7 +510,7 @@ impl FederatedRL {
 
     /// List all distillation rounds, ordered by round number (ascending).
     pub fn list_rounds(&self) -> Vec<DistillationRound> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let mut rounds: Vec<DistillationRound> = inner.rounds.values().cloned().collect();
         rounds.sort_by_key(|r| r.round_number);
         rounds
@@ -509,7 +520,7 @@ impl FederatedRL {
 
     /// Return a snapshot of runtime metrics.
     pub fn profile(&self) -> FederatedProfile {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
 
         let total_policies = inner.policies.len();
         let total_rounds = inner.rounds.len();

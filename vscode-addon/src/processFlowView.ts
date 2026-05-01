@@ -134,7 +134,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
 
   private async _importProcesses(imported: Record<string, ProcessData>) {
     if (!imported || typeof imported !== "object") {
-      vscode.window.showErrorMessage("Invalid import data");
+      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.processFlowInvalidImportData));
       return;
     }
 
@@ -155,7 +155,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
       processes,
     });
 
-    vscode.window.showInformationMessage("Processes imported successfully");
+    vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.processFlowImported));
   }
 
   private async _createProcess(processData: ProcessData) {
@@ -181,7 +181,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     });
 
     vscode.window.showInformationMessage(
-      `Process "${processData.name}" created successfully!`,
+      i18n.getMessage(MessageKeys.processFlowCreatedSuccess, [processData.name]),
     );
   }
 
@@ -193,7 +193,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     const process = processes[processId];
 
     if (!process) {
-      vscode.window.showErrorMessage("Process not found");
+      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.processFlowProcessNotFound));
       return;
     }
 
@@ -276,7 +276,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
       });
 
       vscode.window.showInformationMessage(
-        `Process "${process.name}" completed successfully!`,
+        i18n.getMessage(MessageKeys.processFlowCompletedSuccess, [process.name]),
       );
     } catch (error: unknown) {
       process.status = "failed";
@@ -306,12 +306,12 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
 
     // Validate input
     if (!processId) {
-      vscode.window.showErrorMessage("Invalid process: ID is required");
+      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.processFlowInvalidProcessId));
       return;
     }
 
     if (!processes[processId]) {
-      vscode.window.showErrorMessage("Process not found");
+      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.processFlowProcessNotFound));
       return;
     }
 
@@ -321,7 +321,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
       updates.stages &&
       !Array.isArray(updates.stages)
     ) {
-      vscode.window.showErrorMessage("Invalid stages format: must be array");
+      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.processFlowInvalidStagesFormat));
       return;
     }
 

@@ -210,10 +210,12 @@ export function registerCoreCommands(
             const retryMissingEnvVars =
               deps.parseMissingEnvVariableNames(retryMessage);
             if (retryMissingEnvVars.length > 0) {
+              // TODO: i18n - hardcoded English string
               vscode.window.showErrorMessage(
                 `Failed to start Go-On: missing environment variables (${retryMissingEnvVars.join(", ")}). Configure provider keys in Settings.`,
               );
             } else {
+              // TODO: i18n - hardcoded English string
               vscode.window.showErrorMessage(
                 `Failed to start Go-On: ${retryMessage}`,
               );
@@ -262,9 +264,7 @@ export function registerCoreCommands(
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.requestFailed, [
-            getErrorMessage(error),
-          ]),
+          i18n.getMessage(MessageKeys.requestFailed, [getErrorMessage(error)]),
         );
       }
     },
@@ -276,11 +276,15 @@ export function registerCoreCommands(
       try {
         const result = await deps.sendRequest("runtime.health");
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.healthCheckResult, [JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.healthCheckResult, [
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.healthCheckFailed, [getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.healthCheckFailed, [
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -319,7 +323,9 @@ export function registerCoreCommands(
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.healthProbesFailed, [getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.healthProbesFailed, [
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -358,7 +364,9 @@ export function registerCoreCommands(
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.lockStatusFailed, [getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.lockStatusFailed, [
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -370,11 +378,15 @@ export function registerCoreCommands(
       try {
         const result = await deps.sendRequest("breaker.status");
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.breakerStatusResult, [JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.breakerStatusResult, [
+            JSON.stringify(result),
+          ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.breakerStatusFailed, [getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.breakerStatusFailed, [
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -385,10 +397,14 @@ export function registerCoreCommands(
     async () => {
       try {
         await deps.sendRequest("cache.clear");
-        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.cacheCleared));
+        vscode.window.showInformationMessage(
+          i18n.getMessage(MessageKeys.cacheCleared),
+        );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.cacheClearFailed, [getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.cacheClearFailed, [
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -399,10 +415,14 @@ export function registerCoreCommands(
     async () => {
       try {
         await deps.sendRequest("vector.clear");
-        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.vectorCleared));
+        vscode.window.showInformationMessage(
+          i18n.getMessage(MessageKeys.vectorCleared),
+        );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.vectorClearFailed, [getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.vectorClearFailed, [
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -413,10 +433,14 @@ export function registerCoreCommands(
     async () => {
       try {
         await deps.sendRequest("config.reload");
-        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.configReloaded));
+        vscode.window.showInformationMessage(
+          i18n.getMessage(MessageKeys.configReloaded),
+        );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.configReloadFailed, [getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.configReloadFailed, [
+            getErrorMessage(error),
+          ]),
         );
       }
     },
@@ -427,10 +451,14 @@ export function registerCoreCommands(
     async () => {
       try {
         await deps.sendRequest("shutdown");
-        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.goOnShutdown));
+        vscode.window.showInformationMessage(
+          i18n.getMessage(MessageKeys.goOnShutdown),
+        );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
-          i18n.getMessage(MessageKeys.goOnShutdownFailed, [getErrorMessage(error)]),
+          i18n.getMessage(MessageKeys.goOnShutdownFailed, [
+            getErrorMessage(error),
+          ]),
         );
       }
     },

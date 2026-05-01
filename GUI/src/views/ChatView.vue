@@ -258,6 +258,9 @@ function handleFileSelect(file: File): boolean {
       file,
     });
   };
+  reader.onerror = () => {
+    ElMessage.error(t("chat.fileReadFailed"));
+  };
   reader.readAsDataURL(file);
   return false; // prevent auto-upload
 }
@@ -398,7 +401,7 @@ async function sendMessage() {
 
     const response = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
       signal: controller.signal,
       body: JSON.stringify({
         model: selectedAgent.value === "default" ? "adaptive" : (selectedAgent.value ?? "adaptive"),

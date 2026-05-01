@@ -284,10 +284,14 @@ function onConfirmExecutePlan() {
 
 onMounted(() => {
   loadTasks(tasks, executionHistory).catch((err) => {
-    console.warn("WorkflowView: loadTasks failed (backend may be offline)", err);
+    if (import.meta.env.DEV) {
+      console.warn("WorkflowView: loadTasks failed (backend may be offline)", err);
+    }
   });
   refreshPeakIndicators().catch((err) => {
-    console.warn("WorkflowView: refreshPeakIndicators failed (backend may be offline)", err);
+    if (import.meta.env.DEV) {
+      console.warn("WorkflowView: refreshPeakIndicators failed (backend may be offline)", err);
+    }
   });
 });
 </script>

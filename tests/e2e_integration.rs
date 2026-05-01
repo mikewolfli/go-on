@@ -106,7 +106,7 @@ impl E2eHarness {
         // Determine project root by walking up from the binary path until
         // we find the Cargo.toml that belongs to this workspace.
         // `CARGO_BIN_EXE_go-on` points to `<project>/target/debug/go-on`.
-        let mut project_root = PathBuf::from(binary_path());
+        let mut project_root = binary_path();
         // Pop the file name first (go-on), then walk up.
         project_root.pop();
         loop {

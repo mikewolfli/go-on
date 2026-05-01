@@ -259,7 +259,7 @@ export function useWorkflow() {
             task_name: found.name,
             status: "running",
             duration: "-",
-            result: "Executing...",
+            result: t("workflow.executing"),
           });
         }
       }

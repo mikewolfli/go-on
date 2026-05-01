@@ -1130,7 +1130,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
 
     panel.webview.html = this._getConfigWizardHtml(panel.webview);
 
-    panel.webview.onDidReceiveMessage(
+    // Store the message listener disposable so it can be cleaned up when the panel closes
+    const messageSubscription = panel.webview.onDidReceiveMessage(
       async (message: Record<string, unknown>) => {
         const command = String(message.command ?? "");
         if (command === "cancel") {
@@ -1182,6 +1183,11 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         panel.dispose();
       },
     );
+
+    // Clean up the message subscription when the panel is disposed
+    panel.onDidDispose(() => {
+      messageSubscription.dispose();
+    });
   }
 
   private _getConfigWizardHtml(webview: vscode.Webview) {

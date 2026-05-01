@@ -6,7 +6,7 @@
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 // ── Configuration ───────────────────────────────────────────────────────────
 
@@ -150,6 +150,17 @@ struct Inner {
     next_reflexion_id: u64,
 }
 
+/// Acquire a lock on the inner mutex, recovering from poison.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("consciousness mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /// Thread-safe tracker for consciousness agent metrics.
@@ -189,7 +200,7 @@ impl ConsciousnessMetrics {
             bail!("confidence must be in [0.0, 1.0], got {confidence}");
         }
 
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         let metric = AwarenessMetric {
             metric_type,
@@ -241,7 +252,7 @@ impl ConsciousnessMetrics {
     /// Trigger a reflexion cycle, generating a record and potentially advancing
     /// the consciousness state.
     pub fn trigger_reflexion(&self, trigger: &str) -> Result<ReflexionRecord> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         let state_before = self.compute_state_from_metrics(&inner.metrics);
 
@@ -286,7 +297,7 @@ impl ConsciousnessMetrics {
     /// Compute the average value for a specific awareness metric type,
     /// considering only metrics within the tracking window.
     pub fn awareness_by_type(&self, metric_type: AwarenessMetricType) -> f64 {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let filtered: Vec<f64> = inner
             .metrics
             .iter()
@@ -306,7 +317,7 @@ impl ConsciousnessMetrics {
 
     /// Return a snapshot of the tracker's runtime metrics.
     pub fn profile(&self) -> ConsciousnessProfile {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
 
         let overall = self.compute_overall_from_inner(&inner.metrics);
         let state = self.compute_state_from_metrics(&inner.metrics);
@@ -368,7 +379,7 @@ impl ConsciousnessMetrics {
 
     /// Compute the simple average awareness (unweighted) for state calculation.
     fn average_awareness(&self) -> f64 {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let types = AwarenessMetricType::all();
         let mut sum = 0.0;
         let mut count = 0;

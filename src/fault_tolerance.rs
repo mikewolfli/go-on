@@ -6,7 +6,7 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
@@ -192,6 +192,17 @@ struct Inner {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Acquire a mutex lock, recovering from a poisoned mutex if necessary.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("fault_tolerance mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// Compute cluster health from raw counts (shared by `profile` and `cluster_health`).
 fn cluster_health_from_counts(
     total_nodes: usize,
@@ -247,7 +258,7 @@ impl FaultToleranceEngine {
 
     /// Register a node for heartbeat monitoring.
     pub fn register_node(&self, node_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let node_id = node_id.to_string();
         if inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is already registered", node_id));
@@ -265,7 +276,7 @@ impl FaultToleranceEngine {
 
     /// Unregister a node, removing it from monitoring entirely.
     pub fn unregister_node(&self, node_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let node_id = node_id.to_string();
         if inner.heartbeats.remove(&node_id).is_none() {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -278,7 +289,7 @@ impl FaultToleranceEngine {
     /// Report a heartbeat from a node. Resets the missed-beat counter and
     /// moves the node back to Online if it was recovering.
     pub fn report_heartbeat(&self, node_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let node_id = node_id.to_string();
         let record = inner
             .heartbeats
@@ -301,7 +312,7 @@ impl FaultToleranceEngine {
         severity: u8,
         description: &str,
     ) -> Result<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -335,7 +346,7 @@ impl FaultToleranceEngine {
 
     /// Resolve an active fault by its id.
     pub fn resolve_fault(&self, fault_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let fault_id = fault_id.to_string();
         let event = inner
             .faults
@@ -353,7 +364,7 @@ impl FaultToleranceEngine {
     /// Isolate a node under a specific isolation level. Creates or updates
     /// an isolation group containing the node.
     pub fn isolate_node(&self, node_id: &str, level: IsolationLevel) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -394,7 +405,7 @@ impl FaultToleranceEngine {
 
     /// Reintegrate a previously isolated node back into the cluster.
     pub fn reintegrate_node(&self, node_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -446,7 +457,7 @@ impl FaultToleranceEngine {
     /// Check all heartbeats and return a list of node ids that have missed
     /// too many heartbeats (exceeded max_missed_beats).
     pub fn check_heartbeats(&self) -> Vec<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = now_millis();
         let timeout = inner.config.heartbeat_timeout_ms;
         let max_missed = inner.config.max_missed_beats;
@@ -483,7 +494,7 @@ impl FaultToleranceEngine {
 
     /// Return all active (unresolved) faults.
     pub fn active_faults(&self) -> Vec<FaultEvent> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner
             .faults
             .values()
@@ -494,7 +505,7 @@ impl FaultToleranceEngine {
 
     /// Return a snapshot profile of the cluster state.
     pub fn profile(&self) -> FaultToleranceProfile {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let total_nodes = inner.heartbeats.len();
         let online_nodes = inner
             .heartbeats
@@ -550,7 +561,7 @@ impl FaultToleranceEngine {
     /// Create a recovery plan for a failed node.
     /// Determines appropriate recovery actions based on fault type and severity.
     pub fn create_recovery_plan(&self, node_id: &str) -> Result<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -620,7 +631,7 @@ impl FaultToleranceEngine {
 
     /// Execute a recovery plan — transitions it to InProgress.
     pub fn execute_recovery_plan(&self, plan_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
@@ -637,7 +648,7 @@ impl FaultToleranceEngine {
 
     /// Complete a recovery plan with a result.
     pub fn complete_recovery_plan(&self, plan_id: &str, result: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
@@ -662,7 +673,7 @@ impl FaultToleranceEngine {
 
     /// Fail a recovery plan.
     pub fn fail_recovery_plan(&self, plan_id: &str, error: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
@@ -675,7 +686,7 @@ impl FaultToleranceEngine {
 
     /// Get active recovery plans.
     pub fn active_recovery_plans(&self) -> Vec<RecoveryPlan> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner
             .recovery_plans
             .values()
@@ -686,7 +697,7 @@ impl FaultToleranceEngine {
 
     /// Assess the escalation level for a given node.
     pub fn escalation_level(&self, node_id: &str) -> EscalationLevel {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let node_id = node_id.to_string();
         let record = match inner.heartbeats.get(&node_id) {
             Some(r) => r,
@@ -753,7 +764,7 @@ impl FaultToleranceEngine {
         for node_id in &offenders {
             // Check if a plan already exists for this node
             let existing = {
-                let inner = self.inner.lock().unwrap();
+                let inner = lock_guard(&self.inner);
                 inner
                     .recovery_plans
                     .values()

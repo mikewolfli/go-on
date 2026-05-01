@@ -29,7 +29,7 @@
             </el-input>
           </el-form-item>
           <el-form-item :label="t('config.workingDir')">
-            <el-input v-model="workingDir" placeholder="D:/Workspace/RustWorkspace/go-on">
+            <el-input v-model="workingDir" :placeholder="t('config.workingDirPlaceholder')">
               <template #append>
                 <el-button @click="pickWorkingDir">{{ t('config.pickDirectory') }}</el-button>
               </template>

@@ -436,12 +436,18 @@ export function activate(context: vscode.ExtensionContext) {
   // Initialize config manager
   const config = vscode.workspace.getConfiguration("go-on");
   const configPath = config.get<string>("configPath", "./config.toml");
-  configManager.initialize(configPath).catch((err) => {
-    goOnOutput.appendLine(`warn: config manager init failed: ${err}`);
-    void vscode.window.showWarningMessage(
-      `Go-On: configuration initialization failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  });
+  // Initialize config manager and report status
+  configManager.initialize(configPath).then(
+    () => {
+      goOnOutput.appendLine("config manager initialized");
+    },
+    (err) => {
+      goOnOutput.appendLine(`warn: config manager init failed: ${err}`);
+      void vscode.window.showWarningMessage(
+        `Go-On: configuration initialization failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    },
+  );
 
   // Sync VS Code language to app configuration
   syncLanguageToApp(currentLanguage);
@@ -590,7 +596,9 @@ export function activate(context: vscode.ExtensionContext) {
         await runGoOnSecretCommand(context, "set", name, value);
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.keyringSetFailed, [message]));
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.keyringSetFailed, [message]),
+        );
       }
     },
   );
@@ -606,7 +614,9 @@ export function activate(context: vscode.ExtensionContext) {
         return await runGoOnSecretCommand(context, "get", name);
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.keyringGetFailed, [message]));
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.keyringGetFailed, [message]),
+        );
         return undefined;
       }
     },
@@ -623,7 +633,9 @@ export function activate(context: vscode.ExtensionContext) {
         await runGoOnSecretCommand(context, "delete", name);
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.keyringDeleteFailed, [message]));
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.keyringDeleteFailed, [message]),
+        );
       }
     },
   );
@@ -635,7 +647,9 @@ export function activate(context: vscode.ExtensionContext) {
         return await runGoOnSecretCommand(context, "list");
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.keyringListFailed, [message]));
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.keyringListFailed, [message]),
+        );
         return undefined;
       }
     },

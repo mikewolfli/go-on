@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { i18n, MessageKeys } from "./i18n";
 import { RuntimeManagerLike } from "./managerTypes";
 
 interface AdvancedEditArgs {
@@ -83,12 +84,12 @@ export class GoOnAdvancedEditProvider {
     range: vscode.Range,
   ): vscode.CodeAction {
     const action = new vscode.CodeAction(
-      "Go-On: Explain Code",
+      `Go-On: ${i18n.getMessage(MessageKeys.editingActionExplainCode)}`,
       vscode.CodeActionKind.QuickFix,
     );
     action.command = {
       command: "go-on.editCode",
-      title: "Explain Code",
+      title: i18n.getMessage(MessageKeys.editingActionExplainCode),
       arguments: [{ action: "explain", document, range }],
     };
     return action;
@@ -99,12 +100,12 @@ export class GoOnAdvancedEditProvider {
     range: vscode.Range,
   ): vscode.CodeAction {
     const action = new vscode.CodeAction(
-      "Go-On: Refactor Code",
+      `Go-On: ${i18n.getMessage(MessageKeys.editingActionRefactorCode)}`,
       vscode.CodeActionKind.Refactor,
     );
     action.command = {
       command: "go-on.refactorCode",
-      title: "Refactor Code",
+      title: i18n.getMessage(MessageKeys.editingActionRefactorCode),
       arguments: [{ action: "refactor", document, range }],
     };
     return action;
@@ -115,12 +116,12 @@ export class GoOnAdvancedEditProvider {
     range: vscode.Range,
   ): vscode.CodeAction {
     const action = new vscode.CodeAction(
-      "Go-On: Optimize Code",
+      `Go-On: ${i18n.getMessage(MessageKeys.editingActionOptimizeCode)}`,
       vscode.CodeActionKind.Refactor,
     );
     action.command = {
       command: "go-on.editCode",
-      title: "Optimize Code",
+      title: i18n.getMessage(MessageKeys.editingActionOptimizeCode),
       arguments: [{ action: "optimize", document, range }],
     };
     return action;
@@ -129,7 +130,7 @@ export class GoOnAdvancedEditProvider {
   private async handleAdvancedEdit(args?: AdvancedEditArgs) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
-      vscode.window.showErrorMessage("No active editor");
+      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.editingNoActiveEditor));
       return;
     }
 
@@ -138,7 +139,7 @@ export class GoOnAdvancedEditProvider {
     const selectedText = document.getText(selection);
 
     if (!selectedText) {
-      vscode.window.showInformationMessage("Please select some code to edit");
+      vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.editingSelectCodeToEdit));
       return;
     }
 
@@ -146,16 +147,16 @@ export class GoOnAdvancedEditProvider {
     if (!action) {
       const picked = await vscode.window.showQuickPick(
         [
-          { label: "Explain Code", value: "explain" },
-          { label: "Refactor Code", value: "refactor" },
-          { label: "Optimize Code", value: "optimize" },
-          { label: "Add Comments", value: "comment" },
-          { label: "Convert to Async", value: "async" },
-          { label: "Add Error Handling", value: "error-handling" },
-          { label: "Generate Unit Tests", value: "test" },
-          { label: "Security Audit", value: "security-audit" },
+          { label: i18n.getMessage(MessageKeys.editingActionExplainCode), value: "explain" },
+          { label: i18n.getMessage(MessageKeys.editingActionRefactorCode), value: "refactor" },
+          { label: i18n.getMessage(MessageKeys.editingActionOptimizeCode), value: "optimize" },
+          { label: i18n.getMessage(MessageKeys.editingActionAddComments), value: "comment" },
+          { label: i18n.getMessage(MessageKeys.editingActionConvertToAsync), value: "async" },
+          { label: i18n.getMessage(MessageKeys.editingActionAddErrorHandling), value: "error-handling" },
+          { label: i18n.getMessage(MessageKeys.editingActionGenerateUnitTests), value: "test" },
+          { label: i18n.getMessage(MessageKeys.editingActionSecurityAudit), value: "security-audit" },
         ],
-        { placeHolder: "Choose an action" },
+        { placeHolder: i18n.getMessage(MessageKeys.editingChooseActionPlaceholder) },
       );
       if (!picked) return;
       action = picked.value;
@@ -163,7 +164,7 @@ export class GoOnAdvancedEditProvider {
 
     if (!this.manager.isRunning()) {
       await vscode.window.showWarningMessage(
-        "Go-On backend is not running. Please start it first.",
+        i18n.getMessage(MessageKeys.goOnNotRunningRpc),
       );
       return;
     }
@@ -181,7 +182,7 @@ export class GoOnAdvancedEditProvider {
       const responseText = this.extractResponseText(result);
 
       if (!responseText) {
-        vscode.window.showErrorMessage("No response from AI service");
+        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.editingNoResponseFromAi));
         return;
       }
 
@@ -212,16 +213,16 @@ export class GoOnAdvancedEditProvider {
 
     let showResult: { label: string; value: string } | undefined;
     if (showDiffByDefault) {
-      showResult = { label: "Show Diff", value: "diff" };
+      showResult = { label: i18n.getMessage(MessageKeys.showDiff), value: "diff" };
     } else {
       showResult = await vscode.window.showQuickPick(
         [
-          { label: "Replace Selection", value: "replace" },
-          { label: "Show in New Document", value: "new-doc" },
-          { label: "Show Diff", value: "diff" },
-          { label: "Copy to Clipboard", value: "clipboard" },
+          { label: i18n.getMessage(MessageKeys.editingResultReplaceSelection), value: "replace" },
+          { label: i18n.getMessage(MessageKeys.editingResultShowInNewDocument), value: "new-doc" },
+          { label: i18n.getMessage(MessageKeys.showDiff), value: "diff" },
+          { label: i18n.getMessage(MessageKeys.editingResultCopyToClipboard), value: "clipboard" },
         ],
-        { placeHolder: "How to show the result?" },
+        { placeHolder: i18n.getMessage(MessageKeys.editingChooseResultDisplayPlaceholder) },
       );
     }
 
@@ -232,7 +233,7 @@ export class GoOnAdvancedEditProvider {
         await editor.edit((editBuilder) => {
           editBuilder.replace(selection, resultText);
         });
-        vscode.window.showInformationMessage("Result applied to document");
+        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.editingResultApplied));
         break;
       case "new-doc": {
         const doc = await vscode.workspace.openTextDocument({
@@ -255,13 +256,13 @@ export class GoOnAdvancedEditProvider {
           "vscode.diff",
           originalDoc.uri,
           refactoredDoc.uri,
-          "Original ↔ Refactored",
+          i18n.getMessage(MessageKeys.editingOriginalRefactoredDiffTitle),
         );
         break;
       }
       case "clipboard":
         await vscode.env.clipboard.writeText(resultText);
-        vscode.window.showInformationMessage("Result copied to clipboard");
+        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.codeCopied));
         break;
     }
   }
@@ -269,7 +270,7 @@ export class GoOnAdvancedEditProvider {
   private async handleRefactorCode(args?: AdvancedEditArgs) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
-      vscode.window.showErrorMessage("No active editor");
+      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.editingNoActiveEditor));
       return;
     }
 
@@ -279,7 +280,7 @@ export class GoOnAdvancedEditProvider {
 
     if (!selectedText) {
       vscode.window.showInformationMessage(
-        "Please select some code to refactor",
+        i18n.getMessage(MessageKeys.editingSelectCodeToRefactor),
       );
       return;
     }
@@ -288,14 +289,14 @@ export class GoOnAdvancedEditProvider {
     if (!refactorType) {
       const picked = await vscode.window.showQuickPick(
         [
-          { label: "Extract Function", value: "extract-function" },
-          { label: "Rename Variables", value: "rename-variables" },
-          { label: "Simplify Logic", value: "simplify-logic" },
-          { label: "Improve Performance", value: "performance" },
-          { label: "Add Type Hints", value: "type-hints" },
-          { label: "Custom Refactoring", value: "custom" },
+          { label: i18n.getMessage(MessageKeys.editingRefactorExtractFunction), value: "extract-function" },
+          { label: i18n.getMessage(MessageKeys.editingRefactorRenameVariables), value: "rename-variables" },
+          { label: i18n.getMessage(MessageKeys.editingRefactorSimplifyLogic), value: "simplify-logic" },
+          { label: i18n.getMessage(MessageKeys.editingRefactorImprovePerformance), value: "performance" },
+          { label: i18n.getMessage(MessageKeys.editingRefactorAddTypeHints), value: "type-hints" },
+          { label: i18n.getMessage(MessageKeys.editingRefactorCustom), value: "custom" },
         ],
-        { placeHolder: "Choose refactoring type" },
+        { placeHolder: i18n.getMessage(MessageKeys.editingChooseRefactorTypePlaceholder) },
       );
       if (!picked) return;
       refactorType = picked.value;
@@ -304,8 +305,8 @@ export class GoOnAdvancedEditProvider {
     let prompt: string;
     if (refactorType === "custom") {
       const customPrompt = await vscode.window.showInputBox({
-        prompt: "Describe the refactoring you want",
-        placeHolder: "e.g., make this function more readable",
+        prompt: i18n.getMessage(MessageKeys.editingDescribeRefactorPrompt),
+        placeHolder: i18n.getMessage(MessageKeys.editingDescribeRefactorPlaceholder),
       });
       if (!customPrompt) return;
       prompt = `Please refactor this code to ${customPrompt}:\n\n${selectedText}`;
@@ -319,7 +320,7 @@ export class GoOnAdvancedEditProvider {
 
     if (!this.manager.isRunning()) {
       await vscode.window.showWarningMessage(
-        "Go-On backend is not running. Please start it first.",
+        i18n.getMessage(MessageKeys.goOnNotRunningRpc),
       );
       return;
     }
@@ -331,7 +332,7 @@ export class GoOnAdvancedEditProvider {
       const responseText = this.extractResponseText(result);
 
       if (!responseText) {
-        vscode.window.showErrorMessage("No response from AI service");
+        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.editingNoResponseFromAi));
         return;
       }
 

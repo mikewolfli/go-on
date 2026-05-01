@@ -1,3 +1,9 @@
+//! F-GAP-99: Legacy JSON-RPC types — superseded by `mcp/schema.rs`
+//!
+//! These types (`JsonRpcRequest`, `JsonRpcResponse`, etc.) are kept for
+//! backwards compatibility with existing callers (`runtime.rs`).
+//! New code should use the types from `crate::mcp::schema`.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

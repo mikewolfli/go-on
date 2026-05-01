@@ -79,6 +79,7 @@ export class StatusMonitor {
           !this.failureWarningShown
         ) {
           this.failureWarningShown = true;
+          // TODO: i18n - hardcoded English string
           void vscode.window.showWarningMessage(
             "Go-On: Health checks are failing, but monitoring is still running and will recover automatically once the backend responds again.",
           );

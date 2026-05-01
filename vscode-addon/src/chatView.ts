@@ -109,7 +109,10 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     if (this.onViewResolved) {
       Promise.resolve(this.onViewResolved()).catch((error) => {
         void vscode.window.showWarningMessage(
-          t(MessageKeys.chatInitFailed, error instanceof Error ? error.message : String(error)),
+          t(
+            MessageKeys.chatInitFailed,
+            error instanceof Error ? error.message : String(error),
+          ),
         );
       });
     }
@@ -184,7 +187,9 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         } catch (error: unknown) {
           const message_text =
             error instanceof Error ? error.message : String(error);
-          void vscode.window.showErrorMessage(t(MessageKeys.chatError, message_text));
+          void vscode.window.showErrorMessage(
+            t(MessageKeys.chatError, message_text),
+          );
         }
       },
       undefined,
@@ -216,13 +221,13 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
       let messagesPayload: Array<{
         role: string;
         content:
-        | string
-        | Array<{
-          type: string;
-          text?: string;
-          image_url?: { url: string; detail: string };
-          file_data?: { data: string; filename: string; mime_type: string };
-        }>;
+          | string
+          | Array<{
+              type: string;
+              text?: string;
+              image_url?: { url: string; detail: string };
+              file_data?: { data: string; filename: string; mime_type: string };
+            }>;
       }>;
       if (!attachments || attachments.length === 0) {
         // Backward compatible: plain text
@@ -233,9 +238,9 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           | { type: "text"; text: string }
           | { type: "image_url"; image_url: { url: string; detail: string } }
           | {
-            type: "file";
-            file_data: { data: string; filename: string; mime_type: string };
-          }
+              type: "file";
+              file_data: { data: string; filename: string; mime_type: string };
+            }
         )[] = [{ type: "text", text }];
         for (const a of attachments) {
           if (a.type && a.type.startsWith("image/")) {
@@ -269,7 +274,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         content: responseText || JSON.stringify(result),
         timestamp: new Date().toISOString(),
       } as ChatMessage;
-      this._addMessageToCurrentSession(assistantMessage);
+      await this._addMessageToCurrentSession(assistantMessage);
 
       // Send response to UI
       this._view.webview.postMessage({
@@ -282,7 +287,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         content: `Error: ${this._getErrorMessage(error)}`,
         timestamp: new Date().toISOString(),
       } as ChatMessage;
-      this._addMessageToCurrentSession(errorMessage);
+      await this._addMessageToCurrentSession(errorMessage);
 
       this._view.webview.postMessage({
         type: "addMessage",

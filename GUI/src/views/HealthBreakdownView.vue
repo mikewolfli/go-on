@@ -390,7 +390,9 @@ async function refreshBreakdown() {
 
 onMounted(() => {
   refreshBreakdown().catch((err) => {
-    console.warn("HealthBreakdown: initial refresh failed (backend may be offline)", err);
+    if (import.meta.env.DEV) {
+      console.warn("HealthBreakdown: initial refresh failed (backend may be offline)", err);
+    }
   });
 });
 </script>

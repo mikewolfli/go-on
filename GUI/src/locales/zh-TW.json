@@ -197,6 +197,7 @@
     "save": "保存路徑配置",
     "saved": "服務路徑已保存",
     "executablePathPlaceholder": "D:/Workspace/RustWorkspace/go-on/go-on.exe",
+    "workingDirPlaceholder": "D:/Workspace/RustWorkspace/go-on",
     "wizard": {
       "open": "打開向導",
       "title": "配置嚮導",
@@ -1205,6 +1206,9 @@
   },
   "monitorView": {
     "noData": "暫無數據"
+  },
+  "error": {
+    "unexpected": "發生意外錯誤。請查看控制台獲取詳細資訊。"
   },
   "language": {
     "english": "English",
