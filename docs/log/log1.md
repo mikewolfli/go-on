@@ -558,3 +558,14 @@ All now use `safeGetItem/safeSetItem` wrappers. No raw localStorage calls remain
 ### Verification
 - All 3 ends compile ✅, clippy ✅, tests ✅
 - `GUI: vue-tsc` ✅, `vscode-addon: tsc` ✅
+
+## Round 26: Documentation Updates (2026-06-03)
+
+### Updated
+| File | Change |
+|:-----|:-------|
+| `README.md` | Test counts 866→779, 905→825, 898→888; i18n keys 372+→448+; updated Quick Start with auto-setup flow |
+| `vscode-addon/README.md` | Updated Quick Start with automatic activation + first-run setup flow |
+
+### Verification
+- All 3 ends compile ✅, clippy ✅, tests ✅

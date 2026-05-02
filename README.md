@@ -23,13 +23,20 @@ Three build profiles support different deployment scenarios:
 | `profile-simple-server` | SQLite + sqlite-vec | Single-server deployment | `cargo build --no-default-features -F profile-simple-server` |
 | `profile-multi-users-server` | PostgreSQL + pgvector | Multi-user production | `cargo build --no-default-features -F profile-multi-users-server` |
 
-## Verification Status (Phase 4 — Complete)
+## Verification Status (Phase 4+ — 25 Rounds of Deep Scan Complete)
 
 | Profile | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **866 passed** (766 unit + 86 RPC + 14 transport) |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **905 passed** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **898 passed** |
+| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **779 passed** |
+| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **825 passed** |
+| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **888 passed** |
+
+Cross-platform (Windows, Linux, macOS):
+- All `localStorage` calls wrapped in try/catch
+- All `Mutex::lock().unwrap()` replaced with poison-recovering `lock_guard()`
+- Cross-platform env vars: `HOME`/`USERPROFILE`/`COMPUTERNAME`
+- vscode-addon: `activationEvents` set, `.exe`/`.bat` platform-aware defaults
+- GUI: window min constraints set, CSP allows backend connection
 
 ## Repository Layout
 
@@ -95,7 +102,7 @@ Three build profiles support different deployment scenarios:
 - `test_i18n/` — Internationalization test suites
 
 ### Resources
-- `languages/` — Runtime i18n resources (en_US, zh_CN, zh_TW — 372+ keys each)
+- `languages/` — Runtime i18n resources (en_US, zh_CN, zh_TW — 448+ keys each)
   - `languages/rules/` — PUA coding rules
 - `RULES/` — Governance and coding rule packs
 - `contracts/` — Editor capability matrix and contracts
@@ -199,9 +206,9 @@ go-on provides full i18n coverage (~95%) across the Rust backend:
 
 | Language | File | Keys |
 |:---------|:-----|:----:|
-| English (US) | `languages/en_US.json` | 372+ |
-| Chinese (Simplified) | `languages/zh_CN.json` | 372+ |
-| Chinese (Traditional) | `languages/zh_TW.json` | 372+ |
+| English (US) | `languages/en_US.json` | 448+ |
+| Chinese (Simplified) | `languages/zh_CN.json` | 448+ |
+| Chinese (Traditional) | `languages/zh_TW.json` | 448+ |
 
 Covered layers:
 - **ACP/MCP HTTP error responses** — 100%
@@ -215,30 +222,38 @@ Covered layers:
 
 ## Quick Start
 
-### 1) Build and Test
+### 1) Build
 
 ```bash
 cargo build
-cargo check --all-targets
-cargo test --all-targets
 ```
 
-### 2) First-time Setup
+### 2) First-time Setup (auto-detected)
+
+Just run `go-on` — if no config or AI providers are found, it will prompt interactively:
 
 ```bash
-cargo run -- --init --config config/config.toml
-cargo run -- --check --config config/config.toml
+# Run with default config path (~/.config/go-on/config.toml)
+cargo run
 ```
 
-Optional setup levels:
+For non-interactive environments (GUI, CI), the backend auto-creates a bootstrap config and starts.
+
+Manual setup:
 
 ```bash
-cargo run -- --init --setup-level quick --config config/config.toml
-cargo run -- --init --setup-level standard --config config/config.toml
-cargo run -- --init --setup-level custom --config config/config.toml
+cargo run -- --init
+cargo run -- --init --setup-level quick
+cargo run -- --init --setup-level custom
 ```
 
-### 3) Start Runtime
+### 3) Validate Configuration
+
+```bash
+cargo run -- --check
+```
+
+### 4) Start Runtime
 
 - Linux/macOS: `./scripts/start-go-on.sh`
 - Windows: `scripts/start-go-on.bat`

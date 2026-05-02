@@ -114,10 +114,15 @@ npm run compile
 
 ## Quick Start
 
-1. Start the go-on backend (recommended `mode = "adaptive"`).
-2. Set `go-on.executablePath` and `go-on.configPath` in VS Code settings.
-3. `adaptive` means dual-stack capability with request-type routing; to fix an interface, set `go-on.runtime.protocolMode` to `acp_stdio` / `acp_http` / `mcp_stdio` / `mcp_http`.
-4. Run the `go-on.start` command and verify the main chain with `go-on.healthCheck`.
+1. Install the extension — it activates automatically on VS Code startup (`onStartupFinished`).
+2. Open the Go-On Chat view from the activity bar or command palette (`go-on.openChat`).
+3. On first use, the extension will:
+   - Auto-create a config file at `~/.config/go-on/config.toml`
+   - Prompt to download the go-on runtime or select a local binary
+   - Guide you through provider API key setup
+4. Set `go-on.executablePath` and `go-on.configPath` in settings if you have a custom runtime.
+5. `go-on.runtime.protocolMode` supports: `from_config` / `adaptive` / `acp_stdio` / `acp_http` / `mcp_stdio` / `mcp_http`.
+6. Use `go-on.start` to start the runtime or let the chat view start it automatically.
 
 
 ## Sync Policy
