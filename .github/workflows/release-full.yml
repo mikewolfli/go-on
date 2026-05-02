@@ -1,6 +1,11 @@
 name: Release Backend and GUI
 
 on:
+  workflow_dispatch:
+  push:
+    tags:
+      - '0.*'
+      - 'v0.*'
   release:
     types: [published]
 
