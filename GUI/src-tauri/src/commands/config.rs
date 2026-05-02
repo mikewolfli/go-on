@@ -502,7 +502,7 @@ fn read_configured_agent_settings(
     };
 
     let mut result = HashMap::new();
-    let Some(agents) = doc["agents"].as_table_like() else {
+    let Some(agents) = doc.get("agents").and_then(|item| item.as_table_like()) else {
         return result;
     };
 
@@ -626,8 +626,12 @@ pub fn save_provider_selection(
 
     let config_path = config_file_path(&working_dir);
     let mut doc = load_toml_document(&config_path)?;
-    let agents = ensure_table(&mut doc["agents"]);
-    let agent = ensure_table(&mut agents[&provider_name]);
+    let agents = ensure_table(doc.entry("agents").or_insert(Item::Table(Table::new())));
+    let agent = ensure_table(
+        agents
+            .entry(&*provider_name)
+            .or_insert(Item::Table(Table::new())),
+    );
 
     set_string(agent, "type", Some(spec.agent_type.as_str()));
     set_string(agent, "url", spec.url.as_deref());
@@ -650,11 +654,12 @@ pub fn save_provider_selection(
     set_integer(agent, "max_tokens", spec.max_tokens);
     set_bool(agent, "supports_system", spec.supports_system);
 
-    if let Some(default_phase) = doc["default_phase"]
-        .as_str()
+    if let Some(default_phase) = doc
+        .get("default_phase")
+        .and_then(|item| item.as_str())
         .map(|value_text| value_text.to_string())
     {
-        if let Some(phases) = doc["phases"].as_table_mut() {
+        if let Some(phases) = doc.get_mut("phases").and_then(|item| item.as_table_mut()) {
             if let Some(phase_item) = phases.get_mut(&default_phase) {
                 if phase_item.is_table() {
                     let phase_table = phase_item.as_table_mut().expect("checked table");
