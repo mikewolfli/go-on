@@ -2,13 +2,14 @@
 
 简体中文 | [English](README.md)
 
-go-on 是一个基于 Rust 的 **ACP/MCP 智能体编排、治理与生产安全运行时**，支持全链路多语言国际化，采用模块化多总线架构，涵盖 14 条能力子总线和 21+ 个 F-GAP 模块。
+go-on 是一个基于 Rust 的 **ACP/MCP 智能体编排、治理与生产安全运行时**，
+支持全链路多语言国际化，采用模块化多总线架构，涵盖 14 条能力子总线和 21+ 个 F-GAP 模块。
 
 ## 版本
 
-- 后端 Runtime：**0.8.4**
-- GUI 桌面端：**0.8.4**
-- VS Code 插件：**0.8.4**
+- 后端 Runtime：**0.9.0**
+- GUI 桌面端：**0.9.0**
+- VS Code 插件：**0.9.0**
 - 默认特性：`profile-local`
 - 可选特性：`profile-simple-server`、`profile-multi-users-server`
 
@@ -22,13 +23,20 @@ go-on 是一个基于 Rust 的 **ACP/MCP 智能体编排、治理与生产安全
 | `profile-simple-server` | SQLite + sqlite-vec | 单服务部署 | `cargo build --no-default-features -F profile-simple-server` |
 | `profile-multi-users-server` | PostgreSQL + pgvector | 多用户生产环境 | `cargo build --no-default-features -F profile-multi-users-server` |
 
-## 验证状态（Phase 4 完成）
+## 验证状态（Phase 4+ — 25 轮深度扫描完成）
 
 | 配置文件 | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **866 通过**（766 单元 + 86 RPC + 14 transport） |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **905 通过** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **898 通过** |
+| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **779 通过** |
+| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **825 通过** |
+| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **888 通过** |
+
+跨平台（Windows、Linux、macOS）：
+- 所有 `localStorage` 调用均已包装 try/catch
+- 所有 `Mutex::lock().unwrap()` 已替换为中毒恢复的 `lock_guard()`
+- 跨平台环境变量：`HOME`/`USERPROFILE`/`COMPUTERNAME`
+- vscode-addon：已设置 `activationEvents`，默认路径支持 `.exe`/`.bat` 平台感知
+- GUI：窗口最小尺寸约束已设置，CSP 允许后端连接
 
 ## 仓库结构
 
@@ -94,7 +102,7 @@ go-on 是一个基于 Rust 的 **ACP/MCP 智能体编排、治理与生产安全
 - `test_i18n/` — 国际化测试套件
 
 ### 资源
-- `languages/` — 运行时多语言资源（en_US、zh_CN、zh_TW — 各 372+ 键值）
+- `languages/` — 运行时多语言资源（en_US、zh_CN、zh_TW — 各 448+ 键值）
   - `languages/rules/` — PUA 编码规则
 - `RULES/` — 治理与编码规则集
 - `contracts/` — 编辑器能力矩阵与契约
@@ -198,9 +206,9 @@ go-on 在后端实现了约 **95%** 的全链路国际化覆盖：
 
 | 语言 | 文件 | 键值数 |
 |:-----|:-----|:------:|
-| 英语（美国） | `languages/en_US.json` | 372+ |
-| 简体中文 | `languages/zh_CN.json` | 372+ |
-| 繁体中文 | `languages/zh_TW.json` | 372+ |
+| 英语（美国） | `languages/en_US.json` | 448+ |
+| 简体中文 | `languages/zh_CN.json` | 448+ |
+| 繁体中文 | `languages/zh_TW.json` | 448+ |
 
 覆盖层：
 - **ACP/MCP HTTP 错误响应** — 100%
@@ -214,30 +222,38 @@ go-on 在后端实现了约 **95%** 的全链路国际化覆盖：
 
 ## 快速开始
 
-### 1）构建与测试
+### 1）构建
 
 ```bash
 cargo build
-cargo check --all-targets
-cargo test --all-targets
 ```
 
-### 2）首次初始化
+### 2）首次初始化（自动检测）
+
+直接运行 `go-on`——若未找到配置或 AI 供应商，将交互式提示：
 
 ```bash
-cargo run -- --init --config config/config.toml
-cargo run -- --check --config config/config.toml
+# 使用默认配置路径运行 (~/.config/go-on/config.toml)
+cargo run
 ```
 
-可选初始化级别：
+对于非交互式环境（GUI、CI），后端会自动创建引导配置并启动。
+
+手动初始化：
 
 ```bash
-cargo run -- --init --setup-level quick --config config/config.toml
-cargo run -- --init --setup-level standard --config config/config.toml
-cargo run -- --init --setup-level custom --config config/config.toml
+cargo run -- --init
+cargo run -- --init --setup-level quick
+cargo run -- --init --setup-level custom
 ```
 
-### 3）启动 Runtime
+### 3）验证配置
+
+```bash
+cargo run -- --check
+```
+
+### 4）启动 Runtime
 
 - Linux/macOS：`./scripts/start-go-on.sh`
 - Windows：`scripts/start-go-on.bat`
@@ -314,7 +330,7 @@ Authorization: Bearer your-secret-key-here
 
 二者已对齐后端 RPC 能力、治理状态与健康探针语义。
 
-## 常用 RPC 能力分组
+## 通用 RPC 能力分组
 
 当前主链代表方法：
 
