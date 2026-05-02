@@ -1,5 +1,16 @@
 # Universal Coding Phase Rules
 
+## Enhanced Development Workflow Alignment
+
+- Treat coding tasks as a strict think -> act -> check -> done loop.
+- Before implementation, record assumptions and file/symbol scope to reduce unintended edits.
+- During implementation, keep changes atomic and avoid unrelated refactors.
+- Before completion, run mandatory checks that match the touched surface:
+	- Rust runtime/core changes: `cargo check --all-targets` and profile-scoped clippy/tests.
+	- VS Code addon changes: `npm --prefix vscode-addon run check` and `npm --prefix vscode-addon run test:contract`.
+	- GUI changes: `npm --prefix GUI run build` and `npm --prefix GUI run test:contract`.
+- If any required check fails, fix and re-run until green before entering done phase.
+
 - Prioritize correctness and maintainability over clever optimizations.
 - Keep control flow straightforward; avoid deeply nested branches.
 - Preserve public behavior unless the task explicitly requires a change.

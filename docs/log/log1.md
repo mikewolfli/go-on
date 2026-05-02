@@ -362,3 +362,26 @@ Each file got a `lock_guard<T>(mtx: &Mutex<T>)` helper with `tracing::error!` + 
 - `cd GUI && npm run build` ✅
 - `cd vscode-addon && npm run compile` ✅
 - `cd vscode-addon && npm run test` (contract smoke) ✅
+
+## Round 15: Post-Refactoring Regression Verification (2026-06-03)
+
+### Verified — No regressions from prior rounds
+- All 109 `pub fn` signatures intact across 11 heavily modified files
+- No duplicate function names, no broken `#[cfg(test)]` blocks
+- All RPC methods fully routed (86 methods, all with handlers)
+- `checkpoint.list` / `skill.list` aliases verified working alongside originals
+
+### Fixed
+| # | File | Problem | Fix |
+|:-:|:-----|:--------|:-----|
+| 1 | `i18n/runtime.rs:19,29` | Poison recovery uses `warn!` (too low for system-critical) | `warn!` → `error!` |
+| 2 | `GUI/src/services/api.ts` | Unused dead code — `buildClient()` never imported | Moved to `api.ts.legacy` |
+
+### Verification
+- `cargo check` (3 profiles) ✅ 0 errors, 0 warnings
+- `cargo clippy -D warnings` (3 profiles) ✅ 0 errors
+- `cargo test` ✅ 779/825/888 all pass
+- `vscode-addon: tsc --noEmit` ✅ 0 errors
+- `GUI: vue-tsc --noEmit` ✅ 0 errors
+- Remaining `#[allow(dead_code)]` in production Rust: **0** (only F-GAP annotations)
+- Remaining `TODO`/`FIXME` in production Rust: **0** |

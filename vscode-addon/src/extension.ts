@@ -667,7 +667,6 @@ export function activate(context: vscode.ExtensionContext) {
         const configPath = await applyDefaultConfigTemplate(context, template);
         return configPath;
       } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
         vscode.window.showErrorMessage(
           i18n.getMessage(MessageKeys.templateRequired),
         );

@@ -26,6 +26,22 @@ The loader reads optional files relative to the config directory:
 
 ## Recommended Workflow
 
+## Universal Enhanced Development Workflow (default)
+
+Default workflow baseline (from `config.toml`):
+- `think` -> `act` -> `check` -> `done`
+
+Phase intent and required outputs:
+- think: clarify scope, constraints, risks, affected files, and acceptance criteria before editing.
+- act: implement optimal, high-quality, reviewable changes; keep behavior deterministic and documented.
+- check: run surface-specific verification (build/lint/tests/contracts) and collect evidence.
+- done: deliver concise change summary, validation result, and residual risk/rollback notes.
+
+Control rules:
+- Do not skip `check` and `done` for non-trivial changes.
+- If `check` fails, loop back to `think` with concrete failure evidence and remediation plan.
+- Keep authority in `RULES/*.md`; avoid duplicating long policy text elsewhere.
+
 Authoritative source model:
 - Keep policy authority in `RULES/*.md` for editor-agnostic reuse.
 - Keep `.github/copilot-instructions.md` as bootstrap pointer for Copilot compatibility.

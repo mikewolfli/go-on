@@ -1,5 +1,16 @@
 # Universal Review Phase Rules
 
+## Enhanced Workflow Review Gates
+
+- Review outcome must map to workflow phases:
+	- think: scope and assumptions are explicit and justified.
+	- act: code changes are optimal, coherent, high-quality, and non-placeholder.
+	- check: validation evidence is present for each changed surface.
+	- done: delivery notes include residual risks and rollback path.
+- Reject changes that claim completion without check-phase evidence.
+- Require finding-to-fix closure: each high/medium finding must be resolved or explicitly risk-accepted.
+- For release-facing changes, verify packaging/build workflow commands are reproducible in local environment.
+
 - Reject any change that weakens protocol compatibility or runtime safety.
 - In early-stage architecture, placeholders are allowed only if interfaces are clear and risks are documented.
 - Prioritize boundary correctness, extension points, and rollback safety first.

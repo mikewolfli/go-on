@@ -10,6 +10,13 @@ Authoritative policy sources (single source of truth):
 Compatibility bootstrap:
 - .github/copilot-instructions.md points to RULES and is not the long-form authority.
 
+## Universal Workflow Baseline
+
+- Default runtime workflow is `think -> act -> check -> done` (from `config.toml`).
+- Any non-trivial change must produce evidence for all four phases.
+- If validation fails in `check`, re-enter `think` with root-cause and remediation notes.
+- Do not mark completion in `done` without runnable verification evidence.
+
 ## Archive/index policy:
 - Historical or duplicate policy documents must be reduced to short index pages.
 - Index pages should only point to the authoritative sources above.
@@ -38,7 +45,7 @@ Compatibility bootstrap:
 
 - Follow all repository-wide rules from DEVELOPMENT_RULES.md and top-level policies.
 - Preserve API and protocol compatibility; never break method contracts.
-- Prefer minimal, reviewable diffs; avoid broad refactoring unless necessary.
+- Prefer optimal, high-quality, reviewable diffs; avoid broad refactoring unless necessary.
 - Ensure all behavior is deterministic and observable with clear logs and metrics.
 - Never expose secrets, tokens, or private file contents in any response.
 - Treat all external inputs as untrusted; always validate before use.

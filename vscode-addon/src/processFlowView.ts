@@ -234,7 +234,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
             stage.result = this._extractResponseText(result) || "";
             break;
           }
-          case "code":
+          case "code": {
             const codeNotSupported = i18n.getMessage(
               MessageKeys.processFlowCodeExecutionNotSupported,
             );
@@ -246,6 +246,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
             });
             stage.result = codeNotSupported;
             break;
+          }
           case "delay":
             await new Promise((resolve) =>
               setTimeout(resolve, Number(stage.delay || 0) * 1000),

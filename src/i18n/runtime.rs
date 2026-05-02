@@ -10,13 +10,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 fn read_guard<'a, T>(lock: &'a RwLock<T>, label: &str) -> RwLockReadGuard<'a, T> {
     match lock.read() {
         Ok(guard) => guard,
         Err(poisoned) => {
-            warn!("{} poisoned during read; recovering state", label);
+            error!("{} poisoned during read; recovering state", label);
             poisoned.into_inner()
         }
     }
@@ -26,7 +26,7 @@ fn write_guard<'a, T>(lock: &'a RwLock<T>, label: &str) -> RwLockWriteGuard<'a, 
     match lock.write() {
         Ok(guard) => guard,
         Err(poisoned) => {
-            warn!("{} poisoned during write; recovering state", label);
+            error!("{} poisoned during write; recovering state", label);
             poisoned.into_inner()
         }
     }

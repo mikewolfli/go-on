@@ -31,7 +31,9 @@ L3 checklist (all required):
 2. Grep the codebase for related symbols/patterns.
 3. Trace error/stack to concrete file and line.
 4. Verify dependency/version compatibility.
-5. Isolate minimal reproduction.
+5. Isolate reproduction in two mandatory steps (neither step is optional):
+   - Step 1 — Minimal reproduction: strip variables and scope to the smallest case that still triggers the bug; goal is to lock root cause quickly.
+   - Step 2 — High-fidelity reproduction: reproduce in a realistic scenario (real config, real data, real environment); goal is to verify the fix holds under actual conditions, not just the toy case.
 6. Use verbose or debug output.
 7. Check version-specific documentation.
 
