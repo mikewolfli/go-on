@@ -891,7 +891,9 @@ fn maybe_prompt_ai_onboarding(cli: &Cli, config_path: &std::path::Path) -> Resul
         return Ok(false);
     }
 
-    let is_terminal = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let is_terminal = std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && std::env::var("GO_ON_ENABLE_LOCAL_TEST_AGENTS").is_err();
 
     let Some(state) = detect_ai_onboarding_state(config_path)? else {
         return Ok(false);
@@ -1369,6 +1371,7 @@ async fn run() -> Result<()> {
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
         && !std::env::args().any(|a| a == "--setup" || a == "--init")
+        && std::env::var("GO_ON_ENABLE_LOCAL_TEST_AGENTS").is_err()
     {
         let provider_count = config.agents.len();
         let ready_count = config
