@@ -694,7 +694,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "npx tsc -p ./ && mkdir -p out/locales && cp -r src/locales/. out/locales",
+    "compile": "npx tsc -p ./ && node ./scripts/sync-locales.js",
     "watch": "npx tsc --watch -p ./",
     "watch:locales": "npx tsc --watch -p ./ & nodemon --watch src/locales --ext json -x 'cp -r src/locales/. out/locales'",
     "lint": "eslint src --ext ts",
