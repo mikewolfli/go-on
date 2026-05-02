@@ -7,7 +7,18 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// Lock a Mutex, recovering from poison with a log.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::error!("transport mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -228,7 +239,7 @@ impl MultiChannelTransport {
     /// `Expired` and not enqueued.
     pub fn send(&self, msg: ChannelMessage) -> Result<()> {
         let now = Self::now_ms();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         // TTL check
         if msg.created_ms + msg.ttl_ms < now {
@@ -297,7 +308,7 @@ impl MultiChannelTransport {
 
     /// Dequeue the highest priority message from the given channel.
     pub fn receive(&self, channel: &TransportChannel) -> Option<ChannelMessage> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         // Pop the front message — then drop(queue) before touching other fields
         let (msg, queue_len) = {
@@ -336,14 +347,14 @@ impl MultiChannelTransport {
 
     /// Mark a message as delivered and update statistics.
     pub fn acknowledge(&self, _msg_id: &str) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         inner.total_delivered += 1;
         inner.last_activity_ms = Self::now_ms();
     }
 
     /// Mark a message as failed, optionally retrying based on QoS.
     pub fn fail_message(&self, _msg_id: &str, _reason: &str) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = Self::now_ms();
         let enable_retry = inner.config.enable_retry;
         let max_retries = inner.config.max_retries;
@@ -400,26 +411,26 @@ impl MultiChannelTransport {
 
     /// Peek at the highest priority message without dequeuing.
     pub fn peek(&self, channel: &TransportChannel) -> Option<ChannelMessage> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.queues.get(channel)?.front().cloned()
     }
 
     /// Get statistics for a specific channel.
     pub fn channel_stats(&self, channel: &TransportChannel) -> Option<ChannelStats> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.stats.get(channel).cloned()
     }
 
     /// Get statistics for all channels.
     pub fn all_channel_stats(&self) -> Vec<ChannelStats> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.stats.values().cloned().collect()
     }
 
     /// Remove expired messages from all queues.
     pub fn prune_expired(&self) {
         let now = Self::now_ms();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         // Collect channel names first to avoid simultaneous borrows
         let channels: Vec<TransportChannel> = inner.queues.keys().cloned().collect();
@@ -450,7 +461,7 @@ impl MultiChannelTransport {
     /// Obtain a snapshot of the entire transport profile.
     pub fn profile(&self) -> TransportProfile {
         let channel_stats = self.all_channel_stats();
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
 
         // Collect borrowed data into owned values before building the struct
         let active_channels: Vec<String> = inner.queues.keys().map(|ch| ch.to_string()).collect();
@@ -470,7 +481,7 @@ impl MultiChannelTransport {
 
     /// Get a copy of the current channel configuration.
     pub fn config(&self) -> ChannelConfig {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.config.clone()
     }
 

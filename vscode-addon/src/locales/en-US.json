@@ -840,7 +840,10 @@
     "invalidProcessId": "Invalid process: ID is required",
     "invalidStagesFormat": "Invalid stages format: must be array",
     "createdSuccess": "Process \"{0}\" created successfully!",
-    "completedSuccess": "Process \"{0}\" completed successfully!"
+    "completedSuccess": "Process \"{0}\" completed successfully!",
+    "codeExecutionNotSupported": "Code execution is not yet supported in this view",
+    "manualStagePrompt": "Process \"{0}\" - Stage {1}: {2}",
+    "continueButton": "Continue"
   },
   "advanced": {
     "governancePlan": "Governance Plan",

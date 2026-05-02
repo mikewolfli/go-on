@@ -8,7 +8,18 @@ use crate::i18n::runtime::tf;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// Lock a Mutex, recovering from poison with a log.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::error!("world_model mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
@@ -246,7 +257,7 @@ impl WorldModel {
     /// Returns an error if an entity with the same `name` and `entity_type`
     /// already exists, or if the maximum number of entities has been reached.
     pub fn register_entity(&self, name: &str, entity_type: EntityType) -> Result<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = now_ms();
 
         // Check for duplicate by name + type.
@@ -300,7 +311,7 @@ impl WorldModel {
     /// Merges the provided `properties` into the entity's existing properties.
     /// Returns an error if no entity with the given `id` exists.
     pub fn update_entity(&self, id: &str, properties: HashMap<String, String>) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = now_ms();
 
         let entity = inner
@@ -322,7 +333,7 @@ impl WorldModel {
     ///
     /// Returns an error if no entity with the given `id` exists.
     pub fn remove_entity(&self, id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = now_ms();
 
         let pos = inner
@@ -354,7 +365,7 @@ impl WorldModel {
         rel_type: RelationshipType,
         weight: f64,
     ) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = now_ms();
 
         // Verify both entities exist.
@@ -391,7 +402,7 @@ impl WorldModel {
         source: &str,
         payload: HashMap<String, String>,
     ) -> Result<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = now_ms();
 
         let id = format!("evt_{}", inner.next_event_id);
@@ -427,7 +438,7 @@ impl WorldModel {
         entity_type: Option<EntityType>,
         min_confidence: f64,
     ) -> Vec<WorldEntity> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
 
         inner
             .entities
@@ -445,7 +456,7 @@ impl WorldModel {
 
     /// Query all relationships involving the given entity ID.
     pub fn query_relationships(&self, entity_id: &str) -> Vec<Relationship> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
 
         inner
             .relationships
@@ -457,7 +468,7 @@ impl WorldModel {
 
     /// Query events filtered by `event_type` and occurring after `since_ms`.
     pub fn query_events(&self, event_type: &str, since_ms: u64) -> Vec<WorldEvent> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
 
         inner
             .events
@@ -471,7 +482,7 @@ impl WorldModel {
 
     /// Capture a point-in-time snapshot of the world model's state.
     pub fn snapshot(&self) -> StateSnapshot {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = now_ms();
 
         let snapshot_id = format!("snap_{}", inner.next_snapshot_id);
@@ -490,7 +501,7 @@ impl WorldModel {
     /// Remove entities, relationships, and events that are older than the
     /// retention period. Returns the number of entities that were removed.
     pub fn cleanup_stale(&self) -> usize {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = now_ms();
         let cutoff = now.saturating_sub(inner.config.state_retention_ms);
 
@@ -535,7 +546,7 @@ impl WorldModel {
         delay_ms: f64,
         context_tags: Vec<String>,
     ) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         if let Some(existing) = inner
             .causal_links
             .iter_mut()
@@ -570,7 +581,7 @@ impl WorldModel {
     ///
     /// Returns a list of predicted effects with confidence scores.
     pub fn predict_outcome(&self, action: &str, target_entity: &str) -> Vec<Prediction> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let mut results: Vec<Prediction> = Vec::new();
 
         // Helper to convert entity properties to a serde_json Value
@@ -648,7 +659,7 @@ impl WorldModel {
 
         // Collect event data while holding the lock, then drop it before mutation
         let event_data: Vec<(String, std::collections::HashMap<String, String>)> = {
-            let inner = self.inner.lock().unwrap();
+            let inner = lock_guard(&self.inner);
             inner
                 .events
                 .iter()
@@ -711,7 +722,7 @@ impl WorldModel {
 
     /// Return a summary profile of the world model's current state.
     pub fn profile(&self) -> WorldModelProfile {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let now = now_ms();
         let cutoff = now.saturating_sub(inner.config.state_retention_ms);
 

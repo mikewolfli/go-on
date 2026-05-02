@@ -7,7 +7,18 @@
 use crate::i18n::runtime::tf;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// Lock a Mutex, recovering from poison with a log.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::error!("self_model mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Data Structures
@@ -155,14 +166,14 @@ impl SelfModelCore {
 
     /// Set (or overwrite) the system identity.
     pub fn set_identity(&self, identity: SelfIdentity) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         inner.identity = Some(identity);
         inner.last_update_ms = now_ms();
     }
 
     /// Get the system identity, if one has been set.
     pub fn get_identity(&self) -> Option<SelfIdentity> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.identity.clone()
     }
 
@@ -172,7 +183,7 @@ impl SelfModelCore {
     ///
     /// Returns an error if a capability with the same name already exists.
     pub fn register_capability(&self, capability: SelfCapability) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         if inner.capabilities.iter().any(|c| c.name == capability.name) {
             bail!(
                 "{}",
@@ -199,7 +210,7 @@ impl SelfModelCore {
     ///
     /// Returns an error if no capability with the given `name` exists.
     pub fn update_capability(&self, name: &str, effectiveness: f64, confidence: f64) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let cap = inner
             .capabilities
             .iter_mut()
@@ -219,7 +230,7 @@ impl SelfModelCore {
 
     /// Retrieve a capability by name.
     pub fn get_capability(&self, name: &str) -> Option<SelfCapability> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.capabilities.iter().find(|c| c.name == name).cloned()
     }
 
@@ -228,7 +239,7 @@ impl SelfModelCore {
     /// When `category_filter` is `None`, all capabilities are returned.
     /// When `Some(cat)`, only capabilities whose `category` equals the filter are returned.
     pub fn list_capabilities(&self, category_filter: Option<&str>) -> Vec<SelfCapability> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         match category_filter {
             Some(cat) => inner
                 .capabilities
@@ -244,7 +255,7 @@ impl SelfModelCore {
 
     /// Add a new limitation.
     pub fn add_limitation(&self, limitation: SelfLimitation) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         inner.limitations.push(limitation);
         inner.last_update_ms = now_ms();
     }
@@ -253,7 +264,7 @@ impl SelfModelCore {
     ///
     /// Returns an error if no limitation with the given `name` exists.
     pub fn acknowledge_limitation(&self, name: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let lim = inner
             .limitations
             .iter_mut()
@@ -266,7 +277,7 @@ impl SelfModelCore {
 
     /// Retrieve a limitation by name.
     pub fn get_limitation(&self, name: &str) -> Option<SelfLimitation> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.limitations.iter().find(|l| l.name == name).cloned()
     }
 
@@ -275,7 +286,7 @@ impl SelfModelCore {
     /// When `acknowledged_only` is `false`, all limitations are returned.
     /// When `true`, only limitations where `is_acknowledged == true` are returned.
     pub fn list_limitations(&self, acknowledged_only: bool) -> Vec<SelfLimitation> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         if acknowledged_only {
             inner
                 .limitations
@@ -295,7 +306,7 @@ impl SelfModelCore {
     /// If `enable_performance_tracking` is `false` in the config, the snapshot
     /// is silently discarded.
     pub fn record_performance(&self, snapshot: SelfPerformanceSnapshot) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         if !inner.config.enable_performance_tracking {
             return;
         }
@@ -315,7 +326,7 @@ impl SelfModelCore {
     ///
     /// If `count` is larger than the number of available snapshots, all are returned.
     pub fn performance_history(&self, count: usize) -> Vec<SelfPerformanceSnapshot> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let len = inner.snapshots.len();
         let start = len.saturating_sub(count);
         inner.snapshots[start..].iter().rev().cloned().collect()
@@ -323,7 +334,7 @@ impl SelfModelCore {
 
     /// Get the latest performance snapshot, if any.
     pub fn latest_performance(&self) -> Option<SelfPerformanceSnapshot> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.snapshots.last().cloned()
     }
 
@@ -358,7 +369,7 @@ impl SelfModelCore {
 
     /// Return a summary profile of the self-model's current state.
     pub fn profile(&self) -> SelfModelProfile {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
 
         let limitations_count = inner.limitations.len();
         let acknowledged_limitations = inner

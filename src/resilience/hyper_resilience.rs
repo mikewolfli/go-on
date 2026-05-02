@@ -10,7 +10,18 @@ use crate::i18n::runtime::tf;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// Lock a Mutex, recovering from poison with a log.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::error!("hyper_resilience mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
@@ -226,7 +237,7 @@ impl HyperResilienceEngine {
         threshold: u64,
         recovery_timeout_ms: u64,
     ) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         if inner.circuit_breakers.contains_key(name) {
             bail!(
                 "{}",
@@ -255,7 +266,7 @@ impl HyperResilienceEngine {
     ///
     /// Returns the new state of the circuit breaker after applying the failure.
     pub fn record_failure(&self, breaker_name: &str) -> Result<CircuitState> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let cb = inner
             .circuit_breakers
             .get_mut(breaker_name)
@@ -291,7 +302,7 @@ impl HyperResilienceEngine {
     ///
     /// If the breaker is half-open, a success moves it back to closed.
     pub fn record_success(&self, breaker_name: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let cb = inner
             .circuit_breakers
             .get_mut(breaker_name)
@@ -328,7 +339,7 @@ impl HyperResilienceEngine {
     /// Does not mutate state. Use `probe()` if you also want automatic
     /// open→half-open recovery transitions.
     pub fn is_available(&self, breaker_name: &str) -> bool {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         match inner.circuit_breakers.get(breaker_name) {
             Some(cb) => matches!(cb.state, CircuitState::Closed | CircuitState::HalfOpen),
             None => false,
@@ -341,7 +352,7 @@ impl HyperResilienceEngine {
     ///
     /// This is the state-mutating counterpart of `is_available()`.
     pub fn probe(&self, breaker_name: &str) -> bool {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let cb = match inner.circuit_breakers.get_mut(breaker_name) {
             Some(cb) => cb,
             None => return false,
@@ -369,7 +380,7 @@ impl HyperResilienceEngine {
         primary: &str,
         replicas: Vec<String>,
     ) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         if inner.failover_groups.contains_key(group_id) {
             bail!("Failover group '{}' is already registered", group_id);
         }
@@ -398,7 +409,7 @@ impl HyperResilienceEngine {
     ///
     /// Returns the identifier of the new leader.
     pub fn trigger_failover(&self, group_id: &str) -> Result<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let group = inner
             .failover_groups
             .get_mut(group_id)
@@ -433,7 +444,7 @@ impl HyperResilienceEngine {
 
     /// Return a snapshot of the current system health.
     pub fn system_health(&self) -> SystemHealth {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let active_circuit_breakers = inner.circuit_breakers.len();
         let open_circuits = inner
             .circuit_breakers
@@ -479,7 +490,7 @@ impl HyperResilienceEngine {
         target: &str,
     ) -> Result<HealingReport> {
         let started_ms = now_millis();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         inner.healing_actions_taken += 1;
 
@@ -560,7 +571,7 @@ impl HyperResilienceEngine {
 
     /// Return the current resilience profile summarising overall engine state.
     pub fn profile(&self) -> ResilienceProfile {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let total_circuit_breakers = inner.circuit_breakers.len();
         let open_circuits = inner
             .circuit_breakers
@@ -609,7 +620,7 @@ impl HyperResilienceEngine {
     /// evaluates system metrics and triggers self-healing. Here we simply mark
     /// the engine as having health checks running.
     pub fn start_health_checks(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         inner.health_checks_running = true;
         // Simulated: adjust metrics to reflect "monitored" state.
         inner.simulated_avg_latency_ms = 8.0;
@@ -630,7 +641,7 @@ impl HyperResilienceEngine {
     /// `HarnessBus::evaluate()` and `verify_output()`.
     pub fn record_execution(&self, breaker_name: &str, success: bool) {
         // Auto-register under a single lock to avoid race.
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         if !inner.circuit_breakers.contains_key(breaker_name) {
             let config = inner.config.clone();
             let cb = CircuitBreaker {

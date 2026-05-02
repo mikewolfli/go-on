@@ -79,7 +79,7 @@ function parseRpcOutput(raw: string): unknown {
     return JSON.parse(raw);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid RPC response payload: ${reason}`);
+    throw new Error(t("backendOps.invalidRpcPayload", { reason }));
   }
 }
 
@@ -115,8 +115,8 @@ async function callDangerous(method: "shutdown" | "cache.clear" | "vector.clear"
   };
 
   const confirmed = await ElMessageBox.confirm(
-    `${method}\n\n${consequences[method] || "This operation is irreversible."}`,
-    "Confirm dangerous operation",
+    `${method}\n\n${consequences[method] || t("backendOps.irreversibleOperation")}`,
+    t("backendOps.dangerConfirmTitle"),
     {
       confirmButtonText: t("common.confirm"),
       cancelButtonText: t("common.cancel"),
@@ -133,13 +133,13 @@ async function callDangerous(method: "shutdown" | "cache.clear" | "vector.clear"
 
   if (method === "shutdown") {
     const typed = await ElMessageBox.prompt(
-      'Type "shutdown" to confirm backend shutdown.',
-      "Final confirmation",
+      t("backendOps.shutdownPrompt"),
+      t("backendOps.finalConfirmTitle"),
       {
         confirmButtonText: t("common.confirm"),
         cancelButtonText: t("common.cancel"),
         inputPattern: /^shutdown$/,
-        inputErrorMessage: 'Please type "shutdown" exactly.',
+        inputErrorMessage: t("backendOps.shutdownPromptError"),
         closeOnClickModal: false,
         closeOnPressEscape: false,
       }

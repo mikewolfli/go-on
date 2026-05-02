@@ -6,7 +6,18 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// Lock a Mutex, recovering from poison with a log.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::error!("transport(2) mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -273,7 +284,7 @@ impl MultiChannelTransport {
 
     /// Configure a specific channel. Creates the channel if it does not exist.
     pub fn configure_channel(&self, config: ChannelConfig) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let channel_id = config.channel.clone();
 
         // Enforce max_channels limit
@@ -317,7 +328,7 @@ impl MultiChannelTransport {
     ///
     /// Returns a `DeliveryReceipt` indicating the initial delivery status.
     pub fn send(&self, message: TransportMessage) -> Result<DeliveryReceipt> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = Self::now_ms();
 
         // Dedup for ExactlyOnce QoS: if the message id was already sent, return
@@ -419,7 +430,7 @@ impl MultiChannelTransport {
 
     /// Receive all available messages from a specific channel.
     pub fn receive(&self, channel_id: ChannelId) -> Result<Vec<TransportMessage>> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = Self::now_ms();
 
         let channel = inner
@@ -471,7 +482,7 @@ impl MultiChannelTransport {
     ///
     /// Removes the message from its channel queue.
     pub fn acknowledge(&self, message_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         for (_ch_id, channel) in inner.channels.iter_mut() {
             let before = channel.queue.len();
@@ -490,7 +501,7 @@ impl MultiChannelTransport {
     /// Removes the original message and sends a copy to the target channel.
     /// Peek at the next message in a channel without dequeuing.
     pub fn peek(&self, channel_id: &ChannelId) -> Option<TransportMessage> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner
             .channels
             .get(channel_id)
@@ -499,7 +510,7 @@ impl MultiChannelTransport {
 
     /// Get statistics for all channels.
     pub fn all_channel_stats(&self) -> Vec<ChannelStats> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.channels.values().map(|ch| ch.stats.clone()).collect()
     }
 
@@ -537,7 +548,7 @@ impl MultiChannelTransport {
     ///
     /// Removes the original message and sends a copy to the target channel.
     pub fn forward(&self, message_id: &str, target_channel: ChannelId) -> Result<DeliveryReceipt> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         // Find and remove the original message from any channel
         let mut original_msg: Option<TransportMessage> = None;
@@ -616,13 +627,13 @@ impl MultiChannelTransport {
 
     /// Get statistics for a specific channel.
     pub fn channel_stats(&self, channel_id: ChannelId) -> Option<ChannelStats> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.channels.get(&channel_id).map(|ch| ch.stats.clone())
     }
 
     /// Obtain a snapshot of the entire transport profile.
     pub fn profile(&self) -> TransportProfile {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let channel_stats: Vec<ChannelStats> =
             inner.channels.values().map(|ch| ch.stats.clone()).collect();
         let active_channels = inner.channels.len();
@@ -642,7 +653,7 @@ impl MultiChannelTransport {
     ///
     /// Returns the number of messages removed.
     pub fn expire_old_messages(&self) -> usize {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let now = Self::now_ms();
         let mut total_removed = 0;
         let mut total_failure_add = 0u64;

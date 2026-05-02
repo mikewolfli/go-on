@@ -7,7 +7,18 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// Lock a Mutex, recovering from poison with a log.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::error!("metacognitive mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
 
 // ── Reflection level ────────────────────────────────────────────────────────
 
@@ -211,7 +222,7 @@ impl MetacognitiveController {
         severity: &str,
         description: &str,
     ) -> Result<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let id = format!("obs-{}", inner.next_id);
         inner.next_id += 1;
 
@@ -238,7 +249,7 @@ impl MetacognitiveController {
 
     /// Get a single observation by id.
     pub fn get_observation(&self, id: &str) -> Result<ExecutionObservation> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner
             .observations
             .iter()
@@ -249,7 +260,7 @@ impl MetacognitiveController {
 
     /// List all observations, optionally filtered to unresolved ones only.
     pub fn list_observations(&self, unresolved_only: bool) -> Vec<ExecutionObservation> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         if unresolved_only {
             inner
                 .observations
@@ -264,7 +275,7 @@ impl MetacognitiveController {
 
     /// Mark an observation as resolved.
     pub fn resolve_observation(&self, id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let obs = inner
             .observations
             .iter_mut()
@@ -286,7 +297,7 @@ impl MetacognitiveController {
         action_type: &str,
         description: &str,
     ) -> Result<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         // Validate that the observation exists.
         if !inner.observations.iter().any(|o| o.id == observation_id) {
@@ -318,7 +329,7 @@ impl MetacognitiveController {
 
     /// Transition a Pending action to InProgress.
     pub fn execute_action(&self, action_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let action = inner
             .actions
             .iter_mut()
@@ -339,7 +350,7 @@ impl MetacognitiveController {
 
     /// Mark an action as Completed.
     pub fn complete_action(&self, action_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let action = inner
             .actions
             .iter_mut()
@@ -361,7 +372,7 @@ impl MetacognitiveController {
 
     /// Mark an action as Failed with an error reason stored in the description.
     pub fn fail_action(&self, action_id: &str, reason: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let action = inner
             .actions
             .iter_mut()
@@ -385,7 +396,7 @@ impl MetacognitiveController {
 
     /// Skip a Pending action without executing it.
     pub fn skip_action(&self, action_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let action = inner
             .actions
             .iter_mut()
@@ -407,7 +418,7 @@ impl MetacognitiveController {
 
     /// List actions, optionally filtered by status.
     pub fn list_actions(&self, status_filter: Option<CorrectiveStatus>) -> Vec<CorrectiveAction> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         match status_filter {
             Some(status) => inner
                 .actions
@@ -427,7 +438,7 @@ impl MetacognitiveController {
     /// The `reflection_level` is auto-detected based on how many observations
     /// and actions exist for the task.
     pub fn generate_reflection_report(&self, task_id: &str) -> Result<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         let report_id = format!("report-{}", inner.next_id);
         inner.next_id += 1;
@@ -525,7 +536,7 @@ impl MetacognitiveController {
 
     /// Get a single reflection report by id.
     pub fn get_report(&self, id: &str) -> Result<ReflectionReport> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner
             .reports
             .iter()
@@ -536,7 +547,7 @@ impl MetacognitiveController {
 
     /// List all generated reflection reports.
     pub fn list_reports(&self) -> Vec<ReflectionReport> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         inner.reports.clone()
     }
 
@@ -548,7 +559,7 @@ impl MetacognitiveController {
     ///
     /// Returns the list of report ids generated (one per affected task).
     pub fn autoreflect(&self) -> Vec<String> {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
 
         if !inner.config.enable_auto_reflection {
             return Vec::new();
@@ -588,7 +599,7 @@ impl MetacognitiveController {
 
     /// Return a snapshot of the controller's runtime metrics.
     pub fn profile(&self) -> MetacognitiveProfile {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
 
         let total_observations = inner.observations.len();
         let unresolved_observations = inner.observations.iter().filter(|o| !o.is_resolved).count();

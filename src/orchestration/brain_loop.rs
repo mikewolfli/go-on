@@ -16,7 +16,18 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// Lock a Mutex, recovering from poison with a log.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::error!("brain_loop mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::i18n::runtime::tf;
@@ -181,14 +192,14 @@ impl BrainLoop {
             id: id.clone(),
             goal: goal.to_string(),
             steps,
-            max_iterations: self.inner.lock().unwrap().config.max_iterations,
+            max_iterations: lock_guard(&self.inner).config.max_iterations,
             current_iteration: 0,
             created_ms: now,
             phase: BrainLoopPhase::Planning,
             fail_reason: String::new(),
         };
 
-        self.inner.lock().unwrap().plans.insert(id.clone(), plan);
+        lock_guard(&self.inner).plans.insert(id.clone(), plan);
         Ok(id)
     }
 
@@ -205,7 +216,7 @@ impl BrainLoop {
 
     /// Return a list of all known plan ids.
     pub fn list_plans(&self) -> Vec<String> {
-        self.inner.lock().unwrap().plans.keys().cloned().collect()
+        lock_guard(&self.inner).plans.keys().cloned().collect()
     }
 
     // ── Execution ────────────────────────────────────────────────────────
@@ -217,7 +228,7 @@ impl BrainLoop {
     /// first step executed in a new iteration.
     pub fn execute_step(&self, plan_id: &str, step_id: &str, output: &str) -> anyhow::Result<()> {
         let now = now_epoch_ms();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         // Remove the plan so we can mutate it independently from `inner`.
         let mut plan = inner
@@ -289,7 +300,7 @@ impl BrainLoop {
         improvements: Vec<String>,
     ) -> anyhow::Result<BrainLoopReflection> {
         let now = now_epoch_ms();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         // Remove the plan so we can mutate it without borrowing inner.
         let mut plan = inner
@@ -351,7 +362,7 @@ impl BrainLoop {
     /// Existing completed / in-progress steps are preserved.
     /// The plan phase is set to `Replanning`.
     pub fn replan(&self, plan_id: &str, new_steps: Vec<BrainLoopStep>) -> anyhow::Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
 
         let plan = inner
             .plans
@@ -376,7 +387,7 @@ impl BrainLoop {
 
     /// Mark a plan as completed.
     pub fn complete_plan(&self, plan_id: &str) -> anyhow::Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let plan = inner
             .plans
             .get_mut(plan_id)
@@ -392,7 +403,7 @@ impl BrainLoop {
 
     /// Mark a plan as failed with a reason.
     pub fn fail_plan(&self, plan_id: &str, reason: &str) -> anyhow::Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let plan = inner
             .plans
             .get_mut(plan_id)
@@ -409,7 +420,7 @@ impl BrainLoop {
 
     /// Cancel a plan.
     pub fn cancel_plan(&self, plan_id: &str) -> anyhow::Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         let plan = inner
             .plans
             .get_mut(plan_id)
@@ -438,7 +449,7 @@ impl BrainLoop {
 
     /// Return a snapshot of runtime metrics.
     pub fn profile(&self) -> BrainLoopProfile {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
 
         let total_plans = inner.plans.len() as u64;
         let active_plans = inner

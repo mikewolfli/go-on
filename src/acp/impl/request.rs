@@ -47,6 +47,7 @@ fn is_acp_request(method: &str) -> bool {
             | "action.check"
             | "conversation.checkpoint.create"
             | "conversation.checkpoint.list"
+            | "checkpoint.list"
             | "conversation.rollback"
             | "conversation.checkpoint.prune"
             | "config.reload"
@@ -79,6 +80,7 @@ fn is_acp_request(method: &str) -> bool {
                 | "skill.enable"
                 | "skill.disable"
                 | "skill.list_imported"
+                | "skill.list"
                 | "skill.remove"
                 | "skill.create"
             | "phase.policy.replay"
@@ -418,7 +420,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
-                "skill.list_imported" => {
+                "skill.list_imported" | "skill.list" => {
                     protocol_pack::handle_skill_list_imported(server, request_id).await
                 }
                 "skill.create" => {
@@ -565,7 +567,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
-                "conversation.checkpoint.list" => {
+                "conversation.checkpoint.list" | "checkpoint.list" => {
                     runtime_pack::handle_conversation_checkpoint_list(
                         server,
                         request.params.unwrap_or_default(),

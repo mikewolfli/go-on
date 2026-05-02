@@ -264,6 +264,7 @@ export const MessageKeys = {
   statusBarRunningTooltip: "statusBar.runningTooltip",
   statusBarStoppedTooltip: "statusBar.stoppedTooltip",
   statusBarHealthCheckFailedTooltip: "statusBar.healthCheckFailedTooltip",
+  statusBarHealthTooltip: "statusBar.healthTooltip",
 
   // Editing
   advancedEdit: "editing.advancedEdit",
@@ -328,6 +329,10 @@ export const MessageKeys = {
   processFlowInvalidStagesFormat: "processFlow.invalidStagesFormat",
   processFlowCreatedSuccess: "processFlow.createdSuccess",
   processFlowCompletedSuccess: "processFlow.completedSuccess",
+  processFlowCodeExecutionNotSupported:
+    "processFlow.codeExecutionNotSupported",
+  processFlowManualStagePrompt: "processFlow.manualStagePrompt",
+  processFlowContinueButton: "processFlow.continueButton",
 
   // Advanced
   governancePlan: "advanced.governancePlan",

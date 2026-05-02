@@ -6,7 +6,18 @@
 //! resource utilization.
 
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// Lock a Mutex, recovering from poison with a log.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::error!("workflow_optimizer mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
 
 /// A single execution record for a phase in a workflow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -400,7 +411,7 @@ impl OptimizerRegistry {
 
     /// Registers a new optimizer plugin.
     pub fn register(&self, optimizer: Box<dyn WorkflowOptimizerPlugin>) {
-        self.optimizers.lock().unwrap().push(optimizer);
+        lock_guard(&self.optimizers).push(optimizer);
     }
 
     /// Runs all registered optimizers and returns aggregated suggestions,
@@ -448,7 +459,7 @@ impl OptimizerRegistry {
 
     /// Returns the number of registered optimizers.
     pub fn count(&self) -> usize {
-        self.optimizers.lock().unwrap().len()
+        lock_guard(&self.optimizers).len()
     }
 }
 

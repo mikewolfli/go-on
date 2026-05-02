@@ -329,7 +329,13 @@
     "customMethod": "自定义方法，例如 breaker.status",
     "customParams": "JSON 参数，例如 {}",
     "run": "执行",
-    "done": "RPC 调用完成"
+    "done": "RPC 调用完成",
+    "invalidRpcPayload": "RPC 响应载荷无效：{reason}",
+    "irreversibleOperation": "此操作不可逆。",
+    "dangerConfirmTitle": "确认危险操作",
+    "finalConfirmTitle": "最终确认",
+    "shutdownPrompt": "输入 \"shutdown\" 以确认关闭后端。",
+    "shutdownPromptError": "请完整输入 \"shutdown\"。"
   },
   "backend": {
     "autoDetectedAndLinked": "已自动检测并链接本地目录中的后端。",

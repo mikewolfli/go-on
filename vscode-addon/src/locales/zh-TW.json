@@ -840,7 +840,10 @@
     "invalidProcessId": "無效的流程: ID 是必需的",
     "invalidStagesFormat": "無效的階段格式: 必須是陣列",
     "createdSuccess": "流程 \"{0}\" 建立成功！",
-    "completedSuccess": "流程 \"{0}\" 執行完成！"
+    "completedSuccess": "流程 \"{0}\" 執行完成！",
+    "codeExecutionNotSupported": "目前檢視暫不支援程式碼執行",
+    "manualStagePrompt": "流程 \"{0}\" - 階段 {1}: {2}",
+    "continueButton": "繼續"
   },
   "advanced": {
     "governancePlan": "治理計畫",

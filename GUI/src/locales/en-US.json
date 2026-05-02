@@ -329,7 +329,13 @@
     "customMethod": "Custom Method",
     "customParams": "Custom Params",
     "run": "Run",
-    "done": "Done"
+    "done": "Done",
+    "invalidRpcPayload": "Invalid RPC response payload: {reason}",
+    "irreversibleOperation": "This operation is irreversible.",
+    "dangerConfirmTitle": "Confirm dangerous operation",
+    "finalConfirmTitle": "Final confirmation",
+    "shutdownPrompt": "Type \"shutdown\" to confirm backend shutdown.",
+    "shutdownPromptError": "Please type \"shutdown\" exactly."
   },
   "backend": {
     "autoDetectedAndLinked": "Automatically detected and linked backend in the local directory.",

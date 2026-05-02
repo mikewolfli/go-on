@@ -235,13 +235,16 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
             break;
           }
           case "code":
+            const codeNotSupported = i18n.getMessage(
+              MessageKeys.processFlowCodeExecutionNotSupported,
+            );
             this._view?.webview.postMessage({
               type: "stageResult",
               processId,
               stageIndex: i,
-              result: "Code execution not yet supported in this view",
+              result: codeNotSupported,
             });
-            stage.result = "Code execution not yet supported in this view";
+            stage.result = codeNotSupported;
             break;
           case "delay":
             await new Promise((resolve) =>
@@ -252,8 +255,12 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
             // Wait for manual confirmation
             await new Promise<void>((resolve) => {
               const thenable = vscode.window.showInformationMessage(
-                `Process "${process.name}" - Stage ${i + 1}: ${stage.name}`,
-                "Continue",
+                i18n.getMessage(MessageKeys.processFlowManualStagePrompt, [
+                  process.name,
+                  String(i + 1),
+                  stage.name ?? "-",
+                ]),
+                i18n.getMessage(MessageKeys.processFlowContinueButton),
               );
               Promise.resolve(thenable).then(
                 () => resolve(),

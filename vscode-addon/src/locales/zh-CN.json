@@ -840,7 +840,10 @@
     "invalidProcessId": "无效的流程: ID 是必需的",
     "invalidStagesFormat": "无效的阶段格式: 必须是数组",
     "createdSuccess": "流程 \"{0}\" 创建成功！",
-    "completedSuccess": "流程 \"{0}\" 执行完成！"
+    "completedSuccess": "流程 \"{0}\" 执行完成！",
+    "codeExecutionNotSupported": "当前视图暂不支持代码执行",
+    "manualStagePrompt": "流程 \"{0}\" - 阶段 {1}: {2}",
+    "continueButton": "继续"
   },
   "advanced": {
     "governancePlan": "治理计划",

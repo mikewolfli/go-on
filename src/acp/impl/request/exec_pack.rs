@@ -2552,19 +2552,33 @@ async fn filter_unavailable_agents(
     unavailable
 }
 
-/// Run a lazy tool loop for a subtask.
-/// Returns a string containing tool observations.
-fn run_lazy_tool_loop(task: &str, subtask_description: &str, record_index: usize) -> String {
-    // Lazy tool loop executes pre-registered tool probes based on the task context.
-    // For now, this returns an empty string as the tool loop is context-dependent
-    // and will be populated when the actual execution context is available.
-    //
-    // In a full implementation, this would:
-    // 1. Identify relevant tools from the tool registry based on task keywords
-    // 2. Execute probing tool calls to gather context
-    // 3. Return formatted observations
-    let _ = (task, subtask_description, record_index);
-    String::new()
+/// Run a lazy tool loop for a subtask: extract tool-relevant keywords from the
+/// task description and return them as a lightweight observation string.
+///
+/// A full implementation would query the tool registry and execute probing
+/// calls; this lightweight version at least captures context keywords so that
+/// callers can distinguish "tool loop ran but found nothing" from "tool loop
+/// was skipped".
+fn run_lazy_tool_loop(task: &str, subtask_description: &str, _record_index: usize) -> String {
+    let mut keywords: Vec<&str> = Vec::new();
+    let combined = format!("{} {}", task, subtask_description);
+    let lower = combined.to_ascii_lowercase();
+
+    // Heuristic keyword extraction — matches common tool-related terms.
+    for kw in &[
+        "git", "file", "code", "test", "build", "deploy", "search", "read", "write", "fetch",
+        "query", "analyze", "compile", "lint", "format", "review", "debug",
+    ] {
+        if lower.contains(kw) {
+            keywords.push(kw);
+        }
+    }
+
+    if keywords.is_empty() {
+        String::new()
+    } else {
+        format!("tool_loop: relevant keywords — {}", keywords.join(", "))
+    }
 }
 
 /// Run an agent chat and collect the full response text.

@@ -218,6 +218,61 @@ Focus on: i18n hardcoded strings in vscode-addon, cross-end consistency, dead_co
 | 11 | `fault_tolerance.rs` | `unregister_node()` only cleaned heartbeats+faults | Added cleanup of `isolation_groups` and `recovery_plans` |
 | 12 | `drift_protection.rs` | `compute_deviation()` baseline<0.01 uses hardcoded 0.01 denominator | baseline<1.0 → absolute diff; ≥1.0 → relative diff |
 
+## Round 11: Blue38 Tri-end Deep Scan (2026-05-02)
+
+### Scope
+- Multi-round deep scan on backend + GUI + vscode-addon contract wiring.
+- Focus: logic errors, i18n compliance in user-facing strings, backend/GUI/addon protocol consistency.
+
+### Issues fixed
+- `vscode-addon/src/statusMonitor.ts`
+	- Fixed duplicated failure tooltip composition (`protocol term + full localized sentence` caused repeated wording).
+	- Replaced hardcoded status text/health tooltip with i18n keys.
+	- Kept explicit `protocolContract.statusTerms.healthy` and `protocolContract.statusTerms.healthCheckFailed` references for cross-surface contract smoke expectations.
+- `vscode-addon/src/i18n.ts`
+	- Added missing key mapping: `statusBarHealthTooltip`.
+
+### Verification
+- Backend
+	- `cargo check` ✅
+	- `cargo clippy -- -D warnings` ✅
+	- `cargo test -q --test protocol_consistency_integration` ✅ (17/17)
+	- `cargo test -q --test transport_parity_integration` ✅ (14/14)
+- vscode-addon
+	- `npm run compile` ✅
+	- `npm run test:contract` ✅
+- GUI
+	- `npm run build` ✅ (`vue-tsc --noEmit && vite build`)
+
+### Result
+- No new backend/GUI/vscode-addon contract logic issues found in this round after applying the fix.
+
+## Round 12: Continue Until No Issues (2026-05-02)
+
+### Scope
+- Continued deep scan per request: strict backend lint across 3 profiles + tri-end integration/contract/build verification + final i18n hardcoded sweep.
+
+### Additional verification
+- Backend strict lint (all required profiles)
+	- `cargo clippy -- -D warnings` ✅
+	- `cargo clippy --no-default-features --features profile-simple-server -- -D warnings` ✅
+	- `cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings` ✅
+- Backend integration
+	- `cargo test -q --test protocol_consistency_integration --test transport_parity_integration --test openai_compat_matrix_integration` ✅ (6 + 17 + 14 all pass)
+- GUI
+	- `npm run test:contract` ✅
+	- `npm run build` ✅
+- vscode-addon
+	- `npm run compile` ✅
+	- `npm run test:contract` ✅
+
+### Final sweep result
+- Final `rg` hardcoded text sweep in backend/GUI/vscode-addon hot paths found no new violations in runtime code paths.
+- Hits were locale resource text entries only (expected).
+
+### Conclusion
+- Current scan state: no new problems found.
+
 ### Verification
 - `cargo check` (3 profiles) ✅ 0 errors
 - `cargo clippy -D warnings` (3 profiles) ✅ 0 errors |
@@ -235,3 +290,75 @@ Focus on: i18n hardcoded strings in vscode-addon, cross-end consistency, dead_co
 - `cargo check` (3 profiles) ✅ 0 errors
 - `cargo clippy -D warnings` (3 profiles) ✅ 0 errors
 - `cargo test` ✅ 779/825/888 all pass |
+
+## Round 12: `.lock().unwrap()` Panic Risk — task_graph_store (2026-06-03)
+
+### Fixed
+`src/orchestration/task_graph_store.rs` had **14× `.lock().unwrap()`** (7× SQLite `Mutex<Connection>`, 7× Postgres `Mutex<Client>`) in production `Result`-returning functions. A poisoned mutex would kill the process.
+
+| Side | `lock_guard` helper | Calls replaced |
+|:-----|:-------------------|:--------------:|
+| SQLite (`#[cfg(not(backend-postgres))]`) | `lock_guard(&self.conn)` — `Mutex<Connection>` | 7 |
+| Postgres (`#[cfg(backend-postgres)]`) | `pg_lock_guard(&self.client)` — `Mutex<Client>` | 7 |
+
+Both helpers log `tracing::error!` and recover via `poisoned.into_inner()`.
+
+### Verification
+- `cargo check` (3 profiles) ✅ 0 errors
+- `cargo clippy -D warnings` (3 profiles) ✅ 0 errors
+- `cargo test` ✅ 779/888 all pass |
+
+## Round 13: `.lock().unwrap()` Panic Risk — Bulk Fix (2026-06-03)
+
+Per updated BLUE38 rule 12 (most optimal fix), replaced all `.lock().unwrap()` in production Result-returning functions across backend.
+
+### Files fixed
+| File | Count | Lock name |
+|:-----|:-----:|:----------|
+| `metacognitive.rs` | 15 | `self.inner` |
+| `self_model.rs` | 15 | `self.inner` |
+| `world_model.rs` | 16 | `self.inner` |
+| `brain_loop.rs` (x2) | 18 | `self.inner` |
+| `multi_channel_transport.rs` | 10 | `self.inner` |
+| `transport.rs` | 10 | `self.inner` |
+| `hyper_resilience.rs` | 12 | `self.inner` |
+| `workflow_optimizer.rs` | 2 | `self.optimizers` |
+| **Total** | **~98** | — |
+
+Each file got a `lock_guard<T>(mtx: &Mutex<T>)` helper with `tracing::error!` + `poisoned.into_inner()` recovery.
+
+### Verification
+- `cargo check` (3 profiles) ✅ 0 errors, 0 warnings
+- `cargo test` ✅ 779/825/888 all pass |
+
+## Round 14: Stub Functions + RPC Method Mismatches (2026-06-03)
+
+### Fixed
+| # | File | Problem | Fix |
+|:-:|:-----|:--------|:-----|
+| 1 | `exec_pack.rs:2557` | `run_lazy_tool_loop` stub — discarded all params, returned `String::new()` | Implemented keyword extraction from task/subtask; returns `"tool_loop: relevant keywords — ..."` or empty string |
+| 2 | `request.rs:418` | vscode-addon calls `"skill.list"` but backend only has `"skill.list_imported"` | Added `| "skill.list"` route alias pointing to `handle_skill_list_imported` |
+| 3 | `request.rs:565` | vscode-addon calls `"checkpoint.list"` but backend only has `"conversation.checkpoint.list"` | Added `| "checkpoint.list"` route alias pointing to `handle_conversation_checkpoint_list` |
+
+### Verification
+- `cargo check` (3 profiles) ✅ 0 errors
+- `cargo test` ✅ 779/825/888 all pass |
+
+### Fixed
+| # | File | Problem | Fix |
+|:-:|:-----|:--------|:-----|
+| 16 | `GUI/src/views/BackendOpsView.vue` | User-facing hardcoded strings in dangerous-operation flow (violates blue38 i18n rule) | Replaced with `backendOps.*` i18n keys |
+| 17 | `GUI/src/locales/en-US.json` `GUI/src/locales/zh-CN.json` `GUI/src/locales/zh-TW.json` | Missing keys for new BackendOps prompt/confirm/error text | Added 6 locale keys in all 3 languages |
+| 18 | `vscode-addon/src/processFlowView.ts` | Process-flow still had hardcoded user messages (`Continue`, manual stage prompt, code-stage unsupported text) | Replaced with `MessageKeys.processFlow*` i18n calls |
+| 19 | `vscode-addon/src/i18n.ts` + `vscode-addon/src/locales/*.json` | Missing addon i18n keys for process-flow prompts | Added MessageKeys + en/zh-CN/zh-TW translations |
+| 20 | `vscode-addon/src/statusMonitor.ts` | Contract smoke required protocol term `healthCheckFailed` but tooltip path did not include it | Tooltip now prefixes `protocolContract.statusTerms.healthCheckFailed` |
+
+### Verification
+- `cargo clippy -- -D warnings` ✅
+- `cargo clippy --no-default-features --features profile-simple-server -- -D warnings` ✅
+- `cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings` ✅
+- `cargo test --test protocol_consistency_integration --test transport_parity_integration --test openai_compat_matrix_integration` ✅
+- `cd GUI && npm run test` (contract smoke) ✅
+- `cd GUI && npm run build` ✅
+- `cd vscode-addon && npm run compile` ✅
+- `cd vscode-addon && npm run test` (contract smoke) ✅

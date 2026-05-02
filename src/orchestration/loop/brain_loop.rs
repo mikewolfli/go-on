@@ -15,7 +15,18 @@
 //! cloned and shared across threads safely.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// Lock a Mutex, recovering from poison with a log.
+fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::error!("brain_loop_2 mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -161,7 +172,7 @@ impl BrainLoop {
     /// The current implementation uses simple string-based logic. A production
     /// system would delegate to an LLM or planner service.
     pub fn plan(&self, task: &str) -> anyhow::Result<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         inner.state = BrainLoopState::Planning;
         inner.iteration_count += 1;
 
@@ -208,7 +219,7 @@ impl BrainLoop {
     /// deterministic result string. A production system would actually
     /// run the plan steps.
     pub fn execute(&self, plan: &str) -> anyhow::Result<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         inner.state = BrainLoopState::Executing;
 
         let step_id = self.next_step_id.fetch_add(1, Ordering::AcqRel);
@@ -248,7 +259,7 @@ impl BrainLoop {
     /// Returns a [`Reflection`] that contains a score, identified issues,
     /// suggested improvements, and a convergence flag.
     pub fn reflect(&self, plan: &str, result: &str) -> anyhow::Result<Reflection> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         inner.state = BrainLoopState::Reflecting;
 
         let step_id = self.next_step_id.fetch_add(1, Ordering::AcqRel);
@@ -324,7 +335,7 @@ impl BrainLoop {
 
     /// Produce an improved plan based on the reflection and the original plan.
     pub fn replan(&self, reflection: &Reflection, original_plan: &str) -> anyhow::Result<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_guard(&self.inner);
         inner.state = BrainLoopState::Replanning;
 
         let step_id = self.next_step_id.fetch_add(1, Ordering::AcqRel);
@@ -383,7 +394,7 @@ impl BrainLoop {
     /// Returns a [`BrainLoopReport`] summarising the run.
     pub fn run(&self, task: &str) -> anyhow::Result<BrainLoopReport> {
         let config = {
-            let inner = self.inner.lock().unwrap();
+            let inner = lock_guard(&self.inner);
             inner.config.clone()
         };
 
@@ -419,7 +430,7 @@ impl BrainLoop {
 
         // Mark the final state.
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = lock_guard(&self.inner);
             if converged {
                 inner.state = BrainLoopState::Completed;
             } else {
@@ -428,13 +439,13 @@ impl BrainLoop {
         }
 
         let history = {
-            let inner = self.inner.lock().unwrap();
+            let inner = lock_guard(&self.inner);
             inner.steps.clone()
         };
 
         // Verify terminal state is set correctly.
         let state = {
-            let inner = self.inner.lock().unwrap();
+            let inner = lock_guard(&self.inner);
             inner.state
         };
         debug_assert!(state.is_terminal(), "state must be terminal after run");
@@ -451,7 +462,7 @@ impl BrainLoop {
 
     /// Return a snapshot of the current runtime profile.
     pub fn profile(&self) -> BrainLoopProfile {
-        let inner = self.inner.lock().unwrap();
+        let inner = lock_guard(&self.inner);
         let total_steps = inner.steps.len() as u64;
 
         let scores: Vec<f64> = inner.steps.iter().filter_map(|s| s.score).collect();
