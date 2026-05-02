@@ -808,7 +808,17 @@ mod tests {
         let snap = ForkSnapshot::new(vec![10, 20, 30], labels);
         let json = serde_json::to_string(&snap).expect("serialize");
         let deserialized: ForkSnapshot = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(snap, deserialized);
+        // f64 timestamps at ~1.7×10⁹ magnitude can lose the last ULP through
+        // serde_json's shortest-representation encoding; compare fields
+        // individually and use an epsilon for the floating-point timestamp.
+        assert_eq!(snap.data, deserialized.data);
+        assert_eq!(snap.labels, deserialized.labels);
+        assert!(
+            (snap.timestamp - deserialized.timestamp).abs() < 1e-4,
+            "timestamp precision lost beyond tolerance: {} vs {}",
+            snap.timestamp,
+            deserialized.timestamp
+        );
     }
 
     #[test]
