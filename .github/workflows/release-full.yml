@@ -4,13 +4,16 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - '0.*'
-      - 'v0.*'
+      - "0.*"
+      - "v0.*"
   release:
     types: [published]
 
 permissions:
   contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build-and-package:
