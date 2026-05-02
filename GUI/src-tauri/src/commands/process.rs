@@ -117,9 +117,15 @@ fn start_service_impl(state: &AppState) -> Result<ServiceStatus> {
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(stderr_log));
 
-    if let Some(protocol_mode) = inner.config.protocol_mode.as_deref() {
-        cmd.arg("--protocol-mode").arg(protocol_mode);
-    }
+    // Default to acp_http so the backend exposes a health endpoint on 127.0.0.1:8090
+    // that the GUI can connect to. If the config specifies a protocol mode, use that instead.
+    let protocol_mode = inner
+        .config
+        .protocol_mode
+        .as_deref()
+        .filter(|m| !m.is_empty())
+        .unwrap_or("acp_http");
+    cmd.arg("--protocol-mode").arg(protocol_mode);
 
     for (k, v) in &inner.config.extra_env {
         cmd.env(k, v);

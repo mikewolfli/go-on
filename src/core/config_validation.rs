@@ -470,11 +470,9 @@ impl ConfigValidator {
     fn validate_structure(&self, result: &mut ValidationResult) {
         // Check required sections
         if self.config.agents.is_empty() {
-            result.errors.push(ValidationError {
+            result.warnings.push(ValidationWarning {
                 message: "No agents configured".to_string(),
-                severity: ErrorSeverity::Critical,
                 section: "agents".to_string(),
-                suggestion: Some("Add at least one agent configuration".to_string()),
             });
         }
 
