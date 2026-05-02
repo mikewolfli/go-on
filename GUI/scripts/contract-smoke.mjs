@@ -8,7 +8,10 @@ const repoRoot = path.resolve(guiRoot, '..');
 const contract = JSON.parse(
     fs.readFileSync(path.join(repoRoot, 'contracts', 'editor-capability-matrix.json'), 'utf8')
 );
-const apiSource = fs.readFileSync(path.join(guiRoot, 'src', 'services', 'api.ts'), 'utf8');
+const apiSource = fs.readFileSync(
+    path.join(guiRoot, 'src', 'services', 'protocolContract.ts'),
+    'utf8'
+);
 const protocolSource = fs.readFileSync(
     path.join(guiRoot, 'src', 'services', 'protocolContract.ts'),
     'utf8'

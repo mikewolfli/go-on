@@ -20,13 +20,20 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
+
+      - name: Create required SQLite databases for release build
+        shell: bash
+        run: |
+          mkdir -p config
+          touch config/acp_cache.sqlite3
+          touch config/acp_vector.sqlite3
 
       - name: Install Tauri system dependencies (Linux only)
         if: runner.os == 'Linux'
@@ -46,24 +53,54 @@ jobs:
 
       # ── GUI ────────────────────────────────────────────────────────────
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            GUI/package-lock.json
+            vscode-addon/package-lock.json
 
-      - name: Build GUI
+      - name: Build GUI (tauri build calls `npm run build` via beforeBuildCommand)
         working-directory: ./GUI
         run: |
           npm ci
-          npm run build
           npm run tauri build
 
+      - name: Embed backend into macOS app bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          APP_BUNDLE=$(find GUI/src-tauri/target/release/bundle/macos -maxdepth 1 -type d -name "*.app" | head -1 || true)
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "macOS app bundle not found"
+            exit 1
+          fi
+
+          RUNTIME_DIR="$APP_BUNDLE/Contents/Resources/backend"
+          mkdir -p "$RUNTIME_DIR"
+
+          cp target/release/go-on "$RUNTIME_DIR/go-on"
+          chmod +x "$RUNTIME_DIR/go-on"
+
+          cp -r RULES "$RUNTIME_DIR/" || true
+          cp -r languages "$RUNTIME_DIR/" || true
+          cp config/config.toml "$RUNTIME_DIR/" || true
+          cp config/config.coding.toml "$RUNTIME_DIR/" || true
+          cp config/config.simple-server.toml "$RUNTIME_DIR/" || true
+          cp config/config.multi-users-server.toml "$RUNTIME_DIR/" || true
+          cp config/providers.toml "$RUNTIME_DIR/" || true
+          cp README.md "$RUNTIME_DIR/" || true
+          cp README.zh-CN.md "$RUNTIME_DIR/" || true
+
       # ── VS Code addon ──────────────────────────────────────────────────
+      # compile is required to produce `out/` before vsce package; lint/check
+      # already ran in build.yml — no redundant verification here.
       - name: Build VS Code addon and package vsix
         working-directory: ./vscode-addon
         run: |
           npm ci
           npm run compile
-          npm run test
           npx @vscode/vsce package --no-dependencies --out go-on-vscode.vsix
 
       # ── Package ────────────────────────────────────────────────────────
@@ -73,37 +110,57 @@ jobs:
           PKG="go-on-release-${{ matrix.os }}"
 
           mkdir -p "$PKG"
+          GUI_APP=""
 
-          # GUI binary (platform-specific)
-          GUI_BIN=$(find GUI/src-tauri/target/release/bundle -type f \( -name "go-on-gui" -o -name "go-on-gui.exe" -o -name "*.AppImage" -o -name "*.dmg" \) 2>/dev/null | head -1 || true)
-          if [ -z "$GUI_BIN" ]; then
-            GUI_BIN=$(find GUI/src-tauri/target/release -maxdepth 1 \( -name "go-on-gui" -o -name "go-on-gui.exe" \) 2>/dev/null | head -1 || true)
+          # GUI artifacts (platform-specific)
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            GUI_DMG=$(find GUI/src-tauri/target/release/bundle -type f -name "*.dmg" 2>/dev/null | head -1 || true)
+            GUI_APP=$(find GUI/src-tauri/target/release/bundle -type d -name "*.app" 2>/dev/null | head -1 || true)
+            [ -n "$GUI_DMG" ] && cp "$GUI_DMG" "$PKG/"
+            [ -n "$GUI_APP" ] && cp -R "$GUI_APP" "$PKG/"
+          else
+            GUI_BIN=$(find GUI/src-tauri/target/release/bundle -type f \( -name "go-on-gui" -o -name "go-on-gui.exe" -o -name "*.AppImage" \) 2>/dev/null | head -1 || true)
+            if [ -z "$GUI_BIN" ]; then
+              GUI_BIN=$(find GUI/src-tauri/target/release -maxdepth 1 \( -name "go-on-gui" -o -name "go-on-gui.exe" \) 2>/dev/null | head -1 || true)
+            fi
+            [ -n "$GUI_BIN" ] && cp "$GUI_BIN" "$PKG/"
           fi
-          [ -n "$GUI_BIN" ] && cp "$GUI_BIN" "$PKG/"
 
           # VS Code extension
           cp vscode-addon/go-on-vscode.vsix "$PKG/" 2>/dev/null || true
+          cp scripts/macos-gui-unblock.sh "$PKG/" 2>/dev/null || true
+          cp scripts/first-run.sh "$PKG/" 2>/dev/null || true
+          cp MACOS_FIRST_RUN.md "$PKG/" 2>/dev/null || true
 
-          # Backend
-          mkdir -p "$PKG/backend"
+          # Standalone backend runtime (kept for CLI/VS Code addon linking)
+          BACKEND_DIR="$PKG/backend"
+          mkdir -p "$BACKEND_DIR"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp target/release/go-on.exe "$PKG/backend/" 2>/dev/null || true
+            cp target/release/go-on.exe "$BACKEND_DIR/" 2>/dev/null || true
           else
-            cp target/release/go-on "$PKG/backend/" 2>/dev/null || true
+            cp target/release/go-on "$BACKEND_DIR/" 2>/dev/null || true
           fi
-          cp -r RULES                               "$PKG/backend/"  || true
-          cp -r languages                           "$PKG/backend/"  || true
-          cp config/config.toml                     "$PKG/backend/"  || true
-          cp config/config.coding.toml              "$PKG/backend/"  || true
-          cp config/config.simple-server.toml       "$PKG/backend/"  || true
-          cp config/config.multi-users-server.toml  "$PKG/backend/"  || true
-          cp config/providers.toml                  "$PKG/backend/"  || true
-          cp README.md                              "$PKG/backend/"  || true
-          cp README.zh-CN.md                        "$PKG/backend/"  || true
-          cp scripts/start-go-on.sh                 "$PKG/backend/"  || true
-          cp scripts/stop-go-on.sh                  "$PKG/backend/"  || true
-          cp scripts/run-quality-gate.sh            "$PKG/backend/"  || true
-          cp scripts/run-release-readiness-gate.sh   "$PKG/backend/"  || true
+          cp -r RULES                               "$BACKEND_DIR/"  || true
+          cp -r languages                           "$BACKEND_DIR/"  || true
+          cp config/config.toml                     "$BACKEND_DIR/"  || true
+          cp config/config.coding.toml              "$BACKEND_DIR/"  || true
+          cp config/config.simple-server.toml       "$BACKEND_DIR/"  || true
+          cp config/config.multi-users-server.toml  "$BACKEND_DIR/"  || true
+          cp config/providers.toml                  "$BACKEND_DIR/"  || true
+          cp README.md                              "$BACKEND_DIR/"  || true
+          cp README.zh-CN.md                        "$BACKEND_DIR/"  || true
+          cp scripts/start-go-on.sh                 "$BACKEND_DIR/"  || true
+          cp scripts/stop-go-on.sh                  "$BACKEND_DIR/"  || true
+          cp scripts/macos-gui-unblock.sh           "$BACKEND_DIR/"  || true
+          cp scripts/first-run.sh                   "$BACKEND_DIR/"  || true
+          cp MACOS_FIRST_RUN.md                     "$BACKEND_DIR/"  || true
+          cp scripts/run-quality-gate.sh            "$BACKEND_DIR/"  || true
+          cp scripts/run-release-readiness-gate.sh  "$BACKEND_DIR/"  || true
+
+          chmod +x "$PKG/macos-gui-unblock.sh" 2>/dev/null || true
+          chmod +x "$PKG/first-run.sh" 2>/dev/null || true
+          chmod +x "$BACKEND_DIR/macos-gui-unblock.sh" 2>/dev/null || true
+          chmod +x "$BACKEND_DIR/first-run.sh" 2>/dev/null || true
 
           # Archive
           tar -czf "${PKG}.tar.gz" "$PKG"

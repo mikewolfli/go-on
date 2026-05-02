@@ -342,6 +342,11 @@ fn discover_backend_executable(default_exe: &str) -> Option<PathBuf> {
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(parent) = current_exe.parent() {
             roots.push(parent.to_path_buf());
+            if let Some(contents_dir) = parent.parent() {
+                roots.push(contents_dir.to_path_buf());
+                roots.push(contents_dir.join("Resources"));
+                roots.push(contents_dir.join("Resources").join("backend"));
+            }
         }
     }
 
