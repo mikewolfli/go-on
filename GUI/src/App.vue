@@ -308,11 +308,37 @@ onMounted(async () => {
 
   runtime.startStatusPolling();
 
+  async function checkProviderAndNavigate() {
+    if (!runtime.status.running) return;
+    try {
+      const { getProviderStatus } = await import("./services/rpcService");
+      const status = await getProviderStatus();
+      const agentInfo = status?.provider_status;
+      const agents = Array.isArray(agentInfo?.configured_agents) ? agentInfo!.configured_agents! : [];
+      const readyCount = agents.filter((p: any) => p?.ready === true).length;
+      const summary = agentInfo?.summary;
+      const configuredCount = summary?.configured ?? agents.length;
+      if (readyCount === 0 && configuredCount > 0) {
+        ElMessage.warning(t("backend.monitorOnlyMode"));
+        activeMainTab.value = "config";
+        activeConfigSubTab.value = "providers";
+      } else if (configuredCount === 0) {
+        ElMessage.info(t("backend.executableNotFound").replace("{attempt}/", "").replace("{max}", ""));
+        activeMainTab.value = "config";
+        activeConfigSubTab.value = "setup";
+      }
+    } catch { /* provider check failed — ignore */ }
+  }
+
+  // Check provider readiness immediately
+  await checkProviderAndNavigate();
+
   stopRunningWatch = watch(
     () => runtime.status.running,
-    (running) => {
+    async (running) => {
       if (!previousRunning && running) {
         ElMessage.success(t("toast.serviceRecovered"));
+        await checkProviderAndNavigate();
       }
       previousRunning = running;
     },
