@@ -31,9 +31,9 @@ jobs:
       - name: Build check (profile-local)
         run: cargo check --all-targets 2>&1
       - name: Clippy (profile-local, deny warnings)
-        run: cargo clippy -F profile-local -- -D warnings
+        run: cargo clippy --no-default-features -F profile-local -- -D warnings
       - name: Unit tests (profile-local)
-        run: cargo test -F profile-local --lib
+        run: cargo test --no-default-features -F profile-local --bin go-on
 
       # ── Profile: simple-server ────────────────────────────────────────
       - name: Clippy (profile-simple-server, deny warnings)
@@ -45,15 +45,25 @@ jobs:
 
       # ── Integration tests ─────────────────────────────────────────────
       - name: Integration — release readiness
-        run: cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_release_readiness_benchmark_requests -- --nocapture
+        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration run_scenario_file_executes_release_readiness_benchmark_requests -- --nocapture
+        env:
+          GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
       - name: Integration — governance
-        run: cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_governance_dynamic_rules_benchmark_requests -- --nocapture
+        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration run_scenario_file_executes_governance_dynamic_rules_benchmark_requests -- --nocapture
+        env:
+          GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
       - name: Integration — managed service inference
-        run: cargo test --test acp_runtime_rpc_integration managed_service_target_infers_multi_user_mode_on_main_chain -- --nocapture
+        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration managed_service_target_infers_multi_user_mode_on_main_chain -- --nocapture
+        env:
+          GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
       - name: Integration — adversarial paths
-        run: cargo test --test acp_runtime_rpc_integration adversarial_ -- --nocapture
+        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration adversarial_ -- --nocapture
+        env:
+          GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
       - name: Integration — multi-user lifecycle drill
-        run: cargo test --test acp_runtime_rpc_integration run_scenario_file_executes_multi_user_lifecycle_drill_requests -- --nocapture
+        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration run_scenario_file_executes_multi_user_lifecycle_drill_requests -- --nocapture
+        env:
+          GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
 
       # ── Front-end ─────────────────────────────────────────────────────
       - name: Set up Node.js

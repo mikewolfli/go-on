@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 fn read_guard<'a, T>(lock: &'a RwLock<T>, label: &str) -> RwLockReadGuard<'a, T> {
     match lock.read() {
@@ -163,7 +163,7 @@ impl I18nManager {
         let file_path = self.languages_dir.join(format!("{}.json", language.code()));
 
         if !file_path.exists() {
-            warn!("Language file not found: {:?}", file_path);
+            debug!("Language file not found: {:?}", file_path);
             return Ok(());
         }
 
