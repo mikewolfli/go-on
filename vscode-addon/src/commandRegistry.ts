@@ -27,18 +27,18 @@ export function registerViewCommands(
       } catch (error: unknown) {
         await deps.revealGoOnView("settings");
         const message = error instanceof Error ? error.message : String(error);
-        // TODO: i18n - hardcoded English string
+        // i18n
         vscode.window.showWarningMessage(
-          `Go-On executable is not ready: ${message}. Please set a valid .exe, .bat, or .sh path in Settings.`,
+          i18n.getMessage(MessageKeys.executableNotReady, [message]),
         );
         return;
       }
 
       const opened = await deps.revealGoOnView("chat");
       if (!opened) {
-        // TODO: i18n - hardcoded English string
+        // i18n
         vscode.window.showWarningMessage(
-          "Go-On Chat view is not available yet. Reload Window after installing/updating the extension.",
+          i18n.getMessage(MessageKeys.chatViewNotAvailable),
         );
       }
       void deps.prepareRuntimeAfterChatOpen();
@@ -52,14 +52,14 @@ export function registerViewCommands(
 
       if (deps.isRunning()) {
         deps.stop();
-        // TODO: i18n - hardcoded English string
+        // i18n
         vscode.window.showInformationMessage(
-          "Go-On chat closed. Running backend was stopped.",
+          i18n.getMessage(MessageKeys.chatClosedBackendStopped),
         );
       } else {
-        // TODO: i18n - hardcoded English string
+        // i18n
         vscode.window.showInformationMessage(
-          "Go-On chat closed. Backend was already stopped.",
+          i18n.getMessage(MessageKeys.chatClosedBackendAlreadyStopped),
         );
       }
     },
@@ -70,9 +70,9 @@ export function registerViewCommands(
     async () => {
       const opened = await deps.revealGoOnView("settings");
       if (!opened) {
-        // TODO: i18n - hardcoded English string
+        // i18n
         vscode.window.showWarningMessage(
-          "Go-On Settings view is not available yet. Reload Window after installing/updating the extension.",
+          i18n.getMessage(MessageKeys.settingsViewNotAvailable),
         );
       }
     },
@@ -83,9 +83,9 @@ export function registerViewCommands(
     async () => {
       const opened = await deps.revealGoOnView("workflow");
       if (!opened) {
-        // TODO: i18n - hardcoded English string
+        // i18n
         vscode.window.showWarningMessage(
-          "Go-On Workflow view is not available yet. Reload Window after installing/updating the extension.",
+          i18n.getMessage(MessageKeys.workflowViewNotAvailable),
         );
       }
     },
@@ -94,9 +94,9 @@ export function registerViewCommands(
   const runWorkflowCommand = vscode.commands.registerCommand(
     "go-on.runWorkflow",
     () => {
-      // TODO: i18n - hardcoded English string
+      // i18n
       vscode.window.showInformationMessage(
-        "Select a workflow to run from the Workflow panel",
+        i18n.getMessage(MessageKeys.selectWorkflow),
       );
     },
   );
@@ -106,9 +106,9 @@ export function registerViewCommands(
     async () => {
       const opened = await deps.revealGoOnView("process-flow");
       if (!opened) {
-        // TODO: i18n - hardcoded English string
+        // i18n
         vscode.window.showWarningMessage(
-          "Go-On Process Flow view is not available yet. Reload Window after installing/updating the extension.",
+          i18n.getMessage(MessageKeys.processFlowViewNotAvailable),
         );
       }
     },

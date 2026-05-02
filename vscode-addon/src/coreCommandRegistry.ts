@@ -206,14 +206,16 @@ export function registerCoreCommands(
             const retryMissingEnvVars =
               deps.parseMissingEnvVariableNames(retryMessage);
             if (retryMissingEnvVars.length > 0) {
-              // TODO: i18n - hardcoded English string
+              // i18n
               vscode.window.showErrorMessage(
-                `Failed to start Go-On: missing environment variables (${retryMissingEnvVars.join(", ")}). Configure provider keys in Settings.`,
+                i18n.getMessage(MessageKeys.goOnStartFailedMissingEnv, [
+                  retryMissingEnvVars.join(", "),
+                ]),
               );
             } else {
-              // TODO: i18n - hardcoded English string
+              // i18n
               vscode.window.showErrorMessage(
-                `Failed to start Go-On: ${retryMessage}`,
+                i18n.getMessage(MessageKeys.goOnStartFailed, [retryMessage]),
               );
             }
             throw retryError;

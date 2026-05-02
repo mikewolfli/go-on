@@ -636,6 +636,7 @@
     "breakerStatusFailed": "断路器状态检查失败: {0}",
     "diagnosisCompleted": "Go-On 诊断完成。",
     "diagnosisIssue": "Go-On 诊断完成但存在问题。请查看 \"Go-On Diagnosis\" 输出。",
+    "backendNotReady": "聊天已打开，后端尚未就绪: {0}。请在聊天/设置视图中配置 Go-On 设置后重试。",
     "requestFailed": "请求失败: {0}",
     "noWorkspaceFolderOpen": "未打开工作区文件夹。",
     "chatClosedBackendStopped": "Go-On 聊天已关闭。运行中的后端已停止。",

@@ -106,7 +106,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
           const message_text =
             error instanceof Error ? error.message : String(error);
           void vscode.window.showErrorMessage(
-            `Process Flow error: ${message_text}`,
+            i18n.getMessage(MessageKeys.processFlowFailed, [message_text]),
           );
         }
       },
@@ -356,7 +356,9 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
       });
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        `Failed to update process: ${this.getErrorMessage(error)}`,
+        i18n.getMessage(MessageKeys.processFlowFailed, [
+          this.getErrorMessage(error),
+        ]),
       );
     }
   }

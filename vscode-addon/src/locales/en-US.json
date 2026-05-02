@@ -636,6 +636,7 @@
     "breakerStatusFailed": "Breaker status check failed: {0}",
     "diagnosisCompleted": "Go-On diagnosis completed.",
     "diagnosisIssue": "Go-On diagnosis completed with issues. See \"Go-On Diagnosis\" output.",
+    "backendNotReady": "Chat is open. Backend is not ready yet: {0}. Configure Go-On settings in the Chat/Settings view and retry.",
     "requestFailed": "Request failed: {0}",
     "noWorkspaceFolderOpen": "No workspace folder open.",
     "chatClosedBackendStopped": "Go-On chat closed. Running backend was stopped.",

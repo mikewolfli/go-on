@@ -793,7 +793,9 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     .await
                 }
                 "health.check" => {
-                    let _ = run_health_check(server).await;
+                    if let Err(e) = run_health_check(server).await {
+                        tracing::warn!("health.check: run_health_check failed: {}", e);
+                    }
                     send_result(server, request_id, json!({ "ok": true })).await
                 }
                 "governance.remediate" => {

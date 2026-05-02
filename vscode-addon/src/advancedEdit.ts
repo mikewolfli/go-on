@@ -130,7 +130,9 @@ export class GoOnAdvancedEditProvider {
   private async handleAdvancedEdit(args?: AdvancedEditArgs) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
-      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.editingNoActiveEditor));
+      vscode.window.showErrorMessage(
+        i18n.getMessage(MessageKeys.editingNoActiveEditor),
+      );
       return;
     }
 
@@ -139,7 +141,9 @@ export class GoOnAdvancedEditProvider {
     const selectedText = document.getText(selection);
 
     if (!selectedText) {
-      vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.editingSelectCodeToEdit));
+      vscode.window.showInformationMessage(
+        i18n.getMessage(MessageKeys.editingSelectCodeToEdit),
+      );
       return;
     }
 
@@ -147,16 +151,44 @@ export class GoOnAdvancedEditProvider {
     if (!action) {
       const picked = await vscode.window.showQuickPick(
         [
-          { label: i18n.getMessage(MessageKeys.editingActionExplainCode), value: "explain" },
-          { label: i18n.getMessage(MessageKeys.editingActionRefactorCode), value: "refactor" },
-          { label: i18n.getMessage(MessageKeys.editingActionOptimizeCode), value: "optimize" },
-          { label: i18n.getMessage(MessageKeys.editingActionAddComments), value: "comment" },
-          { label: i18n.getMessage(MessageKeys.editingActionConvertToAsync), value: "async" },
-          { label: i18n.getMessage(MessageKeys.editingActionAddErrorHandling), value: "error-handling" },
-          { label: i18n.getMessage(MessageKeys.editingActionGenerateUnitTests), value: "test" },
-          { label: i18n.getMessage(MessageKeys.editingActionSecurityAudit), value: "security-audit" },
+          {
+            label: i18n.getMessage(MessageKeys.editingActionExplainCode),
+            value: "explain",
+          },
+          {
+            label: i18n.getMessage(MessageKeys.editingActionRefactorCode),
+            value: "refactor",
+          },
+          {
+            label: i18n.getMessage(MessageKeys.editingActionOptimizeCode),
+            value: "optimize",
+          },
+          {
+            label: i18n.getMessage(MessageKeys.editingActionAddComments),
+            value: "comment",
+          },
+          {
+            label: i18n.getMessage(MessageKeys.editingActionConvertToAsync),
+            value: "async",
+          },
+          {
+            label: i18n.getMessage(MessageKeys.editingActionAddErrorHandling),
+            value: "error-handling",
+          },
+          {
+            label: i18n.getMessage(MessageKeys.editingActionGenerateUnitTests),
+            value: "test",
+          },
+          {
+            label: i18n.getMessage(MessageKeys.editingActionSecurityAudit),
+            value: "security-audit",
+          },
         ],
-        { placeHolder: i18n.getMessage(MessageKeys.editingChooseActionPlaceholder) },
+        {
+          placeHolder: i18n.getMessage(
+            MessageKeys.editingChooseActionPlaceholder,
+          ),
+        },
       );
       if (!picked) return;
       action = picked.value;
@@ -182,7 +214,9 @@ export class GoOnAdvancedEditProvider {
       const responseText = this.extractResponseText(result);
 
       if (!responseText) {
-        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.editingNoResponseFromAi));
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.editingNoResponseFromAi),
+        );
         return;
       }
 
@@ -194,7 +228,9 @@ export class GoOnAdvancedEditProvider {
       );
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        `Edit failed: ${this.getErrorMessage(error)}`,
+        i18n.getMessage(MessageKeys.changesFailed, [
+          this.getErrorMessage(error),
+        ]),
       );
     }
   }
@@ -213,16 +249,32 @@ export class GoOnAdvancedEditProvider {
 
     let showResult: { label: string; value: string } | undefined;
     if (showDiffByDefault) {
-      showResult = { label: i18n.getMessage(MessageKeys.showDiff), value: "diff" };
+      showResult = {
+        label: i18n.getMessage(MessageKeys.showDiff),
+        value: "diff",
+      };
     } else {
       showResult = await vscode.window.showQuickPick(
         [
-          { label: i18n.getMessage(MessageKeys.editingResultReplaceSelection), value: "replace" },
-          { label: i18n.getMessage(MessageKeys.editingResultShowInNewDocument), value: "new-doc" },
+          {
+            label: i18n.getMessage(MessageKeys.editingResultReplaceSelection),
+            value: "replace",
+          },
+          {
+            label: i18n.getMessage(MessageKeys.editingResultShowInNewDocument),
+            value: "new-doc",
+          },
           { label: i18n.getMessage(MessageKeys.showDiff), value: "diff" },
-          { label: i18n.getMessage(MessageKeys.editingResultCopyToClipboard), value: "clipboard" },
+          {
+            label: i18n.getMessage(MessageKeys.editingResultCopyToClipboard),
+            value: "clipboard",
+          },
         ],
-        { placeHolder: i18n.getMessage(MessageKeys.editingChooseResultDisplayPlaceholder) },
+        {
+          placeHolder: i18n.getMessage(
+            MessageKeys.editingChooseResultDisplayPlaceholder,
+          ),
+        },
       );
     }
 
@@ -233,7 +285,9 @@ export class GoOnAdvancedEditProvider {
         await editor.edit((editBuilder) => {
           editBuilder.replace(selection, resultText);
         });
-        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.editingResultApplied));
+        vscode.window.showInformationMessage(
+          i18n.getMessage(MessageKeys.editingResultApplied),
+        );
         break;
       case "new-doc": {
         const doc = await vscode.workspace.openTextDocument({
@@ -262,7 +316,9 @@ export class GoOnAdvancedEditProvider {
       }
       case "clipboard":
         await vscode.env.clipboard.writeText(resultText);
-        vscode.window.showInformationMessage(i18n.getMessage(MessageKeys.codeCopied));
+        vscode.window.showInformationMessage(
+          i18n.getMessage(MessageKeys.codeCopied),
+        );
         break;
     }
   }
@@ -270,7 +326,9 @@ export class GoOnAdvancedEditProvider {
   private async handleRefactorCode(args?: AdvancedEditArgs) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
-      vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.editingNoActiveEditor));
+      vscode.window.showErrorMessage(
+        i18n.getMessage(MessageKeys.editingNoActiveEditor),
+      );
       return;
     }
 
@@ -289,14 +347,38 @@ export class GoOnAdvancedEditProvider {
     if (!refactorType) {
       const picked = await vscode.window.showQuickPick(
         [
-          { label: i18n.getMessage(MessageKeys.editingRefactorExtractFunction), value: "extract-function" },
-          { label: i18n.getMessage(MessageKeys.editingRefactorRenameVariables), value: "rename-variables" },
-          { label: i18n.getMessage(MessageKeys.editingRefactorSimplifyLogic), value: "simplify-logic" },
-          { label: i18n.getMessage(MessageKeys.editingRefactorImprovePerformance), value: "performance" },
-          { label: i18n.getMessage(MessageKeys.editingRefactorAddTypeHints), value: "type-hints" },
-          { label: i18n.getMessage(MessageKeys.editingRefactorCustom), value: "custom" },
+          {
+            label: i18n.getMessage(MessageKeys.editingRefactorExtractFunction),
+            value: "extract-function",
+          },
+          {
+            label: i18n.getMessage(MessageKeys.editingRefactorRenameVariables),
+            value: "rename-variables",
+          },
+          {
+            label: i18n.getMessage(MessageKeys.editingRefactorSimplifyLogic),
+            value: "simplify-logic",
+          },
+          {
+            label: i18n.getMessage(
+              MessageKeys.editingRefactorImprovePerformance,
+            ),
+            value: "performance",
+          },
+          {
+            label: i18n.getMessage(MessageKeys.editingRefactorAddTypeHints),
+            value: "type-hints",
+          },
+          {
+            label: i18n.getMessage(MessageKeys.editingRefactorCustom),
+            value: "custom",
+          },
         ],
-        { placeHolder: i18n.getMessage(MessageKeys.editingChooseRefactorTypePlaceholder) },
+        {
+          placeHolder: i18n.getMessage(
+            MessageKeys.editingChooseRefactorTypePlaceholder,
+          ),
+        },
       );
       if (!picked) return;
       refactorType = picked.value;
@@ -306,7 +388,9 @@ export class GoOnAdvancedEditProvider {
     if (refactorType === "custom") {
       const customPrompt = await vscode.window.showInputBox({
         prompt: i18n.getMessage(MessageKeys.editingDescribeRefactorPrompt),
-        placeHolder: i18n.getMessage(MessageKeys.editingDescribeRefactorPlaceholder),
+        placeHolder: i18n.getMessage(
+          MessageKeys.editingDescribeRefactorPlaceholder,
+        ),
       });
       if (!customPrompt) return;
       prompt = `Please refactor this code to ${customPrompt}:\n\n${selectedText}`;
@@ -332,7 +416,9 @@ export class GoOnAdvancedEditProvider {
       const responseText = this.extractResponseText(result);
 
       if (!responseText) {
-        vscode.window.showErrorMessage(i18n.getMessage(MessageKeys.editingNoResponseFromAi));
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.editingNoResponseFromAi),
+        );
         return;
       }
 
@@ -344,7 +430,9 @@ export class GoOnAdvancedEditProvider {
       );
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        `Refactoring failed: ${this.getErrorMessage(error)}`,
+        i18n.getMessage(MessageKeys.changesFailed, [
+          this.getErrorMessage(error),
+        ]),
       );
     }
   }

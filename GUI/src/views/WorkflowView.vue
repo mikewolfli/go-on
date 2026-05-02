@@ -9,8 +9,8 @@
         <!-- Demo data warning -->
         <el-alert
           v-if="isUsingDemoData"
-          :title="t('common.offlineMode') || 'Backend Offline'"
-          :description="t('workflow.demoDataWarning') || 'Displaying placeholder demo data. Start the backend to see live workflow data.'"
+          :title="t('common.offlineMode')"
+          :description="t('workflow.demoDataWarning')"
           type="warning"
           show-icon
           :closable="false"
@@ -114,9 +114,9 @@
           <el-table :data="latestCycleTimeline" border stripe>
             <el-table-column prop="iteration" :label="t('common.name') + ' #'" width="100" />
             <el-table-column prop="status" :label="t('common.status')" width="130" />
-            <el-table-column prop="next_action" :label="t('workflow.nextAction') || 'Next Action'" />
-            <el-table-column prop="patch_set_size" :label="t('workflow.patchSet') || 'Patch Set'" width="120" />
-            <el-table-column prop="test_gate_result" :label="t('workflow.gate') || 'Gate'" width="120" />
+            <el-table-column prop="next_action" :label="t('workflow.nextAction')" />
+            <el-table-column prop="patch_set_size" :label="t('workflow.patchSet')" width="120" />
+            <el-table-column prop="test_gate_result" :label="t('workflow.gate')" width="120" />
           </el-table>
         </el-card>
 
@@ -125,16 +125,16 @@
             <span>{{ t('views.WorkflowView.gateMatrix') }}</span>
           </template>
           <el-descriptions :columns="2" border>
-            <el-descriptions-item :label="t('workflow.requirementGate') || 'Requirement Gate'">
+            <el-descriptions-item :label="t('workflow.requirementGate')">
               {{ requirementGateStatus() }}
             </el-descriptions-item>
-            <el-descriptions-item :label="t('workflow.reviewGate') || 'Review Gate'">
+            <el-descriptions-item :label="t('workflow.reviewGate')">
               {{ reviewGateStatus() }}
             </el-descriptions-item>
-            <el-descriptions-item :label="t('workflow.repairStatus') || 'Repair Status'">
+            <el-descriptions-item :label="t('workflow.repairStatus')">
               {{ repairStatusText() }}
             </el-descriptions-item>
-            <el-descriptions-item :label="t('workflow.repairTargets') || 'Repair Targets'">
+            <el-descriptions-item :label="t('workflow.repairTargets')">
               {{ repairTargetCount() }}
             </el-descriptions-item>
           </el-descriptions>
@@ -148,19 +148,19 @@
             </div>
           </template>
           <el-descriptions :columns="2" border>
-            <el-descriptions-item :label="t('workflow.taskSuccessRate') || 'Task Success Rate'">
+            <el-descriptions-item :label="t('workflow.taskSuccessRate')">
               {{ (peakIndicators.taskSuccessRate ?? 0).toFixed(4) }}
             </el-descriptions-item>
-            <el-descriptions-item :label="t('workflow.firstPassRate') || 'First Pass Rate'">
+            <el-descriptions-item :label="t('workflow.firstPassRate')">
               {{ (peakIndicators.firstPassRate ?? 0).toFixed(4) }}
             </el-descriptions-item>
-            <el-descriptions-item :label="t('workflow.meanRepairIterations') || 'Mean Repair Iterations'">
+            <el-descriptions-item :label="t('workflow.meanRepairIterations')">
               {{ (peakIndicators.meanRepairIterations ?? 0).toFixed(4) }}
             </el-descriptions-item>
-            <el-descriptions-item :label="t('workflow.humanInterventionRate') || 'Human Intervention Rate'">
+            <el-descriptions-item :label="t('workflow.humanInterventionRate')">
               {{ (peakIndicators.humanInterventionRate ?? 0).toFixed(4) }}
             </el-descriptions-item>
-            <el-descriptions-item :label="t('workflow.regressionRate') || 'Regression Rate'">
+            <el-descriptions-item :label="t('workflow.regressionRate')">
               {{ (peakIndicators.regressionRate ?? 0).toFixed(4) }}
             </el-descriptions-item>
           </el-descriptions>

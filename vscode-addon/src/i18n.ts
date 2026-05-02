@@ -218,6 +218,21 @@ export const MessageKeys = {
   diagnosisCompleted: "messages.diagnosisCompleted",
   diagnosisIssue: "messages.diagnosisIssue",
   noWorkspaceFolderOpen: "messages.noWorkspaceFolderOpen",
+  executableNotReady: "messages.executableNotReady",
+  chatViewNotAvailable: "messages.chatViewNotAvailable",
+  settingsViewNotAvailable: "messages.settingsViewNotAvailable",
+  workflowViewNotAvailable: "messages.workflowViewNotAvailable",
+  processFlowViewNotAvailable: "messages.processFlowViewNotAvailable",
+  chatClosedBackendStopped: "messages.chatClosedBackendStopped",
+  chatClosedBackendAlreadyStopped: "messages.chatClosedBackendAlreadyStopped",
+  healthCheckWarning: "messages.healthCheckWarning",
+  backendNotReady: "messages.backendNotReady",
+  goOnStartFailedMissingEnv: "messages.goOnStartFailedMissingEnv",
+  reconnectMaxAttempts: "messages.reconnectMaxAttempts",
+  runtimeInitFailed: "messages.runtimeInitFailed",
+  templateRequired: "messages.templateRequired",
+  workflowMappingRequired: "messages.workflowMappingRequired",
+  rulesPayloadRequired: "messages.rulesPayloadRequired",
 
   // Language
   language: "language.language",
@@ -248,6 +263,7 @@ export const MessageKeys = {
   statusBarText: "statusBar.text",
   statusBarRunningTooltip: "statusBar.runningTooltip",
   statusBarStoppedTooltip: "statusBar.stoppedTooltip",
+  statusBarHealthCheckFailedTooltip: "statusBar.healthCheckFailedTooltip",
 
   // Editing
   advancedEdit: "editing.advancedEdit",

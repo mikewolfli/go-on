@@ -20,21 +20,21 @@ export function classifyStartupError(error: unknown): string {
   const message = normalizeErrorMessage(error);
   const raw = message.toLowerCase();
   if (raw.includes("startup_error:file_missing")) {
-    return "Startup failed: backend executable not found, please re-select the path.";
+    return i18n.global.t("backendStartup.fileMissing");
   }
   if (raw.includes("startup_error:not_a_file")) {
-    return "Startup failed: configured path is not an executable file.";
+    return i18n.global.t("backendStartup.notAFile");
   }
   if (raw.includes("startup_error:permission_denied")) {
-    return "Startup failed: permission denied. Please check file permissions or run as administrator.";
+    return i18n.global.t("backendStartup.permissionDenied");
   }
   if (raw.includes("startup_error:exited_early")) {
-    return "Startup failed: backend process exited immediately. Please check logs and port usage.";
+    return i18n.global.t("backendStartup.exitedEarly");
   }
   if (raw.includes("startup_error:spawn_failed")) {
-    return "Startup failed: unable to spawn backend process. Please check dependencies and runtime environment.";
+    return i18n.global.t("backendStartup.spawnFailed");
   }
-  return `Startup failed: ${message}`;
+  return `${i18n.global.t("backendStartup.startupPrefix")}: ${message}`;
 }
 
 export async function waitForBackendHealthy(
@@ -67,9 +67,7 @@ export async function startBackendWithChecks() {
 
   const healthy = await waitForBackendHealthy();
   if (!healthy) {
-    throw new Error(
-      "Startup timeout: backend process did not become ready within 12 seconds. Please check port, config, or dependencies.",
-    );
+    throw new Error(i18n.global.t("backendStartup.startupTimeout"));
   }
 }
 
@@ -154,9 +152,7 @@ export async function ensureBackendAndStart() {
       return;
     }
 
-    throw new Error(
-      "Maximum retry attempts reached. Please manually set the backend path in the config page.",
-    );
+    throw new Error(i18n.global.t("backendStartup.maxRetriesReached"));
   } finally {
     starting = false;
   }

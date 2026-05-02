@@ -442,9 +442,10 @@ export function activate(context: vscode.ExtensionContext) {
       goOnOutput.appendLine("config manager initialized");
     },
     (err) => {
-      goOnOutput.appendLine(`warn: config manager init failed: ${err}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      goOnOutput.appendLine(`warn: config manager init failed: ${errMsg}`);
       void vscode.window.showWarningMessage(
-        `Go-On: configuration initialization failed: ${err instanceof Error ? err.message : String(err)}`,
+        i18n.getMessage(MessageKeys.runtimeInitFailed, [errMsg]),
       );
     },
   );
@@ -668,7 +669,7 @@ export function activate(context: vscode.ExtensionContext) {
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         vscode.window.showErrorMessage(
-          `Apply config template failed: ${message}`,
+          i18n.getMessage(MessageKeys.templateRequired),
         );
         return undefined;
       }
@@ -693,7 +694,7 @@ export function activate(context: vscode.ExtensionContext) {
       >;
     }) => {
       if (!payload) {
-        throw new Error("workflow mapping payload is required");
+        throw new Error(i18n.getMessage(MessageKeys.workflowMappingRequired));
       }
       return await updateWorkflowMappingConfig(context, payload);
     },
@@ -707,7 +708,7 @@ export function activate(context: vscode.ExtensionContext) {
       phaseRules?: Record<string, string[]>;
     }) => {
       if (!payload) {
-        throw new Error("rules payload is required");
+        throw new Error(i18n.getMessage(MessageKeys.rulesPayloadRequired));
       }
       return await updateRulesMarkdownFiles(context, payload);
     },

@@ -514,10 +514,14 @@ impl DriftProtectionEngine {
     }
 }
 
-/// Computes the normalised deviation: |current - baseline| / max(baseline, 0.01).
+/// Computes the normalised deviation: |current - baseline| / max(|baseline|, ε).
+///
+/// Uses a small epsilon (1e-6) instead of 0.01 so the deviation remains
+/// meaningful (≈ absolute difference scaled by 1e6) rather than being
+/// clamped to an arbitrary 0.01 denominator.
 fn compute_deviation(current: f64, baseline: f64) -> f64 {
-    let denominator = if baseline.abs() < 0.01 {
-        0.01
+    let denominator = if baseline.abs() < 1e-6 {
+        1e-6
     } else {
         baseline.abs()
     };

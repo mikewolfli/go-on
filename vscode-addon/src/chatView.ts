@@ -162,13 +162,13 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                 const selection = await vscode.window.showWarningMessage(
                   message.message,
                   { modal: true },
-                  "OK",
-                  "Cancel",
+                  t(MessageKeys.ok),
+                  t(MessageKeys.cancel),
                 );
                 this._view?.webview.postMessage({
                   type: "showConfirmResult",
                   id: message.id,
-                  confirmed: selection === "OK",
+                  confirmed: selection === t(MessageKeys.ok),
                   workflowId: message.workflowId,
                 });
               }

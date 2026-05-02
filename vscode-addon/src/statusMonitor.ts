@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { i18n, MessageKeys } from "./i18n";
 
 import { protocolContract } from "./protocolContract";
 import { RuntimeManagerLike } from "./managerTypes";
@@ -38,8 +39,8 @@ export class StatusMonitor {
     const isRunning = this.manager.isRunning();
     this.statusBarItem.text = "$(comment-discussion) Go-On Chat";
     this.statusBarItem.tooltip = isRunning
-      ? "Go-On backend is running. Click to open chat."
-      : "Click to open chat. Backend can be configured from Chat/Settings.";
+      ? i18n.getMessage(MessageKeys.statusBarRunningTooltip)
+      : i18n.getMessage(MessageKeys.statusBarStoppedTooltip);
     this.statusBarItem.backgroundColor = undefined;
   }
 
@@ -72,16 +73,19 @@ export class StatusMonitor {
         this.failureWarningShown = false;
       } catch {
         this.consecutiveFailures++;
-        this.statusBarItem.tooltip = `Go-On Status: ${protocolContract.statusTerms.healthCheckFailed} (${this.consecutiveFailures}/${this.maxFailures})\nMonitoring will continue automatically.\nClick to open chat`;
+        this.statusBarItem.tooltip = i18n.getMessage(
+          MessageKeys.statusBarHealthCheckFailedTooltip,
+          [String(this.consecutiveFailures), String(this.maxFailures)],
+        );
 
         if (
           this.consecutiveFailures >= this.maxFailures &&
           !this.failureWarningShown
         ) {
           this.failureWarningShown = true;
-          // TODO: i18n - hardcoded English string
+          // i18n
           void vscode.window.showWarningMessage(
-            "Go-On: Health checks are failing, but monitoring is still running and will recover automatically once the backend responds again.",
+            i18n.getMessage(MessageKeys.healthCheckWarning),
           );
         }
       } finally {

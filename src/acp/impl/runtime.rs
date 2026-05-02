@@ -1060,7 +1060,14 @@ async fn write_responses_api_error(
     socket: &mut TcpStream,
     payload: serde_json::Value,
 ) -> Result<()> {
-    write_http_json_response_with_context(socket, 400, payload, "responses.api").await
+    let result = write_http_json_response_with_context(socket, 400, payload, "responses.api").await;
+    if let Err(ref e) = result {
+        tracing::warn!(
+            "write_responses_api_error: failed to write error response: {}",
+            e
+        );
+    }
+    result
 }
 
 fn is_supported_responses_tool_choice(value: &serde_json::Value) -> bool {

@@ -13,10 +13,7 @@ app.config.errorHandler = (err, _instance, info) => {
   if (import.meta.env.DEV) {
     console.error("Unhandled Vue error:", err, info);
   }
-  const message =
-    i18n.global.t("error.unexpected") ||
-    "An unexpected error occurred. Please check the console for details.";
-  ElMessage.error(message);
+  ElMessage.error(i18n.global.t("error.unexpected"));
 };
 
 app.use(createPinia());

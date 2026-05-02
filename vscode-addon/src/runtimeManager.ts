@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from "child_process";
 import * as vscode from "vscode";
+import { i18n, MessageKeys } from "./i18n";
 import {
   isAllowedProtocolMode,
   normalizeProtocolMode,
@@ -290,7 +291,9 @@ export class GoOnManager {
         `[reconnect] Max reconnect attempts (${this.maxReconnectAttempts}) reached, giving up.`,
       );
       void vscode.window.showWarningMessage(
-        `Go-On: Backend process crashed and ${this.maxReconnectAttempts} reconnect attempts failed. Please restart manually.`,
+        i18n.getMessage(MessageKeys.reconnectMaxAttempts, [
+          String(this.maxReconnectAttempts),
+        ]),
       );
       this._reconnectAttempts = 0;
       return;

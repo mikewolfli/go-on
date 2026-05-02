@@ -197,7 +197,7 @@ fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
     match mtx.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
-            tracing::warn!("fault_tolerance mutex poisoned, recovering");
+            tracing::error!("fault_tolerance mutex poisoned, recovering");
             poisoned.into_inner()
         }
     }
@@ -283,6 +283,25 @@ impl FaultToleranceEngine {
         }
         // Also clean up any active faults for this node
         inner.faults.retain(|_, f| f.node_id != node_id);
+        // Clean up isolation groups that reference this node
+        let groups_to_remove: Vec<String> = inner
+            .isolation_groups
+            .iter()
+            .filter(|(_, g)| g.nodes.contains(&node_id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for group_id in groups_to_remove {
+            let mut empty = false;
+            if let Some(group) = inner.isolation_groups.get_mut(&group_id) {
+                group.nodes.retain(|n| n != &node_id);
+                empty = group.nodes.is_empty();
+            }
+            if empty {
+                inner.isolation_groups.remove(&group_id);
+            }
+        }
+        // Clean up recovery plans for this node
+        inner.recovery_plans.retain(|_, p| p.node_id != node_id);
         Ok(())
     }
 
@@ -759,7 +778,7 @@ impl FaultToleranceEngine {
     pub fn run_recovery_cycle(&self) -> RecoveryCycleSummary {
         let offenders = self.check_heartbeats();
         let mut plans_created = 0u32;
-        let plans_completed = 0u32;
+        let mut plans_completed = 0u32;
 
         for node_id in &offenders {
             // Check if a plan already exists for this node
@@ -775,11 +794,13 @@ impl FaultToleranceEngine {
             }
         }
 
-        // Auto-execute pending plans
+        // Auto-execute pending plans and count completions
         let pending_plans = self.active_recovery_plans();
         for plan in &pending_plans {
-            if plan.state == RecoveryState::Pending {
-                let _ = self.execute_recovery_plan(&plan.plan_id);
+            if plan.state == RecoveryState::Pending
+                && self.execute_recovery_plan(&plan.plan_id).is_ok()
+            {
+                plans_completed += 1;
             }
         }
 

@@ -924,7 +924,11 @@ impl CapabilityBus {
                 (name, score)
             })
             .collect();
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(b.0))
+        });
         scored.first().map(|(name, _)| (*name).clone())
     }
 
@@ -1063,6 +1067,12 @@ impl CapabilityBus {
         #[cfg(feature = "sub-bus-orchestration")]
         let flow_id = format!("{}::{}", task_type, task_id);
         #[cfg(feature = "sub-bus-orchestration")]
+        let _flow_guard = FlowGuard {
+            bus: &self.orchestration_bus,
+            flow_id: &flow_id,
+            task_id,
+        };
+        #[cfg(feature = "sub-bus-orchestration")]
         let _ = self.orchestration_bus.start_flow(&flow_id, task_id);
 
         // 1. Write to learning bus
@@ -1168,9 +1178,7 @@ impl CapabilityBus {
             vec![],
         ));
 
-        // 7. Complete orchestration flow lifecycle for this task.
-        #[cfg(feature = "sub-bus-orchestration")]
-        self.orchestration_bus.complete_flow(&flow_id, task_id);
+        // `complete_flow` is called automatically by `FlowGuard` RAII guard.
     }
 
     // ------------------------------------------------------------------
@@ -1240,14 +1248,17 @@ impl CapabilityBus {
                 1,
             );
             // Try to contribute to the current round if one exists
-            let _ = self
+            if let Err(e) = self
                 .federated_rl
-                .contribute_to_round(&format!("round_{}", state.0), &frl);
+                .contribute_to_round(&format!("round_{}", state.0), &frl)
+            {
+                warn!("evolve: federated_rl.contribute_to_round failed: {}", e);
+            }
         }
 
         // 2. ContinuousLearning: consolidate experience to prevent forgetting
-        if let Ok(cl) = self.continuous_learning.lock() {
-            let _ = cl.consolidate_experience(
+        if let Err(e) = self.continuous_learning.lock().map(|cl| {
+            cl.consolidate_experience(
                 &format!("{:?}_{}", state.0, action),
                 &serde_json::json!({
                     "state": state,
@@ -1258,23 +1269,28 @@ impl CapabilityBus {
                 })
                 .to_string(),
                 quality_score,
+            )
+        }) {
+            warn!(
+                "evolve: continuous_learning.consolidate_experience failed: {}",
+                e
             );
         }
 
         // 3. Metacognitive: record observation for self-reflection
-        if let Ok(mc) = self.metacognitive.record_observation(
+        if let Err(e) = self.metacognitive.record_observation(
             &format!("evolve_{}_{}", state.0, action),
             "capability_bus",
             "evolution",
             if success { "success" } else { "failure" },
             &format!("reward={}, quality={}", reward, quality_score),
         ) {
-            let _ = mc;
+            warn!("evolve: metacognitive.record_observation failed: {}", e);
         }
 
         // 4. DiscoveryCenter: record successful patterns
         if success && quality_score > 0.7 {
-            if let Ok(dc) = self.discovery.record_solution(
+            if let Err(e) = self.discovery.record_solution(
                 crate::intelligence::discovery::DiscoveryEntry {
                     id: String::new(),
                     problem_pattern: format!("state_{}", state.0),
@@ -1289,7 +1305,7 @@ impl CapabilityBus {
                     last_used_ms: now,
                 }
             ) {
-                let _ = dc;
+                warn!("evolve: discovery.record_solution failed: {}", e);
             }
         }
 
@@ -1298,20 +1314,23 @@ impl CapabilityBus {
             let cap_name = format!("evolve_{}", action);
 
             // Register the capability if it doesn't exist yet
-            let _ = eg.register_capability(&state.0, &cap_name, EvolutionStage::New);
+            if let Err(e) = eg.register_capability(&state.0, &cap_name, EvolutionStage::New) {
+                warn!("evolve: evolution_graph.register_capability failed: {}", e);
+            }
 
             // Record a new version snapshot
-            let _ = eg.record_version(
+            if let Err(e) = eg.record_version(
                 &state.0,
                 &cap_name,
                 if success { quality_score } else { 0.0 },
                 0.0,
-            );
+            ) {
+                warn!("evolve: evolution_graph.record_version failed: {}", e);
+            }
 
             // Promote if consistently successful (high quality, multiple versions)
             if success && quality_score > 0.8 {
-                let record = eg.get_history(&state.0, &cap_name);
-                if let Some(rec) = record {
+                if let Some(rec) = eg.get_history(&state.0, &cap_name) {
                     let next_stage = match rec.current_stage {
                         EvolutionStage::New => Some(EvolutionStage::Learning),
                         EvolutionStage::Learning
@@ -1323,25 +1342,31 @@ impl CapabilityBus {
                         _ => None,
                     };
                     if let Some(stage) = next_stage {
-                        let _ = eg.advance_stage(&state.0, &cap_name, stage);
+                        if let Err(e) = eg.advance_stage(&state.0, &cap_name, stage) {
+                            warn!("evolve: evolution_graph.advance_stage failed: {}", e);
+                        }
                     }
                 }
             }
         }
 
         // 6. WorldModel: update environmental state cognition
-        if let Ok(wm) = self.world_model.register_entity(
+        if let Err(e) = self.world_model.register_entity(
             &format!("action_{}", action),
             crate::intelligence::world_model::EntityType::System,
         ) {
-            let _ = wm;
+            warn!("evolve: world_model.register_entity failed: {}", e);
+        } else {
             let mut props = std::collections::HashMap::new();
             props.insert("state_0".to_string(), state.0.clone());
             props.insert("state_1".to_string(), state.1.clone());
             props.insert("reward".to_string(), reward.to_string());
-            let _ = self
+            if let Err(e) = self
                 .world_model
-                .update_entity(&format!("action_{}", action), props);
+                .update_entity(&format!("action_{}", action), props)
+            {
+                warn!("evolve: world_model.update_entity failed: {}", e);
+            }
         }
 
         // Send an event through the transport layer with evolve summary
@@ -1365,21 +1390,26 @@ impl CapabilityBus {
         if let Ok(transport) = self.transport.lock() {
             let summary =
                 serde_json::json!({ "q_value": q_value, "exploration_rate": exploration_rate });
-            let _ = transport.send_event("capability-bus", "monitor", &summary.to_string());
+            if let Err(e) = transport.send_event("capability-bus", "monitor", &summary.to_string())
+            {
+                warn!("evolve: transport.send_event failed: {}", e);
+            }
         }
 
         // 7. ConsensusEngine: record the evolve result as a round in consensus
         {
             use crate::intelligence::consensus::{ConsensusNode, ConsensusVote, NodeRole};
-            let _ = self.consensus.register_node(ConsensusNode {
+            if let Err(e) = self.consensus.register_node(ConsensusNode {
                 id: "capability-bus".to_string(),
                 address: "internal://capability_bus".to_string(),
                 weight: 1,
                 role: NodeRole::Leader,
                 is_online: true,
                 last_heartbeat_ms: 0,
-            });
-            let round_id = self.consensus.start_round(
+            }) {
+                warn!("evolve: consensus.register_node failed: {}", e);
+            }
+            match self.consensus.start_round(
                 "capability-bus",
                 vec![serde_json::json!({
                     "action": action,
@@ -1388,16 +1418,20 @@ impl CapabilityBus {
                     "q_value": q_value,
                     "success": success,
                 })],
-            );
-            if let Ok(rid) = round_id {
-                let _ = self.consensus.cast_vote(ConsensusVote {
-                    node_id: "capability-bus".to_string(),
-                    round_id: rid,
-                    proposal_id: String::new(),
-                    approve: success,
-                    weight: 1,
-                    vote_ms: 0,
-                });
+            ) {
+                Ok(rid) => {
+                    if let Err(e) = self.consensus.cast_vote(ConsensusVote {
+                        node_id: "capability-bus".to_string(),
+                        round_id: rid,
+                        proposal_id: String::new(),
+                        approve: success,
+                        weight: 1,
+                        vote_ms: 0,
+                    }) {
+                        warn!("evolve: consensus.cast_vote failed: {}", e);
+                    }
+                }
+                Err(e) => warn!("evolve: consensus.start_round failed: {}", e),
             }
         }
 
@@ -1576,6 +1610,22 @@ pub struct DecisionOutput {
     /// Phase 4: tools available for the selected agent
     #[cfg(feature = "sub-bus-tool")]
     pub available_tools: Vec<String>,
+}
+
+/// RAII guard that ensures `complete_flow` is called when `feedback()` returns,
+/// even if an intermediate operation panics.
+#[cfg(feature = "sub-bus-orchestration")]
+struct FlowGuard<'a> {
+    bus: &'a OrchestrationBus,
+    flow_id: &'a str,
+    task_id: &'a str,
+}
+
+#[cfg(feature = "sub-bus-orchestration")]
+impl Drop for FlowGuard<'_> {
+    fn drop(&mut self) {
+        self.bus.complete_flow(self.flow_id, self.task_id);
+    }
 }
 
 /// Current wall-clock time in milliseconds since Unix epoch.

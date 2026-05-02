@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { i18n, MessageKeys } from "./i18n";
 
 export interface RuntimeBootstrapDeps {
   ensureBinary: (
@@ -60,7 +61,9 @@ export async function ensureGoOnStarted(
   await vscode.commands.executeCommand(startCommandId);
   if (!isRunning()) {
     throw new Error(
-      "Go-On backend is still stopped after startup attempt. Check executablePath/configPath settings.",
+      i18n.getMessage(MessageKeys.backendNotReady, [
+        "still stopped after startup",
+      ]),
     );
   }
 }
@@ -74,9 +77,9 @@ export async function prepareRuntimeAndStartFromChat(
     await ensureGoOnStarted(deps.isRunning, deps.startCommandId);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    // TODO: i18n - hardcoded English string
+    // i18n
     vscode.window.showWarningMessage(
-      `Chat is open. Backend is not ready yet: ${message}. Configure Go-On settings in the Chat/Settings view and retry.`,
+      i18n.getMessage(MessageKeys.backendNotReady, [message]),
     );
   }
 }

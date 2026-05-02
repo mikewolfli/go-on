@@ -323,7 +323,24 @@ impl HyperResilienceEngine {
     ///
     /// This method also evaluates whether an open breaker should transition
     /// to half-open based on the recovery timeout.
+    /// Check whether a circuit breaker is currently accepting requests (read-only).
+    ///
+    /// Does not mutate state. Use `probe()` if you also want automatic
+    /// open→half-open recovery transitions.
     pub fn is_available(&self, breaker_name: &str) -> bool {
+        let inner = self.inner.lock().unwrap();
+        match inner.circuit_breakers.get(breaker_name) {
+            Some(cb) => matches!(cb.state, CircuitState::Closed | CircuitState::HalfOpen),
+            None => false,
+        }
+    }
+
+    /// Probe a circuit breaker: if open and the recovery timeout has elapsed,
+    /// transition to half-open.  Returns `true` if the breaker is accepting
+    /// requests after the probe (i.e. closed or half-open).
+    ///
+    /// This is the state-mutating counterpart of `is_available()`.
+    pub fn probe(&self, breaker_name: &str) -> bool {
         let mut inner = self.inner.lock().unwrap();
         let cb = match inner.circuit_breakers.get_mut(breaker_name) {
             Some(cb) => cb,
@@ -331,12 +348,10 @@ impl HyperResilienceEngine {
         };
 
         match cb.state {
-            CircuitState::Closed => true,
-            CircuitState::HalfOpen => true,
+            CircuitState::Closed | CircuitState::HalfOpen => true,
             CircuitState::Open => {
                 let now = now_millis();
                 if now >= cb.last_failure_ms + cb.recovery_timeout_ms {
-                    // Transition to half-open.
                     cb.state = CircuitState::HalfOpen;
                     cb.half_open_attempts = 0;
                     true
@@ -604,27 +619,34 @@ impl HyperResilienceEngine {
     /// Record an execution outcome (success/failure) against a named circuit
     /// breaker.  If the breaker does not exist it will be automatically
     /// registered with the engine's default threshold and recovery timeout.
+    /// Record an execution result for a circuit breaker.  If the breaker does
+    /// not exist it will be automatically registered with the engine's default
+    /// threshold and recovery timeout.
+    ///
+    /// Registration is performed under a single lock to avoid a TOCTOU race
+    /// between the existence check and the registration call.
     ///
     /// This is the primary integration point for production code paths such as
     /// `HarnessBus::evaluate()` and `verify_output()`.
     pub fn record_execution(&self, breaker_name: &str, success: bool) {
-        // Auto-register if missing.
-        {
-            let inner = self.inner.lock().unwrap();
-            if !inner.circuit_breakers.contains_key(breaker_name) {
-                // Drop lock before calling register_circuit_breaker.
-                drop(inner);
-                let config = {
-                    let inner = self.inner.lock().unwrap();
-                    inner.config.clone()
-                };
-                let _ = self.register_circuit_breaker(
-                    breaker_name,
-                    config.circuit_breaker_threshold,
-                    config.recovery_timeout_ms,
-                );
-            }
+        // Auto-register under a single lock to avoid race.
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.circuit_breakers.contains_key(breaker_name) {
+            let config = inner.config.clone();
+            let cb = CircuitBreaker {
+                name: breaker_name.to_string(),
+                state: CircuitState::Closed,
+                failure_count: 0,
+                threshold: config.circuit_breaker_threshold,
+                recovery_timeout_ms: config.recovery_timeout_ms,
+                last_failure_ms: 0,
+                half_open_attempts: 0,
+            };
+            inner.circuit_breakers.insert(breaker_name.to_string(), cb);
         }
+        // Drop the inner lock early so record_success / record_failure can
+        // acquire it without double-lock risk.
+        drop(inner);
 
         if success {
             let _ = self.record_success(breaker_name);
@@ -716,8 +738,8 @@ mod tests {
         // Wait for the recovery timeout (1 ms + some slack).
         thread::sleep(Duration::from_millis(10));
 
-        // Now is_available should transition to half-open and return true.
-        assert!(engine.is_available("cb-cache"));
+        // Now probe should transition to half-open and return true.
+        assert!(engine.probe("cb-cache"));
     }
 
     /// 5. A success in half-open resets the breaker to closed.
@@ -733,8 +755,8 @@ mod tests {
         // Wait for recovery timeout.
         thread::sleep(Duration::from_millis(10));
 
-        // Now is_available transitions to half-open.
-        assert!(engine.is_available("cb-api"));
+        // Now probe transitions to half-open.
+        assert!(engine.probe("cb-api"));
 
         // Record a success — should close the breaker.
         engine.record_success("cb-api").unwrap();

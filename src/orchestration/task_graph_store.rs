@@ -20,6 +20,18 @@ use crate::orchestration::task_graph::{TaskGraph, TaskGraphCheckpointArtifact, T
 #[cfg(not(feature = "backend-postgres"))]
 use rusqlite::{params, Connection, OptionalExtension};
 
+/// Lock the Mutex, recovering from poison with a warning.
+#[cfg(not(feature = "backend-postgres"))]
+fn lock_guard(conn: &Mutex<Connection>) -> std::sync::MutexGuard<'_, Connection> {
+    match conn.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::error!("task_graph_store mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// SQLite-backed persistent store for task graphs and checkpoints.
 #[cfg(not(feature = "backend-postgres"))]
 pub struct TaskGraphStore {
@@ -81,7 +93,7 @@ impl TaskGraphStore {
     pub fn save_graph(&self, graph_id: &str, graph: &TaskGraph) -> Result<()> {
         let now = now_ts();
         let serialized = serde_json::to_string(graph)?;
-        let conn = self.conn.lock().unwrap();
+        let conn = lock_guard(&self.conn);
         conn.execute(
             "INSERT INTO task_graphs (graph_id, root_node_id, serialized_graph, created_at, updated_at, status)
              VALUES (?1, ?2, ?3, ?4, ?5, 'active')
@@ -97,7 +109,7 @@ impl TaskGraphStore {
 
     /// Load a task graph by its graph_id.
     pub fn load_graph(&self, graph_id: &str) -> Result<Option<TaskGraph>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = lock_guard(&self.conn);
         let mut stmt =
             conn.prepare("SELECT serialized_graph FROM task_graphs WHERE graph_id = ?1")?;
         let result: Option<String> = stmt
@@ -120,7 +132,7 @@ impl TaskGraphStore {
     ) -> Result<()> {
         let now = now_ts();
         let serialized = serde_json::to_string(checkpoint)?;
-        let conn = self.conn.lock().unwrap();
+        let conn = lock_guard(&self.conn);
         conn.execute(
             "INSERT INTO task_checkpoints (checkpoint_id, graph_id, serialized_checkpoint, created_at)
              VALUES (?1, ?2, ?3, ?4)
@@ -138,7 +150,7 @@ impl TaskGraphStore {
         &self,
         checkpoint_id: &str,
     ) -> Result<Option<TaskGraphCheckpointArtifact>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = lock_guard(&self.conn);
         let mut stmt = conn.prepare(
             "SELECT serialized_checkpoint FROM task_checkpoints WHERE checkpoint_id = ?1",
         )?;
@@ -156,7 +168,7 @@ impl TaskGraphStore {
 
     /// List all graph IDs with status 'active'.
     pub fn list_active_graphs(&self) -> Result<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = lock_guard(&self.conn);
         let mut stmt = conn.prepare(
             "SELECT graph_id FROM task_graphs WHERE status = 'active' ORDER BY updated_at DESC",
         )?;
@@ -169,7 +181,7 @@ impl TaskGraphStore {
     /// Mark a graph as completed (status = 'completed').
     pub fn mark_graph_completed(&self, graph_id: &str) -> Result<()> {
         let now = now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = lock_guard(&self.conn);
         conn.execute(
             "UPDATE task_graphs SET status = 'completed', updated_at = ?1 WHERE graph_id = ?2",
             params![now, graph_id],
@@ -179,7 +191,7 @@ impl TaskGraphStore {
 
     /// Delete a graph and all its associated checkpoints.
     pub fn delete_graph(&self, graph_id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = lock_guard(&self.conn);
         conn.execute(
             "DELETE FROM task_checkpoints WHERE graph_id = ?1",
             params![graph_id],
@@ -252,6 +264,18 @@ impl TaskGraphStore {
 #[cfg(feature = "backend-postgres")]
 use postgres::{Client, NoTls};
 
+/// Lock the Mutex, recovering from poison with a warning.
+#[cfg(feature = "backend-postgres")]
+fn pg_lock_guard(conn: &Mutex<Client>) -> std::sync::MutexGuard<'_, Client> {
+    match conn.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::error!("task_graph_store (pg) mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// Postgres-backed persistent store for task graphs and checkpoints.
 #[cfg(feature = "backend-postgres")]
 pub struct TaskGraphStore {
@@ -303,7 +327,7 @@ impl TaskGraphStore {
     pub fn save_graph(&self, graph_id: &str, graph: &TaskGraph) -> Result<()> {
         let now = now_ts();
         let serialized = serde_json::to_string(graph)?;
-        let mut client = self.client.lock().unwrap();
+        let mut client = pg_lock_guard(&self.client);
         client.execute(
             "INSERT INTO task_graphs (graph_id, root_node_id, serialized_graph, created_at, updated_at, status)
              VALUES ($1, $2, $3, $4, $5, 'active')
@@ -319,7 +343,7 @@ impl TaskGraphStore {
 
     /// Load a task graph by its graph_id.
     pub fn load_graph(&self, graph_id: &str) -> Result<Option<TaskGraph>> {
-        let mut client = self.client.lock().unwrap();
+        let mut client = pg_lock_guard(&self.client);
         let rows = client.query(
             "SELECT serialized_graph FROM task_graphs WHERE graph_id = $1",
             &[&graph_id],
@@ -342,7 +366,7 @@ impl TaskGraphStore {
     ) -> Result<()> {
         let now = now_ts();
         let serialized = serde_json::to_string(checkpoint)?;
-        let mut client = self.client.lock().unwrap();
+        let mut client = pg_lock_guard(&self.client);
         client.execute(
             "INSERT INTO task_checkpoints (checkpoint_id, graph_id, serialized_checkpoint, created_at)
              VALUES ($1, $2, $3, $4)
@@ -360,7 +384,7 @@ impl TaskGraphStore {
         &self,
         checkpoint_id: &str,
     ) -> Result<Option<TaskGraphCheckpointArtifact>> {
-        let mut client = self.client.lock().unwrap();
+        let mut client = pg_lock_guard(&self.client);
         let rows = client.query(
             "SELECT serialized_checkpoint FROM task_checkpoints WHERE checkpoint_id = $1",
             &[&checkpoint_id],
@@ -377,7 +401,7 @@ impl TaskGraphStore {
 
     /// List all graph IDs with status 'active'.
     pub fn list_active_graphs(&self) -> Result<Vec<String>> {
-        let mut client = self.client.lock().unwrap();
+        let mut client = pg_lock_guard(&self.client);
         let rows = client.query(
             "SELECT graph_id FROM task_graphs WHERE status = 'active' ORDER BY updated_at DESC",
             &[],
@@ -389,7 +413,7 @@ impl TaskGraphStore {
     /// Mark a graph as completed (status = 'completed').
     pub fn mark_graph_completed(&self, graph_id: &str) -> Result<()> {
         let now = now_ts();
-        let mut client = self.client.lock().unwrap();
+        let mut client = pg_lock_guard(&self.client);
         client.execute(
             "UPDATE task_graphs SET status = 'completed', updated_at = $1 WHERE graph_id = $2",
             &[&now, &graph_id],
@@ -399,7 +423,7 @@ impl TaskGraphStore {
 
     /// Delete a graph and all its associated checkpoints.
     pub fn delete_graph(&self, graph_id: &str) -> Result<()> {
-        let mut client = self.client.lock().unwrap();
+        let mut client = pg_lock_guard(&self.client);
         client.execute(
             "DELETE FROM task_checkpoints WHERE graph_id = $1",
             &[&graph_id],

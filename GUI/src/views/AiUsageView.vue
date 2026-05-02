@@ -1,7 +1,7 @@
 <template>
   <!-- Loading state -->
   <div v-if="runtime.loading && !runtime.status.running" style="text-align:center;padding:40px;color:#999;">
-    {{ t('common.loading') || 'Loading...' }}
+    {{ t('common.loading') }}
   </div>
 
   <!-- Error/Empty state (backend not running) -->
