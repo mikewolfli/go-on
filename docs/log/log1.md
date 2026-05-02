@@ -385,3 +385,176 @@ Each file got a `lock_guard<T>(mtx: &Mutex<T>)` helper with `tracing::error!` + 
 - `GUI: vue-tsc --noEmit` ✅ 0 errors
 - Remaining `#[allow(dead_code)]` in production Rust: **0** (only F-GAP annotations)
 - Remaining `TODO`/`FIXME` in production Rust: **0** |
+
+## Hotfix: CSP `unsafe-eval` Error in GUI (2026-06-03)
+
+### Problem
+GUI throws `EvalError: Refused to evaluate a string as JavaScript because 'unsafe-eval' is not allowed` — triggered by a dependency (vue-i18n / element-plus template compilation) at runtime.
+
+### Fix
+| File | Change |
+|:-----|:-------|
+| `GUI/index.html` | CSP `script-src 'self'` → `'self' 'unsafe-eval'` |
+| `GUI/src-tauri/tauri.conf.json` | Same CSP update |
+
+### Verification
+- `GUI: vue-tsc --noEmit` ✅ 0 errors |
+
+## Hotfix: Replace custom sanitizeHtml with DOMPurify (2026-06-03)
+
+### Problem
+`ChatView.vue` used a custom regex-based `sanitizeHtml()` that could be bypassed by crafted HTML (e.g. `<<script>script>`) allowing XSS through chat messages. `DOMPurify` was already in dependencies but unused.
+
+### Fix
+| File | Change |
+|:-----|:-------|
+| `GUI/src/views/ChatView.vue:346` | `sanitizeHtml(html)` → `DOMPurify.sanitize(html, { ALLOWED_TAGS: [...] })` |
+| `GUI/src/views/ChatView.vue:203` | Added `import DOMPurify from "dompurify"` |
+| `GUI/src/views/ChatView.vue:329` | Removed custom `sanitizeHtml()` function |
+
+### vscode-addon check
+- No `innerHTML`, `v-html`, or HTML sanitization usage found — not affected ✅
+
+### Verification
+- `GUI: vue-tsc --noEmit` ✅ 0 errors
+- `vscode-addon: tsc --noEmit` ✅ 0 errors
+- `cargo check` (3 profiles) ✅ 0 errors |
+
+## Round 16: Runtime Issues Deep Scan (2026-06-03)
+
+### Fixed
+| # | End | File | Problem | Fix |
+|:-:|:---:|:-----|:--------|:-----|
+| 1 | GUI | `ChatView.vue:397` | `setTimeout` not cleared when fetch throws | Moved `timeoutId`/`controller` out of `try`, `clearTimeout` in `finally` |
+| 2 | vscode-addon | `runtimeManager.ts:255` | `stop()` registers closeHandler then immediately unregisters it — `forceKillTimer` never cleared | Removed premature `this._closeListener?.()` call after registration |
+| 3 | vscode-addon | `runtimeManager.ts:391` | `sendRequest` timeout `setTimeout` never cleared on success/error | Wrapped resolve/reject to `clearTimeout` before forwarding; moved inside Promise ctor |
+
+### Verified — No regressions
+- All 109 `pub fn` signatures intact across 11 heavily modified files
+- `OrchestrationBus` lock order: `complete_flow` (active_flow_map→profile→total_routes) consistent with `profile` (profile→total_routes) — no ABBA deadlock |
+
+## Round 17: Onboarding / API Key Flow Fix (2026-06-03)
+
+### Problem
+When backend started without terminal (GUI/addon), `maybe_prompt_ai_onboarding` skipped entirely due to `!is_terminal` check. Server started with missing API keys, spamming `WARN` about missing env vars instead of guiding user to configuration.
+
+### Fix
+| File | Change |
+|:-----|:-------|
+| `main.rs:883-915` | Non-terminal mode now logs single `info!` message (not `WARN`) describing the exact missing configuration and how to fix it (`--init` or GUI), then allows server to start gracefully |
+| `main.rs:930` | Terminal mode prompt no longer requires `is_terminal()` check duplication (merged into single check) |
+
+### Behavior after fix
+| Scenario | Before | After |
+|:---------|:-------|:------|
+| Backend CLI without config | Skips onboarding if !terminal → server starts with spammy WARNs | Single `info!` message: "no config, run `--init` or use GUI" |
+| GUI starts backend | Spammed `WARN Configuration has 4 warnings` + repeated env key errors | Single `info!` message + server starts, GUI handles its own setup wizard |
+| vscode-addon starts backend | Same warning spam | Same — single info line |
+
+### Verification
+- `cargo check` (3 profiles) ✅ 0 errors
+- `cargo test` ✅ 779/825/888 all pass |
+
+## Round 18: Remove Obsolete Phase-Agent Binding (2026-06-03)
+
+### Problem
+`PhaseConfig.agents: Vec<String>` was designed when each phase needed explicit agent lists. Since `FlowManager::resolve()` (Path B) now auto-maps all registered agents when the list is empty, the manual binding is obsolete. But validation still emitted warnings/errors.
+
+### Changes
+| File | Change |
+|:-----|:-------|
+| `config_validation.rs:593` | Removed "Phase has no agents" WARNING (Path B auto-map is standard) |
+| `config.rs:1634` | `AppConfig::validate()` skips agent existence check when `phase.agents` empty |
+| `config.rs:1703` | Complex autopilot review check handles empty agents (Path B) gracefully |
+| `config.rs:428-499` | `AdaptiveConfig::to_app_config()` changed all phase `agents` from `providers.clone()` to `vec![]` — Path B auto-map is now the default |
+| `config.rs:595+613` | `preferred_review_agents`/`preferred_delivery_agents` no longer called — marked `#[allow(dead_code)]` |
+
+### Verification
+- `cargo check` (3 profiles) ✅ 0 errors
+- `cargo test` ✅ 779/825/888 all pass |
+
+## Round 20: Crash Prevention (2026-06-03)
+
+### CRITICAL
+`GUI/src/locales/index.ts` accessed `localStorage.getItem()` at module top-level without try/catch. If it throws (private browsing, Tauri), app doesn't mount.
+
+### Fixed
+- `locales/index.ts` + `App.vue`: added `safeGetItem/safeSetItem` with try/catch; replaced all localStorage calls
+
+### Verified
+- All 3 ends compile ✅, tests pass ✅
+- No unsafe `unwrap()`/`panic!()` in production |
+
+## Round 21: Startup Crash Fixes (2026-06-03)
+
+### CRITICAL Issues Fixed
+| # | Issue | Fix |
+|:-:|:------|:----|
+| 1 | `vscode-addon/package.json:15` `activationEvents: []` — extension never activates | Added `onStartupFinished`, `onCommand:go-on.openChat`, `onView:go-on-chat` |
+| 2 | `default_config_path()` falls back to exe dir (not writable) — first-run setup crashes | Prefer `~/.config/go-on/config.toml`, create dir if missing |
+| 3 | Non-terminal mode: config missing crashes `AppConfig::load` | `handle_validation_mode` auto-creates bootstrap config before load |
+
+### Verification
+- `cargo check` (3 profiles) ✅ 0 errors
+- `cargo clippy -D warnings` (3 profiles) ✅ 0 errors
+- `cargo test` ✅ 779/825/888 all pass
+- `GUI: vue-tsc --noEmit` ✅ 0 errors
+- `vscode-addon: tsc --noEmit` ✅ 0 errors |
+
+## Round 22: Cross-Platform Fixes (2026-06-03)
+
+### Issues Fixed
+| # | Platform | File | Problem | Fix |
+|:-:|:--------:|:-----|:--------|:-----|
+| 1 | Windows | `main.rs:322` | `HOME` env var only (not set on Windows) — config lookup silently fails | Added `USERPROFILE` fallback for Windows |
+| 2 | Windows | `distributed_memory_bus.rs:897` | `HOSTNAME`/`HOST` env var only — node ID falls back to "local-node" on Windows | Added `COMPUTERNAME` fallback |
+| 3 | Linux | `chatView.ts:523` | Hardcoded `/bin/bash` — crashes on systems without bash (NixOS, Alpine) | Changed to `process.env.SHELL || "sh"` |
+| 4 | Windows | `runtimeBinaryService.ts:25` | `.sh` accepted as executable on Windows (can't spawn `.sh` files natively) | Removed `.sh` from Windows executable list |
+
+### Verification
+- `cargo check` (3 profiles) ✅ 0 errors
+- `cargo clippy -D warnings` (3 profiles) ✅ 0 errors
+- `cargo test` ✅ 779/825/888 all pass
+- `GUI: vue-tsc --noEmit` ✅ 0 errors
+- `vscode-addon: tsc --noEmit` ✅ 0 errors |
+
+## Round 23: Final localStorage Safety (2026-06-03)
+
+### Fixed
+5 files had raw `localStorage.getItem/setItem` without try/catch:
+- `stores/runtime.ts` (4×), `utils/theme.ts` (2×), `views/ConfigView.vue` (6×)
+- `components/QuickNavigator.vue` (2×), `views/SecurityView.vue` (1×)
+
+All now use `safeGetItem/safeSetItem` wrappers. No raw localStorage calls remain.
+
+### Final State
+- All 3 ends: compile ✅, clippy ✅, tests ✅
+- No `lock().unwrap()` in production code
+- No raw localStorage without try/catch
+- Cross-platform: HOME/USERPROFILE, /bin/bash→sh, .sh removed on Windows
+
+## Round 24: UX Polish & Minor Bug Fixes (2026-06-03)
+
+### Fixed
+| # | File | Problem | Fix |
+|:-:|:-----|:--------|:-----|
+| 1 | `runtimeBootstrap.ts:32` | Progress title "Preparing Go-On runtime" hardcoded (not i18n'd) | → `i18n.getMessage(MessageKeys.runtimeDownloading)` |
+| 2 | `main.rs:1415` | API key count shows total agents instead of missing count (misleading) | `provider_count` → `missing.len()` |
+| 3 | `main.rs:921` | Non-terminal `InvalidConfig` state silently ignored (no log) | Added `info!` log telling user to run `--validate-config` |
+| 4 | `bridge.ts:465` | `fetchRuntimeFeatures` returns `{} as RuntimeFeatures` with zero diagnostics on failure | Added `DEV`-guarded `console.warn` |
+
+### Verification
+- All 3 ends compile ✅, clippy ✅, tests ✅
+
+## Round 25: Cross-Platform Polish (2026-06-03)
+
+### Fixed
+| # | End | File | Problem | Fix |
+|:-:|:---:|:-----|:--------|:-----|
+| 1 | vscode | `runtimeBinaryService.ts:437` | Default `executablePath` is `./target/release/go-on` — no `.exe` on Windows, `isSupportedExecutablePath` rejects it | Platform-aware default: `./target/release/go-on.exe` on Windows |
+| 2 | vscode | `runtimeBinaryService.ts:475` | Error message says `.sh` is valid on Windows (but `isSupportedExecutablePath` removed `.sh` in Round 22) | Removed `.sh` from error message |
+| 3 | GUI | `tauri.conf.json` | Main window missing `minWidth`/`minHeight` — can resize to unusable size | Added `minWidth: 800, minHeight: 500` |
+
+### Verification
+- All 3 ends compile ✅, clippy ✅, tests ✅
+- `GUI: vue-tsc` ✅, `vscode-addon: tsc` ✅

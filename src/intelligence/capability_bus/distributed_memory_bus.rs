@@ -896,6 +896,7 @@ fn local_node_id() -> String {
     {
         std::env::var("HOSTNAME")
             .or_else(|_| std::env::var("HOST"))
+            .or_else(|_| std::env::var("COMPUTERNAME"))
             .unwrap_or_else(|_| "local-node".to_string())
     }
 

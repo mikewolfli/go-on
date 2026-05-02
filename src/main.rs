@@ -311,21 +311,29 @@ enum CliCommand {
 ///
 /// Search order:
 /// 1) ./config.toml
-/// 2) $HOME/.config/go-on/config.toml
-/// 3) <exe_dir>/config.toml
+/// 2) $HOME/.config/go-on/config.toml (created if missing)
+/// 3) Exe directory (fallback only — may not be writable)
 fn default_config_path() -> Result<PathBuf> {
     let cwd_candidate = std::env::current_dir()?.join("config.toml");
     if cwd_candidate.exists() {
         return Ok(cwd_candidate);
     }
 
-    if let Some(home_dir) = std::env::var_os("HOME") {
-        let home_candidate = PathBuf::from(home_dir).join(".config/go-on/config.toml");
+    // Cross-platform home directory: $HOME (Unix) or %USERPROFILE% (Windows)
+    let home_dir = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    if let Some(home) = home_dir {
+        let home = PathBuf::from(home);
+        let home_candidate = home.join(".config/go-on/config.toml");
         if home_candidate.exists() {
             return Ok(home_candidate);
         }
+        if let Some(parent) = home_candidate.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        return Ok(home_candidate);
     }
 
+    // Last resort: exe directory (may not be writable, but better than nothing)
     let exe = std::env::current_exe()?;
     let dir = exe
         .parent()
@@ -883,14 +891,44 @@ fn maybe_prompt_ai_onboarding(cli: &Cli, config_path: &std::path::Path) -> Resul
         return Ok(false);
     }
 
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        return Ok(false);
-    }
+    let is_terminal = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
 
     let Some(state) = detect_ai_onboarding_state(config_path)? else {
         return Ok(false);
     };
 
+    // Non-terminal mode (GUI / addon): log a single clear message instead of spamming warnings
+    if !is_terminal {
+        match state {
+            AiOnboardingState::MissingConfig | AiOnboardingState::BlankConfig => {
+                info!(
+                    "no configuration found at {} — create one with `go-on --init` or use the GUI setup wizard",
+                    config_path.display()
+                );
+            }
+            AiOnboardingState::NoAgents => {
+                info!(
+                    "configuration at {} has no AI providers — add providers with `go-on --init` or use the GUI settings page",
+                    config_path.display()
+                );
+            }
+            AiOnboardingState::AgentsNotReady => {
+                info!(
+                    "configuration at {} has AI providers but API keys are not set — configure credentials with `go-on --init` or the GUI settings page",
+                    config_path.display()
+                );
+            }
+            AiOnboardingState::InvalidConfig => {
+                info!(
+                    "configuration at {} is invalid — run `go-on --validate-config` for details",
+                    config_path.display()
+                );
+            }
+        }
+        return Ok(false); // allow server to start, caller handles provider errors gracefully
+    }
+
+    // Terminal mode: interactive onboarding
     info!("starting onboarding flow for state={}", state.as_str());
     println!("{}", tf("setup.onboarding_intro", &[]));
     println!("{}", tf("setup.onboarding_option_1", &[]));
@@ -1326,6 +1364,86 @@ async fn run() -> Result<()> {
         None => return Ok(()),
     };
 
+    // Check agent readiness — if no agents configured, prompt for setup or skip
+    if !cli.setup
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && !std::env::args().any(|a| a == "--setup" || a == "--init")
+    {
+        let provider_count = config.agents.len();
+        let ready_count = config
+            .agents
+            .keys()
+            .filter(|name| is_agent_env_ready(&config, name))
+            .count();
+
+        if provider_count == 0 {
+            println!();
+            println!("{}", tf("setup.onboarding_intro", &[]));
+            println!("  {}", tf("setup.onboarding_option_1", &[]));
+            println!("  {}", tf("setup.onboarding_option_3", &[]));
+            print!("{} ", tf("setup.onboarding_select", &[]));
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).ok();
+            let selection = input.trim();
+
+            if selection == "1" || selection.is_empty() {
+                crate::setup::run_setup_with_options(
+                    &config_path,
+                    SetupOptions {
+                        profile: Some(parse_setup_profile("adaptive")?),
+                        level: Some(parse_setup_level("quick")?),
+                        secret_mode: None,
+                        force: true,
+                        prompt_for_secrets: true,
+                    },
+                )?;
+                println!("{}", tf("setup.onboarding_done_next", &[]));
+                // Reload config after setup
+                let config = Arc::new(AppConfig::load(&config_path)?);
+                return start_server(config, &cli, &config_path).await;
+            } else {
+                println!("{}", tf("setup.onboarding_skipped", &[]));
+                println!("{}", tf("setup.onboarding_next", &[]));
+            }
+        } else if ready_count == 0 && provider_count > 0 {
+            let missing: Vec<String> = config
+                .agents
+                .keys()
+                .filter(|name| !is_agent_env_ready(&config, name))
+                .cloned()
+                .collect();
+            println!();
+            println!(
+                "{} API key(s) not set: {}",
+                missing.len(),
+                missing.join(", ")
+            );
+            println!("  Run `go-on --init` to configure credentials, or continue without them.");
+            print!("Press Enter to continue (or type 's' to run setup): ");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).ok();
+            if input.trim().eq_ignore_ascii_case("s") {
+                crate::setup::run_setup_with_options(
+                    &config_path,
+                    SetupOptions {
+                        profile: Some(parse_setup_profile("adaptive")?),
+                        level: Some(parse_setup_level("quick")?),
+                        secret_mode: None,
+                        force: true,
+                        prompt_for_secrets: true,
+                    },
+                )?;
+                println!("{}", tf("setup.onboarding_done_next", &[]));
+                let config = Arc::new(AppConfig::load(&config_path)?);
+                return start_server(config, &cli, &config_path).await;
+            }
+        }
+    }
+
     // Start the server
     start_server(config, &cli, &config_path).await
 }
@@ -1406,6 +1524,26 @@ fn handle_validation_mode(
     cli: &Cli,
     config_path: &std::path::Path,
 ) -> Result<Option<Arc<AppConfig>>> {
+    // If config doesn't exist, create a minimal bootstrap config
+    if !config_path.exists() {
+        info!(
+            "config not found at {}, creating bootstrap",
+            config_path.display()
+        );
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create config directory: {}", parent.display())
+            })?;
+        }
+        let bootstrap = crate::config::default_non_ai_config_toml();
+        std::fs::write(config_path, &bootstrap).with_context(|| {
+            format!(
+                "failed to write bootstrap config to {}",
+                config_path.display()
+            )
+        })?;
+    }
+
     // Load and validate configuration
     info!("loading config from {}", config_path.display());
     let config = Arc::new(AppConfig::load(config_path)?);

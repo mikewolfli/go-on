@@ -519,7 +519,8 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     const { executionTimeout } = this._getExecutionConfig();
     return new Promise((resolve) => {
       const shell = process.platform === "win32" ? "cmd" : "bash";
-      const shellPath = process.platform === "win32" ? "cmd.exe" : "/bin/bash";
+      const shellPath =
+        process.platform === "win32" ? "cmd.exe" : process.env.SHELL || "sh";
       const shellArg = process.platform === "win32" ? "/c" : "-c";
 
       if (!this._isPathAllowed(shellPath)) {

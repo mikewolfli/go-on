@@ -131,13 +131,20 @@ function handleFloatButtonMouseLeave(e: MouseEvent) {
   target.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15)';
 }
 
+function safeGetItem(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function safeSetItem(key: string, value: string) {
+  try { localStorage.setItem(key, value); } catch {}
+}
+
 function toggleQuickNav() {
   showQuickNav.value = !showQuickNav.value;
-  localStorage.setItem("goon.gui.quicknav.collapsed", (!showQuickNav.value).toString());
+  safeSetItem("goon.gui.quicknav.collapsed", (!showQuickNav.value).toString());
 }
 
 // Restore state from localStorage (stores "true" when collapsed)
-const saved = localStorage.getItem("goon.gui.quicknav.collapsed");
+const saved = safeGetItem("goon.gui.quicknav.collapsed");
 if (saved === "true") {
   showQuickNav.value = false;
 }

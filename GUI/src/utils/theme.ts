@@ -15,6 +15,19 @@ const THEME_LIST: ThemeMeta[] = [
   { value: "kitty", labelKey: "theme.kitty" },
 ];
 
+function safeGetItem(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function safeSetItem(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+}
+
 const THEME_KEY = "go-on-gui-theme";
 
 // Migrate old "light"/"dark" values to new names
@@ -27,14 +40,14 @@ function migrateTheme(stored: string | null): Theme {
 }
 
 function loadTheme(): Theme {
-  return migrateTheme(localStorage.getItem(THEME_KEY));
+  return migrateTheme(safeGetItem(THEME_KEY));
 }
 
 export const currentTheme = ref<Theme>(loadTheme());
 
 function setTheme(theme: Theme) {
   currentTheme.value = theme;
-  localStorage.setItem(THEME_KEY, theme);
+  safeSetItem(THEME_KEY, theme);
   applyTheme(theme);
 }
 

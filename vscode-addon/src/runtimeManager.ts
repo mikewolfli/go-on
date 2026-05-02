@@ -267,15 +267,13 @@ export class GoOnManager {
         clearTimeout(forceKillTimer);
       };
       proc.on("close", closeHandler);
+      // Store cleanup so it can be removed if stop() is called again
       this._closeListener = () => {
         proc.off("close", closeHandler);
         this._closeListener = null;
       };
       this.process = null;
     }
-    // Clean up close listener
-    this._closeListener?.();
-    this._closeListener = null;
 
     this.updateStatus();
     this._shutdownInProgress = false;
@@ -378,7 +376,23 @@ export class GoOnManager {
     };
 
     return new Promise((resolve, reject) => {
-      this.pendingRequests.set(id, { resolve, reject });
+      const timeoutId = setTimeout(() => {
+        if (this.pendingRequests.has(id)) {
+          this.pendingRequests.delete(id);
+          reject(new Error("Request timeout"));
+        }
+      }, 30000);
+
+      this.pendingRequests.set(id, {
+        resolve: (v: unknown) => {
+          clearTimeout(timeoutId);
+          resolve(v);
+        },
+        reject: (e: unknown) => {
+          clearTimeout(timeoutId);
+          reject(e);
+        },
+      });
 
       const requestStr = JSON.stringify(request) + "\n";
       if (!this.process || !this.process.stdin) {
@@ -387,13 +401,6 @@ export class GoOnManager {
         return;
       }
       this.process.stdin.write(requestStr);
-
-      setTimeout(() => {
-        if (this.pendingRequests.has(id)) {
-          this.pendingRequests.delete(id);
-          reject(new Error("Request timeout"));
-        }
-      }, 30000);
     });
   }
 

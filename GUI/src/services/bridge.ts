@@ -462,7 +462,10 @@ export async function fetchRuntimeFeatures(): Promise<RuntimeFeatures> {
   try {
     const parsed = JSON.parse(json);
     return (parsed?.features as RuntimeFeatures) ?? ({} as RuntimeFeatures);
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) {
+      console.warn("fetchRuntimeFeatures: failed to parse response", e);
+    }
     return {} as RuntimeFeatures;
   }
 }

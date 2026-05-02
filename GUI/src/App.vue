@@ -187,7 +187,14 @@ let stopWatchMainTab: (() => void) | undefined;
 let stopWatchMonitorSub: (() => void) | undefined;
 let stopWatchConfigSub: (() => void) | undefined;
 
-const monitorOnly = ref(localStorage.getItem(MONITOR_ONLY_KEY) === "true");
+function safeGetItem(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function safeSetItem(key: string, value: string) {
+  try { localStorage.setItem(key, value); } catch {}
+}
+
+const monitorOnly = ref(safeGetItem(MONITOR_ONLY_KEY) === "true");
 const { register: registerCrashHandler, unregister: unregisterCrashHandler } = useCrashHandler({
   onRecover: onRestart,
   t: (key: string) => t(key),
@@ -217,7 +224,7 @@ function openOnboarding() {
 }
 
 function markOnboardingSeen() {
-  localStorage.setItem(ONBOARDING_SEEN_KEY, "true");
+  safeSetItem(ONBOARDING_SEEN_KEY, "true");
 }
 
 function handleGuideNavigate(payload: { mainTab: string; subTab?: string }) {
@@ -310,21 +317,21 @@ onMounted(async () => {
       previousRunning = running;
     },
   );
-  if (localStorage.getItem(ONBOARDING_SEEN_KEY) !== "true") {
+  if (safeGetItem(ONBOARDING_SEEN_KEY) !== "true") {
     showOnboarding.value = true;
   }
   // Restore tab state on mount
-  const savedMainTab = localStorage.getItem("goon.gui.activeMainTab");
+  const savedMainTab = safeGetItem("goon.gui.activeMainTab");
   if (savedMainTab) activeMainTab.value = savedMainTab;
-  const savedMonitorSubTab = localStorage.getItem("goon.gui.activeMonitorSubTab");
+  const savedMonitorSubTab = safeGetItem("goon.gui.activeMonitorSubTab");
   if (savedMonitorSubTab) activeMonitorSubTab.value = savedMonitorSubTab;
-  const savedConfigSubTab = localStorage.getItem("goon.gui.activeConfigSubTab");
+  const savedConfigSubTab = safeGetItem("goon.gui.activeConfigSubTab");
   if (savedConfigSubTab) activeConfigSubTab.value = savedConfigSubTab;
 
   // Watch and persist tab state
-  stopWatchMainTab = watch(activeMainTab, (val) => localStorage.setItem("goon.gui.activeMainTab", val));
-  stopWatchMonitorSub = watch(activeMonitorSubTab, (val) => localStorage.setItem("goon.gui.activeMonitorSubTab", val));
-  stopWatchConfigSub = watch(activeConfigSubTab, (val) => localStorage.setItem("goon.gui.activeConfigSubTab", val));
+  stopWatchMainTab = watch(activeMainTab, (val) => safeSetItem("goon.gui.activeMainTab", val));
+  stopWatchMonitorSub = watch(activeMonitorSubTab, (val) => safeSetItem("goon.gui.activeMonitorSubTab", val));
+  stopWatchConfigSub = watch(activeConfigSubTab, (val) => safeSetItem("goon.gui.activeConfigSubTab", val));
 
   await registerCrashHandler();
 });

@@ -426,10 +426,6 @@ impl AdaptiveConfig {
     /// Generate AppConfig from adaptive configuration
     pub fn to_app_config(&self) -> AppConfig {
         let providers = normalized_provider_list(&self.minimal_config.available_providers);
-        let planning_agents = providers.clone();
-        let coding_agents = providers.clone();
-        let review_agents = preferred_review_agents(&providers);
-        let delivery_agents = preferred_delivery_agents(&providers);
 
         let mut agents = HashMap::new();
         for provider in &providers {
@@ -450,11 +446,14 @@ impl AdaptiveConfig {
         };
 
         let mut phases = HashMap::new();
+        // All phases use empty agent lists — runtime auto-maps (Path B) via
+        // FlowManager::resolve. Agents are dynamically selected by CapabilityBus
+        // based on task type, reputation, and availability.
         phases.insert(
             "planning".to_string(),
             PhaseConfig {
                 description: "Adaptive planning phase".to_string(),
-                agents: planning_agents,
+                agents: vec![],
                 fallback: Some(true),
                 principles: Some(adaptive_principles(&self.learning_preferences, "planning")),
                 options: Some(PhaseOptions {
@@ -467,13 +466,13 @@ impl AdaptiveConfig {
             "coding".to_string(),
             PhaseConfig {
                 description: "Adaptive coding phase".to_string(),
-                agents: coding_agents,
+                agents: vec![],
                 fallback: Some(true),
                 principles: Some(adaptive_principles(&self.learning_preferences, "coding")),
                 options: Some(adaptive_coding_options(
                     self.minimal_config.enable_cache,
                     self.minimal_config.enable_vector_memory,
-                    &review_agents,
+                    &[],
                 )),
             },
         );
@@ -481,7 +480,7 @@ impl AdaptiveConfig {
             "review".to_string(),
             PhaseConfig {
                 description: "Adaptive review phase".to_string(),
-                agents: review_agents.clone(),
+                agents: vec![],
                 fallback: Some(true),
                 principles: Some(adaptive_principles(&self.learning_preferences, "review")),
                 options: Some(adaptive_review_options()),
@@ -491,7 +490,7 @@ impl AdaptiveConfig {
             "delivery".to_string(),
             PhaseConfig {
                 description: "Adaptive delivery phase".to_string(),
-                agents: delivery_agents,
+                agents: vec![],
                 fallback: Some(false),
                 principles: Some(adaptive_principles(&self.learning_preferences, "delivery")),
                 options: Some(PhaseOptions {
@@ -593,6 +592,8 @@ fn default_agent_config(provider: &str) -> Option<AgentConfig> {
     })
 }
 
+/// Legacy helper for manual config compat, not used by modern Path B routing.
+#[allow(dead_code)]
 fn preferred_review_agents(providers: &[String]) -> Vec<String> {
     let mut reviewers: Vec<String> = providers
         .iter()
@@ -611,6 +612,8 @@ fn preferred_review_agents(providers: &[String]) -> Vec<String> {
     }
 }
 
+/// Legacy helper for manual config compat, not used by modern Path B routing.
+#[allow(dead_code)]
 fn preferred_delivery_agents(providers: &[String]) -> Vec<String> {
     if providers.iter().any(|provider| provider == "copilot") {
         return vec!["copilot".to_string()];
@@ -1631,15 +1634,19 @@ impl AppConfig {
                 .get(phase_name)
                 .with_context(|| format!("phase '{}' missing in [phases]", phase_name))?;
 
-            for agent_name in &phase_cfg.agents {
-                if !self.agents.contains_key(agent_name) {
-                    anyhow::bail!(
-                        "{}",
-                        tf(
-                            "error.phase_references_undefined_agent",
-                            &[("phase", phase_name), ("agent", agent_name)]
-                        )
-                    );
+            // Agents list is optional: Path B (auto-map) resolves agents dynamically
+            // from the registry at request time. Skip validation when empty.
+            if !phase_cfg.agents.is_empty() {
+                for agent_name in &phase_cfg.agents {
+                    if !self.agents.contains_key(agent_name) {
+                        anyhow::bail!(
+                            "{}",
+                            tf(
+                                "error.phase_references_undefined_agent",
+                                &[("phase", phase_name), ("agent", agent_name)]
+                            )
+                        );
+                    }
                 }
             }
 
@@ -1696,29 +1703,45 @@ impl AppConfig {
                     );
                 }
 
-                if review_phase.agents.len() < 2 {
-                    anyhow::bail!("{}", tf("error.phases_review_min_agents", &[]));
-                }
-
-                for reviewer in reviewers.iter().take(2) {
-                    if !self.agents.contains_key(reviewer) {
-                        anyhow::bail!(
-                            "{}",
-                            tf(
-                                "error.phase_references_undefined_review_agent",
-                                &[("phase", phase_name), ("agent", reviewer)]
-                            )
-                        );
+                if review_phase.agents.is_empty() {
+                    // Path B: agents resolved dynamically — skip static agent checks.
+                    // Still verify that reviewer names exist in the config.
+                    for reviewer in reviewers.iter().take(2) {
+                        if !self.agents.contains_key(reviewer) {
+                            anyhow::bail!(
+                                "{}",
+                                tf(
+                                    "error.phase_references_undefined_review_agent",
+                                    &[("phase", phase_name), ("agent", reviewer)]
+                                )
+                            );
+                        }
+                    }
+                } else {
+                    if review_phase.agents.len() < 2 {
+                        anyhow::bail!("{}", tf("error.phases_review_min_agents", &[]));
                     }
 
-                    if !review_phase.agents.iter().any(|agent| agent == reviewer) {
-                        anyhow::bail!(
-                            "{}",
-                            tf(
-                                "error.review_agent_must_be_in_phases",
-                                &[("agent", reviewer)]
-                            )
-                        );
+                    for reviewer in reviewers.iter().take(2) {
+                        if !self.agents.contains_key(reviewer) {
+                            anyhow::bail!(
+                                "{}",
+                                tf(
+                                    "error.phase_references_undefined_review_agent",
+                                    &[("phase", phase_name), ("agent", reviewer)]
+                                )
+                            );
+                        }
+
+                        if !review_phase.agents.iter().any(|agent| agent == reviewer) {
+                            anyhow::bail!(
+                                "{}",
+                                tf(
+                                    "error.review_agent_must_be_in_phases",
+                                    &[("agent", reviewer)]
+                                )
+                            );
+                        }
                     }
                 }
             }
@@ -1953,7 +1976,7 @@ impl AppConfig {
     }
 }
 
-fn default_non_ai_config_toml() -> String {
+pub fn default_non_ai_config_toml() -> String {
     [
         "default_phase = \"coding\"",
         "model_selection_mode = \"adaptive\"",

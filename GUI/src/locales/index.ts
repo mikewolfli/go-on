@@ -3,12 +3,28 @@ import enUS from "./en-US.json";
 import zhCN from "./zh-CN.json";
 import zhTW from "./zh-TW.json";
 
+function safeGetItem(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSetItem(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // localStorage unavailable (private browsing etc.) — silently ignore
+  }
+}
+
 const KEY = "goon.gui.locale";
 
 type Locale = "en-US" | "zh-CN" | "zh-TW";
 
 function resolveInitialLocale(): Locale {
-  const saved = localStorage.getItem(KEY);
+  const saved = safeGetItem(KEY);
   if (saved === "en-US" || saved === "zh-CN" || saved === "zh-TW") {
     return saved;
   }
@@ -36,7 +52,7 @@ export const i18n = createI18n({
 
 export function setLocale(locale: Locale) {
   i18n.global.locale.value = locale;
-  localStorage.setItem(KEY, locale);
+  safeSetItem(KEY, locale);
 }
 
 export function getLocale(): Locale {

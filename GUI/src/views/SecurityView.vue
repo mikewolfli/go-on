@@ -577,13 +577,15 @@ async function saveSecurity() {
     ElMessage.success(t("security.settingsSaved"));
   } catch {
     // Backend save failed — persist locally as fallback
-    localStorage.setItem(
-      "goon.gui.securitySettings",
-      JSON.stringify({
-        autoMaskSensitive: autoMaskSensitive.value,
-        auditEnabled: auditEnabled.value,
-      }),
-    );
+    try {
+      localStorage.setItem(
+        "goon.gui.securitySettings",
+        JSON.stringify({
+          autoMaskSensitive: autoMaskSensitive.value,
+          auditEnabled: auditEnabled.value,
+        }),
+      );
+    } catch {}
     ElMessage.warning(t("security.settingsSavedLocally") || "Settings saved locally only");
   }
 }

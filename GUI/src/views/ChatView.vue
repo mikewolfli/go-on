@@ -389,16 +389,16 @@ async function sendMessage() {
   await nextTick();
   scrollToBottom();
 
-  try {
-    const baseUrl = defaultRuntimeBaseUrl;
-    // Cancel previous request if any
-    if (currentAbortController.value) {
-      currentAbortController.value.abort();
-    }
-    const controller = new AbortController();
-    currentAbortController.value = controller;
-    const timeoutId = window.setTimeout(() => controller.abort(), 120000);
+  const baseUrl = defaultRuntimeBaseUrl;
+  // Cancel previous request if any
+  if (currentAbortController.value) {
+    currentAbortController.value.abort();
+  }
+  const controller = new AbortController();
+  currentAbortController.value = controller;
+  const timeoutId = window.setTimeout(() => controller.abort(), 120000);
 
+  try {
     const response = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -410,8 +410,6 @@ async function sendMessage() {
       }),
     });
 
-    window.clearTimeout(timeoutId);
-    currentAbortController.value = null;
     if (!response.ok) {
       const errText = await response.text();
       throw new Error(`HTTP ${response.status}: ${errText}`);
@@ -426,7 +424,6 @@ async function sendMessage() {
     };
     session.messages.push(assistantMsg);
   } catch (err) {
-    currentAbortController.value = null;
     const errorMsg: ChatMessage = {
       id: `m${Date.now()}_e`,
       role: "assistant",
@@ -435,6 +432,8 @@ async function sendMessage() {
     session.messages.push(errorMsg);
     ElMessage.error(String(err));
   } finally {
+    window.clearTimeout(timeoutId);
+    currentAbortController.value = null;
     loading.value = false;
     await nextTick();
     scrollToBottom();

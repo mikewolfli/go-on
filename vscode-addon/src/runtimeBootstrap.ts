@@ -29,7 +29,7 @@ export async function ensureRuntimeReadyAfterChatOpen(
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: "Preparing Go-On runtime",
+        title: i18n.getMessage(MessageKeys.runtimeDownloading),
         cancellable: false,
       },
       async () => {

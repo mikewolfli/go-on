@@ -91,12 +91,19 @@ import { openDialog } from "../services/dialog";
 import { normalizeErrorMessage } from "../utils/errors";
 import ConfigWizard from "../components/ConfigWizard.vue";
 
+function safeGetItem(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function safeSetItem(key: string, value: string) {
+  try { localStorage.setItem(key, value); } catch {}
+}
+
 const MONITOR_ONLY_KEY = "goon.gui.monitorOnly";
 const PROTOCOL_MODE_KEY = "goon.gui.protocolMode";
 const executablePath = ref("go-on");
 const workingDir = ref(".");
-const protocolMode = ref(localStorage.getItem(PROTOCOL_MODE_KEY) || "from_config");
-const monitorOnly = ref(localStorage.getItem(MONITOR_ONLY_KEY) === "true");
+const protocolMode = ref(safeGetItem(PROTOCOL_MODE_KEY) || "from_config");
+const monitorOnly = ref(safeGetItem(MONITOR_ONLY_KEY) === "true");
 const activePanels = ref(["runtime", "protocol"]);
 const wizardVisible = ref(false);
 const diagnosing = ref(false);
@@ -104,8 +111,8 @@ const diagnoseOutput = ref("");
 const initialState = ref({
   executablePath: "go-on",
   workingDir: ".",
-  protocolMode: localStorage.getItem(PROTOCOL_MODE_KEY) || "from_config",
-  monitorOnly: localStorage.getItem(MONITOR_ONLY_KEY) === "true",
+  protocolMode: safeGetItem(PROTOCOL_MODE_KEY) || "from_config",
+  monitorOnly: safeGetItem(MONITOR_ONLY_KEY) === "true",
 });
 const { t } = useI18n();
 
@@ -235,8 +242,8 @@ async function save() {
       });
     }
     await configureService(executablePath.value, workingDir.value, protocolMode.value);
-    localStorage.setItem(MONITOR_ONLY_KEY, String(monitorOnly.value));
-    localStorage.setItem(PROTOCOL_MODE_KEY, protocolMode.value);
+    safeSetItem(MONITOR_ONLY_KEY, String(monitorOnly.value));
+    safeSetItem(PROTOCOL_MODE_KEY, protocolMode.value);
     window.dispatchEvent(new CustomEvent<boolean>("goon:monitor-only-changed", { detail: monitorOnly.value }));
     initialState.value = {
       executablePath: executablePath.value,

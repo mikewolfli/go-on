@@ -21,6 +21,22 @@ import { defaultRuntimeBaseUrl } from "../services/protocolContract";
 
 const defaultHealthEndpoint = `${defaultRuntimeBaseUrl.replace(/\/$/, "")}/health`;
 
+function safeGetItem(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function safeSetItem(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+}
+
+const STATUS_KEY = "goon.gui.statusPollingMs";
+const LOGS_KEY = "goon.gui.logsPollingMs";
+
 export const useRuntimeStore = defineStore("runtime", {
   state: () => ({
     status: { running: false } as ServiceStatus,
@@ -39,12 +55,8 @@ export const useRuntimeStore = defineStore("runtime", {
     endpointHealthStats: [] as EndpointHealthStat[],
     editorIntegrations: [] as EditorIntegrationStatus[],
     heatmapWindowSeconds: 300,
-    statusPollingMs: Number(
-      localStorage.getItem("goon.gui.statusPollingMs") || "2000",
-    ),
-    logsPollingMs: Number(
-      localStorage.getItem("goon.gui.logsPollingMs") || "1000",
-    ),
+    statusPollingMs: Number(safeGetItem("goon.gui.statusPollingMs") || "2000"),
+    logsPollingMs: Number(safeGetItem("goon.gui.logsPollingMs") || "1000"),
     usageHeatmap: {
       windowSeconds: 300,
       phaseTop: [],
@@ -183,18 +195,12 @@ export const useRuntimeStore = defineStore("runtime", {
     },
     setStatusPollingInterval(ms: number) {
       this.statusPollingMs = Math.min(10000, Math.max(500, Number(ms)));
-      localStorage.setItem(
-        "goon.gui.statusPollingMs",
-        String(this.statusPollingMs),
-      );
+      safeSetItem("goon.gui.statusPollingMs", String(this.statusPollingMs));
       this.startStatusPolling();
     },
     setLogsPollingInterval(ms: number) {
       this.logsPollingMs = Math.min(10000, Math.max(500, Number(ms)));
-      localStorage.setItem(
-        "goon.gui.logsPollingMs",
-        String(this.logsPollingMs),
-      );
+      safeSetItem("goon.gui.logsPollingMs", String(this.logsPollingMs));
     },
     async refreshFeatures() {
       if (!this.status.running) {

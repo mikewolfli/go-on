@@ -2,7 +2,7 @@
   "name": "go-on-vscode",
   "displayName": "Go-On VS Code Extension",
   "description": "VS Code extension for the Go-On Rust ACP proxy",
-  "version": "0.8.4",
+  "version": "0.9.0",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -12,7 +12,11 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:go-on.openChat",
+    "onView:go-on-chat"
+  ],
   "main": "./out/extension.js",
   "repository": {
     "type": "git",

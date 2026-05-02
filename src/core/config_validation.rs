@@ -590,24 +590,8 @@ impl ConfigValidator {
 
     /// Validate individual phase
     fn validate_phase(&self, name: &str, phase: &PhaseConfig, result: &mut ValidationResult) {
-        // Check agents.
-        // An empty agents list is intentional: the runtime uses Path B (auto-map), which
-        // resolves agents dynamically from the full registry at request time.
-        // Downgrade to Warning so --validate-config does not block startup.
-        if phase.agents.is_empty() {
-            // Empty agents list is intentional: the runtime uses Path B (auto-map), which
-            // resolves agents dynamically from the full registry at request time.
-            // Message kept compatible with i18n key "validation.msg.phase_no_agents".
-            result.warnings.push(ValidationWarning {
-                message: format!("Phase '{}' has no agents", name),
-                section: format!("phases.{}", name),
-            });
-        }
-
-        // Check fallback configuration
-        // Note: fallback is Option<bool> in PhaseConfig, not a phase name
-        // This validation is not applicable in current implementation
-        // Keeping the structure for future reference if fallback becomes a phase name
+        // Agents list is optional: when empty the runtime auto-maps agents from
+        // the full registry at request time (FlowManager::resolve Path B).
 
         // Check principles
         if let Some(principles) = &phase.principles {
