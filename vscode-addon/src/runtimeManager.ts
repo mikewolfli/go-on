@@ -508,6 +508,36 @@ export class GoOnManager {
     }
   }
 
+  private async fetchAvailableProviders(): Promise<Array<{
+    name: string;
+    label: string;
+    description: string;
+    detail: string;
+    envVar?: string;
+    apiKeyEnv?: string;
+  }> | null> {
+    try {
+      const catalog = await this.sendRequest(
+        "provider.catalog",
+        {},
+        { skipProviderGuard: true },
+      );
+      const providers = (catalog as any)?.providers;
+      if (!Array.isArray(providers)) return null;
+
+      return providers.map((p: any) => ({
+        name: p.name,
+        label: p.name.charAt(0).toUpperCase() + p.name.slice(1),
+        description: p.agent_type || p.url || "",
+        detail: `Model: ${p.model || "auto"} | Env: ${p.api_key_env || p.secret_key_env || "N/A"}`,
+        envVar: p.api_key_env || p.secret_key_env,
+        apiKeyEnv: p.api_key_env,
+      }));
+    } catch {
+      return null;
+    }
+  }
+
   private async notifyAndOpenSetupWizard(): Promise<void> {
     const now = Date.now();
     if (now - this.lastWizardPromptAt < 5000) {
@@ -515,16 +545,97 @@ export class GoOnManager {
     }
     this.lastWizardPromptAt = now;
 
-    // Keep contract smoke reference
-    const _contractPrompt = protocolContract.errors.setupWizardPrompt;
-
     const action = await vscode.window.showWarningMessage(
-      "Go-On needs an AI provider API key to process your request. Open Settings to configure one?",
+      "Go-On needs an AI provider API key to process your request.",
+      "Quick Setup",
       "Open Settings",
       "Later",
     );
+
+    if (action === "Later") return;
+
     if (action === "Open Settings") {
       await vscode.commands.executeCommand("go-on.openSettings");
+      return;
+    }
+
+    // === Quick Setup flow ===
+
+    // Step 1: Pick provider
+    const providers = await this.fetchAvailableProviders();
+    if (!providers || providers.length === 0) {
+      vscode.window.showErrorMessage(
+        "No AI providers found in your configuration.",
+      );
+      return;
+    }
+
+    const providerItems = providers.map((p) => ({
+      label: p.label,
+      description: p.description,
+      detail: p.detail,
+      provider: p,
+    }));
+
+    const picked = await vscode.window.showQuickPick(providerItems, {
+      placeHolder: "Select an AI provider to configure",
+      title: "Quick Setup — Step 1/2",
+    });
+
+    if (!picked) return;
+    const selectedProvider = picked.provider;
+
+    // Step 2: Enter API key
+    const apiKey = await vscode.window.showInputBox({
+      prompt: `Enter your API key for ${selectedProvider.label}`,
+      password: true,
+      placeHolder: "sk-...",
+      validateInput: (value: string) => {
+        if (!value || value.trim().length < 4) {
+          return "API key must be at least 4 characters";
+        }
+        return null;
+      },
+    });
+
+    if (!apiKey || apiKey.trim().length < 4) return;
+
+    // Step 3: Save to keyring and configure
+    try {
+      // Save to keyring
+      const envVarName = selectedProvider.envVar || selectedProvider.apiKeyEnv;
+      if (envVarName) {
+        await vscode.commands.executeCommand("go-on.keyringSet", {
+          name: envVarName.toLowerCase(),
+          value: apiKey.trim(),
+        });
+      }
+
+      // If provider has a known env var, also set it as runtime env override
+      if (selectedProvider.envVar) {
+        this.setRuntimeEnvOverrides({
+          [selectedProvider.envVar]: apiKey.trim(),
+        });
+      }
+
+      // Save provider selection to config.toml
+      if (selectedProvider.name) {
+        await vscode.commands.executeCommand(
+          "go-on.applyDefaultConfigTemplate",
+          {
+            template: "config.toml.autopilot-adaptive",
+          },
+        );
+      }
+
+      vscode.window.showInformationMessage(
+        `✅ ${selectedProvider.label} API key configured! You can now send messages.`,
+      );
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(
+        `Setup failed: ${msg}. Try Open Settings instead.`,
+      );
     }
   }
 

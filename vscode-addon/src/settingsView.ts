@@ -388,6 +388,11 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       deleteKeyringSecret: async (msg) =>
         this._handleKeyringDelete(String(msg.name ?? "")),
       listKeyringSecrets: async () => this._handleKeyringList(),
+      quickSetupProvider: async (msg) =>
+        this._handleQuickSetupProvider(
+          String(msg.provider ?? ""),
+          String(msg.apiKey ?? ""),
+        ),
       applyDefaultConfigTemplate: async (msg) =>
         this._handleApplyDefaultConfigTemplate(String(msg.template ?? "")),
       applyRulesSettings: async (msg) =>
@@ -1042,6 +1047,35 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       this._postMessage({
         type: "keyringError",
         message: this._getErrorMessage(error),
+      });
+    }
+  }
+
+  private async _handleQuickSetupProvider(
+    provider: string,
+    apiKey: string,
+  ): Promise<void> {
+    try {
+      // Infer env var name from provider
+      const envVarName = inferEnvVar(provider);
+
+      // 1. Store API key in keyring
+      await vscode.commands.executeCommand("go-on.keyringSet", {
+        name: envVarName.toLowerCase(),
+        value: apiKey,
+      });
+
+      // 2. Save provider selection to config.toml
+      await this._saveProviderSelection(provider, "auto", envVarName);
+
+      this._postMessage({
+        type: "quickSetupResult",
+        message: `✅ ${provider} configured successfully. API key saved to keyring.`,
+      });
+    } catch (error: unknown) {
+      this._postMessage({
+        type: "quickSetupError",
+        message: `Setup failed: ${this._getErrorMessage(error)}`,
       });
     }
   }
