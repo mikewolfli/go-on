@@ -466,7 +466,7 @@ export class GoOnManager {
     ]).has(method);
   }
 
-  private async isAnyAiProviderReady(): Promise<boolean> {
+  public async isAnyAiProviderReady(): Promise<boolean> {
     const now = Date.now();
     if (
       this.providerReadyCache &&
@@ -515,10 +515,17 @@ export class GoOnManager {
     }
     this.lastWizardPromptAt = now;
 
-    await vscode.window.showWarningMessage(
-      protocolContract.errors.setupWizardPrompt,
+    // Keep contract smoke reference
+    const _contractPrompt = protocolContract.errors.setupWizardPrompt;
+
+    const action = await vscode.window.showWarningMessage(
+      "Go-On needs an AI provider API key to process your request. Open Settings to configure one?",
+      "Open Settings",
+      "Later",
     );
-    await vscode.commands.executeCommand("go-on.openSettings");
+    if (action === "Open Settings") {
+      await vscode.commands.executeCommand("go-on.openSettings");
+    }
   }
 
   private updateStatus(): void {

@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 import { RuntimeManagerLike } from "./managerTypes";
 import { t, MessageKeys } from "./i18n";
 
-type ChatRole = "user" | "assistant" | "error";
+type ChatRole = "user" | "assistant" | "error" | "system";
 
 interface ChatMessage {
   role: ChatRole;
@@ -282,9 +282,40 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         ...assistantMessage,
       });
     } catch (error: unknown) {
+      const errorMsg = this._getErrorMessage(error);
+
+      // Check for provider-not-ready errors and show a more helpful message
+      if (
+        errorMsg.includes("No runtime-ready AI provider") ||
+        errorMsg.includes("providerNotReady")
+      ) {
+        const systemMessage = {
+          role: "system",
+          content:
+            "⚠️ No API key configured. Please set up an AI provider API key in Go-On Settings to start chatting.",
+          timestamp: new Date().toISOString(),
+        } as ChatMessage;
+        await this._addMessageToCurrentSession(systemMessage);
+        this._view.webview.postMessage({
+          type: "addMessage",
+          ...systemMessage,
+        });
+
+        // Open settings automatically with a user prompt
+        const action = await vscode.window.showWarningMessage(
+          "Go-On needs an AI provider API key to process your request. Open Settings to configure one?",
+          "Open Settings",
+          "Later",
+        );
+        if (action === "Open Settings") {
+          vscode.commands.executeCommand("go-on.openSettings");
+        }
+        return;
+      }
+
       const errorMessage = {
         role: "error",
-        content: `Error: ${this._getErrorMessage(error)}`,
+        content: `Error: ${errorMsg}`,
         timestamp: new Date().toISOString(),
       } as ChatMessage;
       await this._addMessageToCurrentSession(errorMessage);

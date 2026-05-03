@@ -739,6 +739,31 @@ export function activate(context: vscode.ExtensionContext) {
       updateRulesCommand,
     );
 
+    // Delayed check for provider readiness (warn user if API key is missing)
+    setTimeout(async () => {
+      try {
+        if (goOnManager) {
+          const backendRunning = goOnManager.isRunning();
+          if (!backendRunning) return;
+          const ready = await goOnManager.isAnyAiProviderReady();
+          if (!ready) {
+            const config = vscode.workspace.getConfiguration("go-on");
+            const action = await vscode.window.showWarningMessage(
+              "AI provider is configured but no API key is set. " +
+                "Go-On needs an API key to function.",
+              "Open Settings",
+              "Later",
+            );
+            if (action === "Open Settings") {
+              vscode.commands.executeCommand("go-on.openSettings");
+            }
+          }
+        }
+      } catch {
+        // backend may not be running yet, ignore
+      }
+    }, 3000);
+
     // Open chat automatically only once (controlled by go-on.autoOpenChat config).
     const autoOpenChat = vscode.workspace
       .getConfiguration("go-on")

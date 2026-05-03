@@ -4,6 +4,17 @@ import { i18n, MessageKeys } from "./i18n";
 import { protocolContract } from "./protocolContract";
 import { RuntimeManagerLike } from "./managerTypes";
 
+interface ProbeReport {
+  probes?: {
+    provider_dependencies?: {
+      ready: boolean;
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 export class StatusMonitor {
   private statusBarItem: vscode.StatusBarItem;
   private healthCheckTimer: NodeJS.Timeout | undefined;
@@ -21,6 +32,7 @@ export class StatusMonitor {
       vscode.StatusBarAlignment.Left,
       100,
     );
+    this.statusBarItem.backgroundColor = undefined;
     this.statusBarItem.command = "go-on.openChat";
     this.updateStatus();
     this.statusBarItem.show();
@@ -76,6 +88,33 @@ export class StatusMonitor {
         this.updateHealthStatus(health);
         this.consecutiveFailures = 0;
         this.failureWarningShown = false;
+
+        // Check provider readiness when runtime is healthy
+        if (health) {
+          try {
+            const probeResult = (await this.manager.sendRequest(
+              "health.probes",
+            )) as ProbeReport;
+            const probes = probeResult?.probes;
+            if (
+              probes?.provider_dependencies &&
+              !probes.provider_dependencies.ready
+            ) {
+              this.statusBarItem.text = "$(warning) Go-On Chat";
+              this.statusBarItem.tooltip =
+                "Go-On is running but no AI provider is configured. API key required.";
+              this.statusBarItem.backgroundColor = new vscode.ThemeColor(
+                "statusBarItem.warningBackground",
+              );
+              return;
+            }
+          } catch {
+            // probe check failed, ignore — provider may not be ready yet
+          }
+        }
+
+        // Provider ready or probe check failed — reset to normal
+        this.statusBarItem.backgroundColor = undefined;
       } catch {
         this.consecutiveFailures++;
         // Keep explicit contract-term reference for cross-surface smoke checks.
