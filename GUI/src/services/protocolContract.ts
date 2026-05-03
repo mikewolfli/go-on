@@ -1,4 +1,4 @@
-import protocolContract from "../assets/editor-capability-matrix.json";
+import protocolContract from "../../../contracts/editor-capability-matrix.json";
 
 export { protocolContract };
 
