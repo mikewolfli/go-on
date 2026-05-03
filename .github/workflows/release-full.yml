@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
   push:
     tags:
+      - "v*"
       - "0.*"
-      - "v0.*"
-      - "[0-9]*"
   release:
     types: [published]
 
@@ -53,13 +52,13 @@ jobs:
       # ── Backend: build release binary ─────────────────────────────────
       # Checks (clippy, tests) are already run by build.yml on every push/PR.
       - name: Build backend (release, profile-local)
-        run: cargo build --release --locked
+        run: cargo build --release
 
       # ── GUI ────────────────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: |
             GUI/package-lock.json

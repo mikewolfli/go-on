@@ -66,7 +66,8 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
               try {
                 await this._deleteWorkflow(message.workflowId);
               } catch (err) {
-                console.error(`[workflow] delete error: ${err}`);
+                // eslint-disable-next-line no-console
+                console.warn(`[workflow] delete error: ${err}`);
               }
               break;
             case "showConfirm":
@@ -84,7 +85,8 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
                   workflowId: message.workflowId,
                 });
               } catch (err) {
-                console.error(`[workflow] showConfirm error: ${err}`);
+                // eslint-disable-next-line no-console
+                console.warn(`[workflow] showConfirm error: ${err}`);
               }
               break;
             case "showInputBox":

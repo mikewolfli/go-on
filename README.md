@@ -7,9 +7,9 @@ with full i18n support and a modular multi-bus architecture spanning 14 capabili
 
 ## Version
 
-- Core runtime: **0.9.2**
-- GUI desktop: **0.9.2**
-- VS Code addon: **0.9.2**
+- Core runtime: **0.9.3**
+- GUI desktop: **0.9.3**
+- VS Code addon: **0.9.3**
 - Default feature: `profile-local`
 - Alternative feature scaffolds: `profile-simple-server`, `profile-multi-users-server`
 

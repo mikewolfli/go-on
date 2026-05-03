@@ -47,24 +47,9 @@ jobs:
         run: cargo clippy --no-default-features -F profile-multi-users-server -- -D warnings
 
       # ── Integration tests ─────────────────────────────────────────────
-      - name: Integration — release readiness
-        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration run_scenario_file_executes_release_readiness_benchmark_requests -- --nocapture
-        env:
-          GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
-      - name: Integration — governance
-        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration run_scenario_file_executes_governance_dynamic_rules_benchmark_requests -- --nocapture
-        env:
-          GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
-      - name: Integration — managed service inference
-        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration managed_service_target_infers_multi_user_mode_on_main_chain -- --nocapture
-        env:
-          GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
-      - name: Integration — adversarial paths
-        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration adversarial_ -- --nocapture
-        env:
-          GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
-      - name: Integration — multi-user lifecycle drill
-        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration run_scenario_file_executes_multi_user_lifecycle_drill_requests -- --nocapture
+      - name: Integration tests
+        timeout-minutes: 5
+        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration -- --nocapture
         env:
           GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
 
@@ -72,7 +57,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: |
             GUI/package-lock.json
