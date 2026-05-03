@@ -299,6 +299,9 @@ async function onRestart() {
 onMounted(async () => {
   try {
     await bootstrapBackend(monitorOnlyModeEnabled());
+    // bootstrapBackend succeeded → backend was just started by us,
+    // so the watch below should not show "Service Recovered".
+    previousRunning = true;
   } catch (error) {
     ElMessage.error(String(error));
   }
@@ -327,7 +330,9 @@ onMounted(async () => {
         activeMainTab.value = "config";
         activeConfigSubTab.value = "setup";
       }
-    } catch { /* provider check failed — ignore */ }
+    } catch (e) {
+      console.warn("checkProviderAndNavigate failed:", e);
+    }
   }
 
   // Check provider readiness immediately
