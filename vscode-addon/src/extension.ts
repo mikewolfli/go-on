@@ -747,7 +747,6 @@ export function activate(context: vscode.ExtensionContext) {
           if (!backendRunning) return;
           const ready = await goOnManager.isAnyAiProviderReady();
           if (!ready) {
-            const config = vscode.workspace.getConfiguration("go-on");
             const action = await vscode.window.showWarningMessage(
               "AI provider is configured but no API key is set. " +
                 "Go-On needs an API key to function.",

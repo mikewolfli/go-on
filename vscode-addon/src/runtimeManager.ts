@@ -522,16 +522,22 @@ export class GoOnManager {
         {},
         { skipProviderGuard: true },
       );
-      const providers = (catalog as any)?.providers;
+      const result = catalog as Record<string, unknown>;
+      const providers = result?.providers as
+        | Array<Record<string, unknown>>
+        | undefined;
       if (!Array.isArray(providers)) return null;
 
-      return providers.map((p: any) => ({
-        name: p.name,
-        label: p.name.charAt(0).toUpperCase() + p.name.slice(1),
-        description: p.agent_type || p.url || "",
+      return providers.map((p: Record<string, unknown>) => ({
+        name: String(p.name ?? ""),
+        label:
+          String(p.name ?? "")
+            .charAt(0)
+            .toUpperCase() + String(p.name ?? "").slice(1),
+        description: String(p.agent_type || p.url || ""),
         detail: `Model: ${p.model || "auto"} | Env: ${p.api_key_env || p.secret_key_env || "N/A"}`,
-        envVar: p.api_key_env || p.secret_key_env,
-        apiKeyEnv: p.api_key_env,
+        envVar: String(p.api_key_env || p.secret_key_env || ""),
+        apiKeyEnv: String(p.api_key_env || ""),
       }));
     } catch {
       return null;
