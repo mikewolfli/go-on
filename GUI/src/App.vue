@@ -8,6 +8,7 @@
       :activeTab="activeMainTab"
       @navigate="handleQuickNavigate"
     />
+    <ApiKeySetupDialog v-model="showApiKeySetup" @configured="onApiKeyConfigured" />
     <div v-if="monitorOnly" class="monitor-only-banner">
       ⚠️ {{ t("app.monitorOnlyBanner") }}
       <span class="monitor-only-config-link" @click="activeMainTab = 'config'">{{ t("app.monitorOnlyConfigLink") }}</span>
@@ -167,6 +168,7 @@ import SkillsView from "./views/SkillsView.vue";
 import SecurityView from "./views/SecurityView.vue";
 import ChatView from "./views/ChatView.vue";
 import OnboardingGuide from "./components/OnboardingGuide.vue";
+import ApiKeySetupDialog from "./components/ApiKeySetupDialog.vue";
 
 const runtime = useRuntimeStore();
 const router = useRouter();
@@ -179,6 +181,7 @@ const activeMainTab = ref("monitor");
 const activeMonitorSubTab = ref("dashboard");
 const activeConfigSubTab = ref("setup");
 const showOnboarding = ref(false);
+const showApiKeySetup = ref(false);
 let previousRunning = runtime.status.running;
 const MONITOR_ONLY_KEY = "goon.gui.monitorOnly";
 const ONBOARDING_SEEN_KEY = "goon.gui.onboardingSeen";
@@ -296,6 +299,11 @@ async function onRestart() {
   }
 }
 
+function onApiKeyConfigured() {
+  showApiKeySetup.value = false;
+  runtime.refreshAll();
+}
+
 onMounted(async () => {
   try {
     await bootstrapBackend(monitorOnlyModeEnabled());
@@ -322,9 +330,8 @@ onMounted(async () => {
       const summary = agentInfo?.summary;
       const configuredCount = summary?.configured ?? agents.length;
       if (readyCount === 0 && configuredCount > 0) {
-        ElMessage.warning(t("backend.monitorOnlyMode"));
-        activeMainTab.value = "config";
-        activeConfigSubTab.value = "providers";
+        // API key needed — show the setup dialog instead of jumping pages
+        showApiKeySetup.value = true;
       } else if (configuredCount === 0) {
         ElMessage.info(t("backend.executableNotFound").replace("{attempt}/", "").replace("{max}", ""));
         activeMainTab.value = "config";

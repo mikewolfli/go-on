@@ -337,6 +337,24 @@
     "shutdownPrompt": "Type \"shutdown\" to confirm backend shutdown.",
     "shutdownPromptError": "Please type \"shutdown\" exactly."
   },
+  "apiKeySetup": {
+    "title": "API Key Required",
+    "provider": "Provider",
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "Paste your API key here",
+    "envVar": "Environment Variable",
+    "envVarHint": "Auto-detected from provider",
+    "model": "Default Model",
+    "autoModel": "Auto-select by task",
+    "skip": "Configure Later",
+    "save": "Save & Activate",
+    "gotIt": "Got It",
+    "completedTitle": "API Key Configured",
+    "completedSubtitle": "You can now use AI features in the chat and workflow views.",
+    "errorNoProvider": "Please select a provider",
+    "errorInvalidKey": "API key must be at least 4 characters",
+    "errorNotReady": "Provider configured but not ready yet. Please check the provider status."
+  },
   "backend": {
     "autoDetectedAndLinked": "Automatically detected and linked backend in the local directory.",
     "executableNotFound": "Backend executable \"go-on\" not found. Please select the directory containing go-on (it will look for root/bin/exec/backend automatically).\nAttempt {attempt}/{max}",

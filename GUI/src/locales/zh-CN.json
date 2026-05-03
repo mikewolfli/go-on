@@ -337,6 +337,24 @@
     "shutdownPrompt": "输入 \"shutdown\" 以确认关闭后端。",
     "shutdownPromptError": "请完整输入 \"shutdown\"。"
   },
+  "apiKeySetup": {
+    "title": "需要配置 API Key",
+    "provider": "AI 服务商",
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "在此粘贴您的 API Key",
+    "envVar": "环境变量",
+    "envVarHint": "自动从服务商推断",
+    "model": "默认模型",
+    "autoModel": "自动选择模型",
+    "skip": "稍后配置",
+    "save": "保存并激活",
+    "gotIt": "知道了",
+    "completedTitle": "API Key 配置完成",
+    "completedSubtitle": "您现在可以在聊天和工作流中使用 AI 功能了。",
+    "errorNoProvider": "请选择一个 AI 服务商",
+    "errorInvalidKey": "API Key 至少需要 4 个字符",
+    "errorNotReady": "服务商已配置但尚未就绪，请检查服务商状态。"
+  },
   "backend": {
     "autoDetectedAndLinked": "已自动检测并链接本地目录中的后端。",
     "executableNotFound": "未找到后端可执行文件 \"go-on\"。请选择包含 go-on 的目录（将自动查找 root/bin/exec/backend）。\n第 {attempt}/{max} 次",
