@@ -265,14 +265,20 @@ pub fn service_status(state: State<'_, AppState>) -> Result<ServiceStatus, Strin
 
 #[tauri::command]
 pub fn run_cli_command(state: State<'_, AppState>, command: String) -> Result<String, String> {
-    let inner = state
-        .0
-        .lock()
-        .map_err(|_| "state lock poisoned".to_string())?;
+    let (executable_path, working_dir) = {
+        let inner = state
+            .0
+            .lock()
+            .map_err(|_| "state lock poisoned".to_string())?;
+        (
+            inner.config.executable_path.clone(),
+            inner.config.working_dir.clone(),
+        )
+    }; // 锁在此释放
 
     let args: Vec<&str> = command.split_whitespace().collect();
-    let output = Command::new(&inner.config.executable_path)
-        .current_dir(&inner.config.working_dir)
+    let output = Command::new(&executable_path)
+        .current_dir(&working_dir)
         .args(args)
         .output()
         .map_err(|e| e.to_string())?;

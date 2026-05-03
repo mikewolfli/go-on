@@ -79,8 +79,8 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
                   confirmed: selection === t(MessageKeys.ok),
                   workflowId: message.workflowId,
                 });
-              } catch {
-                // View may be disposed; silently ignore
+              } catch (err) {
+                console.error(`[workflow] showConfirm error: ${err}`);
               }
               break;
             case "showInputBox":
@@ -257,7 +257,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
       delete workflows[workflowId];
       await this.context.workspaceState.update("go-on-workflows", workflows);
 
-      this._view?.webview.postMessage({
+      void this._view?.webview.postMessage({
         type: "workflowDeleted",
         workflowId,
       });

@@ -354,8 +354,12 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
               break;
             }
 
-            // Keep compatibility with current behavior but guard dangerous globals.
-            result = String(new Function("return (" + code + ")()")());
+            // Use safe JSON parsing instead of arbitrary code execution
+            try {
+              result = JSON.stringify(JSON.parse(code), null, 2);
+            } catch {
+              result = "⚠️ Only JSON expressions are supported for preview";
+            }
           } catch (e: unknown) {
             result = `Error: ${this._getErrorMessage(e)}`;
           }

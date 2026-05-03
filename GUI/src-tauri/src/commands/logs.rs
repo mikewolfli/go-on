@@ -14,8 +14,7 @@ pub struct LogChunk {
 }
 
 fn mask_sensitive_line(line: &str) -> String {
-    let mut masked = line.to_string();
-    let patterns = [
+    let sensitive_keywords = [
         "api_key",
         "apikey",
         "token",
@@ -23,18 +22,33 @@ fn mask_sensitive_line(line: &str) -> String {
         "secret",
         "password",
     ];
+    let lower = line.to_lowercase();
 
-    for p in patterns {
-        if masked.to_lowercase().contains(p) {
-            if let Some(idx) = masked.find('=') {
-                masked = format!("{}=***", &masked[..idx]);
-            } else if let Some(idx) = masked.find(':') {
-                masked = format!("{}: ***", &masked[..idx]);
-            }
-        }
+    // 检查是否包含任何敏感关键字
+    let has_sensitive = sensitive_keywords.iter().any(|kw| lower.contains(kw));
+    if !has_sensitive {
+        return line.to_string();
     }
 
-    masked
+    // 按空格分割 token，对每个匹配敏感关键的 token 进行 mask
+    line.split_whitespace()
+        .map(|token| {
+            let token_lower = token.to_lowercase();
+            if sensitive_keywords.iter().any(|kw| token_lower.contains(kw)) {
+                // 找到 '=' 或 ':' 的位置，只保留 key 部分
+                if let Some(idx) = token.find('=') {
+                    format!("{}=***", &token[..idx])
+                } else if let Some(idx) = token.find(':') {
+                    format!("{}:***", &token[..idx])
+                } else {
+                    "***".to_string()
+                }
+            } else {
+                token.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[tauri::command]
@@ -44,12 +58,16 @@ pub fn read_recent_logs(
     lines: Option<usize>,
     mask_sensitive: Option<bool>,
 ) -> Result<LogChunk, String> {
-    let inner = state
-        .0
-        .lock()
-        .map_err(|_| "state lock poisoned".to_string())?;
-
-    let path = log_path.unwrap_or_else(|| inner.config.log_path.clone());
+    let path = {
+        let inner = state
+            .0
+            .lock()
+            .map_err(|_| "state lock poisoned".to_string())?;
+        match log_path {
+            Some(p) => std::path::PathBuf::from(p),
+            None => std::path::PathBuf::from(&inner.config.log_path),
+        }
+    }; // 锁在此释放
     let line_limit = lines.unwrap_or(200);
     let should_mask = mask_sensitive.unwrap_or(true);
 
@@ -69,7 +87,7 @@ pub fn read_recent_logs(
     }
 
     Ok(LogChunk {
-        path,
+        path: path.to_string_lossy().to_string(),
         lines: chunks,
         total_lines_read: total,
     })

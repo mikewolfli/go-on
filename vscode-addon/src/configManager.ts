@@ -464,7 +464,9 @@ class ConfigManager {
 
     try {
       const content = this.toTOML(this.config);
-      await fs.writeFile(this.configPath, content, "utf-8");
+      const tmpPath = this.configPath + ".tmp";
+      await fs.writeFile(tmpPath, content, "utf-8");
+      await fs.rename(tmpPath, this.configPath);
     } catch (error) {
       throw new Error(`Failed to save configuration: ${error}`);
     }

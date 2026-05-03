@@ -254,20 +254,14 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
             break;
           case "manual":
             // Wait for manual confirmation
-            await new Promise<void>((resolve) => {
-              const thenable = vscode.window.showInformationMessage(
-                i18n.getMessage(MessageKeys.processFlowManualStagePrompt, [
-                  process.name,
-                  String(i + 1),
-                  stage.name ?? "-",
-                ]),
-                i18n.getMessage(MessageKeys.processFlowContinueButton),
-              );
-              Promise.resolve(thenable).then(
-                () => resolve(),
-                () => resolve(),
-              );
-            });
+            await vscode.window.showInformationMessage(
+              i18n.getMessage(MessageKeys.processFlowManualStagePrompt, [
+                process.name,
+                String(i + 1),
+                stage.name ?? "-",
+              ]),
+              i18n.getMessage(MessageKeys.processFlowContinueButton),
+            );
             break;
         }
 

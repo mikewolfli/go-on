@@ -3,11 +3,15 @@
 mod commands;
 mod state;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
+
+struct RunningGuard(Arc<AtomicBool>);
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "tray_show", "Show Main", true, None::<&str>)?;
@@ -60,6 +64,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 let _ = commands::process::tray_recover(app);
             }
             "tray_quit" => {
+                if let Some(guard) = app.try_state::<RunningGuard>() {
+                    guard.0.store(false, Ordering::Relaxed);
+                }
                 app.exit(0);
             }
             _ => {}
@@ -86,10 +93,15 @@ fn main() {
         .setup(|app| {
             build_tray(&app.handle())?;
 
+            let running = Arc::new(AtomicBool::new(true));
+            app.manage(RunningGuard(running.clone()));
+
             let app_handle = app.handle().clone();
-            thread::spawn(move || loop {
-                let _ = commands::process::watchdog_tick(&app_handle);
-                thread::sleep(Duration::from_secs(1));
+            thread::spawn(move || {
+                while running.load(Ordering::Relaxed) {
+                    let _ = commands::process::watchdog_tick(&app_handle);
+                    thread::sleep(Duration::from_secs(1));
+                }
             });
 
             // 主窗口关闭时只隐藏自己
@@ -102,12 +114,6 @@ fn main() {
                             let _ = window.hide();
                         }
                     }
-                    // 若主窗口显示，则隐藏迷你窗口
-                    if let tauri::WindowEvent::Focused(true) = event {
-                        if let Some(mini) = app_handle.get_webview_window("mini") {
-                            let _ = mini.hide();
-                        }
-                    }
                 });
             }
             // 迷你窗口关闭时只隐藏自己
@@ -118,12 +124,6 @@ fn main() {
                         api.prevent_close();
                         if let Some(window) = app_handle.get_webview_window("mini") {
                             let _ = window.hide();
-                        }
-                    }
-                    // 若迷你窗口显示，则隐藏主窗口
-                    if let tauri::WindowEvent::Focused(true) = event {
-                        if let Some(main) = app_handle.get_webview_window("main") {
-                            let _ = main.hide();
                         }
                     }
                 });

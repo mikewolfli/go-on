@@ -436,7 +436,10 @@ export function activate(context: vscode.ExtensionContext) {
   // Initialize config manager
   const config = vscode.workspace.getConfiguration("go-on");
   const configPath = config.get<string>("configPath", "./config.toml");
-  // Initialize config manager and report status
+  // Sync VS Code language to app configuration
+  syncLanguageToApp(currentLanguage);
+
+  // Initialize config manager and GoOnManager
   (async () => {
     try {
       await configManager.initialize(configPath);
@@ -448,13 +451,10 @@ export function activate(context: vscode.ExtensionContext) {
         i18n.getMessage(MessageKeys.runtimeInitFailed, [errMsg]),
       );
     }
+
+    goOnManager = new GoOnManager();
+    goOnManager.setOutputChannel(goOnOutput);
   })();
-
-  // Sync VS Code language to app configuration
-  syncLanguageToApp(currentLanguage);
-
-  goOnManager = new GoOnManager();
-  goOnManager.setOutputChannel(goOnOutput);
   statusProvider = new GoOnStatusProvider(goOnManager);
   const runtimeBootstrapDeps: RuntimeBootstrapDeps = {
     ensureBinary: ensureGoOnBinary,

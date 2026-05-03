@@ -82,40 +82,35 @@ pub struct EditorIntegrationStatus {
     pub note: String,
 }
 
-fn count_processes(candidates: &[&str]) -> u32 {
-    if cfg!(target_os = "windows") {
-        let output = Command::new("tasklist").output();
-        if let Ok(out) = output {
-            let content = String::from_utf8_lossy(&out.stdout).to_lowercase();
-            let mut count = 0u32;
-            for line in content.lines() {
-                if candidates
-                    .iter()
-                    .any(|name| line.contains(&name.to_lowercase()))
-                {
-                    count += 1;
-                }
-            }
-            return count;
+fn count_processes(candidate_names: &[&str]) -> u32 {
+    let mut count = 0u32;
+    for name in candidate_names {
+        if name.is_empty() {
+            continue;
         }
-    } else {
-        let output = Command::new("pgrep").arg("-fl").arg(".").output();
-        if let Ok(out) = output {
-            let content = String::from_utf8_lossy(&out.stdout).to_lowercase();
-            let mut count = 0u32;
-            for line in content.lines() {
-                if candidates
-                    .iter()
-                    .any(|name| line.contains(&name.to_lowercase()))
-                {
-                    count += 1;
+        if cfg!(target_os = "windows") {
+            let output = Command::new("tasklist").output();
+            if let Ok(out) = output {
+                let content = String::from_utf8_lossy(&out.stdout).to_lowercase();
+                for line in content.lines() {
+                    if line.contains(&name.to_lowercase()) {
+                        count += 1;
+                    }
                 }
             }
-            return count;
+        } else {
+            // Use pgrep -x for exact process name matching
+            let output = Command::new("pgrep").arg("-x").arg(name).output();
+            if let Ok(out) = output {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let trimmed = stdout.trim();
+                if !trimmed.is_empty() {
+                    count += trimmed.lines().count() as u32;
+                }
+            }
         }
     }
-
-    0
+    count
 }
 
 fn probe_http(url: &str) -> ProbeResult {

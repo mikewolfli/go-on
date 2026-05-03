@@ -82,14 +82,14 @@ fn parse_line_timestamp_utc(line: &str) -> Option<DateTime<Utc>> {
     if let Ok(naive) = NaiveDateTime::parse_from_str(token, "%Y-%m-%dT%H:%M:%S") {
         return Local
             .from_local_datetime(&naive)
-            .single()
+            .earliest()
             .map(|dt| dt.with_timezone(&Utc));
     }
 
     if let Ok(naive) = NaiveDateTime::parse_from_str(token, "%Y-%m-%d_%H:%M:%S") {
         return Local
             .from_local_datetime(&naive)
-            .single()
+            .earliest()
             .map(|dt| dt.with_timezone(&Utc));
     }
 
@@ -164,11 +164,19 @@ pub fn get_usage_heatmap(
         "log-fallback".to_string()
     };
 
+    drop(inner);
+
     let mut fallback_lines: Vec<String> = Vec::new();
     let max_fallback = (bucket_count as usize) * 20;
 
     if !has_events {
-        let log_text = fs::read_to_string(&inner.config.log_path).unwrap_or_default();
+        let inner2 = state
+            .0
+            .lock()
+            .map_err(|_| "state lock poisoned".to_string())?;
+        let log_path = inner2.config.log_path.clone();
+        drop(inner2);
+        let log_text = fs::read_to_string(&log_path).unwrap_or_default();
         let now_utc = Utc::now();
 
         for line in log_text.lines().rev().take((seconds as usize) * 12) {

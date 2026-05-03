@@ -43,7 +43,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 async function ensureRunning(deps: CoreCommandRegistryDeps): Promise<boolean> {
   if (!deps.isRunning()) {
-    vscode.window.showErrorMessage(
+    await vscode.window.showErrorMessage(
       i18n.getMessage(MessageKeys.goOnNotRunningRpc),
     );
     return false;

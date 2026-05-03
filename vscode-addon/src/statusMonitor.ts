@@ -46,6 +46,7 @@ export class StatusMonitor {
   }
 
   private restartHealthMonitoring() {
+    if (this._disposed) return;
     this.stopHealthMonitoring();
     this.startHealthMonitoring();
   }
@@ -122,6 +123,7 @@ export class StatusMonitor {
   }
 
   public refresh() {
+    if (this._disposed) return;
     this.updateStatus();
     if (!this.healthCheckTimer) {
       this.startHealthMonitoring();

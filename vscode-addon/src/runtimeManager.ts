@@ -205,6 +205,7 @@ export class GoOnManager {
 
       this.process.on("close", (code: number) => {
         this._outputChannel?.appendLine(`[exit] code ${code}`);
+        this._shutdownInProgress = false;
         const failedBeforeStartup = !resolved;
         this.process = null;
 
@@ -295,6 +296,7 @@ export class GoOnManager {
       this._closeListener?.();
       const closeHandler = () => {
         clearTimeout(forceKillTimer);
+        this._shutdownInProgress = false;
       };
       proc.on("close", closeHandler);
       // Store cleanup so it can be removed if stop() is called again
@@ -305,7 +307,6 @@ export class GoOnManager {
     }
 
     this.updateStatus();
-    this._shutdownInProgress = false;
   }
 
   private async attemptReconnect(): Promise<void> {
@@ -434,7 +435,18 @@ export class GoOnManager {
         this.pendingRequests.delete(id);
         return;
       }
-      this.process.stdin.write(requestStr);
+      const canWrite = this.process.stdin.write(requestStr);
+      if (!canWrite) {
+        this._outputChannel?.appendLine(
+          "[warn] RPC stdin backpressure, waiting for drain...",
+        );
+        this.process.stdin.once("drain", () => {
+          this._outputChannel?.appendLine(
+            "[info] RPC stdin drain complete, retrying write",
+          );
+          this.process!.stdin!.write(requestStr);
+        });
+      }
     });
   }
 
