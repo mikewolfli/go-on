@@ -315,6 +315,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     );
 
     this._sendCurrentSettings();
+    // Request webview to scroll to credentials section
+    this._postMessage({ type: "focusCredentials" });
     if (this.manager.isRunning?.()) {
       this._refreshRuntimeFeatures().catch(() => undefined);
     }

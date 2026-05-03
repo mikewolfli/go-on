@@ -33,6 +33,24 @@
       renderSettingsActionOutput(`Error: ${message.message}`);
     } else if (message.type === "runtimeFeatures") {
       applyRuntimeFeatures(message.features || {});
+    } else if (message.type === "focusCredentials") {
+      // Scroll to the keyring/credentials section when navigating from API key prompt
+      const keyringSection = document.querySelector(".setting-group h3");
+      if (keyringSection && keyringSection.closest) {
+        const container = keyringSection.closest(".setting-group");
+        if (container) {
+          container.scrollIntoView({ behavior: "smooth", block: "start" });
+          // Highlight the secret value input briefly
+          const secretInput = container.querySelector("#secretValue");
+          if (secretInput) {
+            secretInput.style.outline =
+              "2px solid var(--vscode-inputOption-activeBorder)";
+            setTimeout(() => {
+              secretInput.style.outline = "";
+            }, 2000);
+          }
+        }
+      }
     }
   });
 
