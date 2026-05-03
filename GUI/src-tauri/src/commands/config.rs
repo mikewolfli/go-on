@@ -34,6 +34,8 @@ struct ProviderCatalogSpec {
     #[serde(rename = "type")]
     agent_type: String,
     #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
     url: Option<String>,
     #[serde(default)]
     chat_path: Option<String>,
@@ -56,6 +58,8 @@ struct ProviderCatalogSpec {
 pub struct ProviderCatalogEntry {
     pub name: String,
     pub agent_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -263,6 +267,9 @@ fn config_template_path(working_dir: &str) -> PathBuf {
 fn provider_catalog_path(working_dir: &str) -> Option<PathBuf> {
     let candidates = [
         PathBuf::from(working_dir).join("providers.toml"),
+        PathBuf::from(working_dir)
+            .join("config")
+            .join("providers.toml"),
         std::env::current_dir().ok()?.join("providers.toml"),
     ];
 
@@ -421,6 +428,7 @@ fn fallback_provider_catalog() -> Vec<ProviderCatalogSpec> {
         ProviderCatalogSpec {
             name: "anthropic".to_string(),
             agent_type: "claude".to_string(),
+            group: None,
             url: Some("https://api.anthropic.com".to_string()),
             chat_path: None,
             model: Some("claude-3-7-sonnet-latest".to_string()),
@@ -433,6 +441,7 @@ fn fallback_provider_catalog() -> Vec<ProviderCatalogSpec> {
         ProviderCatalogSpec {
             name: "copilot".to_string(),
             agent_type: "copilot".to_string(),
+            group: None,
             url: Some("http://127.0.0.1:8080".to_string()),
             chat_path: None,
             model: Some("copilot".to_string()),
@@ -445,6 +454,7 @@ fn fallback_provider_catalog() -> Vec<ProviderCatalogSpec> {
         ProviderCatalogSpec {
             name: "gemini".to_string(),
             agent_type: "gemini".to_string(),
+            group: None,
             url: Some("https://generativelanguage.googleapis.com/v1beta/openai".to_string()),
             chat_path: Some("/chat/completions".to_string()),
             model: Some("gemini-2.0-flash".to_string()),
@@ -457,6 +467,7 @@ fn fallback_provider_catalog() -> Vec<ProviderCatalogSpec> {
         ProviderCatalogSpec {
             name: "openai".to_string(),
             agent_type: "openai".to_string(),
+            group: None,
             url: Some("https://api.openai.com/v1".to_string()),
             chat_path: None,
             model: Some("gpt-4o-mini".to_string()),
@@ -581,6 +592,7 @@ pub fn list_provider_catalog(
             ProviderCatalogEntry {
                 name: spec.name,
                 agent_type: spec.agent_type,
+                group: spec.group,
                 default_model: spec.model,
                 api_key_env: spec.api_key_env,
                 secret_key_env: spec.secret_key_env,

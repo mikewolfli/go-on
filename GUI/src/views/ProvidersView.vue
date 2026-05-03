@@ -12,15 +12,20 @@
 
       <el-form label-width="140px" style="width:100%;max-width:760px;">
         <el-form-item :label="t('providers.provider')">
-          <el-select v-model="provider" style="width:280px" filterable :loading="loadingProviders">
-            <el-option
-              v-for="item in providerOptions"
-              :key="item.name"
-              :label="item.name"
-              :value="item.name"
-            />
-          </el-select>
-        </el-form-item>
+            <el-select v-model="provider" style="width:280px" filterable :loading="loadingProviders">
+              <el-option-group
+                v-for="group in groupedProviders"
+                :key="group.label"
+                :label="group.label">
+                <el-option
+                  v-for="item in group.children"
+                  :key="item.name"
+                  :label="item.name"
+                  :value="item.name"
+                />
+              </el-option-group>
+            </el-select>
+          </el-form-item>
         <el-form-item :label="t('providers.defaultModel')">
           <el-select v-model="selectedModel" style="width:320px" filterable :loading="loadingModels">
             <el-option
@@ -55,6 +60,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+
+const GROUP_LABELS: Record<string, string> = {
+  openai: "OpenAI Family",
+  chinese: "Chinese Vendors",
+  other: "Other Vendors",
+};
 import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
 import {
@@ -79,6 +90,22 @@ const loadingProviders = ref(false);
 const loadingModels = ref(false);
 const providerOptions = ref<ProviderCatalogEntry[]>([]);
 const modelOptions = ref<Array<{ label: string; value: string }>>([]);
+
+const groupedProviders = computed(() => {
+  const groups = new Map<string, ProviderCatalogEntry[]>();
+  for (const p of providerOptions.value) {
+    const g = p.group || "other";
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g)!.push(p);
+  }
+  const order = ["openai", "chinese", "other"];
+  return order
+    .filter((g) => groups.has(g))
+    .map((g) => ({
+      label: GROUP_LABELS[g] || g,
+      children: groups.get(g)!,
+    }));
+});
 
 const copilotInfo = computed(() => {
   if (!tokenSource.value) {

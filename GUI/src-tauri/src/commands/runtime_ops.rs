@@ -1,86 +1,20 @@
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::time::Duration;
 use tauri::State;
 
 use crate::state::AppState;
 
+const RPC_HTTP_TIMEOUT_SECS: u64 = 25;
+
 #[tauri::command]
 pub fn invoke_runtime_rpc(
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
     method: String,
     params_json: Option<String>,
 ) -> Result<String, String> {
-    let inner = state
-        .0
-        .lock()
-        .map_err(|_| "state lock poisoned".to_string())?;
-    let executable = inner.config.executable_path.clone();
-    let working_dir = inner.config.working_dir.clone();
-    let mut env_overrides = inner.config.extra_env.clone();
-    drop(inner);
-
     if method.trim().is_empty() {
         return Err("method cannot be empty".to_string());
     }
-
-    let config_path = std::path::Path::new(&working_dir).join("config.toml");
-    let executable_path = {
-        let path = std::path::PathBuf::from(&executable);
-        if path.is_absolute() {
-            path
-        } else {
-            std::path::PathBuf::from(&working_dir).join(path)
-        }
-    };
-
-    let mut cmd = Command::new(&executable_path);
-    cmd.current_dir(&working_dir)
-        .arg("--config")
-        .arg(config_path)
-        .arg("--verbose")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    for (k, v) in env_overrides.drain() {
-        cmd.env(k, v);
-    }
-
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "failed to open child stdin".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "failed to open child stdout".to_string())?;
-
-    let (tx, rx) = mpsc::channel::<Result<Value, String>>();
-    std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            match line {
-                Ok(content) => {
-                    if content.trim().is_empty() {
-                        continue;
-                    }
-                    if let Ok(v) = serde_json::from_str::<Value>(&content) {
-                        let _ = tx.send(Ok(v));
-                        return;
-                    }
-                }
-                Err(err) => {
-                    let _ = tx.send(Err(err.to_string()));
-                    return;
-                }
-            }
-        }
-        let _ = tx.send(Err("no JSON-RPC response received".to_string()));
-    });
 
     let params_value = if let Some(raw) = params_json {
         if raw.trim().is_empty() {
@@ -105,31 +39,36 @@ pub fn invoke_runtime_rpc(
         "params": params_value
     });
 
-    let line = format!("{}\n", req);
-    stdin
-        .write_all(line.as_bytes())
-        .map_err(|e| e.to_string())?;
-    stdin.flush().map_err(|e| e.to_string())?;
+    // Determine the backend endpoint — use state's working_dir to infer the base URL,
+    // but default to 127.0.0.1:8090 which is the standard acp_http bind address.
+    let endpoint = "http://127.0.0.1:8090/rpc";
 
-    let json = match rx.recv_timeout(Duration::from_secs(12)) {
-        Ok(v) => match v {
-            Ok(val) => val,
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("rpc child error: {e}"));
-            }
-        },
-        Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("rpc timeout".to_string());
-        }
-    };
-    let _ = child.kill();
-    let _ = child.wait();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(RPC_HTTP_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
 
-    if let Some(err) = json.get("error") {
+    let response = client
+        .post(endpoint)
+        .json(&req)
+        .send()
+        .map_err(|e| format!("RPC HTTP request failed: {e}"))?;
+
+    let status = response.status();
+    let body: Value = response
+        .json()
+        .map_err(|e| format!("failed to parse RPC response: {e}"))?;
+
+    if !status.is_success() {
+        let error_msg = body
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown HTTP error");
+        return Err(format!("rpc_http_error:{}:{}", status.as_u16(), error_msg));
+    }
+
+    // Check for JSON-RPC error in the response body
+    if let Some(err) = body.get("error") {
         let code = err.get("code").and_then(|x| x.as_i64()).unwrap_or(-1);
         let message = err
             .get("message")
@@ -163,6 +102,6 @@ pub fn invoke_runtime_rpc(
         ));
     }
 
-    let payload = json.get("result").cloned().unwrap_or(json);
+    let payload = body.get("result").cloned().unwrap_or(body);
     Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string()))
 }

@@ -129,6 +129,12 @@
     }
   }
 
+  const GROUP_LABELS = {
+    openai: "OpenAI Family",
+    chinese: "Chinese Vendors",
+    other: "Other Vendors",
+  };
+
   function populateProviderSelect(providers, selectedProvider) {
     const select = document.getElementById("providerSelect");
     if (!select) {
@@ -136,11 +142,27 @@
     }
 
     select.innerHTML = "";
+
+    // Group providers by region
+    const groups = {};
+    const order = ["openai", "chinese", "other"];
     providers.forEach((provider) => {
-      const option = document.createElement("option");
-      option.value = provider.name;
-      option.textContent = provider.name;
-      select.appendChild(option);
+      const g = provider.group || "other";
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(provider);
+    });
+
+    order.forEach((g) => {
+      if (!groups[g] || groups[g].length === 0) return;
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = GROUP_LABELS[g] || g;
+      groups[g].forEach((provider) => {
+        const option = document.createElement("option");
+        option.value = provider.name;
+        option.textContent = provider.name;
+        optgroup.appendChild(option);
+      });
+      select.appendChild(optgroup);
     });
 
     if (

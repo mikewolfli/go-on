@@ -180,6 +180,7 @@ export interface AutoConfigureResult {
 export interface ProviderCatalogEntry {
   name: string;
   agentType: string;
+  group?: string;
   defaultModel?: string;
   apiKeyEnv?: string;
   secretKeyEnv?: string;

@@ -148,7 +148,7 @@ pub struct AcpServer {
     /// Verbose logging flag
     pub verbose: bool,
     /// Output stream for responses
-    pub output: Arc<Mutex<tokio::io::Stdout>>,
+    pub output: Arc<Mutex<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>>,
     /// Shutdown notification mechanism
     pub shutdown_notify: Arc<Notify>,
     /// In-memory registry for Responses API objects
@@ -573,7 +573,9 @@ impl ServerBuilder {
             prompt_assembler: PromptAssembler,
             promotion_registry: Arc::new(StdMutex::new(PromotionRegistry::new())),
             verbose: self.verbose,
-            output: Arc::new(Mutex::new(tokio::io::stdout())),
+            output: Arc::new(Mutex::new(
+                Box::new(tokio::io::stdout()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>
+            )),
             shutdown_notify: Arc::new(Notify::new()),
             responses_api_store,
             task_graph_store: self.task_graph_store,

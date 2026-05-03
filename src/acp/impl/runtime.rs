@@ -5,6 +5,7 @@
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
+use std::mem;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -321,7 +322,9 @@ pub fn new_acp_server(
                 promotion_registry: Arc::new(StdMutex::new(
                     crate::orchestration::promotion_plugin::PromotionRegistry::new(),
                 )),
-                output: Arc::new(Mutex::new(tokio::io::stdout())),
+                output: Arc::new(Mutex::new(
+                    Box::new(tokio::io::stdout()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>
+                )),
                 shutdown_notify: Arc::new(Notify::new()),
                 responses_api_store: Arc::new(StdMutex::new(std::collections::HashMap::new())),
                 task_graph_store: None,
@@ -2507,6 +2510,70 @@ async fn route_http_post(
                 }
                 "/chat/completions" | "/v1/chat/completions" | "/chat/chat/completions" => {
                     handle_openai_chat_completions(socket, Arc::clone(&server), body).await?;
+                }
+                "/rpc" => {
+                    let request: JsonRpcRequest = match serde_json::from_value(body) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            write_http_json_response_with_context(
+                                socket,
+                                400,
+                                serde_json::json!({"error": format!("invalid RPC request: {}", e)}),
+                                "rpc",
+                            )
+                            .await?;
+                            return Ok(());
+                        }
+                    };
+
+                    // Create a pipe to capture the JSON-RPC response written to server.output
+                    let (pipe_writer, mut pipe_reader) = tokio::io::duplex(65536);
+
+                    // Temporarily swap stdout with the pipe writer
+                    {
+                        let mut guard = server.output.lock().await;
+                        let _ = mem::replace(&mut *guard, Box::new(pipe_writer));
+                    }
+
+                    // Dispatch the RPC request — response goes into the pipe
+                    if let Err(err) = handle_request(server.as_ref(), request).await {
+                        // Restore stdout before erroring out
+                        {
+                            let mut guard = server.output.lock().await;
+                            let _ = mem::replace(
+                                &mut *guard,
+                                Box::new(tokio::io::stdout()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
+                            );
+                        }
+                        write_http_json_response_with_context(
+                            socket,
+                            500,
+                            serde_json::json!({"error": format!("RPC dispatch error: {}", err)}),
+                            "rpc",
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+
+                    // Restore stdout
+                    {
+                        let mut guard = server.output.lock().await;
+                        let _ = mem::replace(
+                            &mut *guard,
+                            Box::new(tokio::io::stdout()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
+                        );
+                    }
+
+                    // Read the captured RPC response from the pipe
+                    let mut response_bytes = Vec::new();
+                    pipe_reader.read_to_end(&mut response_bytes).await?;
+
+                    let response_str = String::from_utf8_lossy(&response_bytes);
+                    let response_value: serde_json::Value =
+                        serde_json::from_str(response_str.trim())
+                            .unwrap_or_else(|_| serde_json::json!({"raw": response_str.to_string()}));
+
+                    write_http_json_response(socket, 200, response_value).await?;
                 }
                 "/v1/responses" => {
                     handle_responses_api(socket, Arc::clone(&server), body).await?;

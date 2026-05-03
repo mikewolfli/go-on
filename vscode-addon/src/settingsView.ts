@@ -9,6 +9,7 @@ import { normalizeProtocolMode } from "./protocolContract";
 interface ProviderCatalogSpec {
   name: string;
   type: string;
+  group?: string;
   model?: string;
   api_key_env?: string;
   secret_key_env?: string;
@@ -22,6 +23,7 @@ interface ProviderCatalogSpec {
 interface ProviderCatalogEntry {
   name: string;
   agentType: string;
+  group?: string;
   defaultModel?: string;
   apiKeyEnv?: string;
   secretKeyEnv?: string;
@@ -517,6 +519,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     const root = this._workspaceRoot();
     const candidates = [
       path.join(root, "providers.toml"),
+      path.join(root, "config", "providers.toml"),
       path.resolve(root, "..", "providers.toml"),
     ];
 
@@ -627,6 +630,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         return {
           name: spec.name,
           agentType: spec.type,
+          group: spec.group,
           defaultModel: spec.model,
           apiKeyEnv: spec.api_key_env,
           secretKeyEnv: spec.secret_key_env,
