@@ -798,12 +798,21 @@ pub(super) async fn handle_release_readiness(
         && brain_loop_artifact_and_safe_degrade_gate
         && consensus_with_dissent_preservation_gate;
     // BLUE35 S1-S16
+    // NOTE: The gates below form a pure boolean algebra chain (BLUE38 §6.3).
+    // `startup_context_loader_gate` has been wired to a real check: if the
+    // startup context has been loaded asynchronously, the gate passes.
+    // Other gates remain as boolean stubs until real backends are wired.
     let custom_role_registry_gate = blue34_release_closure_gate && status.lifecycle.is_healthy;
     let custom_role_dynamic_matching_gate = custom_role_registry_gate && observability_gate;
     let compliance_audit_metadata_gate = custom_role_dynamic_matching_gate && strict_enabled;
     let self_rationalization_guard_gate =
         compliance_audit_metadata_gate && metrics.total_requests >= metrics.failed_requests;
-    let startup_context_loader_gate = self_rationalization_guard_gate;
+    // REAL CHECK: startup_context_loader_gate now checks whether the
+    // asynchronous StartupContext has been successfully loaded (BLUE38 §6.3).
+    let startup_context_loader_gate = crate::orchestration::startup_context::get()
+        .as_ref()
+        .map(|ctx| ctx.loaded)
+        .unwrap_or(false);
     let layered_prompt_builder_gate = startup_context_loader_gate && status.lifecycle.is_healthy;
     let layered_token_trigger_gate = layered_prompt_builder_gate && observability_gate;
     let multi_priority_scheduler_gate = layered_token_trigger_gate && dual_track_consistency_gate;

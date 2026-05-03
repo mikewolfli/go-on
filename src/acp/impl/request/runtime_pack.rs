@@ -1681,7 +1681,12 @@ pub(super) async fn handle_governance_status(
     let compliance_audit_metadata_ready = custom_role_dynamic_matching_ready && strict_component_ok;
     let self_rationalization_guard_ready =
         compliance_audit_metadata_ready && !pua_learning.is_empty();
-    let startup_context_loader_ready = self_rationalization_guard_ready;
+    // REAL CHECK: startup_context_loader_ready verifies the async StartupContext
+    // has been loaded before BLUE35 layered prompt builder can proceed (BLUE38 §6.3).
+    let startup_context_loader_ready = crate::orchestration::startup_context::get()
+        .as_ref()
+        .map(|ctx| ctx.loaded)
+        .unwrap_or(false);
     let layered_prompt_builder_ready = startup_context_loader_ready && status.lifecycle.is_healthy;
     let layered_token_trigger_ready = layered_prompt_builder_ready && reconciliation_ok;
     let multi_priority_scheduler_ready =
@@ -3043,6 +3048,10 @@ pub(super) async fn handle_governance_status(
         .unwrap_or(0);
 
     // REAL DATA: fork registry stats for active/reaped/rejected counts
+    // NOTE: fork_reaped_count and fork_rejected_count are currently stubbed to 0
+    // because ForkRegistry does not track cumulative reap/reject counters yet.
+    // Once ForkRegistry adds reaped_total() and schema_violation_rejected_total()
+    // methods, these should be wired here. (BLUE38 §6.2)
     let (fork_active_count, fork_reaped_count, fork_rejected_count) = server
         .fork_registry
         .lock()
@@ -3613,7 +3622,7 @@ pub(super) async fn handle_governance_status(
                     "priority_queue_profile": {
                         "aging_threshold_s": 30u32,
                         "max_wait_time_s": 0u64,
-                        "starvation_events_prevented": 0u64,
+                        "starvation_events_prevented": sched_starvation_prevented,
                         "priority_weights": {
                             "urgency": 0.4,
                             "cost": 0.2,
