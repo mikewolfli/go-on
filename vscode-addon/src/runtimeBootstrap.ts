@@ -17,11 +17,7 @@ export async function ensureRuntimeReadyAfterChatOpen(
   context: vscode.ExtensionContext,
   deps: RuntimeBootstrapDeps,
 ): Promise<void> {
-  if (runtimeReadyPromise) {
-    await runtimeReadyPromise;
-    return;
-  }
-
+  // Always create a fresh promise to avoid stale state from previous activations
   runtimeReadyPromise = (async () => {
     const config = vscode.workspace.getConfiguration("go-on");
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;

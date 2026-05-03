@@ -30,6 +30,7 @@ pub fn check_health(
         .build()
         .map_err(|e| e.to_string())?;
 
+    // HTTP request outside the lock to avoid holding the mutex for up to 4 seconds
     let result = client.get(&endpoint).send();
 
     let mut inner = state

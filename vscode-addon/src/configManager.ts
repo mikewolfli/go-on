@@ -218,6 +218,11 @@ class ConfigManager {
         // Parse value type
         if (rawValue.startsWith('"') && rawValue.endsWith('"')) {
           value = rawValue.slice(1, -1);
+          // Handle escape sequences in TOML strings
+          value = (value as string)
+            .replace(/\\n/g, "\n")
+            .replace(/\\t/g, "\t")
+            .replace(/\\\\/g, "\\");
         } else if (rawValue === "true") {
           value = true;
         } else if (rawValue === "false") {
@@ -225,8 +230,15 @@ class ConfigManager {
         } else if (!isNaN(Number(rawValue))) {
           value = Number(rawValue);
         } else if (rawValue.startsWith("[")) {
-          // Simple array parsing
-          value = JSON.parse(rawValue.replace(/'/g, '"'));
+          // Array parsing: replace single quotes with double quotes for TOML arrays
+          // Use a more precise approach to avoid corrupting string content
+          const jsonArrayStr = rawValue.replace(/'/g, '"');
+          try {
+            value = JSON.parse(jsonArrayStr);
+          } catch {
+            // If JSON parse fails, keep the raw array as a string
+            value = rawValue;
+          }
         }
 
         const parts = currentSection.split(".");

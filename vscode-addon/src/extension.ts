@@ -437,18 +437,18 @@ export function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration("go-on");
   const configPath = config.get<string>("configPath", "./config.toml");
   // Initialize config manager and report status
-  configManager.initialize(configPath).then(
-    () => {
+  (async () => {
+    try {
+      await configManager.initialize(configPath);
       goOnOutput.appendLine("config manager initialized");
-    },
-    (err) => {
+    } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       goOnOutput.appendLine(`warn: config manager init failed: ${errMsg}`);
       void vscode.window.showWarningMessage(
         i18n.getMessage(MessageKeys.runtimeInitFailed, [errMsg]),
       );
-    },
-  );
+    }
+  })();
 
   // Sync VS Code language to app configuration
   syncLanguageToApp(currentLanguage);

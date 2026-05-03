@@ -1,4 +1,5 @@
-import { ChildProcess, spawn } from "child_process";
+import { ChildProcess, spawn, exec } from "child_process";
+import * as os from "os";
 import * as vscode from "vscode";
 import { i18n, MessageKeys } from "./i18n";
 import {
@@ -50,6 +51,7 @@ export class GoOnManager {
   private readonly maxReconnectAttempts = 3;
   private _shutdownInProgress = false;
   private _closeListener: (() => void) | null = null;
+  private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private _startupConfig?: {
     configPath: string;
     executablePath: string;
@@ -233,6 +235,7 @@ export class GoOnManager {
       });
 
       this.process.on("error", (error) => {
+        clearTimeout(startupTimeout);
         this._outputChannel?.appendLine(`[error] ${error}`);
         this.process = null;
         reject(error);
@@ -240,12 +243,39 @@ export class GoOnManager {
     });
   }
 
+  private async forceKillProcess(proc: ChildProcess): Promise<void> {
+    if (os.platform() === "win32") {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const kill = exec(`taskkill /F /T /PID ${proc.pid}`, (err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+          kill.unref();
+        });
+      } catch {
+        proc.kill(); // fallback
+      }
+    } else {
+      proc.kill("SIGKILL");
+    }
+  }
+
   stop(): void {
     this._shutdownInProgress = true;
     this._reconnectAttempts = 0;
     this._startupConfig = undefined;
 
+    // Clean up timers first
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = undefined;
+    }
+
+    // Save process reference to local variable before clearing
     const proc = this.process;
+    this.process = null;
+
     if (proc) {
       // Graceful shutdown: send SIGTERM first
       proc.kill("SIGTERM");
@@ -257,7 +287,7 @@ export class GoOnManager {
           this._outputChannel?.appendLine(
             "[shutdown] SIGTERM timeout, sending SIGKILL",
           );
-          proc.kill("SIGKILL");
+          void this.forceKillProcess(proc);
         }
       }, 5000);
 
@@ -272,7 +302,6 @@ export class GoOnManager {
         proc.off("close", closeHandler);
         this._closeListener = null;
       };
-      this.process = null;
     }
 
     this.updateStatus();
@@ -302,7 +331,9 @@ export class GoOnManager {
     );
 
     // Wait before reconnecting
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => {
+      this._reconnectTimer = setTimeout(resolve, 2000);
+    });
 
     try {
       await this.start(
@@ -324,7 +355,10 @@ export class GoOnManager {
         this._reconnectAttempts < this.maxReconnectAttempts &&
         this._startupConfig
       ) {
-        setTimeout(() => void this.attemptReconnect(), 2000);
+        this._reconnectTimer = setTimeout(
+          () => void this.attemptReconnect(),
+          2000,
+        );
       }
     }
   }

@@ -665,7 +665,7 @@ pub fn save_provider_selection(
                     let phase_table = phase_item.as_table_mut().expect("checked table");
                     let mut agents = Array::default();
                     agents.push(provider_name.as_str());
-                    phase_table["agents"] = value(agents);
+                    phase_table.insert("agents", value(agents));
                 }
             }
         }

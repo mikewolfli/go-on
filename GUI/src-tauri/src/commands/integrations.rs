@@ -119,6 +119,9 @@ fn count_processes(candidates: &[&str]) -> u32 {
 }
 
 fn probe_http(url: &str) -> ProbeResult {
+    // TODO: 迁移到异步 reqwest::Client 以避免阻塞同步 command 线程。
+    // 当前 `get_editor_integration_status` 是同步 tauri::command，
+    // reqwest 的 async feature 未启用，暂时保持 blocking 实现。
     let client = match reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()
@@ -219,7 +222,9 @@ fn protocol_mode_from_config_text(text: &str) -> Option<&'static str> {
         };
 
         match current_section.as_deref() {
-            Some("protocol") if name.trim().eq_ignore_ascii_case("mode") => return Some(normalized),
+            Some("protocol") if name.trim().eq_ignore_ascii_case("mode") => {
+                return Some(normalized)
+            }
             Some("runtime") if name.trim().eq_ignore_ascii_case("protocol_mode") => {
                 runtime_mode = Some(normalized);
             }
@@ -267,8 +272,14 @@ pub fn get_editor_integration_status() -> Result<Vec<EditorIntegrationStatus>, S
 
     let contract = try_capability_matrix().unwrap_or_else(|_| capability_matrix());
     let contract_load_error = try_capability_matrix().err();
-    let models_endpoint = format!("{}{}", contract.runtime.base_url, contract.openai.models_path);
-    let health_endpoint = format!("{}{}", contract.runtime.base_url, contract.runtime.health_path);
+    let models_endpoint = format!(
+        "{}{}",
+        contract.runtime.base_url, contract.openai.models_path
+    );
+    let health_endpoint = format!(
+        "{}{}",
+        contract.runtime.base_url, contract.runtime.health_path
+    );
 
     let zed_models_probe = probe_http(&models_endpoint);
     let zed_health_probe = probe_http(&health_endpoint);
@@ -394,22 +405,22 @@ type = "acp"
 mode = "mcp"
 "#;
 
-    assert_eq!(protocol_mode_from_config_text(text), Some("mcp_stdio"));
+        assert_eq!(protocol_mode_from_config_text(text), Some("mcp_stdio"));
     }
 
     #[test]
     fn protocol_mode_parser_supports_all_five_options() {
-    let text = r#"
+        let text = r#"
 [protocol]
 mode = "acp_http"
 "#;
-    assert_eq!(protocol_mode_from_config_text(text), Some("acp_http"));
+        assert_eq!(protocol_mode_from_config_text(text), Some("acp_http"));
 
-    let text = r#"
+        let text = r#"
 [protocol]
 mode = "mcp_http"
 "#;
-    assert_eq!(protocol_mode_from_config_text(text), Some("mcp_http"));
+        assert_eq!(protocol_mode_from_config_text(text), Some("mcp_http"));
     }
 
     #[test]
@@ -451,6 +462,9 @@ mode = "adaptive"
 
     #[test]
     fn capability_matrix_fallback_matches_runtime_contract_port() {
-        assert_eq!(capability_matrix().runtime.base_url, "http://127.0.0.1:8090");
+        assert_eq!(
+            capability_matrix().runtime.base_url,
+            "http://127.0.0.1:8090"
+        );
     }
 }

@@ -13,6 +13,7 @@ export class StatusMonitor {
   private healthCheckInFlight = false;
   private failureWarningShown = false;
   private _configListener: vscode.Disposable | undefined;
+  private _disposed = false;
 
   constructor(manager: RuntimeManagerLike) {
     this.manager = manager;
@@ -50,9 +51,8 @@ export class StatusMonitor {
   }
 
   private startHealthMonitoring() {
-    if (this.healthCheckTimer) {
-      return;
-    }
+    // Stop any existing timer first to ensure timer ID uniqueness
+    this.stopHealthMonitoring();
     const config = vscode.workspace.getConfiguration("go-on");
     const interval = config.get<number>("health.interval", 300) * 1000; // Convert to milliseconds
 
@@ -61,7 +61,11 @@ export class StatusMonitor {
     }
 
     this.healthCheckTimer = setInterval(async () => {
-      if (!this.manager.isRunning() || this.healthCheckInFlight) {
+      if (
+        this._disposed ||
+        !this.manager.isRunning() ||
+        this.healthCheckInFlight
+      ) {
         return;
       }
 
@@ -111,10 +115,10 @@ export class StatusMonitor {
       typeof health === "object"
         ? JSON.stringify(health, null, 2)
         : String(health);
-    this.statusBarItem.tooltip = i18n.getMessage(MessageKeys.statusBarHealthTooltip, [
-      new Date().toLocaleTimeString(),
-      healthInfo,
-    ]);
+    this.statusBarItem.tooltip = i18n.getMessage(
+      MessageKeys.statusBarHealthTooltip,
+      [new Date().toLocaleTimeString(), healthInfo],
+    );
   }
 
   public refresh() {
@@ -125,7 +129,8 @@ export class StatusMonitor {
   }
 
   public dispose() {
-    this.stopHealthMonitoring();
+    this._disposed = true;
+    this.stopHealthMonitoring(); // Stop timer first
     this.statusBarItem.dispose();
     this._configListener?.dispose();
   }

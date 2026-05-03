@@ -194,25 +194,33 @@ fn set_tray_hint(app: &AppHandle, hint: Option<&str>) {
 
 pub fn watchdog_tick(app: &AppHandle) -> Result<()> {
     let state = app.state::<AppState>();
-    let mut inner = state.0.lock().map_err(|_| anyhow!("state lock poisoned"))?;
-    let status = current_status(&mut inner);
-
-    if !status.running {
-        if let Some(message) = inner.crash_message.clone() {
-            if !inner.crash_notified {
-                inner.crash_notified = true;
-                let payload = CrashEventPayload {
-                    message,
-                    timestamp: Local::now().to_rfc3339(),
-                };
-                let _ = app.emit("service-crash", payload);
-                set_tray_hint(app, Some("go-on crashed: use Recover Service"));
+    let crash_message = {
+        let mut inner = state.0.lock().map_err(|_| anyhow!("state lock poisoned"))?;
+        let status = current_status(&mut inner);
+        if !status.running {
+            if let Some(message) = inner.crash_message.clone() {
+                if !inner.crash_notified {
+                    inner.crash_notified = true;
+                    Some(CrashEventPayload {
+                        message,
+                        timestamp: Local::now().to_rfc3339(),
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
             }
+        } else {
+            set_tray_hint(app, Some("go-on running"));
+            None
         }
-    } else {
-        set_tray_hint(app, Some("go-on running"));
+    };
+    // emit 时已释放锁
+    if let Some(payload) = crash_message {
+        let _ = app.emit("service-crash", payload);
+        set_tray_hint(app, Some("go-on crashed: use Recover Service"));
     }
-
     Ok(())
 }
 

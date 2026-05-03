@@ -520,7 +520,9 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     return new Promise((resolve) => {
       const shell = process.platform === "win32" ? "cmd" : "bash";
       const shellPath =
-        process.platform === "win32" ? "cmd.exe" : process.env.SHELL || "sh";
+        process.platform === "win32"
+          ? process.env.COMSPEC || "cmd.exe"
+          : process.env.SHELL || "/bin/sh";
       const shellArg = process.platform === "win32" ? "/c" : "-c";
 
       if (!this._isPathAllowed(shellPath)) {

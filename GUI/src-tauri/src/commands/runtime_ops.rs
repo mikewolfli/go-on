@@ -86,7 +86,13 @@ pub fn invoke_runtime_rpc(
         if raw.trim().is_empty() {
             json!({})
         } else {
-            serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| json!({}))
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || trimmed == "{}" {
+                json!({})
+            } else {
+                serde_json::from_str::<Value>(trimmed)
+                    .map_err(|e| format!("invalid params JSON: {e}"))?
+            }
         }
     } else {
         json!({})
@@ -105,56 +111,58 @@ pub fn invoke_runtime_rpc(
         .map_err(|e| e.to_string())?;
     stdin.flush().map_err(|e| e.to_string())?;
 
-    let result = rx
-        .recv_timeout(Duration::from_secs(12))
-        .map_err(|_| "rpc timeout".to_string());
-
+    let json = match rx.recv_timeout(Duration::from_secs(12)) {
+        Ok(v) => match v {
+            Ok(val) => val,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("rpc child error: {e}"));
+            }
+        },
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("rpc timeout".to_string());
+        }
+    };
     let _ = child.kill();
     let _ = child.wait();
 
-    let result = result?;
-
-    match result {
-        Ok(v) => {
-            if let Some(err) = v.get("error") {
-                let code = err.get("code").and_then(|x| x.as_i64()).unwrap_or(-1);
-                let message = err
-                    .get("message")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("unknown rpc error");
-                let data = err.get("data");
-                let kind = data
-                    .and_then(|d| d.get("kind"))
-                    .and_then(|k| k.as_str())
-                    .map(|k| k.to_string())
-                    .unwrap_or_else(|| {
-                        let lower = message.to_ascii_lowercase();
-                        if lower.contains("pua") {
-                            "PuaViolation".to_string()
-                        } else if lower.contains("budget") {
-                            "BudgetExceeded".to_string()
-                        } else if lower.contains("sandbox")
-                            || lower.contains("hardening policy denied")
-                        {
-                            "SandboxBlocked".to_string()
-                        } else {
-                            "GeneralError".to_string()
-                        }
-                    });
-                let context = data
-                    .and_then(|d| d.get("detail"))
-                    .and_then(|detail| detail.as_str())
-                    .filter(|detail| detail.contains("acp.handle_request.dispatch"))
-                    .map(|_| "acp.handle_request.dispatch")
-                    .unwrap_or("none");
-                return Err(format!(
-                    "rpc_error:{code}:{kind}:{message} (context={context})"
-                ));
-            }
-
-            let payload = v.get("result").cloned().unwrap_or(v);
-            Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string()))
-        }
-        Err(err) => Err(err),
+    if let Some(err) = json.get("error") {
+        let code = err.get("code").and_then(|x| x.as_i64()).unwrap_or(-1);
+        let message = err
+            .get("message")
+            .and_then(|x| x.as_str())
+            .unwrap_or("unknown rpc error");
+        let data = err.get("data");
+        let kind = data
+            .and_then(|d| d.get("kind"))
+            .and_then(|k| k.as_str())
+            .map(|k| k.to_string())
+            .unwrap_or_else(|| {
+                let lower = message.to_ascii_lowercase();
+                if lower.contains("pua") {
+                    "PuaViolation".to_string()
+                } else if lower.contains("budget") {
+                    "BudgetExceeded".to_string()
+                } else if lower.contains("sandbox") || lower.contains("hardening policy denied") {
+                    "SandboxBlocked".to_string()
+                } else {
+                    "GeneralError".to_string()
+                }
+            });
+        let context = data
+            .and_then(|d| d.get("detail"))
+            .and_then(|detail| detail.as_str())
+            .filter(|detail| detail.contains("acp.handle_request.dispatch"))
+            .map(|_| "acp.handle_request.dispatch")
+            .unwrap_or("none");
+        return Err(format!(
+            "rpc_error:{code}:{kind}:{message} (context={context})"
+        ));
     }
+
+    let payload = json.get("result").cloned().unwrap_or(json);
+    Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string()))
 }
