@@ -121,6 +121,7 @@ export class GoOnManager {
     this._startupConfig = { configPath, executablePath, cwd, protocolMode };
 
     return new Promise((resolve, reject) => {
+      let settled = false;
       let resolved = false;
       let stderrBuffer = "";
 
@@ -204,8 +205,10 @@ export class GoOnManager {
       });
 
       this.process.on("close", (code: number) => {
+        if (settled) return;
         this._outputChannel?.appendLine(`[exit] code ${code}`);
         this._shutdownInProgress = false;
+        if (!this._startupConfig) return;
         const failedBeforeStartup = !resolved;
         this.process = null;
 
@@ -223,21 +226,24 @@ export class GoOnManager {
         }
 
         if (failedBeforeStartup) {
+          settled = true;
           const details = stderrBuffer.trim();
           reject(
             new Error(
-              `Go-On exited before startup (code ${code}). ${details || "No stderr output."}`,
+              `Go-On process exited prematurely with code ${code}. ${details || "No stderr output."}`,
             ),
           );
-        } else if (!this._shutdownInProgress && this._startupConfig) {
-          // Attempt reconnection when process crashes unexpectedly
-          void this.attemptReconnect();
+        } else {
+          // process exited after startup — attempt reconnect
+          this._handleProcessExit();
         }
       });
 
-      this.process.on("error", (error) => {
+      this.process.on("error", (error: Error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(startupTimeout);
-        this._outputChannel?.appendLine(`[error] ${error}`);
+        this._outputChannel?.appendLine(`[error] ${error.message}`);
         this.process = null;
         reject(error);
       });
@@ -309,10 +315,20 @@ export class GoOnManager {
     this.updateStatus();
   }
 
+  private _handleProcessExit(): void {
+    if (this._shutdownInProgress || !this._startupConfig) return;
+    void this.attemptReconnect();
+  }
+
+  private _scheduleReconnect(): void {
+    this._reconnectTimer = setTimeout(() => {
+      void this.attemptReconnect();
+    }, 5000);
+  }
+
   private async attemptReconnect(): Promise<void> {
-    if (this._shutdownInProgress || !this._startupConfig) {
-      return;
-    }
+    if (this._shutdownInProgress || !this._startupConfig) return;
+
     this._reconnectAttempts++;
     if (this._reconnectAttempts > this.maxReconnectAttempts) {
       this._outputChannel?.appendLine(
@@ -332,9 +348,12 @@ export class GoOnManager {
     );
 
     // Wait before reconnecting
-    await new Promise((resolve) => {
+    await new Promise<void>((resolve) => {
       this._reconnectTimer = setTimeout(resolve, 2000);
     });
+
+    // Check again after delay — stop() may have been called
+    if (this._shutdownInProgress || !this._startupConfig) return;
 
     try {
       await this.start(
@@ -351,15 +370,9 @@ export class GoOnManager {
       this._outputChannel?.appendLine(
         `[reconnect] Attempt ${this._reconnectAttempts} failed: ${error}`,
       );
-      // Schedule next retry if attempts remain and we still have startup config
-      if (
-        this._reconnectAttempts < this.maxReconnectAttempts &&
-        this._startupConfig
-      ) {
-        this._reconnectTimer = setTimeout(
-          () => void this.attemptReconnect(),
-          2000,
-        );
+      // Only schedule retry if not shutting down
+      if (!this._shutdownInProgress) {
+        this._scheduleReconnect();
       }
     }
   }
@@ -437,15 +450,7 @@ export class GoOnManager {
       }
       const canWrite = this.process.stdin.write(requestStr);
       if (!canWrite) {
-        this._outputChannel?.appendLine(
-          "[warn] RPC stdin backpressure, waiting for drain...",
-        );
-        this.process.stdin.once("drain", () => {
-          this._outputChannel?.appendLine(
-            "[info] RPC stdin drain complete, retrying write",
-          );
-          this.process!.stdin!.write(requestStr);
-        });
+        this._outputChannel?.appendLine("[warn] RPC stdin backpressure");
       }
     });
   }

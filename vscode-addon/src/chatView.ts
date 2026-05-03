@@ -209,7 +209,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         content: text,
         timestamp: new Date().toISOString(),
       } as ChatMessage;
-      this._addMessageToCurrentSession(userMessage);
+      await this._addMessageToCurrentSession(userMessage);
 
       // Send message to UI
       this._view.webview.postMessage({

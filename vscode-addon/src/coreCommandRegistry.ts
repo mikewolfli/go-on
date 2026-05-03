@@ -373,6 +373,7 @@ export function registerCoreCommands(
   const breakerStatusCommand = vscode.commands.registerCommand(
     "go-on.breakerStatus",
     async () => {
+      if (!(await ensureRunning(deps))) return;
       try {
         const result = await deps.sendRequest("breaker.status");
         vscode.window.showInformationMessage(

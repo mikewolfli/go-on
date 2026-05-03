@@ -63,7 +63,11 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
               await this._runWorkflow(message.workflowId);
               break;
             case "deleteWorkflow":
-              this._deleteWorkflow(message.workflowId);
+              try {
+                await this._deleteWorkflow(message.workflowId);
+              } catch (err) {
+                console.error(`[workflow] delete error: ${err}`);
+              }
               break;
             case "showConfirm":
               try {
@@ -199,7 +203,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
           case "code":
             this._view?.webview.postMessage({
               type: "stepResult",
-              stepId: step,
+              stepId: step.prompt || `step-${i}`,
               result: t(MessageKeys.workflowCodeNotSupported),
             });
             break;

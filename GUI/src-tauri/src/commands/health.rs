@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use reqwest::blocking::Client;
@@ -6,6 +7,8 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::state::AppState;
+
+static HEALTH_CLIENT: OnceLock<Client> = OnceLock::new();
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -25,10 +28,13 @@ pub fn check_health(
     let endpoint = endpoint.unwrap_or_else(|| "http://127.0.0.1:8090/health".to_string());
 
     let start = Instant::now();
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(4))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = HEALTH_CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(std::time::Duration::from_secs(4))
+            .pool_max_idle_per_host(2)
+            .build()
+            .expect("health check client build failed")
+    });
 
     // HTTP request outside the lock to avoid holding the mutex for up to 4 seconds
     let result = client.get(&endpoint).send();

@@ -393,7 +393,11 @@ fn save_env_file(path: &PathBuf, entries: &HashMap<String, String>) -> Result<()
             out.push_str(&format!("{k}={v}\n"));
         }
     }
-    fs::write(path, out).map_err(|e| e.to_string())
+    // Atomic write: write to a temporary file first, then rename to avoid corruption
+    let tmp_path = path.with_extension(".env.goon.tmp");
+    fs::write(&tmp_path, out).map_err(|e| format!("failed to write env file: {e}"))?;
+    fs::rename(&tmp_path, path).map_err(|e| format!("failed to rename env file: {e}"))?;
+    Ok(())
 }
 
 fn mask_token(token: &str) -> String {

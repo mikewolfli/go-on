@@ -151,6 +151,15 @@ fn start_service_impl(state: &AppState) -> Result<ServiceStatus> {
         }
     }
 
+    // Final check: try_wait once more to catch exit between loop and process store
+    if let Ok(Some(status)) = child.try_wait() {
+        let code = status
+            .code()
+            .map(|x| x.to_string())
+            .unwrap_or_else(|| "signal".to_string());
+        return Err(anyhow!("startup_error:exited_early:{code}"));
+    }
+
     let pid = child.id();
 
     inner.process = Some(ManagedProcess {
@@ -169,12 +178,18 @@ fn stop_service_impl(state: &AppState) -> Result<ServiceStatus> {
     let mut inner = state.0.lock().map_err(|_| anyhow!("state lock poisoned"))?;
     inner.stop_requested = true;
 
-    if let Some(proc) = inner.process.as_mut() {
+    // Take the process out so child.wait() can run in another thread with timeout,
+    // preventing the Mutex from being blocked indefinitely.
+    if let Some(mut proc) = inner.process.take() {
         let _ = proc.child.kill();
-        let _ = proc.child.wait();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = proc.child.wait();
+            let _ = tx.send(());
+        });
+        let _ = rx.recv_timeout(std::time::Duration::from_secs(3));
     }
     inner.stop_requested = false;
-    inner.process = None;
 
     Ok(current_status(&mut inner))
 }
