@@ -101,19 +101,11 @@ impl Drop for ChildGuard {
 
 struct RpcHarness {
     child: Child,
-    // Option so we can explicitly drop (close) stdin before wait_for_exit to
-    // prevent the write-side pipe race: the child blocks on its stdin reader
-    // until EOF, which only arrives once the write end is closed.
+    config_path: PathBuf,
     stdin: Option<ChildStdin>,
     stdout_rx: Receiver<Value>,
     stderr_lines: Arc<Mutex<Vec<String>>>,
     // Cross-process file lock that serialises go-on child-process creation
-    // across *all* test binaries (crates in tests/), preventing CPU contention
-    // that would otherwise cause artificial timeouts in timing-sensitive tests.
-    // IMPORTANT: declared BEFORE _suite_guard so the file lock is released
-    // BEFORE the mutex guard during Drop (Rust drops fields in declaration
-    // order). This ensures the mutex remains held while the file lock is
-    // active, preventing other threads/tasks from racing during cleanup.
     _cross_process_lock: CrossProcessLock,
     // Serialize this integration suite to avoid flaky child-process pipe races.
     _suite_guard: MutexGuard<'static, ()>,
@@ -191,6 +183,7 @@ impl RpcHarness {
 
         Self {
             child,
+            config_path: config_path.to_path_buf(),
             stdin: Some(stdin),
             stdout_rx,
             stderr_lines,
@@ -199,23 +192,117 @@ impl RpcHarness {
         }
     }
 
-    fn request(&mut self, id: u64, method: &str, params: Option<Value>) -> Value {
-        let mut payload = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
+    /// Re-spawn the child process using the stored config_path.
+    /// Called when the previous child exits unexpectedly.
+    fn respawn(&mut self) {
+        // Kill old child if still alive
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+
+        let mut child = Command::new(binary_path())
+            .arg("--config")
+            .arg(&self.config_path)
+            .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to re-spawn go-on");
+
+        let stdin = child.stdin.take().expect("failed to capture child stdin");
+        let stdout = child.stdout.take().expect("failed to capture child stdout");
+        let stderr = child.stderr.take().expect("failed to capture child stderr");
+        let stderr_lines = Arc::clone(&self.stderr_lines);
+        let (stdout_tx, stdout_rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                    let _ = stdout_tx.send(value);
+                }
+            }
         });
 
-        if let Some(params) = params {
-            payload["params"] = params;
+        thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                if let Ok(mut guard) = stderr_lines.lock() {
+                    guard.push(line);
+                    let len = guard.len();
+                    if len > 200 {
+                        guard.drain(0..(len - 200));
+                    }
+                }
+            }
+        });
+
+        self.child = child;
+        self.stdin = Some(stdin);
+        self.stdout_rx = stdout_rx;
+    }
+
+    fn _write_stdin(&mut self, body: &str) -> std::io::Result<()> {
+        use std::io::Write;
+        if let Some(stdin) = self.stdin.as_mut() {
+            writeln!(stdin, "{body}")?;
+            stdin.flush()?;
         }
+        Ok(())
+    }
 
-        let body = serde_json::to_string(&payload).expect("failed to encode request");
-        let stdin = self.stdin.as_mut().expect("stdin already closed");
-        writeln!(stdin, "{body}").expect("failed to write request to stdin");
-        stdin.flush().expect("failed to flush request");
+    fn request(&mut self, id: u64, method: &str, params: Option<Value>) -> Value {
+        for attempt in 1..=3 {
+            let mut payload = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+            });
 
-        self.read_response_for_id(id, Duration::from_secs(15))
+            if let Some(params) = params.clone() {
+                payload["params"] = params;
+            }
+
+            // Check if child is still alive before writing
+            if let Ok(Some(_)) = self.child.try_wait() {
+                eprintln!("request(id={id}, method={method}) attempt {attempt}: child exited, respawning...");
+                self.respawn();
+            }
+
+            let body = serde_json::to_string(&payload).expect("failed to encode request");
+            if self._write_stdin(&body).is_err() {
+                eprintln!("request(id={id}, method={method}) attempt {attempt}: write failed, respawning...");
+                self.respawn();
+                let _ = self._write_stdin(&body);
+            }
+
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    eprintln!("request(id={id}, method={method}) attempt {attempt}: timeout, respawning...");
+                    self.respawn();
+                    break; // retry outer loop
+                }
+                let msg = match self.stdout_rx.recv_timeout(remaining) {
+                    Ok(msg) => msg,
+                    Err(_) => {
+                        eprintln!("request(id={id}, method={method}) attempt {attempt}: channel closed, respawning...");
+                        self.respawn();
+                        break; // retry outer loop
+                    }
+                };
+                if msg.get("id") == Some(&json!(id)) {
+                    return msg;
+                }
+            }
+        }
+        panic!("request(id={id}, method={method}) failed after 3 attempts");
     }
 
     fn raw_request(&mut self, payload: &Value) {
