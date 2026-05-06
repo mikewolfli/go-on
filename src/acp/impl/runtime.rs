@@ -15,7 +15,7 @@ use anyhow::Result;
 use reqwest;
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::{Mutex, Notify};
 use tracing::{debug, error, info, warn};
 
@@ -432,7 +432,20 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
         return Err(err);
     }
 
-    let listener = TcpListener::bind(&bind_addr).await?;
+    // Create socket with SO_REUSEADDR to avoid "Address already in use" after restart
+    let listener = match bind_addr.parse::<SocketAddr>() {
+        Ok(addr) => {
+            let s = match addr {
+                SocketAddr::V4(_) => TcpSocket::new_v4()?,
+                SocketAddr::V6(_) => TcpSocket::new_v6()?,
+            };
+            s.set_reuseaddr(true)?;
+            s.bind(addr)?;
+            s.listen(1024)?
+        }
+        Err(_) => TcpListener::bind(&bind_addr).await?,
+    };
+
     loop {
         tokio::select! {
             _ = shutdown_notify.notified() => {
