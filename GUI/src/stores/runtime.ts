@@ -115,10 +115,8 @@ export const useRuntimeStore = defineStore("runtime", {
       try {
         this.status = await serviceStatus();
         this.lastKnownStatus = this.status;
-        this.offline = false;
       } catch (error) {
         this.lastError = String(error);
-        this.offline = true;
         // Keep last known status
       }
     },
@@ -127,11 +125,9 @@ export const useRuntimeStore = defineStore("runtime", {
         const result = await checkHealthWithMeta();
         this.health = result.value;
         this.lastKnownHealth = this.health;
-        this.offline = false;
         this.healthStale = result.cache.cached;
       } catch (error) {
         this.lastError = String(error);
-        this.offline = true;
         // Restore from last known
         this.health = this.lastKnownHealth;
         this.healthStale = true;
@@ -202,6 +198,7 @@ export const useRuntimeStore = defineStore("runtime", {
     setLogsPollingInterval(ms: number) {
       this.logsPollingMs = Math.min(10000, Math.max(500, Number(ms)));
       safeSetItem("goon.gui.logsPollingMs", String(this.logsPollingMs));
+      this.startLogsPolling();
     },
     async refreshFeatures() {
       if (!this.status.running) {
@@ -209,7 +206,8 @@ export const useRuntimeStore = defineStore("runtime", {
       }
       try {
         this.activeFeatures = await fetchRuntimeFeatures();
-      } catch {
+      } catch (e) {
+        this.lastError = String(e);
         // keep previous features on error
       }
     },
@@ -218,8 +216,9 @@ export const useRuntimeStore = defineStore("runtime", {
       if (val) {
         this.stopStatusPolling();
         this.stopLogsPolling();
-      } else if (this.status.running) {
+      } else {
         this.startStatusPolling();
+        this.startLogsPolling();
       }
     },
     async refreshAll() {
@@ -232,6 +231,8 @@ export const useRuntimeStore = defineStore("runtime", {
       this.refreshAllInProgress = true;
       this.loading = true;
       try {
+        this.lastError = "";
+        this.offline = true; // assume offline until proven otherwise
         await Promise.all([
           this.refreshStatus(),
           this.refreshHealth(),
@@ -241,6 +242,7 @@ export const useRuntimeStore = defineStore("runtime", {
           this.refreshEndpointHealthStats(),
           this.refreshFeatures(),
         ]);
+        this.offline = false; // all succeeded
       } finally {
         this.refreshAllInProgress = false;
         this.loading = false;
@@ -268,8 +270,10 @@ export const useRuntimeStore = defineStore("runtime", {
       }, this.statusPollingMs);
 
       // Initial refresh (non-blocking)
+      const gen = generation;
       this.statusPollingInFlight = true;
       this.refreshAll().finally(() => {
+        if (gen !== this.statusPollingGeneration) return;
         this.statusPollingInFlight = false;
       });
     },
@@ -303,8 +307,10 @@ export const useRuntimeStore = defineStore("runtime", {
       }, this.logsPollingMs);
 
       // Initial refresh (non-blocking)
+      const gen = generation;
       this.logsPollingInFlight = true;
       this.refreshLogs(lines).finally(() => {
+        if (gen !== this.logsPollingGeneration) return;
         this.logsPollingInFlight = false;
       });
     },

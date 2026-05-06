@@ -141,6 +141,7 @@ fn main() {
             commands::config::reset_default_settings,
             commands::config::set_provider_api_key,
             commands::config::clear_provider_api_key,
+            commands::config::check_providers_configured,
             commands::config::list_provider_catalog,
             commands::config::save_provider_selection,
             commands::config::fetch_github_copilot_token,

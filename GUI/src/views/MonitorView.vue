@@ -179,8 +179,8 @@ const { t } = useI18n();
 const selfChecking = ref(false);
 
 onMounted(() => {
-  if (!runtime.status.running) {
-    runtime.refreshAll();
+  if (runtime.status.running) {
+    runtime.refreshAll().catch(e => console.warn("refreshAll failed:", e));
   }
 });
 

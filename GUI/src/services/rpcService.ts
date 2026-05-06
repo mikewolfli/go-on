@@ -497,43 +497,84 @@ async function callRpcJson<T>(method: string, params: unknown): Promise<T> {
   return unwrapResult<T>(parseRpcJson(raw));
 }
 
+async function safeCallRpcJson<T>(
+  method: string,
+  params: unknown,
+  fallback: T,
+): Promise<T> {
+  try {
+    return await callRpcJson<T>(method, params);
+  } catch (e) {
+    console.warn(`RPC ${method} failed:`, e);
+    return fallback;
+  }
+}
+
 export async function getGovernanceStatus(): Promise<GovernanceStatusResult> {
-  return callRpcJson<GovernanceStatusResult>("governance.status", {});
+  return safeCallRpcJson<GovernanceStatusResult>(
+    "governance.status",
+    {},
+    {} as GovernanceStatusResult,
+  );
 }
 
 export async function getGovernanceAuditRecent(
   limit = 20,
 ): Promise<GovernanceAuditRecentResult> {
-  return callRpcJson<GovernanceAuditRecentResult>("governance.audit.recent", {
-    limit,
-  });
+  return safeCallRpcJson<GovernanceAuditRecentResult>(
+    "governance.audit.recent",
+    {
+      limit,
+    },
+    {} as GovernanceAuditRecentResult,
+  );
 }
 
 export async function getProviderStatus(): Promise<ProviderStatusResult> {
-  return callRpcJson<ProviderStatusResult>("provider.status", {});
+  return safeCallRpcJson<ProviderStatusResult>(
+    "provider.status",
+    {},
+    {} as ProviderStatusResult,
+  );
 }
 
 export async function getReleaseReadiness(): Promise<ReleaseReadinessResult> {
-  return callRpcJson<ReleaseReadinessResult>("release.readiness", {});
+  return safeCallRpcJson<ReleaseReadinessResult>(
+    "release.readiness",
+    {},
+    {} as ReleaseReadinessResult,
+  );
 }
 
 // TODO: planned for future use
 export async function getHealthProbes(): Promise<HealthProbesResult> {
-  return callRpcJson<HealthProbesResult>("health.probes", {});
+  return safeCallRpcJson<HealthProbesResult>(
+    "health.probes",
+    {},
+    {} as HealthProbesResult,
+  );
 }
 
 export async function getRuntimeSelfModel(
   params: Record<string, unknown> = {},
 ): Promise<RuntimeSelfModelResult> {
-  return callRpcJson<RuntimeSelfModelResult>("runtime.self_model", params);
+  return safeCallRpcJson<RuntimeSelfModelResult>(
+    "runtime.self_model",
+    params,
+    {} as RuntimeSelfModelResult,
+  );
 }
 
 export async function getBreakerStatus(): Promise<BreakerStatusResult> {
-  return callRpcJson<BreakerStatusResult>("breaker.status", {});
+  return safeCallRpcJson<BreakerStatusResult>(
+    "breaker.status",
+    {},
+    {} as BreakerStatusResult,
+  );
 }
 
 export async function getMetrics(): Promise<MetricsResult> {
-  return callRpcJson<MetricsResult>("metrics.get", {});
+  return safeCallRpcJson<MetricsResult>("metrics.get", {}, {} as MetricsResult);
 }
 
 // TODO: planned for future use
@@ -541,7 +582,11 @@ export async function callTaskPlan(
   task: string,
   params: Record<string, unknown> = {},
 ): Promise<TaskPlanResult> {
-  return callRpcJson<TaskPlanResult>("task.plan", { task, ...params });
+  return safeCallRpcJson<TaskPlanResult>(
+    "task.plan",
+    { task, ...params },
+    {} as TaskPlanResult,
+  );
 }
 
 // TODO: planned for future use
@@ -549,35 +594,59 @@ export async function callTaskExecute(
   task: string,
   params: Record<string, unknown> = {},
 ): Promise<TaskExecuteResult> {
-  return callRpcJson<TaskExecuteResult>("task.execute", { task, ...params });
+  return safeCallRpcJson<TaskExecuteResult>(
+    "task.execute",
+    { task, ...params },
+    {} as TaskExecuteResult,
+  );
 }
 
 export async function importSkill(
   source: SkillImportSource,
 ): Promise<SkillImportResult> {
-  return callRpcJson<SkillImportResult>("skill.import", { source });
+  return safeCallRpcJson<SkillImportResult>(
+    "skill.import",
+    { source },
+    {} as SkillImportResult,
+  );
 }
 
 export async function listImportedSkills(): Promise<SkillListImportedResult> {
-  return callRpcJson<SkillListImportedResult>("skill.list_imported", {});
+  return safeCallRpcJson<SkillListImportedResult>(
+    "skill.list_imported",
+    {},
+    {} as SkillListImportedResult,
+  );
 }
 
 export async function enableImportedSkill(
   name: string,
 ): Promise<SkillImportResult> {
-  return callRpcJson<SkillImportResult>("skill.enable", { name });
+  return safeCallRpcJson<SkillImportResult>(
+    "skill.enable",
+    { name },
+    {} as SkillImportResult,
+  );
 }
 
 export async function disableImportedSkill(
   name: string,
 ): Promise<SkillImportResult> {
-  return callRpcJson<SkillImportResult>("skill.disable", { name });
+  return safeCallRpcJson<SkillImportResult>(
+    "skill.disable",
+    { name },
+    {} as SkillImportResult,
+  );
 }
 
 export async function removeImportedSkill(
   name: string,
 ): Promise<SkillRemoveResult> {
-  return callRpcJson<SkillRemoveResult>("skill.remove", { name });
+  return safeCallRpcJson<SkillRemoveResult>(
+    "skill.remove",
+    { name },
+    {} as SkillRemoveResult,
+  );
 }
 
 export async function createSkill(source: {
@@ -586,26 +655,42 @@ export async function createSkill(source: {
   prompt_template: string;
   input_schema: Record<string, string>;
 }): Promise<SkillCreateResult> {
-  return callRpcJson<SkillCreateResult>("skill.create", source);
+  return safeCallRpcJson<SkillCreateResult>(
+    "skill.create",
+    source,
+    {} as SkillCreateResult,
+  );
 }
 
 export async function remediateRisk(
   riskId: string,
 ): Promise<Record<string, unknown>> {
-  return callRpcJson<Record<string, unknown>>("governance.remediate", {
-    risk_id: riskId,
-  });
+  return safeCallRpcJson<Record<string, unknown>>(
+    "governance.remediate",
+    {
+      risk_id: riskId,
+    },
+    {} as Record<string, unknown>,
+  );
 }
 
 export async function saveGovernanceConfig(params: {
   autoMaskSensitive?: boolean;
   auditEnabled?: boolean;
 }): Promise<Record<string, unknown>> {
-  return callRpcJson<Record<string, unknown>>("governance.config.save", params);
+  return safeCallRpcJson<Record<string, unknown>>(
+    "governance.config.save",
+    params,
+    {} as Record<string, unknown>,
+  );
 }
 
 export async function getDebugPanel(): Promise<Record<string, unknown>> {
-  return callRpcJson<Record<string, unknown>>("debug_panel.get", {});
+  return safeCallRpcJson<Record<string, unknown>>(
+    "debug_panel.get",
+    {},
+    {} as Record<string, unknown>,
+  );
 }
 
 export interface CheckpointListResult {
@@ -621,9 +706,13 @@ export interface CheckpointListResult {
 export async function getCheckpointList(
   conversationId: string,
 ): Promise<CheckpointListResult> {
-  return callRpcJson<CheckpointListResult>("conversation.checkpoint.list", {
-    conversation_id: conversationId,
-  });
+  return safeCallRpcJson<CheckpointListResult>(
+    "conversation.checkpoint.list",
+    {
+      conversation_id: conversationId,
+    },
+    {} as CheckpointListResult,
+  );
 }
 
 export interface OptimizationPeakResult {
@@ -644,7 +733,11 @@ export interface OptimizationPeakResult {
 
 // TODO: planned for future use
 export async function getOptimizationPeak(): Promise<OptimizationPeakResult> {
-  return callRpcJson<OptimizationPeakResult>("optimization.peak", {});
+  return safeCallRpcJson<OptimizationPeakResult>(
+    "optimization.peak",
+    {},
+    {} as OptimizationPeakResult,
+  );
 }
 
 export interface RuntimeFeatures {
@@ -662,9 +755,10 @@ export interface RuntimeFeatures {
 
 // TODO: planned for future use
 export async function getRuntimeFeatures(): Promise<RuntimeFeatures> {
-  const result = await callRpcJson<{ features?: RuntimeFeatures }>(
+  const result = await safeCallRpcJson<{ features?: RuntimeFeatures }>(
     "runtime.features",
     {},
+    {} as { features?: RuntimeFeatures },
   );
   return result?.features ?? ({} as RuntimeFeatures);
 }

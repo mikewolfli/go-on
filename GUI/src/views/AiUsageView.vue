@@ -89,6 +89,8 @@ import { useI18n } from "vue-i18n";
 const runtime = useRuntimeStore();
 const { t } = useI18n();
 onMounted(() => {
-  runtime.refreshAll();
+  if (runtime.status.running) {
+    runtime.refreshAll().catch(e => console.warn("refreshAll failed:", e));
+  }
 });
 </script>

@@ -13,15 +13,32 @@
       ⚠️ {{ t("app.monitorOnlyBanner") }}
       <span class="monitor-only-config-link" @click="activeMainTab = 'config'">{{ t("app.monitorOnlyConfigLink") }}</span>
     </div>
-    <!-- Banner when awaiting API key configuration -->
-    <div v-if="runtime.paused" class="api-key-banner">
-      ⚠️ {{ t('app.waitingForConfig') }}
-      <el-button size="small" type="primary" @click="showApiKeySetup = true">
-        {{ t('app.configureNow') }}
-      </el-button>
-      <el-button size="small" @click="onNavigateToConfig">
-        {{ t('app.goToSettings') }}
-      </el-button>
+    <!-- Gentle banner: backend is running but needs AI provider setup -->
+    <div v-if="runtime.paused" class="api-key-banner" role="alert">
+      <span class="banner-icon">✨</span>
+      <span class="banner-text">
+        {{ showApiKeySetup ? t('app.waitingForConfig') : t('app.providersNeeded') }}
+      </span>
+      <span class="banner-actions">
+        <el-button size="small" type="primary" @click="onNavigateToConfig">
+          {{ t('app.configureNow') }}
+        </el-button>
+        <el-button size="small" @click="onNavigateToConfig">
+          {{ t('app.goToSettings') }}
+        </el-button>
+        <el-button size="small" text @click="runtime.setPaused(false)">
+          {{ t('app.dismiss') }}
+        </el-button>
+      </span>
+    </div>
+    <!-- DEBUG: show current state -->
+    <div style="background:#eee;padding:4px 12px;font-size:12px;font-family:monospace;display:flex;gap:16px;flex-wrap:wrap;">
+      <span>loading: <b>{{ String(runtime.loading) }}</b></span>
+      <span>running: <b>{{ String(runtime.status.running) }}</b></span>
+      <span>paused: <b>{{ String(runtime.paused) }}</b></span>
+      <span>offline: <b>{{ String(runtime.offline) }}</b></span>
+      <span>lastError: <b>{{ runtime.lastError || '(none)' }}</b></span>
+      <span>bootstrap: <b>{{ bootstrapResult?.status || 'pending' }}</b></span>
     </div>
     <el-container :style="monitorOnly ? 'height: calc(100vh - 36px)' : 'height: 100vh'" direction="vertical">
       <OnboardingGuide
@@ -150,7 +167,6 @@ import {
 } from "./services/bridge";
 import {
   bootstrapBackend,
-  ensureBackendAndStart,
   startBackendWithChecks,
 } from "./services/backendLifecycle";
 import { useRuntimeStore } from "./stores/runtime";
@@ -193,14 +209,14 @@ const activeMonitorSubTab = ref("dashboard");
 const activeConfigSubTab = ref("setup");
 const showOnboarding = ref(false);
 const showApiKeySetup = ref(false);
-let previousRunning = runtime.status.running;
+const bootstrapResult = ref<{ status: string } | null>(null);
+let previousRunning = false;
 const MONITOR_ONLY_KEY = "goon.gui.monitorOnly";
 const ONBOARDING_SEEN_KEY = "goon.gui.onboardingSeen";
 let stopRunningWatch: (() => void) | undefined;
 let stopWatchMainTab: (() => void) | undefined;
 let stopWatchMonitorSub: (() => void) | undefined;
 let stopWatchConfigSub: (() => void) | undefined;
-let providerCheckTimer: number | undefined;
 
 async function checkProviderAndNavigate() {
   if (!runtime.status.running) return;
@@ -213,15 +229,16 @@ async function checkProviderAndNavigate() {
     const summary = agentInfo?.summary;
     const configuredCount = summary?.configured ?? agents.length;
     if (readyCount === 0 && configuredCount > 0) {
+      // Providers configured but not ready → show API key setup dialog
       if (!runtime.paused) {
         runtime.setPaused(true);
-        ElMessage.warning(t('app.waitingForConfig'));
       }
       showApiKeySetup.value = true;
     } else if (configuredCount === 0) {
-      ElMessage.info(t("backend.executableNotFound").replace("{attempt}/", "").replace("{max}", ""));
-      activeMainTab.value = "config";
-      activeConfigSubTab.value = "setup";
+      // No providers configured — ensure paused banner is shown
+      if (!runtime.paused) {
+        runtime.setPaused(true);
+      }
     }
   } catch (e) {
     console.warn("checkProviderAndNavigate failed:", e);
@@ -253,6 +270,8 @@ function onLocaleChange(value: string) {
   if (value === "en-US" || value === "zh-CN" || value === "zh-TW") {
     setLocale(value);
     locale.value = value;
+  } else {
+    console.warn("Unknown locale:", value);
   }
 }
 
@@ -299,13 +318,10 @@ async function onSwitchToMiniWindow() {
 
 async function onStart() {
   try {
-    const exists = await backendExecutableExists();
-    if (!exists) {
-      await ensureBackendAndStart();
-    } else {
-      await startBackendWithChecks();
-    }
+    await startBackendWithChecks();
     await runtime.refreshAll();
+    runtime.startStatusPolling();
+    await checkProviderAndNavigate();
     ElMessage.success(t("toast.serviceStarted"));
   } catch (error) {
     ElMessage.error(String(error));
@@ -315,6 +331,7 @@ async function onStart() {
 async function onStop() {
   try {
     await stopService();
+    runtime.setPaused(true);
     await runtime.refreshAll();
     ElMessage.success(t("toast.serviceStopped"));
   } catch (error) {
@@ -324,13 +341,9 @@ async function onStop() {
 
 async function onRestart() {
   try {
-    const exists = await backendExecutableExists();
-    if (!exists) {
-      await ensureBackendAndStart();
-    } else {
-      await restartService();
-    }
+    await restartService();
     await runtime.refreshAll();
+    runtime.startStatusPolling();
     ElMessage.success(t("toast.serviceRestarted"));
   } catch (error) {
     ElMessage.error(String(error));
@@ -339,20 +352,29 @@ async function onRestart() {
 
 async function onApiKeyConfigured() {
   showApiKeySetup.value = false;
-  // Restart backend so it picks up the new env var
+  let started = false;
   try {
     await restartService();
+    started = true;
   } catch {
-    try { await startService(); } catch { /* may already be running */ }
+    try {
+      await startService();
+      started = true;
+    } catch (e) {
+      console.warn("start after api key config failed:", e);
+    }
   }
-  // Wait for backend to be healthy
-  const { waitForBackendHealthy } = await import("./services/backendLifecycle");
-  await waitForBackendHealthy(15000);
-  await runtime.refreshAll();
-  // Check if providers are actually ready now
-  await checkProviderAndNavigate();
-  if (!runtime.status.running || !runtime.paused) {
-    // Only resume if provider check didn't re-pause
+  if (started) {
+    const { waitForBackendHealthy } = await import("./services/backendLifecycle");
+    const healthy = await waitForBackendHealthy(15000);
+    if (healthy) {
+      runtime.startStatusPolling();
+    }
+    await runtime.refreshAll();
+    await checkProviderAndNavigate();
+  }
+  // Only unpause if backend is actually running
+  if (runtime.status.running && runtime.paused) {
     runtime.setPaused(false);
   }
 }
@@ -363,45 +385,76 @@ function onNavigateToConfig() {
 }
 
 onMounted(async () => {
+  if (isMiniRoute.value) return;
+  bootstrapResult.value = null;
   try {
-    await bootstrapBackend(monitorOnlyModeEnabled());
-    // bootstrapBackend succeeded → backend was just started by us,
-    // so the watch below should not show "Service Recovered".
-    previousRunning = true;
+    const result = await bootstrapBackend(monitorOnlyModeEnabled());
+    bootstrapResult.value = result;
+
+    switch (result.status) {
+      case "configured":
+        try {
+          await startBackendWithChecks();
+          previousRunning = true;
+        } catch (error) {
+          ElMessage.error(String(error));
+        }
+        break;
+
+      case "no-providers":
+        previousRunning = false;
+        runtime.setPaused(true);
+        break;
+
+      case "no-backend":
+        ElMessage.warning(result.reason);
+        previousRunning = false;
+        break;
+
+      case "monitor-only":
+        previousRunning = false;
+        break;
+    }
   } catch (error) {
+    console.error("Bootstrap failed:", error);
     ElMessage.error(String(error));
   }
 
   monitorOnly.value = monitorOnlyModeEnabled();
   window.addEventListener("goon:monitor-only-changed", handleMonitorOnlyChanged);
 
-  runtime.startStatusPolling();
-
-
-
-  // Check provider readiness immediately
+  // Check provider readiness (only runs if backend is running)
   await checkProviderAndNavigate();
 
-  // Periodically re-check provider health during polling
-  providerCheckTimer = window.setInterval(() => {
-    checkProviderAndNavigate();
-  }, 30000);
-
+  // Watch for backend status changes (debounced to prevent races)
+  let watchPending = false;
   stopRunningWatch = watch(
     () => runtime.status.running,
     async (running) => {
-      if (!previousRunning && running) {
-        ElMessage.success(t("toast.serviceRecovered"));
-        await checkProviderAndNavigate();
-      } else if (previousRunning && !running && !runtime.paused) {
-        // Backend stopped unexpectedly — pause to prevent stale data
-        runtime.setPaused(true);
-        ElMessage.warning(t("toast.serviceStopped"));
+      if (watchPending) return;
+      watchPending = true;
+      try {
+        if (!previousRunning && running) {
+          ElMessage.success(t("toast.serviceRecovered"));
+          await checkProviderAndNavigate();
+        } else if (previousRunning && !running && !runtime.paused) {
+          runtime.setPaused(true);
+          ElMessage.warning(t("toast.serviceStopped"));
+        }
+      } finally {
+        previousRunning = running;
+        watchPending = false;
       }
-      previousRunning = running;
     },
   );
-  if (safeGetItem(ONBOARDING_SEEN_KEY) !== "true") {
+
+  // Only start polling if backend is expected to be running
+  if (bootstrapResult.value?.status === "configured") {
+    runtime.startStatusPolling();
+  }
+  // Show onboarding guide only when status is "configured" (backend running with providers)
+  // For no-providers, no-backend, monitor-only: the banner is sufficient.
+  if (safeGetItem(ONBOARDING_SEEN_KEY) !== "true" && bootstrapResult.value?.status === "configured") {
     showOnboarding.value = true;
   }
   // Restore tab state on mount
@@ -440,7 +493,6 @@ onUnmounted(() => {
     stopRunningWatch();
     stopRunningWatch = undefined;
   }
-  window.clearInterval(providerCheckTimer);
 });
 </script>
 
@@ -448,7 +500,7 @@ onUnmounted(() => {
 .api-key-banner {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   background: #fffbeb;
   color: #92400e;
   border-bottom: 2px solid #f59e0b;
@@ -458,6 +510,23 @@ onUnmounted(() => {
   top: 0;
   z-index: 100;
   flex-wrap: wrap;
+}
+
+.banner-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+.banner-text {
+  flex: 1 1 auto;
+  min-width: 160px;
+}
+
+.banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .paused-overlay-content {

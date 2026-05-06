@@ -66,6 +66,8 @@ import { useI18n } from "vue-i18n";
 const runtime = useRuntimeStore();
 const { t } = useI18n();
 onMounted(() => {
+  // If backend is known to be not running, don't show loading spinner at all
+  if (!runtime.status.running) return;
   runtime.refreshAll();
 });
 </script>

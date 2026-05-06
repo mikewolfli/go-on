@@ -54,12 +54,6 @@ governance_policy_mode = "advisory"
 
 [agents]
 
-[agents.deepseek]
-type = "deepseek"
-api_key_env = "keyring://go-on/deepseek_api_key"
-model = "deepseek-chat"
-supports_system = true
-
 [flow]
 name = "Universal Adaptive"
 phases = ["think", "act", "check", "done"]

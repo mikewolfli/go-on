@@ -976,6 +976,21 @@ fn set_integer(table: &mut Table, key: &str, value_opt: Option<u32>) {
 }
 
 #[tauri::command]
+pub fn check_providers_configured(state: State<'_, AppState>) -> Result<bool, String> {
+    let inner = state
+        .0
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let config_path = config_file_path(&inner.config.working_dir);
+    drop(inner);
+
+    let agents = read_configured_agent_settings(&config_path);
+    // Only count agents that have both a model AND an api_key_env set
+    let configured = agents.values().any(|(model, env)| model.is_some() && env.is_some());
+    Ok(configured)
+}
+
+#[tauri::command]
 pub fn list_provider_catalog(
     state: State<'_, AppState>,
 ) -> Result<Vec<ProviderCatalogEntry>, String> {

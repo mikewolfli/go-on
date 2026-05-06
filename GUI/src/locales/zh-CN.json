@@ -19,7 +19,9 @@
     "waitingForConfig": "请至少配置一个AI供应商以激活运行时。已暂停轮询。",
     "configureApiKeyHint": "Please configure at least one AI provider API key to activate the runtime.",
     "configureNow": "配置",
-    "goToSettings": "设置"
+    "goToSettings": "设置",
+    "providersNeeded": "请先配置 AI 供应商，然后才能使用聊天和智能体功能。",
+    "dismiss": "稍后"
   },
   "menu": {
     "dashboard": "总览",

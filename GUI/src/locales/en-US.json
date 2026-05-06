@@ -19,7 +19,9 @@
     "waitingForConfig": "Please configure at least one AI provider. Polling paused.",
     "configureApiKeyHint": "Please configure at least one AI provider API key to activate the runtime.",
     "configureNow": "Configure",
-    "goToSettings": "Settings"
+    "goToSettings": "Settings",
+    "providersNeeded": "AI provider needs to be configured before using chat and agent features.",
+    "dismiss": "Dismiss"
   },
   "menu": {
     "dashboard": "Dashboard",

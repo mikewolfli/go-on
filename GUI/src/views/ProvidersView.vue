@@ -268,21 +268,36 @@ async function importCopilotToken() {
   }
 }
 
+let reloadingModels = false;
+let unmounted = false;
+
 const stopWatchingProvider = watch(
   provider,
   async (nextProvider, previousProvider) => {
-    syncEnvVar(previousProvider);
-    await reloadModels();
+    if (reloadingModels) return;
+    reloadingModels = true;
+    try {
+      syncEnvVar(previousProvider);
+      if (unmounted) return;
+      await reloadModels();
+    } finally {
+      if (!unmounted) reloadingModels = false;
+    }
   },
   { flush: "post" }
 );
 
 onUnmounted(() => {
+  unmounted = true;
   stopWatchingProvider();
 });
 
 onMounted(async () => {
-  await reloadProviderCatalog();
-  await reloadModels();
+  try {
+    await reloadProviderCatalog();
+    await reloadModels();
+  } catch (e) {
+    console.warn("ProvidersView mount failed:", e);
+  }
 });
 </script>

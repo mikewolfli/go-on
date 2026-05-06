@@ -19,16 +19,16 @@ export function useCrashHandler(options: CrashHandlerOptions) {
     unlistenCrash = await listen<{ message: string; timestamp: string }>(
       "service-crash",
       async (event) => {
-        const payload = event.payload;
-        const now = Date.now();
-        const crashKey = payload.message;
-        if (crashKey === lastCrashKey && now - lastCrashAt < cooldownMs) {
-          return;
-        }
-        lastCrashKey = crashKey;
-        lastCrashAt = now;
-
         try {
+          const payload = event.payload;
+          const now = Date.now();
+          const crashKey = payload.message;
+          if (crashKey === lastCrashKey && now - lastCrashAt < cooldownMs) {
+            return;
+          }
+          lastCrashKey = crashKey;
+          lastCrashAt = now;
+
           await ElMessageBox.confirm(
             `${payload.message}\n${options.t("toast.recoverPrompt")}`,
             options.t("toast.serviceCrashed"),
@@ -38,7 +38,15 @@ export function useCrashHandler(options: CrashHandlerOptions) {
               type: "error",
             },
           );
-          await options.onRecover();
+          try {
+            await options.onRecover();
+          } catch (recoverErr) {
+            ElMessage.error(
+              options.t("toast.recoverFailed") ||
+                "Recovery failed. Please try again.",
+            );
+            lastCrashAt = 0; // reset cooldown so user can retry
+          }
         } catch {
           ElMessage.warning(options.t("toast.recoverDeferred"));
         }

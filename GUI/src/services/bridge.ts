@@ -268,6 +268,10 @@ export async function clearProviderApiKey(provider: string, envVar?: string) {
   );
 }
 
+export async function checkProvidersConfigured() {
+  return invokeWithTimeout<boolean>("check_providers_configured");
+}
+
 export async function listProviderCatalog() {
   return invokeWithTimeout<ProviderCatalogEntry[]>("list_provider_catalog");
 }
@@ -459,14 +463,19 @@ export interface RuntimeFeatures {
 }
 
 export async function fetchRuntimeFeatures(): Promise<RuntimeFeatures> {
-  const json = await invokeRuntimeRpc("runtime.features", "{}");
   try {
-    const parsed = JSON.parse(json);
-    return (parsed?.features as RuntimeFeatures) ?? ({} as RuntimeFeatures);
-  } catch (e) {
-    if (import.meta.env.DEV) {
-      console.warn("fetchRuntimeFeatures: failed to parse response", e);
+    const json = await invokeRuntimeRpc("runtime.features", "{}");
+    try {
+      const parsed = JSON.parse(json);
+      const result = parsed?.result ?? parsed;
+      return (result?.features as RuntimeFeatures) ?? ({} as RuntimeFeatures);
+    } catch (e) {
+      if (import.meta.env.DEV) {
+        console.warn("fetchRuntimeFeatures: failed to parse response", e);
+      }
+      return {} as RuntimeFeatures;
     }
+  } catch {
     return {} as RuntimeFeatures;
   }
 }

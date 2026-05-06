@@ -3,6 +3,7 @@ import {
   autoConfigureBackendPath,
   backendExecutableExists,
   checkHealth,
+  checkProvidersConfigured,
   configureServiceByDirectory,
   serviceStatus,
   startService,
@@ -58,6 +59,9 @@ export async function waitForBackendHealthy(
   return false;
 }
 
+/**
+ * Start the backend service and wait for it to become healthy.
+ */
 export async function startBackendWithChecks() {
   try {
     await startService();
@@ -71,19 +75,24 @@ export async function startBackendWithChecks() {
   }
 }
 
-export async function ensureBackendAndStart() {
+/**
+ * Ensure the backend executable path is configured.
+ * Returns true if a valid backend was found and linked.
+ * Does NOT start the backend process.
+ */
+export async function ensureBackendConfigured(): Promise<boolean> {
   if (starting) {
-    return;
+    return false;
   }
   starting = true;
   try {
+    // Step 1: Try auto-discover
     const localAuto = await autoConfigureBackendPath();
     if (localAuto.linked) {
-      await startBackendWithChecks();
-      ElMessage.success(i18n.global.t("backend.autoDetectedAndLinked"));
-      return;
+      return true;
     }
 
+    // Step 2: Retry loop with user directory picker
     for (
       let attempt = 1;
       attempt <= MAX_BACKEND_CONFIGURE_ATTEMPTS;
@@ -91,8 +100,7 @@ export async function ensureBackendAndStart() {
     ) {
       const exists = await backendExecutableExists();
       if (exists) {
-        await startBackendWithChecks();
-        return;
+        return true;
       }
 
       await ElMessageBox.alert(
@@ -147,45 +155,73 @@ export async function ensureBackendAndStart() {
         continue;
       }
 
-      await startBackendWithChecks();
-      ElMessage.success(i18n.global.t("backend.started"));
-      return;
+      // Found and configured successfully
+      return true;
     }
 
-    throw new Error(i18n.global.t("backendStartup.maxRetriesReached"));
+    ElMessage.error(i18n.global.t("backendStartup.maxRetriesReached"));
+    return false;
   } finally {
     starting = false;
   }
 }
 
-export async function bootstrapBackend(monitorOnly: boolean) {
-  const hasConfiguredPath = await backendExecutableExists();
-  if (hasConfiguredPath) {
-    return;
-  }
-
+/**
+ * Check whether AI providers are already configured in the backend config.
+ * Runs as a Tauri command in the GUI process — no backend needed.
+ */
+export async function providersConfigured(): Promise<boolean> {
   try {
-    const health = await checkHealth();
-    if (health.ok) {
-      const result = await autoConfigureBackendPath();
-      if (result.linked) {
-        ElMessage.success(i18n.global.t("backend.detectedRunning"));
-        return;
-      }
-      ElMessage.warning(
-        i18n.global.t("backend.detectedRunningAutoLinkFailed", {
-          reason: result.reason,
-        }),
-      );
-    }
+    return await checkProvidersConfigured();
   } catch {
-    // Ignore health probe failures and continue to manual path flow.
+    return false;
+  }
+}
+
+/**
+ * Bootstrap: find the backend executable and configure its path.
+ * Separated from starting the backend — the caller decides when to start.
+ *
+ * Returns:
+ *   "configured"   → backend path found and saved, caller can start it
+ *   "no-backend"   → could not find or configure backend path
+ *   "no-providers" → backend path found, but no AI providers configured yet
+ *   "monitor-only" → monitor-only mode, user chose not to start
+ */
+export type BootstrapResult =
+  | { status: "configured" }
+  | { status: "no-backend"; reason: string }
+  | { status: "no-providers" }
+  | { status: "monitor-only" };
+
+export async function bootstrapBackend(
+  monitorOnly: boolean,
+): Promise<BootstrapResult> {
+  // Step 1: Check if backend path is already configured
+  const hasConfiguredPath = await backendExecutableExists();
+
+  if (!hasConfiguredPath) {
+    if (monitorOnly) {
+      ElMessage.warning(i18n.global.t("backend.monitorOnlyMode"));
+      return { status: "monitor-only" };
+    }
+
+    // Step 2: Auto-discover backend executable
+    const configured = await ensureBackendConfigured();
+    if (!configured) {
+      return {
+        status: "no-backend",
+        reason: "Failed to locate or configure backend executable",
+      };
+    }
   }
 
-  if (monitorOnly) {
-    ElMessage.warning(i18n.global.t("backend.monitorOnlyMode"));
-    return;
+  // Step 4: Backend path is configured — check if providers exist
+  const hasProviders = await providersConfigured();
+  if (!hasProviders) {
+    return { status: "no-providers" };
   }
 
-  await ensureBackendAndStart();
+  // Step 5: Everything ready — providers configured, backend path set
+  return { status: "configured" };
 }

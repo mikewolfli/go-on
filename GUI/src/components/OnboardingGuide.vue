@@ -3,7 +3,7 @@
     :model-value="modelValue"
     width="880px"
     top="6vh"
-    :close-on-click-modal="false"
+    :close-on-click-modal="true"
     @close="dismissGuide"
   >
     <template #header>

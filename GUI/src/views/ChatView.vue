@@ -201,6 +201,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onActivated, onMounted, onUnmounted, nextTick } from "vue";
+
+let isMounted = true;
+onUnmounted(() => { isMounted = false; });
 import { useI18n } from "vue-i18n";
 import { ElMessage } from "element-plus";
 import { Document } from "@element-plus/icons-vue";
@@ -251,6 +254,7 @@ function handleFileSelect(file: File): boolean {
   // Read as data URL
   const reader = new FileReader();
   reader.onload = () => {
+    if (!isMounted) return;
     attachments.value.push({
       name: file.name,
       type: file.type,

@@ -89,6 +89,8 @@ import {
 } from "../services/bridge";
 import { useRuntimeStore } from "../stores/runtime";
 
+let modelLoadGeneration = 0;
+
 const { t } = useI18n();
 const runtime = useRuntimeStore();
 
@@ -145,8 +147,10 @@ async function loadProviders() {
 }
 
 async function loadModels() {
+  const gen = ++modelLoadGeneration;
   loadingModels.value = true;
   try {
+    if (gen !== modelLoadGeneration) return;
     const options = new Map<string, { label: string; value: string }>();
     options.set("auto", { label: t("apiKeySetup.autoModel"), value: "auto" });
 
@@ -179,13 +183,14 @@ async function loadModels() {
       // runtime RPC unavailable, use catalog-only models
     }
 
+    if (gen !== modelLoadGeneration) return;
     modelOptions.value = Array.from(options.values());
     const nextModel = spec?.configuredModel || spec?.defaultModel || "auto";
     if (!modelOptions.value.some((item) => item.value === selectedModel.value)) {
       selectedModel.value = nextModel;
     }
   } finally {
-    loadingModels.value = false;
+    if (gen === modelLoadGeneration) loadingModels.value = false;
   }
 }
 
@@ -195,6 +200,7 @@ function syncEnvVar() {
 }
 
 watch(provider, async () => {
+  errorMsg.value = '';
   syncEnvVar();
   await loadModels();
 });
@@ -237,7 +243,6 @@ async function handleSave() {
     }
 
     completed.value = true;
-    emit("configured");
   } catch (e) {
     errorMsg.value = String(e);
   } finally {

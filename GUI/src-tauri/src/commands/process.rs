@@ -4,6 +4,12 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::SystemTime;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Local};
 use serde::Serialize;
@@ -113,6 +119,8 @@ fn start_service_impl(state: &AppState) -> Result<ServiceStatus> {
         .open(&inner.config.log_path)?;
 
     let mut cmd = Command::new(&exe_path);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.current_dir(&inner.config.working_dir)
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(stderr_log));
