@@ -265,14 +265,25 @@ fn config_template_path(working_dir: &str) -> PathBuf {
 }
 
 fn provider_catalog_path(working_dir: &str) -> Option<PathBuf> {
-    let candidates = [
-        PathBuf::from(working_dir).join("providers.toml"),
+    let cwd = std::env::current_dir().ok();
+    let mut candidates = Vec::new();
+    // Try working_dir first
+    candidates.push(PathBuf::from(working_dir).join("providers.toml"));
+    candidates.push(
         PathBuf::from(working_dir)
             .join("config")
             .join("providers.toml"),
-        std::env::current_dir().ok()?.join("providers.toml"),
-    ];
-
+    );
+    // Then cwd
+    if let Some(ref cwd) = cwd {
+        candidates.push(cwd.join("providers.toml"));
+        candidates.push(cwd.join("config").join("providers.toml"));
+        // Tauri dev mode: cwd is GUI/, config is at ../config/
+        if let Some(parent) = cwd.parent() {
+            candidates.push(parent.join("config").join("providers.toml"));
+            candidates.push(parent.join("providers.toml"));
+        }
+    }
     candidates.into_iter().find(|path| path.exists())
 }
 
