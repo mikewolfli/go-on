@@ -237,7 +237,9 @@
           "description": "适合由编辑器以子进程方式拉起 go-on。"
         }
       }
-    }
+    },
+    "regionGroup": "区域与语言",
+    "language": "语言"
   },
   "protocol_mode": {
     "adaptive": {

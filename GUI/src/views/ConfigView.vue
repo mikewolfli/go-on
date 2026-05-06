@@ -60,6 +60,18 @@
         </el-form>
       </el-collapse-item>
 
+      <el-collapse-item :title="t('config.regionGroup')" name="region">
+        <el-form label-width="150px">
+          <el-form-item :label="t('config.language')">
+            <el-select v-model="locale" style="width: 100%;" @change="onLocaleChange">
+              <el-option :label="t('language.english')" value="en-US" />
+              <el-option :label="t('language.simplifiedChinese')" value="zh-CN" />
+              <el-option :label="t('language.traditionalChinese')" value="zh-TW" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </el-collapse-item>
+
       <el-collapse-item :title="t('config.behaviorGroup')" name="behavior">
         <el-form label-width="150px">
           <el-form-item :label="t('config.monitorOnly')">
@@ -89,6 +101,7 @@ import { useI18n } from "vue-i18n";
 import { configureService, runCliCommand, serviceStatus } from "../services/bridge";
 import { openDialog } from "../services/dialog";
 import { normalizeErrorMessage } from "../utils/errors";
+import { getLocale, setLocale } from "../locales";
 import ConfigWizard from "../components/ConfigWizard.vue";
 
 function safeGetItem(key: string): string | null {
@@ -115,6 +128,14 @@ const initialState = ref({
   monitorOnly: safeGetItem(MONITOR_ONLY_KEY) === "true",
 });
 const { t } = useI18n();
+const locale = ref(getLocale());
+
+function onLocaleChange(value: string) {
+  if (value === "en-US" || value === "zh-CN" || value === "zh-TW") {
+    setLocale(value);
+    locale.value = value;
+  }
+}
 
 const protocolModes = computed(() => [
   {

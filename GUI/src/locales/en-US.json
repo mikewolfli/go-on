@@ -237,7 +237,9 @@
           "description": "Connect the GUI to a backend managed by VS Code / Cursor / Windsurf."
         }
       }
-    }
+    },
+    "regionGroup": "Region && Language",
+    "language": "Language"
   },
   "protocol_mode": {
     "adaptive": {

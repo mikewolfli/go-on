@@ -237,7 +237,9 @@
           "description": "適合由編輯器以子進程方式拉起 go-on。"
         }
       }
-    }
+    },
+    "regionGroup": "區域與語言",
+    "language": "語言"
   },
   "protocol_mode": {
     "adaptive": {
