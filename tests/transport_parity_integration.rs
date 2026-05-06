@@ -758,6 +758,7 @@ fn acp_http_route_inventory_changes_require_transport_gate_update() {
             "/chat/stream".to_string(),
             "/health".to_string(),
             "/models".to_string(),
+            "/rpc".to_string(),
             "/v1/chat/completions".to_string(),
             "/v1/model".to_string(),
             "/v1/models".to_string(),
