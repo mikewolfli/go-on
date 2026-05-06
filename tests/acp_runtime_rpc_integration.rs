@@ -1064,6 +1064,7 @@ fn rpc_initialize_health_phase_and_shutdown() {
     harness.wait_for_exit(Duration::from_secs(8));
 }
 
+#[serial]
 mod advanced {
     use super::*;
 
