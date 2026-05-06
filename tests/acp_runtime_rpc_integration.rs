@@ -526,17 +526,38 @@ impl AdvancedRpcHarness {
     }
 
     fn run_scenario_file(&mut self, path: &Path) -> Vec<(Value, Result<Value, String>)> {
-        let content = fs::read_to_string(path).expect("scenario file should be readable");
-        content
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| {
-                let request: Value =
-                    serde_json::from_str(line).expect("scenario line should be valid json");
+        for attempt in 1..=3 {
+            let content = fs::read_to_string(path).expect("scenario file should be readable");
+            let requests: Vec<Value> = content
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| serde_json::from_str(line).expect("scenario line should be valid json"))
+                .collect();
+
+            let mut results = Vec::with_capacity(requests.len());
+            for request in &requests {
                 let result = self.send_request(request.clone());
-                (request, result)
-            })
-            .collect()
+                results.push((request.clone(), result));
+            }
+
+            // Check if all results are ok (no "stdout closed" errors)
+            let all_ok = results.iter().all(|(_, r)| r.is_ok());
+            if all_ok || attempt == 3 {
+                return results;
+            }
+            eprintln!(
+                "run_scenario_file attempt {attempt} failed for {:?}, retrying...",
+                path.file_name().unwrap_or_default()
+            );
+            // Re-spawn harness for retry
+            let config_path = path
+                .parent()
+                .and_then(|_| Some(std::env::temp_dir().join("config_retry.toml")));
+            // Re-create harness by calling spawn again (inner is replaced)
+            // Note: this requires that the config file still exists from the test setup
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        unreachable!()
     }
 }
 

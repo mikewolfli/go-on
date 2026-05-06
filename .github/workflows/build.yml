@@ -49,7 +49,8 @@ jobs:
       # ── Integration tests ─────────────────────────────────────────────
       - name: Integration tests
         timeout-minutes: 5
-        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration -- --nocapture
+        # --test-threads=1 prevents flaky child-process races on resource-constrained CI runners
+        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration -- --test-threads=1 --nocapture
         env:
           GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
 
