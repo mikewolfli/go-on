@@ -13,6 +13,7 @@ export interface CachedResponse<T> {
   cache: CacheMetadata;
 }
 
+const BOOTSTRAP_INVOKE_TIMEOUT_MS = 3000;
 const DEFAULT_INVOKE_TIMEOUT_MS = 15000;
 const STARTUP_INVOKE_TIMEOUT_MS = 20000;
 const RUNTIME_RPC_TIMEOUT_MS = 30000;
@@ -228,14 +229,18 @@ export async function configureServiceByDirectory(directoryPath: string) {
 }
 
 export async function backendExecutableExists() {
-  return invokeWithTimeout<boolean>("backend_executable_exists");
+  return invokeWithTimeout<boolean>(
+    "backend_executable_exists",
+    undefined,
+    BOOTSTRAP_INVOKE_TIMEOUT_MS,
+  );
 }
 
 export async function autoConfigureBackendPath() {
   return invokeWithTimeout<AutoConfigureResult>(
     "auto_configure_backend_path",
     undefined,
-    STARTUP_INVOKE_TIMEOUT_MS,
+    BOOTSTRAP_INVOKE_TIMEOUT_MS,
   );
 }
 
@@ -269,7 +274,11 @@ export async function clearProviderApiKey(provider: string, envVar?: string) {
 }
 
 export async function checkProvidersConfigured() {
-  return invokeWithTimeout<boolean>("check_providers_configured");
+  return invokeWithTimeout<boolean>(
+    "check_providers_configured",
+    undefined,
+    BOOTSTRAP_INVOKE_TIMEOUT_MS,
+  );
 }
 
 export async function listProviderCatalog() {
