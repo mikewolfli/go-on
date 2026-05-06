@@ -13,6 +13,16 @@
       ⚠️ {{ t("app.monitorOnlyBanner") }}
       <span class="monitor-only-config-link" @click="activeMainTab = 'config'">{{ t("app.monitorOnlyConfigLink") }}</span>
     </div>
+    <!-- Banner when awaiting API key configuration -->
+    <div v-if="runtime.paused" class="api-key-banner">
+      ⚠️ {{ t('app.waitingForConfig') }}
+      <el-button size="small" type="primary" @click="showApiKeySetup = true">
+        {{ t('app.configureNow') }}
+      </el-button>
+      <el-button size="small" @click="onNavigateToConfig">
+        {{ t('app.goToSettings') }}
+      </el-button>
+    </div>
     <el-container :style="monitorOnly ? 'height: calc(100vh - 36px)' : 'height: 100vh'" direction="vertical">
       <OnboardingGuide
         v-model="showOnboarding"
@@ -133,6 +143,7 @@ import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
 import {
   backendExecutableExists,
+  startService,
   stopService,
   restartService,
   switchToMiniWindow,
@@ -189,6 +200,33 @@ let stopRunningWatch: (() => void) | undefined;
 let stopWatchMainTab: (() => void) | undefined;
 let stopWatchMonitorSub: (() => void) | undefined;
 let stopWatchConfigSub: (() => void) | undefined;
+let providerCheckTimer: number | undefined;
+
+async function checkProviderAndNavigate() {
+  if (!runtime.status.running) return;
+  try {
+    const { getProviderStatus } = await import("./services/rpcService");
+    const status = await getProviderStatus();
+    const agentInfo = status?.provider_status;
+    const agents = Array.isArray(agentInfo?.configured_agents) ? agentInfo!.configured_agents! : [];
+    const readyCount = agents.filter((p: any) => p?.ready === true).length;
+    const summary = agentInfo?.summary;
+    const configuredCount = summary?.configured ?? agents.length;
+    if (readyCount === 0 && configuredCount > 0) {
+      if (!runtime.paused) {
+        runtime.setPaused(true);
+        ElMessage.warning(t('app.waitingForConfig'));
+      }
+      showApiKeySetup.value = true;
+    } else if (configuredCount === 0) {
+      ElMessage.info(t("backend.executableNotFound").replace("{attempt}/", "").replace("{max}", ""));
+      activeMainTab.value = "config";
+      activeConfigSubTab.value = "setup";
+    }
+  } catch (e) {
+    console.warn("checkProviderAndNavigate failed:", e);
+  }
+}
 
 function safeGetItem(key: string): string | null {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -299,9 +337,29 @@ async function onRestart() {
   }
 }
 
-function onApiKeyConfigured() {
+async function onApiKeyConfigured() {
   showApiKeySetup.value = false;
-  runtime.refreshAll();
+  // Restart backend so it picks up the new env var
+  try {
+    await restartService();
+  } catch {
+    try { await startService(); } catch { /* may already be running */ }
+  }
+  // Wait for backend to be healthy
+  const { waitForBackendHealthy } = await import("./services/backendLifecycle");
+  await waitForBackendHealthy(15000);
+  await runtime.refreshAll();
+  // Check if providers are actually ready now
+  await checkProviderAndNavigate();
+  if (!runtime.status.running || !runtime.paused) {
+    // Only resume if provider check didn't re-pause
+    runtime.setPaused(false);
+  }
+}
+
+function onNavigateToConfig() {
+  activeMainTab.value = 'config';
+  activeConfigSubTab.value = 'providers';
 }
 
 onMounted(async () => {
@@ -319,31 +377,15 @@ onMounted(async () => {
 
   runtime.startStatusPolling();
 
-  async function checkProviderAndNavigate() {
-    if (!runtime.status.running) return;
-    try {
-      const { getProviderStatus } = await import("./services/rpcService");
-      const status = await getProviderStatus();
-      const agentInfo = status?.provider_status;
-      const agents = Array.isArray(agentInfo?.configured_agents) ? agentInfo!.configured_agents! : [];
-      const readyCount = agents.filter((p: any) => p?.ready === true).length;
-      const summary = agentInfo?.summary;
-      const configuredCount = summary?.configured ?? agents.length;
-      if (readyCount === 0 && configuredCount > 0) {
-        // API key needed — show the setup dialog instead of jumping pages
-        showApiKeySetup.value = true;
-      } else if (configuredCount === 0) {
-        ElMessage.info(t("backend.executableNotFound").replace("{attempt}/", "").replace("{max}", ""));
-        activeMainTab.value = "config";
-        activeConfigSubTab.value = "setup";
-      }
-    } catch (e) {
-      console.warn("checkProviderAndNavigate failed:", e);
-    }
-  }
+
 
   // Check provider readiness immediately
   await checkProviderAndNavigate();
+
+  // Periodically re-check provider health during polling
+  providerCheckTimer = window.setInterval(() => {
+    checkProviderAndNavigate();
+  }, 30000);
 
   stopRunningWatch = watch(
     () => runtime.status.running,
@@ -351,6 +393,10 @@ onMounted(async () => {
       if (!previousRunning && running) {
         ElMessage.success(t("toast.serviceRecovered"));
         await checkProviderAndNavigate();
+      } else if (previousRunning && !running && !runtime.paused) {
+        // Backend stopped unexpectedly — pause to prevent stale data
+        runtime.setPaused(true);
+        ElMessage.warning(t("toast.serviceStopped"));
       }
       previousRunning = running;
     },
@@ -394,10 +440,50 @@ onUnmounted(() => {
     stopRunningWatch();
     stopRunningWatch = undefined;
   }
+  window.clearInterval(providerCheckTimer);
 });
 </script>
 
 <style scoped>
+.api-key-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  border-bottom: 2px solid #f59e0b;
+  padding: 8px 16px;
+  font-size: 13px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  flex-wrap: wrap;
+}
+
+.paused-overlay-content {
+  text-align: center;
+  max-width: 400px;
+  padding: 40px;
+}
+
+.paused-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.paused-overlay-content h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  color: #1f2937;
+}
+
+.paused-overlay-content p {
+  margin: 0 0 24px;
+  color: #6b7280;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 .monitor-only-banner {
   display: flex;
   align-items: center;

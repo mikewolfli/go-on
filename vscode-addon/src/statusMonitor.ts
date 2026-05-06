@@ -25,6 +25,7 @@ export class StatusMonitor {
   private failureWarningShown = false;
   private _configListener: vscode.Disposable | undefined;
   private _disposed = false;
+  private _noProviderWarningShown: boolean = false;
 
   constructor(manager: RuntimeManagerLike) {
     this.manager = manager;
@@ -64,14 +65,10 @@ export class StatusMonitor {
   }
 
   private startHealthMonitoring() {
-    // Stop any existing timer first to ensure timer ID uniqueness
     this.stopHealthMonitoring();
     const config = vscode.workspace.getConfiguration("go-on");
-    const interval = config.get<number>("health.interval", 300) * 1000; // Convert to milliseconds
-
-    if (interval <= 0) {
-      return; // Disabled
-    }
+    const interval = config.get<number>("health.interval", 300) * 1000;
+    if (interval <= 0) return;
 
     this.healthCheckTimer = setInterval(async () => {
       if (
@@ -81,7 +78,6 @@ export class StatusMonitor {
       ) {
         return;
       }
-
       this.healthCheckInFlight = true;
       try {
         const health = await this.manager.sendRequest("runtime.health");
@@ -91,45 +87,20 @@ export class StatusMonitor {
 
         // Check provider readiness when runtime is healthy
         if (health) {
-          try {
-            const probeResult = (await this.manager.sendRequest(
-              "health.probes",
-            )) as ProbeReport;
-            const probes = probeResult?.probes;
-            if (
-              probes?.provider_dependencies &&
-              !probes.provider_dependencies.ready
-            ) {
-              this.statusBarItem.text = "$(warning) Go-On Chat";
-              this.statusBarItem.tooltip =
-                "Go-On is running but no AI provider is configured. API key required.";
-              this.statusBarItem.backgroundColor = new vscode.ThemeColor(
-                "statusBarItem.warningBackground",
-              );
-              return;
-            }
-          } catch {
-            // probe check failed, ignore — provider may not be ready yet
-          }
+          await this._checkProviderReadiness();
         }
-
-        // Provider ready or probe check failed — reset to normal
-        this.statusBarItem.backgroundColor = undefined;
       } catch {
         this.consecutiveFailures++;
-        // Keep explicit contract-term reference for cross-surface smoke checks.
         const _failureTerm = protocolContract.statusTerms.healthCheckFailed;
         this.statusBarItem.tooltip = i18n.getMessage(
           MessageKeys.statusBarHealthCheckFailedTooltip,
           [String(this.consecutiveFailures), String(this.maxFailures)],
         );
-
         if (
           this.consecutiveFailures >= this.maxFailures &&
           !this.failureWarningShown
         ) {
           this.failureWarningShown = true;
-          // i18n
           void vscode.window.showWarningMessage(
             i18n.getMessage(MessageKeys.healthCheckWarning),
           );
@@ -138,6 +109,48 @@ export class StatusMonitor {
         this.healthCheckInFlight = false;
       }
     }, interval);
+  }
+
+  private async _checkProviderReadiness(): Promise<void> {
+    try {
+      const probeResult = (await this.manager.sendRequest(
+        "health.probes",
+      )) as ProbeReport;
+      const probes = probeResult?.probes;
+      const providerDep = probes?.provider_dependencies;
+      const hasProviderConfig = providerDep !== undefined;
+      const providerReady = hasProviderConfig && providerDep!.ready;
+
+      if (hasProviderConfig && !providerReady) {
+        this.statusBarItem.text = "$(warning) Go-On Chat";
+        this.statusBarItem.tooltip =
+          "Go-On is running but no AI provider is ready. Configure API key in Settings.";
+        this.statusBarItem.backgroundColor = new vscode.ThemeColor(
+          "statusBarItem.warningBackground",
+        );
+        if (!this._noProviderWarningShown) {
+          this._noProviderWarningShown = true;
+          void vscode.window
+            .showWarningMessage(
+              "Go-On needs an AI provider API key to function. Open Settings to configure one.",
+              "Open Settings",
+            )
+            .then((action) => {
+              if (action === "Open Settings") {
+                vscode.commands.executeCommand("go-on.openSettings");
+              }
+            });
+        }
+        return;
+      }
+
+      // Provider ready — reset to normal status
+      this._noProviderWarningShown = false;
+      this.statusBarItem.backgroundColor = undefined;
+      this.updateStatus();
+    } catch {
+      // probe check failed — ignore, will retry on next interval
+    }
   }
 
   private stopHealthMonitoring() {

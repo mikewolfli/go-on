@@ -15,7 +15,11 @@
     },
     "toggleTheme": "Toggle Dark/Light Mode",
     "monitorOnlyBanner": "Monitor-only mode · GUI will not auto-start backend",
-    "monitorOnlyConfigLink": "Go to Config to disable"
+    "monitorOnlyConfigLink": "Go to Config to disable",
+    "waitingForConfig": "Please configure at least one AI provider. Polling paused.",
+    "configureApiKeyHint": "Please configure at least one AI provider API key to activate the runtime.",
+    "configureNow": "Configure",
+    "goToSettings": "Settings"
   },
   "menu": {
     "dashboard": "Dashboard",

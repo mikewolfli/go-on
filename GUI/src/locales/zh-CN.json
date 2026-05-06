@@ -15,7 +15,11 @@
     },
     "toggleTheme": "切换深色/浅色模式",
     "monitorOnlyBanner": "监控模式 · GUI 不会自动启动后台",
-    "monitorOnlyConfigLink": "前往配置关闭"
+    "monitorOnlyConfigLink": "前往配置关闭",
+    "waitingForConfig": "请至少配置一个AI供应商以激活运行时。已暂停轮询。",
+    "configureApiKeyHint": "Please configure at least one AI provider API key to activate the runtime.",
+    "configureNow": "配置",
+    "goToSettings": "设置"
   },
   "menu": {
     "dashboard": "总览",

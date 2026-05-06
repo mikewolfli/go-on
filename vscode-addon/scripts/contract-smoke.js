@@ -1,253 +1,846 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
-const addonRoot = path.resolve(__dirname, '..');
-const repoRoot = path.resolve(addonRoot, '..');
+const addonRoot = path.resolve(__dirname, "..");
+const repoRoot = path.resolve(addonRoot, "..");
 
 const contract = JSON.parse(
-    fs.readFileSync(path.join(repoRoot, 'contracts', 'editor-capability-matrix.json'), 'utf8')
+  fs.readFileSync(
+    path.join(repoRoot, "contracts", "editor-capability-matrix.json"),
+    "utf8",
+  ),
 );
-const extensionSource = fs.readFileSync(path.join(addonRoot, 'src', 'extension.ts'), 'utf8');
-const runtimeManagerSource = fs.readFileSync(path.join(addonRoot, 'src', 'runtimeManager.ts'), 'utf8');
-const monitorSource = fs.readFileSync(path.join(addonRoot, 'src', 'statusMonitor.ts'), 'utf8');
-const contractSource = fs.readFileSync(path.join(addonRoot, 'src', 'protocolContract.ts'), 'utf8');
+const extensionSource = fs.readFileSync(
+  path.join(addonRoot, "src", "extension.ts"),
+  "utf8",
+);
+const runtimeManagerSource = fs.readFileSync(
+  path.join(addonRoot, "src", "runtimeManager.ts"),
+  "utf8",
+);
+const monitorSource = fs.readFileSync(
+  path.join(addonRoot, "src", "statusMonitor.ts"),
+  "utf8",
+);
+const contractSource = fs.readFileSync(
+  path.join(addonRoot, "src", "protocolContract.ts"),
+  "utf8",
+);
 
 assert.equal(contract.surfaces.vscodeAddon.supports.openAiCompat, true);
 assert.equal(contract.surfaces.vscodeAddon.supports.responsesNative, false);
-assert.equal(typeof contract.verification?.generatedBy, 'string');
-assert.equal(typeof contract.verification?.generatedAt, 'string');
-assert.equal(typeof contract.verification?.sourceOfTruth, 'string');
+assert.equal(typeof contract.verification?.generatedBy, "string");
+assert.equal(typeof contract.verification?.generatedAt, "string");
+assert.equal(typeof contract.verification?.sourceOfTruth, "string");
 assert.ok(contract.verification.generatedBy.length > 0);
-assert.ok(contract.verification.generatedAt.includes('T'));
+assert.ok(contract.verification.generatedAt.includes("T"));
 assert.ok(contract.verification.sourceOfTruth.length > 0);
-assert.deepEqual(contract.protocol.supportedModes, ['adaptive', 'acp_stdio', 'acp_http', 'mcp_stdio', 'mcp_http']);
-assert.deepEqual(contract.protocol.workflowControlModes, ['manual', 'assisted', 'autonomous']);
-assert.deepEqual(contract.protocol.platformModes, ['universal', 'phase_compat']);
-assert.equal(contract.protocol.defaultWorkflowControlMode, 'assisted');
-assert.equal(contract.protocol.defaultPlatformMode, 'phase_compat');
+assert.deepEqual(contract.protocol.supportedModes, [
+  "adaptive",
+  "acp_stdio",
+  "acp_http",
+  "mcp_stdio",
+  "mcp_http",
+]);
+assert.deepEqual(contract.protocol.workflowControlModes, [
+  "manual",
+  "assisted",
+  "autonomous",
+]);
+assert.deepEqual(contract.protocol.platformModes, [
+  "universal",
+  "phase_compat",
+]);
+assert.equal(contract.protocol.defaultWorkflowControlMode, "assisted");
+assert.equal(contract.protocol.defaultPlatformMode, "phase_compat");
 assert.deepEqual(contract.protocol.workflowProfileFields, [
-    'configured_workflow_type',
-    'effective_workflow_type',
-    'detection_signal',
+  "configured_workflow_type",
+  "effective_workflow_type",
+  "detection_signal",
 ]);
 assert.equal(contract.protocol.universalPlatformEnabled, true);
 assert.equal(contract.protocol.phaseCompatMappingEnabled, true);
-assert.equal(contract.protocol.universalExecutionCycleSchemaVersion, 'blue23-universal-cycle-v1');
+assert.equal(
+  contract.protocol.universalExecutionCycleSchemaVersion,
+  "blue23-universal-cycle-v1",
+);
 assert.equal(contract.protocol.universalGateModelCheckedInMainChain, true);
-assert.equal(contract.protocol.universalResponseSkeletonCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.universalResponseSkeletonCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.universalSandboxProfileCheckedInMainChain, true);
-assert.equal(contract.protocol.universalApprovalCheckpointCheckedInMainChain, true);
-assert.equal(contract.protocol.universalCapabilityProfileCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.universalApprovalCheckpointCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.universalCapabilityProfileCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue23MigrationScriptCheckedInMainChain, true);
 assert.equal(contract.protocol.blue23RollbackScriptCheckedInMainChain, true);
-assert.equal(contract.protocol.blue23BenchmarkCompareScriptCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.blue23BenchmarkCompareScriptCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue23ScorecardCheckedInMainChain, true);
-assert.equal(contract.protocol.blue23MultiAgentProtocolCheckedInMainChain, true);
-assert.equal(contract.protocol.blue23PolicyBundlePublishScriptCheckedInMainChain, true);
-assert.equal(contract.protocol.blue23OrgPolicyGovernanceViewCheckedInMainChain, true);
-assert.equal(contract.protocol.blue23UniversalGovernanceProfileCheckedInMainChain, true);
-assert.equal(contract.protocol.blue23ConfigDualTrackModeCheckedInMainChain, true);
-assert.equal(contract.protocol.blue23RuntimePlatformModeFromConfigCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.blue23MultiAgentProtocolCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue23PolicyBundlePublishScriptCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue23OrgPolicyGovernanceViewCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue23UniversalGovernanceProfileCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue23ConfigDualTrackModeCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue23RuntimePlatformModeFromConfigCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue23RepoNativeContextCheckedInMainChain, true);
-assert.equal(contract.protocol.blue23ApprovalResumeTokenCheckedInMainChain, true);
-assert.equal(contract.protocol.blue23LearningCognitionProfileCheckedInMainChain, true);
-assert.equal(contract.protocol.blue23MultiRoundTokenEconomyCheckedInMainChain, true);
-assert.equal(contract.protocol.blue23KnowledgeRefinementProfileCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.blue23ApprovalResumeTokenCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue23LearningCognitionProfileCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue23MultiRoundTokenEconomyCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue23KnowledgeRefinementProfileCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue23SelfEvolutionLoopCheckedInMainChain, true);
-assert.equal(contract.protocol.blue23LearningPackProfileElevatedToMainChain, true);
+assert.equal(
+  contract.protocol.blue23LearningPackProfileElevatedToMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue23WorkflowPreChainProfileElevated, true);
 assert.equal(contract.protocol.blue23RuntimeSelfModelProfileElevated, true);
-assert.equal(contract.protocol.rpcGovernanceStatusMultiUserServerViewCheckedInMainChain, true);
-assert.equal(contract.protocol.multiUserServerComponentMatrixCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.rpcGovernanceStatusMultiUserServerViewCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.multiUserServerComponentMatrixCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.multiTenantReleaseGateCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcReleaseReadinessMultiUserServerGateCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcReleaseReadinessMultiUserSummaryCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcGovernanceStatusServerModeInferenceFromDeploymentTargetCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcReleaseReadinessServerModeInferenceFromDeploymentTargetCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcGovernanceStatusServerModeInferenceSourceCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcReleaseReadinessServerModeInferenceSourceCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcReleaseReadinessBlockedGateNamesCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcGovernanceStatusSchemaVersionCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcReleaseReadinessSchemaVersionCheckedInMainChain, true);
-assert.equal(contract.protocol.artifactSchemaVersionedOutputCheckedInMainChain, true);
-assert.equal(contract.protocol.adversarialUnknownDeploymentTargetDefaultsSingleUserCheckedInMainChain, true);
-assert.equal(contract.protocol.adversarialExplicitSingleUserOverridesInferenceCheckedInMainChain, true);
-assert.equal(contract.protocol.adversarialEmptyParamsReturnValidStructureCheckedInMainChain, true);
-assert.equal(contract.protocol.adversarialInvalidMethodReturnsJsonRpcErrorCheckedInMainChain, true);
-assert.equal(contract.protocol.deterministicAdversarialDualTrackGateCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.rpcReleaseReadinessMultiUserServerGateCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcReleaseReadinessMultiUserSummaryCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .rpcGovernanceStatusServerModeInferenceFromDeploymentTargetCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .rpcReleaseReadinessServerModeInferenceFromDeploymentTargetCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .rpcGovernanceStatusServerModeInferenceSourceCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .rpcReleaseReadinessServerModeInferenceSourceCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcReleaseReadinessBlockedGateNamesCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcGovernanceStatusSchemaVersionCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcReleaseReadinessSchemaVersionCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.artifactSchemaVersionedOutputCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .adversarialUnknownDeploymentTargetDefaultsSingleUserCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .adversarialExplicitSingleUserOverridesInferenceCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .adversarialEmptyParamsReturnValidStructureCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .adversarialInvalidMethodReturnsJsonRpcErrorCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.deterministicAdversarialDualTrackGateCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue26S16CiTopLevelGateCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S16GateBlocksBuildOnFailureCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcGovernanceStatusMultiUserLifecycleOpsCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcReleaseReadinessMultiUserLifecycleOpsCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcReleaseReadinessMultiUserLifecycleGateCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcGovernanceStatusDualTrackConsistencyCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcReleaseReadinessDualTrackConsistencyCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcReleaseReadinessDualTrackConsistencyGateCheckedInMainChain, true);
-assert.equal(contract.protocol.multiUserLifecycleDrillScenarioCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S11TaskGraphCheckpointResumableCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S0TargetFrozenScopeLockedCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S1UnifiedExecutionCycleCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S2AutoRepairLoopMainChainCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S3CodeChangeBundleThreeSurfaceCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S4ToolCapabilityMatrixFallbackCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S5MemoryGraphDriftProtectionCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S6ReviewAdjudicationStructuredCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S7ReplayScoringThreeDimensionalCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S12ThinkActObserveToolLoopCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S13RoleHandoffConflictResolutionCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S18ZeroTrustComplianceFrameworkCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S19EnterpriseRbacPolicyEngineCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S20SlaServiceGovernanceCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S21SkillEngineDynamicRegistryLifecycleCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S22WorkflowToSkillAutoConversionPipelineCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S23WorkflowSkillMainChainAutoRegistrationCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S24SkillManagementConsoleUiCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S25EnterpriseSkillRbacAuditComplianceCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S26ThreeModeCoreConsistencyCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S27ThreeModeScenarioAdaptabilityCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S28ThreeModeQualityAssuranceCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S29ThreeModeIssuePreventionCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S30SubagentArchitectureCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S31SubagentCollaborationCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S32SubagentObservabilityCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S33KnowledgeManagementCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S34PerformanceOptimizationCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S35EnterpriseDeployOpsCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S36EcosystemExtensibilityCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S37SharedLearningMainChainCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S38SelfEvolutionMainChainCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S39CapabilityConsistencyMainChainCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S40SharedLearningDataFlowCheckedInMainChain, true);
-assert.equal(contract.protocol.blue26S41SelfEvolutionFlowCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S0TaskGraphPersistenceCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S1EvaluationHarnessBaselineCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S2MemoryWritePolicyCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S3TaskRoutingMainChainCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S4ToolBudgetEnforcementCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.blue26S16GateBlocksBuildOnFailureCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcGovernanceStatusMultiUserLifecycleOpsCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcReleaseReadinessMultiUserLifecycleOpsCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcReleaseReadinessMultiUserLifecycleGateCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcGovernanceStatusDualTrackConsistencyCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcReleaseReadinessDualTrackConsistencyCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .rpcReleaseReadinessDualTrackConsistencyGateCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.multiUserLifecycleDrillScenarioCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S11TaskGraphCheckpointResumableCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S0TargetFrozenScopeLockedCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S1UnifiedExecutionCycleCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S2AutoRepairLoopMainChainCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S3CodeChangeBundleThreeSurfaceCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S4ToolCapabilityMatrixFallbackCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S5MemoryGraphDriftProtectionCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S6ReviewAdjudicationStructuredCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S7ReplayScoringThreeDimensionalCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S12ThinkActObserveToolLoopCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S13RoleHandoffConflictResolutionCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S18ZeroTrustComplianceFrameworkCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S19EnterpriseRbacPolicyEngineCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S20SlaServiceGovernanceCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .blue26S21SkillEngineDynamicRegistryLifecycleCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .blue26S22WorkflowToSkillAutoConversionPipelineCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .blue26S23WorkflowSkillMainChainAutoRegistrationCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S24SkillManagementConsoleUiCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .blue26S25EnterpriseSkillRbacAuditComplianceCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S26ThreeModeCoreConsistencyCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S27ThreeModeScenarioAdaptabilityCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S28ThreeModeQualityAssuranceCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S29ThreeModeIssuePreventionCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S30SubagentArchitectureCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S31SubagentCollaborationCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S32SubagentObservabilityCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S33KnowledgeManagementCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S34PerformanceOptimizationCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S35EnterpriseDeployOpsCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S36EcosystemExtensibilityCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S37SharedLearningMainChainCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S38SelfEvolutionMainChainCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S39CapabilityConsistencyMainChainCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S40SharedLearningDataFlowCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue26S41SelfEvolutionFlowCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S0TaskGraphPersistenceCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S1EvaluationHarnessBaselineCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S2MemoryWritePolicyCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S3TaskRoutingMainChainCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S4ToolBudgetEnforcementCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue27S5StateStoreTraitCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S6AdversarialVerificationCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S7PlannerExecutorSeparationCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S8MultiAgentHandoffCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S9EvaluationReplayEngineCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S10TraceModelAgentGraphCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S11DynamicWorkflowOptimizationCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S12ThinkActObserveLoopCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S13ModelDegradationDetectionCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S14TaskDecompositionPipelineCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S15OmnipotentModeReadinessCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S16SotaGapBenchmarkCheckedInMainChain, true);
-assert.equal(contract.protocol.blue27S17Blue27ReleaseClosureCheckedInMainChain, true);
-assert.equal(contract.protocol.blue28S0SchemaMigrationVersioningCheckedInMainChain, true);
-assert.equal(contract.protocol.blue28S1TenantAuthApiKeyCheckedInMainChain, true);
-assert.equal(contract.protocol.blue28S2SqlitePostgresMigrationCheckedInMainChain, true);
-assert.equal(contract.protocol.blue28S3SolutionDiscoveryHubCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.blue27S6AdversarialVerificationCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S7PlannerExecutorSeparationCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S8MultiAgentHandoffCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S9EvaluationReplayEngineCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S10TraceModelAgentGraphCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S11DynamicWorkflowOptimizationCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S12ThinkActObserveLoopCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S13ModelDegradationDetectionCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S14TaskDecompositionPipelineCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S15OmnipotentModeReadinessCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S16SotaGapBenchmarkCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue27S17Blue27ReleaseClosureCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue28S0SchemaMigrationVersioningCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue28S1TenantAuthApiKeyCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue28S2SqlitePostgresMigrationCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue28S3SolutionDiscoveryHubCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue28S4ScenarioMatcherCheckedInMainChain, true);
 assert.equal(contract.protocol.blue28S5SubaiFactoryCheckedInMainChain, true);
-assert.equal(contract.protocol.blue28S6TrainingOrchestratorCheckedInMainChain, true);
-assert.equal(contract.protocol.blue28S7AutoIntegrationRuntimeCheckedInMainChain, true);
-assert.equal(contract.protocol.blue28S8ReinforcementLoopCheckedInMainChain, true);
-assert.equal(contract.protocol.blue28S9CoordinatorCouncilCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.blue28S6TrainingOrchestratorCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue28S7AutoIntegrationRuntimeCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue28S8ReinforcementLoopCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue28S9CoordinatorCouncilCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue28S10WorkerSwarmCheckedInMainChain, true);
-assert.equal(contract.protocol.blue28S11ConsensusEngineCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.blue28S11ConsensusEngineCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue28S12BrainLoopCheckedInMainChain, true);
 assert.equal(contract.protocol.blue28S13NodeReputationCheckedInMainChain, true);
 assert.equal(contract.protocol.blue28S14SelfModelCoreCheckedInMainChain, true);
 assert.equal(contract.protocol.blue28S15MetaCognitionCheckedInMainChain, true);
 assert.equal(contract.protocol.blue28S16DriftGuardCheckedInMainChain, true);
-assert.equal(contract.protocol.blue28S17Blue28ReleaseClosureCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.blue28S17Blue28ReleaseClosureCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue29S0FederatedRlCheckedInMainChain, true);
-assert.equal(contract.protocol.blue29S1DistributedMemoryBusCheckedInMainChain, true);
-assert.equal(contract.protocol.blue29S2AdaptiveSwarmOptimizerCheckedInMainChain, true);
-assert.equal(contract.protocol.blue29S3HyperNodeNetworkCheckedInMainChain, true);
-assert.equal(contract.protocol.blue29S4WorldModelPipelineCheckedInMainChain, true);
-assert.equal(contract.protocol.blue29S5ContinualLearningHubCheckedInMainChain, true);
-assert.equal(contract.protocol.blue29S6Blue29ReleaseClosureCheckedInMainChain, true);
-assert.equal(contract.protocol.blue30S0MultiChannelMessagingCheckedInMainChain, true);
-assert.equal(contract.protocol.blue30S1CollaborationGameEngineCheckedInMainChain, true);
-assert.equal(contract.protocol.blue30S2ConsciousnessProxyMetricsCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.blue29S1DistributedMemoryBusCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue29S2AdaptiveSwarmOptimizerCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue29S3HyperNodeNetworkCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue29S4WorldModelPipelineCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue29S5ContinualLearningHubCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue29S6Blue29ReleaseClosureCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue30S0MultiChannelMessagingCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue30S1CollaborationGameEngineCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue30S2ConsciousnessProxyMetricsCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue30S3HyperResilienceCheckedInMainChain, true);
-assert.equal(contract.protocol.blue30S4DualTrackAwakeningParityCheckedInMainChain, true);
-assert.equal(contract.protocol.blue30S5CicdAwarenessGateCheckedInMainChain, true);
-assert.equal(contract.protocol.blue30S6Blue30ReleaseClosureCheckedInMainChain, true);
-assert.equal(contract.protocol.blue31S0AutonomyBoundaryGovernanceCheckedInMainChain, true);
-assert.equal(contract.protocol.blue31S1EmergencyStopProtocolCheckedInMainChain, true);
-assert.equal(contract.protocol.blue31S2CollaborationAbEvaluationCheckedInMainChain, true);
-assert.equal(contract.protocol.blue31S3HypernodeTopologyCheckedInMainChain, true);
-assert.equal(contract.protocol.blue31S4CrossRegionPriorityRoutingCheckedInMainChain, true);
-assert.equal(contract.protocol.blue31S5MetaControllerReplanCheckedInMainChain, true);
-assert.equal(contract.protocol.blue31S6Blue31ReleaseClosureCheckedInMainChain, true);
-assert.equal(contract.protocol.blue32S0GameTheoryBalancerCheckedInMainChain, true);
-assert.equal(contract.protocol.blue32S1FederatedRlV2GuardrailCheckedInMainChain, true);
-assert.equal(contract.protocol.blue32S2ContinuousLearningDistillationCheckedInMainChain, true);
-assert.equal(contract.protocol.blue32S3DriftAutoTakeoverCheckedInMainChain, true);
-assert.equal(contract.protocol.blue32S4ByzantineFaultInjectionCheckedInMainChain, true);
-assert.equal(contract.protocol.blue32S5RecoveryConsistencyRecheckCheckedInMainChain, true);
-assert.equal(contract.protocol.blue32S6Blue32ReleaseClosureCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S0LocalReflectionTrackCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S1ServerAwakeningTrackCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S2CiGateContinuousGreenCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S3StagedRolloutGuardCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S4ReleaseTrainFreezeCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S5RolloutAuditReplayCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S6Blue33ReleaseClosureCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S7AutonomyScopeMatrixCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S8RedlinePolicyRuntimeCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S9HumanApprovalCheckpointCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S10SupernodeHotStandbyCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S11CrossZoneStateSnapshotCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S12FailoverRecoveryDrillCheckedInMainChain, true);
-assert.equal(contract.protocol.blue33S13Blue33RemainingClosureCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S0DualTrackBoundaryFreezeCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S1StateVectorStoreTraitUnifiedCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S2LocalServerProfileMatrixCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S3PostgresPgvectorSchemaVersioningCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S4SqliteToPgMigrationDryrunCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S5PlannerExecutorTaskgraphResumeCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S6ThinkActObserveToolGovernanceCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S7RoleHandoffSchemaAndConflictArbiterCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S8DeterministicAdversarialDoubleChecksCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S9MemoryWritePromotionGcPolicyCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S10BenchmarkReplayAnd3dScoringCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S11CapabilityDiscoveryRegistryBaselineCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S12StagedRolloutCanaryRollbackGateCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S13DistributedNodeRegistryHeartbeatCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S14ConsensusWithDissentPreservationCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S15BrainLoopArtifactAndSafeDegradeCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S16FaultInjectionRecoveryRecheckCheckedInMainChain, true);
-assert.equal(contract.protocol.blue34S17Blue34ReleaseClosureCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S1CustomRoleRegistryCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S2CustomRoleDynamicMatchingCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S3ComplianceAuditMetadataCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S4SelfRationalizationGuardCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S5StartupContextLoaderCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S6LayeredPromptBuilderCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S7LayeredTokenTriggerCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S8MultiPrioritySchedulerCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S9WorkerSchedulerBackpressureCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S10ForkIsolationGuardCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S11CapabilityGraphCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S12ProvenanceLedgerCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S13NodeReputationTrackerCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S14K8sDeliveryPackCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S15SdkMultiLanguageStubCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S16WorkflowTypeTriModeCheckedInMainChain, true);
-assert.equal(contract.protocol.blue35S17Blue35ReleaseClosureCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.blue30S4DualTrackAwakeningParityCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue30S5CicdAwarenessGateCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue30S6Blue30ReleaseClosureCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue31S0AutonomyBoundaryGovernanceCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue31S1EmergencyStopProtocolCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue31S2CollaborationAbEvaluationCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue31S3HypernodeTopologyCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue31S4CrossRegionPriorityRoutingCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue31S5MetaControllerReplanCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue31S6Blue31ReleaseClosureCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue32S0GameTheoryBalancerCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue32S1FederatedRlV2GuardrailCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue32S2ContinuousLearningDistillationCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue32S3DriftAutoTakeoverCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue32S4ByzantineFaultInjectionCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue32S5RecoveryConsistencyRecheckCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue32S6Blue32ReleaseClosureCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S0LocalReflectionTrackCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S1ServerAwakeningTrackCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S2CiGateContinuousGreenCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S3StagedRolloutGuardCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S4ReleaseTrainFreezeCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S5RolloutAuditReplayCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S6Blue33ReleaseClosureCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S7AutonomyScopeMatrixCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S8RedlinePolicyRuntimeCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S9HumanApprovalCheckpointCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S10SupernodeHotStandbyCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S11CrossZoneStateSnapshotCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S12FailoverRecoveryDrillCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue33S13Blue33RemainingClosureCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S0DualTrackBoundaryFreezeCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S1StateVectorStoreTraitUnifiedCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S2LocalServerProfileMatrixCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S3PostgresPgvectorSchemaVersioningCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S4SqliteToPgMigrationDryrunCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S5PlannerExecutorTaskgraphResumeCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S6ThinkActObserveToolGovernanceCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .blue34S7RoleHandoffSchemaAndConflictArbiterCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .blue34S8DeterministicAdversarialDoubleChecksCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S9MemoryWritePromotionGcPolicyCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S10BenchmarkReplayAnd3dScoringCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .blue34S11CapabilityDiscoveryRegistryBaselineCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S12StagedRolloutCanaryRollbackGateCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S13DistributedNodeRegistryHeartbeatCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S14ConsensusWithDissentPreservationCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S15BrainLoopArtifactAndSafeDegradeCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S16FaultInjectionRecoveryRecheckCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue34S17Blue34ReleaseClosureCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S1CustomRoleRegistryCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S2CustomRoleDynamicMatchingCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S3ComplianceAuditMetadataCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S4SelfRationalizationGuardCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S5StartupContextLoaderCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S6LayeredPromptBuilderCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S7LayeredTokenTriggerCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S8MultiPrioritySchedulerCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S9WorkerSchedulerBackpressureCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S10ForkIsolationGuardCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S11CapabilityGraphCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S12ProvenanceLedgerCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S13NodeReputationTrackerCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S14K8sDeliveryPackCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S15SdkMultiLanguageStubCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S16WorkflowTypeTriModeCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue35S17Blue35ReleaseClosureCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.blue24PlatformProfileUniversalLazyLoad, true);
 assert.equal(contract.protocol.blue24AllEndpointsConnectedToMainChain, true);
-assert.equal(contract.protocol.blue24InfrastructureEndpointsGetPlatformContext, true);
-assert.equal(contract.protocol.blue24MetaCognitionProfileInLearningProfile, true);
+assert.equal(
+  contract.protocol.blue24InfrastructureEndpointsGetPlatformContext,
+  true,
+);
+assert.equal(
+  contract.protocol.blue24MetaCognitionProfileInLearningProfile,
+  true,
+);
 assert.equal(contract.protocol.blue24TokenEconomyDynamicCompression, true);
-assert.equal(contract.protocol.blue24KnowledgeRefinementCrossRoundDistillation, true);
+assert.equal(
+  contract.protocol.blue24KnowledgeRefinementCrossRoundDistillation,
+  true,
+);
 assert.equal(contract.protocol.blue24SelfModelMetaCognitionBlock, true);
-assert.equal(contract.protocol.defaultMode, 'adaptive');
+assert.equal(contract.protocol.defaultMode, "adaptive");
 assert.equal(contract.protocol.autoModeSupportsAcpAndMcp, true);
-assert.equal(contract.protocol.protocolCapabilityModel, 'capability_plus_transport');
-assert.equal(contract.protocol.adaptiveSelectionModel, 'client_type_routed');
-assert.equal(contract.protocol.adaptiveStartupTransportStrategy, 'http_if_bind_else_stdio');
+assert.equal(
+  contract.protocol.protocolCapabilityModel,
+  "capability_plus_transport",
+);
+assert.equal(contract.protocol.adaptiveSelectionModel, "client_type_routed");
+assert.equal(
+  contract.protocol.adaptiveStartupTransportStrategy,
+  "http_if_bind_else_stdio",
+);
 assert.equal(contract.protocol.fixedModesAreConfigDriven, true);
-assert.equal(contract.protocol.acpInitializeProtocol, 'acp');
-assert.equal(contract.protocol.mcpInitializeProtocolVersion, '2024-11-05');
+assert.equal(contract.protocol.acpInitializeProtocol, "acp");
+assert.equal(contract.protocol.mcpInitializeProtocolVersion, "2024-11-05");
 assert.equal(contract.protocol.coexistenceValidatedByRpcIntegration, true);
 assert.equal(contract.protocol.triPathValidatedByIntegration, true);
 assert.equal(contract.protocol.httpRootSupportsAcpHttp, true);
@@ -258,61 +851,192 @@ assert.equal(contract.protocol.guiTauriCompileCheckedInMainChain, true);
 assert.equal(contract.protocol.vscodeAddonCompileCheckedInMainChain, true);
 assert.equal(contract.protocol.rpcFallbackDegradeCheckedInMainChain, true);
 assert.equal(contract.protocol.rpcConfigReloadCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcReviewTimeoutCollisionCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.rpcReviewTimeoutCollisionCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.rpcInitHealthShutdownCheckedInMainChain, true);
-assert.equal(contract.protocol.httpStreamSseAndPersistenceCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.httpStreamSseAndPersistenceCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.rpcDebugPanelSnapshotCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcConversationCheckpointCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcCacheClearAndValidationCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.rpcConversationCheckpointCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcCacheClearAndValidationCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.rpcRateLimitSaturationCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcJsonRpcVersionValidationCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcChatParameterValidationCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcBreakerStatusAndResetCheckedInMainChain, true);
-assert.equal(contract.protocol.startupFailureOnMissingDependenciesCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcLegacyMethodAliasesCompatibilityCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcActionVectorMaintenanceAndMetricsCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcUnknownMethodAndConfigReloadCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcTaskGovernanceRequirementGateCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.rpcJsonRpcVersionValidationCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcChatParameterValidationCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcBreakerStatusAndResetCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.startupFailureOnMissingDependenciesCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcLegacyMethodAliasesCompatibilityCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcActionVectorMaintenanceAndMetricsCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcUnknownMethodAndConfigReloadCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcTaskGovernanceRequirementGateCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.rpcUnifiedGateFacadeCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcWorkflowResearchConsultGateCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcWorkflowTaskExecutionCycleCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcWorkflowTaskChangeBundleCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcWorkflowTaskResponseSkeletonCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcExecutionCycleHistoryAndAutoRepairPlanCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcExecutionCycleRealRepairIterationHistoryCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcChangeBundleRollbackCommitCoverageCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcRuntimeExecutionCyclePatchSetAndRepairPreviewCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcChangeBundleFileSummaryRiskGateRollbackCommitSuggestionCheckedInMainChain, true);
-assert.equal(contract.protocol.toolRegistryCapabilityRiskTimeoutRetryFallbackCheckedInMainChain, true);
-assert.equal(contract.protocol.toolFallbackExecutionChainCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcWorkflowReviewPolicyAndLearningFeedbackCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcWorkflowDualReviewAndDecisionsCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcTaskPlanMemoryGraphRecallCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcWorkflowTaskRunModeSwitchCheckedInMainChain, true);
-assert.equal(contract.protocol.blue22BenchmarkSnapshotScriptCheckedInMainChain, true);
-assert.equal(contract.protocol.blue22BenchmarkIndicatorsTrackedInMainChain, true);
-assert.equal(contract.protocol.blue22ReleaseGateRunsBenchmarkSnapshotCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcLearningSummaryAggregatesMetricsCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcPrimarySecondaryPolicyArtifactCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcPrimarySecondaryStabilityFailoverCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcWorkflowConsultArtifactAndConsensusCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcWorkflowResearchArtifactAndPlanCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcConfirmClarificationRoundsCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcAutotuneResetDefaultStateCheckedInMainChain, true);
-assert.equal(contract.protocol.rpcWorkflowAutoConsultationConsensusGateCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.rpcWorkflowResearchConsultGateCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcWorkflowTaskExecutionCycleCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcWorkflowTaskChangeBundleCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcWorkflowTaskResponseSkeletonCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcExecutionCycleHistoryAndAutoRepairPlanCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .rpcExecutionCycleRealRepairIterationHistoryCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcChangeBundleRollbackCommitCoverageCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .rpcRuntimeExecutionCyclePatchSetAndRepairPreviewCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .rpcChangeBundleFileSummaryRiskGateRollbackCommitSuggestionCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .toolRegistryCapabilityRiskTimeoutRetryFallbackCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.toolFallbackExecutionChainCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol
+    .rpcWorkflowReviewPolicyAndLearningFeedbackCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcWorkflowDualReviewAndDecisionsCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcTaskPlanMemoryGraphRecallCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcWorkflowTaskRunModeSwitchCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue22BenchmarkSnapshotScriptCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue22BenchmarkIndicatorsTrackedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.blue22ReleaseGateRunsBenchmarkSnapshotCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcLearningSummaryAggregatesMetricsCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcPrimarySecondaryPolicyArtifactCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcPrimarySecondaryStabilityFailoverCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcWorkflowConsultArtifactAndConsensusCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcWorkflowResearchArtifactAndPlanCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcConfirmClarificationRoundsCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcAutotuneResetDefaultStateCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.rpcWorkflowAutoConsultationConsensusGateCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.acpCoreUnitSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.i18nModuleSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.coreConfigUnitSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.governancePuaUnitSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.mcpModuleSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.protocolMcpServerSuiteCheckedInMainChain, true);
-assert.equal(contract.protocol.openaiCompatibleAgentSuiteCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.openaiCompatibleAgentSuiteCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.memoryCacheSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.memoryVectorSuiteCheckedInMainChain, true);
-assert.equal(contract.protocol.orchestrationTaskRouterSuiteCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.orchestrationTaskRouterSuiteCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.orchestrationFlowSuiteCheckedInMainChain, true);
-assert.equal(contract.protocol.orchestrationFlowWithModelsSuiteCheckedInMainChain, true);
-assert.equal(contract.protocol.orchestrationOrchestratorSuiteCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.orchestrationFlowWithModelsSuiteCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.orchestrationOrchestratorSuiteCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.orchestrationToolSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.coreErrorSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.copilotAgentSuiteCheckedInMainChain, true);
@@ -322,51 +1046,96 @@ assert.equal(contract.protocol.wenxinAgentSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.deepseekAgentSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.optimizationCostSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.optimizationSpeedSuiteCheckedInMainChain, true);
-assert.equal(contract.protocol.optimizationReliabilitySuiteCheckedInMainChain, true);
-assert.equal(contract.protocol.optimizationFailurePreventionSuiteCheckedInMainChain, true);
-assert.equal(contract.protocol.intelligenceAdaptiveSelectorSuiteCheckedInMainChain, true);
-assert.equal(contract.protocol.intelligenceModelSelectorSuiteCheckedInMainChain, true);
-assert.equal(contract.protocol.intelligenceAdvancedModulesSuiteCheckedInMainChain, true);
-assert.equal(contract.protocol.intelligenceReinforcementSuiteCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.optimizationReliabilitySuiteCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.optimizationFailurePreventionSuiteCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.intelligenceAdaptiveSelectorSuiteCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.intelligenceModelSelectorSuiteCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.intelligenceAdvancedModulesSuiteCheckedInMainChain,
+  true,
+);
+assert.equal(
+  contract.protocol.intelligenceReinforcementSuiteCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.coreSetupSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.genericAgentSuiteCheckedInMainChain, true);
 assert.equal(contract.protocol.acpPreludeMetricsSuiteCheckedInMainChain, true);
-assert.equal(contract.protocol.orchestrationSkillRegistrySuiteCheckedInMainChain, true);
+assert.equal(
+  contract.protocol.orchestrationSkillRegistrySuiteCheckedInMainChain,
+  true,
+);
 assert.equal(contract.protocol.rustAllTargetsFullGateCheckedInMainChain, true);
-assert.ok(contract.openai.commonForwardedFields.includes('parallel_tool_calls'));
-assert.equal(contract.responsesApi.path, '/v1/responses');
-assert.equal(contract.responsesApi.retrievalPath, '/v1/responses/{id}');
-assert.equal(contract.responsesApi.listPath, '/v1/responses');
+assert.ok(
+  contract.openai.commonForwardedFields.includes("parallel_tool_calls"),
+);
+assert.equal(contract.responsesApi.path, "/v1/responses");
+assert.equal(contract.responsesApi.retrievalPath, "/v1/responses/{id}");
+assert.equal(contract.responsesApi.listPath, "/v1/responses");
 assert.equal(contract.responsesApi.responseRetrievalSupport, true);
 assert.equal(contract.responsesApi.responseListSupport, true);
-assert.equal(contract.responsesApi.responseListObjectType, 'list');
-assert.equal(contract.responsesApi.responseListDataContainsResponseObjects, true);
+assert.equal(contract.responsesApi.responseListObjectType, "list");
+assert.equal(
+  contract.responsesApi.responseListDataContainsResponseObjects,
+  true,
+);
 assert.equal(contract.responsesApi.responseListNewestFirst, true);
 assert.equal(contract.responsesApi.responseIdsAreUniquePerRequest, true);
 assert.equal(contract.responsesApi.responseIdHasTimestampAndSequence, true);
 assert.equal(contract.responsesApi.responseStoreTracksCompleted, true);
 assert.equal(contract.responsesApi.responseStoreTracksFailed, true);
-assert.deepEqual(contract.responsesApi.responseStatusLifecycle, ['queued', 'in_progress', 'completed', 'failed']);
-assert.equal(contract.responsesApi.responseStatusHistoryField, 'status_history');
+assert.deepEqual(contract.responsesApi.responseStatusLifecycle, [
+  "queued",
+  "in_progress",
+  "completed",
+  "failed",
+]);
+assert.equal(
+  contract.responsesApi.responseStatusHistoryField,
+  "status_history",
+);
 assert.equal(contract.responsesApi.responseHistoryIncludesTransitions, true);
 assert.equal(contract.responsesApi.toolCallInitiationSupport, true);
 assert.equal(contract.responsesApi.toolChoiceRequiredReturnsIncomplete, true);
 assert.equal(contract.responsesApi.toolCallOutputItemSupport, true);
 assert.equal(contract.responsesApi.toolResultContinuationSupport, true);
-assert.equal(contract.responsesApi.previousResponseIdMustBeNonEmptyString, true);
+assert.equal(
+  contract.responsesApi.previousResponseIdMustBeNonEmptyString,
+  true,
+);
 assert.equal(contract.responsesApi.toolResultRequiresMatchingToolCallId, true);
 assert.equal(contract.responsesApi.toolResultOutputItemSupport, true);
-assert.deepEqual(contract.responsesApi.failureCodeClasses, ['timeout', 'rate_limit', 'tool_error', 'upstream_error']);
+assert.deepEqual(contract.responsesApi.failureCodeClasses, [
+  "timeout",
+  "rate_limit",
+  "tool_error",
+  "upstream_error",
+]);
 assert.equal(contract.responsesApi.toolLoopMissingResultUsesToolError, true);
 assert.equal(contract.responsesApi.noPendingToolCallUsesToolError, true);
 assert.equal(contract.responsesApi.upstreamTimeoutMapped, true);
 assert.equal(contract.responsesApi.upstreamRateLimitMapped, true);
-assert.equal(contract.responsesApi.retrievalNotFoundUsesResponsesErrorShape, true);
+assert.equal(
+  contract.responsesApi.retrievalNotFoundUsesResponsesErrorShape,
+  true,
+);
 assert.equal(contract.responsesApi.errorHasCodeField, true);
 assert.equal(contract.responsesApi.requestBodyMustBeObject, true);
 assert.equal(contract.responsesApi.modelMustBeNonEmptyString, true);
 assert.equal(contract.responsesApi.modelMustBeString, true);
-assert.deepEqual(contract.responsesApi.acceptedInputTypes, ['string', 'array']);
+assert.deepEqual(contract.responsesApi.acceptedInputTypes, ["string", "array"]);
 assert.equal(contract.responsesApi.inputMustProduceMessages, true);
 assert.equal(contract.responsesApi.inputMustIncludeUserMessage, true);
 assert.equal(contract.responsesApi.maxOutputTokensMin, 1);
@@ -381,48 +1150,135 @@ assert.equal(contract.responsesApi.toolsEntriesMustUseFunctionType, true);
 assert.equal(contract.responsesApi.toolsEntriesRequireFunctionName, true);
 assert.equal(contract.responsesApi.toolsFunctionDescriptionMustBeString, true);
 assert.equal(contract.responsesApi.toolsFunctionParametersMustBeObject, true);
-assert.equal(contract.responsesApi.toolsFunctionParametersTypeMustBeObject, true);
-assert.equal(contract.responsesApi.toolsFunctionParametersPropertiesMustBeObject, true);
-assert.equal(contract.responsesApi.toolsFunctionParametersRequiredMustBeStringArray, true);
-assert.deepEqual(contract.responsesApi.toolChoiceAllowedTypes, ['string', 'object']);
-assert.deepEqual(contract.responsesApi.toolChoiceStringValues, ['auto', 'none', 'required']);
+assert.equal(
+  contract.responsesApi.toolsFunctionParametersTypeMustBeObject,
+  true,
+);
+assert.equal(
+  contract.responsesApi.toolsFunctionParametersPropertiesMustBeObject,
+  true,
+);
+assert.equal(
+  contract.responsesApi.toolsFunctionParametersRequiredMustBeStringArray,
+  true,
+);
+assert.deepEqual(contract.responsesApi.toolChoiceAllowedTypes, [
+  "string",
+  "object",
+]);
+assert.deepEqual(contract.responsesApi.toolChoiceStringValues, [
+  "auto",
+  "none",
+  "required",
+]);
 assert.equal(contract.responsesApi.toolChoiceRequiredNeedsTools, true);
 assert.equal(contract.responsesApi.toolChoiceObjectMustUseFunctionType, true);
 assert.equal(contract.responsesApi.toolChoiceObjectRequiresFunctionName, true);
 assert.equal(contract.responsesApi.toolChoiceObjectRequiresTools, true);
-assert.equal(contract.responsesApi.toolChoiceObjectMustReferenceDeclaredTool, true);
+assert.equal(
+  contract.responsesApi.toolChoiceObjectMustReferenceDeclaredTool,
+  true,
+);
 assert.equal(contract.responsesApi.emptyBodyUsesResponsesErrorShape, true);
 assert.equal(contract.responsesApi.invalidJsonUsesResponsesErrorShape, true);
 assert.equal(contract.responsesApi.goldenCasesImplemented, true);
-assert.deepEqual(contract.responsesApi.responseRequiredFields, ['id', 'object', 'created_at', 'model', 'status', 'output', 'usage', 'error', 'incomplete_details']);
-assert.deepEqual(contract.responsesApi.errorRequiredFields, ['code', 'type', 'message']);
-assert.deepEqual(contract.responsesApi.streamEventOrder, ['response.created', 'response.output_text.delta', 'response.completed']);
-assert.equal(contract.responsesApi.rootCapabilitiesPath, '/');
-assert.equal(contract.responsesApi.rootCapabilitiesAdvertisesResponsesEndpoints, true);
+assert.deepEqual(contract.responsesApi.responseRequiredFields, [
+  "id",
+  "object",
+  "created_at",
+  "model",
+  "status",
+  "output",
+  "usage",
+  "error",
+  "incomplete_details",
+]);
+assert.deepEqual(contract.responsesApi.errorRequiredFields, [
+  "code",
+  "type",
+  "message",
+]);
+assert.deepEqual(contract.responsesApi.streamEventOrder, [
+  "response.created",
+  "response.output_text.delta",
+  "response.completed",
+]);
+assert.equal(contract.responsesApi.rootCapabilitiesPath, "/");
+assert.equal(
+  contract.responsesApi.rootCapabilitiesAdvertisesResponsesEndpoints,
+  true,
+);
 assert.equal(contract.responsesApi.deleteResponseMethodReturns405, true);
-assert.equal(contract.responsesApi.streamSetupUnavailableDegradesToCompleted, true);
-assert.equal(contract.responsesApi.streamSetupUnavailableUsesDegradedMessage, true);
-assert.equal(contract.responsesApi.streamSetupUnavailableStoredAsCompleted, true);
+assert.equal(
+  contract.responsesApi.streamSetupUnavailableDegradesToCompleted,
+  true,
+);
+assert.equal(
+  contract.responsesApi.streamSetupUnavailableUsesDegradedMessage,
+  true,
+);
+assert.equal(
+  contract.responsesApi.streamSetupUnavailableStoredAsCompleted,
+  true,
+);
 assert.equal(contract.responsesApi.streamSetupUnavailableRetrievableById, true);
-assert.equal(contract.responsesApi.nonStreamSetupUnavailableDegradesToCompleted, true);
-assert.equal(contract.responsesApi.nonStreamSetupUnavailableUsesDegradedMessage, true);
-assert.equal(contract.responsesApi.nonStreamSetupUnavailableStoredAsCompleted, true);
-assert.equal(contract.responsesApi.nonStreamSetupUnavailableRetrievableById, true);
-assert.deepEqual(contract.responsesApi.streamEvents, ['response.created', 'response.output_text.delta', 'response.completed', 'response.failed']);
+assert.equal(
+  contract.responsesApi.nonStreamSetupUnavailableDegradesToCompleted,
+  true,
+);
+assert.equal(
+  contract.responsesApi.nonStreamSetupUnavailableUsesDegradedMessage,
+  true,
+);
+assert.equal(
+  contract.responsesApi.nonStreamSetupUnavailableStoredAsCompleted,
+  true,
+);
+assert.equal(
+  contract.responsesApi.nonStreamSetupUnavailableRetrievableById,
+  true,
+);
+assert.deepEqual(contract.responsesApi.streamEvents, [
+  "response.created",
+  "response.output_text.delta",
+  "response.completed",
+  "response.failed",
+]);
 assert.equal(contract.responsesApi.streamTerminatesWithDone, true);
-assert.ok(contractSource.includes('editor-capability-matrix.json'));
-assert.ok(contractSource.includes('protocol: {'));
-assert.ok(contractSource.includes('responsesApi: {'));
-assert.ok(contractSource.includes('vscodeAddonCompileCheckedInMainChain: true'));
-assert.ok(contractSource.includes('streamSetupUnavailableDegradesToCompleted: true'));
-assert.ok(runtimeManagerSource.includes('protocolContract.errors.providerNotReady'));
-assert.ok(runtimeManagerSource.includes('protocolContract.errors.setupWizardPrompt'));
-assert.deepEqual(contract.errors.requestErrorKinds, ['PuaViolation', 'BudgetExceeded', 'SandboxBlocked']);
-assert.equal(contract.errors.requestErrorContextPrefix, 'acp.handle_request.dispatch');
-assert.ok(runtimeManagerSource.includes('formatRpcError'));
-assert.ok(runtimeManagerSource.includes('rpc_error:'));
-assert.ok(runtimeManagerSource.includes('protocolContract.errors.requestErrorContextPrefix'));
-assert.ok(monitorSource.includes('protocolContract.statusTerms.healthy'));
-assert.ok(monitorSource.includes('protocolContract.statusTerms.healthCheckFailed'));
+assert.ok(contractSource.includes("editor-capability-matrix.json"));
+assert.ok(contractSource.includes("protocol: {"));
+assert.ok(contractSource.includes("responsesApi: {"));
+assert.ok(
+  contractSource.includes("vscodeAddonCompileCheckedInMainChain: true"),
+);
+assert.ok(
+  contractSource.includes("streamSetupUnavailableDegradesToCompleted: true"),
+);
+assert.ok(
+  runtimeManagerSource.includes("protocolContract.errors.providerNotReady"),
+);
+assert.ok(
+  runtimeManagerSource.includes("protocolContract.errors.setupWizardOpened"),
+);
+assert.deepEqual(contract.errors.requestErrorKinds, [
+  "PuaViolation",
+  "BudgetExceeded",
+  "SandboxBlocked",
+]);
+assert.equal(
+  contract.errors.requestErrorContextPrefix,
+  "acp.handle_request.dispatch",
+);
+assert.ok(runtimeManagerSource.includes("formatRpcError"));
+assert.ok(runtimeManagerSource.includes("rpc_error:"));
+assert.ok(
+  runtimeManagerSource.includes(
+    "protocolContract.errors.requestErrorContextPrefix",
+  ),
+);
+assert.ok(monitorSource.includes("protocolContract.statusTerms.healthy"));
+assert.ok(
+  monitorSource.includes("protocolContract.statusTerms.healthCheckFailed"),
+);
 
-console.log('VS Code addon contract smoke passed');
+console.log("VS Code addon contract smoke passed");

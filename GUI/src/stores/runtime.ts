@@ -69,6 +69,7 @@ export const useRuntimeStore = defineStore("runtime", {
     statusPollingInFlight: false,
     logsPollingInFlight: false,
     refreshAllInProgress: false,
+    paused: false,
     loading: false,
     activeFeatures: {} as Partial<RuntimeFeatures>,
     lastError: "",
@@ -212,8 +213,20 @@ export const useRuntimeStore = defineStore("runtime", {
         // keep previous features on error
       }
     },
+    setPaused(val: boolean) {
+      this.paused = val;
+      if (val) {
+        this.stopStatusPolling();
+        this.stopLogsPolling();
+      } else if (this.status.running) {
+        this.startStatusPolling();
+      }
+    },
     async refreshAll() {
       if (this.refreshAllInProgress) {
+        return;
+      }
+      if (this.paused) {
         return;
       }
       this.refreshAllInProgress = true;
