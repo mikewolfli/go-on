@@ -63,21 +63,29 @@ impl ProvidersView {
                 let key = self.new_key.trim().to_string();
                 let model = self.new_model.trim().to_string();
                 if !name.is_empty() && !key.is_empty() {
-                    if let Some(existing) = config.providers.iter_mut().find(|p| p.name == name) {
-                        existing.api_key = key;
-                        existing.model = model;
-                        existing.validated = true;
+                    // Save to system keyring (shared with backend)
+                    let provider_lower = name.to_lowercase();
+                    if let Err(e) = crate::keyring_util::store_api_key(&provider_lower, &key) {
+                        self.status = format!("保存到系统 keyring 失败: {}", e);
                     } else {
-                        config.providers.push(ProviderConfig {
-                            name,
-                            api_key: key,
-                            model,
-                            validated: true,
-                        });
+                        if let Some(existing) = config.providers.iter_mut().find(|p| p.name == name)
+                        {
+                            existing.api_key = key;
+                            existing.model = model;
+                            existing.validated = true;
+                        } else {
+                            config.providers.push(ProviderConfig {
+                                name,
+                                api_key: key,
+                                model,
+                                validated: true,
+                            });
+                        }
+                        save_app_config(config);
+                        self.status = "Provider saved.".to_string();
+                        self.new_key.clear();
                     }
                     changed = true;
-                    self.status = "Provider saved.".to_string();
-                    self.new_key.clear();
                 }
             }
         });
@@ -132,7 +140,8 @@ impl ProvidersView {
                             && self.pending_delete_confirmation != Some(idx)
                         {
                             self.pending_delete_confirmation = Some(idx);
-                            self.status = format!("Click delete again to remove {}.", provider.name);
+                            self.status =
+                                format!("Click delete again to remove {}.", provider.name);
                         } else {
                             remove_idx = Some(idx);
                             self.pending_delete_confirmation = None;

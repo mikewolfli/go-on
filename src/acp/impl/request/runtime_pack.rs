@@ -4903,6 +4903,7 @@ pub(super) async fn handle_provider_configure(
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
+    let api_key = params.get("api_key").and_then(Value::as_str).unwrap_or("");
     let model = params
         .get("model")
         .and_then(Value::as_str)
@@ -4916,9 +4917,23 @@ pub(super) async fn handle_provider_configure(
         )
     );
 
-    // Provider configuration is stored locally by the GUI.
-    // This handler acknowledges the request and logs the config.
-    // Future enhancement: persist provider config on the backend.
+    // ── Persist API key to system keyring ──────────────────────────
+    // The agent config references keyring://go-on/{provider}_api_key
+    // which the backend reads via keyring::Entry::get_password().
+    if api_key.is_empty() {
+        tracing::warn!("empty API key for '{}', skipping persistence", name);
+    } else {
+        let account = format!("{}_api_key", name);
+        match keyring::Entry::new("go-on", &account) {
+            Ok(entry) => match entry.set_password(api_key) {
+                Ok(_) => info!("API key for '{}' saved to system keyring", name),
+                Err(e) => tracing::warn!("failed to save API key for '{}' to keyring: {}", name, e),
+            },
+            Err(e) => {
+                tracing::warn!("failed to open keyring entry for '{}': {}", name, e);
+            }
+        }
+    }
 
     send_result(
         server,

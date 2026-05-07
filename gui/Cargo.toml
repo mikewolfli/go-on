@@ -14,3 +14,4 @@ anyhow = "1"
 toml = "0.8"
 directories = "6"
 rfd = "0.15"
+keyring = { version = "3" }

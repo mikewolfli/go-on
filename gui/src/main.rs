@@ -2,6 +2,7 @@ mod app;
 mod backend;
 mod config;
 mod i18n;
+mod keyring_util;
 mod theme;
 mod views;
 

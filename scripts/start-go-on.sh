@@ -53,13 +53,19 @@ start() {
 		echo "错误: $GOON_BIN 不存在或不可执行，请先编译 go-on 二进制文件。"
 		exit 1
 	fi
+
+	# ── 启动后端 ────────────────────────────────────────────
+	# API key 通过系统 keyring 管理（配置为 keyring://go-on/{provider}_api_key）
+	# 用户在 GUI 中保存 API key 时会自动写入系统 keyring
+
 	# 输出当前协议模式
-	if grep -q "^mode" ../config/config.toml 2>/dev/null; then
-		PROTO_MODE=$(grep "^mode" ../config/config.toml | head -n1 | cut -d'=' -f2 | tr -d ' "')
+	if grep -q "^mode" "$DIR/config.toml" 2>/dev/null; then
+		PROTO_MODE=$(grep "^mode" "$DIR/config.toml" | head -n1 | cut -d'=' -f2 | tr -d ' "')
 		echo "[info] 当前协议模式: $PROTO_MODE"
 	fi
+
 	nohup "$GOON_BIN" > "$LOG_FILE" 2>&1 &
-	echo $! > "$PID_FILE"
+	echo \$! > "$PID_FILE"
 	echo "go-on 已启动，日志写入 $LOG_FILE，PID: $(cat $PID_FILE)"
 }
 

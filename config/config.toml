@@ -34,6 +34,7 @@ summary_trigger_messages = 8
 summary_max_chars = 1200
 
 [runtime]
+acp_http_bind_addr = "127.0.0.1:8090"
 maintenance_interval_seconds = 60
 health_interval_seconds = 120
 shutdown_drain_seconds = 30
@@ -53,6 +54,11 @@ governance_enabled = true
 governance_policy_mode = "advisory"
 
 [agents]
+[agents.deepseek]
+type = "deepseek"
+api_key_env = "keyring://go-on/deepseek_api_key"
+model = "deepseek-chat"
+supports_system = true
 
 [flow]
 name = "Universal Adaptive"
@@ -60,7 +66,7 @@ phases = ["think", "act", "check", "done"]
 
 [phases.think]
 description = "Think — analyze, plan, gather context"
-agents = []
+agents = ["deepseek"]
 fallback = true
 
 [phases.think.options]
@@ -74,7 +80,7 @@ global_max_inflight = 128
 
 [phases.act]
 description = "Act — execute, generate, implement"
-agents = []
+agents = ["deepseek"]
 fallback = true
 
 [phases.act.options]
@@ -88,7 +94,7 @@ global_max_inflight = 128
 
 [phases.check]
 description = "Check — verify, validate, review results"
-agents = []
+agents = ["deepseek"]
 fallback = true
 
 [phases.check.options]

@@ -1,4 +1,4 @@
-use crate::backend::{BackendClient, HealthStatus, ProviderStatus};
+use crate::backend::BackendClient;
 use crate::config::{self, has_valid_providers, save_app_config, AppConfig};
 use crate::i18n::{I18n, Lang};
 use crate::views::{
@@ -15,6 +15,57 @@ enum BackendUpdate {
     Providers(Vec<ProviderStatus>),
     RefreshDone,
 }
+
+/// Find the go-on backend binary path relative to the GUI executable.
+///
+/// Look order:
+/// 1. Same directory as GUI (release layout: gui + backend/ side by side)
+/// 2. `backend/` subdirectory next to GUI
+/// 3. `$PATH`
+fn find_backend_binary() -> Option<std::path::PathBuf> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+
+    // Layout 1: backend/go-on next to the GUI binary
+    let candidates = [exe_dir.join("backend").join("go-on"), exe_dir.join("go-on")];
+    for path in &candidates {
+        if path.exists() {
+            return Some(path.clone());
+        }
+    }
+
+    // Layout 2: search PATH
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths).find_map(|dir| {
+            let candidate = dir.join("go-on");
+            if candidate.exists() {
+                Some(candidate)
+            } else {
+                None
+            }
+        })
+    })
+}
+
+/// Start the backend process in the background.
+/// Returns the child process handle or an error message.
+fn start_backend_process() -> Result<std::process::Child, String> {
+    let backend_path = find_backend_binary().ok_or_else(|| {
+        "找不到 go-on 后端程序。请确保 go-on 放在 backend/ 目录下或 PATH 中。".to_string()
+    })?;
+
+    let config_dir = backend_path.parent().unwrap_or(std::path::Path::new("."));
+
+    let child = std::process::Command::new(&backend_path)
+        .current_dir(config_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("启动后端失败: {}", e))?;
+
+    Ok(child)
+}
+
+use crate::backend::{HealthStatus, ProviderStatus};
 
 pub struct GoOnApp {
     pub config: AppConfig,
@@ -36,6 +87,8 @@ pub struct GoOnApp {
     backend_tx: mpsc::Sender<BackendUpdate>,
     pending_refresh: bool,
     last_refresh: Instant,
+    /// Handle to the managed backend child process.
+    backend_child: Option<std::process::Child>,
 }
 
 impl GoOnApp {
@@ -50,8 +103,20 @@ impl GoOnApp {
 
         let (backend_tx, backend_updates) = mpsc::channel();
 
+        // Try to start the backend automatically
+        let (backend, backend_child) = match start_backend_process() {
+            Ok(child) => {
+                eprintln!("go-on 后端已启动 (PID: {})", child.id());
+                (BackendClient::new(&config.backend_url), Some(child))
+            }
+            Err(e) => {
+                eprintln!("警告: {}", e);
+                (BackendClient::new(&config.backend_url), None)
+            }
+        };
+
         Self {
-            backend: BackendClient::new(&config.backend_url),
+            backend,
             i18n: I18n::new(lang),
             setup_view: SetupView::new(),
             monitor_view: MonitorView::new(),
@@ -70,6 +135,7 @@ impl GoOnApp {
             backend_tx,
             pending_refresh: false,
             last_refresh: Instant::now(),
+            backend_child,
         }
     }
 
@@ -138,9 +204,7 @@ impl eframe::App for GoOnApp {
 
         // Setup screen – blocks main UI
         if self.show_setup {
-            let done = self
-                .setup_view
-                .show(ctx, &self.i18n, &mut self.config, &self.backend);
+            let done = self.setup_view.show(ctx, &self.i18n, &mut self.config);
             if done {
                 self.show_setup = false;
                 self.has_providers = has_valid_providers(&self.config);
@@ -189,7 +253,13 @@ impl eframe::App for GoOnApp {
                     } else {
                         self.i18n.t("status.disconnected")
                     };
-                    ui.label(status);
+                    // Also show backend PID if managed
+                    let pid_info = self
+                        .backend_child
+                        .as_ref()
+                        .map(|c| format!(" [PID:{}]", c.id()))
+                        .unwrap_or_default();
+                    ui.label(format!("{}{}", status, pid_info));
                 });
             });
         });
@@ -237,6 +307,18 @@ impl eframe::App for GoOnApp {
                 }
             }
         });
+    }
+}
+
+impl Drop for GoOnApp {
+    fn drop(&mut self) {
+        // Kill the managed backend process when GUI exits
+        if let Some(mut child) = self.backend_child.take() {
+            eprintln!("正在关闭 go-on 后端 (PID: {})...", child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+            eprintln!("go-on 后端已关闭");
+        }
     }
 }
 
