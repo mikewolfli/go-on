@@ -13,6 +13,21 @@ go-on 是一个基于 Rust 的 **ACP/MCP 智能体编排、治理与生产安全
 - 默认特性：`profile-local`
 - 可选特性：`profile-simple-server`、`profile-multi-users-server`
 
+## GUI 桌面应用
+
+基于 EGUI 的桌面图形界面（`gui/`）提供监控、对话和配置管理：
+
+```bash
+cargo run --manifest-path gui/Cargo.toml
+```
+
+主要功能：
+- **监控面板**：后端健康状态、AI 供应商状态、实时指标
+- **对话界面**：多会话管理、阶段选择（coding/review/debug/test/deploy）、模式切换（Ask/Plan/Edit/Safeguard/Full Auto）、文件附件、动态发送按钮（依据 AI 状态变化）
+- **技能管理**：创建和导入 AI 技能；内置 `skill-creator` 让 AI 自主定义新技能
+- **设置**：功能开关、语言切换（en/zh-CN/zh-TW）、5 种视觉主题
+- **后端连接**：ACP+HTTP JSON-RPC，自动健康轮询
+
 ## 构建配置文件
 
 三种构建配置文件适配不同的部署场景：
