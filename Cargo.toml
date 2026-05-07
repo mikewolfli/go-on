@@ -73,7 +73,7 @@ lazy_static = "1.4"
 rusqlite = { version = "0.39.0", features = ["bundled"], optional = true }
 sha2 = "0.11.0"
 toml = "1.1.0"
-keyring = { version = "3", features = ["apple-native"] }
+keyring = { version = "3" }
 opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.31", features = ["trace", "grpc-tonic"] }

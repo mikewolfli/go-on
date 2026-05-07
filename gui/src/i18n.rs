@@ -471,6 +471,178 @@ impl I18n {
             ),
         );
 
+        // Providers page
+        m.insert(
+            "providers.title",
+            tr!(en, "Providers", cn, "提供商", tw, "提供商"),
+        );
+        m.insert(
+            "providers.add_new",
+            tr!(en, "Add Provider", cn, "添加提供商", tw, "添加提供商"),
+        );
+        m.insert(
+            "providers.saved",
+            tr!(
+                en,
+                "Saved Providers",
+                cn,
+                "已保存的提供商",
+                tw,
+                "已保存的提供商"
+            ),
+        );
+        m.insert("providers.name", tr!(en, "Name", cn, "名称", tw, "名稱"));
+        m.insert(
+            "providers.api_key",
+            tr!(en, "API Key", cn, "API 密钥", tw, "API 密鑰"),
+        );
+        m.insert("providers.model", tr!(en, "Model", cn, "模型", tw, "模型"));
+        m.insert("providers.add", tr!(en, "Add", cn, "添加", tw, "添加"));
+        m.insert(
+            "providers.update_key",
+            tr!(en, "Update Key", cn, "更新密钥", tw, "更新密鑰"),
+        );
+        m.insert(
+            "providers.save_key",
+            tr!(en, "Save", cn, "保存", tw, "保存"),
+        );
+        m.insert(
+            "providers.cancel",
+            tr!(en, "Cancel", cn, "取消", tw, "取消"),
+        );
+        m.insert(
+            "providers.delete",
+            tr!(en, "Delete", cn, "删除", tw, "刪除"),
+        );
+        m.insert(
+            "providers.confirm_delete",
+            tr!(en, "Confirm Delete", cn, "确认删除", tw, "確認刪除"),
+        );
+        m.insert(
+            "providers.push",
+            tr!(en, "Push to Backend", cn, "推送到后端", tw, "推送到後端"),
+        );
+        m.insert(
+            "providers.validated",
+            tr!(en, "Validated", cn, "已验证", tw, "已驗證"),
+        );
+        m.insert(
+            "providers.key_preview",
+            tr!(en, "Key:", cn, "密钥:", tw, "密鑰:"),
+        );
+        m.insert(
+            "providers.already_exists",
+            tr!(
+                en,
+                "already exists, use Update",
+                cn,
+                "已存在，请使用更新",
+                tw,
+                "已存在，請使用更新"
+            ),
+        );
+        m.insert(
+            "providers.save_failed",
+            tr!(
+                en,
+                "Failed to save to system keyring:",
+                cn,
+                "保存到系统密钥环失败:",
+                tw,
+                "保存到系統密鑰環失敗:"
+            ),
+        );
+        m.insert(
+            "providers.keyring_ok",
+            tr!(
+                en,
+                "saved to system keyring",
+                cn,
+                "已保存到系统密钥环",
+                tw,
+                "已保存到系統密鑰環"
+            ),
+        );
+        m.insert(
+            "providers.copilot_hint",
+            tr!(
+                en,
+                "(Copilot uses GitHub token, not API key)",
+                cn,
+                "(Copilot 使用 GitHub Token，不是 API 密钥)",
+                tw,
+                "(Copilot 使用 GitHub Token，不是 API 密鑰)"
+            ),
+        );
+        m.insert(
+            "providers.enter_new_key",
+            tr!(
+                en,
+                "Enter new key for",
+                cn,
+                "输入新的密钥",
+                tw,
+                "輸入新的密鑰"
+            ),
+        );
+        m.insert(
+            "providers.provider",
+            tr!(en, "Provider:", cn, "提供商:", tw, "提供商:"),
+        );
+        m.insert("providers.auto", tr!(en, "Auto", cn, "自动", tw, "自動"));
+        m.insert(
+            "providers.added",
+            tr!(en, "added.", cn, "已添加。", tw, "已添加。"),
+        );
+        m.insert(
+            "providers.updated",
+            tr!(en, "updated.", cn, "已更新。", tw, "已更新。"),
+        );
+        m.insert(
+            "providers.configured",
+            tr!(
+                en,
+                "configured on backend.",
+                cn,
+                "已在后端配置。",
+                tw,
+                "已在後端配置。"
+            ),
+        );
+        m.insert(
+            "providers.push_failed",
+            tr!(
+                en,
+                "Provider push failed:",
+                cn,
+                "推送提供商失败:",
+                tw,
+                "推送提供商失敗:"
+            ),
+        );
+        m.insert(
+            "providers.click_delete_again",
+            tr!(
+                en,
+                "Click delete again to remove",
+                cn,
+                "再次点击删除以移除",
+                tw,
+                "再次點擊刪除以移除"
+            ),
+        );
+        m.insert(
+            "providers.removed",
+            tr!(
+                en,
+                "Provider removed.",
+                cn,
+                "提供商已移除。",
+                tw,
+                "提供商已移除。"
+            ),
+        );
+
         // Theme
         m.insert("theme.title", tr!(en, "Theme", cn, "主题", tw, "主題"));
         m.insert("theme.minimal", tr!(en, "Minimal", cn, "简约", tw, "簡約"));

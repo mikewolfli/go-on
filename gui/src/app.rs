@@ -16,24 +16,17 @@ enum BackendUpdate {
     RefreshDone,
 }
 
+use crate::backend::{HealthStatus, ProviderStatus};
+
 /// Find the go-on backend binary path relative to the GUI executable.
-///
-/// Look order:
-/// 1. Same directory as GUI (release layout: gui + backend/ side by side)
-/// 2. `backend/` subdirectory next to GUI
-/// 3. `$PATH`
 fn find_backend_binary() -> Option<std::path::PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-
-    // Layout 1: backend/go-on next to the GUI binary
     let candidates = [exe_dir.join("backend").join("go-on"), exe_dir.join("go-on")];
     for path in &candidates {
         if path.exists() {
             return Some(path.clone());
         }
     }
-
-    // Layout 2: search PATH
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).find_map(|dir| {
             let candidate = dir.join("go-on");
@@ -45,27 +38,6 @@ fn find_backend_binary() -> Option<std::path::PathBuf> {
         })
     })
 }
-
-/// Start the backend process in the background.
-/// Returns the child process handle or an error message.
-fn start_backend_process() -> Result<std::process::Child, String> {
-    let backend_path = find_backend_binary().ok_or_else(|| {
-        "找不到 go-on 后端程序。请确保 go-on 放在 backend/ 目录下或 PATH 中。".to_string()
-    })?;
-
-    let config_dir = backend_path.parent().unwrap_or(std::path::Path::new("."));
-
-    let child = std::process::Command::new(&backend_path)
-        .current_dir(config_dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("启动后端失败: {}", e))?;
-
-    Ok(child)
-}
-
-use crate::backend::{HealthStatus, ProviderStatus};
 
 pub struct GoOnApp {
     pub config: AppConfig,
@@ -87,7 +59,7 @@ pub struct GoOnApp {
     backend_tx: mpsc::Sender<BackendUpdate>,
     pending_refresh: bool,
     last_refresh: Instant,
-    /// Handle to the managed backend child process.
+    /// Managed backend child process
     backend_child: Option<std::process::Child>,
 }
 
@@ -103,14 +75,45 @@ impl GoOnApp {
 
         let (backend_tx, backend_updates) = mpsc::channel();
 
-        // Try to start the backend automatically
-        let (backend, backend_child) = match start_backend_process() {
-            Ok(child) => {
-                eprintln!("go-on 后端已启动 (PID: {})", child.id());
-                (BackendClient::new(&config.backend_url), Some(child))
+        // Auto-start backend
+        let (backend, backend_child) = match find_backend_binary() {
+            Some(path) => {
+                let config_dir = path.parent().unwrap_or(std::path::Path::new("."));
+                let mut cmd = std::process::Command::new(&path);
+                cmd.current_dir(config_dir)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                // 从 gui_config.json 读取所有 provider key 设为环境变量传给后端
+                // macOS/Windows 走 keyring，Linux 走 env fallback
+                for p in &config.providers {
+                    let env_var = match p.name.to_lowercase().as_str() {
+                        "deepseek" => Some("DEEPSEEK_API_KEY"),
+                        "openai" => Some("OPENAI_API_KEY"),
+                        "anthropic" => Some("ANTHROPIC_API_KEY"),
+                        "qwen" => Some("QWEN_API_KEY"),
+                        "gemini" => Some("GEMINI_API_KEY"),
+                        "groq" => Some("GROQ_API_KEY"),
+                        "mistral" => Some("MISTRAL_API_KEY"),
+                        "copilot" => Some("GITHUB_COPILOT_TOKEN"),
+                        _ => None,
+                    };
+                    if let Some(var) = env_var {
+                        cmd.env(var, &p.api_key);
+                    }
+                }
+                match cmd.spawn() {
+                    Ok(child) => {
+                        eprintln!("go-on 后端已启动 (PID: {})", child.id());
+                        (BackendClient::new(&config.backend_url), Some(child))
+                    }
+                    Err(e) => {
+                        eprintln!("警告: 启动后端失败: {}", e);
+                        (BackendClient::new(&config.backend_url), None)
+                    }
+                }
             }
-            Err(e) => {
-                eprintln!("警告: {}", e);
+            None => {
+                eprintln!("警告: 找不到 go-on 后端程序");
                 (BackendClient::new(&config.backend_url), None)
             }
         };
@@ -147,7 +150,6 @@ impl GoOnApp {
         }
     }
 
-    /// Sync the backend client's URL with the config (in case user changed it in settings)
     fn sync_backend_url(&mut self) {
         let config_url = self.config.backend_url.trim_end_matches('/').to_string();
         if self.backend.base_url() != config_url {
@@ -155,38 +157,26 @@ impl GoOnApp {
         }
     }
 
-    /// Poll the channel for async backend updates and apply them to the monitor view.
     fn poll_backend_updates(&mut self) {
         while let Ok(update) = self.backend_updates.try_recv() {
             match update {
-                BackendUpdate::Health(h) => {
-                    self.monitor_view.health = Some(h);
-                }
-                BackendUpdate::Providers(p) => {
-                    self.monitor_view.providers = p;
-                }
-                BackendUpdate::RefreshDone => {
-                    self.pending_refresh = false;
-                }
+                BackendUpdate::Health(h) => self.monitor_view.health = Some(h),
+                BackendUpdate::Providers(p) => self.monitor_view.providers = p,
+                BackendUpdate::RefreshDone => self.pending_refresh = false,
             }
         }
     }
 
-    /// Trigger an async health + provider refresh if enough time has elapsed and no
-    /// refresh is already in-flight.
     fn maybe_refresh_backend(&mut self) {
         if self.last_refresh.elapsed().as_secs() >= 5 && !self.pending_refresh {
             self.pending_refresh = true;
             let tx = self.backend_tx.clone();
             let backend = self.backend.clone();
             tokio::spawn(async move {
-                // Fetch health
                 let health = backend.health().await;
                 let _ = tx.send(BackendUpdate::Health(health));
-                // Fetch provider status
                 let providers = backend.provider_status().await;
                 let _ = tx.send(BackendUpdate::Providers(providers));
-                // Signal that the refresh cycle is complete
                 let _ = tx.send(BackendUpdate::RefreshDone);
             });
             self.last_refresh = Instant::now();
@@ -196,13 +186,27 @@ impl GoOnApp {
 
 impl eframe::App for GoOnApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Switch language and theme
         self.i18n.switch(self.current_lang());
         let theme = crate::theme::Theme::from_name(&self.config.theme);
         theme.apply(ctx);
         ctx.request_repaint_after(Duration::from_millis(200));
 
-        // Setup screen – blocks main UI
+        // Reap zombie child if backend exited
+        if let Some(ref mut child) = self.backend_child {
+            match child.try_wait() {
+                Ok(None) => {} // still running
+                Ok(Some(status)) => {
+                    eprintln!("go-on 后端已退出 (code: {:?})", status.code());
+                    self.backend_child = None;
+                }
+                Err(e) => {
+                    eprintln!("go-on 后端 wait 错误: {}", e);
+                    self.backend_child = None;
+                }
+            }
+        }
+
+        // Setup screen
         if self.show_setup {
             let done = self.setup_view.show(ctx, &self.i18n, &mut self.config);
             if done {
@@ -214,28 +218,18 @@ impl eframe::App for GoOnApp {
             return;
         }
 
-        // Sync backend URL from config to the client in case the user changed it in settings
         self.sync_backend_url();
-
-        // Poll for async backend updates arriving from spawned tasks
         self.poll_backend_updates();
-
-        // Periodically trigger a new async health / provider refresh
         self.maybe_refresh_backend();
-
-        // Keep provider availability in sync with current editable config
         self.has_providers = has_valid_providers(&self.config);
 
-        // Pre-compute values to avoid borrow issues inside closures
         let tabs = self.active_tabs_precomputed();
-
-        // If the active feature tab was just disabled, redirect to settings
         if !tabs.contains(&self.active_tab) {
-            if tabs.contains(&"monitor".to_string()) {
-                self.active_tab = "monitor".to_string();
+            self.active_tab = if tabs.contains(&"monitor".to_string()) {
+                "monitor".to_string()
             } else {
-                self.active_tab = "settings".to_string();
-            }
+                "settings".to_string()
+            };
         }
         let is_connected = self
             .monitor_view
@@ -243,7 +237,7 @@ impl eframe::App for GoOnApp {
             .as_ref()
             .is_some_and(|h| h.connected);
 
-        // Top toolbar
+        // Toolbar
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(self.i18n.t("app.title"));
@@ -253,7 +247,6 @@ impl eframe::App for GoOnApp {
                     } else {
                         self.i18n.t("status.disconnected")
                     };
-                    // Also show backend PID if managed
                     let pid_info = self
                         .backend_child
                         .as_ref()
@@ -283,24 +276,23 @@ impl eframe::App for GoOnApp {
             self.active_tab = t;
         }
 
-        // Main content area
+        // Main content
         egui::CentralPanel::default().show(ctx, |ui| {
             let tab = self.active_tab.clone();
             let has_backend = self.has_providers;
             match tab.as_str() {
                 "monitor" => self.monitor_view.show(ui, &self.i18n, has_backend),
                 "chat" => self.chat_view.show(ui, &self.i18n, &self.backend, ctx),
-                "skills" => {
-                    self.skills_view.show(ui, &self.i18n, &self.backend, ctx);
-                }
+                "skills" => self.skills_view.show(ui, &self.i18n, &self.backend, ctx),
                 "settings" => SettingsView::show(ui, &self.i18n, &mut self.config),
                 "workflow" => self.workflow_view.show(ui, ctx),
                 "autotune" => self.autotune_view.show(ui),
                 "security" => self.security_view.show(ui, &self.backend, ctx),
                 "config" => self.config_editor_view.show(ui, &mut self.config),
-                "providers" => self
-                    .providers_view
-                    .show(ui, &mut self.config, &self.backend, ctx),
+                "providers" => {
+                    self.providers_view
+                        .show(ui, &self.i18n, &mut self.config, &self.backend, ctx)
+                }
                 _ => {
                     ui.heading(&tab);
                     ui.label("Unknown tab id.");
@@ -312,7 +304,6 @@ impl eframe::App for GoOnApp {
 
 impl Drop for GoOnApp {
     fn drop(&mut self) {
-        // Kill the managed backend process when GUI exits
         if let Some(mut child) = self.backend_child.take() {
             eprintln!("正在关闭 go-on 后端 (PID: {})...", child.id());
             let _ = child.kill();

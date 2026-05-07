@@ -12,6 +12,10 @@ pub struct Message {
     pub content: String,
     pub timestamp: u64,
     pub attachments: Vec<Attachment>,
+    #[serde(default)]
+    pub thinking: String,
+    #[serde(skip)]
+    pub show_thinking_msg: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +46,7 @@ pub enum AiStatus {
 /// Result returned from an async chat call.
 struct PendingResponse {
     content: String,
+    thinking: String,
     error: Option<String>,
 }
 
@@ -55,6 +60,10 @@ pub struct ChatView {
     pub selected_phase: String,
     pub selected_mode: String,
     pub attachments: Vec<Attachment>,
+    /// Available phases fetched from backend
+    phases: Vec<String>,
+    /// Whether phases have been fetched
+    phases_loaded: bool,
     pending_rx: mpsc::Receiver<PendingResponse>,
     pending_tx: mpsc::Sender<PendingResponse>,
 }
@@ -141,16 +150,12 @@ impl ChatView {
     pub fn new() -> Self {
         let mut sessions = Self::load_sessions_from_disk();
         if sessions.is_empty() {
-            sessions.push(Self::default_session(
-                0,
-                "coding".to_string(),
-                "ask".to_string(),
-            ));
+            sessions.push(Self::default_session(0, String::new(), "ask".to_string()));
         }
         let initial_phase = sessions
             .first()
             .map(|s| s.phase.clone())
-            .unwrap_or_else(|| "coding".to_string());
+            .unwrap_or_default();
         let initial_mode = sessions
             .first()
             .map(|s| s.mode.clone())
@@ -168,6 +173,8 @@ impl ChatView {
             selected_phase: initial_phase,
             selected_mode: initial_mode,
             attachments: Vec::new(),
+            phases: Vec::new(),
+            phases_loaded: false,
             pending_rx,
             pending_tx,
         }
@@ -182,7 +189,7 @@ impl ChatView {
             if self.sessions.is_empty() {
                 self.sessions.push(Self::default_session(
                     0,
-                    "coding".to_string(),
+                    "think".to_string(),
                     "ask".to_string(),
                 ));
             }
@@ -248,6 +255,8 @@ impl ChatView {
             content: msg.clone(),
             timestamp: now,
             attachments: atts,
+            thinking: String::new(),
+            show_thinking_msg: false,
         });
         self.save_sessions_to_disk();
         self.ai_status = AiStatus::Thinking;
@@ -261,12 +270,14 @@ impl ChatView {
         tokio::spawn(async move {
             let resp = backend_clone.chat(&outbound_msg, &mode, &phase).await;
             let _ = tx.send(match resp {
-                Ok(content) => PendingResponse {
+                Ok((content, thinking)) => PendingResponse {
                     content,
+                    thinking,
                     error: None,
                 },
                 Err(e) => PendingResponse {
                     content: String::new(),
+                    thinking: String::new(),
                     error: Some(e),
                 },
             });
@@ -282,6 +293,16 @@ impl ChatView {
                 .unwrap_or_default()
                 .as_secs();
 
+            // Check for internal control messages
+            if let Some(phases_str) = pending.content.strip_prefix("__phases__:") {
+                self.phases = phases_str.split(',').map(String::from).collect();
+                continue;
+            }
+            if let Some(editor_content) = pending.content.strip_prefix("__editor__:") {
+                self.input = editor_content.to_string();
+                continue;
+            }
+
             if let Some(err) = &pending.error {
                 self.error = format!("Chat error: {err}");
                 self.ai_status = AiStatus::Error;
@@ -289,10 +310,31 @@ impl ChatView {
                 self.session().messages.push(Message {
                     role: "assistant".to_string(),
                     content: pending.content,
+                    thinking: pending.thinking,
                     timestamp: now,
                     attachments: Vec::new(),
+                    show_thinking_msg: false,
                 });
                 self.ai_status = AiStatus::Idle;
+
+                // Auto-name the session from first user message if still default
+                {
+                    let first_user_content = self
+                        .session()
+                        .messages
+                        .iter()
+                        .find(|m| m.role == "user")
+                        .map(|m| m.content.clone());
+                    if let Some(content) = first_user_content {
+                        let is_default = self.session().name == "New Chat"
+                            || self.session().name.starts_with("Chat ");
+                        if is_default {
+                            let truncated: String = content.chars().take(25).collect();
+                            self.session().name = truncated;
+                        }
+                    }
+                }
+
                 self.save_sessions_to_disk();
             }
             self.sending = false;
@@ -308,6 +350,37 @@ impl ChatView {
     ) {
         // Process any pending async responses
         self.process_pending();
+
+        // Fetch available phases from backend if not yet loaded
+        if !self.phases_loaded {
+            self.phases_loaded = true;
+            let backend_clone = backend.clone();
+            let tx = self.pending_tx.clone();
+            let ctx_clone = ctx.clone();
+            tokio::spawn(async move {
+                if let Ok(baseline) = backend_clone.config_baseline().await {
+                    let phases = baseline
+                        .get("config")
+                        .and_then(|c| c.get("flow"))
+                        .and_then(|f| f.get("phases"))
+                        .and_then(|p| p.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect::<Vec<_>>()
+                        });
+                    if let Some(list) = phases {
+                        let msg = format!("__phases__:{}", list.join(","));
+                        let _ = tx.send(PendingResponse {
+                            content: msg,
+                            thinking: String::new(),
+                            error: None,
+                        });
+                    }
+                }
+                ctx_clone.request_repaint();
+            });
+        }
 
         // ── Layout: left sidebar (200px) + right content ──────────────
         egui::SidePanel::left("chat_sessions")
@@ -332,36 +405,33 @@ impl ChatView {
             ui.separator();
             ui.add_space(4.0);
 
-            // ── Phase + Mode selector row ──────────────────────────
-            ui.horizontal(|ui| {
-                ui.label(i18n.t("chat.phase"));
-                egui::ComboBox::from_id_salt("phase_sel")
-                    .selected_text(i18n.t(&format!("phase.{}", self.selected_phase)))
-                    .show_ui(ui, |ui| {
-                        let phases = ["coding", "review", "debug", "test", "deploy"];
-                        for p in &phases {
-                            ui.selectable_value(
-                                &mut self.selected_phase,
-                                p.to_string(),
-                                i18n.t(&format!("phase.{p}")),
-                            );
-                        }
+            // ── Mode selector row ──────────────────────────────────
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(240, 242, 245))
+                .corner_radius(6.0)
+                .inner_margin(egui::Margin::symmetric(10i8, 6i8))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(i18n.t("chat.mode"))
+                                .color(egui::Color32::from_rgb(34, 34, 34))
+                                .strong(),
+                        );
+                        ui.add_space(6.0);
+                        egui::ComboBox::from_id_salt("mode_sel")
+                            .selected_text(i18n.t(&format!("mode.{}", self.selected_mode)))
+                            .show_ui(ui, |ui| {
+                                let modes = ["ask", "plan", "edit", "safeguard", "full_auto"];
+                                for val in &modes {
+                                    ui.selectable_value(
+                                        &mut self.selected_mode,
+                                        val.to_string(),
+                                        i18n.t(&format!("mode.{val}")),
+                                    );
+                                }
+                            });
                     });
-                ui.add_space(12.0);
-                ui.label(i18n.t("chat.mode"));
-                egui::ComboBox::from_id_salt("mode_sel")
-                    .selected_text(i18n.t(&format!("mode.{}", self.selected_mode)))
-                    .show_ui(ui, |ui| {
-                        let modes = ["ask", "plan", "edit", "safeguard", "full_auto"];
-                        for val in &modes {
-                            ui.selectable_value(
-                                &mut self.selected_mode,
-                                val.to_string(),
-                                i18n.t(&format!("mode.{val}")),
-                            );
-                        }
-                    });
-            });
+                });
             let mut metadata_changed = false;
             if self.active_session < self.sessions.len() {
                 let session = &mut self.sessions[self.active_session];
@@ -398,9 +468,26 @@ impl ChatView {
             }
 
             ui.horizontal(|ui| {
-                // Attachment button
+                // Input field - multiline for IME compatibility with external editor workaround
+                let resp = egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(255, 255, 255))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(4i8, 2i8))
+                    .show(ui, |ui| {
+                        ui.set_min_width(80.0);
+                        // Reserve 130px for buttons (attach, editor, send)
+                        let inp = egui::TextEdit::multiline(&mut self.input)
+                            .hint_text(i18n.t("chat.input"))
+                            .desired_width((ui.available_width() - 130.0).max(80.0))
+                            .desired_rows(2)
+                            .frame(false);
+                        ui.add(inp)
+                    })
+                    .inner;
+
+                // Attach button
                 if ui
-                    .button("📎")
+                    .button("\u{1f4ce}")
                     .on_hover_text(i18n.t("chat.attach"))
                     .clicked()
                 {
@@ -419,29 +506,72 @@ impl ChatView {
                     }
                 }
 
-                // Text input
-                let inp_w = ui.available_width() - 100.0;
-                let inp = egui::TextEdit::singleline(&mut self.input)
-                    .hint_text(i18n.t("chat.input"))
-                    .desired_width(inp_w.max(80.0));
-                let resp = ui.add(inp);
+                // External editor button
+                if ui.button("\u{1f4dd}").on_hover_text("外部编辑器").clicked() {
+                    let tmp_path = std::env::temp_dir().join("go_on_chat_input.txt");
+                    let _ = std::fs::write(&tmp_path, &self.input);
+                    let editors = ["zed", "code", "gedit", "vim", "nano", "xdg-open"];
+                    let mut opened = false;
+                    for editor in &editors {
+                        if std::process::Command::new(editor)
+                            .arg(&tmp_path)
+                            .spawn()
+                            .is_ok()
+                        {
+                            opened = true;
+                            break;
+                        }
+                    }
+                    if opened {
+                        let tx = self.pending_tx.clone();
+                        let path = tmp_path.to_string_lossy().to_string();
+                        std::thread::spawn(move || {
+                            use std::time::Duration;
+                            let path = std::path::PathBuf::from(&path);
+                            let mut last_modified =
+                                std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+                            loop {
+                                std::thread::sleep(Duration::from_millis(500));
+                                let current =
+                                    std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+                                if current != last_modified {
+                                    if let Ok(content) = std::fs::read_to_string(&path) {
+                                        let trimmed = content.trim().to_string();
+                                        let _ = tx.send(PendingResponse {
+                                            content: format!("__editor__:{}", trimmed),
+                                            thinking: String::new(),
+                                            error: None,
+                                        });
+                                    }
+                                    last_modified = current;
+                                }
+                            }
+                        });
+                    }
+                }
 
-                // Send button with dynamic icon based on AI status
+                // Send button
                 let (icon, color) = match self.ai_status {
-                    AiStatus::Idle => ("▶", egui::Color32::from_rgb(40, 120, 220)),
-                    AiStatus::Thinking => ("⏳", egui::Color32::from_rgb(200, 160, 60)),
-                    AiStatus::Error => ("⚠", egui::Color32::RED),
+                    AiStatus::Idle => ("\u{25b6}", egui::Color32::from_rgb(40, 120, 220)),
+                    AiStatus::Thinking => ("\u{23f3}", egui::Color32::from_rgb(200, 160, 60)),
+                    AiStatus::Error => ("\u{26a0}", egui::Color32::RED),
                 };
                 let btn = egui::Button::new(icon)
                     .fill(color)
                     .min_size(egui::vec2(40.0, 28.0));
 
-                if ui.add_enabled(!self.sending, btn).clicked()
-                    || (!self.sending
-                        && resp.lost_focus()
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                {
+                let enter_pressed = resp.has_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    && !ui.input(|i| i.modifiers.shift);
+                let shift_enter = resp.has_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    && ui.input(|i| i.modifiers.shift);
+
+                if ui.add_enabled(!self.sending, btn).clicked() || enter_pressed {
                     self.send_message(backend, ctx);
+                }
+                if shift_enter {
+                    self.input.push('\n');
                 }
             });
 
@@ -554,27 +684,43 @@ impl ChatView {
 
             ui.with_layout(align, |ui| {
                 let max_w = ui.available_width() * 0.75;
-                egui::Frame::group(ui.style())
+                let (bg_fill, text_color, corner_label) = if is_user {
+                    (
+                        egui::Color32::from_rgb(40, 117, 224),
+                        egui::Color32::from_rgb(255, 255, 255),
+                        i18n.t("chat.you"),
+                    )
+                } else {
+                    (
+                        egui::Color32::from_rgb(232, 236, 240),
+                        egui::Color32::from_rgb(34, 34, 34),
+                        i18n.t("chat.assistant"),
+                    )
+                };
+
+                egui::Frame::new()
+                    .fill(bg_fill)
+                    .corner_radius(8.0)
                     .inner_margin(egui::Margin::symmetric(12i8, 8i8))
                     .show(ui, |ui| {
                         ui.set_max_width(max_w);
 
                         // Role label + timestamp
                         ui.horizontal(|ui| {
-                            let (color, label) = match msg.role.as_str() {
-                                "user" => {
-                                    (egui::Color32::from_rgb(59, 130, 246), i18n.t("chat.you"))
-                                }
-                                "assistant" => (
-                                    egui::Color32::from_rgb(16, 185, 129),
-                                    i18n.t("chat.assistant"),
-                                ),
-                                _ => (egui::Color32::GRAY, i18n.t("chat.system")),
+                            let role_color = if is_user {
+                                egui::Color32::from_rgb(200, 220, 255)
+                            } else {
+                                egui::Color32::from_rgb(100, 120, 140)
                             };
-                            ui.colored_label(color, label);
+                            ui.colored_label(role_color, corner_label);
                             let ts = msg.timestamp;
                             let time_str = format_time(ts, i18n);
-                            ui.colored_label(egui::Color32::from_rgb(120, 130, 140), time_str);
+                            let ts_color = if is_user {
+                                egui::Color32::from_rgb(180, 200, 240)
+                            } else {
+                                egui::Color32::from_rgb(140, 150, 160)
+                            };
+                            ui.colored_label(ts_color, time_str);
                         });
 
                         // Attachments
@@ -584,11 +730,46 @@ impl ChatView {
                             } else {
                                 "📎"
                             };
-                            ui.label(format!("{} {}", icon, att.name));
+                            ui.label(
+                                egui::RichText::new(format!("{} {}", icon, att.name))
+                                    .color(text_color),
+                            );
+                        }
+
+                        // Think toggle button (assistant messages with thinking content)
+                        if msg.role == "assistant" && !msg.thinking.is_empty() {
+                            if msg.show_thinking_msg {
+                                if ui.button("▲ Think").clicked() {
+                                    if let Some(m) = self
+                                        .session()
+                                        .messages
+                                        .iter_mut()
+                                        .find(|m| m.timestamp == msg.timestamp)
+                                    {
+                                        m.show_thinking_msg = false;
+                                    }
+                                }
+                            } else if ui.button("▼ Think").clicked() {
+                                if let Some(m) = self
+                                    .session()
+                                    .messages
+                                    .iter_mut()
+                                    .find(|m| m.timestamp == msg.timestamp)
+                                {
+                                    m.show_thinking_msg = true;
+                                }
+                            }
+                        }
+
+                        // Thinking text (collapsible)
+                        if msg.show_thinking_msg && !msg.thinking.is_empty() {
+                            ui.colored_label(egui::Color32::from_rgb(200, 160, 60), "Thinking:");
+                            ui.label(egui::RichText::new(&msg.thinking).color(text_color));
+                            ui.separator();
                         }
 
                         // Message content
-                        ui.label(&msg.content);
+                        ui.label(egui::RichText::new(&msg.content).color(text_color));
                     });
             });
             ui.add_space(8.0);

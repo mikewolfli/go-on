@@ -35,6 +35,7 @@ pub fn stream_chunk_notification(
     cache_level: Option<&str>,
     phase: Option<&str>,
     trace_id: Option<&str>,
+    reasoning: Option<&str>,
 ) -> Value {
     let mut payload = Map::new();
     payload.insert("id".to_string(), id.clone().unwrap_or(Value::Null));
@@ -52,6 +53,14 @@ pub fn stream_chunk_notification(
     }
     if let Some(trace) = trace_id {
         payload.insert("trace_id".to_string(), Value::String(trace.to_string()));
+    }
+    if let Some(reasoning_text) = reasoning {
+        if !reasoning_text.is_empty() {
+            payload.insert(
+                "reasoning".to_string(),
+                Value::String(reasoning_text.to_string()),
+            );
+        }
     }
 
     Value::Object(payload)

@@ -331,6 +331,19 @@ fn extract_token(value: &Value) -> Option<String> {
         return Some(token.to_string());
     }
 
+    // DeepSeek reasoning content (thinking tokens)
+    if let Some(token) = value
+        .get("choices")
+        .and_then(|v| v.get(0))
+        .and_then(|v| v.get("delta"))
+        .and_then(|v| v.get("reasoning_content"))
+        .and_then(|v| v.as_str())
+    {
+        if !token.is_empty() {
+            return Some(format!("__thinking__{}", token));
+        }
+    }
+
     if let Some(parts) = value
         .get("choices")
         .and_then(|v| v.get(0))

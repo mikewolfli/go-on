@@ -2104,6 +2104,13 @@ async fn emit_stream_chunk(
         return Ok(());
     };
 
+    // Check if this is a reasoning token (prefixed with __thinking__)
+    let (display_token, reasoning_token) = if let Some(rest) = token.strip_prefix("__thinking__") {
+        ("", rest)
+    } else {
+        (token, "")
+    };
+
     if let Some(response_id) = observer.jsonrpc_response_id.clone() {
         let response_id = Some(response_id);
         crate::acp::r#impl::io::send_notification(
@@ -2112,29 +2119,37 @@ async fn emit_stream_chunk(
             stream_chunk_notification(
                 &response_id,
                 meta.agent_name,
-                token,
+                display_token,
                 chunk_index,
                 total_chars,
                 None,
                 Some(meta.phase_name),
                 Some(meta.trace_id),
+                if reasoning_token.is_empty() {
+                    None
+                } else {
+                    Some(reasoning_token)
+                },
             ),
         )
         .await?;
     }
 
     if let Some(sender) = &observer.sse_sender {
-        // NOTE: This SSE frame structure should match helpers/metrics::stream_chunk_notification
+        let mut payload = json!({
+            "agent": meta.agent_name,
+            "chunk_index": chunk_index,
+            "phase": meta.phase_name,
+            "token": display_token,
+            "total_chars": total_chars,
+            "trace_id": meta.trace_id,
+        });
+        if !reasoning_token.is_empty() {
+            payload["reasoning"] = json!(reasoning_token);
+        }
         let _ = sender.send(StreamFrame {
             event: "chunk".to_string(),
-            payload: json!({
-                "agent": meta.agent_name,
-                "chunk_index": chunk_index,
-                "phase": meta.phase_name,
-                "token": token,
-                "total_chars": total_chars,
-                "trace_id": meta.trace_id,
-            }),
+            payload,
         });
     }
 

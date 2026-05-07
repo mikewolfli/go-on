@@ -30,7 +30,6 @@ impl Theme {
         }
     }
 
-    /// Return the i18n-localized display name for this theme
     pub fn display_name<'a>(&self, i18n: &'a crate::i18n::I18n) -> std::borrow::Cow<'a, str> {
         match self {
             Theme::Minimal => i18n.t("theme.minimal"),
@@ -54,104 +53,130 @@ impl Theme {
     }
 
     // ── 简约 ──────────────────────────────────────────────
+    // Clean, high-contrast light theme
     fn apply_minimal(style: &mut Style) {
         style.visuals = Visuals::light();
-        style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(245, 247, 250);
-        style.visuals.widgets.noninteractive.fg_stroke =
-            Stroke::new(1.0, Color32::from_rgb(100, 110, 130));
-        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(230, 234, 240);
-        style.visuals.widgets.active.bg_fill = Color32::from_rgb(40, 120, 220);
-        style.visuals.selection.bg_fill = Color32::from_rgb(40, 120, 220);
-        style.visuals.hyperlink_color = Color32::from_rgb(40, 100, 200);
+        let bg = Color32::from_rgb(245, 245, 248);
+        let panel = Color32::from_rgb(255, 255, 255);
+        let text_main = Color32::from_rgb(30, 30, 30);
+        let accent = Color32::from_rgb(40, 117, 224);
+        let border = Color32::from_rgb(215, 218, 225);
+
+        style.visuals.window_fill = panel;
+        style.visuals.panel_fill = bg;
+        style.visuals.widgets.noninteractive.bg_fill = panel;
+        style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, border);
+        style.visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(6);
+        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(240, 241, 245);
+        style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, text_main);
+        style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
+        style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(235, 236, 242);
+        style.visuals.widgets.active.bg_fill = accent;
+        style.visuals.widgets.active.fg_stroke = Stroke::new(1.5, Color32::from_rgb(255, 255, 255));
+        style.visuals.selection.bg_fill = accent;
+        style.visuals.hyperlink_color = accent;
+        style.visuals.override_text_color = Some(text_main);
         style.spacing.item_spacing = egui::vec2(12.0, 8.0);
     }
 
     // ── 国风 ──────────────────────────────────────────────
+    // Warm red-gold high contrast
     fn apply_guofeng(style: &mut Style) {
         style.visuals = Visuals::light();
-        let crimson = Color32::from_rgb(180, 40, 50);
-        let gold = Color32::from_rgb(200, 160, 60);
-        let cream = Color32::from_rgb(250, 242, 226);
-        let ink = Color32::from_rgb(60, 40, 30);
+        let bg = Color32::from_rgb(248, 240, 225);
+        let panel = Color32::from_rgb(252, 248, 238);
+        let text_main = Color32::from_rgb(45, 30, 20);
+        let accent = Color32::from_rgb(190, 45, 55);
+        let gold = Color32::from_rgb(210, 170, 50);
 
-        style.visuals.window_fill = cream;
-        style.visuals.panel_fill = cream;
-        style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(245, 235, 215);
-        style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, ink);
-        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(235, 220, 195);
-        style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.5, ink);
-        style.visuals.widgets.active.bg_fill = crimson;
+        style.visuals.window_fill = panel;
+        style.visuals.panel_fill = bg;
+        style.visuals.widgets.noninteractive.bg_fill = panel;
+        style.visuals.widgets.noninteractive.fg_stroke =
+            Stroke::new(1.0, Color32::from_rgb(200, 185, 160));
+        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(240, 228, 210);
+        style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, text_main);
+        style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(235, 220, 200);
+        style.visuals.widgets.active.bg_fill = accent;
         style.visuals.widgets.active.fg_stroke = Stroke::new(2.0, gold);
-        style.visuals.selection.bg_fill = crimson;
-        style.visuals.hyperlink_color = crimson;
-        style.visuals.selection.stroke = Stroke::new(1.0, gold);
+        style.visuals.selection.bg_fill = accent;
+        style.visuals.hyperlink_color = accent;
+        style.visuals.override_text_color = Some(text_main);
         style.spacing.item_spacing = egui::vec2(14.0, 10.0);
     }
 
     // ── 武侠 ──────────────────────────────────────────────
+    // Dark theme with high contrast text
     fn apply_wuxia(style: &mut Style) {
         style.visuals = Visuals::dark();
-        let ink_black = Color32::from_rgb(25, 22, 20);
-        let blood_red = Color32::from_rgb(160, 30, 35);
-        let parchment = Color32::from_rgb(210, 190, 160);
-        let steel = Color32::from_rgb(140, 140, 145);
+        let bg = Color32::from_rgb(22, 20, 18);
+        let panel = Color32::from_rgb(30, 27, 24);
+        let text_main = Color32::from_rgb(225, 215, 195);
+        let accent = Color32::from_rgb(185, 40, 45);
+        let border = Color32::from_rgb(60, 55, 48);
 
-        style.visuals.window_fill = ink_black;
-        style.visuals.panel_fill = ink_black;
-        style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(35, 30, 28);
-        style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, steel);
-        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(50, 42, 38);
-        style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.5, steel);
-        style.visuals.widgets.active.bg_fill = blood_red;
-        style.visuals.widgets.active.fg_stroke = Stroke::new(2.0, parchment);
-        style.visuals.selection.bg_fill = blood_red;
-        style.visuals.selection.stroke = Stroke::new(1.0, steel);
-        style.visuals.hyperlink_color = blood_red;
-        style.visuals.override_text_color = Some(parchment);
+        style.visuals.window_fill = panel;
+        style.visuals.panel_fill = bg;
+        style.visuals.widgets.noninteractive.bg_fill = panel;
+        style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, border);
+        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(45, 40, 36);
+        style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, text_main);
+        style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(55, 48, 42);
+        style.visuals.widgets.active.bg_fill = accent;
+        style.visuals.widgets.active.fg_stroke = Stroke::new(1.5, Color32::from_rgb(235, 215, 180));
+        style.visuals.selection.bg_fill = accent;
+        style.visuals.hyperlink_color = Color32::from_rgb(200, 60, 65);
+        style.visuals.override_text_color = Some(text_main);
         style.spacing.item_spacing = egui::vec2(12.0, 8.0);
     }
 
     // ── 山水 ──────────────────────────────────────────────
+    // Cool teal-green with high readability
     fn apply_shanshui(style: &mut Style) {
         style.visuals = Visuals::light();
-        let mist = Color32::from_rgb(230, 238, 240);
-        let teal = Color32::from_rgb(50, 140, 130);
-        let ink_wash = Color32::from_rgb(80, 90, 95);
-        let bamboo = Color32::from_rgb(100, 160, 100);
-        let cloud = Color32::from_rgb(245, 248, 245);
+        let bg = Color32::from_rgb(235, 242, 240);
+        let panel = Color32::from_rgb(248, 250, 248);
+        let text_main = Color32::from_rgb(35, 35, 35);
+        let accent = Color32::from_rgb(40, 145, 130);
+        let border = Color32::from_rgb(200, 215, 212);
 
-        style.visuals.window_fill = cloud;
-        style.visuals.panel_fill = cloud;
-        style.visuals.widgets.noninteractive.bg_fill = mist;
-        style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, ink_wash);
-        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(215, 228, 230);
-        style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, teal);
-        style.visuals.widgets.active.bg_fill = teal;
-        style.visuals.widgets.active.fg_stroke = Stroke::new(1.5, Color32::from_rgb(200, 230, 225));
-        style.visuals.selection.bg_fill = bamboo;
-        style.visuals.selection.stroke = Stroke::new(1.0, teal);
-        style.visuals.hyperlink_color = teal;
+        style.visuals.window_fill = panel;
+        style.visuals.panel_fill = bg;
+        style.visuals.widgets.noninteractive.bg_fill = panel;
+        style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, border);
+        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(225, 236, 232);
+        style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, text_main);
+        style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(215, 230, 225);
+        style.visuals.widgets.active.bg_fill = accent;
+        style.visuals.widgets.active.fg_stroke = Stroke::new(1.5, Color32::from_rgb(230, 245, 240));
+        style.visuals.selection.bg_fill = accent;
+        style.visuals.hyperlink_color = accent;
+        style.visuals.override_text_color = Some(text_main);
         style.spacing.item_spacing = egui::vec2(14.0, 10.0);
     }
 
     // ── Hello Kitty ───────────────────────────────────────
+    // Light pink theme with clear dark text
     fn apply_hellokitty(style: &mut Style) {
         style.visuals = Visuals::light();
-        let pink = Color32::from_rgb(245, 180, 200);
-        let hot_pink = Color32::from_rgb(230, 80, 140);
-        let white = Color32::from_rgb(255, 248, 250);
+        let bg = Color32::from_rgb(255, 242, 246);
+        let panel = Color32::from_rgb(255, 248, 250);
+        let text_main = Color32::from_rgb(50, 40, 42);
+        let accent = Color32::from_rgb(235, 70, 140);
+        let border = Color32::from_rgb(240, 210, 218);
 
-        style.visuals.window_fill = white;
-        style.visuals.panel_fill = white;
-        style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(252, 235, 240);
-        style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, pink);
-        style.visuals.widgets.inactive.bg_fill = pink;
-        style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.5, hot_pink);
-        style.visuals.widgets.active.bg_fill = hot_pink;
-        style.visuals.widgets.active.fg_stroke = Stroke::new(2.0, white);
-        style.visuals.selection.bg_fill = hot_pink;
-        style.visuals.selection.stroke = Stroke::new(1.0, pink);
-        style.visuals.hyperlink_color = hot_pink;
+        style.visuals.window_fill = panel;
+        style.visuals.panel_fill = bg;
+        style.visuals.widgets.noninteractive.bg_fill = panel;
+        style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, border);
+        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(250, 232, 238);
+        style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, text_main);
+        style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(248, 225, 232);
+        style.visuals.widgets.active.bg_fill = accent;
+        style.visuals.widgets.active.fg_stroke = Stroke::new(2.0, Color32::from_rgb(255, 255, 255));
+        style.visuals.selection.bg_fill = accent;
+        style.visuals.hyperlink_color = accent;
+        style.visuals.override_text_color = Some(text_main);
         style.spacing.item_spacing = egui::vec2(16.0, 12.0);
     }
 }
