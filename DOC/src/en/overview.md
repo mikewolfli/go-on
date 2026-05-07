@@ -12,6 +12,21 @@
 - GUI desktop: **0.8.4**
 - VS Code addon: **0.8.4**
 
+## GUI Desktop App
+
+The EGUI-based desktop GUI (`gui/`) provides monitoring, chat, and configuration management:
+
+```bash
+cargo run --manifest-path gui/Cargo.toml
+```
+
+Key features:
+- **Monitor**: Backend health, AI provider status, real-time metrics
+- **Chat**: Multi-session conversations with phase (coding/review/debug/test/deploy) and mode (Ask/Plan/Edit/Safeguard/Full Auto) selectors, file attachments, dynamic send button based on AI status
+- **Skills**: Create and import AI skills; built-in `skill-creator` lets AI define new skills autonomously
+- **Settings**: Feature toggles, language switching (en/zh-CN/zh-TW), 5 visual themes
+- **Backend Connection**: ACP+HTTP JSON-RPC with automatic health polling
+
 ## Build Profiles
 
 Three build profiles support different deployment scenarios:

@@ -12,15 +12,30 @@
 - GUI 桌面端：**0.8.3**
 - VS Code 插件：**0.8.3**
 
+## GUI 桌面应用
+
+基于 EGUI 的桌面图形界面（`gui/`）提供监控、对话和配置管理：
+
+```bash
+cargo run --manifest-path gui/Cargo.toml
+```
+
+主要功能：
+- **监控面板**：后端健康状态、AI 供应商状态、实时指标
+- **对话界面**：多会话管理、阶段选择（coding/review/debug/test/deploy）、模式切换（Ask/Plan/Edit/Safeguard/Full Auto）、文件附件、动态发送按钮（依据 AI 状态变化）
+- **技能管理**：创建和导入 AI 技能；内置 `skill-creator` 让 AI 自主定义新技能
+- **设置**：功能开关、语言切换（en/zh-CN/zh-TW）、5 种视觉主题
+- **后端连接**：ACP+HTTP JSON-RPC，自动健康轮询
+
 ## 构建配置文件
 
-三种构建配置文件适配不同的部署场景：
+三种构建配置文件适用于不同的部署场景：
 
-| 配置文件 | 后端 | 目标 | 构建命令 |
-|---------|------|------|----------|
+| 配置文件 | 后端 | 场景 | 构建命令 |
+|---------|------|------|---------|
 | `profile-local` | SQLite + sqlite-vec | 单用户本地工具 | `cargo build`（默认） |
-| `profile-simple-server` | SQLite + sqlite-vec | 单服务部署 | `cargo build --no-default-features -F profile-simple-server` |
-| `profile-multi-users-server` | PostgreSQL + pgvector | 多用户生产环境 | `cargo build --no-default-features -F profile-multi-users-server` |
+| `profile-simple-server` | SQLite + sqlite-vec | 单服务器部署 | `cargo build --no-default-features -F profile-simple-server` |
+| `profile-multi-users-server` | PostgreSQL + pgvector | 多用户生产 | `cargo build --no-default-features -F profile-multi-users-server` |
 
 ## 验证状态（Phase 4 完成）
 

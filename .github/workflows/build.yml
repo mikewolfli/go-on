@@ -54,24 +54,21 @@ jobs:
         env:
           GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
 
-      # ── Front-end ─────────────────────────────────────────────────────
+      # ── EGUI GUI ───────────────────────────────────────────────────────
+      - name: Build EGUI GUI
+        run: cargo build --release --manifest-path gui/Cargo.toml
+
+      # ── VS Code addon ─────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: |
-            GUI/package-lock.json
             vscode-addon/package-lock.json
       - name: Install addon dependencies
         run: npm --prefix vscode-addon ci
-      - name: Install GUI dependencies
-        run: npm --prefix GUI ci
       - name: VS Code addon compile + lint
         run: npm --prefix vscode-addon run check
       - name: VS Code addon contract smoke
         run: npm --prefix vscode-addon run test:contract
-      - name: GUI build
-        run: npm --prefix GUI run build
-      - name: GUI contract smoke
-        run: npm --prefix GUI run test:contract

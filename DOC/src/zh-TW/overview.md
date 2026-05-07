@@ -8,9 +8,24 @@
 
 ## 版本
 
-- 後端 Runtime：**0.8.4**
-- GUI 桌面端：**0.8.4**
-- VS Code 插件：**0.8.4**
+- 后端 Runtime：**0.9.3**
+- GUI 桌面端：**0.9.3**
+- VS Code 插件：**0.9.3**
+
+## GUI 桌面應用
+
+基於 EGUI 的桌面圖形界面（`gui/`）提供監控、對話和配置管理：
+
+```bash
+cargo run --manifest-path gui/Cargo.toml
+```
+
+主要功能：
+- **監控面板**：後端健康狀態、AI 供應商狀態、實時指標
+- **對話界面**：多會話管理、階段選擇（coding/review/debug/test/deploy）、模式切換（Ask/Plan/Edit/Safeguard/Full Auto）、文件附件、動態發送按鈕（依據 AI 狀態變化）
+- **技能管理**：創建和導入 AI 技能；內置 `skill-creator` 讓 AI 自主定義新技能
+- **設置**：功能開關、語言切換（en/zh-CN/zh-TW）、5 種視覺主題
+- **後端連接**：ACP+HTTP JSON-RPC，自動健康輪詢
 
 ## 構建配置文件
 

@@ -13,6 +13,21 @@ with full i18n support and a modular multi-bus architecture spanning 14 capabili
 - Default feature: `profile-local`
 - Alternative feature scaffolds: `profile-simple-server`, `profile-multi-users-server`
 
+## GUI Desktop App
+
+The EGUI-based desktop GUI provides monitoring, chat, and configuration management:
+
+```bash
+cargo run --manifest-path gui/Cargo.toml
+```
+
+Features:
+- **Monitor**: Backend health, AI provider status
+- **Chat**: Multi-session conversations with phase/mode selection, file attachments, and dynamic AI status indicators
+- **Skills**: Create and manage AI skills, including the built-in skill-creator
+- **Settings**: Feature toggles, language (en/zh-CN/zh-TW), and 5 themes (简约/国风/武侠/山水/Hello Kitty)
+- **Backend Connection**: ACP+HTTP JSON-RPC, automatic health polling
+
 ## Build Profiles
 
 Three build profiles support different deployment scenarios:
