@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -58,44 +57,6 @@ impl Default for AppConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BackendTomlConfig {
-    pub agents: Option<HashMap<String, AgentConfig>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentConfig {
-    #[serde(rename = "type")]
-    pub agent_type: Option<String>,
-    pub model: Option<String>,
-    pub api_key: Option<String>,
-}
-
-/// Search for config.toml in standard locations
-pub fn find_config() -> Option<PathBuf> {
-    let candidates = [
-        Path::new("backend/config.toml"),
-        Path::new("cmd/config.toml"),
-        Path::new("bin/config.toml"),
-        Path::new("config.toml"),
-        Path::new("../backend/config.toml"),
-        Path::new("../config.toml"),
-    ];
-    for p in &candidates {
-        if p.exists() {
-            return Some(p.to_path_buf());
-        }
-    }
-    None
-}
-
-/// Parse backend config.toml and extract AI providers
-pub fn parse_backend_config(path: &Path) -> Result<BackendTomlConfig, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    toml::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))
-}
-
 /// Load GUI app config from JSON file
 pub fn load_app_config() -> AppConfig {
     let path = app_config_path();
@@ -110,10 +71,20 @@ pub fn load_app_config() -> AppConfig {
 pub fn save_app_config(config: &AppConfig) {
     let path = app_config_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("Failed to create config directory {:?}: {}", parent, e);
+            return;
+        }
     }
-    if let Ok(content) = serde_json::to_string_pretty(config) {
-        std::fs::write(&path, content).ok();
+    match serde_json::to_string_pretty(config) {
+        Ok(content) => {
+            if let Err(e) = std::fs::write(&path, content) {
+                eprintln!("Failed to write config to {:?}: {}", path, e);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to serialize config: {}", e);
+        }
     }
 }
 

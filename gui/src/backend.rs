@@ -29,15 +29,11 @@ impl BackendClient {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
-            .unwrap();
+            .expect("Failed to build HTTP client (TLS initialization error)");
         Self {
             client,
             base_url: base_url.trim_end_matches('/').to_string(),
         }
-    }
-
-    pub fn update_url(&mut self, url: &str) {
-        self.base_url = url.trim_end_matches('/').to_string();
     }
 
     /// Call a JSON-RPC method on the backend
@@ -51,11 +47,16 @@ impl BackendClient {
 
         let resp = self
             .client
-            .post(&format!("{}/rpc", self.base_url))
+            .post(format!("{}/rpc", self.base_url))
             .json(&body)
             .send()
             .await
             .map_err(|e| format!("HTTP error: {}", e))?;
+
+        // Check for HTTP-level errors (4xx, 5xx)
+        let resp = resp
+            .error_for_status()
+            .map_err(|e| format!("HTTP status error: {}", e))?;
 
         let result: Value = resp
             .json()
@@ -77,9 +78,9 @@ impl BackendClient {
                 connected: true,
                 healthy: val["lifecycle"]["is_healthy"].as_bool().unwrap_or(false),
                 uptime: val["lifecycle"]["uptime_seconds"].as_u64().unwrap_or(0),
-                requests_per_minute: 0.0,
-                success_rate: 0.0,
-                avg_latency_ms: 0.0,
+                requests_per_minute: val["stats"]["requests_per_minute"].as_f64().unwrap_or(0.0),
+                success_rate: val["stats"]["success_rate"].as_f64().unwrap_or(0.0),
+                avg_latency_ms: val["stats"]["avg_latency_ms"].as_f64().unwrap_or(0.0),
             },
             Err(_) => HealthStatus {
                 connected: false,
@@ -137,15 +138,5 @@ impl BackendClient {
             .as_str()
             .unwrap_or("No response")
             .to_string())
-    }
-
-    /// Initialize backend
-    pub async fn initialize(&self) -> Result<Value, String> {
-        self.rpc_call("initialize", None).await
-    }
-
-    /// Get runtime features
-    pub async fn features(&self) -> Result<Value, String> {
-        self.rpc_call("runtime.features", None).await
     }
 }

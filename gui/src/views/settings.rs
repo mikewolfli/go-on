@@ -11,41 +11,64 @@ impl SettingsView {
         ui.separator();
         ui.add_space(8.0);
 
+        let mut changed = false;
+
         egui::Grid::new("feature_grid")
             .striped(true)
             .show(ui, |ui| {
                 ui.label(i18n.t("tab.monitor"));
-                ui.checkbox(&mut config.features.monitor, "");
+                if ui.checkbox(&mut config.features.monitor, "").changed() {
+                    changed = true;
+                }
                 ui.end_row();
 
                 ui.label(i18n.t("tab.chat"));
-                ui.checkbox(&mut config.features.chat, "");
+                if ui.checkbox(&mut config.features.chat, "").changed() {
+                    changed = true;
+                }
                 ui.end_row();
 
                 ui.label(i18n.t("tab.skills"));
-                ui.checkbox(&mut config.features.skills, "");
+                if ui.checkbox(&mut config.features.skills, "").changed() {
+                    changed = true;
+                }
                 ui.end_row();
 
                 ui.label(i18n.t("tab.workflow"));
-                ui.checkbox(&mut config.features.workflow, "");
+                if ui.checkbox(&mut config.features.workflow, "").changed() {
+                    changed = true;
+                }
                 ui.end_row();
 
                 ui.label(i18n.t("tab.autotune"));
-                ui.checkbox(&mut config.features.autotune, "");
+                if ui.checkbox(&mut config.features.autotune, "").changed() {
+                    changed = true;
+                }
                 ui.end_row();
 
                 ui.label(i18n.t("tab.security"));
-                ui.checkbox(&mut config.features.security, "");
+                if ui.checkbox(&mut config.features.security, "").changed() {
+                    changed = true;
+                }
                 ui.end_row();
 
                 ui.label(i18n.t("tab.config"));
-                ui.checkbox(&mut config.features.config, "");
+                if ui.checkbox(&mut config.features.config, "").changed() {
+                    changed = true;
+                }
                 ui.end_row();
 
                 ui.label(i18n.t("tab.providers"));
-                ui.checkbox(&mut config.features.providers, "");
+                if ui.checkbox(&mut config.features.providers, "").changed() {
+                    changed = true;
+                }
                 ui.end_row();
             });
+
+        if changed {
+            save_app_config(config);
+            ui.ctx().request_repaint();
+        }
 
         ui.add_space(10.0);
         ui.separator();
@@ -66,6 +89,7 @@ impl SettingsView {
                 {
                     config.language = code.to_string();
                     save_app_config(config);
+                    ui.ctx().request_repaint();
                 }
             }
         });
@@ -75,13 +99,14 @@ impl SettingsView {
         ui.add_space(8.0);
 
         // Theme selector
-        ui.label("主题 / Theme");
+        ui.label(i18n.t("theme.title"));
         ui.horizontal(|ui| {
             let themes = crate::theme::Theme::all();
             for (_theme, name) in themes {
                 if ui.selectable_label(config.theme == *name, *name).clicked() {
                     config.theme = name.to_string();
                     save_app_config(config);
+                    ui.ctx().request_repaint();
                 }
             }
         });

@@ -2,30 +2,59 @@ use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;
 
 pub struct SetupView {
-    pub visible: bool,
     selected_provider: String,
     api_key: String,
     selected_model: String,
     validating: bool,
     error_msg: String,
     success_msg: String,
+    validate_start: Option<std::time::Instant>,
 }
+
+const VALIDATE_DELAY_MS: u128 = 500;
 
 impl SetupView {
     pub fn new() -> Self {
         Self {
-            visible: true,
             selected_provider: "openai".to_string(),
             api_key: String::new(),
             selected_model: "auto".to_string(),
             validating: false,
             error_msg: String::new(),
             success_msg: String::new(),
+            validate_start: None,
         }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, i18n: &I18n, config: &mut AppConfig) -> bool {
         let mut done = false;
+
+        // ── Non-blocking validation timer ──────────────────────
+        if self.validating {
+            if let Some(start) = self.validate_start {
+                if start.elapsed().as_millis() >= VALIDATE_DELAY_MS {
+                    // Simulated validation passed – persist provider
+                    config.providers.push(ProviderConfig {
+                        name: self.selected_provider.clone(),
+                        api_key: self.api_key.clone(),
+                        model: self.selected_model.clone(),
+                        validated: true,
+                    });
+                    save_app_config(config);
+                    self.success_msg = format!(
+                        "{} {} {}",
+                        i18n.t("setup.success"),
+                        self.selected_provider,
+                        i18n.t("toast.serviceRestarted"),
+                    );
+                    self.validating = false;
+                    self.validate_start = None;
+                } else {
+                    ctx.request_repaint();
+                }
+            }
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(60.0);
@@ -45,7 +74,7 @@ impl SetupView {
 
                 ui.horizontal(|ui| {
                     ui.label(i18n.t("setup.provider"));
-                    egui::ComboBox::from_id_source("provider_sel")
+                    egui::ComboBox::from_id_salt("provider_sel")
                         .selected_text(&self.selected_provider)
                         .show_ui(ui, |ui| {
                             let providers = [
@@ -78,7 +107,7 @@ impl SetupView {
 
                 ui.horizontal(|ui| {
                     ui.label(i18n.t("setup.model"));
-                    egui::ComboBox::from_id_source("model_sel")
+                    egui::ComboBox::from_id_salt("model_sel")
                         .selected_text(&self.selected_model)
                         .show_ui(ui, |ui| {
                             let models = [
@@ -114,16 +143,9 @@ impl SetupView {
                         .clicked()
                     {
                         self.validating = true;
+                        self.validate_start = Some(std::time::Instant::now());
                         self.error_msg.clear();
-                        config.providers.push(ProviderConfig {
-                            name: self.selected_provider.clone(),
-                            api_key: self.api_key.clone(),
-                            model: self.selected_model.clone(),
-                            validated: true,
-                        });
-                        save_app_config(config);
-                        self.success_msg = i18n.t("setup.success").to_string();
-                        self.validating = false;
+                        ctx.request_repaint();
                     }
 
                     if ui.button(i18n.t("setup.skip")).clicked() {

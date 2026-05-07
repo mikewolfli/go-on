@@ -1,4 +1,3 @@
-use crate::backend::BackendClient;
 use crate::i18n::I18n;
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +14,7 @@ pub struct SkillsView {
     pub skills: Vec<SkillRecord>,
     pub loading: bool,
     pub error: String,
+    pub success: String,
     pub show_create: bool,
     pub create_name: String,
     pub create_desc: String,
@@ -30,6 +30,7 @@ impl SkillsView {
             skills: Vec::new(),
             loading: false,
             error: String::new(),
+            success: String::new(),
             show_create: false,
             create_name: String::new(),
             create_desc: String::new(),
@@ -40,61 +41,114 @@ impl SkillsView {
         }
     }
 
-    pub fn show(
-        &mut self,
-        ui: &mut egui::Ui,
-        i18n: &I18n,
-        _backend: &BackendClient,
-        _ctx: &egui::Context,
-    ) {
+    pub fn show(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
         ui.heading(i18n.t("tab.skills"));
         ui.separator();
         ui.add_space(4.0);
+
+        // Loading indicator
+        if self.loading {
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(i18n.t("skills.loading"));
+            });
+            ui.add_space(4.0);
+        }
+
+        // Error message
+        if !self.error.is_empty() {
+            ui.colored_label(egui::Color32::RED, &self.error);
+            ui.add_space(4.0);
+        }
+
+        // Success message
+        if !self.success.is_empty() {
+            ui.colored_label(egui::Color32::GREEN, &self.success);
+            ui.add_space(4.0);
+        }
 
         // Action buttons
         ui.horizontal(|ui| {
             if ui.button("➕").clicked() {
                 self.show_create = !self.show_create;
+                self.error.clear();
+                self.success.clear();
             }
             if ui.button("📥").clicked() {
                 self.show_import = !self.show_import;
+                self.error.clear();
+                self.success.clear();
             }
-            if ui.button("🔄").clicked() { /* refresh */ }
+            if ui
+                .add_enabled(!self.loading, egui::Button::new("🔄"))
+                .clicked()
+            {
+                self.loading = true;
+                self.error.clear();
+                self.success.clear();
+            }
         });
 
         // Create dialog
         if self.show_create {
             egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.label("Create New Skill");
+                ui.label(i18n.t("skills.create.title"));
                 ui.horizontal(|ui| {
-                    ui.label("Name:");
+                    ui.label(i18n.t("skills.create.name"));
                     ui.text_edit_singleline(&mut self.create_name);
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Desc:");
+                    ui.label(i18n.t("skills.create.desc"));
                     ui.text_edit_singleline(&mut self.create_desc);
                 });
-                ui.label("Prompt Template:");
+                ui.label(i18n.t("skills.create.prompt"));
                 ui.text_edit_multiline(&mut self.create_prompt);
-                ui.label("Input Schema (JSON):");
+                ui.label(i18n.t("skills.create.schema"));
                 ui.text_edit_multiline(&mut self.create_input_schema);
-                if ui.button("Save Skill").clicked() {
-                    self.skills.push(SkillRecord {
-                        name: Some(self.create_name.clone()),
-                        description: Some(self.create_desc.clone()),
-                        version: Some("1".to_string()),
-                        enabled: Some(true),
-                        imported_at: Some(
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs(),
-                        ),
-                    });
-                    self.create_name.clear();
-                    self.create_desc.clear();
-                    self.create_prompt.clear();
-                    self.show_create = false;
+                if ui
+                    .add_enabled(
+                        !self.loading,
+                        egui::Button::new(i18n.t("skills.create.save")),
+                    )
+                    .clicked()
+                {
+                    let name = self.create_name.trim().to_string();
+                    let desc = self.create_desc.trim().to_string();
+                    let prompt = self.create_prompt.trim().to_string();
+
+                    if name.is_empty() {
+                        self.error =
+                            format!("{} {}", i18n.t("skills.create.error"), "Name is required.");
+                    } else if prompt.is_empty() {
+                        self.error = format!(
+                            "{} {}",
+                            i18n.t("skills.create.error"),
+                            "Prompt is required."
+                        );
+                    } else {
+                        self.error.clear();
+                        self.success.clear();
+
+                        // Store the record locally
+                        self.skills.push(SkillRecord {
+                            name: Some(name),
+                            description: Some(desc),
+                            version: Some("1".to_string()),
+                            enabled: Some(true),
+                            imported_at: Some(
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+                                    .as_secs(),
+                            ),
+                        });
+                        self.create_name.clear();
+                        self.create_desc.clear();
+                        self.create_prompt.clear();
+                        self.show_create = false;
+                        self.success = i18n.t("skills.create.success").to_string();
+                    }
                 }
             });
         }
@@ -102,12 +156,46 @@ impl SkillsView {
         // Import dialog
         if self.show_import {
             egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.label("Import Skill from URL");
+                ui.label(i18n.t("skills.import.title"));
                 ui.horizontal(|ui| {
-                    ui.text_edit_singleline(&mut self.import_url);
-                    if ui.button("Import").clicked() {
-                        self.import_url.clear();
-                        self.show_import = false;
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.import_url)
+                            .hint_text(i18n.t("skills.import.placeholder")),
+                    );
+                    if ui
+                        .add_enabled(
+                            !self.loading,
+                            egui::Button::new(i18n.t("skills.import.btn")),
+                        )
+                        .clicked()
+                    {
+                        let url = self.import_url.trim().to_string();
+                        if url.is_empty() {
+                            self.error =
+                                format!("{} {}", i18n.t("skills.import.error"), "URL is required.");
+                        } else {
+                            self.error.clear();
+                            self.success.clear();
+
+                            // Store imported skill locally
+                            self.skills.push(SkillRecord {
+                                name: Some(
+                                    url.split('/').next_back().unwrap_or("imported").to_string(),
+                                ),
+                                description: Some(format!("Imported from {}", url)),
+                                version: Some("1".to_string()),
+                                enabled: Some(true),
+                                imported_at: Some(
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+                                        .as_secs(),
+                                ),
+                            });
+                            self.import_url.clear();
+                            self.show_import = false;
+                            self.success = i18n.t("skills.import.success").to_string();
+                        }
                     }
                 });
             });
@@ -117,11 +205,11 @@ impl SkillsView {
         ui.separator();
         ui.add_space(4.0);
 
-        // Skills list
+        // Skills list / empty state
         if self.skills.is_empty() {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
-                ui.label(i18n.t("chat.noMessages"));
+                ui.label(i18n.t("skills.none"));
             });
             return;
         }

@@ -1,11 +1,18 @@
-use crate::backend::BackendClient;
+use crate::backend::{BackendClient, HealthStatus, ProviderStatus};
 use crate::config::{self, has_valid_providers, save_app_config, AppConfig};
 use crate::i18n::{I18n, Lang};
 use crate::views::{
     chat::ChatView, monitor::MonitorView, settings::SettingsView, setup::SetupView,
     skills::SkillsView,
 };
+use std::sync::mpsc;
 use std::time::Instant;
+
+enum BackendUpdate {
+    Health(HealthStatus),
+    Providers(Vec<ProviderStatus>),
+    RefreshDone,
+}
 
 pub struct GoOnApp {
     pub config: AppConfig,
@@ -17,7 +24,10 @@ pub struct GoOnApp {
     pub skills_view: SkillsView,
     pub show_setup: bool,
     pub active_tab: String,
-    pub health_error: String,
+    pub has_providers: bool,
+    backend_updates: mpsc::Receiver<BackendUpdate>,
+    backend_tx: mpsc::Sender<BackendUpdate>,
+    pending_refresh: bool,
     last_refresh: Instant,
 }
 
@@ -29,7 +39,9 @@ impl GoOnApp {
             "zh-TW" => Lang::ZhTw,
             _ => Lang::En,
         };
-        let has_providers = has_valid_providers(&config);
+        let providers_valid = has_valid_providers(&config);
+
+        let (backend_tx, backend_updates) = mpsc::channel();
 
         Self {
             backend: BackendClient::new(&config.backend_url),
@@ -39,9 +51,12 @@ impl GoOnApp {
             chat_view: ChatView::new(),
             skills_view: SkillsView::new(),
             config,
-            show_setup: !has_providers,
+            show_setup: !providers_valid,
             active_tab: "monitor".to_string(),
-            health_error: String::new(),
+            has_providers: providers_valid,
+            backend_updates,
+            backend_tx,
+            pending_refresh: false,
             last_refresh: Instant::now(),
         }
     }
@@ -53,6 +68,44 @@ impl GoOnApp {
             _ => Lang::En,
         }
     }
+
+    /// Poll the channel for async backend updates and apply them to the monitor view.
+    fn poll_backend_updates(&mut self) {
+        while let Ok(update) = self.backend_updates.try_recv() {
+            match update {
+                BackendUpdate::Health(h) => {
+                    self.monitor_view.health = Some(h);
+                }
+                BackendUpdate::Providers(p) => {
+                    self.monitor_view.providers = p;
+                }
+                BackendUpdate::RefreshDone => {
+                    self.pending_refresh = false;
+                }
+            }
+        }
+    }
+
+    /// Trigger an async health + provider refresh if enough time has elapsed and no
+    /// refresh is already in-flight.
+    fn maybe_refresh_backend(&mut self) {
+        if self.last_refresh.elapsed().as_secs() >= 5 && !self.pending_refresh {
+            self.pending_refresh = true;
+            let tx = self.backend_tx.clone();
+            let backend = self.backend.clone();
+            tokio::spawn(async move {
+                // Fetch health
+                let health = backend.health().await;
+                let _ = tx.send(BackendUpdate::Health(health));
+                // Fetch provider status
+                let providers = backend.provider_status().await;
+                let _ = tx.send(BackendUpdate::Providers(providers));
+                // Signal that the refresh cycle is complete
+                let _ = tx.send(BackendUpdate::RefreshDone);
+            });
+            self.last_refresh = Instant::now();
+        }
+    }
 }
 
 impl eframe::App for GoOnApp {
@@ -61,33 +114,37 @@ impl eframe::App for GoOnApp {
         self.i18n.switch(self.current_lang());
         let theme = crate::theme::Theme::from_name(&self.config.theme);
         theme.apply(ctx);
+        ctx.request_repaint(); // Ensure theme / repaint is applied each frame
 
-        // Setup screen - blocks main UI
+        // Setup screen – blocks main UI
         if self.show_setup {
             let done = self.setup_view.show(ctx, &self.i18n, &mut self.config);
             if done {
                 self.show_setup = false;
+                self.has_providers = has_valid_providers(&self.config);
                 save_app_config(&self.config);
             }
             ctx.request_repaint();
             return;
         }
 
-        // Periodic health refresh - non-blocking, updates on next frame
-        if self.last_refresh.elapsed().as_secs() >= 5 && self.monitor_view.health.is_none() {
-            self.monitor_view.health = Some(crate::backend::HealthStatus {
-                connected: true,
-                healthy: true,
-                uptime: 0,
-                requests_per_minute: 0.0,
-                success_rate: 100.0,
-                avg_latency_ms: 0.0,
-            });
-            self.last_refresh = Instant::now();
-        }
+        // Poll for async backend updates arriving from spawned tasks
+        self.poll_backend_updates();
+
+        // Periodically trigger a new async health / provider refresh
+        self.maybe_refresh_backend();
 
         // Pre-compute values to avoid borrow issues inside closures
         let tabs = self.active_tabs_precomputed();
+
+        // If the active feature tab was just disabled, redirect to settings
+        if !tabs.contains(&self.active_tab) {
+            if tabs.contains(&"monitor".to_string()) {
+                self.active_tab = "monitor".to_string();
+            } else {
+                self.active_tab = "settings".to_string();
+            }
+        }
         let is_connected = self
             .monitor_view
             .health
@@ -132,14 +189,15 @@ impl eframe::App for GoOnApp {
         // Main content area
         egui::CentralPanel::default().show(ctx, |ui| {
             let tab = self.active_tab.clone();
+            let has_backend = self.has_providers;
             match tab.as_str() {
-                "monitor" => self.monitor_view.show(ui, &self.i18n),
+                "monitor" => self.monitor_view.show(ui, &self.i18n, has_backend),
                 "chat" => self.chat_view.show(ui, &self.i18n, &self.backend, ctx),
-                "skills" => self.skills_view.show(ui, &self.i18n, &self.backend, ctx),
+                "skills" => self.skills_view.show(ui, &self.i18n),
                 "settings" => SettingsView::show(ui, &self.i18n, &mut self.config),
                 _ => {
                     ui.heading(&tab);
-                    ui.label("Coming soon...");
+                    ui.label(self.i18n.t("app.comingSoon"));
                 }
             }
         });
@@ -188,7 +246,7 @@ impl GoOnApp {
             "config" => self.i18n.t("tab.config"),
             "providers" => self.i18n.t("tab.providers"),
             "settings" => self.i18n.t("tab.settings"),
-            _ => tab,
+            _ => std::borrow::Cow::Borrowed(tab),
         }
         .to_string()
     }

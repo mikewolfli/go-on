@@ -30,16 +30,6 @@ impl Theme {
         }
     }
 
-    pub fn name(&self) -> &str {
-        match self {
-            Theme::Minimal => "简约",
-            Theme::GuoFeng => "国风",
-            Theme::Wuxia => "武侠",
-            Theme::ShanShui => "山水",
-            Theme::HelloKitty => "Hello Kitty",
-        }
-    }
-
     pub fn apply(&self, ctx: &egui::Context) {
         let mut style = (*ctx.style()).clone();
         match self {

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 #[derive(Hash, PartialEq, Eq)]
@@ -23,19 +24,16 @@ impl I18n {
         self.lang = lang;
     }
 
-    pub fn t(&self, key: &'static str) -> &str {
+    pub fn t(&self, key: &str) -> Cow<'_, str> {
         self.strings
             .get(key)
             .and_then(|m| m.get(&self.lang))
             .copied()
-            .unwrap_or(key)
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned(key.to_string()))
     }
 
     fn load_all(m: &mut HashMap<&'static str, HashMap<Lang, &'static str>>) {
-        let _en = Lang::En;
-        let _cn = Lang::ZhCn;
-        let _tw = Lang::ZhTw;
-
         // App
         m.insert(
             "app.title",
@@ -116,9 +114,49 @@ impl I18n {
             "monitor.notReady",
             tr!(en, "Not Ready", cn, "未就绪", tw, "未就緒"),
         );
+        m.insert(
+            "monitor.offlineHint",
+            tr!(
+                en,
+                "⚠ Providers configured – verify the backend is running",
+                cn,
+                "⚠ 已配置 AI 供应商，请确认后端正在运行",
+                tw,
+                "⚠ 已配置 AI 供應商，請確認後端正在運行"
+            ),
+        );
 
         // Chat
         m.insert("chat.title", tr!(en, "Chat", cn, "对话", tw, "對話"));
+        m.insert("chat.phase", tr!(en, "Phase", cn, "阶段", tw, "階段"));
+        m.insert("chat.mode", tr!(en, "Mode", cn, "模式", tw, "模式"));
+
+        // Phase options
+        m.insert("phase.coding", tr!(en, "Coding", cn, "编码", tw, "編碼"));
+        m.insert("phase.review", tr!(en, "Review", cn, "审查", tw, "審查"));
+        m.insert("phase.debug", tr!(en, "Debug", cn, "调试", tw, "調試"));
+        m.insert("phase.test", tr!(en, "Test", cn, "测试", tw, "測試"));
+        m.insert("phase.deploy", tr!(en, "Deploy", cn, "部署", tw, "部署"));
+
+        // Mode options
+        m.insert("mode.ask", tr!(en, "💬 Ask", cn, "💬 提问", tw, "💬 提問"));
+        m.insert(
+            "mode.plan",
+            tr!(en, "📋 Plan", cn, "📋 计划", tw, "📋 計劃"),
+        );
+        m.insert(
+            "mode.edit",
+            tr!(en, "✏️ Edit", cn, "✏️ 编辑", tw, "✏️ 編輯"),
+        );
+        m.insert(
+            "mode.safeguard",
+            tr!(en, "🛡️ Safeguard", cn, "🛡️ 保护", tw, "🛡️ 保護"),
+        );
+        m.insert(
+            "mode.full_auto",
+            tr!(en, "🤖 Full Auto", cn, "🤖 全自动", tw, "🤖 全自動"),
+        );
+
         m.insert(
             "chat.input",
             tr!(
@@ -155,6 +193,17 @@ impl I18n {
                 "暂无消息，开始对话吧！",
                 tw,
                 "暫無消息，開始對話吧！"
+            ),
+        );
+        m.insert(
+            "chat.hint",
+            tr!(
+                en,
+                "Type a message below to start chatting",
+                cn,
+                "在下方输入消息开始对话",
+                tw,
+                "在下方輸入消息開始對話"
             ),
         );
 
@@ -254,6 +303,164 @@ impl I18n {
             tr!(en, "Disconnected", cn, "已断开", tw, "已斷開"),
         );
         m.insert("status.error", tr!(en, "Error", cn, "错误", tw, "錯誤"));
+
+        // Skills
+        m.insert(
+            "skills.none",
+            tr!(
+                en,
+                "No skills configured yet. Create or import one to get started.",
+                cn,
+                "暂无技能。创建或导入一个技能以开始使用。",
+                tw,
+                "暫無技能。創建或導入一個技能以開始使用。"
+            ),
+        );
+        m.insert(
+            "skills.create.title",
+            tr!(en, "Create New Skill", cn, "创建新技能", tw, "創建新技能"),
+        );
+        m.insert(
+            "skills.create.name",
+            tr!(en, "Name", cn, "名称", tw, "名稱"),
+        );
+        m.insert(
+            "skills.create.desc",
+            tr!(en, "Description", cn, "描述", tw, "描述"),
+        );
+        m.insert(
+            "skills.create.prompt",
+            tr!(en, "Prompt Template", cn, "提示模板", tw, "提示模板"),
+        );
+        m.insert(
+            "skills.create.schema",
+            tr!(
+                en,
+                "Input Schema (JSON)",
+                cn,
+                "输入模式 (JSON)",
+                tw,
+                "輸入模式 (JSON)"
+            ),
+        );
+        m.insert(
+            "skills.create.save",
+            tr!(en, "Save Skill", cn, "保存技能", tw, "保存技能"),
+        );
+        m.insert(
+            "skills.create.success",
+            tr!(
+                en,
+                "Skill created successfully!",
+                cn,
+                "技能创建成功！",
+                tw,
+                "技能創建成功！"
+            ),
+        );
+        m.insert(
+            "skills.create.error",
+            tr!(
+                en,
+                "Failed to create skill.",
+                cn,
+                "创建技能失败。",
+                tw,
+                "創建技能失敗。"
+            ),
+        );
+        m.insert(
+            "skills.import.title",
+            tr!(
+                en,
+                "Import Skill from URL",
+                cn,
+                "从 URL 导入技能",
+                tw,
+                "從 URL 導入技能"
+            ),
+        );
+        m.insert(
+            "skills.import.placeholder",
+            tr!(
+                en,
+                "Enter skill URL...",
+                cn,
+                "输入技能 URL...",
+                tw,
+                "輸入技能 URL..."
+            ),
+        );
+        m.insert(
+            "skills.import.btn",
+            tr!(en, "Import", cn, "导入", tw, "導入"),
+        );
+        m.insert(
+            "skills.import.success",
+            tr!(
+                en,
+                "Skill imported successfully!",
+                cn,
+                "技能导入成功！",
+                tw,
+                "技能導入成功！"
+            ),
+        );
+        m.insert(
+            "skills.import.error",
+            tr!(
+                en,
+                "Failed to import skill.",
+                cn,
+                "导入技能失败。",
+                tw,
+                "導入技能失敗。"
+            ),
+        );
+        m.insert(
+            "skills.loading",
+            tr!(
+                en,
+                "Loading skills...",
+                cn,
+                "加载技能中...",
+                tw,
+                "加載技能中..."
+            ),
+        );
+
+        // Theme
+        m.insert("theme.title", tr!(en, "Theme", cn, "主题", tw, "主題"));
+        m.insert("theme.minimal", tr!(en, "Minimal", cn, "简约", tw, "簡約"));
+        m.insert("theme.guofeng", tr!(en, "GuoFeng", cn, "国风", tw, "國風"));
+        m.insert("theme.wuxia", tr!(en, "Wuxia", cn, "武侠", tw, "武俠"));
+        m.insert(
+            "theme.shanshui",
+            tr!(en, "ShanShui", cn, "山水", tw, "山水"),
+        );
+        m.insert(
+            "theme.hellokitty",
+            tr!(en, "Hello Kitty", cn, "Hello Kitty", tw, "Hello Kitty"),
+        );
+
+        // Toast
+        m.insert(
+            "toast.serviceRestarted",
+            tr!(
+                en,
+                "Service will restart to apply changes.",
+                cn,
+                "服务将重启以应用更改。",
+                tw,
+                "服務將重啟以應用更改。"
+            ),
+        );
+
+        // Fallback
+        m.insert(
+            "app.comingSoon",
+            tr!(en, "Coming soon...", cn, "即将推出...", tw, "即將推出..."),
+        );
     }
 }
 
