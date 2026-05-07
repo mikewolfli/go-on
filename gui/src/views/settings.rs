@@ -74,17 +74,38 @@ impl SettingsView {
         ui.separator();
         ui.add_space(8.0);
 
+        // Backend URL setting
+        ui.label(i18n.t("settings.backendUrl"));
+        ui.label(i18n.t("settings.backendUrlHint"));
+        ui.horizontal(|ui| {
+            let mut url = config.backend_url.clone();
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut url)
+                    .hint_text("http://127.0.0.1:8090")
+                    .desired_width(300.0),
+            );
+            if resp.changed() && !url.is_empty() {
+                config.backend_url = url.trim().trim_end_matches('/').to_string();
+                save_app_config(config);
+                ui.ctx().request_repaint();
+            }
+        });
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(8.0);
+
         // Language selector
         ui.label(i18n.t("settings.language"));
         ui.horizontal(|ui| {
             let langs = [
-                ("English", "en"),
-                ("简体中文", "zh-CN"),
-                ("繁體中文", "zh-TW"),
+                ("lang.en", "en"),
+                ("lang.zhCn", "zh-CN"),
+                ("lang.zhTw", "zh-TW"),
             ];
-            for (label, code) in &langs {
+            for (key, code) in &langs {
                 if ui
-                    .selectable_label(config.language == *code, *label)
+                    .selectable_label(config.language == *code, i18n.t(key))
                     .clicked()
                 {
                     config.language = code.to_string();
@@ -102,9 +123,13 @@ impl SettingsView {
         ui.label(i18n.t("theme.title"));
         ui.horizontal(|ui| {
             let themes = crate::theme::Theme::all();
-            for (_theme, name) in themes {
-                if ui.selectable_label(config.theme == *name, *name).clicked() {
-                    config.theme = name.to_string();
+            for (theme_variant, config_name) in themes {
+                let label = theme_variant.display_name(i18n);
+                if ui
+                    .selectable_label(config.theme == *config_name, label)
+                    .clicked()
+                {
+                    config.theme = config_name.to_string();
                     save_app_config(config);
                     ui.ctx().request_repaint();
                 }

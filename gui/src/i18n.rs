@@ -29,8 +29,7 @@ impl I18n {
             .get(key)
             .and_then(|m| m.get(&self.lang))
             .copied()
-            .map(Cow::Borrowed)
-            .unwrap_or_else(|| Cow::Owned(key.to_string()))
+            .map_or_else(|| Cow::Owned(key.to_string()), Cow::Borrowed)
     }
 
     fn load_all(m: &mut HashMap<&'static str, HashMap<Lang, &'static str>>) {
@@ -282,6 +281,49 @@ impl I18n {
             ),
         );
 
+        // Skills validation errors
+        m.insert(
+            "skills.create.errorName",
+            tr!(
+                en,
+                "Name is required.",
+                cn,
+                "名称是必填项。",
+                tw,
+                "名稱是必填項。"
+            ),
+        );
+        m.insert(
+            "skills.create.errorPrompt",
+            tr!(
+                en,
+                "Prompt is required.",
+                cn,
+                "提示是必填项。",
+                tw,
+                "提示是必填項。"
+            ),
+        );
+        m.insert(
+            "skills.import.errorUrl",
+            tr!(
+                en,
+                "URL is required.",
+                cn,
+                "URL 是必填项。",
+                tw,
+                "URL 是必填項。"
+            ),
+        );
+        m.insert(
+            "skills.import.unnamed",
+            tr!(en, "imported", cn, "已导入", tw, "已導入"),
+        );
+        m.insert(
+            "skills.import.importedFrom",
+            tr!(en, "Imported from {}", cn, "从 {} 导入", tw, "從 {} 導入"),
+        );
+
         // Settings (feature toggles)
         m.insert(
             "settings.title",
@@ -443,6 +485,52 @@ impl I18n {
             tr!(en, "Hello Kitty", cn, "Hello Kitty", tw, "Hello Kitty"),
         );
 
+        // Time format
+        m.insert(
+            "time.secondsAgo",
+            tr!(en, "{}s ago", cn, "{}秒前", tw, "{}秒前"),
+        );
+        m.insert(
+            "time.minutesAgo",
+            tr!(en, "{}m ago", cn, "{}分钟前", tw, "{}分鐘前"),
+        );
+        m.insert(
+            "time.hoursAgo",
+            tr!(en, "{}h ago", cn, "{}小时前", tw, "{}小時前"),
+        );
+        m.insert(
+            "time.daysAgo",
+            tr!(en, "{}d ago", cn, "{}天前", tw, "{}天前"),
+        );
+
+        // Settings: Backend URL
+        m.insert(
+            "settings.backendUrl",
+            tr!(en, "Backend URL", cn, "后端地址", tw, "後端地址"),
+        );
+        m.insert(
+            "settings.backendUrlHint",
+            tr!(
+                en,
+                "URL of the Go-On backend server",
+                cn,
+                "Go-On 后端服务器地址",
+                tw,
+                "Go-On 後端服務器地址"
+            ),
+        );
+
+        // Language names (for settings display)
+        m.insert("lang.en", tr!(en, "English", cn, "English", tw, "English"));
+        m.insert(
+            "lang.zhCn",
+            tr!(en, "简体中文", cn, "简体中文", tw, "简体中文"),
+        );
+        m.insert(
+            "lang.zhTw",
+            tr!(en, "繁體中文", cn, "繁體中文", tw, "繁體中文"),
+        );
+
         // Toast
         m.insert(
             "toast.serviceRestarted",
@@ -456,10 +544,61 @@ impl I18n {
             ),
         );
 
-        // Fallback
+        // Feature descriptions
         m.insert(
-            "app.comingSoon",
-            tr!(en, "Coming soon...", cn, "即将推出...", tw, "即將推出..."),
+            "feature.workflow.desc",
+            tr!(
+                en,
+                "Multi-step workflow orchestration for creating, managing, and running\nAI task pipelines with reusable steps.",
+                cn,
+                "多步骤工作流编排，可用于创建、管理和执行\n可复用的 AI 任务流水线。",
+                tw,
+                "多步驟工作流編排，可用於創建、管理和執行\n可復用的 AI 任務流水線。"
+            ),
+        );
+        m.insert(
+            "feature.autotune.desc",
+            tr!(
+                en,
+                "Automatic model tuning controls for prompt generation behavior\nand output quality/cost trade-offs.",
+                cn,
+                "自动模型调优控制，用于调节生成行为以及\n质量/成本平衡。",
+                tw,
+                "自動模型調優控制，用於調節生成行為以及\n品質/成本平衡。"
+            ),
+        );
+        m.insert(
+            "feature.security.desc",
+            tr!(
+                en,
+                "Security controls for confirmation gates, UI redaction,\nand runtime safety behavior.",
+                cn,
+                "安全控制项：确认门禁、界面脱敏、\n运行时安全行为。",
+                tw,
+                "安全控制項：確認門禁、介面脫敏、\n運行時安全行為。"
+            ),
+        );
+        m.insert(
+            "feature.config.desc",
+            tr!(
+                en,
+                "Advanced configuration management with live JSON editing\nand immediate persistence.",
+                cn,
+                "高级配置管理：支持 JSON 实时编辑\n并立即持久化。",
+                tw,
+                "高級配置管理：支持 JSON 即時編輯\n並立即持久化。"
+            ),
+        );
+        m.insert(
+            "feature.providers.desc",
+            tr!(
+                en,
+                "Provider management for adding/updating credentials,\nmodel selection, and backend push.",
+                cn,
+                "供应商管理：支持新增/更新凭据、\n模型选择与推送到后端。",
+                tw,
+                "供應商管理：支持新增/更新憑據、\n模型選擇與推送到後端。"
+            ),
         );
     }
 }

@@ -1,0 +1,95 @@
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AutoTuneState {
+    temperature: f32,
+    top_p: f32,
+    max_tokens: u32,
+    aggressive: bool,
+}
+
+impl Default for AutoTuneState {
+    fn default() -> Self {
+        Self {
+            temperature: 0.7,
+            top_p: 0.95,
+            max_tokens: 2048,
+            aggressive: false,
+        }
+    }
+}
+
+pub struct AutoTuneView {
+    state: AutoTuneState,
+}
+
+impl AutoTuneView {
+    pub fn new() -> Self {
+        Self {
+            state: Self::load_state(),
+        }
+    }
+
+    fn state_path() -> PathBuf {
+        if let Some(dirs) = directories::ProjectDirs::from("com", "goon", "go-on-gui") {
+            dirs.config_dir().join("autotune_state.json")
+        } else {
+            PathBuf::from("autotune_state.json")
+        }
+    }
+
+    fn load_state() -> AutoTuneState {
+        match std::fs::read_to_string(Self::state_path()) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+            Err(_) => AutoTuneState::default(),
+        }
+    }
+
+    fn save_state(&self) {
+        let path = Self::state_path();
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("Failed to create autotune state dir: {e}");
+                return;
+            }
+        }
+        match serde_json::to_string_pretty(&self.state) {
+            Ok(content) => {
+                if let Err(e) = std::fs::write(&path, content) {
+                    eprintln!("Failed to write autotune state {}: {e}", path.display());
+                }
+            }
+            Err(e) => eprintln!("Failed to serialize autotune state: {e}"),
+        }
+    }
+
+    pub fn show(&mut self, ui: &mut egui::Ui) {
+        ui.heading("AutoTune");
+        ui.label("Tune generation defaults used by your workflows and prompts.");
+        ui.separator();
+
+        let mut changed = false;
+        changed |= ui
+            .add(egui::Slider::new(&mut self.state.temperature, 0.0..=2.0).text("Temperature"))
+            .changed();
+        changed |= ui
+            .add(egui::Slider::new(&mut self.state.top_p, 0.1..=1.0).text("Top-p"))
+            .changed();
+        changed |= ui
+            .add(egui::Slider::new(&mut self.state.max_tokens, 128..=8192).text("Max tokens"))
+            .changed();
+        changed |= ui
+            .checkbox(&mut self.state.aggressive, "Aggressive optimization")
+            .changed();
+
+        if ui.button("Reset Defaults").clicked() {
+            self.state = AutoTuneState::default();
+            changed = true;
+        }
+
+        if changed {
+            self.save_state();
+        }
+    }
+}

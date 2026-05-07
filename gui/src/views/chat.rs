@@ -1,6 +1,8 @@
 use crate::backend::BackendClient;
 use crate::i18n::I18n;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -34,7 +36,6 @@ pub struct Session {
 pub enum AiStatus {
     Idle,
     Thinking,
-    Generating,
     Error,
 }
 
@@ -54,71 +55,164 @@ pub struct ChatView {
     pub selected_phase: String,
     pub selected_mode: String,
     pub attachments: Vec<Attachment>,
-    pub show_file_dialog: bool,
     pending_rx: mpsc::Receiver<PendingResponse>,
     pending_tx: mpsc::Sender<PendingResponse>,
 }
 
 impl ChatView {
-    pub fn new() -> Self {
+    fn guess_mime(path: &Path) -> String {
+        match path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("png") => "image/png".to_string(),
+            Some("jpg") | Some("jpeg") => "image/jpeg".to_string(),
+            Some("gif") => "image/gif".to_string(),
+            Some("webp") => "image/webp".to_string(),
+            Some("pdf") => "application/pdf".to_string(),
+            Some("json") => "application/json".to_string(),
+            Some("md") => "text/markdown".to_string(),
+            Some("txt") => "text/plain".to_string(),
+            _ => "application/octet-stream".to_string(),
+        }
+    }
+
+    fn default_session(index: usize, phase: String, mode: String) -> Session {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let default_session = Session {
-            id: "session_1".to_string(),
-            name: "New Chat".to_string(),
+        Session {
+            id: format!("session_{}", index + 1),
+            name: if index == 0 {
+                "New Chat".to_string()
+            } else {
+                format!("Chat {}", index + 1)
+            },
             messages: Vec::new(),
             created_at: now,
             workflow_type: "chat".to_string(),
-            phase: "coding".to_string(),
-            mode: "ask".to_string(),
-        };
+            phase,
+            mode,
+        }
+    }
+
+    fn sessions_path() -> PathBuf {
+        if let Some(dirs) = directories::ProjectDirs::from("com", "goon", "go-on-gui") {
+            dirs.config_dir().join("chat_sessions.json")
+        } else {
+            PathBuf::from("chat_sessions.json")
+        }
+    }
+
+    fn load_sessions_from_disk() -> Vec<Session> {
+        let path = Self::sessions_path();
+        match std::fs::read_to_string(&path) {
+            Ok(content) => serde_json::from_str::<Vec<Session>>(&content).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn save_sessions_to_disk(&self) {
+        let path = Self::sessions_path();
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!(
+                    "Failed to create chat session directory {}: {e}",
+                    parent.display()
+                );
+                return;
+            }
+        }
+        match serde_json::to_string_pretty(&self.sessions) {
+            Ok(content) => {
+                if let Err(e) = std::fs::write(&path, content) {
+                    eprintln!("Failed to write chat sessions to {}: {e}", path.display());
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to serialize chat sessions: {e}");
+            }
+        }
+    }
+
+    pub fn new() -> Self {
+        let mut sessions = Self::load_sessions_from_disk();
+        if sessions.is_empty() {
+            sessions.push(Self::default_session(
+                0,
+                "coding".to_string(),
+                "ask".to_string(),
+            ));
+        }
+        let initial_phase = sessions
+            .first()
+            .map(|s| s.phase.clone())
+            .unwrap_or_else(|| "coding".to_string());
+        let initial_mode = sessions
+            .first()
+            .map(|s| s.mode.clone())
+            .unwrap_or_else(|| "ask".to_string());
 
         let (pending_tx, pending_rx) = mpsc::channel();
 
         Self {
-            sessions: vec![default_session],
+            sessions,
             active_session: 0,
             input: String::new(),
             sending: false,
             error: String::new(),
             ai_status: AiStatus::Idle,
-            selected_phase: "coding".to_string(),
-            selected_mode: "ask".to_string(),
+            selected_phase: initial_phase,
+            selected_mode: initial_mode,
             attachments: Vec::new(),
-            show_file_dialog: false,
             pending_rx,
             pending_tx,
         }
     }
 
     fn session(&mut self) -> &mut Session {
-        &mut self.sessions[self.active_session]
+        // Bounds check: if active_session is out of range, create a fallback session
+        let idx = if self.active_session < self.sessions.len() {
+            self.active_session
+        } else {
+            // Fallback to last session or create one
+            if self.sessions.is_empty() {
+                self.sessions.push(Self::default_session(
+                    0,
+                    "coding".to_string(),
+                    "ask".to_string(),
+                ));
+            }
+            self.active_session = self.sessions.len() - 1;
+            self.active_session
+        };
+        &mut self.sessions[idx]
     }
 
     fn messages(&self) -> &[Message] {
-        &self.sessions[self.active_session].messages
+        if self.active_session < self.sessions.len() {
+            &self.sessions[self.active_session].messages
+        } else if !self.sessions.is_empty() {
+            &self.sessions[self.sessions.len() - 1].messages
+        } else {
+            &[]
+        }
     }
 
     fn new_session(&mut self) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
         let count = self.sessions.len() + 1;
-        self.sessions.push(Session {
-            id: format!("session_{}", count),
-            name: format!("Chat {}", count),
-            messages: Vec::new(),
-            created_at: now,
-            workflow_type: "chat".to_string(),
-            phase: self.selected_phase.clone(),
-            mode: self.selected_mode.clone(),
-        });
+        self.sessions.push(Self::default_session(
+            count - 1,
+            self.selected_phase.clone(),
+            self.selected_mode.clone(),
+        ));
         self.active_session = self.sessions.len() - 1;
         self.ai_status = AiStatus::Idle;
         self.attachments.clear();
+        self.save_sessions_to_disk();
     }
 
     /// Send a message asynchronously via the backend.
@@ -127,6 +221,8 @@ impl ChatView {
         if msg.is_empty() || self.sending {
             return;
         }
+        let mode = self.selected_mode.clone();
+        let phase = self.selected_phase.clone();
 
         self.input.clear();
         let now = SystemTime::now()
@@ -134,6 +230,17 @@ impl ChatView {
             .unwrap_or_default()
             .as_secs();
         let atts = std::mem::take(&mut self.attachments);
+        let attachment_summary = if atts.is_empty() {
+            String::new()
+        } else {
+            let details = atts
+                .iter()
+                .map(|a| format!("- {} ({}) {}", a.name, a.mime, a.data))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("\n\n[Attachments]\n{details}")
+        };
+        let outbound_msg = format!("{msg}{attachment_summary}");
 
         // Add user message immediately
         self.session().messages.push(Message {
@@ -142,6 +249,7 @@ impl ChatView {
             timestamp: now,
             attachments: atts,
         });
+        self.save_sessions_to_disk();
         self.ai_status = AiStatus::Thinking;
         self.sending = true;
         self.error.clear();
@@ -151,7 +259,7 @@ impl ChatView {
         let backend_clone = backend.clone();
         let ctx_clone = ctx.clone();
         tokio::spawn(async move {
-            let resp = backend_clone.chat(&msg).await;
+            let resp = backend_clone.chat(&outbound_msg, &mode, &phase).await;
             let _ = tx.send(match resp {
                 Ok(content) => PendingResponse {
                     content,
@@ -166,16 +274,16 @@ impl ChatView {
         });
     }
 
-    /// Drain any pending async responses and update the session / ai_status.
+    /// Drain any pending async responses and update the session / `ai_status`.
     fn process_pending(&mut self) {
         while let Ok(pending) = self.pending_rx.try_recv() {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
+                .unwrap_or_default()
                 .as_secs();
 
             if let Some(err) = &pending.error {
-                self.error = format!("Chat error: {}", err);
+                self.error = format!("Chat error: {err}");
                 self.ai_status = AiStatus::Error;
             } else {
                 self.session().messages.push(Message {
@@ -184,7 +292,8 @@ impl ChatView {
                     timestamp: now,
                     attachments: Vec::new(),
                 });
-                self.ai_status = AiStatus::Generating;
+                self.ai_status = AiStatus::Idle;
+                self.save_sessions_to_disk();
             }
             self.sending = false;
         }
@@ -199,11 +308,6 @@ impl ChatView {
     ) {
         // Process any pending async responses
         self.process_pending();
-
-        // If we were showing Generating (one frame), fall back to Idle
-        if self.ai_status == AiStatus::Generating {
-            self.ai_status = AiStatus::Idle;
-        }
 
         // ── Layout: left sidebar (200px) + right content ──────────────
         egui::SidePanel::left("chat_sessions")
@@ -239,7 +343,7 @@ impl ChatView {
                             ui.selectable_value(
                                 &mut self.selected_phase,
                                 p.to_string(),
-                                i18n.t(&format!("phase.{}", p)),
+                                i18n.t(&format!("phase.{p}")),
                             );
                         }
                     });
@@ -253,13 +357,26 @@ impl ChatView {
                             ui.selectable_value(
                                 &mut self.selected_mode,
                                 val.to_string(),
-                                i18n.t(&format!("mode.{}", val)),
+                                i18n.t(&format!("mode.{val}")),
                             );
                         }
                     });
             });
-            self.session().mode = self.selected_mode.clone();
-            self.session().phase = self.selected_phase.clone();
+            let mut metadata_changed = false;
+            if self.active_session < self.sessions.len() {
+                let session = &mut self.sessions[self.active_session];
+                if session.mode != self.selected_mode {
+                    session.mode = self.selected_mode.clone();
+                    metadata_changed = true;
+                }
+                if session.phase != self.selected_phase {
+                    session.phase = self.selected_phase.clone();
+                    metadata_changed = true;
+                }
+            }
+            if metadata_changed {
+                self.save_sessions_to_disk();
+            }
 
             ui.add_space(4.0);
 
@@ -282,8 +399,24 @@ impl ChatView {
 
             ui.horizontal(|ui| {
                 // Attachment button
-                if ui.button("📎").clicked() {
-                    self.show_file_dialog = !self.show_file_dialog;
+                if ui
+                    .button("📎")
+                    .on_hover_text(i18n.t("chat.attach"))
+                    .clicked()
+                {
+                    if let Some(files) = rfd::FileDialog::new().pick_files() {
+                        for file in files {
+                            let name = file
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("attachment")
+                                .to_string();
+                            let mime = Self::guess_mime(&file);
+                            let data = file.display().to_string();
+                            self.attachments.push(Attachment { name, mime, data });
+                        }
+                        self.error.clear();
+                    }
                 }
 
                 // Text input
@@ -297,7 +430,6 @@ impl ChatView {
                 let (icon, color) = match self.ai_status {
                     AiStatus::Idle => ("▶", egui::Color32::from_rgb(40, 120, 220)),
                     AiStatus::Thinking => ("⏳", egui::Color32::from_rgb(200, 160, 60)),
-                    AiStatus::Generating => ("⚡", egui::Color32::from_rgb(16, 185, 129)),
                     AiStatus::Error => ("⚠", egui::Color32::RED),
                 };
                 let btn = egui::Button::new(icon)
@@ -325,7 +457,11 @@ impl ChatView {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.label(i18n.t("chat.title"));
-                if ui.button("＋").clicked() {
+                if ui
+                    .button("＋")
+                    .on_hover_text(i18n.t("chat.title"))
+                    .clicked()
+                {
                     self.new_session();
                 }
             });
@@ -353,10 +489,13 @@ impl ChatView {
                                     ui.set_min_width(160.0);
                                     if ui.selectable_label(selected, &session.name).clicked() {
                                         self.active_session = idx;
+                                        self.selected_mode = session.mode.clone();
+                                        self.selected_phase = session.phase.clone();
                                         self.ai_status = AiStatus::Idle;
                                     }
                                     // Right-click context or delete button
-                                    if ui.button("✕").clicked() {
+                                    if ui.button("✕").on_hover_text(i18n.t("chat.clear")).clicked()
+                                    {
                                         to_remove = Some(idx);
                                     }
                                 });
@@ -374,9 +513,18 @@ impl ChatView {
                     if let Some(idx) = to_remove {
                         if self.sessions.len() > 1 {
                             self.sessions.remove(idx);
-                            if self.active_session >= self.sessions.len() {
+                            if idx < self.active_session {
+                                self.active_session -= 1;
+                            } else if self.active_session >= self.sessions.len() {
                                 self.active_session = self.sessions.len() - 1;
                             }
+                            if self.active_session < self.sessions.len() {
+                                self.selected_mode =
+                                    self.sessions[self.active_session].mode.clone();
+                                self.selected_phase =
+                                    self.sessions[self.active_session].phase.clone();
+                            }
+                            self.save_sessions_to_disk();
                         }
                     }
                 });
@@ -425,7 +573,7 @@ impl ChatView {
                             };
                             ui.colored_label(color, label);
                             let ts = msg.timestamp;
-                            let time_str = format_time(ts);
+                            let time_str = format_time(ts, i18n);
                             ui.colored_label(egui::Color32::from_rgb(120, 130, 140), time_str);
                         });
 
@@ -448,19 +596,22 @@ impl ChatView {
     }
 }
 
-fn format_time(ts: u64) -> String {
+fn format_time(ts: u64, i18n: &I18n) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
+        .unwrap_or_default()
         .as_secs();
     let diff = now.saturating_sub(ts);
     if diff < 60 {
-        format!("{}s ago", diff)
+        i18n.t("time.secondsAgo").replace("{}", &diff.to_string())
     } else if diff < 3600 {
-        format!("{}m ago", diff / 60)
+        i18n.t("time.minutesAgo")
+            .replace("{}", &(diff / 60).to_string())
     } else if diff < 86400 {
-        format!("{}h ago", diff / 3600)
+        i18n.t("time.hoursAgo")
+            .replace("{}", &(diff / 3600).to_string())
     } else {
-        format!("{}d ago", diff / 86400)
+        i18n.t("time.daysAgo")
+            .replace("{}", &(diff / 86400).to_string())
     }
 }

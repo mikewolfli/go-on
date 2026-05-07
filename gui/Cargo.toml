@@ -1,6 +1,6 @@
 [package]
 name = "go-on-gui-egui"
-version = "0.9.3"
+version = "0.9.4"
 edition = "2021"
 
 [dependencies]
@@ -13,3 +13,4 @@ tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 toml = "0.8"
 directories = "6"
+rfd = "0.15"

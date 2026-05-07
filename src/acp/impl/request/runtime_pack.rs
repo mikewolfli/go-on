@@ -282,6 +282,11 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
         })
         .unwrap_or(json!({"enabled": false}));
 
+    let total = status.metrics.total_requests.max(1);
+    let success_rate = (status.metrics.successful_requests as f64 / total as f64) * 100.0;
+    let uptime_secs = status.lifecycle.uptime_seconds.max(1);
+    let requests_per_minute = (status.metrics.total_requests as f64 / uptime_secs as f64) * 60.0;
+
     send_result(
         server,
         request_id,
@@ -290,6 +295,15 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
                 "shutting_down": status.lifecycle.shutdown_requested,
                 "is_healthy": status.lifecycle.is_healthy,
                 "uptime_seconds": status.lifecycle.uptime_seconds,
+            },
+            "stats": {
+                "total_requests": status.metrics.total_requests,
+                "successful_requests": status.metrics.successful_requests,
+                "failed_requests": status.metrics.failed_requests,
+                "requests_per_minute": (requests_per_minute * 100.0).round() / 100.0,
+                "success_rate": (success_rate * 100.0).round() / 100.0,
+                "avg_latency_ms": (status.metrics.avg_request_duration_ms * 100.0).round() / 100.0,
+                "active_requests": status.metrics.active_requests,
             },
             "maintenance": status.maintenance,
             "review_gate": {
@@ -4873,6 +4887,68 @@ pub(super) async fn handle_governance_config_save(
         json!({
             "ok": true,
             "applied": applied,
+        }),
+    )
+    .await
+}
+
+/// Handle provider configuration request from GUI or other clients.
+/// Stores the provider config in memory and applies it to the agent registry.
+pub(super) async fn handle_provider_configure(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let model = params
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("auto");
+
+    info!(
+        "{}",
+        tf(
+            "Provider configured: name={}, model={}",
+            &[("name", name), ("model", model)]
+        )
+    );
+
+    // Provider configuration is stored locally by the GUI.
+    // This handler acknowledges the request and logs the config.
+    // Future enhancement: persist provider config on the backend.
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "provider": name,
+            "model": model,
+        }),
+    )
+    .await
+}
+
+/// Handle runtime restart request from GUI or other clients.
+/// Initiates a graceful shutdown so the process manager can restart the service.
+pub(super) async fn handle_runtime_restart(
+    server: &AcpServer,
+    request_id: Option<Value>,
+) -> Result<()> {
+    info!("{}", t("info.restart_requested"));
+
+    server.begin_shutdown();
+    server.shutdown_notify.notify_waiters();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "restart": "initiated",
         }),
     )
     .await

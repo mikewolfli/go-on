@@ -816,6 +816,15 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
+                "provider.configure" => {
+                    runtime_pack::handle_provider_configure(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "runtime.restart" => runtime_pack::handle_runtime_restart(server, request_id).await,
                 _ => {
                     send_error(
                         server,

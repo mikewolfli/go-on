@@ -2,10 +2,12 @@ use crate::backend::{BackendClient, HealthStatus, ProviderStatus};
 use crate::config::{self, has_valid_providers, save_app_config, AppConfig};
 use crate::i18n::{I18n, Lang};
 use crate::views::{
-    chat::ChatView, monitor::MonitorView, settings::SettingsView, setup::SetupView,
-    skills::SkillsView,
+    autotune::AutoTuneView, chat::ChatView, config_editor::ConfigEditorView, monitor::MonitorView,
+    providers::ProvidersView, security::SecurityView, settings::SettingsView, setup::SetupView,
+    skills::SkillsView, workflow::WorkflowView,
 };
 use std::sync::mpsc;
+use std::time::Duration;
 use std::time::Instant;
 
 enum BackendUpdate {
@@ -22,6 +24,11 @@ pub struct GoOnApp {
     pub monitor_view: MonitorView,
     pub chat_view: ChatView,
     pub skills_view: SkillsView,
+    pub workflow_view: WorkflowView,
+    pub autotune_view: AutoTuneView,
+    pub security_view: SecurityView,
+    pub config_editor_view: ConfigEditorView,
+    pub providers_view: ProvidersView,
     pub show_setup: bool,
     pub active_tab: String,
     pub has_providers: bool,
@@ -50,6 +57,11 @@ impl GoOnApp {
             monitor_view: MonitorView::new(),
             chat_view: ChatView::new(),
             skills_view: SkillsView::new(),
+            workflow_view: WorkflowView::new(),
+            autotune_view: AutoTuneView::new(),
+            security_view: SecurityView::new(),
+            config_editor_view: ConfigEditorView::new(),
+            providers_view: ProvidersView::new(),
             config,
             show_setup: !providers_valid,
             active_tab: "monitor".to_string(),
@@ -66,6 +78,14 @@ impl GoOnApp {
             "zh-CN" => Lang::ZhCn,
             "zh-TW" => Lang::ZhTw,
             _ => Lang::En,
+        }
+    }
+
+    /// Sync the backend client's URL with the config (in case user changed it in settings)
+    fn sync_backend_url(&mut self) {
+        let config_url = self.config.backend_url.trim_end_matches('/').to_string();
+        if self.backend.base_url() != config_url {
+            self.backend.set_base_url(&config_url);
         }
     }
 
@@ -114,11 +134,13 @@ impl eframe::App for GoOnApp {
         self.i18n.switch(self.current_lang());
         let theme = crate::theme::Theme::from_name(&self.config.theme);
         theme.apply(ctx);
-        ctx.request_repaint(); // Ensure theme / repaint is applied each frame
+        ctx.request_repaint_after(Duration::from_millis(200));
 
         // Setup screen – blocks main UI
         if self.show_setup {
-            let done = self.setup_view.show(ctx, &self.i18n, &mut self.config);
+            let done = self
+                .setup_view
+                .show(ctx, &self.i18n, &mut self.config, &self.backend);
             if done {
                 self.show_setup = false;
                 self.has_providers = has_valid_providers(&self.config);
@@ -128,11 +150,17 @@ impl eframe::App for GoOnApp {
             return;
         }
 
+        // Sync backend URL from config to the client in case the user changed it in settings
+        self.sync_backend_url();
+
         // Poll for async backend updates arriving from spawned tasks
         self.poll_backend_updates();
 
         // Periodically trigger a new async health / provider refresh
         self.maybe_refresh_backend();
+
+        // Keep provider availability in sync with current editable config
+        self.has_providers = has_valid_providers(&self.config);
 
         // Pre-compute values to avoid borrow issues inside closures
         let tabs = self.active_tabs_precomputed();
@@ -149,13 +177,12 @@ impl eframe::App for GoOnApp {
             .monitor_view
             .health
             .as_ref()
-            .map(|h| h.connected)
-            .unwrap_or(false);
+            .is_some_and(|h| h.connected);
 
         // Top toolbar
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Go-On GUI");
+                ui.label(self.i18n.t("app.title"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let status = if is_connected {
                         self.i18n.t("status.connected")
@@ -177,7 +204,7 @@ impl eframe::App for GoOnApp {
                         .selectable_label(self.active_tab == *tab, label)
                         .clicked()
                     {
-                        new_tab = Some(tab.to_string());
+                        new_tab = Some(tab.clone());
                     }
                 }
             });
@@ -193,11 +220,20 @@ impl eframe::App for GoOnApp {
             match tab.as_str() {
                 "monitor" => self.monitor_view.show(ui, &self.i18n, has_backend),
                 "chat" => self.chat_view.show(ui, &self.i18n, &self.backend, ctx),
-                "skills" => self.skills_view.show(ui, &self.i18n),
+                "skills" => {
+                    self.skills_view.show(ui, &self.i18n, &self.backend, ctx);
+                }
                 "settings" => SettingsView::show(ui, &self.i18n, &mut self.config),
+                "workflow" => self.workflow_view.show(ui, ctx),
+                "autotune" => self.autotune_view.show(ui),
+                "security" => self.security_view.show(ui, &self.backend, ctx),
+                "config" => self.config_editor_view.show(ui, &mut self.config),
+                "providers" => self
+                    .providers_view
+                    .show(ui, &mut self.config, &self.backend, ctx),
                 _ => {
                     ui.heading(&tab);
-                    ui.label(self.i18n.t("app.comingSoon"));
+                    ui.label("Unknown tab id.");
                 }
             }
         });

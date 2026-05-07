@@ -70,7 +70,7 @@ impl MonitorView {
         ui.add_space(16.0);
 
         // ── Configured-but-backend-offline hint ────────────────
-        if self.backend_configured && self.health.as_ref().map(|h| !h.connected).unwrap_or(true) {
+        if self.backend_configured && self.health.as_ref().is_none_or(|h| !h.connected) {
             ui.colored_label(
                 egui::Color32::from_rgb(200, 160, 60),
                 i18n.t("monitor.offlineHint"),

@@ -30,6 +30,17 @@ impl Theme {
         }
     }
 
+    /// Return the i18n-localized display name for this theme
+    pub fn display_name<'a>(&self, i18n: &'a crate::i18n::I18n) -> std::borrow::Cow<'a, str> {
+        match self {
+            Theme::Minimal => i18n.t("theme.minimal"),
+            Theme::GuoFeng => i18n.t("theme.guofeng"),
+            Theme::Wuxia => i18n.t("theme.wuxia"),
+            Theme::ShanShui => i18n.t("theme.shanshui"),
+            Theme::HelloKitty => i18n.t("theme.hellokitty"),
+        }
+    }
+
     pub fn apply(&self, ctx: &egui::Context) {
         let mut style = (*ctx.style()).clone();
         match self {
@@ -129,7 +140,6 @@ impl Theme {
         let pink = Color32::from_rgb(245, 180, 200);
         let hot_pink = Color32::from_rgb(230, 80, 140);
         let white = Color32::from_rgb(255, 248, 250);
-        let _red_bow = Color32::from_rgb(220, 50, 80);
 
         style.visuals.window_fill = white;
         style.visuals.panel_fill = white;

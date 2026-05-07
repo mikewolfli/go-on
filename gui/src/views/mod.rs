@@ -1,5 +1,11 @@
+pub mod autotune;
 pub mod chat;
+pub mod config_editor;
 pub mod monitor;
+pub mod providers;
+pub mod security;
+pub mod security_prefs;
 pub mod settings;
 pub mod setup;
 pub mod skills;
+pub mod workflow;

@@ -72,18 +72,21 @@ pub fn save_app_config(config: &AppConfig) {
     let path = app_config_path();
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("Failed to create config directory {:?}: {}", parent, e);
+            eprintln!(
+                "Failed to create config directory {}: {e}",
+                parent.display()
+            );
             return;
         }
     }
     match serde_json::to_string_pretty(config) {
         Ok(content) => {
             if let Err(e) = std::fs::write(&path, content) {
-                eprintln!("Failed to write config to {:?}: {}", path, e);
+                eprintln!("Failed to write config to {}: {e}", path.display());
             }
         }
         Err(e) => {
-            eprintln!("Failed to serialize config: {}", e);
+            eprintln!("Failed to serialize config: {e}");
         }
     }
 }
