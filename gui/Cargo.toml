@@ -14,4 +14,8 @@ anyhow = "1"
 toml = "0.8"
 directories = "6"
 rfd = "0.15"
-keyring = { version = "3", features = ["linux-native-sync-persistent"] }
+keyring = { version = "3" }
+chrono = { version = "0.4", features = ["now"] }
+
+[build-dependencies]
+winres = "0.1"

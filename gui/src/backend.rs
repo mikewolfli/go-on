@@ -28,7 +28,11 @@ pub struct ProviderStatus {
 impl BackendClient {
     pub fn new(base_url: &str) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
+            // Use a generous timeout (120s) for chat requests that may wait
+            // for AI provider responses. The per-request chat() method also
+            // has its own timeout via tokio::time::timeout to allow a longer
+            // wait for long-running LLM calls.
+            .timeout(Duration::from_secs(120))
             .build()
             .unwrap_or_else(|e| {
                 eprintln!("Failed to build HTTP client with custom timeout: {e}");
@@ -37,6 +41,32 @@ impl BackendClient {
         Self {
             client,
             base_url: base_url.trim_end_matches('/').to_string(),
+        }
+    }
+
+    /// Fetch available models from the backend. Returns a map of provider → list of model IDs.
+    pub async fn fetch_models(&self) -> std::collections::HashMap<String, Vec<String>> {
+        let resp = self.rpc_call("models.list", None).await;
+        match resp {
+            Ok(val) => {
+                let mut result: std::collections::HashMap<String, Vec<String>> =
+                    std::collections::HashMap::new();
+                if let Some(models) = val.get("models").and_then(|m| m.as_array()) {
+                    for m in models {
+                        if let (Some(provider), Some(model_id)) = (
+                            m.get("provider").and_then(|p| p.as_str()),
+                            m.get("id").and_then(|id| id.as_str()),
+                        ) {
+                            result
+                                .entry(provider.to_string())
+                                .or_default()
+                                .push(model_id.to_string());
+                        }
+                    }
+                }
+                result
+            }
+            Err(_) => std::collections::HashMap::new(),
         }
     }
 
@@ -144,6 +174,10 @@ impl BackendClient {
     }
 
     /// Send a chat message. Returns (response_text, thinking_text).
+    ///
+    /// Uses the `/chat` endpoint directly (NOT JSON-RPC `/rpc`) to avoid
+    /// the pipe/NDJSON overhead that happens when streaming chunks are
+    /// captured through server.output on the backend.
     pub async fn chat(
         &self,
         message: &str,
@@ -156,22 +190,17 @@ impl BackendClient {
             serde_json::Value::String(phase.to_string())
         };
 
-        let params = serde_json::json!({
+        let body = serde_json::json!({
             "messages": [{"role": "user", "content": message}],
             "mode": mode,
             "phase": phase_val,
         });
 
-        let body = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "chat",
-            "params": params,
-        });
-
+        // POST directly to /chat endpoint (not /rpc) — returns the result
+        // JSON directly without going through the pipe/stdout mechanism.
         let resp = self
             .client
-            .post(format!("{}/rpc", self.base_url))
+            .post(format!("{}/chat", self.base_url))
             .json(&body)
             .send()
             .await
@@ -180,71 +209,26 @@ impl BackendClient {
         let resp = resp
             .error_for_status()
             .map_err(|e| format!("HTTP error: {}", e))?;
-        let text = resp
-            .text()
+        let value: Value = resp
+            .json()
             .await
-            .map_err(|e| format!("read error: {}", e))?;
+            .map_err(|e| format!("JSON parse error: {}", e))?;
 
-        // Parse the outer JSON-RPC response
-        let outer: Value =
-            serde_json::from_str(&text).map_err(|e| format!("JSON parse error: {}", e))?;
-
-        // Check for JSON-RPC error
-        if let Some(err) = outer.get("error") {
-            return Err(format!(
-                "RPC error: {}",
-                err.get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("unknown")
-            ));
+        // Check for error field
+        if let Some(err_msg) = value.get("error").and_then(|e| e.as_str()) {
+            return Err(format!("Chat error: {}", err_msg));
         }
 
-        // Get the inner content
-        // Try result wrapper first (standard JSON-RPC), then top-level raw
-        let raw_text = if let Some(result) = outer.get("result") {
-            // Try result.response first (non-streaming)
-            if let Some(response) = result.get("response").and_then(|r| r.as_str()) {
-                if !response.is_empty() {
-                    return Ok((response.to_string(), String::new()));
-                }
-            }
-            // Try result.raw
-            match result.get("raw").and_then(|r| r.as_str()) {
-                Some(raw) => raw.to_string(),
-                None => return Ok(("(no response)".to_string(), String::new())),
-            }
-        } else if let Some(raw) = outer.get("raw").and_then(|r| r.as_str()) {
-            // Top-level raw field (non-standard JSON-RPC, but backend uses this for SSE)
-            raw.to_string()
-        } else {
-            return Ok(("(no response)".to_string(), String::new()));
-        };
+        // Extract response text and optional reasoning (thinking) text
+        let response_text = value
+            .get("response")
+            .and_then(|r| r.as_str())
+            .unwrap_or("")
+            .to_string();
+        let reasoning_text = String::new();
 
-        // Parse SSE events from raw_text
-        let mut response_text = String::new();
-        let mut reasoning_text = String::new();
-        for line in raw_text.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if let Ok(chunk) = serde_json::from_str::<Value>(trimmed) {
-                if chunk.get("method").and_then(|m| m.as_str()) == Some("chat.stream.chunk") {
-                    if let Some(params) = chunk.get("params") {
-                        if let Some(token) = params.get("token").and_then(|t| t.as_str()) {
-                            response_text.push_str(token);
-                        }
-                        if let Some(reasoning) = params.get("reasoning").and_then(|t| t.as_str()) {
-                            reasoning_text.push_str(reasoning);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Return (response_text, reasoning_text)
-        if response_text.is_empty() && reasoning_text.is_empty() {
-            Ok(("(empty)".to_string(), String::new()))
+        if response_text.is_empty() {
+            Ok(("(empty)".to_string(), reasoning_text))
         } else {
             Ok((response_text, reasoning_text))
         }
@@ -278,11 +262,14 @@ impl BackendClient {
         prompt: &str,
         input_schema: &str,
     ) -> Result<Value, String> {
+        // Parse input_schema string as JSON so backend receives an object, not a string
+        let schema_value: serde_json::Value = serde_json::from_str(input_schema)
+            .unwrap_or_else(|_| serde_json::json!({}));
         let params = serde_json::json!({
             "name": name,
             "description": description,
             "prompt_template": prompt,
-            "input_schema": input_schema,
+            "input_schema": schema_value,
         });
         self.rpc_call("skill.create", Some(params)).await
     }

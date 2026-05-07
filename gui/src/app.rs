@@ -21,7 +21,15 @@ use crate::backend::{HealthStatus, ProviderStatus};
 /// Find the go-on backend binary path relative to the GUI executable.
 fn find_backend_binary() -> Option<std::path::PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    let candidates = [exe_dir.join("backend").join("go-on"), exe_dir.join("go-on")];
+    let exe_name = if cfg!(target_os = "windows") {
+        "go-on.exe"
+    } else {
+        "go-on"
+    };
+    let candidates = [
+        exe_dir.join("backend").join(exe_name),
+        exe_dir.join(exe_name),
+    ];
     for path in &candidates {
         if path.exists() {
             return Some(path.clone());
@@ -281,7 +289,7 @@ impl eframe::App for GoOnApp {
             let tab = self.active_tab.clone();
             let has_backend = self.has_providers;
             match tab.as_str() {
-                "monitor" => self.monitor_view.show(ui, &self.i18n, has_backend),
+                "monitor" => self.monitor_view.show(ui, &self.i18n, has_backend, &self.backend),
                 "chat" => self.chat_view.show(ui, &self.i18n, &self.backend, ctx),
                 "skills" => self.skills_view.show(ui, &self.i18n, &self.backend, ctx),
                 "settings" => SettingsView::show(ui, &self.i18n, &mut self.config),

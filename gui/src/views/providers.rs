@@ -2,6 +2,7 @@ use crate::backend::BackendClient;
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;
 use crate::views::security_prefs;
+use serde_json;
 use std::sync::mpsc;
 
 pub struct ProvidersView {
@@ -16,6 +17,10 @@ pub struct ProvidersView {
     pending_delete_confirmation: Option<usize>,
     pending_rx: mpsc::Receiver<String>,
     pending_tx: mpsc::Sender<String>,
+    /// Models fetched from backend: provider → [model_id, ...]
+    remote_models: std::collections::HashMap<String, Vec<String>>,
+    /// Whether we've tried to fetch models
+    models_loaded: bool,
 }
 
 /// Provider names for the dropdown (34 total, matching providers.toml)
@@ -72,13 +77,21 @@ impl ProvidersView {
             pending_delete_confirmation: None,
             pending_rx,
             pending_tx,
+            remote_models: std::collections::HashMap::new(),
+            models_loaded: false,
         }
     }
 
     fn process_pending(&mut self) {
         while let Ok(msg) = self.pending_rx.try_recv() {
-            self.sending = false;
-            self.status = msg;
+            if let Some(models_json) = msg.strip_prefix("__models__:") {
+                if let Ok(models) = serde_json::from_str::<std::collections::HashMap<String, Vec<String>>>(models_json) {
+                    self.remote_models = models;
+                }
+            } else {
+                self.sending = false;
+                self.status = msg;
+            }
         }
     }
 
@@ -91,6 +104,22 @@ impl ProvidersView {
         ctx: &egui::Context,
     ) {
         self.process_pending();
+
+        // Fetch models from backend if not yet loaded
+        if !self.models_loaded {
+            self.models_loaded = true;
+            let backend_clone = backend.clone();
+            let tx = self.pending_tx.clone();
+            let ctx_clone = ctx.clone();
+            tokio::spawn(async move {
+                let models = backend_clone.fetch_models().await;
+                // Send models back via pending channel
+                let msg = format!("__models__:{}", serde_json::to_string(&models).unwrap_or_default());
+                let _ = tx.send(msg);
+                ctx_clone.request_repaint();
+            });
+        }
+
         let mut changed = false;
         let security = security_prefs::load();
 
@@ -138,10 +167,8 @@ impl ProvidersView {
                     let models: &[&str] = match self.selected_provider.to_lowercase().as_str() {
                         "deepseek" => &[
                             "auto",
-                            "deepseek-chat",
-                            "deepseek-reasoner",
-                            "deepseek-v3",
-                            "deepseek-coder",
+                            "deepseek-v4-flash",
+                            "deepseek-v4-pro",
                         ],
                         "openai" => &[
                             "auto",
@@ -226,37 +253,35 @@ impl ProvidersView {
                 let model = self.new_model.trim().to_string();
                 let provider_lower = name.to_lowercase();
 
-                match crate::keyring_util::store_api_key(&provider_lower, &key) {
-                    Ok(_) => {
-                        if !config.providers.iter().any(|p| p.name == name) {
-                            config.providers.push(ProviderConfig {
-                                name: name.clone(),
-                                api_key: key,
-                                model,
-                                validated: true,
-                            });
-                            save_app_config(config);
-                            self.status = format!(
-                                "{} '{}' {}.",
-                                i18n.t("providers.provider"),
-                                name,
-                                i18n.t("providers.added")
-                            );
-                        } else {
-                            self.status = format!(
-                                "{} '{}' {}.",
-                                i18n.t("providers.provider"),
-                                name,
-                                i18n.t("providers.already_exists")
-                            );
-                        }
-                        self.new_key.clear();
-                        changed = true;
-                    }
-                    Err(e) => {
-                        self.status = format!("{} {}", i18n.t("providers.save_failed"), e);
-                    }
+                // Try keyring, but don't block the save if it fails
+                if let Err(e) = crate::keyring_util::store_api_key(&provider_lower, &key) {
+                    eprintln!("Warning: failed to store API key in system keyring: {}", e);
                 }
+
+                if !config.providers.iter().any(|p| p.name == name) {
+                    config.providers.push(ProviderConfig {
+                        name: name.clone(),
+                        api_key: key,
+                        model,
+                        validated: true,
+                    });
+                    save_app_config(config);
+                    self.status = format!(
+                        "{} '{}' {}.",
+                        i18n.t("providers.provider"),
+                        name,
+                        i18n.t("providers.added")
+                    );
+                } else {
+                    self.status = format!(
+                        "{} '{}' {}.",
+                        i18n.t("providers.provider"),
+                        name,
+                        i18n.t("providers.already_exists")
+                    );
+                }
+                self.new_key.clear();
+                changed = true;
             }
         });
 
@@ -288,10 +313,8 @@ impl ProvidersView {
                     let models: &[&str] = match provider.name.to_lowercase().as_str() {
                         "deepseek" => &[
                             "auto",
-                            "deepseek-chat",
-                            "deepseek-reasoner",
-                            "deepseek-v3",
-                            "deepseek-coder",
+                            "deepseek-v4-flash",
+                            "deepseek-v4-pro",
                         ],
                         "openai" => &[
                             "auto",
@@ -378,26 +401,21 @@ impl ProvidersView {
                             if !new_key.is_empty() {
                                 let provider_lower = provider.name.to_lowercase();
                                 let provider_name = provider.name.clone();
-                                match crate::keyring_util::store_api_key(&provider_lower, &new_key)
-                                {
-                                    Ok(_) => {
-                                        provider.api_key = new_key;
-                                        provider.validated = true;
-                                        self.status = format!(
-                                            "{} '{}' {}.",
-                                            i18n.t("providers.api_key"),
-                                            provider_name,
-                                            i18n.t("providers.updated")
-                                        );
-                                        self.new_key.clear();
-                                        self.update_target = -1;
-                                        changed = true;
-                                    }
-                                    Err(e) => {
-                                        self.status =
-                                            format!("{} {}", i18n.t("providers.save_failed"), e);
-                                    }
+                                // Try keyring, don't block save if it fails
+                                if let Err(e) = crate::keyring_util::store_api_key(&provider_lower, &new_key) {
+                                    eprintln!("Warning: failed to store API key in system keyring: {}", e);
                                 }
+                                provider.api_key = new_key;
+                                provider.validated = true;
+                                self.status = format!(
+                                    "{} '{}' {}.",
+                                    i18n.t("providers.api_key"),
+                                    provider_name,
+                                    i18n.t("providers.updated")
+                                );
+                                self.new_key.clear();
+                                self.update_target = -1;
+                                changed = true;
                             }
                         }
                         if ui.button(i18n.t("providers.cancel")).clicked() {

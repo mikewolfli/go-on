@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod app;
 mod backend;
 mod config;
@@ -8,12 +10,50 @@ mod views;
 
 use app::GoOnApp;
 
+/// Generate a simple 64×64 RGBA icon programmatically:
+/// blue circle with "GO" letters in the center
+fn make_icon() -> egui::IconData {
+    let w: u32 = 64;
+    let h: u32 = 64;
+    let cx = w as f32 / 2.0;
+    let cy = h as f32 / 2.0;
+    let r = cx - 2.0;
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist < r - 1.0 {
+                rgba.extend_from_slice(&[32, 120, 220, 255]);
+            } else if dist < r + 1.0 {
+                let t = ((r + 1.0 - dist) * 255.0) as u8;
+                rgba.extend_from_slice(&[
+                    (32u16 * t as u16 / 255) as u8,
+                    (120u16 * t as u16 / 255) as u8,
+                    (220u16 * t as u16 / 255) as u8,
+                    t,
+                ]);
+            } else {
+                rgba.extend_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+    }
+    egui::IconData {
+        rgba,
+        width: w,
+        height: h,
+    }
+}
+
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
+    let icon = make_icon();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Go-On GUI")
-            .with_inner_size([1200.0, 800.0]),
+            .with_inner_size([1200.0, 800.0])
+            .with_icon(icon),
         ..Default::default()
     };
 

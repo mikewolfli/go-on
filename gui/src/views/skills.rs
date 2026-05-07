@@ -463,12 +463,71 @@ impl SkillsView {
         ui.separator();
         ui.add_space(4.0);
 
-        // Skills list / empty state
-        if self.skills.is_empty() {
-            ui.add_space(40.0);
+        // Skills list / empty state with default skill suggestion
+        if self.skills.is_empty() && !self.loading {
+            ui.add_space(30.0);
             ui.vertical_centered(|ui| {
-                ui.label(i18n.t("skills.none"));
+                ui.label(egui::RichText::new(i18n.t("skills.none")).size(14.0).color(egui::Color32::from_rgb(140, 142, 150)));
+                ui.add_space(16.0);
+                // Default Skill Creator suggestion
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(235, 243, 255))
+                    .corner_radius(8.0)
+                    .inner_margin(egui::Margin::symmetric(16i8, 12i8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("\u{1f9e0}");
+                            ui.label(
+                                egui::RichText::new("Skill Creator")
+                                    .color(egui::Color32::from_rgb(0, 106, 255))
+                                    .strong(),
+                            );
+                        });
+                        ui.label(
+                            egui::RichText::new("Create and manage your own AI skills using natural language. Describe what you want, and this skill will help you build it.")
+                                .color(egui::Color32::from_rgb(60, 60, 70))
+                                .size(13.0),
+                        );
+                        ui.add_space(8.0);
+                        let btn = egui::Button::new("\u{2795} Create Default Skill")
+                            .fill(egui::Color32::from_rgb(0, 106, 255))
+                            .min_size(egui::vec2(180.0, 32.0));
+                        if ui.add(btn).clicked()
+                        {
+                            self.sending = true;
+                            let tx = self.pending_tx.clone();
+                            let backend_clone = backend.clone();
+                            let ctx_clone = ctx.clone();
+                            tokio::spawn(async move {
+                                let result = backend_clone.create_skill(
+                                        "create-a-skill",
+                                        "Helps you create and manage AI skills through natural language conversation",
+                                        "You are a Skill Creator assistant. Your role is to help the user design, create, and manage AI skills.\n\nWhen the user describes a task they want to automate:\n1. Understand the core objective\n2. Suggest a skill name and description\n3. Help them define the input schema\n4. Generate an effective prompt template\n\nAsk clarifying questions to refine the skill design before finalizing.",
+                                        r#"{"query": "string", "context": "string"}"#,
+                                    ).await;
+                                match result {
+                                    Ok(_) => {
+                                        let _ = tx.send(SkillsUpdate::Create(Ok(SkillRecord {
+                                            name: Some("create-a-skill".to_string()),
+                                            description: Some("Helps you create and manage AI skills through natural language conversation".to_string()),
+                                            version: Some("1".to_string()),
+                                            enabled: Some(true),
+                                            imported_at: Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()),
+                                        })));
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(SkillsUpdate::Create(Err(e)));
+                                    }
+                                }
+                                ctx_clone.request_repaint();
+                            });
+                        }
+                    });
             });
+            return;
+        }
+
+        if self.skills.is_empty() {
             return;
         }
 

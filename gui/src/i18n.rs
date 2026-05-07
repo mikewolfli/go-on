@@ -124,6 +124,25 @@ impl I18n {
                 "⚠ 已配置 AI 供應商，請確認後端正在運行"
             ),
         );
+        m.insert(
+            "monitor.restart",
+            tr!(en, "Restart Backend", cn, "重启后端", tw, "重啟後端"),
+        );
+        m.insert(
+            "monitor.restarting",
+            tr!(en, "Restarting...", cn, "重启中...", tw, "重啟中..."),
+        );
+        m.insert(
+            "monitor.restartHint",
+            tr!(
+                en,
+                "(backend will come back online shortly)",
+                cn,
+                "(后端即将重新上线)",
+                tw,
+                "(後端即將重新上線)"
+            ),
+        );
 
         // Chat
         m.insert("chat.title", tr!(en, "Chat", cn, "对话", tw, "對話"));
@@ -750,6 +769,42 @@ impl I18n {
                 "安全控制項：確認門禁、介面脫敏、\n運行時安全行為。"
             ),
         );
+        // Provider display names
+        m.insert("provider.openai", tr!(en, "OpenAI", cn, "OpenAI", tw, "OpenAI"));
+        m.insert("provider.openai_compatible", tr!(en, "OpenAI Compatible", cn, "OpenAI 兼容", tw, "OpenAI 兼容"));
+        m.insert("provider.anthropic", tr!(en, "Anthropic", cn, "Anthropic", tw, "Anthropic"));
+        m.insert("provider.cohere", tr!(en, "Cohere", cn, "Cohere", tw, "Cohere"));
+        m.insert("provider.deepseek", tr!(en, "DeepSeek", cn, "深度求索", tw, "深度求索"));
+        m.insert("provider.wenxin", tr!(en, "文心一言", cn, "文心一言", tw, "文心一言"));
+        m.insert("provider.qianfan", tr!(en, "千帆", cn, "千帆", tw, "千帆"));
+        m.insert("provider.qwen", tr!(en, "通义千问", cn, "通义千问", tw, "通義千問"));
+        m.insert("provider.glm", tr!(en, "智谱 GLM", cn, "智谱 GLM", tw, "智譜 GLM"));
+        m.insert("provider.yi", tr!(en, "零一万物", cn, "零一万物", tw, "零一萬物"));
+        m.insert("provider.hunyuan", tr!(en, "腾讯混元", cn, "腾讯混元", tw, "騰訊混元"));
+        m.insert("provider.doubao", tr!(en, "豆包", cn, "豆包", tw, "豆包"));
+        m.insert("provider.facewall", tr!(en, "面壁", cn, "面壁", tw, "面壁"));
+        m.insert("provider.langboat", tr!(en, "出门问问", cn, "出门问问", tw, "出門問問"));
+        m.insert("provider.skywork", tr!(en, "天工", cn, "天工", tw, "天工"));
+        m.insert("provider.stepfun", tr!(en, "阶跃星辰", cn, "阶跃星辰", tw, "階躍星辰"));
+        m.insert("provider.xihu", tr!(en, "西湖", cn, "西湖", tw, "西湖"));
+        m.insert("provider.moonshot", tr!(en, "Moonshot", cn, "月之暗面", tw, "月之暗面"));
+        m.insert("provider.minimax", tr!(en, "MiniMax", cn, "MiniMax", tw, "MiniMax"));
+        m.insert("provider.ai21", tr!(en, "AI21 Labs", cn, "AI21 Labs", tw, "AI21 Labs"));
+        m.insert("provider.aleph", tr!(en, "Aleph Alpha", cn, "Aleph Alpha", tw, "Aleph Alpha"));
+        m.insert("provider.copilot", tr!(en, "GitHub Copilot", cn, "GitHub Copilot", tw, "GitHub Copilot"));
+        m.insert("provider.deepquest", tr!(en, "DeepQuest", cn, "DeepQuest", tw, "DeepQuest"));
+        m.insert("provider.fireworks", tr!(en, "Fireworks", cn, "Fireworks", tw, "Fireworks"));
+        m.insert("provider.gemini", tr!(en, "Gemini", cn, "Gemini", tw, "Gemini"));
+        m.insert("provider.groq", tr!(en, "Groq", cn, "Groq", tw, "Groq"));
+        m.insert("provider.llama", tr!(en, "Llama", cn, "Llama", tw, "Llama"));
+        m.insert("provider.loopai", tr!(en, "Loop AI", cn, "Loop AI", tw, "Loop AI"));
+        m.insert("provider.mistral", tr!(en, "Mistral", cn, "Mistral", tw, "Mistral"));
+        m.insert("provider.nim", tr!(en, "NVIDIA NIM", cn, "NVIDIA NIM", tw, "NVIDIA NIM"));
+        m.insert("provider.perplexity", tr!(en, "Perplexity", cn, "Perplexity", tw, "Perplexity"));
+        m.insert("provider.replicate", tr!(en, "Replicate", cn, "Replicate", tw, "Replicate"));
+        m.insert("provider.titan", tr!(en, "Amazon Titan", cn, "Amazon Titan", tw, "Amazon Titan"));
+        m.insert("provider.together", tr!(en, "Together", cn, "Together", tw, "Together"));
+
         m.insert(
             "feature.config.desc",
             tr!(

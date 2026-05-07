@@ -1,4 +1,5 @@
 #![recursion_limit = "512"]
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 //! Main entry point for the go-on ACP proxy
 //!

@@ -142,32 +142,24 @@ impl Agent for DeepSeekAgent {
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![
             ModelInfo {
-                id: "deepseek-v3".to_string(),
-                name: "DeepSeek v3".to_string(),
-                description: "Most capable model, supports vision and function calling".to_string(),
-                is_default: false,
+                id: "deepseek-v4-flash".to_string(),
+                name: "DeepSeek V4 Flash".to_string(),
+                description: "Latest fast model, non-thinking mode".to_string(),
+                is_default: self.model == "deepseek-v4-flash",
+                capabilities: vec!["chat".to_string(), "function_calling".to_string()],
+                context_window: Some(128000),
+            },
+            ModelInfo {
+                id: "deepseek-v4-pro".to_string(),
+                name: "DeepSeek V4 Pro".to_string(),
+                description: "Latest pro model with thinking/reasoning mode".to_string(),
+                is_default: self.model == "deepseek-v4-pro",
                 capabilities: vec![
                     "chat".to_string(),
-                    "vision".to_string(),
+                    "reasoning".to_string(),
                     "function_calling".to_string(),
                 ],
-                context_window: Some(64000),
-            },
-            ModelInfo {
-                id: "deepseek-chat".to_string(),
-                name: "DeepSeek Chat".to_string(),
-                description: "Fast chat model, optimized for speed".to_string(),
-                is_default: self.model == "deepseek-chat",
-                capabilities: vec!["chat".to_string()],
-                context_window: Some(4096),
-            },
-            ModelInfo {
-                id: "deepseek-coder".to_string(),
-                name: "DeepSeek Coder".to_string(),
-                description: "Specialized for code generation and analysis".to_string(),
-                is_default: false,
-                capabilities: vec!["chat".to_string(), "code".to_string()],
-                context_window: Some(4096),
+                context_window: Some(128000),
             },
         ]
     }

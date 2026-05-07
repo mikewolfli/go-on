@@ -1,4 +1,4 @@
-use crate::backend::{HealthStatus, ProviderStatus};
+use crate::backend::{BackendClient, HealthStatus, ProviderStatus};
 use crate::i18n::I18n;
 
 pub struct MonitorView {
@@ -6,6 +6,7 @@ pub struct MonitorView {
     pub providers: Vec<ProviderStatus>,
     pub backend_configured: bool,
     error: String,
+    restarting: bool,
 }
 
 impl MonitorView {
@@ -15,10 +16,11 @@ impl MonitorView {
             providers: Vec::new(),
             backend_configured: false,
             error: String::new(),
+            restarting: false,
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, i18n: &I18n, backend_configured: bool) {
+    pub fn show(&mut self, ui: &mut egui::Ui, i18n: &I18n, backend_configured: bool, backend: &BackendClient) {
         self.backend_configured = backend_configured;
 
         ui.heading(i18n.t("monitor.health"));
@@ -126,6 +128,32 @@ impl MonitorView {
                 ui.add_space(2.0);
             }
         }
+
+        // ── Restart button ───────────────────────────────────────
+        ui.add_space(24.0);
+        ui.separator();
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let restart_label = if self.restarting {
+                i18n.t("monitor.restarting").to_string()
+            } else {
+                i18n.t("monitor.restart").to_string()
+            };
+            let btn = egui::Button::new(format!("\u{1f504} {}", restart_label))
+                .min_size(egui::vec2(140.0, 32.0));
+            if ui.add_enabled(!self.restarting, btn).clicked() {
+                self.restarting = true;
+                let backend_clone = backend.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = backend_clone.restart_backend().await {
+                        eprintln!("重启后端失败: {}", e);
+                    }
+                });
+            }
+            if self.restarting {
+                ui.label(i18n.t("monitor.restartHint"));
+            }
+        });
 
         // ── Error message ───────────────────────────────────────
         if !self.error.is_empty() {
