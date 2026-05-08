@@ -2008,7 +2008,22 @@ impl ChatView {
         let mut msg_to_retry: Option<String> = None;
         let query = self.message_search_query.trim().to_ascii_lowercase();
 
+        // Guard: if rendering takes more than 500ms total, skip remaining messages
+        const MAX_RENDER_TIME_MS: u128 = 500;
+
         for (msg_idx, msg) in &msgs_with_idx {
+            if render_start.elapsed().as_millis() > MAX_RENDER_TIME_MS {
+                eprintln!(
+                    "[CHAT_DEBUG] show_messages exceeded {}ms, skipping {} remaining messages",
+                    MAX_RENDER_TIME_MS,
+                    msgs_with_idx.len()
+                        - msgs_with_idx
+                            .iter()
+                            .position(|(i, _)| i == msg_idx)
+                            .unwrap_or(0)
+                );
+                break;
+            }
             if !query.is_empty() {
                 let content_match = msg.content.to_ascii_lowercase().contains(&query);
                 let thinking_match = msg.thinking.to_ascii_lowercase().contains(&query);
