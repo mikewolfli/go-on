@@ -1,5 +1,6 @@
 use crate::backend::BackendClient;
 use crate::i18n::I18n;
+use crate::views::autotune::AutoTuneView;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -2362,12 +2363,19 @@ impl ChatView {
                                 );
                             });
                             ui.add(egui::Label::new(
-                                egui::RichText::new(code)
+                                egui::RichText::new(code.to_string())
                                     .font(egui::FontId::monospace(13.0))
                                     .color(egui::Color32::from_rgb(200, 204, 212)),
                             ));
                         });
                     remaining = &remaining[end + 3..];
+                } else {
+                    // No closing ``` found — treat the rest as plain text
+                    let rest = remaining.trim();
+                    if !rest.is_empty() {
+                        ui.label(egui::RichText::new(rest).color(text_color));
+                    }
+                    break;
                 }
             } else {
                 if !remaining.trim().is_empty() {
@@ -2398,8 +2406,6 @@ impl ChatView {
                 break;
             }
         }
-    }
-
     }
 
     /// Draw a small colored avatar circle with initials
