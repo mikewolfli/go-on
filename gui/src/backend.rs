@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
 
+const QUICK_RPC_ATTEMPTS: usize = 2;
+const FULL_RPC_ATTEMPTS: usize = 3;
+
 #[derive(Clone)]
 pub struct BackendClient {
     /// Client for short-lived requests (health checks, probes - 5s timeout)
@@ -26,6 +29,47 @@ pub struct ProviderStatus {
     pub name: String,
     pub ready: bool,
     pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorkflowRunRecord {
+    pub run_id: String,
+    pub task: String,
+    pub status: String,
+    pub created_at: i64,
+    pub started_at: Option<i64>,
+    pub ended_at: Option<i64>,
+    pub phase: String,
+    pub error: Option<String>,
+    pub artifacts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MetricsWindowPoint {
+    pub ts: i64,
+    pub qps: f64,
+    pub p95: f64,
+    pub error_rate: f64,
+    pub success_rate: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ErrorGroup {
+    pub error_type: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderCapabilityModel {
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub is_default: Option<bool>,
+    pub context_window: Option<u64>,
+    pub capabilities: Option<Vec<String>>,
+    pub tool_calling: Option<bool>,
+    pub vision: Option<bool>,
+    pub cost_tier: Option<String>,
 }
 
 impl BackendClient {
@@ -84,53 +128,135 @@ impl BackendClient {
         &self.base_url
     }
 
-    /// Quick RPC call for health / status checks (5s timeout).
-    /// Returns None if the backend is unreachable (no error message).
-    async fn rpc_call_quick(&self, method: &str, params: Option<Value>) -> Option<Value> {
+    fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+        matches!(status.as_u16(), 429 | 502 | 503 | 504)
+    }
+
+    fn is_retryable_transport_error(err: &reqwest::Error) -> bool {
+        err.is_timeout()
+            || err.is_connect()
+            || err.status().map(Self::is_retryable_status).unwrap_or(false)
+    }
+
+    fn retry_backoff(attempt: usize) -> Duration {
+        match attempt {
+            1 => Duration::from_millis(120),
+            2 => Duration::from_millis(300),
+            _ => Duration::from_millis(600),
+        }
+    }
+
+    fn parse_rpc_error(err: &Value) -> String {
+        err.get("message")
+            .and_then(Value::as_str)
+            .or_else(|| err.get("data").and_then(Value::as_str))
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| err.to_string())
+    }
+
+    fn summarize_http_body(body: &str) -> String {
+        let trimmed = body.trim();
+        if trimmed.is_empty() {
+            return "empty response body".to_string();
+        }
+        let mut compact = trimmed.replace('\n', " ").replace('\r', " ");
+        if compact.len() > 240 {
+            compact.truncate(240);
+            compact.push_str("...");
+        }
+        compact
+    }
+
+    async fn rpc_call_internal(
+        &self,
+        client: &reqwest::Client,
+        method: &str,
+        params: Option<Value>,
+        attempts: usize,
+    ) -> Result<Value, String> {
         let body = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": method,
             "params": params.unwrap_or(Value::Null),
         });
-        let resp = self
-            .quick_client
-            .post(format!("{}/rpc", self.base_url))
-            .json(&body)
-            .send()
-            .await
-            .ok()?;
-        let resp = resp.error_for_status().ok()?;
-        let result: Value = resp.json().await.ok()?;
-        if result.get("error").is_some() {
-            return None;
+        let url = format!("{}/rpc", self.base_url);
+        let mut last_err = String::new();
+
+        for attempt in 1..=attempts {
+            let response = match client.post(&url).json(&body).send().await {
+                Ok(resp) => resp,
+                Err(err) => {
+                    last_err = format!("HTTP error: {err}");
+                    if attempt < attempts && Self::is_retryable_transport_error(&err) {
+                        tokio::time::sleep(Self::retry_backoff(attempt)).await;
+                        continue;
+                    }
+                    return Err(last_err);
+                }
+            };
+
+            let status = response.status();
+            let response_text = match response.text().await {
+                Ok(text) => text,
+                Err(err) => {
+                    last_err = format!("HTTP body read error: {err}");
+                    if attempt < attempts && Self::is_retryable_status(status) {
+                        tokio::time::sleep(Self::retry_backoff(attempt)).await;
+                        continue;
+                    }
+                    return Err(last_err);
+                }
+            };
+
+            if !status.is_success() {
+                let detail = serde_json::from_str::<Value>(&response_text)
+                    .ok()
+                    .and_then(|json| json.get("error").cloned())
+                    .map(|err| Self::parse_rpc_error(&err))
+                    .unwrap_or_else(|| Self::summarize_http_body(&response_text));
+                last_err = format!("HTTP status error {}: {}", status.as_u16(), detail);
+                if attempt < attempts && Self::is_retryable_status(status) {
+                    tokio::time::sleep(Self::retry_backoff(attempt)).await;
+                    continue;
+                }
+                return Err(last_err);
+            }
+
+            let result: Value = match serde_json::from_str(&response_text) {
+                Ok(json) => json,
+                Err(err) => {
+                    let detail = Self::summarize_http_body(&response_text);
+                    return Err(format!("JSON error: {err}; body={detail}"));
+                }
+            };
+
+            if let Some(err) = result.get("error") {
+                return Err(Self::parse_rpc_error(err));
+            }
+            return Ok(result.get("result").cloned().unwrap_or(result));
         }
-        result.get("result").cloned()
+
+        Err(if last_err.is_empty() {
+            "RPC request failed for unknown reason".to_string()
+        } else {
+            last_err
+        })
+    }
+
+    /// Quick RPC call for health / status checks (5s timeout).
+    /// Returns None if the backend is unreachable (no error message).
+    async fn rpc_call_quick(&self, method: &str, params: Option<Value>) -> Option<Value> {
+        self.rpc_call_internal(&self.quick_client, method, params, QUICK_RPC_ATTEMPTS)
+            .await
+            .ok()
     }
 
     /// Full RPC call for normal requests (180s timeout).
     pub async fn rpc_call(&self, method: &str, params: Option<Value>) -> Result<Value, String> {
-        let body = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": method,
-            "params": params.unwrap_or(Value::Null),
-        });
-        let resp = self
-            .long_client
-            .post(format!("{}/rpc", self.base_url))
-            .json(&body)
-            .send()
+        self.rpc_call_internal(&self.long_client, method, params, FULL_RPC_ATTEMPTS)
             .await
-            .map_err(|e| format!("HTTP error: {e}"))?;
-        let resp = resp
-            .error_for_status()
-            .map_err(|e| format!("HTTP status error: {e}"))?;
-        let result: Value = resp.json().await.map_err(|e| format!("JSON error: {e}"))?;
-        if let Some(err) = result.get("error") {
-            return Err(format!("{}", err));
-        }
-        Ok(result.get("result").cloned().unwrap_or(result))
     }
 
     /// Check backend health (5s timeout, silent on failure)
@@ -203,6 +329,18 @@ impl BackendClient {
         phase: &str,
         model: Option<&str>,
     ) -> Result<(String, String), String> {
+        self.chat_with_options(message, mode, phase, model, None)
+            .await
+    }
+
+    pub async fn chat_with_options(
+        &self,
+        message: &str,
+        mode: &str,
+        phase: &str,
+        model: Option<&str>,
+        options_extra: Option<Value>,
+    ) -> Result<(String, String), String> {
         let phase_val = if phase.is_empty() {
             serde_json::Value::Null
         } else {
@@ -219,6 +357,13 @@ impl BackendClient {
             body["options"] = serde_json::json!({
                 "model": selected_model,
             });
+        }
+
+        if let Some(extra) = options_extra {
+            if body.get("options").is_none() {
+                body["options"] = serde_json::json!({});
+            }
+            body["options"]["extra"] = extra;
         }
 
         let resp = self
@@ -298,6 +443,217 @@ impl BackendClient {
 
     pub async fn list_skills(&self) -> Result<Value, String> {
         self.rpc_call("skill.list_imported", None).await
+    }
+
+    pub async fn update_skill(
+        &self,
+        name: &str,
+        description: Option<String>,
+        prompt_template: Option<String>,
+        input_schema: Option<Value>,
+        version: Option<String>,
+    ) -> Result<Value, String> {
+        let mut params = serde_json::json!({"name": name});
+        if let Some(description) = description {
+            params["description"] = Value::String(description);
+        }
+        if let Some(prompt_template) = prompt_template {
+            params["prompt_template"] = Value::String(prompt_template);
+        }
+        if let Some(input_schema) = input_schema {
+            params["input_schema"] = input_schema;
+        }
+        if let Some(version) = version {
+            params["version"] = Value::String(version);
+        }
+        self.rpc_call("skill.update", Some(params)).await
+    }
+
+    pub async fn list_skill_versions(&self, name: &str) -> Result<Value, String> {
+        self.rpc_call(
+            "skill.version.list",
+            Some(serde_json::json!({"name": name})),
+        )
+        .await
+    }
+
+    pub async fn rollback_skill_version(&self, name: &str, version: &str) -> Result<Value, String> {
+        self.rpc_call(
+            "skill.version.rollback",
+            Some(serde_json::json!({"name": name, "version": version})),
+        )
+        .await
+    }
+
+    pub async fn enable_skill(&self, name: &str) -> Result<Value, String> {
+        self.rpc_call("skill.enable", Some(serde_json::json!({"name": name})))
+            .await
+    }
+
+    pub async fn disable_skill(&self, name: &str) -> Result<Value, String> {
+        self.rpc_call("skill.disable", Some(serde_json::json!({"name": name})))
+            .await
+    }
+
+    pub async fn remove_skill(&self, name: &str) -> Result<Value, String> {
+        self.rpc_call("skill.remove", Some(serde_json::json!({"name": name})))
+            .await
+    }
+
+    pub async fn test_skill(&self, name: &str, input: Value) -> Result<Value, String> {
+        self.rpc_call(
+            "mcp.tools.call",
+            Some(serde_json::json!({
+                "name": name,
+                "arguments": input,
+            })),
+        )
+        .await
+    }
+
+    pub async fn list_workflow_runs(
+        &self,
+        limit: usize,
+        offset: usize,
+        status: Option<&str>,
+    ) -> Result<Value, String> {
+        let mut params = serde_json::json!({"limit": limit, "offset": offset});
+        if let Some(status) = status {
+            params["status"] = Value::String(status.to_string());
+        }
+        self.rpc_call("workflow.run.list", Some(params)).await
+    }
+
+    pub async fn get_workflow_run(&self, run_id: &str) -> Result<Value, String> {
+        self.rpc_call(
+            "workflow.run.get",
+            Some(serde_json::json!({"run_id": run_id})),
+        )
+        .await
+    }
+
+    pub async fn transition_workflow_run(
+        &self,
+        run_id: &str,
+        action: &str,
+    ) -> Result<Value, String> {
+        let method = match action {
+            "cancel" => "workflow.run.cancel",
+            "pause" => "workflow.run.pause",
+            "resume" => "workflow.run.resume",
+            _ => return Err(format!("unsupported workflow action: {action}")),
+        };
+        self.rpc_call(method, Some(serde_json::json!({"run_id": run_id})))
+            .await
+    }
+
+    pub async fn execute_workflow(
+        &self,
+        task: &str,
+        phase: Option<&str>,
+        options_extra: Option<Value>,
+    ) -> Result<Value, String> {
+        let mut params = serde_json::json!({"task": task});
+        if let Some(phase) = phase {
+            if !phase.trim().is_empty() {
+                params["phase"] = Value::String(phase.to_string());
+            }
+        }
+        if let Some(extra) = options_extra {
+            params["options"] = serde_json::json!({"extra": extra});
+        }
+        self.rpc_call("workflow.execute", Some(params)).await
+    }
+
+    pub async fn provider_test_connection(&self, provider: &str) -> Result<Value, String> {
+        self.rpc_call(
+            "provider.test_connection",
+            Some(serde_json::json!({"provider": provider})),
+        )
+        .await
+    }
+
+    pub async fn provider_test_completion(
+        &self,
+        provider: &str,
+        model: Option<&str>,
+    ) -> Result<Value, String> {
+        let mut params = serde_json::json!({"provider": provider});
+        if let Some(model) = model {
+            params["model"] = Value::String(model.to_string());
+        }
+        self.rpc_call("provider.test_completion", Some(params))
+            .await
+    }
+
+    pub async fn provider_capabilities(
+        &self,
+        provider: &str,
+    ) -> Result<Vec<ProviderCapabilityModel>, String> {
+        let result = self
+            .rpc_call(
+                "provider.capabilities",
+                Some(serde_json::json!({"provider": provider})),
+            )
+            .await?;
+        let models = result
+            .get("capabilities")
+            .and_then(|caps| caps.get("models"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        Ok(models
+            .into_iter()
+            .filter_map(|value| serde_json::from_value::<ProviderCapabilityModel>(value).ok())
+            .collect())
+    }
+
+    pub async fn metrics_window_query(
+        &self,
+        window: &str,
+    ) -> Result<Vec<MetricsWindowPoint>, String> {
+        let result = self
+            .rpc_call(
+                "metrics.window.query",
+                Some(serde_json::json!({"window": window})),
+            )
+            .await?;
+        let series = result
+            .get("series")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        Ok(series
+            .into_iter()
+            .filter_map(|value| serde_json::from_value::<MetricsWindowPoint>(value).ok())
+            .collect())
+    }
+
+    pub async fn metrics_errors_summary(
+        &self,
+        window: &str,
+        limit: usize,
+    ) -> Result<(Vec<ErrorGroup>, Vec<Value>), String> {
+        let result = self
+            .rpc_call(
+                "metrics.errors.summary",
+                Some(serde_json::json!({"window": window, "limit": limit})),
+            )
+            .await?;
+        let groups = result
+            .get("error_groups")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|value| serde_json::from_value::<ErrorGroup>(value).ok())
+            .collect();
+        let failures = result
+            .get("sample_failures")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        Ok((groups, failures))
     }
 
     pub async fn config_baseline(&self) -> Result<Value, String> {

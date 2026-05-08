@@ -1,6 +1,16 @@
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;
 
+fn provider_label(i18n: &I18n, provider: &str) -> String {
+    let key = format!("provider.{}", provider.to_lowercase());
+    let label = i18n.t(&key);
+    if label.as_ref() == key {
+        provider.to_string()
+    } else {
+        label.into_owned()
+    }
+}
+
 pub struct SetupView {
     selected_provider: String,
     api_key: String,
@@ -64,7 +74,7 @@ impl SetupView {
                         }
                     });
                     egui::ComboBox::from_id_salt("provider_sel")
-                        .selected_text(&self.selected_provider)
+                        .selected_text(provider_label(i18n, &self.selected_provider))
                         .show_ui(ui, |ui| {
                             let providers = [
                                 "openai",
@@ -77,7 +87,11 @@ impl SetupView {
                                 "groq",
                             ];
                             for p in &providers {
-                                ui.selectable_value(&mut self.selected_provider, p.to_string(), *p);
+                                ui.selectable_value(
+                                    &mut self.selected_provider,
+                                    p.to_string(),
+                                    provider_label(i18n, p),
+                                );
                             }
                         });
                 });
@@ -126,6 +140,62 @@ impl SetupView {
                         });
                 });
 
+                if config.features.setup_enterprise {
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let text = i18n.t("setup.environment").to_string();
+                        let resp = ui.label(&text);
+                        resp.context_menu(|ui| {
+                            if ui.button("📋 Copy").clicked() {
+                                ui.ctx().copy_text(text.clone());
+                                ui.close_menu();
+                            }
+                        });
+                        egui::ComboBox::from_id_salt("setup_environment")
+                            .selected_text(config.enterprise.active_environment.clone())
+                            .show_ui(ui, |ui| {
+                                for env in &config.enterprise.environments {
+                                    if ui
+                                        .selectable_label(
+                                            config.enterprise.active_environment == env.name,
+                                            &env.name,
+                                        )
+                                        .clicked()
+                                    {
+                                        config.enterprise.active_environment = env.name.clone();
+                                        config.backend_url = env.backend_url.clone();
+                                    }
+                                }
+                            });
+                    });
+
+                    ui.horizontal(|ui| {
+                        let text = i18n.t("setup.secretSource").to_string();
+                        let resp = ui.label(&text);
+                        resp.context_menu(|ui| {
+                            if ui.button("📋 Copy").clicked() {
+                                ui.ctx().copy_text(text.clone());
+                                ui.close_menu();
+                            }
+                        });
+                        egui::ComboBox::from_id_salt("setup_secret_source")
+                            .selected_text(config.enterprise.secret_source.clone())
+                            .show_ui(ui, |ui| {
+                                for source in ["keyring", "env", "file", "auto"] {
+                                    if ui
+                                        .selectable_label(
+                                            config.enterprise.secret_source == source,
+                                            source,
+                                        )
+                                        .clicked()
+                                    {
+                                        config.enterprise.secret_source = source.to_string();
+                                    }
+                                }
+                            });
+                    });
+                }
+
                 ui.add_space(10.0);
 
                 if !self.error_msg.is_empty() {
@@ -159,7 +229,11 @@ impl SetupView {
                                 );
                             }
                             Err(e) => {
-                                self.error_msg = format!("保存到系统 keyring 失败: {}", e);
+                                self.error_msg = format!(
+                                    "{}: {}",
+                                    i18n.t("setup.keyringError"),
+                                    e
+                                );
                                 return;
                             }
                         }

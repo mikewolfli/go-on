@@ -1,4 +1,5 @@
 use crate::backend::BackendClient;
+use crate::i18n::I18n;
 use crate::views::security_prefs::{self, SecurityPrefs};
 use std::sync::mpsc;
 
@@ -31,11 +32,17 @@ impl SecurityView {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, backend: &BackendClient, ctx: &egui::Context) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        i18n: &I18n,
+        backend: &BackendClient,
+        ctx: &egui::Context,
+    ) {
         self.process_pending();
 
-        ui.heading("Security");
-        let text = "Manage client-side safety policies and runtime restart controls.".to_string();
+        ui.heading(i18n.t("tab.security"));
+        let text = i18n.t("security.hint").to_string();
         let resp = ui.label(&text);
         resp.context_menu(|ui| {
             if ui.button("📋 Copy").clicked() {
@@ -49,33 +56,33 @@ impl SecurityView {
         changed |= ui
             .checkbox(
                 &mut self.state.confirm_dangerous_actions,
-                "Require confirmation for dangerous actions",
+                i18n.t("security.confirmDangerousActions"),
             )
             .changed();
         changed |= ui
             .checkbox(
                 &mut self.state.redact_api_keys_in_ui,
-                "Redact API keys in UI",
+                i18n.t("security.redactApiKeys"),
             )
             .changed();
         changed |= ui
             .checkbox(
                 &mut self.state.block_external_urls,
-                "Block external URL imports",
+                i18n.t("security.blockExternalUrls"),
             )
             .changed();
 
         if changed {
             security_prefs::save(&self.state);
-            self.status = "Security settings saved.".to_string();
+            self.status = i18n.t("security.saved").to_string();
             self.pending_restart_confirmation = false;
         }
 
         ui.add_space(8.0);
         let restart_label = if self.pending_restart_confirmation {
-            "Confirm Restart Runtime"
+            i18n.t("security.confirmRestart")
         } else {
-            "Restart Backend Runtime"
+            i18n.t("security.restart")
         };
         if ui
             .add_enabled(!self.sending, egui::Button::new(restart_label))
@@ -83,7 +90,7 @@ impl SecurityView {
         {
             if self.state.confirm_dangerous_actions && !self.pending_restart_confirmation {
                 self.pending_restart_confirmation = true;
-                self.status = "Click restart again to confirm.".to_string();
+                self.status = i18n.t("security.confirmAgain").to_string();
                 return;
             }
 
@@ -93,10 +100,12 @@ impl SecurityView {
             let tx = self.pending_tx.clone();
             let backend_clone = backend.clone();
             let ctx_clone = ctx.clone();
+            let restart_requested = i18n.t("security.restartRequested").to_string();
+            let restart_failed = i18n.t("security.restartFailed").to_string();
             tokio::spawn(async move {
                 let msg = match backend_clone.restart_backend().await {
-                    Ok(_) => "Runtime restart requested.".to_string(),
-                    Err(e) => format!("Restart failed: {e}"),
+                    Ok(_) => restart_requested,
+                    Err(e) => format!("{}: {e}", restart_failed),
                 };
                 let _ = tx.send(msg);
                 ctx_clone.request_repaint();

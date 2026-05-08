@@ -1,9 +1,11 @@
 use crate::config::{save_app_config, AppConfig};
+use crate::i18n::I18n;
 
 pub struct ConfigEditorView {
     draft: String,
     status: String,
     initialized: bool,
+    snapshots: Vec<String>,
 }
 
 impl ConfigEditorView {
@@ -12,17 +14,24 @@ impl ConfigEditorView {
             draft: String::new(),
             status: String::new(),
             initialized: false,
+            snapshots: Vec::new(),
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, config: &mut AppConfig) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        i18n: &I18n,
+        config: &mut AppConfig,
+        safe_mode_enabled: bool,
+    ) {
         if !self.initialized {
             self.draft = serde_json::to_string_pretty(config).unwrap_or_default();
             self.initialized = true;
         }
 
-        ui.heading("Config");
-        let text = "Edit GUI config as JSON. Apply updates live and persist to disk.".to_string();
+        ui.heading(i18n.t("tab.config"));
+        let text = i18n.t("config.hint").to_string();
         let resp = ui.label(&text);
         resp.context_menu(|ui| {
             if ui.button("📋 Copy").clicked() {
@@ -32,6 +41,11 @@ impl ConfigEditorView {
         });
         ui.separator();
 
+        if !safe_mode_enabled {
+            ui.label(i18n.t("config.safeModeHidden"));
+            ui.add_space(6.0);
+        }
+
         ui.add(
             egui::TextEdit::multiline(&mut self.draft)
                 .desired_rows(20)
@@ -39,23 +53,45 @@ impl ConfigEditorView {
         );
 
         ui.horizontal(|ui| {
-            if ui.button("Reload From Current").clicked() {
+            if ui.button(i18n.t("config.reloadCurrent")).clicked() {
                 self.draft = serde_json::to_string_pretty(config).unwrap_or_default();
-                self.status = "Reloaded from in-memory config.".to_string();
+                self.status = i18n.t("config.reloaded").to_string();
             }
-            if ui.button("Apply JSON").clicked() {
+            if safe_mode_enabled && ui.button(i18n.t("config.createSnapshot")).clicked() {
+                self.snapshots.push(self.draft.clone());
+                self.status = format!("{} (#{}).", i18n.t("config.snapshotSaved"), self.snapshots.len());
+            }
+            if ui.button(i18n.t("config.applyJson")).clicked() {
                 match serde_json::from_str::<AppConfig>(&self.draft) {
                     Ok(new_cfg) => {
+                        if safe_mode_enabled {
+                            self.snapshots
+                                .push(serde_json::to_string_pretty(config).unwrap_or_default());
+                        }
                         *config = new_cfg;
                         save_app_config(config);
-                        self.status = "Config applied and saved.".to_string();
+                        self.status = i18n.t("config.applied").to_string();
                     }
                     Err(e) => {
-                        self.status = format!("Invalid JSON: {e}");
+                        self.status = format!("{}: {e}", i18n.t("config.invalidJson"));
                     }
                 }
             }
         });
+
+        if safe_mode_enabled {
+            ui.add_space(6.0);
+            ui.label(format!("{}: {}", i18n.t("config.snapshots"), self.snapshots.len()));
+            if ui
+                .add_enabled(!self.snapshots.is_empty(), egui::Button::new(i18n.t("config.rollbackSnapshot")))
+                .clicked()
+            {
+                if let Some(last) = self.snapshots.pop() {
+                    self.draft = last;
+                    self.status = i18n.t("config.rolledBack").to_string();
+                }
+            }
+        }
 
         if !self.status.is_empty() {
             let text = self.status.clone();

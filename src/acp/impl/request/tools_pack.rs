@@ -20,6 +20,71 @@ pub(super) fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
             "description": "Get ACP debug panel snapshot",
             "input_schema": {"type": "object"}
         }),
+        json!({
+            "name": "goon_workflow_run_list",
+            "description": "List workflow runs with pagination and status filter",
+            "input_schema": {"type": "object"}
+        }),
+        json!({
+            "name": "goon_workflow_run_get",
+            "description": "Get workflow run details by run_id",
+            "input_schema": {"type": "object", "required": ["run_id"]}
+        }),
+        json!({
+            "name": "goon_workflow_run_cancel",
+            "description": "Cancel workflow run by run_id",
+            "input_schema": {"type": "object", "required": ["run_id"]}
+        }),
+        json!({
+            "name": "goon_workflow_run_pause",
+            "description": "Pause workflow run by run_id",
+            "input_schema": {"type": "object", "required": ["run_id"]}
+        }),
+        json!({
+            "name": "goon_workflow_run_resume",
+            "description": "Resume workflow run by run_id",
+            "input_schema": {"type": "object", "required": ["run_id"]}
+        }),
+        json!({
+            "name": "goon_provider_test_connection",
+            "description": "Validate provider connectivity and key readiness",
+            "input_schema": {"type": "object", "required": ["provider"]}
+        }),
+        json!({
+            "name": "goon_provider_test_completion",
+            "description": "Validate provider/model completion route",
+            "input_schema": {"type": "object", "required": ["provider"]}
+        }),
+        json!({
+            "name": "goon_provider_capabilities",
+            "description": "Query provider model capabilities metadata",
+            "input_schema": {"type": "object", "required": ["provider"]}
+        }),
+        json!({
+            "name": "goon_metrics_window_query",
+            "description": "Query metrics time-window series (1m/5m/1h)",
+            "input_schema": {"type": "object"}
+        }),
+        json!({
+            "name": "goon_metrics_errors_summary",
+            "description": "Query grouped errors and sample failures",
+            "input_schema": {"type": "object"}
+        }),
+        json!({
+            "name": "goon_skill_update",
+            "description": "Update imported skill manifest fields",
+            "input_schema": {"type": "object", "required": ["name"]}
+        }),
+        json!({
+            "name": "goon_skill_version_list",
+            "description": "List imported skill version snapshots",
+            "input_schema": {"type": "object", "required": ["name"]}
+        }),
+        json!({
+            "name": "goon_skill_version_rollback",
+            "description": "Rollback imported skill to a specified version",
+            "input_schema": {"type": "object", "required": ["name", "version"]}
+        }),
     ];
 
     let registry = ToolRegistry::new();
@@ -155,6 +220,19 @@ pub(super) async fn execute_mcp_tool_call(
             }))
         }
         "acp_debug_panel_get" => Ok(build_debug_panel_payload(server).await),
+        "goon_workflow_run_list" => Ok(workflow_run_list_payload(arguments)),
+        "goon_workflow_run_get" => workflow_run_get_payload(arguments),
+        "goon_workflow_run_cancel" => workflow_run_transition_payload(arguments, "cancelled"),
+        "goon_workflow_run_pause" => workflow_run_transition_payload(arguments, "paused"),
+        "goon_workflow_run_resume" => workflow_run_transition_payload(arguments, "running"),
+        "goon_provider_test_connection" => provider_test_connection_payload(server, arguments),
+        "goon_provider_test_completion" => provider_test_completion_payload(server, arguments),
+        "goon_provider_capabilities" => provider_capabilities_payload(server, arguments),
+        "goon_metrics_window_query" => Ok(metrics_window_query_payload(server, arguments)),
+        "goon_metrics_errors_summary" => Ok(metrics_errors_summary_payload(server, arguments)),
+        "goon_skill_update" => skill_update_payload(server, arguments),
+        "goon_skill_version_list" => skill_version_list_payload(server, arguments),
+        "goon_skill_version_rollback" => skill_version_rollback_payload(server, arguments),
         _ => {
             let registry = ToolRegistry::new();
             if let Some(tool) = registry.get(name) {

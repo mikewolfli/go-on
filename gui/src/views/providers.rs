@@ -21,6 +21,7 @@ pub struct ProvidersView {
     remote_models: std::collections::HashMap<String, Vec<String>>,
     /// Whether we've tried to fetch models
     models_loaded: bool,
+    provider_ops_status: std::collections::HashMap<String, String>,
 }
 
 /// Provider names for the dropdown (34 total, matching providers.toml)
@@ -64,6 +65,16 @@ const PROVIDER_NAMES: &[&str] = &[
     "together",
 ];
 
+fn provider_label(i18n: &I18n, provider: &str) -> String {
+    let key = format!("provider.{}", provider.to_lowercase());
+    let label = i18n.t(&key);
+    if label.as_ref() == key {
+        provider.to_string()
+    } else {
+        label.into_owned()
+    }
+}
+
 impl ProvidersView {
     pub fn new() -> Self {
         let (pending_tx, pending_rx) = mpsc::channel();
@@ -79,6 +90,7 @@ impl ProvidersView {
             pending_tx,
             remote_models: std::collections::HashMap::new(),
             models_loaded: false,
+            provider_ops_status: std::collections::HashMap::new(),
         }
     }
 
@@ -90,6 +102,11 @@ impl ProvidersView {
                 >(models_json)
                 {
                     self.remote_models = models;
+                }
+            } else if let Some(rest) = msg.strip_prefix("__ops__:") {
+                if let Some((provider, status)) = rest.split_once(':') {
+                    self.provider_ops_status
+                        .insert(provider.to_string(), status.to_string());
                 }
             } else {
                 self.sending = false;
@@ -105,6 +122,7 @@ impl ProvidersView {
         config: &mut AppConfig,
         backend: &BackendClient,
         ctx: &egui::Context,
+        ops_enabled: bool,
     ) {
         self.process_pending();
 
@@ -134,16 +152,8 @@ impl ProvidersView {
         ui.add_space(8.0);
 
         // ── Add new provider section ──────────────────────────────────
-        let text = i18n.t("providers.add_new").to_string();
-        let resp = ui.label(&text);
-        resp.context_menu(|ui| {
-            if ui.button("📋 Copy").clicked() {
-                ui.ctx().copy_text(text.clone());
-                ui.close_menu();
-            }
-        });
-        ui.horizontal(|ui| {
-            let text = i18n.t("providers.provider").to_string();
+        if ops_enabled {
+            let text = i18n.t("providers.add_new").to_string();
             let resp = ui.label(&text);
             resp.context_menu(|ui| {
                 if ui.button("📋 Copy").clicked() {
@@ -151,176 +161,197 @@ impl ProvidersView {
                     ui.close_menu();
                 }
             });
-            egui::ComboBox::from_id_salt("add_provider_sel")
-                .selected_text(&self.selected_provider)
-                .show_ui(ui, |ui| {
-                    for p in PROVIDER_NAMES {
-                        if ui
-                            .selectable_value(&mut self.selected_provider, p.to_string(), *p)
-                            .clicked()
-                        {
-                            self.new_model = "auto".to_string();
-                        }
+            ui.horizontal(|ui| {
+                let text = i18n.t("providers.provider").to_string();
+                let resp = ui.label(&text);
+                resp.context_menu(|ui| {
+                    if ui.button("📋 Copy").clicked() {
+                        ui.ctx().copy_text(text.clone());
+                        ui.close_menu();
                     }
                 });
-            let text = i18n.t("providers.api_key").to_string();
-            let resp = ui.label(&text);
-            resp.context_menu(|ui| {
-                if ui.button("📋 Copy").clicked() {
-                    ui.ctx().copy_text(text.clone());
-                    ui.close_menu();
-                }
-            });
-            ui.add(
-                egui::TextEdit::singleline(&mut self.new_key)
-                    .password(true)
-                    .hint_text("sk-...")
-                    .desired_width(260.0),
-            );
-            let text = i18n.t("providers.model").to_string();
-            let resp = ui.label(&text);
-            resp.context_menu(|ui| {
-                if ui.button("📋 Copy").clicked() {
-                    ui.ctx().copy_text(text.clone());
-                    ui.close_menu();
-                }
-            });
-            egui::ComboBox::from_id_salt("add_model_sel")
-                .selected_text({
-                    if self.new_model == "auto" {
-                        i18n.t("providers.auto").to_string()
-                    } else {
-                        format!("{}: {}", self.selected_provider, self.new_model)
-                    }
-                })
-                .show_ui(ui, |ui| {
-                    // Show hint for copilot
-                    if self.selected_provider.to_lowercase() == "copilot" {
-                        let text = i18n.t("providers.copilot_hint").to_string();
-                        let resp = ui.label(&text);
-                        resp.context_menu(|ui| {
-                            if ui.button("📋 Copy").clicked() {
-                                ui.ctx().copy_text(text.clone());
-                                ui.close_menu();
+                egui::ComboBox::from_id_salt("add_provider_sel")
+                    .selected_text(provider_label(i18n, &self.selected_provider))
+                    .show_ui(ui, |ui| {
+                        for p in PROVIDER_NAMES {
+                            if ui
+                                .selectable_value(
+                                    &mut self.selected_provider,
+                                    p.to_string(),
+                                    provider_label(i18n, p),
+                                )
+                                .clicked()
+                            {
+                                self.new_model = "auto".to_string();
                             }
-                        });
+                        }
+                    });
+                let text = i18n.t("providers.api_key").to_string();
+                let resp = ui.label(&text);
+                resp.context_menu(|ui| {
+                    if ui.button("📋 Copy").clicked() {
+                        ui.ctx().copy_text(text.clone());
+                        ui.close_menu();
                     }
-                    let models: &[&str] = match self.selected_provider.to_lowercase().as_str() {
-                        "deepseek" => &["auto", "deepseek-v4-flash", "deepseek-v4-pro"],
-                        "openai" => &[
-                            "auto",
-                            "gpt-4o",
-                            "gpt-4o-mini",
-                            "gpt-4-turbo",
-                            "gpt-3.5-turbo",
-                        ],
-                        "openai_compatible" => &["auto"],
-                        "anthropic" => &[
-                            "auto",
-                            "claude-sonnet-4-20250514",
-                            "claude-3-5-sonnet-20241022",
-                            "claude-3-opus-20240229",
-                            "claude-3-haiku-20240307",
-                        ],
-                        "cohere" => &["auto", "command-r-plus-08-2024", "command-r"],
-                        "wenxin" => &["auto", "ERNIE-4.5-8K", "ERNIE-4.0", "ERNIE-3.5"],
-                        "qianfan" => &["auto", "ERNIE-Bot", "ERNIE-Bot-turbo"],
-                        "qwen" => &["auto", "qwen-max-2025-01-25", "qwen-plus", "qwen-turbo"],
-                        "glm" => &["auto", "glm-4-flash", "glm-4-plus"],
-                        "yi" => &["auto", "yi-lightning", "yi-large"],
-                        "hunyuan" => &["auto", "hunyuan-turbo-latest"],
-                        "doubao" => &["auto", "doubao-1.5-pro-32k-250115"],
-                        "facewall" => &["auto"],
-                        "langboat" => &["auto"],
-                        "skywork" => &["auto"],
-                        "stepfun" => &["auto", "step-2-16k-2505"],
-                        "xihu" => &["auto"],
-                        "moonshot" => &["auto", "moonshot-v1-8k"],
-                        "minimax" => &["auto", "MiniMax-Text-01"],
-                        "ai21" => &["auto", "jamba-1.5-mini"],
-                        "aleph" => &["auto", "luminous-base-control"],
-                        "copilot" => &["auto", "github-copilot"],
-                        "deepquest" => &["auto"],
-                        "fireworks" => &["auto"],
-                        "gemini" => &[
-                            "auto",
-                            "gemini-2.5-flash-preview-04-17",
-                            "gemini-2.0-flash",
-                            "gemini-1.5-pro",
-                        ],
-                        "groq" => &[
-                            "auto",
-                            "llama-3.3-70b-versatile",
-                            "llama-3.1-8b-instant",
-                            "mixtral-8x7b-32768",
-                        ],
-                        "llama" => &["auto", "llama3.2", "llama3.1"],
-                        "loopai" => &["auto"],
-                        "mistral" => &[
-                            "auto",
-                            "mistral-small-latest",
-                            "mistral-medium-latest",
-                            "mistral-large-latest",
-                        ],
-                        "nim" => &["auto", "meta/llama-3.1-70b-instruct"],
-                        "perplexity" => &["auto", "sonar-pro", "sonar"],
-                        "replicate" => &["auto", "meta/meta-llama-3-70b-instruct"],
-                        "titan" => &["auto"],
-                        "together" => &["auto", "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"],
-                        _ => &["auto"],
-                    };
-                    for m in models {
-                        let display_name = if m == &"auto" {
+                });
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.new_key)
+                        .password(true)
+                        .hint_text("sk-...")
+                        .desired_width(260.0),
+                );
+                let text = i18n.t("providers.model").to_string();
+                let resp = ui.label(&text);
+                resp.context_menu(|ui| {
+                    if ui.button("📋 Copy").clicked() {
+                        ui.ctx().copy_text(text.clone());
+                        ui.close_menu();
+                    }
+                });
+                egui::ComboBox::from_id_salt("add_model_sel")
+                    .selected_text({
+                        if self.new_model == "auto" {
                             i18n.t("providers.auto").to_string()
                         } else {
-                            format!("{}: {}", self.selected_provider, m)
+                            format!(
+                                "{}: {}",
+                                provider_label(i18n, &self.selected_provider),
+                                self.new_model
+                            )
+                        }
+                    })
+                    .show_ui(ui, |ui| {
+                        // Show hint for copilot
+                        if self.selected_provider.to_lowercase() == "copilot" {
+                            let text = i18n.t("providers.copilot_hint").to_string();
+                            let resp = ui.label(&text);
+                            resp.context_menu(|ui| {
+                                if ui.button("📋 Copy").clicked() {
+                                    ui.ctx().copy_text(text.clone());
+                                    ui.close_menu();
+                                }
+                            });
+                        }
+                        let models: &[&str] = match self.selected_provider.to_lowercase().as_str() {
+                            "deepseek" => &["auto", "deepseek-v4-flash", "deepseek-v4-pro"],
+                            "openai" => &[
+                                "auto",
+                                "gpt-4o",
+                                "gpt-4o-mini",
+                                "gpt-4-turbo",
+                                "gpt-3.5-turbo",
+                            ],
+                            "openai_compatible" => &["auto"],
+                            "anthropic" => &[
+                                "auto",
+                                "claude-sonnet-4-20250514",
+                                "claude-3-5-sonnet-20241022",
+                                "claude-3-opus-20240229",
+                                "claude-3-haiku-20240307",
+                            ],
+                            "cohere" => &["auto", "command-r-plus-08-2024", "command-r"],
+                            "wenxin" => &["auto", "ERNIE-4.5-8K", "ERNIE-4.0", "ERNIE-3.5"],
+                            "qianfan" => &["auto", "ERNIE-Bot", "ERNIE-Bot-turbo"],
+                            "qwen" => &["auto", "qwen-max-2025-01-25", "qwen-plus", "qwen-turbo"],
+                            "glm" => &["auto", "glm-4-flash", "glm-4-plus"],
+                            "yi" => &["auto", "yi-lightning", "yi-large"],
+                            "hunyuan" => &["auto", "hunyuan-turbo-latest"],
+                            "doubao" => &["auto", "doubao-1.5-pro-32k-250115"],
+                            "facewall" => &["auto"],
+                            "langboat" => &["auto"],
+                            "skywork" => &["auto"],
+                            "stepfun" => &["auto", "step-2-16k-2505"],
+                            "xihu" => &["auto"],
+                            "moonshot" => &["auto", "moonshot-v1-8k"],
+                            "minimax" => &["auto", "MiniMax-Text-01"],
+                            "ai21" => &["auto", "jamba-1.5-mini"],
+                            "aleph" => &["auto", "luminous-base-control"],
+                            "copilot" => &["auto", "github-copilot"],
+                            "deepquest" => &["auto"],
+                            "fireworks" => &["auto"],
+                            "gemini" => &[
+                                "auto",
+                                "gemini-2.5-flash-preview-04-17",
+                                "gemini-2.0-flash",
+                                "gemini-1.5-pro",
+                            ],
+                            "groq" => &[
+                                "auto",
+                                "llama-3.3-70b-versatile",
+                                "llama-3.1-8b-instant",
+                                "mixtral-8x7b-32768",
+                            ],
+                            "llama" => &["auto", "llama3.2", "llama3.1"],
+                            "loopai" => &["auto"],
+                            "mistral" => &[
+                                "auto",
+                                "mistral-small-latest",
+                                "mistral-medium-latest",
+                                "mistral-large-latest",
+                            ],
+                            "nim" => &["auto", "meta/llama-3.1-70b-instruct"],
+                            "perplexity" => &["auto", "sonar-pro", "sonar"],
+                            "replicate" => &["auto", "meta/meta-llama-3-70b-instruct"],
+                            "titan" => &["auto"],
+                            "together" => &["auto", "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"],
+                            _ => &["auto"],
                         };
-                        ui.selectable_value(&mut self.new_model, m.to_string(), display_name);
-                    }
-                });
-            if ui
-                .add_enabled(
-                    !self.new_key.is_empty() || self.selected_provider.to_lowercase() == "copilot",
-                    egui::Button::new(i18n.t("providers.add")),
-                )
-                .clicked()
-            {
-                let name = self.selected_provider.clone();
-                let key = self.new_key.trim().to_string();
-                let model = self.new_model.trim().to_string();
-                let provider_lower = name.to_lowercase();
-
-                // Try keyring, but don't block the save if it fails
-                if let Err(e) = crate::keyring_util::store_api_key(&provider_lower, &key) {
-                    eprintln!("Warning: failed to store API key in system keyring: {}", e);
-                }
-
-                if !config.providers.iter().any(|p| p.name == name) {
-                    config.providers.push(ProviderConfig {
-                        name: name.clone(),
-                        api_key: key,
-                        model,
-                        validated: true,
+                        for m in models {
+                            let display_name = if m == &"auto" {
+                                i18n.t("providers.auto").to_string()
+                            } else {
+                                format!("{}: {}", provider_label(i18n, &self.selected_provider), m)
+                            };
+                            ui.selectable_value(&mut self.new_model, m.to_string(), display_name);
+                        }
                     });
-                    save_app_config(config);
-                    self.status = format!(
-                        "{} '{}' {}.",
-                        i18n.t("providers.provider"),
-                        name,
-                        i18n.t("providers.added")
-                    );
-                } else {
-                    self.status = format!(
-                        "{} '{}' {}.",
-                        i18n.t("providers.provider"),
-                        name,
-                        i18n.t("providers.already_exists")
-                    );
+                if ui
+                    .add_enabled(
+                        !self.new_key.is_empty()
+                            || self.selected_provider.to_lowercase() == "copilot",
+                        egui::Button::new(i18n.t("providers.add")),
+                    )
+                    .clicked()
+                {
+                    let name = self.selected_provider.clone();
+                    let key = self.new_key.trim().to_string();
+                    let model = self.new_model.trim().to_string();
+                    let provider_lower = name.to_lowercase();
+
+                    // Try keyring, but don't block the save if it fails
+                    if let Err(e) = crate::keyring_util::store_api_key(&provider_lower, &key) {
+                        eprintln!("Warning: failed to store API key in system keyring: {}", e);
+                    }
+
+                    if !config.providers.iter().any(|p| p.name == name) {
+                        config.providers.push(ProviderConfig {
+                            name: name.clone(),
+                            api_key: key,
+                            model,
+                            validated: true,
+                        });
+                        save_app_config(config);
+                        self.status = format!(
+                            "{} '{}' {}.",
+                            i18n.t("providers.provider"),
+                            provider_label(i18n, &name),
+                            i18n.t("providers.added")
+                        );
+                    } else {
+                        self.status = format!(
+                            "{} '{}' {}.",
+                            i18n.t("providers.provider"),
+                            provider_label(i18n, &name),
+                            i18n.t("providers.already_exists")
+                        );
+                    }
+                    self.new_key.clear();
+                    changed = true;
                 }
-                self.new_key.clear();
-                changed = true;
-            }
-        });
+            });
+        } else {
+            ui.label(i18n.t("providers.ops.hidden"));
+        }
 
         ui.add_space(16.0);
         ui.separator();
@@ -339,7 +370,7 @@ impl ProvidersView {
         for (idx, provider) in config.providers.iter_mut().enumerate() {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let text = provider.name.clone();
+                    let text = provider_label(i18n, &provider.name);
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
                         if ui.button("📋 Copy").clicked() {
@@ -422,7 +453,11 @@ impl ProvidersView {
                             if provider.model == "auto" || provider.model.is_empty() {
                                 i18n.t("providers.auto").to_string()
                             } else {
-                                format!("{}: {}", provider.name, provider.model)
+                                format!(
+                                    "{}: {}",
+                                    provider_label(i18n, &provider.name),
+                                    provider.model
+                                )
                             }
                         })
                         .show_ui(ui, |ui| {
@@ -430,7 +465,7 @@ impl ProvidersView {
                                 let display_name = if m == &"auto" {
                                     i18n.t("providers.auto").to_string()
                                 } else {
-                                    format!("{}: {}", provider.name, m)
+                                    format!("{}: {}", provider_label(i18n, &provider.name), m)
                                 };
                                 if ui
                                     .selectable_value(
@@ -452,7 +487,7 @@ impl ProvidersView {
                     }
 
                     // Update button - opens inline edit for this provider
-                    if self.update_target == idx as isize {
+                    if ops_enabled && self.update_target == idx as isize {
                         if ui.button(i18n.t("providers.save_key")).clicked() {
                             let new_key = self.new_key.trim().to_string();
                             if !new_key.is_empty() {
@@ -472,7 +507,7 @@ impl ProvidersView {
                                 self.status = format!(
                                     "{} '{}' {}.",
                                     i18n.t("providers.api_key"),
-                                    provider_name,
+                                    provider_label(i18n, &provider_name),
                                     i18n.t("providers.updated")
                                 );
                                 self.new_key.clear();
@@ -484,18 +519,19 @@ impl ProvidersView {
                             self.update_target = -1;
                             self.new_key.clear();
                         }
-                    } else if ui.button(i18n.t("providers.update_key")).clicked() {
+                    } else if ops_enabled && ui.button(i18n.t("providers.update_key")).clicked() {
                         self.update_target = idx as isize;
                         self.new_key.clear();
                         self.status = format!(
                             "{} '{}' {}.",
                             i18n.t("providers.enter_new_key"),
-                            provider.name,
+                            provider_label(i18n, &provider.name),
                             i18n.t("providers.save_key")
                         );
                     }
 
-                    if ui.button(i18n.t("providers.push")).clicked() && !self.sending {
+                    if ops_enabled && ui.button(i18n.t("providers.push")).clicked() && !self.sending
+                    {
                         self.sending = true;
                         self.status.clear();
                         let tx = self.pending_tx.clone();
@@ -520,12 +556,85 @@ impl ProvidersView {
                             ctx_clone.request_repaint();
                         });
                     }
+                    if ops_enabled && ui.button(i18n.t("providers.ops.testConn")).clicked() {
+                        let name = provider.name.clone();
+                        let tx = self.pending_tx.clone();
+                        let backend_clone = backend.clone();
+                        let ctx_clone = ctx.clone();
+                        tokio::spawn(async move {
+                            let msg = match backend_clone.provider_test_connection(&name).await {
+                                Ok(v) => {
+                                    let ok = v
+                                        .get("ok")
+                                        .and_then(serde_json::Value::as_bool)
+                                        .unwrap_or(false);
+                                    let latency = v
+                                        .get("latency_ms")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(0);
+                                    format!("__ops__:{}:conn ok={} latency={}ms", name, ok, latency)
+                                }
+                                Err(e) => format!("__ops__:{}:conn failed {}", name, e),
+                            };
+                            let _ = tx.send(msg);
+                            ctx_clone.request_repaint();
+                        });
+                    }
+                    if ops_enabled && ui.button(i18n.t("providers.ops.testCompletion")).clicked() {
+                        let name = provider.name.clone();
+                        let model = if provider.model.is_empty() {
+                            None
+                        } else {
+                            Some(provider.model.clone())
+                        };
+                        let tx = self.pending_tx.clone();
+                        let backend_clone = backend.clone();
+                        let ctx_clone = ctx.clone();
+                        tokio::spawn(async move {
+                            let msg = match backend_clone
+                                .provider_test_completion(&name, model.as_deref())
+                                .await
+                            {
+                                Ok(v) => {
+                                    let ok = v
+                                        .get("ok")
+                                        .and_then(serde_json::Value::as_bool)
+                                        .unwrap_or(false);
+                                    let model = v
+                                        .get("model")
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or("-");
+                                    format!("__ops__:{}:completion ok={} model={}", name, ok, model)
+                                }
+                                Err(e) => format!("__ops__:{}:completion failed {}", name, e),
+                            };
+                            let _ = tx.send(msg);
+                            ctx_clone.request_repaint();
+                        });
+                    }
+                    if ops_enabled && ui.button(i18n.t("providers.ops.capabilities")).clicked() {
+                        let name = provider.name.clone();
+                        let tx = self.pending_tx.clone();
+                        let backend_clone = backend.clone();
+                        let ctx_clone = ctx.clone();
+                        tokio::spawn(async move {
+                            let msg = match backend_clone.provider_capabilities(&name).await {
+                                Ok(models) => {
+                                    let count = models.len();
+                                    format!("__ops__:{}:capabilities models={}", name, count)
+                                }
+                                Err(e) => format!("__ops__:{}:capabilities failed {}", name, e),
+                            };
+                            let _ = tx.send(msg);
+                            ctx_clone.request_repaint();
+                        });
+                    }
                     let delete_label = if self.pending_delete_confirmation == Some(idx) {
                         i18n.t("providers.confirm_delete")
                     } else {
                         i18n.t("providers.delete")
                     };
-                    if ui.button(delete_label).clicked() {
+                    if ops_enabled && ui.button(delete_label).clicked() {
                         if security.confirm_dangerous_actions
                             && self.pending_delete_confirmation != Some(idx)
                         {
@@ -533,7 +642,7 @@ impl ProvidersView {
                             self.status = format!(
                                 "{} {}.",
                                 i18n.t("providers.click_delete_again"),
-                                provider.name
+                                provider_label(i18n, &provider.name)
                             );
                         } else {
                             remove_idx = Some(idx);
@@ -541,6 +650,9 @@ impl ProvidersView {
                         }
                     }
                 });
+                if let Some(ops_status) = self.provider_ops_status.get(&provider.name) {
+                    ui.label(ops_status);
+                }
             });
             ui.add_space(4.0);
         }

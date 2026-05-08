@@ -7,7 +7,48 @@ pub struct AppConfig {
     pub language: String,
     pub theme: String,
     pub features: FeatureToggles,
+    pub enterprise: EnterpriseConfig,
     pub providers: Vec<ProviderConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnterpriseConfig {
+    pub active_environment: String,
+    pub environments: Vec<EnvironmentPreset>,
+    pub secret_source: String,
+    pub import_path: String,
+    pub export_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvironmentPreset {
+    pub name: String,
+    pub backend_url: String,
+}
+
+impl Default for EnterpriseConfig {
+    fn default() -> Self {
+        Self {
+            active_environment: "dev".to_string(),
+            environments: vec![
+                EnvironmentPreset {
+                    name: "dev".to_string(),
+                    backend_url: "http://127.0.0.1:8090".to_string(),
+                },
+                EnvironmentPreset {
+                    name: "stage".to_string(),
+                    backend_url: "http://127.0.0.1:8090".to_string(),
+                },
+                EnvironmentPreset {
+                    name: "prod".to_string(),
+                    backend_url: "http://127.0.0.1:8090".to_string(),
+                },
+            ],
+            secret_source: "keyring".to_string(),
+            import_path: "gui_config.import.json".to_string(),
+            export_path: "gui_config.export.json".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +61,13 @@ pub struct FeatureToggles {
     pub security: bool,
     pub config: bool,
     pub providers: bool,
+    pub workflow_run_center: bool,
+    pub autotune_chain_injection: bool,
+    pub skills_lifecycle: bool,
+    pub providers_ops: bool,
+    pub monitor_history_alerts: bool,
+    pub config_safe_mode: bool,
+    pub setup_enterprise: bool,
 }
 
 impl Default for FeatureToggles {
@@ -33,6 +81,13 @@ impl Default for FeatureToggles {
             security: true,
             config: true,
             providers: true,
+            workflow_run_center: false,
+            autotune_chain_injection: false,
+            skills_lifecycle: false,
+            providers_ops: false,
+            monitor_history_alerts: false,
+            config_safe_mode: false,
+            setup_enterprise: false,
         }
     }
 }
@@ -52,6 +107,7 @@ impl Default for AppConfig {
             language: "en".to_string(),
             theme: "简约".to_string(),
             features: FeatureToggles::default(),
+            enterprise: EnterpriseConfig::default(),
             providers: Vec::new(),
         }
     }
@@ -99,10 +155,34 @@ fn app_config_path() -> PathBuf {
     }
 }
 
-/// Check if any AI provider is configured and validated
+/// Check if any AI provider is configured, validated, or exists in keyring
 pub fn has_valid_providers(config: &AppConfig) -> bool {
-    config
+    // Check local config first
+    if config
         .providers
         .iter()
         .any(|p| p.validated && !p.api_key.is_empty())
+    {
+        return true;
+    }
+    // Also check if any known provider has a key in the system keyring
+    // This handles the case where key was set via CLI (--secret set) or backend
+    let known_providers = [
+        "deepseek",
+        "openai",
+        "anthropic",
+        "qwen",
+        "gemini",
+        "groq",
+        "mistral",
+        "copilot",
+    ];
+    for name in &known_providers {
+        if let Some(key) = crate::keyring_util::get_api_key(name) {
+            if !key.is_empty() {
+                return true;
+            }
+        }
+    }
+    false
 }

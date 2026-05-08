@@ -194,11 +194,7 @@ pub(super) fn execution_option_overrides(params: &Value) -> HashMap<String, Valu
     extract_effective_options(params)
 }
 
-pub(super) async fn handle_workflow_run_list(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn workflow_run_list_payload(params: &Value) -> Value {
     let limit = params
         .get("limit")
         .and_then(Value::as_u64)
@@ -237,18 +233,46 @@ pub(super) async fn handle_workflow_run_list(
         .take(limit)
         .collect::<Vec<_>>();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-            "runs": runs,
-        }),
-    )
-    .await
+    json!({
+        "ok": true,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "runs": runs,
+    })
+}
+
+pub(super) fn workflow_run_get_payload(params: &Value) -> Result<Value> {
+    let run_id = params
+        .get("run_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("run_id is required"))?;
+
+    match get_workflow_run_record(run_id) {
+        Some(run) => Ok(json!({"ok": true, "run": run})),
+        None => Err(anyhow::anyhow!("workflow run '{}' not found", run_id)),
+    }
+}
+
+pub(super) fn workflow_run_transition_payload(
+    params: &Value,
+    target_status: &str,
+) -> Result<Value> {
+    let run_id = params
+        .get("run_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("run_id is required"))?;
+
+    let run = transition_workflow_run(run_id, target_status)?;
+    Ok(json!({"ok": true, "run": run, "action": target_status}))
+}
+
+pub(super) async fn handle_workflow_run_list(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_result(server, request_id, workflow_run_list_payload(&params)).await
 }
 
 pub(super) async fn handle_workflow_run_get(
@@ -256,29 +280,9 @@ pub(super) async fn handle_workflow_run_get(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let Some(run_id) = params.get("run_id").and_then(Value::as_str) else {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            "run_id is required".to_string(),
-            None,
-        )
-        .await;
-    };
-
-    match get_workflow_run_record(run_id) {
-        Some(run) => send_result(server, request_id, json!({"ok": true, "run": run})).await,
-        None => {
-            send_error(
-                server,
-                request_id,
-                -32602,
-                format!("workflow run '{}' not found", run_id),
-                None,
-            )
-            .await
-        }
+    match workflow_run_get_payload(&params) {
+        Ok(payload) => send_result(server, request_id, payload).await,
+        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
     }
 }
 
@@ -288,26 +292,8 @@ async fn handle_workflow_run_transition(
     request_id: Option<Value>,
     target_status: &str,
 ) -> Result<()> {
-    let Some(run_id) = params.get("run_id").and_then(Value::as_str) else {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            "run_id is required".to_string(),
-            None,
-        )
-        .await;
-    };
-
-    match transition_workflow_run(run_id, target_status) {
-        Ok(run) => {
-            send_result(
-                server,
-                request_id,
-                json!({"ok": true, "run": run, "action": target_status}),
-            )
-            .await
-        }
+    match workflow_run_transition_payload(&params, target_status) {
+        Ok(payload) => send_result(server, request_id, payload).await,
         Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
     }
 }

@@ -1,4 +1,4 @@
-use egui::{Color32, CornerRadius, Stroke, Style, Vec2, Visuals};
+use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, Style, TextStyle, Vec2, Visuals};
 
 pub enum Theme {
     Minimal,
@@ -6,12 +6,14 @@ pub enum Theme {
     Wuxia,
     ShanShui,
     HelloKitty,
+    ServeThePeople,
 }
 
 impl Theme {
     pub fn all() -> &'static [(Theme, &'static str)] {
         &[
             (Theme::Minimal, "简约"),
+            (Theme::ServeThePeople, "为人民服务"),
             (Theme::GuoFeng, "国风"),
             (Theme::Wuxia, "武侠"),
             (Theme::ShanShui, "山水"),
@@ -26,6 +28,7 @@ impl Theme {
             "武侠" | "wuxia" => Theme::Wuxia,
             "山水" | "shanshui" => Theme::ShanShui,
             "Hello Kitty" | "hellokitty" => Theme::HelloKitty,
+            "为人民服务" | "serve_the_people" | "serve-the-people" => Theme::ServeThePeople,
             _ => Theme::Minimal,
         }
     }
@@ -37,16 +40,43 @@ impl Theme {
             Theme::Wuxia => i18n.t("theme.wuxia"),
             Theme::ShanShui => i18n.t("theme.shanshui"),
             Theme::HelloKitty => i18n.t("theme.hellokitty"),
+            Theme::ServeThePeople => i18n.t("theme.serveThePeople"),
         }
     }
 
     pub fn apply(&self, ctx: &egui::Context) {
         let mut style = (*ctx.style()).clone();
-        // Common base: better spacing & scrollbar
+        // Common base: typography + spacing + interaction density
+        style.text_styles.insert(
+            TextStyle::Heading,
+            FontId::new(25.0, FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            TextStyle::Name("Title".into()),
+            FontId::new(21.0, FontFamily::Proportional),
+        );
+        style
+            .text_styles
+            .insert(TextStyle::Body, FontId::new(16.0, FontFamily::Proportional));
+        style.text_styles.insert(
+            TextStyle::Button,
+            FontId::new(15.0, FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            TextStyle::Monospace,
+            FontId::new(14.0, FontFamily::Monospace),
+        );
+        style.text_styles.insert(
+            TextStyle::Small,
+            FontId::new(13.0, FontFamily::Proportional),
+        );
+
         style.spacing.item_spacing = Vec2::new(10.0, 8.0);
         style.spacing.button_padding = Vec2::new(14.0, 7.0);
         style.spacing.indent = 20.0;
         style.spacing.combo_width = 0.0;
+        style.spacing.interact_size = Vec2::new(44.0, 26.0);
+        style.spacing.text_edit_width = 320.0;
         style.spacing.scroll.bar_width = 6.0;
         style.spacing.scroll.bar_inner_margin = 2.0;
         style.spacing.scroll.bar_outer_margin = 1.0;
@@ -58,6 +88,7 @@ impl Theme {
             Theme::Wuxia => Self::apply_wuxia(&mut style),
             Theme::ShanShui => Self::apply_shanshui(&mut style),
             Theme::HelloKitty => Self::apply_hellokitty(&mut style),
+            Theme::ServeThePeople => Self::apply_serve_the_people(&mut style),
         }
         ctx.set_style(style);
     }
@@ -66,7 +97,7 @@ impl Theme {
     // Modern, clean, professional light theme
     fn apply_minimal(style: &mut Style) {
         style.visuals = Visuals::light();
-        let r6 = CornerRadius::same(6);
+        let r8 = CornerRadius::same(8);
         let text_pri = Color32::from_rgb(28, 28, 32);
         let accent = Color32::from_rgb(0, 106, 255);
 
@@ -79,21 +110,57 @@ impl Theme {
         let w = &mut style.visuals.widgets;
         w.noninteractive.bg_fill = Color32::from_rgb(255, 255, 255);
         w.noninteractive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(224, 226, 232));
-        w.noninteractive.corner_radius = r6;
+        w.noninteractive.corner_radius = r8;
 
         w.inactive.bg_fill = Color32::from_rgb(240, 241, 245);
         w.inactive.fg_stroke = Stroke::new(1.0, text_pri);
-        w.inactive.corner_radius = r6;
+        w.inactive.corner_radius = r8;
 
         w.hovered.bg_fill = Color32::from_rgb(240, 241, 245);
         w.hovered.fg_stroke = Stroke::new(1.5, accent);
-        w.hovered.corner_radius = r6;
+        w.hovered.corner_radius = r8;
 
         w.active.bg_fill = accent;
         w.active.fg_stroke = Stroke::new(2.0, Color32::WHITE);
-        w.active.corner_radius = r6;
+        w.active.corner_radius = r8;
 
         w.open.bg_fill = Color32::from_rgb(255, 255, 255);
+    }
+
+    // ── 为人民服务 ───────────────────────────────────
+    fn apply_serve_the_people(style: &mut Style) {
+        style.visuals = Visuals::dark();
+        let r7 = CornerRadius::same(7);
+        let text_pri = Color32::from_rgb(246, 232, 205);
+        let accent = Color32::from_rgb(196, 28, 37);
+        let accent_soft = Color32::from_rgb(132, 22, 30);
+        let gold = Color32::from_rgb(232, 183, 68);
+
+        style.visuals.window_fill = Color32::from_rgb(34, 10, 12);
+        style.visuals.panel_fill = Color32::from_rgb(56, 14, 18);
+        style.visuals.override_text_color = Some(text_pri);
+        style.visuals.hyperlink_color = gold;
+        style.visuals.selection.bg_fill = accent_soft;
+        style.visuals.selection.stroke = Stroke::new(1.5, gold);
+
+        let w = &mut style.visuals.widgets;
+        w.noninteractive.bg_fill = Color32::from_rgb(62, 18, 23);
+        w.noninteractive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(122, 48, 56));
+        w.noninteractive.corner_radius = r7;
+
+        w.inactive.bg_fill = Color32::from_rgb(88, 22, 29);
+        w.inactive.fg_stroke = Stroke::new(1.0, text_pri);
+        w.inactive.corner_radius = r7;
+
+        w.hovered.bg_fill = Color32::from_rgb(108, 26, 34);
+        w.hovered.fg_stroke = Stroke::new(1.5, gold);
+        w.hovered.corner_radius = r7;
+
+        w.active.bg_fill = accent;
+        w.active.fg_stroke = Stroke::new(2.0, Color32::from_rgb(255, 242, 214));
+        w.active.corner_radius = r7;
+
+        w.open.bg_fill = Color32::from_rgb(96, 24, 31);
     }
 
     // ── 国风 ──────────────────────────────────────────────────

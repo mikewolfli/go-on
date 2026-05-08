@@ -241,6 +241,7 @@ use self::hardness_pack::*;
 use self::learning_pack::*;
 use self::lifecycle_pack::*;
 use self::ops_pack::*;
+use self::protocol_pack::*;
 pub use self::protocol_pack::record_tool_call_audit_with_protocol;
 use self::pua_pack::*;
 use self::runtime_pack::*;

@@ -466,11 +466,18 @@ pub(super) async fn handle_skill_update(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
+    match skill_update_payload(server, &params) {
+        Ok(payload) => send_result(server, request_id, payload).await,
+        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
+    }
+}
+
+pub(super) fn skill_update_payload(server: &AcpServer, params: &Value) -> Result<Value> {
     let name = match parse_skill_name_param(&params) {
         Ok(name) => name,
         Err(err) => {
             record_skill_admin_audit("update", "skill.update", false, &err.to_string());
-            return send_error(server, request_id, -32602, err.to_string(), None).await;
+            return Err(err);
         }
     };
 
@@ -478,7 +485,7 @@ pub(super) async fn handle_skill_update(
     let Some(mut record) = store.get(&name) else {
         let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
         record_skill_admin_audit("update", &name, false, &reason);
-        return send_error(server, request_id, -32602, reason, None).await;
+        anyhow::bail!(reason);
     };
 
     let mut manifest = load_skill_manifest(&record.manifest_path)?;
@@ -514,17 +521,12 @@ pub(super) async fn handle_skill_update(
     store.save()?;
 
     record_skill_admin_audit("update", &name, true, "updated imported skill manifest");
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "action": "update",
-            "name": name,
-            "skill": normalize_imported_record(record),
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "action": "update",
+        "name": name,
+        "skill": normalize_imported_record(record),
+    }))
 }
 
 pub(super) async fn handle_skill_version_list(
@@ -532,6 +534,13 @@ pub(super) async fn handle_skill_version_list(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
+    match skill_version_list_payload(server, &params) {
+        Ok(payload) => send_result(server, request_id, payload).await,
+        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
+    }
+}
+
+pub(super) fn skill_version_list_payload(server: &AcpServer, params: &Value) -> Result<Value> {
     let name = match parse_skill_name_param(&params) {
         Ok(name) => name,
         Err(err) => {
@@ -541,7 +550,7 @@ pub(super) async fn handle_skill_version_list(
                 false,
                 &err.to_string(),
             );
-            return send_error(server, request_id, -32602, err.to_string(), None).await;
+            return Err(err);
         }
     };
 
@@ -549,7 +558,7 @@ pub(super) async fn handle_skill_version_list(
     let Some(record) = store.get(&name) else {
         let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
         record_skill_admin_audit("version.list", &name, false, &reason);
-        return send_error(server, request_id, -32602, reason, None).await;
+        anyhow::bail!(reason);
     };
 
     let manifest = load_skill_manifest(&record.manifest_path)?;
@@ -561,16 +570,11 @@ pub(super) async fn handle_skill_version_list(
     versions.push(build_skill_version_snapshot(&record, &manifest));
 
     record_skill_admin_audit("version.list", &name, true, "listed skill versions");
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "name": name,
-            "versions": versions,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "name": name,
+        "versions": versions,
+    }))
 }
 
 pub(super) async fn handle_skill_version_rollback(
@@ -578,6 +582,13 @@ pub(super) async fn handle_skill_version_rollback(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
+    match skill_version_rollback_payload(server, &params) {
+        Ok(payload) => send_result(server, request_id, payload).await,
+        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
+    }
+}
+
+pub(super) fn skill_version_rollback_payload(server: &AcpServer, params: &Value) -> Result<Value> {
     let name = match parse_skill_name_param(&params) {
         Ok(name) => name,
         Err(err) => {
@@ -587,25 +598,18 @@ pub(super) async fn handle_skill_version_rollback(
                 false,
                 &err.to_string(),
             );
-            return send_error(server, request_id, -32602, err.to_string(), None).await;
+            return Err(err);
         }
     };
     let Some(target_version) = params.get("version").and_then(Value::as_str) else {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            "version is required".to_string(),
-            None,
-        )
-        .await;
+        anyhow::bail!("version is required");
     };
 
     let mut store = open_skill_import_store(server)?;
     let Some(mut record) = store.get(&name) else {
         let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
         record_skill_admin_audit("version.rollback", &name, false, &reason);
-        return send_error(server, request_id, -32602, reason, None).await;
+        anyhow::bail!(reason);
     };
 
     let history = skill_version_history()
@@ -620,17 +624,11 @@ pub(super) async fn handle_skill_version_rollback(
             .map(|version| version == target_version)
             .unwrap_or(false)
     }) else {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            format!(
-                "version '{}' not found for skill '{}'",
-                target_version, name
-            ),
-            None,
-        )
-        .await;
+        anyhow::bail!(
+            "version '{}' not found for skill '{}'",
+            target_version,
+            name
+        );
     };
 
     let mut manifest = load_skill_manifest(&record.manifest_path)?;
@@ -660,18 +658,13 @@ pub(super) async fn handle_skill_version_rollback(
         true,
         "rolled back imported skill version",
     );
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "action": "rollback",
-            "name": name,
-            "version": target_version,
-            "skill": normalize_imported_record(record),
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "action": "rollback",
+        "name": name,
+        "version": target_version,
+        "skill": normalize_imported_record(record),
+    }))
 }
 
 fn governance_action_label(action: GovernanceAction) -> &'static str {

@@ -1,5 +1,6 @@
 use crate::backend::BackendClient;
 use crate::i18n::I18n;
+use crate::views::autotune::AutoTuneView;
 use comrak::{
     nodes::{AstNode, ListType, NodeValue},
     parse_document, Arena, Options,
@@ -638,7 +639,12 @@ impl ChatView {
     }
 
     /// Send a message asynchronously via the backend.
-    pub fn send_message(&mut self, backend: &BackendClient, ctx: &egui::Context) {
+    pub fn send_message(
+        &mut self,
+        backend: &BackendClient,
+        ctx: &egui::Context,
+        autotune_chain_enabled: bool,
+    ) {
         let msg = self.input.trim().to_string();
         if msg.is_empty() || self.sending {
             return;
@@ -648,6 +654,11 @@ impl ChatView {
         let phase = self.selected_phase.clone();
         let base_url = backend.base_url().to_string();
         let selected_models = Self::normalize_models(&self.selected_models);
+        let autotune_extra = if autotune_chain_enabled {
+            Some(AutoTuneView::load_runtime_options())
+        } else {
+            None
+        };
 
         self.input.clear();
         let now = SystemTime::now()
@@ -736,6 +747,7 @@ impl ChatView {
             let outbound_clone = outbound_msg.clone();
             let model_clone = model_name.clone();
             let base_url_clone = base_url.clone();
+            let autotune_extra_clone = autotune_extra.clone();
             let handle = tokio::spawn(async move {
                 let phase_val = if phase_clone.is_empty() {
                     serde_json::Value::Null
@@ -753,6 +765,13 @@ impl ChatView {
                     body["options"] = serde_json::json!({
                         "model": model_clone,
                     });
+                }
+
+                if let Some(extra) = autotune_extra_clone.clone() {
+                    if body.get("options").is_none() {
+                        body["options"] = serde_json::json!({});
+                    }
+                    body["options"]["extra"] = extra;
                 }
 
                 let client = reqwest::Client::builder()
@@ -773,7 +792,13 @@ impl ChatView {
                     Ok(resp) => {
                         let mut resp = if let Err(err) = resp.error_for_status_ref() {
                             let fallback = backend_clone
-                                .chat(&msg_clone, &mode_clone, &phase_clone, Some(&model_clone))
+                                .chat_with_options(
+                                    &msg_clone,
+                                    &mode_clone,
+                                    &phase_clone,
+                                    Some(&model_clone),
+                                    autotune_extra_clone.clone(),
+                                )
                                 .await
                                 .map(|(content, thinking)| PendingResponse::ChatCompleted {
                                     generation_id,
@@ -1105,6 +1130,7 @@ impl ChatView {
         i18n: &I18n,
         backend: &BackendClient,
         ctx: &egui::Context,
+        autotune_chain_enabled: bool,
     ) {
         // Process any pending async responses
         self.process_pending(i18n);
@@ -1496,6 +1522,14 @@ impl ChatView {
                         });
                 }
                 // Fill remaining space, then Send/Stop button on the right
+                ui.add_space(8.0);
+                let send_hint_key = if cfg!(target_os = "linux") {
+                    "chat.sendShortcutHintLinux"
+                } else {
+                    "chat.sendShortcutHint"
+                };
+                ui.label(egui::RichText::new(i18n.t(send_hint_key)).small().weak());
+
                 // Feature 4: stop button replaces send when thinking
                 if self.sending && self.ai_status == AiStatus::Thinking {
                     let stop_btn = egui::Button::new(format!("\u{23f9} {}", i18n.t("chat.stop")))
@@ -1519,7 +1553,7 @@ impl ChatView {
                         .fill(col)
                         .min_size(egui::vec2(80.0, 28.0));
                     if ui.add_enabled(!self.sending, snd).clicked() {
-                        self.send_message(backend, ctx);
+                        self.send_message(backend, ctx, autotune_chain_enabled);
                     }
                 }
             });
@@ -1559,11 +1593,23 @@ impl ChatView {
             }
 
             // ── Enter to send ─────────────────────────────────────────
-            if resp.has_focus()
-                && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                && !ui.input(|i| i.modifiers.shift)
-            {
-                self.send_message(backend, ctx);
+            let should_send_with_enter = ui.input(|i| {
+                if !resp.has_focus() || !i.key_pressed(egui::Key::Enter) || i.modifiers.shift {
+                    return false;
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    // On Linux/fcitx5, plain Enter is used by IME candidate selection.
+                    // Require Ctrl/Command+Enter for sending to avoid accidental submits.
+                    i.modifiers.ctrl || i.modifiers.command
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    true
+                }
+            });
+            if should_send_with_enter {
+                self.send_message(backend, ctx, autotune_chain_enabled);
             }
 
             // Show error if present

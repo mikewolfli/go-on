@@ -63,6 +63,69 @@ impl SettingsView {
                     changed = true;
                 }
                 ui.end_row();
+
+                ui.label(i18n.t("settings.feature.workflowRunCenter"));
+                if ui
+                    .checkbox(&mut config.features.workflow_run_center, "")
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label(i18n.t("settings.feature.autotuneChainInjection"));
+                if ui
+                    .checkbox(&mut config.features.autotune_chain_injection, "")
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label(i18n.t("settings.feature.skillsLifecycle"));
+                if ui
+                    .checkbox(&mut config.features.skills_lifecycle, "")
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label(i18n.t("settings.feature.providersOps"));
+                if ui
+                    .checkbox(&mut config.features.providers_ops, "")
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label(i18n.t("settings.feature.monitorHistoryAlerts"));
+                if ui
+                    .checkbox(&mut config.features.monitor_history_alerts, "")
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label(i18n.t("settings.feature.configSafeMode"));
+                if ui
+                    .checkbox(&mut config.features.config_safe_mode, "")
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label(i18n.t("settings.feature.setupEnterprise"));
+                if ui
+                    .checkbox(&mut config.features.setup_enterprise, "")
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();
             });
 
         if changed {
@@ -73,6 +136,136 @@ impl SettingsView {
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(8.0);
+
+        if config.features.setup_enterprise {
+            ui.label(i18n.t("settings.enterprise.title"));
+
+            ui.horizontal(|ui| {
+                ui.label(i18n.t("settings.enterprise.environment"));
+                egui::ComboBox::from_id_salt("enterprise_environment")
+                    .selected_text(config.enterprise.active_environment.clone())
+                    .show_ui(ui, |ui| {
+                        for env in &config.enterprise.environments {
+                            if ui
+                                .selectable_label(
+                                    config.enterprise.active_environment == env.name,
+                                    &env.name,
+                                )
+                                .clicked()
+                            {
+                                config.enterprise.active_environment = env.name.clone();
+                                config.backend_url = env.backend_url.clone();
+                                save_app_config(config);
+                            }
+                        }
+                    });
+            });
+
+            if let Some(active_index) = config
+                .enterprise
+                .environments
+                .iter()
+                .position(|env| env.name == config.enterprise.active_environment)
+            {
+                let mut backend_url = config.enterprise.environments[active_index]
+                    .backend_url
+                    .clone();
+                let mut url_changed = false;
+                ui.horizontal(|ui| {
+                    ui.label(i18n.t("settings.enterprise.environmentUrl"));
+                    let resp =
+                        ui.add(egui::TextEdit::singleline(&mut backend_url).desired_width(320.0));
+                    url_changed = resp.changed();
+                });
+                if url_changed {
+                    let normalized = backend_url.trim().trim_end_matches('/').to_string();
+                    config.enterprise.environments[active_index].backend_url = normalized.clone();
+                    config.backend_url = normalized;
+                    save_app_config(config);
+                }
+            }
+
+            ui.horizontal(|ui| {
+                ui.label(i18n.t("settings.enterprise.secretSource"));
+                egui::ComboBox::from_id_salt("enterprise_secret_source")
+                    .selected_text(config.enterprise.secret_source.clone())
+                    .show_ui(ui, |ui| {
+                        for source in ["keyring", "env", "file", "auto"] {
+                            if ui
+                                .selectable_label(config.enterprise.secret_source == source, source)
+                                .clicked()
+                            {
+                                config.enterprise.secret_source = source.to_string();
+                                save_app_config(config);
+                            }
+                        }
+                    });
+            });
+
+            ui.horizontal(|ui| {
+                ui.label(i18n.t("settings.enterprise.exportPath"));
+                ui.text_edit_singleline(&mut config.enterprise.export_path);
+            });
+            ui.horizontal(|ui| {
+                ui.label(i18n.t("settings.enterprise.importPath"));
+                ui.text_edit_singleline(&mut config.enterprise.import_path);
+            });
+
+            ui.horizontal(|ui| {
+                if ui
+                    .button(i18n.t("settings.enterprise.exportMasked"))
+                    .clicked()
+                {
+                    let mut masked = config.clone();
+                    for provider in &mut masked.providers {
+                        if !provider.api_key.is_empty() {
+                            provider.api_key = "********".to_string();
+                        }
+                    }
+                    if let Ok(content) = serde_json::to_string_pretty(&masked) {
+                        let _ = std::fs::write(&config.enterprise.export_path, content);
+                    }
+                }
+                if ui
+                    .button(i18n.t("settings.enterprise.exportFull"))
+                    .clicked()
+                {
+                    if let Ok(content) = serde_json::to_string_pretty(config) {
+                        let _ = std::fs::write(&config.enterprise.export_path, content);
+                    }
+                }
+                if ui
+                    .button(i18n.t("settings.enterprise.importConfig"))
+                    .clicked()
+                {
+                    if let Ok(content) = std::fs::read_to_string(&config.enterprise.import_path) {
+                        if let Ok(imported) = serde_json::from_str::<AppConfig>(&content) {
+                            *config = imported;
+                            save_app_config(config);
+                        }
+                    }
+                }
+                if ui
+                    .button(i18n.t("settings.enterprise.syncCurrent"))
+                    .clicked()
+                {
+                    if let Some(active_env) = config
+                        .enterprise
+                        .environments
+                        .iter_mut()
+                        .find(|env| env.name == config.enterprise.active_environment)
+                    {
+                        active_env.backend_url = config.backend_url.clone();
+                        save_app_config(config);
+                    }
+                }
+            });
+
+            ui.label(i18n.t("settings.enterprise.hint"));
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(8.0);
+        }
 
         // Backend URL setting
         ui.label(i18n.t("settings.backendUrl"));

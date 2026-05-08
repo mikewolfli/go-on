@@ -194,11 +194,7 @@ fn append_metric_window_sample(server: &AcpServer) -> MetricWindowPoint {
     point
 }
 
-pub(super) async fn handle_metrics_window_query(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn metrics_window_query_payload(server: &AcpServer, params: &Value) -> Value {
     let window = params.get("window").and_then(Value::as_str).unwrap_or("5m");
     let seconds = match window {
         "1m" => 60,
@@ -220,23 +216,14 @@ pub(super) async fn handle_metrics_window_query(
         })
         .unwrap_or_default();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "window": window,
-            "series": series,
-        }),
-    )
-    .await
+    json!({
+        "ok": true,
+        "window": window,
+        "series": series,
+    })
 }
 
-pub(super) async fn handle_metrics_errors_summary(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn metrics_errors_summary_payload(server: &AcpServer, params: &Value) -> Value {
     let limit = params
         .get("limit")
         .and_then(Value::as_u64)
@@ -293,30 +280,51 @@ pub(super) async fn handle_metrics_errors_summary(
         })
         .collect::<Vec<_>>();
 
+    json!({
+        "ok": true,
+        "window": params.get("window").and_then(Value::as_str).unwrap_or("5m"),
+        "series": {
+            "qps": snapshot.total_requests as f64 / 60.0,
+            "p95": snapshot.avg_request_duration_ms,
+            "error_rate": if snapshot.total_requests > 0 {
+                snapshot.failed_requests as f64 / snapshot.total_requests as f64
+            } else {
+                0.0
+            },
+            "success_rate": if snapshot.total_requests > 0 {
+                (snapshot.total_requests.saturating_sub(snapshot.failed_requests)) as f64
+                    / snapshot.total_requests as f64
+            } else {
+                1.0
+            },
+        },
+        "error_groups": grouped,
+        "sample_failures": sample_failures,
+    })
+}
+
+pub(super) async fn handle_metrics_window_query(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
     send_result(
         server,
         request_id,
-        json!({
-            "ok": true,
-            "window": params.get("window").and_then(Value::as_str).unwrap_or("5m"),
-            "series": {
-                "qps": snapshot.total_requests as f64 / 60.0,
-                "p95": snapshot.avg_request_duration_ms,
-                "error_rate": if snapshot.total_requests > 0 {
-                    snapshot.failed_requests as f64 / snapshot.total_requests as f64
-                } else {
-                    0.0
-                },
-                "success_rate": if snapshot.total_requests > 0 {
-                    (snapshot.total_requests.saturating_sub(snapshot.failed_requests)) as f64
-                        / snapshot.total_requests as f64
-                } else {
-                    1.0
-                },
-            },
-            "error_groups": grouped,
-            "sample_failures": sample_failures,
-        }),
+        metrics_window_query_payload(server, &params),
+    )
+    .await
+}
+
+pub(super) async fn handle_metrics_errors_summary(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_result(
+        server,
+        request_id,
+        metrics_errors_summary_payload(server, &params),
     )
     .await
 }
@@ -5073,11 +5081,10 @@ fn provider_models_for(server: &AcpServer, provider: &str) -> Vec<crate::agent::
         .unwrap_or_default()
 }
 
-pub(super) async fn handle_provider_test_connection(
+pub(super) fn provider_test_connection_payload(
     server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+    params: &Value,
+) -> Result<Value> {
     let started = Instant::now();
     let provider = params
         .get("provider")
@@ -5086,14 +5093,7 @@ pub(super) async fn handle_provider_test_connection(
         .unwrap_or_default();
 
     if provider.trim().is_empty() {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            "provider is required".to_string(),
-            None,
-        )
-        .await;
+        anyhow::bail!("provider is required");
     }
 
     let models = provider_models_for(server, provider);
@@ -5113,28 +5113,22 @@ pub(super) async fn handle_provider_test_connection(
         "provider api key is not configured"
     };
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": ok,
-            "provider": provider,
-            "latency_ms": started.elapsed().as_millis() as u64,
-            "model_count": models.len(),
-            "key_configured": key_configured,
-            "message": message,
-            "error_code": if ok { Value::Null } else { json!("provider_not_ready") },
-            "error_message": if ok { Value::Null } else { json!(message) },
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": ok,
+        "provider": provider,
+        "latency_ms": started.elapsed().as_millis() as u64,
+        "model_count": models.len(),
+        "key_configured": key_configured,
+        "message": message,
+        "error_code": if ok { Value::Null } else { json!("provider_not_ready") },
+        "error_message": if ok { Value::Null } else { json!(message) },
+    }))
 }
 
-pub(super) async fn handle_provider_test_completion(
+pub(super) fn provider_test_completion_payload(
     server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+    params: &Value,
+) -> Result<Value> {
     let started = Instant::now();
     let provider = params
         .get("provider")
@@ -5143,14 +5137,7 @@ pub(super) async fn handle_provider_test_completion(
         .unwrap_or_default();
 
     if provider.trim().is_empty() {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            "provider is required".to_string(),
-            None,
-        )
-        .await;
+        anyhow::bail!("provider is required");
     }
 
     let models = provider_models_for(server, provider);
@@ -5173,34 +5160,25 @@ pub(super) async fn handle_provider_test_completion(
         "provider has no available model for completion"
     };
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": ok,
-            "provider": provider,
-            "model": selected_model,
-            "latency_ms": started.elapsed().as_millis() as u64,
-            "error_code": if ok { Value::Null } else { json!("model_not_found") },
-            "error_message": if ok { Value::Null } else { json!(message) },
-            "preview": if ok {
-                json!({
-                    "type": "route_preview",
-                    "note": "request routing validated; execution can use this provider/model"
-                })
-            } else {
-                Value::Null
-            },
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": ok,
+        "provider": provider,
+        "model": selected_model,
+        "latency_ms": started.elapsed().as_millis() as u64,
+        "error_code": if ok { Value::Null } else { json!("model_not_found") },
+        "error_message": if ok { Value::Null } else { json!(message) },
+        "preview": if ok {
+            json!({
+                "type": "route_preview",
+                "note": "request routing validated; execution can use this provider/model"
+            })
+        } else {
+            Value::Null
+        },
+    }))
 }
 
-pub(super) async fn handle_provider_capabilities(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn provider_capabilities_payload(server: &AcpServer, params: &Value) -> Result<Value> {
     let provider = params
         .get("provider")
         .or_else(|| params.get("name"))
@@ -5208,14 +5186,7 @@ pub(super) async fn handle_provider_capabilities(
         .unwrap_or_default();
 
     if provider.trim().is_empty() {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            "provider is required".to_string(),
-            None,
-        )
-        .await;
+        anyhow::bail!("provider is required");
     }
 
     let models = provider_models_for(server, provider)
@@ -5247,18 +5218,46 @@ pub(super) async fn handle_provider_capabilities(
         })
         .collect::<Vec<_>>();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": !models.is_empty(),
-            "provider": provider,
-            "capabilities": {
-                "models": models,
-            },
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": !models.is_empty(),
+        "provider": provider,
+        "capabilities": {
+            "models": models,
+        },
+    }))
+}
+
+pub(super) async fn handle_provider_test_connection(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    match provider_test_connection_payload(server, &params) {
+        Ok(payload) => send_result(server, request_id, payload).await,
+        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
+    }
+}
+
+pub(super) async fn handle_provider_test_completion(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    match provider_test_completion_payload(server, &params) {
+        Ok(payload) => send_result(server, request_id, payload).await,
+        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
+    }
+}
+
+pub(super) async fn handle_provider_capabilities(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    match provider_capabilities_payload(server, &params) {
+        Ok(payload) => send_result(server, request_id, payload).await,
+        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
+    }
 }
 
 /// Handle provider configuration request from GUI or other clients.

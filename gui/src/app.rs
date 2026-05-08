@@ -92,21 +92,41 @@ impl GoOnApp {
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null());
                 // 从 gui_config.json 读取所有 provider key 设为环境变量传给后端
-                // macOS/Windows 走 keyring，Linux 走 env fallback
-                for p in &config.providers {
-                    let env_var = match p.name.to_lowercase().as_str() {
-                        "deepseek" => Some("DEEPSEEK_API_KEY"),
-                        "openai" => Some("OPENAI_API_KEY"),
-                        "anthropic" => Some("ANTHROPIC_API_KEY"),
-                        "qwen" => Some("QWEN_API_KEY"),
-                        "gemini" => Some("GEMINI_API_KEY"),
-                        "groq" => Some("GROQ_API_KEY"),
-                        "mistral" => Some("MISTRAL_API_KEY"),
-                        "copilot" => Some("GITHUB_COPILOT_TOKEN"),
-                        _ => None,
+                // 同时也从 keyring 读取（兼容 CLI --secret set 配置的 key）
+                let mut set_env = |name: &str, key: &str| {
+                    let env_var = match name {
+                        "deepseek" => "DEEPSEEK_API_KEY",
+                        "openai" => "OPENAI_API_KEY",
+                        "anthropic" => "ANTHROPIC_API_KEY",
+                        "qwen" => "QWEN_API_KEY",
+                        "gemini" => "GEMINI_API_KEY",
+                        "groq" => "GROQ_API_KEY",
+                        "mistral" => "MISTRAL_API_KEY",
+                        "copilot" => "GITHUB_COPILOT_TOKEN",
+                        _ => return,
                     };
-                    if let Some(var) = env_var {
-                        cmd.env(var, &p.api_key);
+                    cmd.env(env_var, key);
+                };
+                // 1. From gui_config.json providers
+                for p in &config.providers {
+                    if !p.api_key.is_empty() {
+                        set_env(&p.name.to_lowercase(), &p.api_key);
+                    }
+                }
+                // 2. From keyring (covers CLI --secret set cases)
+                let known = [
+                    "deepseek",
+                    "openai",
+                    "anthropic",
+                    "qwen",
+                    "gemini",
+                    "groq",
+                    "mistral",
+                    "copilot",
+                ];
+                for name in &known {
+                    if let Some(key) = crate::keyring_util::get_api_key(name) {
+                        set_env(name, &key);
                     }
                 }
                 match cmd.spawn() {
@@ -247,20 +267,47 @@ impl eframe::App for GoOnApp {
 
         // Toolbar
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(self.i18n.t("app.title"));
+            ui.horizontal_wrapped(|ui| {
+                let title_color = if ui.visuals().dark_mode {
+                    egui::Color32::from_rgb(236, 241, 255)
+                } else {
+                    egui::Color32::from_rgb(19, 53, 110)
+                };
+                ui.label(
+                    egui::RichText::new(self.i18n.t("app.title"))
+                        .text_style(egui::TextStyle::Name("Title".into()))
+                        .strong()
+                        .color(title_color),
+                );
+
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let status = if is_connected {
                         self.i18n.t("status.connected")
                     } else {
                         self.i18n.t("status.disconnected")
                     };
+                    let status_color = if is_connected {
+                        egui::Color32::from_rgb(32, 160, 95)
+                    } else {
+                        egui::Color32::from_rgb(198, 60, 60)
+                    };
                     let pid_info = self
                         .backend_child
                         .as_ref()
-                        .map(|c| format!(" [PID:{}]", c.id()))
+                        .map(|c| format!("  PID:{}", c.id()))
                         .unwrap_or_default();
-                    ui.label(format!("{}{}", status, pid_info));
+
+                    egui::Frame::new()
+                        .fill(status_color.gamma_multiply(0.15))
+                        .corner_radius(12.0)
+                        .inner_margin(egui::Margin::symmetric(10i8, 4i8))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{}{}", status, pid_info))
+                                    .color(status_color)
+                                    .strong(),
+                            );
+                        });
                 });
             });
         });
@@ -288,19 +335,55 @@ impl eframe::App for GoOnApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             let tab = self.active_tab.clone();
             let has_backend = self.has_providers;
+            let monitor_history_alerts_enabled = self.config.features.monitor_history_alerts;
+            let skills_lifecycle_enabled = self.config.features.skills_lifecycle;
+            let workflow_run_center_enabled = self.config.features.workflow_run_center;
+            let autotune_chain_enabled = self.config.features.autotune_chain_injection;
+            let config_safe_mode_enabled = self.config.features.config_safe_mode;
+            let providers_ops_enabled = self.config.features.providers_ops;
             match tab.as_str() {
-                "monitor" => self.monitor_view.show(ui, &self.i18n, has_backend, &self.backend),
-                "chat" => self.chat_view.show(ui, &self.i18n, &self.backend, ctx),
-                "skills" => self.skills_view.show(ui, &self.i18n, &self.backend, ctx),
-                "settings" => SettingsView::show(ui, &self.i18n, &mut self.config),
-                "workflow" => self.workflow_view.show(ui, ctx),
-                "autotune" => self.autotune_view.show(ui),
-                "security" => self.security_view.show(ui, &self.backend, ctx),
-                "config" => self.config_editor_view.show(ui, &mut self.config),
-                "providers" => {
-                    self.providers_view
-                        .show(ui, &self.i18n, &mut self.config, &self.backend, ctx)
+                "monitor" => self.monitor_view.show(
+                    ui,
+                    &self.i18n,
+                    has_backend,
+                    &self.backend,
+                    monitor_history_alerts_enabled,
+                ),
+                "chat" => {
+                    self.chat_view
+                        .show(ui, &self.i18n, &self.backend, ctx, autotune_chain_enabled)
                 }
+                "skills" => self.skills_view.show(
+                    ui,
+                    &self.i18n,
+                    &self.backend,
+                    ctx,
+                    skills_lifecycle_enabled,
+                ),
+                "settings" => SettingsView::show(ui, &self.i18n, &mut self.config),
+                "workflow" => self.workflow_view.show(
+                    ui,
+                    &self.i18n,
+                    ctx,
+                    &self.backend,
+                    workflow_run_center_enabled,
+                ),
+                "autotune" => self.autotune_view.show(ui, &self.i18n),
+                "security" => self.security_view.show(ui, &self.i18n, &self.backend, ctx),
+                "config" => self.config_editor_view.show(
+                    ui,
+                    &self.i18n,
+                    &mut self.config,
+                    config_safe_mode_enabled,
+                ),
+                "providers" => self.providers_view.show(
+                    ui,
+                    &self.i18n,
+                    &mut self.config,
+                    &self.backend,
+                    ctx,
+                    providers_ops_enabled,
+                ),
                 _ => {
                     ui.heading(&tab);
                     ui.label("Unknown tab id.");

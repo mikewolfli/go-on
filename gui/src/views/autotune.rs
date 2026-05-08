@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::PathBuf;
+
+use crate::i18n::I18n;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AutoTuneState {
@@ -46,6 +49,16 @@ impl AutoTuneView {
         }
     }
 
+    pub fn load_runtime_options() -> Value {
+        let state = Self::load_state();
+        serde_json::json!({
+            "temperature": state.temperature,
+            "top_p": state.top_p,
+            "max_tokens": state.max_tokens,
+            "aggressive": state.aggressive,
+        })
+    }
+
     fn save_state(&self) {
         let path = Self::state_path();
         if let Some(parent) = path.parent() {
@@ -64,26 +77,26 @@ impl AutoTuneView {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui) {
-        ui.heading("AutoTune");
-        ui.label("Tune generation defaults used by your workflows and prompts.");
+    pub fn show(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
+        ui.heading(i18n.t("tab.autotune"));
+        ui.label(i18n.t("autotune.hint"));
         ui.separator();
 
         let mut changed = false;
         changed |= ui
-            .add(egui::Slider::new(&mut self.state.temperature, 0.0..=2.0).text("Temperature"))
+            .add(egui::Slider::new(&mut self.state.temperature, 0.0..=2.0).text(i18n.t("autotune.temperature")))
             .changed();
         changed |= ui
-            .add(egui::Slider::new(&mut self.state.top_p, 0.1..=1.0).text("Top-p"))
+            .add(egui::Slider::new(&mut self.state.top_p, 0.1..=1.0).text(i18n.t("autotune.topP")))
             .changed();
         changed |= ui
-            .add(egui::Slider::new(&mut self.state.max_tokens, 128..=8192).text("Max tokens"))
+            .add(egui::Slider::new(&mut self.state.max_tokens, 128..=8192).text(i18n.t("autotune.maxTokens")))
             .changed();
         changed |= ui
-            .checkbox(&mut self.state.aggressive, "Aggressive optimization")
+            .checkbox(&mut self.state.aggressive, i18n.t("autotune.aggressive"))
             .changed();
 
-        if ui.button("Reset Defaults").clicked() {
+        if ui.button(i18n.t("autotune.resetDefaults")).clicked() {
             self.state = AutoTuneState::default();
             changed = true;
         }

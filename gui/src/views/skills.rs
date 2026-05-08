@@ -8,6 +8,7 @@ enum SkillsUpdate {
     List(Vec<SkillRecord>, Option<String>),
     Create(Result<SkillRecord, String>),
     Import(Result<SkillRecord, String>),
+    Message { text: String, is_error: bool },
 }
 
 pub struct SkillsView {
@@ -23,6 +24,12 @@ pub struct SkillsView {
     pub import_url: String,
     pub show_import: bool,
     pub sending: bool,
+    selected_skill_name: String,
+    edit_desc: String,
+    edit_prompt: String,
+    edit_schema: String,
+    test_input: String,
+    rollback_version: String,
     initialized: bool,
     pending_rx: mpsc::Receiver<SkillsUpdate>,
     pending_tx: mpsc::Sender<SkillsUpdate>,
@@ -44,6 +51,12 @@ impl SkillsView {
             import_url: String::new(),
             show_import: false,
             sending: false,
+            selected_skill_name: String::new(),
+            edit_desc: String::new(),
+            edit_prompt: String::new(),
+            edit_schema: r#"{"query":"string"}"#.to_string(),
+            test_input: r#"{"query":"health check"}"#.to_string(),
+            rollback_version: String::new(),
             initialized: false,
             pending_rx,
             pending_tx,
@@ -65,12 +78,35 @@ impl SkillsView {
         self.skills.push(skill);
     }
 
-    fn trigger_refresh(&mut self, backend: &BackendClient, ctx: &egui::Context) {
+    fn load_skill_editor(&mut self, skill: &SkillRecord) {
+        self.selected_skill_name = skill.name.clone().unwrap_or_default();
+        self.edit_desc = skill.description.clone().unwrap_or_default();
+        self.edit_prompt.clear();
+        self.edit_schema = r#"{"query":"string"}"#.to_string();
+        self.test_input = r#"{"query":"health check"}"#.to_string();
+        self.rollback_version = skill.version.clone().unwrap_or_default();
+    }
+
+    fn load_skill_editor_by_name(&mut self, name: &str) -> bool {
+        if let Some(skill) = self
+            .skills
+            .iter()
+            .find(|skill| skill.name.as_deref() == Some(name))
+            .cloned()
+        {
+            self.load_skill_editor(&skill);
+            return true;
+        }
+        false
+    }
+
+    fn trigger_refresh(&mut self, i18n: &I18n, backend: &BackendClient, ctx: &egui::Context) {
         self.loading = true;
         self.error.clear();
         let tx = self.pending_tx.clone();
         let backend_clone = backend.clone();
         let ctx_clone = ctx.clone();
+        let fetch_failed = i18n.t("skills.fetchFailed").to_string();
         tokio::spawn(async move {
             let result = backend_clone.list_skills().await;
             match result {
@@ -85,7 +121,7 @@ impl SkillsView {
                 Err(e) => {
                     let _ = tx.send(SkillsUpdate::List(
                         Vec::new(),
-                        Some(format!("Failed to fetch skills: {}", e)),
+                        Some(format!("{}: {}", fetch_failed, e)),
                     ));
                 }
             }
@@ -110,13 +146,21 @@ impl SkillsView {
                     self.sending = false;
                     match result {
                         Ok(skill) => {
+                            let is_default_creator =
+                                skill.name.as_deref() == Some("create-a-skill");
                             self.error.clear();
                             self.upsert_skill(skill);
                             self.create_name.clear();
                             self.create_desc.clear();
                             self.create_prompt.clear();
                             self.show_create = false;
-                            self.success = i18n.t("skills.create.success").to_string();
+                            if is_default_creator
+                                && self.load_skill_editor_by_name("create-a-skill")
+                            {
+                                self.success = i18n.t("skills.defaultCreator.loaded").to_string();
+                            } else {
+                                self.success = i18n.t("skills.create.success").to_string();
+                            }
                         }
                         Err(e) => {
                             self.success.clear();
@@ -140,6 +184,16 @@ impl SkillsView {
                         }
                     }
                 }
+                SkillsUpdate::Message { text, is_error } => {
+                    self.sending = false;
+                    if is_error {
+                        self.error = text;
+                        self.success.clear();
+                    } else {
+                        self.success = text;
+                        self.error.clear();
+                    }
+                }
             }
         }
     }
@@ -150,11 +204,12 @@ impl SkillsView {
         i18n: &I18n,
         backend: &BackendClient,
         ctx: &egui::Context,
+        lifecycle_enabled: bool,
     ) {
         self.process_pending(i18n);
         if !self.initialized {
             self.initialized = true;
-            self.trigger_refresh(backend, ctx);
+            self.trigger_refresh(i18n, backend, ctx);
         }
 
         ui.heading(i18n.t("tab.skills"));
@@ -206,10 +261,11 @@ impl SkillsView {
 
         // Action buttons
         ui.horizontal(|ui| {
-            if ui
-                .button("➕")
-                .on_hover_text(i18n.t("skills.create.title"))
-                .clicked()
+            if lifecycle_enabled
+                && ui
+                    .button("➕")
+                    .on_hover_text(i18n.t("skills.create.title"))
+                    .clicked()
             {
                 self.show_create = !self.show_create;
                 if self.show_create {
@@ -218,10 +274,11 @@ impl SkillsView {
                 self.error.clear();
                 self.success.clear();
             }
-            if ui
-                .button("📥")
-                .on_hover_text(i18n.t("skills.import.title"))
-                .clicked()
+            if lifecycle_enabled
+                && ui
+                    .button("📥")
+                    .on_hover_text(i18n.t("skills.import.title"))
+                    .clicked()
             {
                 self.show_import = !self.show_import;
                 if self.show_import {
@@ -237,12 +294,16 @@ impl SkillsView {
                 .clicked()
             {
                 self.success.clear();
-                self.trigger_refresh(backend, ctx);
+                self.trigger_refresh(i18n, backend, ctx);
             }
         });
 
+        if !lifecycle_enabled {
+            ui.label(i18n.t("skills.lifecycle.hidden"));
+        }
+
         // Create dialog – calls skill.create RPC
-        if self.show_create {
+        if lifecycle_enabled && self.show_create {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 let text = i18n.t("skills.create.title").to_string();
                 let resp = ui.label(&text);
@@ -320,7 +381,7 @@ impl SkillsView {
                         .ok()
                         .is_none_or(|v| !v.is_object())
                     {
-                        self.error = "Input schema must be a valid JSON object.".to_string();
+                        self.error = i18n.t("skills.error.invalidSchemaObject").to_string();
                     } else {
                         self.error.clear();
                         self.success.clear();
@@ -334,6 +395,7 @@ impl SkillsView {
                         let desc_clone = desc.clone();
                         let prompt_clone = prompt.clone();
                         let schema_clone = schema.clone();
+                        let rpc_error = i18n.t("skills.error.rpc").to_string();
                         tokio::spawn(async move {
                             let result = backend_clone
                                 .create_skill(
@@ -356,7 +418,9 @@ impl SkillsView {
                                             .as_secs(),
                                     ),
                                 })),
-                                Err(e) => SkillsUpdate::Create(Err(format!("RPC error: {}", e))),
+                                Err(e) => {
+                                    SkillsUpdate::Create(Err(format!("{}: {}", rpc_error, e)))
+                                }
                             });
                             ctx_clone.request_repaint();
                         });
@@ -366,7 +430,7 @@ impl SkillsView {
         }
 
         // Import dialog – currently stores locally (can be extended for remote import)
-        if self.show_import {
+        if lifecycle_enabled && self.show_import {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 let text = i18n.t("skills.import.title").to_string();
                 let resp = ui.label(&text);
@@ -390,8 +454,7 @@ impl SkillsView {
                     {
                         let security = security_prefs::load();
                         if security.block_external_urls {
-                            self.error =
-                                "External URL import is blocked by security settings.".to_string();
+                            self.error = i18n.t("skills.import.blockedBySecurity").to_string();
                             self.success.clear();
                             return;
                         }
@@ -415,35 +478,45 @@ impl SkillsView {
                             let fallback_name = i18n.t("skills.import.unnamed").to_string();
                             let imported_from_tpl =
                                 i18n.t("skills.import.importedFrom").to_string();
+                            let invalid_url = i18n.t("skills.import.invalidUrl").to_string();
+                            let http_client_error =
+                                i18n.t("skills.import.httpClientError").to_string();
+                            let fetch_error = i18n.t("skills.import.fetchError").to_string();
+                            let http_status_error =
+                                i18n.t("skills.import.httpStatusError").to_string();
+                            let invalid_manifest =
+                                i18n.t("skills.import.invalidManifest").to_string();
+                            let missing_prompt_template =
+                                i18n.t("skills.import.missingPromptTemplate").to_string();
+                            let serialize_schema_error =
+                                i18n.t("skills.import.serializeSchemaError").to_string();
+                            let rpc_error = i18n.t("skills.error.rpc").to_string();
 
                             tokio::spawn(async move {
                                 let result = async {
                                     if !(url_clone.starts_with("http://")
                                         || url_clone.starts_with("https://"))
                                     {
-                                        return Err(
-                                            "Invalid URL: must start with http:// or https://"
-                                                .to_string(),
-                                        );
+                                        return Err(invalid_url);
                                     }
 
                                     let http = reqwest::Client::builder()
                                         .timeout(Duration::from_secs(15))
                                         .build()
-                                        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+                                        .map_err(|e| format!("{}: {e}", http_client_error))?;
 
                                     let resp = http
                                         .get(&url_clone)
                                         .send()
                                         .await
-                                        .map_err(|e| format!("Failed to fetch URL: {e}"))?;
+                                        .map_err(|e| format!("{}: {e}", fetch_error))?;
                                     let resp = resp
                                         .error_for_status()
-                                        .map_err(|e| format!("HTTP status error: {e}"))?;
+                                        .map_err(|e| format!("{}: {e}", http_status_error))?;
                                     let manifest: serde_json::Value = resp
                                         .json()
                                         .await
-                                        .map_err(|e| format!("Invalid JSON manifest: {e}"))?;
+                                        .map_err(|e| format!("{}: {e}", invalid_manifest))?;
 
                                     let name = manifest
                                         .get("name")
@@ -469,10 +542,7 @@ impl SkillsView {
                                         .get("prompt_template")
                                         .or_else(|| manifest.get("prompt"))
                                         .and_then(serde_json::Value::as_str)
-                                        .ok_or_else(|| {
-                                            "Manifest missing required field: prompt_template"
-                                                .to_string()
-                                        })?
+                                        .ok_or(missing_prompt_template)?
                                         .to_string();
 
                                     let input_schema = manifest
@@ -480,9 +550,7 @@ impl SkillsView {
                                         .cloned()
                                         .unwrap_or_else(|| serde_json::json!({"query":"string"}));
                                     let input_schema_str = serde_json::to_string(&input_schema)
-                                        .map_err(|e| {
-                                            format!("Failed to serialize input_schema: {e}")
-                                        })?;
+                                        .map_err(|e| format!("{}: {e}", serialize_schema_error))?;
 
                                     backend_clone
                                         .create_skill(
@@ -492,7 +560,7 @@ impl SkillsView {
                                             &input_schema_str,
                                         )
                                         .await
-                                        .map_err(|e| format!("RPC error: {e}"))?;
+                                        .map_err(|e| format!("{}: {e}", rpc_error))?;
 
                                     Ok(SkillRecord {
                                         name: Some(name),
@@ -547,7 +615,7 @@ impl SkillsView {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("\u{1f9e0}");
-                            let text = "Skill Creator".to_string();
+                            let text = i18n.t("skills.defaultCreator.title").to_string();
                             let resp = ui.label(
                                 egui::RichText::new(&text)
                                     .color(egui::Color32::from_rgb(0, 106, 255))
@@ -560,7 +628,7 @@ impl SkillsView {
                                 }
                             });
                         });
-                        let text = "Create and manage your own AI skills using natural language. Describe what you want, and this skill will help you build it.".to_string();
+                        let text = i18n.t("skills.defaultCreator.description").to_string();
                         let resp = ui.label(
                             egui::RichText::new(&text)
                                 .color(egui::Color32::from_rgb(60, 60, 70))
@@ -573,19 +641,27 @@ impl SkillsView {
                             }
                         });
                         ui.add_space(8.0);
-                        let btn = egui::Button::new("\u{2795} Create Default Skill")
+                        let btn = egui::Button::new(i18n.t("skills.defaultCreator.button"))
                             .fill(egui::Color32::from_rgb(0, 106, 255))
                             .min_size(egui::vec2(180.0, 32.0));
                         if ui.add(btn).clicked()
                         {
+                            if self.load_skill_editor_by_name("create-a-skill") {
+                                self.error.clear();
+                                self.success = i18n.t("skills.defaultCreator.loaded").to_string();
+                                return;
+                            }
                             self.sending = true;
                             let tx = self.pending_tx.clone();
                             let backend_clone = backend.clone();
                             let ctx_clone = ctx.clone();
+                            let seed_description =
+                                i18n.t("skills.defaultCreator.description").to_string();
+                            let default_loaded = i18n.t("skills.defaultCreator.loaded").to_string();
                             tokio::spawn(async move {
                                 let result = backend_clone.create_skill(
                                         "create-a-skill",
-                                        "Helps you create and manage AI skills through natural language conversation",
+                                        &seed_description,
                                         "You are a Skill Creator assistant. Your role is to help the user design, create, and manage AI skills.\n\nWhen the user describes a task they want to automate:\n1. Understand the core objective\n2. Suggest a skill name and description\n3. Help them define the input schema\n4. Generate an effective prompt template\n\nAsk clarifying questions to refine the skill design before finalizing.",
                                         r#"{"query": "string", "context": "string"}"#,
                                     ).await;
@@ -593,14 +669,25 @@ impl SkillsView {
                                     Ok(_) => {
                                         let _ = tx.send(SkillsUpdate::Create(Ok(SkillRecord {
                                             name: Some("create-a-skill".to_string()),
-                                            description: Some("Helps you create and manage AI skills through natural language conversation".to_string()),
+                                            description: Some(seed_description),
                                             version: Some("1".to_string()),
                                             enabled: Some(true),
                                             imported_at: Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()),
                                         })));
                                     }
                                     Err(e) => {
-                                        let _ = tx.send(SkillsUpdate::Create(Err(e)));
+                                        if e.contains("already")
+                                            || e.contains("已存在")
+                                            || e.contains("已注册")
+                                            || e.contains("已註冊")
+                                        {
+                                            let _ = tx.send(SkillsUpdate::Message {
+                                                text: default_loaded,
+                                                is_error: false,
+                                            });
+                                        } else {
+                                            let _ = tx.send(SkillsUpdate::Create(Err(e)));
+                                        }
                                     }
                                 }
                                 ctx_clone.request_repaint();
@@ -615,10 +702,14 @@ impl SkillsView {
             return;
         }
 
-        for skill in &self.skills {
+        for skill in self.skills.clone() {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let name_text = skill.name.as_deref().unwrap_or("unnamed").to_string();
+                    let name_text = skill
+                        .name
+                        .as_deref()
+                        .unwrap_or(i18n.t("skills.import.unnamed").as_ref())
+                        .to_string();
                     let resp = ui.colored_label(egui::Color32::from_rgb(100, 150, 255), &name_text);
                     resp.context_menu(|ui| {
                         if ui.button("📋 Copy").clicked() {
@@ -645,8 +736,276 @@ impl SkillsView {
                         }
                     });
                 }
+                if lifecycle_enabled {
+                    ui.horizontal(|ui| {
+                        let name = skill.name.clone().unwrap_or_default();
+                        let is_enabled = skill.enabled.unwrap_or(true);
+                        let toggle_label = if is_enabled {
+                            i18n.t("skills.lifecycle.disable")
+                        } else {
+                            i18n.t("skills.lifecycle.enable")
+                        };
+                        if ui.button(i18n.t("skills.lifecycle.edit")).clicked() && !name.is_empty()
+                        {
+                            self.load_skill_editor(&skill);
+                        }
+                        if ui.button(toggle_label).clicked() && !name.is_empty() {
+                            self.sending = true;
+                            let tx = self.pending_tx.clone();
+                            let backend_clone = backend.clone();
+                            let ctx_clone = ctx.clone();
+                            let skill_name = name.clone();
+                            let disabled_tpl = i18n.t("skills.lifecycle.disabled").to_string();
+                            let enabled_tpl = i18n.t("skills.lifecycle.enabled").to_string();
+                            let failed_tpl = i18n.t("skills.lifecycle.toggleFailed").to_string();
+                            tokio::spawn(async move {
+                                let result = if is_enabled {
+                                    backend_clone.disable_skill(&skill_name).await
+                                } else {
+                                    backend_clone.enable_skill(&skill_name).await
+                                };
+                                let is_error = result.is_err();
+                                let msg = match result {
+                                    Ok(_) => {
+                                        if is_enabled {
+                                            disabled_tpl.replace("{name}", &skill_name)
+                                        } else {
+                                            enabled_tpl.replace("{name}", &skill_name)
+                                        }
+                                    }
+                                    Err(e) => failed_tpl
+                                        .replace("{name}", &skill_name)
+                                        .replace("{error}", &e.to_string()),
+                                };
+                                let _ = tx.send(SkillsUpdate::Message {
+                                    text: msg,
+                                    is_error,
+                                });
+                                ctx_clone.request_repaint();
+                            });
+                        }
+                        if ui.button(i18n.t("skills.lifecycle.delete")).clicked()
+                            && !name.is_empty()
+                        {
+                            self.sending = true;
+                            let tx = self.pending_tx.clone();
+                            let backend_clone = backend.clone();
+                            let ctx_clone = ctx.clone();
+                            let skill_name = name.clone();
+                            let removed_tpl = i18n.t("skills.lifecycle.removed").to_string();
+                            let failed_tpl = i18n.t("skills.lifecycle.removeFailed").to_string();
+                            tokio::spawn(async move {
+                                let result = backend_clone.remove_skill(&skill_name).await;
+                                let is_error = result.is_err();
+                                let msg = match result {
+                                    Ok(_) => removed_tpl.replace("{name}", &skill_name),
+                                    Err(e) => failed_tpl
+                                        .replace("{name}", &skill_name)
+                                        .replace("{error}", &e.to_string()),
+                                };
+                                let _ = tx.send(SkillsUpdate::Message {
+                                    text: msg,
+                                    is_error,
+                                });
+                                ctx_clone.request_repaint();
+                            });
+                        }
+                        if ui.button(i18n.t("skills.lifecycle.versions")).clicked()
+                            && !name.is_empty()
+                        {
+                            self.sending = true;
+                            let tx = self.pending_tx.clone();
+                            let backend_clone = backend.clone();
+                            let ctx_clone = ctx.clone();
+                            let skill_name = name.clone();
+                            let count_tpl = i18n.t("skills.lifecycle.versionCount").to_string();
+                            let failed_tpl = i18n.t("skills.lifecycle.versionsFailed").to_string();
+                            tokio::spawn(async move {
+                                let result = backend_clone.list_skill_versions(&skill_name).await;
+                                let is_error = result.is_err();
+                                let msg = match result {
+                                    Ok(v) => {
+                                        let count = v
+                                            .get("versions")
+                                            .and_then(serde_json::Value::as_array)
+                                            .map(|arr| arr.len())
+                                            .unwrap_or(0);
+                                        count_tpl
+                                            .replace("{name}", &skill_name)
+                                            .replace("{count}", &count.to_string())
+                                    }
+                                    Err(e) => failed_tpl
+                                        .replace("{name}", &skill_name)
+                                        .replace("{error}", &e.to_string()),
+                                };
+                                let _ = tx.send(SkillsUpdate::Message {
+                                    text: msg,
+                                    is_error,
+                                });
+                                ctx_clone.request_repaint();
+                            });
+                        }
+                    });
+                }
             });
             ui.add_space(4.0);
+        }
+
+        if lifecycle_enabled && !self.selected_skill_name.is_empty() {
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(6.0);
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.label(format!(
+                    "{}: {}",
+                    i18n.t("skills.lifecycle.editTitle"),
+                    self.selected_skill_name
+                ));
+                ui.horizontal(|ui| {
+                    ui.label(i18n.t("skills.create.desc"));
+                    ui.text_edit_singleline(&mut self.edit_desc);
+                });
+                ui.label(i18n.t("skills.lifecycle.promptOverride"));
+                ui.text_edit_multiline(&mut self.edit_prompt);
+                ui.label(i18n.t("skills.lifecycle.inputSchema"));
+                ui.text_edit_multiline(&mut self.edit_schema);
+                ui.horizontal(|ui| {
+                    if ui.button(i18n.t("skills.lifecycle.saveEdit")).clicked() {
+                        let schema =
+                            match serde_json::from_str::<serde_json::Value>(&self.edit_schema) {
+                                Ok(schema) if schema.is_object() => schema,
+                                Ok(_) => {
+                                    self.error =
+                                        i18n.t("skills.error.invalidSchemaObject").to_string();
+                                    return;
+                                }
+                                Err(e) => {
+                                    self.error =
+                                        format!("{}: {e}", i18n.t("skills.error.invalidSchema"));
+                                    return;
+                                }
+                            };
+
+                        self.sending = true;
+                        let tx = self.pending_tx.clone();
+                        let backend_clone = backend.clone();
+                        let ctx_clone = ctx.clone();
+                        let skill_name = self.selected_skill_name.clone();
+                        let desc = if self.edit_desc.trim().is_empty() {
+                            None
+                        } else {
+                            Some(self.edit_desc.trim().to_string())
+                        };
+                        let prompt = if self.edit_prompt.trim().is_empty() {
+                            None
+                        } else {
+                            Some(self.edit_prompt.trim().to_string())
+                        };
+                        let updated_tpl = i18n.t("skills.lifecycle.updated").to_string();
+                        let failed_tpl = i18n.t("skills.lifecycle.updateFailed").to_string();
+                        tokio::spawn(async move {
+                            let result = backend_clone
+                                .update_skill(&skill_name, desc, prompt, Some(schema), None)
+                                .await;
+                            let is_error = result.is_err();
+                            let msg = match result {
+                                Ok(_) => updated_tpl.replace("{name}", &skill_name),
+                                Err(e) => failed_tpl
+                                    .replace("{name}", &skill_name)
+                                    .replace("{error}", &e.to_string()),
+                            };
+                            let _ = tx.send(SkillsUpdate::Message {
+                                text: msg,
+                                is_error,
+                            });
+                            ctx_clone.request_repaint();
+                        });
+                    }
+
+                    if ui.button(i18n.t("common.close")).clicked() {
+                        self.selected_skill_name.clear();
+                    }
+                });
+
+                ui.add_space(6.0);
+                ui.label(i18n.t("skills.lifecycle.testInput"));
+                ui.text_edit_multiline(&mut self.test_input);
+                if ui.button(i18n.t("skills.lifecycle.test")).clicked() {
+                    let input = match serde_json::from_str::<serde_json::Value>(&self.test_input) {
+                        Ok(input) => input,
+                        Err(e) => {
+                            self.error =
+                                format!("{}: {e}", i18n.t("skills.error.invalidTestInput"));
+                            return;
+                        }
+                    };
+
+                    self.sending = true;
+                    let tx = self.pending_tx.clone();
+                    let backend_clone = backend.clone();
+                    let ctx_clone = ctx.clone();
+                    let skill_name = self.selected_skill_name.clone();
+                    let result_tpl = i18n.t("skills.lifecycle.testResult").to_string();
+                    let failed_tpl = i18n.t("skills.lifecycle.testFailed").to_string();
+                    tokio::spawn(async move {
+                        let result = backend_clone.test_skill(&skill_name, input).await;
+                        let is_error = result.is_err();
+                        let msg = match result {
+                            Ok(v) => result_tpl
+                                .replace("{name}", &skill_name)
+                                .replace("{result}", &v.to_string()),
+                            Err(e) => failed_tpl
+                                .replace("{name}", &skill_name)
+                                .replace("{error}", &e.to_string()),
+                        };
+                        let _ = tx.send(SkillsUpdate::Message {
+                            text: msg,
+                            is_error,
+                        });
+                        ctx_clone.request_repaint();
+                    });
+                }
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(i18n.t("skills.lifecycle.rollbackVersion"));
+                    ui.text_edit_singleline(&mut self.rollback_version);
+                    if ui.button(i18n.t("skills.lifecycle.rollback")).clicked() {
+                        let version = self.rollback_version.trim().to_string();
+                        if version.is_empty() {
+                            self.error = i18n.t("skills.lifecycle.rollbackRequired").to_string();
+                            return;
+                        }
+
+                        self.sending = true;
+                        let tx = self.pending_tx.clone();
+                        let backend_clone = backend.clone();
+                        let ctx_clone = ctx.clone();
+                        let skill_name = self.selected_skill_name.clone();
+                        let rolled_back_tpl = i18n.t("skills.lifecycle.rolledBack").to_string();
+                        let failed_tpl = i18n.t("skills.lifecycle.rollbackFailed").to_string();
+                        tokio::spawn(async move {
+                            let result = backend_clone
+                                .rollback_skill_version(&skill_name, &version)
+                                .await;
+                            let is_error = result.is_err();
+                            let msg = match result {
+                                Ok(_) => rolled_back_tpl
+                                    .replace("{name}", &skill_name)
+                                    .replace("{version}", &version),
+                                Err(e) => failed_tpl
+                                    .replace("{name}", &skill_name)
+                                    .replace("{error}", &e.to_string()),
+                            };
+                            let _ = tx.send(SkillsUpdate::Message {
+                                text: msg,
+                                is_error,
+                            });
+                            ctx_clone.request_repaint();
+                        });
+                    }
+                });
+            });
         }
     }
 }

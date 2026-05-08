@@ -535,6 +535,28 @@ impl I18n {
                 "打開外部編輯器"
             ),
         );
+        m.insert(
+            "chat.sendShortcutHint",
+            tr!(
+                en,
+                "Enter send, Shift+Enter newline",
+                cn,
+                "Enter 发送，Shift+Enter 换行",
+                tw,
+                "Enter 發送，Shift+Enter 換行"
+            ),
+        );
+        m.insert(
+            "chat.sendShortcutHintLinux",
+            tr!(
+                en,
+                "Ctrl+Enter send (IME-safe), Enter newline",
+                cn,
+                "Ctrl+Enter 发送（输入法安全），Enter 换行",
+                tw,
+                "Ctrl+Enter 發送（輸入法安全），Enter 換行"
+            ),
+        );
 
         // Setup
         m.insert(
@@ -986,6 +1008,10 @@ impl I18n {
             "theme.hellokitty",
             tr!(en, "Hello Kitty", cn, "Hello Kitty", tw, "Hello Kitty"),
         );
+        m.insert(
+            "theme.serveThePeople",
+            tr!(en, "Serve The People", cn, "为人民服务", tw, "為人民服務"),
+        );
 
         // Time format
         m.insert(
@@ -1020,6 +1046,1028 @@ impl I18n {
                 tw,
                 "Go-On 後端服務器地址"
             ),
+        );
+        m.insert("common.close", tr!(en, "Close", cn, "关闭", tw, "關閉"));
+        m.insert(
+            "settings.feature.workflowRunCenter",
+            tr!(
+                en,
+                "Workflow Run Center",
+                cn,
+                "工作流运行中心",
+                tw,
+                "工作流運行中心"
+            ),
+        );
+        m.insert(
+            "settings.feature.autotuneChainInjection",
+            tr!(
+                en,
+                "AutoTune Chain Injection",
+                cn,
+                "AutoTune 链路注入",
+                tw,
+                "AutoTune 鏈路注入"
+            ),
+        );
+        m.insert(
+            "settings.feature.skillsLifecycle",
+            tr!(
+                en,
+                "Skills Lifecycle",
+                cn,
+                "技能生命周期",
+                tw,
+                "技能生命週期"
+            ),
+        );
+        m.insert(
+            "settings.feature.providersOps",
+            tr!(en, "Providers Ops", cn, "提供商运维", tw, "提供商運維"),
+        );
+        m.insert(
+            "settings.feature.monitorHistoryAlerts",
+            tr!(
+                en,
+                "Monitor History Alerts",
+                cn,
+                "监控历史告警",
+                tw,
+                "監控歷史告警"
+            ),
+        );
+        m.insert(
+            "settings.feature.configSafeMode",
+            tr!(
+                en,
+                "Config Safe Mode",
+                cn,
+                "配置安全模式",
+                tw,
+                "配置安全模式"
+            ),
+        );
+        m.insert(
+            "settings.feature.setupEnterprise",
+            tr!(en, "Setup Enterprise", cn, "企业化配置", tw, "企業化配置"),
+        );
+        m.insert(
+            "settings.enterprise.title",
+            tr!(en, "Enterprise Controls", cn, "企业控制", tw, "企業控制"),
+        );
+        m.insert(
+            "settings.enterprise.environment",
+            tr!(en, "Environment", cn, "环境", tw, "環境"),
+        );
+        m.insert(
+            "settings.enterprise.environmentUrl",
+            tr!(
+                en,
+                "Environment Backend URL",
+                cn,
+                "环境后端地址",
+                tw,
+                "環境後端地址"
+            ),
+        );
+        m.insert(
+            "settings.enterprise.secretSource",
+            tr!(en, "Secret Source", cn, "密钥来源", tw, "密鑰來源"),
+        );
+        m.insert(
+            "settings.enterprise.exportPath",
+            tr!(en, "Export Path", cn, "导出路径", tw, "導出路徑"),
+        );
+        m.insert(
+            "settings.enterprise.importPath",
+            tr!(en, "Import Path", cn, "导入路径", tw, "導入路徑"),
+        );
+        m.insert(
+            "settings.enterprise.exportMasked",
+            tr!(en, "Export Masked", cn, "导出脱敏配置", tw, "導出脫敏配置"),
+        );
+        m.insert(
+            "settings.enterprise.exportFull",
+            tr!(en, "Export Full", cn, "导出完整配置", tw, "導出完整配置"),
+        );
+        m.insert(
+            "settings.enterprise.importConfig",
+            tr!(en, "Import Config", cn, "导入配置", tw, "導入配置"),
+        );
+        m.insert(
+            "settings.enterprise.syncCurrent",
+            tr!(
+                en,
+                "Sync Current URL",
+                cn,
+                "同步当前地址",
+                tw,
+                "同步當前地址"
+            ),
+        );
+        m.insert(
+            "settings.enterprise.hint",
+            tr!(en, "Use named backend environments and import/export config packages for controlled rollout.", cn, "使用命名环境和配置包导入导出，便于受控发布与切换。", tw, "使用命名環境和配置包導入導出，便於受控發布與切換。"),
+        );
+        m.insert(
+            "setup.environment",
+            tr!(en, "Environment", cn, "环境", tw, "環境"),
+        );
+        m.insert(
+            "setup.secretSource",
+            tr!(en, "Secret Source", cn, "密钥来源", tw, "密鑰來源"),
+        );
+        m.insert(
+            "setup.keyringError",
+            tr!(
+                en,
+                "Failed to save to system keyring",
+                cn,
+                "保存到系统 keyring 失败",
+                tw,
+                "保存到系統 keyring 失敗"
+            ),
+        );
+        m.insert(
+            "workflow.hint",
+            tr!(
+                en,
+                "Create reusable multi-step workflow presets and run enabled steps.",
+                cn,
+                "创建可复用的多步骤工作流预设，并执行已启用步骤。",
+                tw,
+                "創建可復用的多步驟工作流預設，並執行已啟用步驟。"
+            ),
+        );
+        m.insert("workflow.step", tr!(en, "Step", cn, "步骤", tw, "步驟"));
+        m.insert(
+            "workflow.command",
+            tr!(en, "Command", cn, "命令", tw, "命令"),
+        );
+        m.insert("workflow.add", tr!(en, "Add", cn, "添加", tw, "添加"));
+        m.insert(
+            "workflow.noSteps",
+            tr!(en, "No steps yet.", cn, "暂无步骤。", tw, "暫無步驟。"),
+        );
+        m.insert("workflow.delete", tr!(en, "Delete", cn, "删除", tw, "刪除"));
+        m.insert(
+            "workflow.confirmDelete",
+            tr!(en, "Confirm Delete", cn, "确认删除", tw, "確認刪除"),
+        );
+        m.insert(
+            "workflow.run",
+            tr!(
+                en,
+                "Run Enabled Steps",
+                cn,
+                "运行已启用步骤",
+                tw,
+                "運行已啟用步驟"
+            ),
+        );
+        m.insert(
+            "workflow.confirmRun",
+            tr!(
+                en,
+                "Confirm Run Enabled Steps",
+                cn,
+                "确认运行已启用步骤",
+                tw,
+                "確認運行已啟用步驟"
+            ),
+        );
+        m.insert(
+            "workflow.runCenter.title",
+            tr!(en, "Run Center", cn, "运行中心", tw, "運行中心"),
+        );
+        m.insert(
+            "workflow.runCenter.refresh",
+            tr!(en, "Refresh Runs", cn, "刷新运行记录", tw, "刷新運行記錄"),
+        );
+        m.insert(
+            "workflow.runCenter.hidden",
+            tr!(
+                en,
+                "Workflow run center is hidden. Enable 'Workflow Run Center' in Settings.",
+                cn,
+                "工作流运行中心已隐藏。请在设置中启用“工作流运行中心”。",
+                tw,
+                "工作流運行中心已隱藏。請在設置中啟用「工作流運行中心」。"
+            ),
+        );
+        m.insert("workflow.phase", tr!(en, "Phase", cn, "阶段", tw, "階段"));
+        m.insert("workflow.error", tr!(en, "Error", cn, "错误", tw, "錯誤"));
+        m.insert(
+            "workflow.artifacts",
+            tr!(en, "Artifacts:", cn, "产物:", tw, "產物:"),
+        );
+        m.insert(
+            "workflow.runCenter.decodeFailed",
+            tr!(
+                en,
+                "Failed to decode run detail.",
+                cn,
+                "运行详情解析失败。",
+                tw,
+                "運行詳情解析失敗。"
+            ),
+        );
+        m.insert(
+            "workflow.noEnabledSteps",
+            tr!(
+                en,
+                "No enabled steps to run.",
+                cn,
+                "没有可运行的启用步骤。",
+                tw,
+                "沒有可運行的已啟用步驟。"
+            ),
+        );
+        m.insert(
+            "workflow.running",
+            tr!(
+                en,
+                "Running workflow...",
+                cn,
+                "工作流运行中...",
+                tw,
+                "工作流運行中..."
+            ),
+        );
+        m.insert(
+            "workflow.deleteConfirmAgain",
+            tr!(
+                en,
+                "Click delete again to remove step '{name}'.",
+                cn,
+                "再次点击删除以移除步骤“{name}”。",
+                tw,
+                "再次點擊刪除以移除步驟「{name}」。"
+            ),
+        );
+        m.insert(
+            "workflow.runConfirmAgain",
+            tr!(
+                en,
+                "Click run again to confirm.",
+                cn,
+                "再次点击运行以确认。",
+                tw,
+                "再次點擊運行以確認。"
+            ),
+        );
+        m.insert("workflow.pause", tr!(en, "Pause", cn, "暂停", tw, "暫停"));
+        m.insert("workflow.resume", tr!(en, "Resume", cn, "恢复", tw, "恢復"));
+        m.insert("workflow.cancel", tr!(en, "Cancel", cn, "取消", tw, "取消"));
+        m.insert(
+            "workflow.runActionRequested",
+            tr!(
+                en,
+                "Run {run_id} {action} requested",
+                cn,
+                "已请求运行 {run_id} 执行 {action}",
+                tw,
+                "已請求運行 {run_id} 執行 {action}"
+            ),
+        );
+        m.insert(
+            "workflow.runActionFailed",
+            tr!(
+                en,
+                "Run {run_id} {action} failed: {error}",
+                cn,
+                "运行 {run_id} 执行 {action} 失败: {error}",
+                tw,
+                "運行 {run_id} 執行 {action} 失敗: {error}"
+            ),
+        );
+        m.insert(
+            "workflow.executionError",
+            tr!(
+                en,
+                "Workflow stopped due to execution error.",
+                cn,
+                "工作流因执行错误而停止。",
+                tw,
+                "工作流因執行錯誤而停止。"
+            ),
+        );
+        m.insert(
+            "workflow.stepFailure",
+            tr!(
+                en,
+                "Workflow stopped due to step failure.",
+                cn,
+                "工作流因步骤失败而停止。",
+                tw,
+                "工作流因步驟失敗而停止。"
+            ),
+        );
+        m.insert(
+            "workflow.stepTimeout",
+            tr!(
+                en,
+                "Workflow stopped due to step timeout.",
+                cn,
+                "工作流因步骤超时而停止。",
+                tw,
+                "工作流因步驟超時而停止。"
+            ),
+        );
+        m.insert(
+            "workflow.noOutput",
+            tr!(en, "No output.", cn, "无输出。", tw, "無輸出。"),
+        );
+        m.insert(
+            "workflow.runStatus.all",
+            tr!(en, "All", cn, "全部", tw, "全部"),
+        );
+        m.insert(
+            "workflow.runStatus.queued",
+            tr!(en, "Queued", cn, "排队中", tw, "排隊中"),
+        );
+        m.insert(
+            "workflow.runStatus.running",
+            tr!(en, "Running", cn, "运行中", tw, "運行中"),
+        );
+        m.insert(
+            "workflow.runStatus.paused",
+            tr!(en, "Paused", cn, "已暂停", tw, "已暫停"),
+        );
+        m.insert(
+            "workflow.runStatus.succeeded",
+            tr!(en, "Succeeded", cn, "已成功", tw, "已成功"),
+        );
+        m.insert(
+            "workflow.runStatus.failed",
+            tr!(en, "Failed", cn, "已失败", tw, "已失敗"),
+        );
+        m.insert(
+            "workflow.runStatus.cancelled",
+            tr!(en, "Cancelled", cn, "已取消", tw, "已取消"),
+        );
+        m.insert(
+            "skills.lifecycle.hidden",
+            tr!(
+                en,
+                "Skills lifecycle actions are hidden. Enable 'Skills Lifecycle' in Settings.",
+                cn,
+                "技能生命周期操作已隐藏。请在设置中启用“技能生命周期”。",
+                tw,
+                "技能生命週期操作已隱藏。請在設置中啟用「技能生命週期」。"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.edit",
+            tr!(en, "Edit", cn, "编辑", tw, "編輯"),
+        );
+        m.insert(
+            "skills.lifecycle.enable",
+            tr!(en, "Enable", cn, "启用", tw, "啟用"),
+        );
+        m.insert(
+            "skills.lifecycle.disable",
+            tr!(en, "Disable", cn, "停用", tw, "停用"),
+        );
+        m.insert(
+            "skills.lifecycle.delete",
+            tr!(en, "Delete", cn, "删除", tw, "刪除"),
+        );
+        m.insert(
+            "skills.lifecycle.versions",
+            tr!(en, "Versions", cn, "版本", tw, "版本"),
+        );
+        m.insert(
+            "skills.lifecycle.editTitle",
+            tr!(en, "Edit Skill", cn, "编辑技能", tw, "編輯技能"),
+        );
+        m.insert(
+            "skills.lifecycle.promptOverride",
+            tr!(
+                en,
+                "Prompt Template (optional override)",
+                cn,
+                "提示模板（可选覆盖）",
+                tw,
+                "提示模板（可選覆蓋）"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.inputSchema",
+            tr!(
+                en,
+                "Input Schema JSON",
+                cn,
+                "输入 Schema JSON",
+                tw,
+                "輸入 Schema JSON"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.saveEdit",
+            tr!(en, "Save Edit", cn, "保存编辑", tw, "保存編輯"),
+        );
+        m.insert(
+            "skills.lifecycle.testInput",
+            tr!(
+                en,
+                "Test Input JSON",
+                cn,
+                "测试输入 JSON",
+                tw,
+                "測試輸入 JSON"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.test",
+            tr!(en, "Test Skill", cn, "测试技能", tw, "測試技能"),
+        );
+        m.insert(
+            "skills.lifecycle.rollbackVersion",
+            tr!(en, "Rollback Version", cn, "回滚版本", tw, "回滾版本"),
+        );
+        m.insert(
+            "skills.lifecycle.rollback",
+            tr!(en, "Rollback", cn, "回滚", tw, "回滾"),
+        );
+        m.insert(
+            "skills.lifecycle.disabled",
+            tr!(
+                en,
+                "Skill '{name}' disabled",
+                cn,
+                "技能“{name}”已停用",
+                tw,
+                "技能「{name}」已停用"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.enabled",
+            tr!(
+                en,
+                "Skill '{name}' enabled",
+                cn,
+                "技能“{name}”已启用",
+                tw,
+                "技能「{name}」已啟用"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.toggleFailed",
+            tr!(
+                en,
+                "Skill '{name}' toggle failed: {error}",
+                cn,
+                "技能“{name}”切换失败: {error}",
+                tw,
+                "技能「{name}」切換失敗: {error}"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.removed",
+            tr!(
+                en,
+                "Skill '{name}' removed",
+                cn,
+                "技能“{name}”已删除",
+                tw,
+                "技能「{name}」已刪除"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.removeFailed",
+            tr!(
+                en,
+                "Skill '{name}' remove failed: {error}",
+                cn,
+                "技能“{name}”删除失败: {error}",
+                tw,
+                "技能「{name}」刪除失敗: {error}"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.versionCount",
+            tr!(
+                en,
+                "Skill '{name}' has {count} versions",
+                cn,
+                "技能“{name}”有 {count} 个版本",
+                tw,
+                "技能「{name}」有 {count} 個版本"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.versionsFailed",
+            tr!(
+                en,
+                "Skill '{name}' versions failed: {error}",
+                cn,
+                "技能“{name}”版本查询失败: {error}",
+                tw,
+                "技能「{name}」版本查詢失敗: {error}"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.updated",
+            tr!(
+                en,
+                "Skill '{name}' updated",
+                cn,
+                "技能“{name}”已更新",
+                tw,
+                "技能「{name}」已更新"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.updateFailed",
+            tr!(
+                en,
+                "Skill '{name}' update failed: {error}",
+                cn,
+                "技能“{name}”更新失败: {error}",
+                tw,
+                "技能「{name}」更新失敗: {error}"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.testResult",
+            tr!(
+                en,
+                "Skill '{name}' test result: {result}",
+                cn,
+                "技能“{name}”测试结果: {result}",
+                tw,
+                "技能「{name}」測試結果: {result}"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.testFailed",
+            tr!(
+                en,
+                "Skill '{name}' test failed: {error}",
+                cn,
+                "技能“{name}”测试失败: {error}",
+                tw,
+                "技能「{name}」測試失敗: {error}"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.rollbackRequired",
+            tr!(
+                en,
+                "Rollback version is required.",
+                cn,
+                "必须填写回滚版本。",
+                tw,
+                "必須填寫回滾版本。"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.rolledBack",
+            tr!(
+                en,
+                "Skill '{name}' rolled back to version {version}",
+                cn,
+                "技能“{name}”已回滚到版本 {version}",
+                tw,
+                "技能「{name}」已回滾到版本 {version}"
+            ),
+        );
+        m.insert(
+            "skills.lifecycle.rollbackFailed",
+            tr!(
+                en,
+                "Skill '{name}' rollback failed: {error}",
+                cn,
+                "技能“{name}”回滚失败: {error}",
+                tw,
+                "技能「{name}」回滾失敗: {error}"
+            ),
+        );
+        m.insert(
+            "skills.defaultCreator.title",
+            tr!(en, "Skill Creator", cn, "技能创建器", tw, "技能創建器"),
+        );
+        m.insert(
+            "skills.defaultCreator.description",
+            tr!(en, "Create and manage your own AI skills using natural language. Describe what you want, and this skill will help you build it.", cn, "使用自然语言创建和管理你的 AI 技能。描述你的目标，这个技能会帮你把它构建出来。", tw, "使用自然語言創建和管理你的 AI 技能。描述你的目標，這個技能會幫你把它構建出來。"),
+        );
+        m.insert(
+            "skills.defaultCreator.button",
+            tr!(
+                en,
+                "➕ Create Default Skill",
+                cn,
+                "➕ 创建默认技能",
+                tw,
+                "➕ 創建默認技能"
+            ),
+        );
+        m.insert(
+            "skills.defaultCreator.loaded",
+            tr!(
+                en,
+                "Default skill is ready and loaded.",
+                cn,
+                "默认技能已就绪并加载。",
+                tw,
+                "默認技能已就緒並載入。"
+            ),
+        );
+        m.insert(
+            "skills.error.invalidSchemaObject",
+            tr!(
+                en,
+                "Input schema must be a valid JSON object.",
+                cn,
+                "输入 schema 必须是合法的 JSON 对象。",
+                tw,
+                "輸入 schema 必須是合法的 JSON 對象。"
+            ),
+        );
+        m.insert(
+            "skills.error.invalidSchema",
+            tr!(
+                en,
+                "Invalid input schema",
+                cn,
+                "输入 schema 无效",
+                tw,
+                "輸入 schema 無效"
+            ),
+        );
+        m.insert(
+            "skills.error.invalidTestInput",
+            tr!(
+                en,
+                "Invalid test input",
+                cn,
+                "测试输入无效",
+                tw,
+                "測試輸入無效"
+            ),
+        );
+        m.insert(
+            "skills.error.rpc",
+            tr!(en, "RPC error", cn, "RPC 错误", tw, "RPC 錯誤"),
+        );
+        m.insert(
+            "skills.fetchFailed",
+            tr!(
+                en,
+                "Failed to fetch skills",
+                cn,
+                "获取技能列表失败",
+                tw,
+                "獲取技能列表失敗"
+            ),
+        );
+        m.insert(
+            "skills.import.blockedBySecurity",
+            tr!(
+                en,
+                "External URL import is blocked by security settings.",
+                cn,
+                "安全设置已阻止外部 URL 导入。",
+                tw,
+                "安全設置已阻止外部 URL 導入。"
+            ),
+        );
+        m.insert(
+            "skills.import.invalidUrl",
+            tr!(
+                en,
+                "Invalid URL: must start with http:// or https://",
+                cn,
+                "URL 无效：必须以 http:// 或 https:// 开头",
+                tw,
+                "URL 無效：必須以 http:// 或 https:// 開頭"
+            ),
+        );
+        m.insert(
+            "skills.import.httpClientError",
+            tr!(
+                en,
+                "Failed to build HTTP client",
+                cn,
+                "构建 HTTP 客户端失败",
+                tw,
+                "構建 HTTP 客戶端失敗"
+            ),
+        );
+        m.insert(
+            "skills.import.fetchError",
+            tr!(
+                en,
+                "Failed to fetch URL",
+                cn,
+                "拉取 URL 失败",
+                tw,
+                "拉取 URL 失敗"
+            ),
+        );
+        m.insert(
+            "skills.import.httpStatusError",
+            tr!(
+                en,
+                "HTTP status error",
+                cn,
+                "HTTP 状态错误",
+                tw,
+                "HTTP 狀態錯誤"
+            ),
+        );
+        m.insert(
+            "skills.import.invalidManifest",
+            tr!(
+                en,
+                "Invalid JSON manifest",
+                cn,
+                "JSON manifest 无效",
+                tw,
+                "JSON manifest 無效"
+            ),
+        );
+        m.insert(
+            "skills.import.missingPromptTemplate",
+            tr!(
+                en,
+                "Manifest missing required field: prompt_template",
+                cn,
+                "manifest 缺少必填字段: prompt_template",
+                tw,
+                "manifest 缺少必填字段: prompt_template"
+            ),
+        );
+        m.insert(
+            "skills.import.serializeSchemaError",
+            tr!(
+                en,
+                "Failed to serialize input_schema",
+                cn,
+                "序列化 input_schema 失败",
+                tw,
+                "序列化 input_schema 失敗"
+            ),
+        );
+        m.insert(
+            "security.hint",
+            tr!(
+                en,
+                "Manage client-side safety policies and runtime restart controls.",
+                cn,
+                "管理客户端安全策略与运行时重启控制。",
+                tw,
+                "管理客戶端安全策略與運行時重啟控制。"
+            ),
+        );
+        m.insert(
+            "security.confirmDangerousActions",
+            tr!(
+                en,
+                "Require confirmation for dangerous actions",
+                cn,
+                "危险操作需要确认",
+                tw,
+                "危險操作需要確認"
+            ),
+        );
+        m.insert(
+            "security.redactApiKeys",
+            tr!(
+                en,
+                "Redact API keys in UI",
+                cn,
+                "在界面中脱敏 API Key",
+                tw,
+                "在介面中脫敏 API Key"
+            ),
+        );
+        m.insert(
+            "security.blockExternalUrls",
+            tr!(
+                en,
+                "Block external URL imports",
+                cn,
+                "阻止外部 URL 导入",
+                tw,
+                "阻止外部 URL 導入"
+            ),
+        );
+        m.insert(
+            "security.saved",
+            tr!(
+                en,
+                "Security settings saved.",
+                cn,
+                "安全设置已保存。",
+                tw,
+                "安全設置已保存。"
+            ),
+        );
+        m.insert(
+            "security.confirmRestart",
+            tr!(
+                en,
+                "Confirm Restart Runtime",
+                cn,
+                "确认重启运行时",
+                tw,
+                "確認重啟運行時"
+            ),
+        );
+        m.insert(
+            "security.restart",
+            tr!(
+                en,
+                "Restart Backend Runtime",
+                cn,
+                "重启后端运行时",
+                tw,
+                "重啟後端運行時"
+            ),
+        );
+        m.insert(
+            "security.confirmAgain",
+            tr!(
+                en,
+                "Click restart again to confirm.",
+                cn,
+                "再次点击重启以确认。",
+                tw,
+                "再次點擊重啟以確認。"
+            ),
+        );
+        m.insert(
+            "security.restartRequested",
+            tr!(
+                en,
+                "Runtime restart requested.",
+                cn,
+                "已请求运行时重启。",
+                tw,
+                "已請求運行時重啟。"
+            ),
+        );
+        m.insert(
+            "security.restartFailed",
+            tr!(en, "Restart failed", cn, "重启失败", tw, "重啟失敗"),
+        );
+        m.insert(
+            "autotune.hint",
+            tr!(
+                en,
+                "Tune generation defaults used by your workflows and prompts.",
+                cn,
+                "调整工作流与提示词默认生成参数。",
+                tw,
+                "調整工作流與提示詞默認生成參數。"
+            ),
+        );
+        m.insert(
+            "autotune.temperature",
+            tr!(en, "Temperature", cn, "温度", tw, "溫度"),
+        );
+        m.insert("autotune.topP", tr!(en, "Top-p", cn, "Top-p", tw, "Top-p"));
+        m.insert(
+            "autotune.maxTokens",
+            tr!(en, "Max tokens", cn, "最大 tokens", tw, "最大 tokens"),
+        );
+        m.insert(
+            "autotune.aggressive",
+            tr!(
+                en,
+                "Aggressive optimization",
+                cn,
+                "激进优化",
+                tw,
+                "激進優化"
+            ),
+        );
+        m.insert(
+            "autotune.resetDefaults",
+            tr!(en, "Reset Defaults", cn, "重置默认值", tw, "重置默認值"),
+        );
+        m.insert(
+            "config.hint",
+            tr!(
+                en,
+                "Edit GUI config as JSON. Apply updates live and persist to disk.",
+                cn,
+                "以 JSON 编辑 GUI 配置，实时应用并持久化到磁盘。",
+                tw,
+                "以 JSON 編輯 GUI 配置，即時應用並持久化到磁碟。"
+            ),
+        );
+        m.insert(
+            "config.safeModeHidden",
+            tr!(
+                en,
+                "Safe config controls are hidden. Enable 'Config Safe Mode' in Settings.",
+                cn,
+                "安全配置控制已隐藏。请在设置中启用“配置安全模式”。",
+                tw,
+                "安全配置控制已隱藏。請在設置中啟用「配置安全模式」。"
+            ),
+        );
+        m.insert(
+            "config.reloadCurrent",
+            tr!(
+                en,
+                "Reload From Current",
+                cn,
+                "从当前配置重载",
+                tw,
+                "從當前配置重載"
+            ),
+        );
+        m.insert(
+            "config.reloaded",
+            tr!(
+                en,
+                "Reloaded from in-memory config.",
+                cn,
+                "已从内存配置重载。",
+                tw,
+                "已從記憶體配置重載。"
+            ),
+        );
+        m.insert(
+            "config.createSnapshot",
+            tr!(en, "Create Snapshot", cn, "创建快照", tw, "創建快照"),
+        );
+        m.insert(
+            "config.snapshotSaved",
+            tr!(en, "Snapshot saved", cn, "快照已保存", tw, "快照已保存"),
+        );
+        m.insert(
+            "config.applyJson",
+            tr!(en, "Apply JSON", cn, "应用 JSON", tw, "應用 JSON"),
+        );
+        m.insert(
+            "config.applied",
+            tr!(
+                en,
+                "Config applied and saved.",
+                cn,
+                "配置已应用并保存。",
+                tw,
+                "配置已應用並保存。"
+            ),
+        );
+        m.insert(
+            "config.invalidJson",
+            tr!(en, "Invalid JSON", cn, "无效 JSON", tw, "無效 JSON"),
+        );
+        m.insert(
+            "config.snapshots",
+            tr!(en, "Snapshots", cn, "快照", tw, "快照"),
+        );
+        m.insert(
+            "config.rollbackSnapshot",
+            tr!(en, "Rollback Snapshot", cn, "回滚快照", tw, "回滾快照"),
+        );
+        m.insert(
+            "config.rolledBack",
+            tr!(
+                en,
+                "Rolled back draft to last snapshot.",
+                cn,
+                "已将草稿回滚到最近快照。",
+                tw,
+                "已將草稿回滾到最近快照。"
+            ),
+        );
+        m.insert(
+            "monitor.loadTrends",
+            tr!(en, "Load Trends", cn, "加载趋势", tw, "載入趨勢"),
+        );
+        m.insert(
+            "monitor.loadErrors",
+            tr!(en, "Load Errors", cn, "加载错误", tw, "載入錯誤"),
+        );
+        m.insert(
+            "providers.ops.hidden",
+            tr!(
+                en,
+                "Provider operation controls are hidden. Enable 'Providers Ops' in Settings.",
+                cn,
+                "提供商运维控件已隐藏。请在设置中启用“提供商运维”。",
+                tw,
+                "提供商運維控件已隱藏。請在設置中啟用「提供商運維」。"
+            ),
+        );
+        m.insert(
+            "providers.ops.testConn",
+            tr!(en, "Test Conn", cn, "测试连接", tw, "測試連接"),
+        );
+        m.insert(
+            "providers.ops.testCompletion",
+            tr!(en, "Test Completion", cn, "测试补全", tw, "測試補全"),
+        );
+        m.insert(
+            "providers.ops.capabilities",
+            tr!(en, "Capabilities", cn, "能力", tw, "能力"),
         );
 
         // Language names (for settings display)
