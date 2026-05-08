@@ -34,6 +34,308 @@ struct RepairAction {
     details: Value,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct WorkflowRunRecord {
+    run_id: String,
+    source_method: String,
+    task: String,
+    status: String,
+    phase: String,
+    created_at: i64,
+    started_at: i64,
+    ended_at: Option<i64>,
+    error: Option<String>,
+    artifacts: Vec<String>,
+    effective_options: Value,
+}
+
+static WORKFLOW_RUNS: OnceLock<StdMutex<Vec<WorkflowRunRecord>>> = OnceLock::new();
+static WORKFLOW_RUN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn workflow_runs() -> &'static StdMutex<Vec<WorkflowRunRecord>> {
+    WORKFLOW_RUNS.get_or_init(|| StdMutex::new(Vec::new()))
+}
+
+fn next_workflow_run_id() -> String {
+    let seq = WORKFLOW_RUN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("run-{}-{}", crate::acp::prelude::now_ts_ms(), seq)
+}
+
+fn merge_effective_option_from_root(params: &Value, key: &str, out: &mut HashMap<String, Value>) {
+    if let Some(value) = params.get(key) {
+        out.insert(key.to_string(), value.clone());
+    }
+}
+
+fn extract_effective_options(params: &Value) -> HashMap<String, Value> {
+    let mut options = HashMap::new();
+    let whitelist = ["temperature", "top_p", "max_tokens", "model"];
+
+    if let Some(extra) = params
+        .get("options")
+        .and_then(|value| value.get("extra"))
+        .and_then(Value::as_object)
+    {
+        for key in whitelist {
+            if let Some(value) = extra.get(key) {
+                options.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+
+    for key in ["temperature", "top_p", "max_tokens", "model"] {
+        merge_effective_option_from_root(params, key, &mut options);
+    }
+
+    options
+}
+
+fn effective_options_value(params: &Value) -> Value {
+    Value::Object(extract_effective_options(params).into_iter().collect())
+}
+
+fn run_id_from_params(params: &Value) -> Option<String> {
+    params
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+pub(super) fn start_workflow_run(
+    source_method: &str,
+    task: &str,
+    phase: Option<&str>,
+    params: &Value,
+) -> WorkflowRunRecord {
+    let now = crate::acp::prelude::now_ts();
+    let record = WorkflowRunRecord {
+        run_id: run_id_from_params(params).unwrap_or_else(next_workflow_run_id),
+        source_method: source_method.to_string(),
+        task: task.to_string(),
+        status: "running".to_string(),
+        phase: phase.unwrap_or("default").to_string(),
+        created_at: now,
+        started_at: now,
+        ended_at: None,
+        error: None,
+        artifacts: Vec::new(),
+        effective_options: effective_options_value(params),
+    };
+
+    if let Ok(mut guard) = workflow_runs().lock() {
+        guard.push(record.clone());
+        if guard.len() > 2000 {
+            let overflow = guard.len() - 2000;
+            guard.drain(0..overflow);
+        }
+    }
+
+    record
+}
+
+pub(super) fn complete_workflow_run(
+    run_id: &str,
+    status: &str,
+    error: Option<String>,
+    artifacts: Vec<String>,
+) {
+    if let Ok(mut guard) = workflow_runs().lock() {
+        if let Some(item) = guard.iter_mut().find(|record| record.run_id == run_id) {
+            item.status = status.to_string();
+            item.error = error;
+            item.artifacts = artifacts;
+            item.ended_at = Some(crate::acp::prelude::now_ts());
+        }
+    }
+}
+
+fn get_workflow_run_record(run_id: &str) -> Option<WorkflowRunRecord> {
+    workflow_runs()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.iter().find(|record| record.run_id == run_id).cloned())
+}
+
+fn transition_workflow_run(run_id: &str, target_status: &str) -> Result<WorkflowRunRecord> {
+    let mut guard = workflow_runs()
+        .lock()
+        .map_err(|err| anyhow::anyhow!("failed to lock workflow run store: {}", err))?;
+    let record = guard
+        .iter_mut()
+        .find(|item| item.run_id == run_id)
+        .ok_or_else(|| anyhow::anyhow!("workflow run '{}' not found", run_id))?;
+
+    let allowed = match (record.status.as_str(), target_status) {
+        ("queued", "cancelled") | ("queued", "running") => true,
+        ("running", "paused") | ("running", "cancelled") | ("running", "succeeded") => true,
+        ("paused", "running") | ("paused", "cancelled") => true,
+        _ if record.status == target_status => true,
+        _ => false,
+    };
+
+    if !allowed {
+        anyhow::bail!(
+            "invalid status transition: {} -> {}",
+            record.status,
+            target_status
+        );
+    }
+
+    record.status = target_status.to_string();
+    if matches!(target_status, "succeeded" | "failed" | "cancelled") {
+        record.ended_at = Some(crate::acp::prelude::now_ts());
+    }
+    Ok(record.clone())
+}
+
+pub(super) fn execution_option_overrides(params: &Value) -> HashMap<String, Value> {
+    extract_effective_options(params)
+}
+
+pub(super) async fn handle_workflow_run_list(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let limit = params
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(50)
+        .min(500);
+    let offset = params
+        .get("offset")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(0);
+
+    let status_filter = params.get("status");
+    let mut records = workflow_runs()
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    records.reverse();
+
+    let filtered = records
+        .into_iter()
+        .filter(|record| match status_filter {
+            Some(Value::String(single)) => record.status == *single,
+            Some(Value::Array(items)) => items
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|status| status == record.status),
+            _ => true,
+        })
+        .collect::<Vec<_>>();
+
+    let total = filtered.len();
+    let runs = filtered
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect::<Vec<_>>();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "runs": runs,
+        }),
+    )
+    .await
+}
+
+pub(super) async fn handle_workflow_run_get(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let Some(run_id) = params.get("run_id").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "run_id is required".to_string(),
+            None,
+        )
+        .await;
+    };
+
+    match get_workflow_run_record(run_id) {
+        Some(run) => send_result(server, request_id, json!({"ok": true, "run": run})).await,
+        None => {
+            send_error(
+                server,
+                request_id,
+                -32602,
+                format!("workflow run '{}' not found", run_id),
+                None,
+            )
+            .await
+        }
+    }
+}
+
+async fn handle_workflow_run_transition(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+    target_status: &str,
+) -> Result<()> {
+    let Some(run_id) = params.get("run_id").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "run_id is required".to_string(),
+            None,
+        )
+        .await;
+    };
+
+    match transition_workflow_run(run_id, target_status) {
+        Ok(run) => {
+            send_result(
+                server,
+                request_id,
+                json!({"ok": true, "run": run, "action": target_status}),
+            )
+            .await
+        }
+        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
+    }
+}
+
+pub(super) async fn handle_workflow_run_cancel(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    handle_workflow_run_transition(server, params, request_id, "cancelled").await
+}
+
+pub(super) async fn handle_workflow_run_pause(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    handle_workflow_run_transition(server, params, request_id, "paused").await
+}
+
+pub(super) async fn handle_workflow_run_resume(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    handle_workflow_run_transition(server, params, request_id, "running").await
+}
+
 fn should_trigger_auto_repair(
     failure_count: usize,
     failure_classes: &[String],
@@ -714,17 +1016,29 @@ pub(super) async fn handle_workflow_execute(
     _trace: &RequestTraceContext,
 ) -> Result<()> {
     let task = params_task(&params).unwrap_or_default();
+    let phase_name = params.get("phase").and_then(Value::as_str);
+    let run = start_workflow_run("workflow.execute", &task, phase_name, &params);
+    let run_id = run.run_id.clone();
+    let effective_options = run.effective_options.clone();
+
     let ledger = clone_artifact_ledger(server);
     let gate = evaluate_requirement_gate_facade(&ledger, &task, &params, "workflow.execute")?;
     if gate.blocked {
+        let reason = gate
+            .reason
+            .clone()
+            .unwrap_or_else(|| "requirement confirmation required".to_string());
+        complete_workflow_run(&run_id, "failed", Some(reason.clone()), Vec::new());
         return send_error(
             server,
             request_id,
             -32006,
-            gate.reason
-                .clone()
-                .unwrap_or_else(|| "requirement confirmation required".to_string()),
-            Some(gate.blocked_payload()),
+            reason,
+            Some(json!({
+                "run_id": run_id,
+                "run_status": "failed",
+                "requirement_gate": gate.blocked_payload(),
+            })),
         )
         .await;
     }
@@ -752,13 +1066,17 @@ pub(super) async fn handle_workflow_execute(
             handoff_primary_agent: "local_echo".to_string(),
         };
         let consultation_artifact_path = persist_consultation_artifact(&ledger, &artifact)?;
+        let blocked_reason = t("error.consultation_blocked");
+        complete_workflow_run(&run_id, "failed", Some(blocked_reason.clone()), Vec::new());
         return send_error(
             server,
             request_id,
             -32007,
-            t("error.consultation_blocked"),
+            blocked_reason,
             Some(json!({
                 "kind": "consultation_blocked",
+                "run_id": run_id,
+                "run_status": "failed",
                 "consultation_artifact_path": consultation_artifact_path.display().to_string(),
             })),
         )
@@ -1054,84 +1372,107 @@ pub(super) async fn handle_workflow_execute(
         build_knowledge_refinement_profile("workflow.execute", &task, &params, &learning_profile);
     let multi_agent = build_multi_agent_sessions(&task, "workflow.execute", &execution_report);
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "capability_profile": capability_profile,
-            "governance_profile": governance_profile,
-            "learning_profile": learning_profile,
-            "token_economy": token_economy,
-            "knowledge_refinement": knowledge_refinement,
-            "artifact_path": artifact_path.display().to_string(),
-            "plan_artifact_path": plan_artifact_path.display().to_string(),
-            "workflow_artifact_path": workflow_artifact_path.display().to_string(),
-            "learning_artifact_path": learning_artifact_path.display().to_string(),
-            "execution_mode": "runtime_execute",
-            "run_mode": normalize_control_mode(&execution_context.adaptive_defaults.applied_mode),
-            "adaptive": {
-                "planning": adaptive_planning,
-                "execution_defaults": execution_context.adaptive_defaults,
-            },
-            "execution_cycle": execution_cycle,
-            "sandbox_profile": sandbox_profile,
-            "requirement_gate": {
-                "confirmed": true,
-                "gate": requirement_gate_payload,
-            },
-            "approval_checkpoint": approval_checkpoint,
-            "repo_context": repo_context,
-            "multi_agent": multi_agent,
-            "gates": gates,
-            "lazy_load": execution_report.lazy_load,
-            "review_policy": review_policy,
-            "reviews": reviews,
-            "artifacts": {
-                "execution_decision": artifact_path.display().to_string(),
-                "plan": plan_artifact_path.display().to_string(),
-                "workflow": workflow_artifact_path.display().to_string(),
-                "learning": learning_artifact_path.display().to_string(),
-                "primary_secondary_policy": primary_secondary_policy_artifact_path.display().to_string(),
-                "primary_failover": primary_failover_artifact_path.display().to_string(),
-            },
-            "change_bundle": change_bundle,
-            "trace_ref": trace_ref,
-            "blue5": {
-                "primary_secondary_policy": policy_artifact,
-                "primary_secondary_policy_artifact_path": primary_secondary_policy_artifact_path.display().to_string(),
-            },
-            "primary_failover_artifact_path": primary_failover_artifact_path.display().to_string(),
-            "primary_failover_report": {
-                "failover_policy": failover_artifact.failover_policy,
-                "reports": failover_artifact.reports,
-            },
-            // Step 2: Add repair readiness information
-            "repair_readiness": {
-                "eligible": auto_repair_enabled,
-                "max_iterations": repair_context.max_iterations,
-                "governance_mode": repair_context.governance_mode.clone(),
-                "reason": if auto_repair_enabled {
-                    format!("{} failures detected and auto-repair is enabled", execution_report.subtasks_failed)
-                } else {
-                    "no failures or auto-repair disabled".to_string()
-                },
-            },
-            // Step 2.3: Add repair history when repair was triggered
-            "repair_history": if auto_repair_enabled && execution_report.subtasks_failed > 0 {
-                repair_history
+    let artifacts = vec![
+        artifact_path.display().to_string(),
+        plan_artifact_path.display().to_string(),
+        workflow_artifact_path.display().to_string(),
+        learning_artifact_path.display().to_string(),
+        primary_secondary_policy_artifact_path.display().to_string(),
+        primary_failover_artifact_path.display().to_string(),
+    ];
+    let run_status = if execution_report.subtasks_failed > 0 {
+        "failed"
+    } else {
+        "succeeded"
+    };
+    let run_error = if execution_report.subtasks_failed > 0 {
+        Some(format!(
+            "{} subtasks failed",
+            execution_report.subtasks_failed
+        ))
+    } else {
+        None
+    };
+    complete_workflow_run(&run_id, run_status, run_error, artifacts.clone());
+
+    let response_payload = json!({
+        "ok": true,
+        "run_id": run_id,
+        "run_status": run_status,
+        "effective_options": effective_options,
+        "capability_profile": capability_profile,
+        "governance_profile": governance_profile,
+        "learning_profile": learning_profile,
+        "token_economy": token_economy,
+        "knowledge_refinement": knowledge_refinement,
+        "artifact_path": artifact_path.display().to_string(),
+        "plan_artifact_path": plan_artifact_path.display().to_string(),
+        "workflow_artifact_path": workflow_artifact_path.display().to_string(),
+        "learning_artifact_path": learning_artifact_path.display().to_string(),
+        "execution_mode": "runtime_execute",
+        "run_mode": normalize_control_mode(&execution_context.adaptive_defaults.applied_mode),
+        "adaptive": {
+            "planning": adaptive_planning,
+            "execution_defaults": execution_context.adaptive_defaults,
+        },
+        "execution_cycle": execution_cycle,
+        "sandbox_profile": sandbox_profile,
+        "requirement_gate": {
+            "confirmed": true,
+            "gate": requirement_gate_payload,
+        },
+        "approval_checkpoint": approval_checkpoint,
+        "repo_context": repo_context,
+        "multi_agent": multi_agent,
+        "gates": gates,
+        "lazy_load": execution_report.lazy_load,
+        "review_policy": review_policy,
+        "reviews": reviews,
+        "artifacts": {
+            "execution_decision": artifact_path.display().to_string(),
+            "plan": plan_artifact_path.display().to_string(),
+            "workflow": workflow_artifact_path.display().to_string(),
+            "learning": learning_artifact_path.display().to_string(),
+            "primary_secondary_policy": primary_secondary_policy_artifact_path.display().to_string(),
+            "primary_failover": primary_failover_artifact_path.display().to_string(),
+        },
+        "change_bundle": change_bundle,
+        "trace_ref": trace_ref,
+        "blue5": {
+            "primary_secondary_policy": policy_artifact,
+            "primary_secondary_policy_artifact_path": primary_secondary_policy_artifact_path.display().to_string(),
+        },
+        "primary_failover_artifact_path": primary_failover_artifact_path.display().to_string(),
+        "primary_failover_report": {
+            "failover_policy": failover_artifact.failover_policy,
+            "reports": failover_artifact.reports,
+        },
+        // Step 2: Add repair readiness information
+        "repair_readiness": {
+            "eligible": auto_repair_enabled,
+            "max_iterations": repair_context.max_iterations,
+            "governance_mode": repair_context.governance_mode.clone(),
+            "reason": if auto_repair_enabled {
+                format!("{} failures detected and auto-repair is enabled", execution_report.subtasks_failed)
             } else {
-                json!({ "actions": [] })
+                "no failures or auto-repair disabled".to_string()
             },
-            // B26-S5: memory graph drift protection profile
-            "memory_graph": build_memory_graph_profile(&task),
-            // B26-S6: structured review adjudication
-            "review_adjudication": build_review_adjudication(execution_report.subtasks_failed),
-            // B26-S7: three-dimensional replay scoring
-            "replay_scoring": build_replay_scoring(execution_report.subtasks_completed, execution_report.subtasks_failed),
-        }),
-    )
-    .await
+        },
+        // Step 2.3: Add repair history when repair was triggered
+        "repair_history": if auto_repair_enabled && execution_report.subtasks_failed > 0 {
+            repair_history
+        } else {
+            json!({ "actions": [] })
+        },
+        // B26-S5: memory graph drift protection profile
+        "memory_graph": build_memory_graph_profile(&task),
+        // B26-S6: structured review adjudication
+        "review_adjudication": build_review_adjudication(execution_report.subtasks_failed),
+        // B26-S7: three-dimensional replay scoring
+        "replay_scoring": build_replay_scoring(execution_report.subtasks_completed, execution_report.subtasks_failed),
+    });
+
+    send_result(server, request_id, response_payload).await
 }
 
 pub(super) async fn handle_task_execute(
@@ -1180,17 +1521,33 @@ pub(super) async fn handle_task_execute(
         return send_result(server, request_id, cached_response).await;
     }
 
+    let run = start_workflow_run(
+        "task.execute",
+        task,
+        params.get("phase").and_then(Value::as_str),
+        &params,
+    );
+    let run_id = run.run_id.clone();
+    let effective_options = run.effective_options.clone();
+
     let ledger = clone_artifact_ledger(server);
     let gate = evaluate_requirement_gate_facade(&ledger, task, &params, "task.execute")?;
     if gate.blocked {
+        let reason = gate
+            .reason
+            .clone()
+            .unwrap_or_else(|| "requirement confirmation required".to_string());
+        complete_workflow_run(&run_id, "failed", Some(reason.clone()), Vec::new());
         return send_error(
             server,
             request_id,
             -32006,
-            gate.reason
-                .clone()
-                .unwrap_or_else(|| "requirement confirmation required".to_string()),
-            Some(gate.blocked_payload()),
+            reason,
+            Some(json!({
+                "run_id": run_id,
+                "run_status": "failed",
+                "requirement_gate": gate.blocked_payload(),
+            })),
         )
         .await;
     }
@@ -1463,6 +1820,9 @@ pub(super) async fn handle_task_execute(
 
     let response_payload = json!({
         "ok": true,
+        "run_id": run_id,
+        "run_status": if summary.subtasks_failed > 0 { "failed" } else { "succeeded" },
+        "effective_options": effective_options,
         "capability_profile": capability_profile,
         "governance_profile": governance_profile,
         "learning_profile": learning_profile,
@@ -1522,6 +1882,27 @@ pub(super) async fn handle_task_execute(
         // B26-S7: three-dimensional replay scoring
         "replay_scoring": build_replay_scoring(summary.subtasks_completed, summary.subtasks_failed),
     });
+
+    complete_workflow_run(
+        &run_id,
+        if summary.subtasks_failed > 0 {
+            "failed"
+        } else {
+            "succeeded"
+        },
+        if summary.subtasks_failed > 0 {
+            Some(format!("{} subtasks failed", summary.subtasks_failed))
+        } else {
+            None
+        },
+        vec![
+            plan_path.display().to_string(),
+            workflow_path.display().to_string(),
+            execution_path.display().to_string(),
+            learning_path.display().to_string(),
+            tg_checkpoint_path.display().to_string(),
+        ],
+    );
 
     {
         let mut cache = task_execute_idempotency_cache()
@@ -1662,12 +2043,15 @@ async fn build_execution_context(
         .and_then(Value::as_str)
         .map(|value| value.to_string());
     let resolved = flow.resolve(requested_phase, registry.as_ref())?;
-    let base_options = resolved
+    let mut base_options = resolved
         .phase
         .options
         .as_ref()
         .and_then(|options| options.agent_options())
         .unwrap_or_default();
+    for (key, value) in execution_option_overrides(params) {
+        base_options.insert(key, value);
+    }
 
     let ledger = clone_artifact_ledger(server);
     let default_failure_strategy = recommend_failure_strategy_from_learning(&ledger, "tolerant");
@@ -2702,4 +3086,50 @@ fn execute_model_tool_calls(
     }
 
     observations
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_options_merge_root_over_extra() {
+        let params = json!({
+            "temperature": 0.8,
+            "options": {
+                "extra": {
+                    "temperature": 0.2,
+                    "top_p": 0.9,
+                    "ignored": "x"
+                }
+            }
+        });
+
+        let options = execution_option_overrides(&params);
+        assert_eq!(options.get("temperature"), Some(&json!(0.8)));
+        assert_eq!(options.get("top_p"), Some(&json!(0.9)));
+        assert!(options.get("ignored").is_none());
+    }
+
+    #[test]
+    fn workflow_run_transition_rules() {
+        let params = json!({"run_id": "run-test-transition"});
+        let started = start_workflow_run("workflow.execute", "demo", Some("execute"), &params);
+        assert_eq!(started.status, "running");
+
+        let paused = transition_workflow_run("run-test-transition", "paused")
+            .expect("running -> paused should be allowed");
+        assert_eq!(paused.status, "paused");
+
+        let resumed = transition_workflow_run("run-test-transition", "running")
+            .expect("paused -> running should be allowed");
+        assert_eq!(resumed.status, "running");
+
+        let completed = transition_workflow_run("run-test-transition", "succeeded")
+            .expect("running -> succeeded should be allowed");
+        assert_eq!(completed.status, "succeeded");
+
+        let invalid = transition_workflow_run("run-test-transition", "paused");
+        assert!(invalid.is_err());
+    }
 }

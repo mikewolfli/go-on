@@ -1,10 +1,17 @@
 use crate::backend::BackendClient;
 use crate::i18n::I18n;
+use comrak::{
+    nodes::{AstNode, ListType, NodeValue},
+    parse_document, Arena, Options,
+};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -12,6 +19,16 @@ pub struct Message {
     pub content: String,
     pub timestamp: u64,
     pub attachments: Vec<Attachment>,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub comparison_id: u64,
+    #[serde(default)]
+    pub input_tokens: usize,
+    #[serde(default)]
+    pub output_tokens: usize,
+    #[serde(default)]
+    pub total_tokens: usize,
     #[serde(default)]
     pub thinking: String,
     #[serde(skip)]
@@ -46,8 +63,34 @@ pub struct Session {
     pub phase: String,
     #[serde(default)]
     pub mode: String,
+    #[serde(default = "default_model")]
+    pub model: String,
+    #[serde(default = "default_models")]
+    pub models: Vec<String>,
     #[serde(default)]
     pub phase_records: Vec<PhaseRecord>,
+}
+
+fn default_model() -> String {
+    "auto".to_string()
+}
+
+fn default_models() -> Vec<String> {
+    vec!["auto".to_string()]
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PromptTemplate {
+    id: String,
+    name: String,
+    command: String,
+    content: String,
+}
+
+struct GenerationState {
+    id: u64,
+    msg_idx: usize,
+    handle: JoinHandle<()>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,11 +100,29 @@ pub enum AiStatus {
     Error,
 }
 
-/// Result returned from an async chat call.
-struct PendingResponse {
-    content: String,
-    thinking: String,
-    error: Option<String>,
+enum PendingResponse {
+    ChatCompleted {
+        generation_id: u64,
+        content: String,
+        thinking: String,
+    },
+    StreamChunk {
+        generation_id: u64,
+        token: String,
+        reasoning: String,
+    },
+    TokenEconomy {
+        generation_id: u64,
+        input_tokens: usize,
+        output_tokens: usize,
+        total_tokens: usize,
+    },
+    Error {
+        generation_id: Option<u64>,
+        message: String,
+    },
+    Phases(Vec<String>),
+    Models(Vec<String>),
 }
 
 pub struct ChatView {
@@ -80,9 +141,62 @@ pub struct ChatView {
     phases_loaded: bool,
     pending_rx: mpsc::Receiver<PendingResponse>,
     pending_tx: mpsc::Sender<PendingResponse>,
+    // Feature 3: edit/retry/delete
+    edit_msg_idx: Option<usize>,
+    edit_msg_buf: String,
+    // Feature 4: stop button
+    stop_requested: bool,
+    generation_states: Vec<GenerationState>,
+    next_generation_id: u64,
+    // Feature 5: token display
+    last_token_estimate: usize,
+    input_token_estimate: usize,
+    output_token_estimate: usize,
+    // Feature 7: quick prompts
+    show_prompts: bool,
+    show_model_picker: bool,
+    prompt_templates: Vec<PromptTemplate>,
+    selected_template_idx: Option<usize>,
+    template_name_buf: String,
+    template_command_buf: String,
+    template_content_buf: String,
+    template_search_query: String,
+    templates_bootstrapped: bool,
+    // Feature 9: search (sessions + messages)
+    session_search_query: String,
+    message_search_query: String,
+    // Feature 6: multi-model
+    selected_model: String,
+    selected_models: Vec<String>,
+    available_models: Vec<String>,
+    models_loaded: bool,
 }
 
 impl ChatView {
+    fn localized_default_session_name(index: usize, i18n: &I18n) -> String {
+        if index == 0 {
+            i18n.t("chat.newSession").to_string()
+        } else {
+            format!("{} {}", i18n.t("chat.newSession"), index + 1)
+        }
+    }
+
+    fn is_default_session_name(name: &str, i18n: &I18n) -> bool {
+        let localized = i18n.t("chat.newSession");
+        name == "New Chat"
+            || name.starts_with("Chat ")
+            || name == localized
+            || name.starts_with(&format!("{} ", localized))
+    }
+
+    fn refresh_default_session_names(&mut self, i18n: &I18n) {
+        for (idx, session) in self.sessions.iter_mut().enumerate() {
+            if session.messages.is_empty() && Self::is_default_session_name(&session.name, i18n) {
+                session.name = Self::localized_default_session_name(idx, i18n);
+            }
+        }
+    }
+
     fn guess_mime(path: &Path) -> String {
         match path
             .extension()
@@ -119,7 +233,50 @@ impl ChatView {
             workflow_type: "chat".to_string(),
             phase,
             mode,
+            model: "auto".to_string(),
+            models: vec!["auto".to_string()],
             phase_records: Vec::new(),
+        }
+    }
+
+    fn templates_path() -> PathBuf {
+        if let Some(dirs) = directories::ProjectDirs::from("com", "goon", "go-on-gui") {
+            dirs.config_dir().join("chat_prompt_templates.json")
+        } else {
+            PathBuf::from("chat_prompt_templates.json")
+        }
+    }
+
+    fn load_templates_from_disk() -> Vec<PromptTemplate> {
+        let path = Self::templates_path();
+        match std::fs::read_to_string(&path) {
+            Ok(content) => {
+                serde_json::from_str::<Vec<PromptTemplate>>(&content).unwrap_or_default()
+            }
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn save_templates_to_disk(&self) {
+        let path = Self::templates_path();
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!(
+                    "Failed to create chat template directory {}: {e}",
+                    parent.display()
+                );
+                return;
+            }
+        }
+        match serde_json::to_string_pretty(&self.prompt_templates) {
+            Ok(content) => {
+                if let Err(e) = std::fs::write(&path, content) {
+                    eprintln!("Failed to write chat templates to {}: {e}", path.display());
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to serialize chat templates: {e}");
+            }
         }
     }
 
@@ -164,6 +321,7 @@ impl ChatView {
 
     pub fn new() -> Self {
         let mut sessions = Self::load_sessions_from_disk();
+        let templates = Self::load_templates_from_disk();
         if sessions.is_empty() {
             sessions.push(Self::default_session(0, String::new(), "ask".to_string()));
         }
@@ -175,6 +333,20 @@ impl ChatView {
             .first()
             .map(|s| s.mode.clone())
             .unwrap_or_else(|| "ask".to_string());
+        let initial_model = sessions
+            .first()
+            .map(|s| s.model.clone())
+            .unwrap_or_else(|| "auto".to_string());
+        let initial_models = sessions
+            .first()
+            .map(|s| {
+                if s.models.is_empty() {
+                    vec![s.model.clone()]
+                } else {
+                    s.models.clone()
+                }
+            })
+            .unwrap_or_else(|| vec!["auto".to_string()]);
 
         let (pending_tx, pending_rx) = mpsc::channel();
 
@@ -192,6 +364,35 @@ impl ChatView {
             phases_loaded: false,
             pending_rx,
             pending_tx,
+            // Feature 3
+            edit_msg_idx: None,
+            edit_msg_buf: String::new(),
+            // Feature 4
+            stop_requested: false,
+            generation_states: Vec::new(),
+            next_generation_id: 1,
+            // Feature 5
+            last_token_estimate: 0,
+            input_token_estimate: 0,
+            output_token_estimate: 0,
+            // Feature 7
+            show_prompts: false,
+            show_model_picker: false,
+            prompt_templates: templates,
+            selected_template_idx: None,
+            template_name_buf: String::new(),
+            template_command_buf: String::new(),
+            template_content_buf: String::new(),
+            template_search_query: String::new(),
+            templates_bootstrapped: false,
+            // Feature 9
+            session_search_query: String::new(),
+            message_search_query: String::new(),
+            // Feature 6
+            selected_model: initial_model,
+            selected_models: initial_models,
+            available_models: vec!["auto".to_string()],
+            models_loaded: false,
         }
     }
 
@@ -224,17 +425,216 @@ impl ChatView {
         }
     }
 
+    fn bootstrap_default_templates(&mut self, i18n: &I18n) {
+        if self.templates_bootstrapped {
+            return;
+        }
+        self.templates_bootstrapped = true;
+        if !self.prompt_templates.is_empty() {
+            return;
+        }
+
+        self.prompt_templates = vec![
+            PromptTemplate {
+                id: "explain".to_string(),
+                name: i18n.t("chat.template.explain").to_string(),
+                command: "/explain".to_string(),
+                content: i18n.t("chat.template.explain.body").to_string(),
+            },
+            PromptTemplate {
+                id: "test".to_string(),
+                name: i18n.t("chat.template.test").to_string(),
+                command: "/test".to_string(),
+                content: i18n.t("chat.template.test.body").to_string(),
+            },
+            PromptTemplate {
+                id: "debug".to_string(),
+                name: i18n.t("chat.template.debug").to_string(),
+                command: "/debug".to_string(),
+                content: i18n.t("chat.template.debug.body").to_string(),
+            },
+            PromptTemplate {
+                id: "refactor".to_string(),
+                name: i18n.t("chat.template.refactor").to_string(),
+                command: "/refactor".to_string(),
+                content: i18n.t("chat.template.refactor.body").to_string(),
+            },
+            PromptTemplate {
+                id: "summary".to_string(),
+                name: i18n.t("chat.template.summary").to_string(),
+                command: "/summary".to_string(),
+                content: i18n.t("chat.template.summary.body").to_string(),
+            },
+            PromptTemplate {
+                id: "docs".to_string(),
+                name: i18n.t("chat.template.docs").to_string(),
+                command: "/docs".to_string(),
+                content: i18n.t("chat.template.docs.body").to_string(),
+            },
+        ];
+        self.save_templates_to_disk();
+    }
+
+    fn normalize_models(models: &[String]) -> Vec<String> {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for model in models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
+            if seen.insert(model.to_string()) {
+                result.push(model.to_string());
+            }
+        }
+        if result.len() > 1 {
+            result.retain(|m| m != "auto");
+        }
+        if result.is_empty() {
+            result.push("auto".to_string());
+        }
+        result
+    }
+
+    fn sync_model_selection(&mut self) {
+        self.selected_models = Self::normalize_models(&self.selected_models);
+        self.selected_model = self
+            .selected_models
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "auto".to_string());
+    }
+
+    fn selected_models_summary(&self, i18n: &I18n) -> String {
+        match self.selected_models.len() {
+            0 => "auto".to_string(),
+            1 => self.selected_models[0].clone(),
+            count => format!(
+                "{} ({count}): {}",
+                i18n.t("chat.multiModelEnabled"),
+                self.selected_models.join(", ")
+            ),
+        }
+    }
+
+    fn next_generation_id(&mut self) -> u64 {
+        let id = self.next_generation_id;
+        self.next_generation_id += 1;
+        id
+    }
+
+    fn generation_msg_idx(&self, generation_id: u64) -> Option<usize> {
+        self.generation_states
+            .iter()
+            .find(|state| state.id == generation_id)
+            .map(|state| state.msg_idx)
+    }
+
+    fn remove_generation(&mut self, generation_id: u64) {
+        self.generation_states
+            .retain(|state| state.id != generation_id);
+        self.sending = !self.generation_states.is_empty();
+        self.ai_status = if self.sending {
+            AiStatus::Thinking
+        } else if self.error.is_empty() {
+            AiStatus::Idle
+        } else {
+            AiStatus::Error
+        };
+    }
+
+    fn remove_message_at(&mut self, idx: usize) {
+        if let Some(session) = self.sessions.get_mut(self.active_session) {
+            if idx < session.messages.len() {
+                session.messages.remove(idx);
+                for state in &mut self.generation_states {
+                    if state.msg_idx > idx {
+                        state.msg_idx -= 1;
+                    }
+                }
+            }
+        }
+    }
+
+    fn normalize_command(command: &str) -> String {
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            String::new()
+        } else if trimmed.starts_with('/') {
+            trimmed.to_string()
+        } else {
+            format!("/{trimmed}")
+        }
+    }
+
+    fn expand_prompt_command(&self, raw_input: &str) -> String {
+        let trimmed = raw_input.trim();
+        if !trimmed.starts_with('/') {
+            return trimmed.to_string();
+        }
+
+        let mut parts = trimmed.splitn(2, char::is_whitespace);
+        let command = parts.next().unwrap_or_default();
+        let arguments = parts.next().unwrap_or_default().trim();
+        if let Some(template) = self
+            .prompt_templates
+            .iter()
+            .find(|template| template.command == command)
+        {
+            if template.content.contains("{{input}}") {
+                return template.content.replace("{{input}}", arguments);
+            }
+            if arguments.is_empty() {
+                return template.content.clone();
+            }
+            return format!("{}\n\n{}", template.content, arguments);
+        }
+
+        trimmed.to_string()
+    }
+
+    fn load_template_into_editor(&mut self, idx: usize) {
+        if let Some(template) = self.prompt_templates.get(idx) {
+            self.selected_template_idx = Some(idx);
+            self.template_name_buf = template.name.clone();
+            self.template_command_buf = template.command.clone();
+            self.template_content_buf = template.content.clone();
+        }
+    }
+
     fn new_session(&mut self) {
+        self.stop_sending();
         let count = self.sessions.len() + 1;
         self.sessions.push(Self::default_session(
             count - 1,
             self.selected_phase.clone(),
             self.selected_mode.clone(),
         ));
+        if let Some(session) = self.sessions.last_mut() {
+            session.model = self.selected_model.clone();
+        }
         self.active_session = self.sessions.len() - 1;
         self.ai_status = AiStatus::Idle;
         self.attachments.clear();
+        self.edit_msg_idx = None;
+        self.edit_msg_buf.clear();
+        self.selected_models = vec![self.selected_model.clone()];
         self.save_sessions_to_disk();
+    }
+
+    // Feature 4: stop sending
+    pub fn stop_sending(&mut self) {
+        self.stop_requested = true;
+        for state in self.generation_states.drain(..) {
+            state.handle.abort();
+        }
+        self.sending = false;
+        self.ai_status = AiStatus::Idle;
+        if let Some(record) = self
+            .session()
+            .phase_records
+            .iter_mut()
+            .rev()
+            .find(|r| r.status == "running")
+        {
+            record.status = "stopped".to_string();
+        }
     }
 
     /// Send a message asynchronously via the backend.
@@ -243,8 +643,11 @@ impl ChatView {
         if msg.is_empty() || self.sending {
             return;
         }
+        let expanded_msg = self.expand_prompt_command(&msg);
         let mode = self.selected_mode.clone();
         let phase = self.selected_phase.clone();
+        let base_url = backend.base_url().to_string();
+        let selected_models = Self::normalize_models(&self.selected_models);
 
         self.input.clear();
         let now = SystemTime::now()
@@ -262,18 +665,28 @@ impl ChatView {
                 .join("\n");
             format!("\n\n[Attachments]\n{details}")
         };
-        let outbound_msg = format!("{msg}{attachment_summary}");
+        let outbound_msg = format!("{expanded_msg}{attachment_summary}");
 
         // Add user message immediately
         self.session().messages.push(Message {
             role: "user".to_string(),
-            content: msg.clone(),
+            content: expanded_msg.clone(),
             timestamp: now,
             attachments: atts,
+            model: String::new(),
+            comparison_id: 0,
+            input_tokens: expanded_msg.chars().count() / 4,
+            output_tokens: 0,
+            total_tokens: 0,
             thinking: String::new(),
             show_thinking_msg: false,
         });
         self.save_sessions_to_disk();
+
+        self.last_token_estimate = 0;
+        self.input_token_estimate = expanded_msg.chars().count() / 4;
+        self.output_token_estimate = 0;
+
         // Add a "running" phase record
         let now_ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -290,71 +703,343 @@ impl ChatView {
         self.ai_status = AiStatus::Thinking;
         self.sending = true;
         self.error.clear();
+        self.stop_requested = false;
 
-        // Spawn a non-blocking tokio task that calls the real backend
-        let tx = self.pending_tx.clone();
-        let backend_clone = backend.clone();
-        let ctx_clone = ctx.clone();
-        tokio::spawn(async move {
-            let resp = backend_clone.chat(&outbound_msg, &mode, &phase).await;
-            let _ = tx.send(match resp {
-                Ok((content, thinking)) => PendingResponse {
-                    content,
-                    thinking,
-                    error: None,
-                },
-                Err(e) => PendingResponse {
-                    content: String::new(),
-                    thinking: String::new(),
-                    error: Some(e),
-                },
+        self.selected_models = selected_models.clone();
+        self.sync_model_selection();
+
+        let comparison_id = now;
+        for model_name in selected_models {
+            let generation_id = self.next_generation_id();
+            let input_tokens = self.input_token_estimate;
+            self.session().messages.push(Message {
+                role: "assistant".to_string(),
+                content: String::new(),
+                timestamp: now,
+                attachments: Vec::new(),
+                model: model_name.clone(),
+                comparison_id,
+                input_tokens,
+                output_tokens: 0,
+                total_tokens: 0,
+                thinking: String::new(),
+                show_thinking_msg: false,
             });
-            ctx_clone.request_repaint();
-        });
+            let msg_idx = self.session().messages.len().saturating_sub(1);
+
+            let tx = self.pending_tx.clone();
+            let backend_clone = backend.clone();
+            let ctx_clone = ctx.clone();
+            let mode_clone = mode.clone();
+            let phase_clone = phase.clone();
+            let msg_clone = expanded_msg.clone();
+            let outbound_clone = outbound_msg.clone();
+            let model_clone = model_name.clone();
+            let base_url_clone = base_url.clone();
+            let handle = tokio::spawn(async move {
+                let phase_val = if phase_clone.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::String(phase_clone.clone())
+                };
+
+                let mut body = serde_json::json!({
+                    "messages": [{"role": "user", "content": outbound_clone}],
+                    "mode": mode_clone,
+                    "phase": phase_val,
+                });
+
+                if !model_clone.trim().is_empty() && model_clone != "auto" {
+                    body["options"] = serde_json::json!({
+                        "model": model_clone,
+                    });
+                }
+
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(180))
+                    .build()
+                    .unwrap_or_else(|_| reqwest::Client::new());
+
+                let stream_resp = client
+                    .post(format!(
+                        "{}/chat/stream",
+                        base_url_clone.trim_end_matches('/')
+                    ))
+                    .json(&body)
+                    .send()
+                    .await;
+
+                match stream_resp {
+                    Ok(resp) => {
+                        let mut resp = if let Err(err) = resp.error_for_status_ref() {
+                            let fallback = backend_clone
+                                .chat(&msg_clone, &mode_clone, &phase_clone, Some(&model_clone))
+                                .await
+                                .map(|(content, thinking)| PendingResponse::ChatCompleted {
+                                    generation_id,
+                                    content,
+                                    thinking,
+                                })
+                                .unwrap_or_else(|e| PendingResponse::Error {
+                                    generation_id: Some(generation_id),
+                                    message: format!(
+                                        "stream status error: {err}; fallback failed: {e}"
+                                    ),
+                                });
+                            let _ = tx.send(fallback);
+                            ctx_clone.request_repaint();
+                            return;
+                        } else {
+                            resp
+                        };
+
+                        let mut sse_buffer = String::new();
+                        let mut final_content: Option<String> = None;
+                        let mut final_thinking: Option<String> = None;
+
+                        loop {
+                            let chunk = match resp.chunk().await {
+                                Ok(Some(c)) => c,
+                                Ok(None) => break,
+                                Err(e) => {
+                                    let _ = tx.send(PendingResponse::Error {
+                                        generation_id: Some(generation_id),
+                                        message: format!("stream read error: {e}"),
+                                    });
+                                    ctx_clone.request_repaint();
+                                    return;
+                                }
+                            };
+                            let part = String::from_utf8_lossy(&chunk);
+                            sse_buffer.push_str(&part);
+
+                            while let Some(split_at) = sse_buffer.find("\n\n") {
+                                let frame = sse_buffer[..split_at].to_string();
+                                sse_buffer = sse_buffer[split_at + 2..].to_string();
+
+                                let mut event_name = String::new();
+                                let mut data_payload = String::new();
+                                for line in frame.lines() {
+                                    if let Some(rest) = line.strip_prefix("event:") {
+                                        event_name = rest.trim().to_string();
+                                    } else if let Some(rest) = line.strip_prefix("data:") {
+                                        if !data_payload.is_empty() {
+                                            data_payload.push('\n');
+                                        }
+                                        data_payload.push_str(rest.trim());
+                                    }
+                                }
+
+                                if data_payload.is_empty() {
+                                    continue;
+                                }
+
+                                let data: Value = match serde_json::from_str(&data_payload) {
+                                    Ok(v) => v,
+                                    Err(_) => continue,
+                                };
+
+                                match event_name.as_str() {
+                                    "chunk" => {
+                                        let token = data
+                                            .get("token")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default()
+                                            .to_string();
+                                        let reasoning = data
+                                            .get("reasoning")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default()
+                                            .to_string();
+                                        if !token.is_empty() || !reasoning.is_empty() {
+                                            let _ = tx.send(PendingResponse::StreamChunk {
+                                                generation_id,
+                                                token,
+                                                reasoning,
+                                            });
+                                        }
+                                    }
+                                    "telemetry" => {
+                                        if let Some(te) = data.get("token_economy") {
+                                            let input_tokens = te
+                                                .get("input_tokens")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0)
+                                                as usize;
+                                            let output_tokens = te
+                                                .get("output_tokens")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0)
+                                                as usize;
+                                            let total_tokens = te
+                                                .get("total_tokens")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0)
+                                                as usize;
+                                            let _ = tx.send(PendingResponse::TokenEconomy {
+                                                generation_id,
+                                                input_tokens,
+                                                output_tokens,
+                                                total_tokens,
+                                            });
+                                        }
+                                    }
+                                    "result" => {
+                                        final_content = data
+                                            .get("response")
+                                            .and_then(|v| v.as_str())
+                                            .map(ToOwned::to_owned);
+                                        final_thinking = data
+                                            .get("thinking")
+                                            .and_then(|v| v.as_str())
+                                            .map(ToOwned::to_owned);
+                                    }
+                                    "error" => {
+                                        let message = data
+                                            .get("message")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("unknown stream error")
+                                            .to_string();
+                                        let _ = tx.send(PendingResponse::Error {
+                                            generation_id: Some(generation_id),
+                                            message,
+                                        });
+                                        ctx_clone.request_repaint();
+                                        return;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            ctx_clone.request_repaint();
+                        }
+
+                        let _ = tx.send(PendingResponse::ChatCompleted {
+                            generation_id,
+                            content: final_content.unwrap_or_default(),
+                            thinking: final_thinking.unwrap_or_default(),
+                        });
+                    }
+                    Err(err) => {
+                        let fallback = backend_clone
+                            .chat(&msg_clone, &mode_clone, &phase_clone, Some(&model_clone))
+                            .await
+                            .map(|(content, thinking)| PendingResponse::ChatCompleted {
+                                generation_id,
+                                content,
+                                thinking,
+                            })
+                            .unwrap_or_else(|e| PendingResponse::Error {
+                                generation_id: Some(generation_id),
+                                message: format!(
+                                    "stream request error: {err}; fallback failed: {e}"
+                                ),
+                            });
+                        let _ = tx.send(fallback);
+                    }
+                }
+                ctx_clone.request_repaint();
+            });
+            self.generation_states.push(GenerationState {
+                id: generation_id,
+                msg_idx,
+                handle,
+            });
+        }
+        self.save_sessions_to_disk();
     }
 
     /// Drain any pending async responses and update the session / `ai_status`.
-    fn process_pending(&mut self) {
+    fn process_pending(&mut self, i18n: &I18n) {
         while let Ok(pending) = self.pending_rx.try_recv() {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-
-            // Check for internal control messages
-            if let Some(phases_str) = pending.content.strip_prefix("__phases__:") {
-                self.phases = phases_str.split(',').map(String::from).collect();
-                continue;
-            }
-            if let Some(editor_content) = pending.content.strip_prefix("__editor__:") {
-                self.input = editor_content.to_string();
-                continue;
-            }
-
-            if let Some(err) = &pending.error {
-                self.error = format!("Chat error: {err}");
-                // Mark latest running phase as error
-                if let Some(record) = self.session().phase_records.iter_mut().rev().find(|r| r.status == "running") {
-                    record.status = "error".to_string();
+            match pending {
+                PendingResponse::Phases(list) => {
+                    self.phases = list;
                 }
-                self.ai_status = AiStatus::Error;
-            } else {
-                self.session().messages.push(Message {
-                    role: "assistant".to_string(),
-                    content: pending.content,
-                    thinking: pending.thinking,
-                    timestamp: now,
-                    attachments: Vec::new(),
-                    show_thinking_msg: false,
-                });
-                // Update the latest running phase record to "completed"
-                if let Some(record) = self.session().phase_records.iter_mut().rev().find(|r| r.status == "running") {
-                    record.status = "completed".to_string();
+                PendingResponse::Models(list) => {
+                    self.available_models = if list.is_empty() {
+                        vec!["auto".to_string()]
+                    } else {
+                        list
+                    };
+                    if !self
+                        .available_models
+                        .iter()
+                        .any(|m| m == &self.selected_model)
+                    {
+                        self.selected_model = "auto".to_string();
+                    }
                 }
-                self.ai_status = AiStatus::Idle;
+                PendingResponse::StreamChunk {
+                    generation_id,
+                    token,
+                    reasoning,
+                } => {
+                    if let Some(idx) = self.generation_msg_idx(generation_id) {
+                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                            if let Some(m) = session.messages.get_mut(idx) {
+                                if !token.is_empty() {
+                                    m.content.push_str(&token);
+                                }
+                                if !reasoning.is_empty() {
+                                    m.thinking.push_str(&reasoning);
+                                }
+                            }
+                        }
+                    }
+                }
+                PendingResponse::TokenEconomy {
+                    generation_id,
+                    input_tokens,
+                    output_tokens,
+                    total_tokens,
+                } => {
+                    if let Some(idx) = self.generation_msg_idx(generation_id) {
+                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                            if let Some(m) = session.messages.get_mut(idx) {
+                                m.input_tokens = input_tokens;
+                                m.output_tokens = output_tokens;
+                                m.total_tokens = total_tokens;
+                            }
+                        }
+                    }
+                    self.input_token_estimate = input_tokens;
+                    self.output_token_estimate = output_tokens;
+                    self.last_token_estimate = total_tokens;
+                }
+                PendingResponse::ChatCompleted {
+                    generation_id,
+                    content,
+                    thinking,
+                } => {
+                    if let Some(idx) = self.generation_msg_idx(generation_id) {
+                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                            if let Some(m) = session.messages.get_mut(idx) {
+                                if !content.is_empty() {
+                                    m.content = content;
+                                }
+                                if !thinking.is_empty() {
+                                    m.thinking = thinking;
+                                }
+                                if self.last_token_estimate == 0 {
+                                    self.output_token_estimate = m.content.chars().count() / 4;
+                                    self.last_token_estimate =
+                                        self.input_token_estimate + self.output_token_estimate;
+                                }
+                            }
+                        }
+                    }
 
-                // Auto-name the session from first user message if still default
-                {
+                    if let Some(record) = self
+                        .session()
+                        .phase_records
+                        .iter_mut()
+                        .rev()
+                        .find(|r| r.status == "running")
+                    {
+                        record.status = "completed".to_string();
+                    }
+
+                    // Auto-name the session from first user message if still default
                     let first_user_content = self
                         .session()
                         .messages
@@ -362,18 +1047,55 @@ impl ChatView {
                         .find(|m| m.role == "user")
                         .map(|m| m.content.clone());
                     if let Some(content) = first_user_content {
-                        let is_default = self.session().name == "New Chat"
-                            || self.session().name.starts_with("Chat ");
+                        let is_default = Self::is_default_session_name(&self.session().name, i18n);
                         if is_default {
                             let truncated: String = content.chars().take(25).collect();
                             self.session().name = truncated;
                         }
                     }
-                }
 
-                self.save_sessions_to_disk();
+                    self.remove_generation(generation_id);
+                    self.stop_requested = false;
+                    self.save_sessions_to_disk();
+                }
+                PendingResponse::Error {
+                    generation_id,
+                    message,
+                } => {
+                    self.error = i18n.t("chat.chatError").replace("{message}", &message);
+                    if let Some(record) = self
+                        .session()
+                        .phase_records
+                        .iter_mut()
+                        .rev()
+                        .find(|r| r.status == "running")
+                    {
+                        record.status = "error".to_string();
+                    }
+
+                    // Drop empty placeholder assistant message on failure.
+                    if let Some(idx) = generation_id.and_then(|id| self.generation_msg_idx(id)) {
+                        let should_remove = self
+                            .sessions
+                            .get(self.active_session)
+                            .map(|session| {
+                                idx < session.messages.len()
+                                    && session.messages[idx].content.is_empty()
+                            })
+                            .unwrap_or(false);
+                        if should_remove {
+                            self.remove_message_at(idx);
+                        }
+                    }
+
+                    if let Some(id) = generation_id {
+                        self.remove_generation(id);
+                    }
+                    self.sending = !self.generation_states.is_empty();
+                    self.ai_status = AiStatus::Error;
+                    self.stop_requested = false;
+                }
             }
-            self.sending = false;
         }
     }
 
@@ -385,7 +1107,10 @@ impl ChatView {
         ctx: &egui::Context,
     ) {
         // Process any pending async responses
-        self.process_pending();
+        self.process_pending(i18n);
+        self.bootstrap_default_templates(i18n);
+        self.sync_model_selection();
+        self.refresh_default_session_names(i18n);
 
         // Fetch available phases from backend if not yet loaded
         if !self.phases_loaded {
@@ -406,14 +1131,29 @@ impl ChatView {
                                 .collect::<Vec<_>>()
                         });
                     if let Some(list) = phases {
-                        let msg = format!("__phases__:{}", list.join(","));
-                        let _ = tx.send(PendingResponse {
-                            content: msg,
-                            thinking: String::new(),
-                            error: None,
-                        });
+                        let _ = tx.send(PendingResponse::Phases(list));
                     }
                 }
+                ctx_clone.request_repaint();
+            });
+        }
+
+        if !self.models_loaded {
+            self.models_loaded = true;
+            let backend_clone = backend.clone();
+            let tx = self.pending_tx.clone();
+            let ctx_clone = ctx.clone();
+            tokio::spawn(async move {
+                let mut options = vec!["auto".to_string()];
+                let models = backend_clone.fetch_models().await;
+                let mut ids: Vec<String> = models
+                    .into_iter()
+                    .flat_map(|(_, ids)| ids.into_iter())
+                    .collect();
+                ids.sort();
+                ids.dedup();
+                options.extend(ids);
+                let _ = tx.send(PendingResponse::Models(options));
                 ctx_clone.request_repaint();
             });
         }
@@ -428,6 +1168,29 @@ impl ChatView {
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
+            let dark_mode = ui.visuals().dark_mode;
+            let panel_bg = if dark_mode {
+                egui::Color32::from_rgb(36, 38, 44)
+            } else {
+                egui::Color32::from_rgb(240, 242, 245)
+            };
+            let panel_text = if dark_mode {
+                egui::Color32::from_rgb(220, 224, 234)
+            } else {
+                egui::Color32::from_rgb(34, 34, 34)
+            };
+
+            // Feature 9: message search in current session.
+            ui.horizontal(|ui| {
+                ui.label(i18n.t("chat.search"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.message_search_query)
+                        .hint_text(i18n.t("chat.searchMessages"))
+                        .desired_width(ui.available_width()),
+                );
+            });
+            ui.add_space(4.0);
+
             // ── Top: conversation messages ──────────────────────────
             let avail = ui.available_height();
             let top_height = avail - 160.0; // leave room for input area
@@ -443,14 +1206,14 @@ impl ChatView {
 
             // ── Mode selector row ──────────────────────────────────
             egui::Frame::new()
-                .fill(egui::Color32::from_rgb(240, 242, 245))
+                .fill(panel_bg)
                 .corner_radius(6.0)
                 .inner_margin(egui::Margin::symmetric(10i8, 6i8))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(i18n.t("chat.mode"))
-                                .color(egui::Color32::from_rgb(34, 34, 34))
+                                .color(panel_text)
                                 .strong(),
                         );
                         ui.add_space(6.0);
@@ -466,6 +1229,24 @@ impl ChatView {
                                     );
                                 }
                             });
+
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new(i18n.t("chat.model")).color(panel_text));
+                        if ui
+                            .button(i18n.t("chat.chooseModels"))
+                            .on_hover_text(i18n.t("chat.multiModelHint"))
+                            .clicked()
+                        {
+                            self.show_model_picker = true;
+                        }
+
+                        // Feature 6: show active model name
+                        ui.add_space(12.0);
+                        ui.label(
+                            egui::RichText::new(self.selected_models_summary(i18n))
+                                .color(panel_text)
+                                .size(12.0),
+                        );
                     });
                 });
             let mut metadata_changed = false;
@@ -477,6 +1258,14 @@ impl ChatView {
                 }
                 if session.phase != self.selected_phase {
                     session.phase = self.selected_phase.clone();
+                    metadata_changed = true;
+                }
+                if session.model != self.selected_model {
+                    session.model = self.selected_model.clone();
+                    metadata_changed = true;
+                }
+                if session.models != self.selected_models {
+                    session.models = self.selected_models.clone();
                     metadata_changed = true;
                 }
             }
@@ -504,52 +1293,276 @@ impl ChatView {
             }
             // ── Input box ────────────────────────────────────────────
             let resp = egui::Frame::new()
-                .fill(egui::Color32::from_rgb(255, 255, 255))
+                .fill(if dark_mode {
+                    egui::Color32::from_rgb(28, 30, 36)
+                } else {
+                    egui::Color32::from_rgb(255, 255, 255)
+                })
                 .corner_radius(6.0)
                 .inner_margin(egui::Margin::symmetric(6i8, 4i8))
                 .show(ui, |ui| {
-                    ui.add(egui::TextEdit::multiline(&mut self.input)
-                        .hint_text(i18n.t("chat.input"))
-                        .desired_width(ui.available_width())
-                        .desired_rows(1)
-                        .frame(false))
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.input)
+                            .hint_text(i18n.t("chat.input"))
+                            .desired_width(ui.available_width())
+                            .desired_rows(1)
+                            .frame(false),
+                    )
                 })
                 .inner;
 
             // ── Button row ────────────────────────────────────────────
             ui.horizontal(|ui| {
-                if ui.button("\u{1f4ce}").on_hover_text(i18n.t("chat.attach")).clicked() {
+                if ui
+                    .button("\u{1f4ce}")
+                    .on_hover_text(i18n.t("chat.attach"))
+                    .clicked()
+                {
                     if let Some(files) = rfd::FileDialog::new().pick_files() {
                         for f in files {
-                            let n = f.file_name().and_then(|s| s.to_str()).unwrap_or("file").to_string();
-                            self.attachments.push(Attachment { name: n, mime: Self::guess_mime(&f), data: f.display().to_string() });
+                            let n = f
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("file")
+                                .to_string();
+                            self.attachments.push(Attachment {
+                                name: n,
+                                mime: Self::guess_mime(&f),
+                                data: f.display().to_string(),
+                            });
                         }
                         self.error.clear();
                     }
                 }
-                if ui.button("\u{1f4dd}").on_hover_text("Editor").clicked() {
+                if ui
+                    .button("\u{1f4dd}")
+                    .on_hover_text(i18n.t("chat.externalEditor"))
+                    .clicked()
+                {
                     let p = std::env::temp_dir().join("go_on_chat_input.txt");
                     let _ = std::fs::write(&p, &self.input);
-                    for e in &["zed","code","gedit","vim","nano"] {
-                        if std::process::Command::new(e).arg(&p).spawn().is_ok() { break; }
+                    for e in &["zed", "code", "gedit", "vim", "nano"] {
+                        if std::process::Command::new(e).arg(&p).spawn().is_ok() {
+                            break;
+                        }
                     }
                 }
-                // Fill remaining space, then Send button on the right
-                let (icon, col) = match self.ai_status {
-                    AiStatus::Idle => ("Send", egui::Color32::from_rgb(40, 120, 220)),
-                    AiStatus::Thinking => ("...", egui::Color32::from_rgb(200, 160, 60)),
-                    AiStatus::Error => ("Retry", egui::Color32::RED),
-                };
-                let snd = egui::Button::new(format!("\u{25b6} {}", icon))
-                    .fill(col)
-                    .min_size(egui::vec2(80.0, 28.0));
-                if ui.add_enabled(!self.sending, snd).clicked() {
-                    self.send_message(backend, ctx);
+                // Feature 7: quick prompts button
+                if ui
+                    .button("\u{1f4a1}")
+                    .on_hover_text(i18n.t("chat.promptTemplates"))
+                    .clicked()
+                {
+                    self.show_prompts = !self.show_prompts;
+                }
+                // Feature 7: show prompt dropdown
+                if self.show_prompts {
+                    egui::Window::new(i18n.t("chat.promptTemplates"))
+                        .id(egui::Id::new("quick_prompts_window"))
+                        .collapsible(false)
+                        .resizable(true)
+                        .default_width(520.0)
+                        .anchor(egui::Align2::LEFT_TOP, egui::vec2(0.0, 0.0))
+                        .show(ui.ctx(), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.template_search_query)
+                                        .hint_text(i18n.t("chat.searchTemplates"))
+                                        .desired_width(220.0),
+                                );
+                                if ui.button(i18n.t("chat.templateNew")).clicked() {
+                                    self.selected_template_idx = None;
+                                    self.template_name_buf.clear();
+                                    self.template_command_buf.clear();
+                                    self.template_content_buf.clear();
+                                }
+                            });
+                            ui.separator();
+                            ui.columns(2, |columns| {
+                                columns[0].vertical(|ui| {
+                                    let query = self.template_search_query.to_ascii_lowercase();
+                                    let mut pick_idx = None;
+                                    for (idx, template) in self.prompt_templates.iter().enumerate()
+                                    {
+                                        if !query.is_empty()
+                                            && !template.name.to_ascii_lowercase().contains(&query)
+                                            && !template
+                                                .command
+                                                .to_ascii_lowercase()
+                                                .contains(&query)
+                                        {
+                                            continue;
+                                        }
+                                        let label =
+                                            format!("{}  {}", template.command, template.name);
+                                        if ui
+                                            .selectable_label(
+                                                self.selected_template_idx == Some(idx),
+                                                label,
+                                            )
+                                            .clicked()
+                                        {
+                                            pick_idx = Some(idx);
+                                        }
+                                    }
+                                    if let Some(idx) = pick_idx {
+                                        self.load_template_into_editor(idx);
+                                    }
+                                });
+
+                                columns[1].vertical(|ui| {
+                                    ui.label(i18n.t("chat.templateName"));
+                                    ui.text_edit_singleline(&mut self.template_name_buf);
+                                    ui.label(i18n.t("chat.templateCommand"));
+                                    ui.text_edit_singleline(&mut self.template_command_buf);
+                                    ui.label(i18n.t("chat.templateBody"));
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut self.template_content_buf)
+                                            .desired_rows(10)
+                                            .desired_width(ui.available_width()),
+                                    );
+                                    ui.label(i18n.t("chat.templatePlaceholderHint"));
+                                    ui.horizontal(|ui| {
+                                        if ui.button(i18n.t("chat.templateInsert")).clicked() {
+                                            self.input = self.template_content_buf.clone();
+                                            self.show_prompts = false;
+                                        }
+                                        if ui.button(i18n.t("chat.templateSave")).clicked() {
+                                            let name = self.template_name_buf.trim();
+                                            let command =
+                                                Self::normalize_command(&self.template_command_buf);
+                                            let content = self.template_content_buf.trim();
+                                            if name.is_empty()
+                                                || command.is_empty()
+                                                || content.is_empty()
+                                            {
+                                                self.error =
+                                                    i18n.t("chat.templateValidation").to_string();
+                                            } else if self.prompt_templates.iter().enumerate().any(
+                                                |(idx, t)| {
+                                                    t.command == command
+                                                        && Some(idx) != self.selected_template_idx
+                                                },
+                                            ) {
+                                                self.error =
+                                                    i18n.t("chat.templateDuplicate").to_string();
+                                            } else {
+                                                let template = PromptTemplate {
+                                                    id: self
+                                                        .selected_template_idx
+                                                        .and_then(|idx| {
+                                                            self.prompt_templates
+                                                                .get(idx)
+                                                                .map(|t| t.id.clone())
+                                                        })
+                                                        .unwrap_or_else(|| {
+                                                            format!(
+                                                                "tpl_{}",
+                                                                self.prompt_templates.len() + 1
+                                                            )
+                                                        }),
+                                                    name: name.to_string(),
+                                                    command,
+                                                    content: content.to_string(),
+                                                };
+                                                if let Some(idx) = self.selected_template_idx {
+                                                    self.prompt_templates[idx] = template;
+                                                } else {
+                                                    self.prompt_templates.push(template);
+                                                    self.selected_template_idx =
+                                                        Some(self.prompt_templates.len() - 1);
+                                                }
+                                                self.save_templates_to_disk();
+                                                self.error.clear();
+                                            }
+                                        }
+                                        if ui.button(i18n.t("chat.templateDelete")).clicked() {
+                                            if let Some(idx) = self.selected_template_idx.take() {
+                                                if idx < self.prompt_templates.len() {
+                                                    self.prompt_templates.remove(idx);
+                                                    self.save_templates_to_disk();
+                                                    self.template_name_buf.clear();
+                                                    self.template_command_buf.clear();
+                                                    self.template_content_buf.clear();
+                                                }
+                                            }
+                                        }
+                                    });
+                                });
+                            });
+                            if ui.button(i18n.t("chat.close")).clicked() {
+                                self.show_prompts = false;
+                            }
+                        });
+                }
+                // Fill remaining space, then Send/Stop button on the right
+                // Feature 4: stop button replaces send when thinking
+                if self.sending && self.ai_status == AiStatus::Thinking {
+                    let stop_btn = egui::Button::new(format!("\u{23f9} {}", i18n.t("chat.stop")))
+                        .fill(egui::Color32::RED)
+                        .min_size(egui::vec2(80.0, 28.0));
+                    if ui.add(stop_btn).clicked() {
+                        self.stop_sending();
+                    }
+                } else {
+                    let (icon, col) = match self.ai_status {
+                        AiStatus::Idle => (
+                            i18n.t("chat.send").to_string(),
+                            egui::Color32::from_rgb(40, 120, 220),
+                        ),
+                        AiStatus::Thinking => {
+                            ("...".to_string(), egui::Color32::from_rgb(200, 160, 60))
+                        }
+                        AiStatus::Error => (i18n.t("chat.retry").to_string(), egui::Color32::RED),
+                    };
+                    let snd = egui::Button::new(format!("\u{25b6} {}", icon))
+                        .fill(col)
+                        .min_size(egui::vec2(80.0, 28.0));
+                    if ui.add_enabled(!self.sending, snd).clicked() {
+                        self.send_message(backend, ctx);
+                    }
                 }
             });
 
+            if self.show_model_picker {
+                egui::Window::new(i18n.t("chat.chooseModels"))
+                    .id(egui::Id::new("chat_model_picker_window"))
+                    .collapsible(false)
+                    .resizable(true)
+                    .default_width(360.0)
+                    .show(ui.ctx(), |ui| {
+                        ui.label(i18n.t("chat.multiModelHint"));
+                        ui.separator();
+                        let available_models = self.available_models.clone();
+                        for model in &available_models {
+                            let mut checked = self.selected_models.iter().any(|m| m == model);
+                            if ui.checkbox(&mut checked, model).changed() {
+                                if checked {
+                                    self.selected_models.push(model.clone());
+                                } else {
+                                    self.selected_models.retain(|m| m != model);
+                                }
+                                self.sync_model_selection();
+                            }
+                        }
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button(i18n.t("chat.modelAutoOnly")).clicked() {
+                                self.selected_models = vec!["auto".to_string()];
+                                self.sync_model_selection();
+                            }
+                            if ui.button(i18n.t("chat.close")).clicked() {
+                                self.show_model_picker = false;
+                            }
+                        });
+                    });
+            }
+
             // ── Enter to send ─────────────────────────────────────────
-            if resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !ui.input(|i| i.modifiers.shift) {
+            if resp.has_focus()
+                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                && !ui.input(|i| i.modifiers.shift)
+            {
                 self.send_message(backend, ctx);
             }
 
@@ -565,14 +1578,91 @@ impl ChatView {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.label(i18n.t("chat.title"));
+                // Feature 8: export button
+                if ui
+                    .button("\u{1f4e4}")
+                    .on_hover_text(i18n.t("chat.export"))
+                    .clicked()
+                {
+                    let msgs = self.messages();
+                    let mut md = String::new();
+                    md.push_str(&format!("# {}\n\n", i18n.t("chat.exportTitle")));
+                    let exported_at = format_absolute_time(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    );
+                    md.push_str(&format!(
+                        "_{}_\n\n",
+                        i18n.t("chat.exportedAt").replace("{time}", &exported_at)
+                    ));
+                    for msg in msgs {
+                        let role_label = if msg.role == "user" {
+                            format!("**{}**", i18n.t("chat.exportRoleYou"))
+                        } else {
+                            format!("**{}**", i18n.t("chat.exportRoleAssistant"))
+                        };
+                        md.push_str(&format!(
+                            "{} ({})\n\n",
+                            role_label,
+                            format_absolute_time(msg.timestamp)
+                        ));
+                        if !msg.model.is_empty() {
+                            md.push_str(&format!(
+                                "_{}_\n\n",
+                                i18n.t("chat.exportModel").replace("{model}", &msg.model)
+                            ));
+                        }
+                        md.push_str(&format!("{}\n\n", msg.content));
+                        if !msg.thinking.is_empty() {
+                            md.push_str(&format!(
+                                "> {}\n\n",
+                                i18n.t("chat.exportThinking")
+                                    .replace("{thinking}", &msg.thinking)
+                            ));
+                        }
+                    }
+                    let default_name = self
+                        .sessions
+                        .get(self.active_session)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_else(|| "chat-export".to_string())
+                        .replace('/', "-");
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_file_name(&format!("{default_name}.md"))
+                        .save_file()
+                    {
+                        match std::fs::write(&path, md) {
+                            Ok(()) => {
+                                self.error = i18n
+                                    .t("chat.exportSuccess")
+                                    .replace("{path}", &path.display().to_string());
+                            }
+                            Err(e) => {
+                                self.error = i18n
+                                    .t("chat.exportFailed")
+                                    .replace("{error}", &e.to_string());
+                            }
+                        }
+                    }
+                }
                 if ui
                     .button("＋")
-                    .on_hover_text(i18n.t("chat.title"))
+                    .on_hover_text(i18n.t("chat.newSession"))
                     .clicked()
                 {
                     self.new_session();
+                    self.refresh_default_session_names(i18n);
                 }
             });
+            // Feature 9: search field
+            ui.add_space(2.0);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.session_search_query)
+                    .hint_text(i18n.t("chat.searchSessions"))
+                    .desired_width(ui.available_width()),
+            );
             ui.separator();
             ui.add_space(4.0);
 
@@ -580,12 +1670,56 @@ impl ChatView {
                 .max_height(ui.available_height().max(100.0))
                 .show(ui, |ui| {
                     let mut to_remove: Option<usize> = None;
-                    for (idx, session) in self.sessions.iter().enumerate() {
-                        let selected = idx == self.active_session;
-                        let bg = if selected {
-                            egui::Color32::from_rgb(40, 100, 200)
+                    // Feature 9: filter by search query
+                    let filtered_sessions: Vec<(usize, String, String, String, Vec<String>)> =
+                        if self.session_search_query.is_empty() {
+                            self.sessions
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, s)| {
+                                    (
+                                        idx,
+                                        s.name.clone(),
+                                        s.mode.clone(),
+                                        s.phase.clone(),
+                                        s.models.clone(),
+                                    )
+                                })
+                                .collect()
                         } else {
-                            egui::Color32::DARK_GRAY
+                            let q = self.session_search_query.to_lowercase();
+                            self.sessions
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, s)| s.name.to_lowercase().contains(&q))
+                                .map(|(idx, s)| {
+                                    (
+                                        idx,
+                                        s.name.clone(),
+                                        s.mode.clone(),
+                                        s.phase.clone(),
+                                        s.models.clone(),
+                                    )
+                                })
+                                .collect()
+                        };
+                    for (idx, session_name, session_mode, session_phase, session_models) in
+                        filtered_sessions
+                    {
+                        let selected = idx == self.active_session;
+                        let dark_mode = ui.visuals().dark_mode;
+                        let bg = if selected {
+                            if dark_mode {
+                                egui::Color32::from_rgb(52, 96, 170)
+                            } else {
+                                egui::Color32::from_rgb(40, 100, 200)
+                            }
+                        } else {
+                            if dark_mode {
+                                egui::Color32::from_rgb(40, 42, 48)
+                            } else {
+                                egui::Color32::from_rgb(86, 90, 98)
+                            }
                         };
 
                         egui::Frame::NONE
@@ -595,11 +1729,58 @@ impl ChatView {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.set_min_width(160.0);
-                                    if ui.selectable_label(selected, &session.name).clicked() {
-                                        self.active_session = idx;
-                                        self.selected_mode = session.mode.clone();
-                                        self.selected_phase = session.phase.clone();
-                                        self.ai_status = AiStatus::Idle;
+                                    // Feature 9: highlight matching text
+                                    if self.session_search_query.is_empty() {
+                                        if ui.selectable_label(selected, &session_name).clicked() {
+                                            self.active_session = idx;
+                                            self.selected_mode = session_mode.clone();
+                                            self.selected_phase = session_phase.clone();
+                                            self.selected_models = if session_models.is_empty() {
+                                                vec!["auto".to_string()]
+                                            } else {
+                                                session_models.clone()
+                                            };
+                                            self.sync_model_selection();
+                                            self.ai_status = AiStatus::Idle;
+                                            self.edit_msg_idx = None;
+                                            self.edit_msg_buf.clear();
+                                        }
+                                    } else {
+                                        // Highlight matched text
+                                        let label = ui.selectable_label(selected, "").clicked();
+                                        let _resp = ui.label(
+                                            egui::RichText::new(&session_name)
+                                                .color(egui::Color32::WHITE),
+                                        );
+                                        // Reuse the click from the selectable_label
+                                        if label {
+                                            self.active_session = idx;
+                                            self.selected_mode = session_mode.clone();
+                                            self.selected_phase = session_phase.clone();
+                                            self.selected_models = if session_models.is_empty() {
+                                                vec!["auto".to_string()]
+                                            } else {
+                                                session_models.clone()
+                                            };
+                                            self.sync_model_selection();
+                                            self.ai_status = AiStatus::Idle;
+                                            self.edit_msg_idx = None;
+                                            self.edit_msg_buf.clear();
+                                        }
+                                        // Highlight using painter - simpler approach
+                                        let q = self.session_search_query.to_lowercase();
+                                        if let Some(_start) = session_name.to_lowercase().find(&q) {
+                                            let painter = ui.painter();
+                                            // Highlight the entire label area as a colored rect
+                                            let min_rect = ui.min_rect();
+                                            painter.rect_filled(
+                                                min_rect,
+                                                2.0,
+                                                egui::Color32::from_rgba_premultiplied(
+                                                    255, 255, 0, 60,
+                                                ),
+                                            );
+                                        }
                                     }
                                     // Right-click context or delete button
                                     if ui.button("✕").on_hover_text(i18n.t("chat.clear")).clicked()
@@ -610,8 +1791,8 @@ impl ChatView {
                                 // Show mode/phase indicator
                                 ui.label(format!(
                                     "{} | {}",
-                                    i18n.t(&format!("mode.{}", session.mode)),
-                                    i18n.t(&format!("phase.{}", session.phase)),
+                                    i18n.t(&format!("mode.{}", session_mode)),
+                                    i18n.t(&format!("phase.{}", session_phase)),
                                 ))
                                 .highlight();
                             });
@@ -631,6 +1812,15 @@ impl ChatView {
                                     self.sessions[self.active_session].mode.clone();
                                 self.selected_phase =
                                     self.sessions[self.active_session].phase.clone();
+                                self.selected_model =
+                                    self.sessions[self.active_session].model.clone();
+                                self.selected_models =
+                                    if self.sessions[self.active_session].models.is_empty() {
+                                        vec![self.selected_model.clone()]
+                                    } else {
+                                        self.sessions[self.active_session].models.clone()
+                                    };
+                                self.sync_model_selection();
                             }
                             self.save_sessions_to_disk();
                         }
@@ -642,6 +1832,23 @@ impl ChatView {
     // ── Messages area (Cherry Studio style) ─────────────────────
     fn show_messages(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
         let msgs = self.messages().to_vec();
+        let dark_mode = ui.visuals().dark_mode;
+        let user_bubble = if dark_mode {
+            egui::Color32::from_rgb(32, 112, 210)
+        } else {
+            egui::Color32::from_rgb(10, 106, 255)
+        };
+        let assistant_bubble = if dark_mode {
+            egui::Color32::from_rgb(42, 44, 50)
+        } else {
+            egui::Color32::from_rgb(240, 241, 245)
+        };
+        let assistant_text = if dark_mode {
+            egui::Color32::from_rgb(232, 236, 244)
+        } else {
+            egui::Color32::from_rgb(28, 28, 32)
+        };
+
         if msgs.is_empty() {
             ui.add_space(80.0);
             ui.vertical_centered(|ui| {
@@ -656,7 +1863,21 @@ impl ChatView {
             return;
         }
 
-        for msg in &msgs {
+        // Take an index so we know which message to edit/delete
+        let msgs_with_idx: Vec<(usize, &Message)> = msgs.iter().enumerate().collect();
+        let mut msg_to_delete: Option<usize> = None;
+        let mut msg_to_retry: Option<String> = None;
+        let query = self.message_search_query.trim().to_ascii_lowercase();
+
+        for (msg_idx, msg) in &msgs_with_idx {
+            if !query.is_empty() {
+                let content_match = msg.content.to_ascii_lowercase().contains(&query);
+                let thinking_match = msg.thinking.to_ascii_lowercase().contains(&query);
+                if !content_match && !thinking_match {
+                    continue;
+                }
+            }
+
             let is_user = msg.role == "user";
 
             // ── Avatar + Bubble row ──────────────────────────────
@@ -665,39 +1886,270 @@ impl ChatView {
             if is_user {
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        Self::avatar_circle(ui, 28.0, egui::Color32::from_rgb(100, 180, 80), "U");
+                        // Feature 3: actions button for user messages
+                        let resp_actions = Self::avatar_circle_with_actions(
+                            ui,
+                            28.0,
+                            egui::Color32::from_rgb(100, 180, 80),
+                            "U",
+                            msg_idx,
+                        );
+                        // Feature 3: context menu for message actions
+                        resp_actions.context_menu(|ui| {
+                            // Edit for user msgs
+                            if msg.role == "user" {
+                                if ui.button(i18n.t("chat.edit")).clicked() {
+                                    self.edit_msg_idx = Some(*msg_idx);
+                                    self.edit_msg_buf = msg.content.clone();
+                                    ui.close_menu();
+                                }
+                            }
+                            // Retry: copy last user message to input
+                            if ui.button(i18n.t("chat.retry")).clicked() {
+                                // Find the user message content at this index
+                                msg_to_retry = Some(msg.content.clone());
+                                ui.close_menu();
+                            }
+                            if ui.button(i18n.t("chat.delete")).clicked() {
+                                msg_to_delete = Some(*msg_idx);
+                                ui.close_menu();
+                            }
+                        });
+
                         ui.add_space(6.0);
+                        // Feature 3: check if editing this message
+                        let is_editing = self.edit_msg_idx == Some(*msg_idx);
+
                         ui.allocate_ui(egui::vec2(bw, ui.available_height()), |ui| {
                             egui::Frame::new()
-                                .fill(egui::Color32::from_rgb(0, 106, 255))
-                                .corner_radius(egui::CornerRadius { nw: 12, ne: 4, sw: 12, se: 12 })
+                                .fill(user_bubble)
+                                .corner_radius(egui::CornerRadius {
+                                    nw: 12,
+                                    ne: 4,
+                                    sw: 12,
+                                    se: 12,
+                                })
                                 .inner_margin(egui::Margin::symmetric(12i8, 8i8))
                                 .show(ui, |ui| {
-                                    self.message_bubble_content(ui, msg, egui::Color32::WHITE, i18n);
+                                    if is_editing {
+                                        // Edit mode: show TextEdit
+                                        ui.add(
+                                            egui::TextEdit::multiline(&mut self.edit_msg_buf)
+                                                .desired_width(bw - 24.0)
+                                                .desired_rows(3)
+                                                .text_color(egui::Color32::WHITE),
+                                        );
+                                        ui.horizontal(|ui| {
+                                            if ui.button(i18n.t("chat.save")).clicked() {
+                                                if let Some(session) =
+                                                    self.sessions.get_mut(self.active_session)
+                                                {
+                                                    if let Some(m) =
+                                                        session.messages.get_mut(*msg_idx)
+                                                    {
+                                                        m.content = self.edit_msg_buf.clone();
+                                                    }
+                                                }
+                                                self.edit_msg_idx = None;
+                                                self.edit_msg_buf.clear();
+                                                self.save_sessions_to_disk();
+                                            }
+                                            if ui.button(i18n.t("chat.cancel")).clicked() {
+                                                self.edit_msg_idx = None;
+                                                self.edit_msg_buf.clear();
+                                            }
+                                        });
+                                    } else {
+                                        // Feature 1 & 10: render markdown with theme colors
+                                        Self::render_markdown(
+                                            ui,
+                                            &msg.content,
+                                            i18n.t("chat.copyCode").as_ref(),
+                                            egui::Color32::WHITE,
+                                        );
+                                    }
                                 });
                         });
                     });
                 });
             } else {
                 ui.horizontal(|ui| {
-                    Self::avatar_circle(ui, 28.0, egui::Color32::from_rgb(0, 106, 255), "A");
+                    // Feature 3: actions avatar for AI messages too
+                    let resp_actions =
+                        Self::avatar_circle_with_actions(ui, 28.0, user_bubble, "A", msg_idx);
+                    resp_actions.context_menu(|ui| {
+                        if ui.button(i18n.t("chat.retry")).clicked() {
+                            // Retry from this point: pick nearest previous user message.
+                            if let Some(previous_user) = msgs
+                                .iter()
+                                .take(*msg_idx + 1)
+                                .rev()
+                                .find(|m| m.role == "user")
+                            {
+                                msg_to_retry = Some(previous_user.content.clone());
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button(i18n.t("chat.delete")).clicked() {
+                            msg_to_delete = Some(*msg_idx);
+                            ui.close_menu();
+                        }
+                    });
                     ui.add_space(6.0);
                     ui.allocate_ui(egui::vec2(bw, ui.available_height()), |ui| {
                         egui::Frame::new()
-                            .fill(egui::Color32::from_rgb(240, 241, 245))
-                            .corner_radius(egui::CornerRadius { nw: 4, ne: 12, sw: 12, se: 12 })
+                            .fill(assistant_bubble)
+                            .corner_radius(egui::CornerRadius {
+                                nw: 4,
+                                ne: 12,
+                                sw: 12,
+                                se: 12,
+                            })
                             .inner_margin(egui::Margin::symmetric(12i8, 8i8))
                             .show(ui, |ui| {
-                                self.message_bubble_content(ui, msg, egui::Color32::from_rgb(28, 28, 32), i18n);
+                                if !msg.model.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} {}",
+                                            i18n.t("chat.model"),
+                                            msg.model
+                                        ))
+                                        .size(11.0)
+                                        .color(egui::Color32::from_rgb(120, 148, 210)),
+                                    );
+                                    ui.add_space(2.0);
+                                }
+                                // Feature 1: render markdown with AI text color
+                                Self::render_markdown(
+                                    ui,
+                                    &msg.content,
+                                    i18n.t("chat.copyCode").as_ref(),
+                                    assistant_text,
+                                );
+                                if !msg.thinking.is_empty() {
+                                    ui.add_space(6.0);
+                                    let toggle_label = if msg.show_thinking_msg {
+                                        format!("▴ {}", i18n.t("chat.thinkingLabel"))
+                                    } else {
+                                        format!("▾ {}", i18n.t("chat.thinkingLabel"))
+                                    };
+                                    if ui.button(toggle_label).clicked() {
+                                        if let Some(session) =
+                                            self.sessions.get_mut(self.active_session)
+                                        {
+                                            if let Some(m) = session.messages.get_mut(*msg_idx) {
+                                                m.show_thinking_msg = !m.show_thinking_msg;
+                                            }
+                                        }
+                                    }
+                                    if msg.show_thinking_msg {
+                                        egui::Frame::new()
+                                            .fill(if dark_mode {
+                                                egui::Color32::from_rgb(64, 58, 34)
+                                            } else {
+                                                egui::Color32::from_rgb(250, 242, 220)
+                                            })
+                                            .corner_radius(4.0)
+                                            .inner_margin(egui::Margin::symmetric(8i8, 6i8))
+                                            .show(ui, |ui| {
+                                                ui.colored_label(
+                                                    egui::Color32::from_rgb(180, 130, 30),
+                                                    i18n.t("chat.thinkingLabel"),
+                                                );
+                                                Self::render_markdown(
+                                                    ui,
+                                                    &msg.thinking,
+                                                    i18n.t("chat.copyCode").as_ref(),
+                                                    if dark_mode {
+                                                        egui::Color32::from_rgb(240, 230, 180)
+                                                    } else {
+                                                        egui::Color32::from_rgb(80, 60, 20)
+                                                    },
+                                                );
+                                            });
+                                    }
+                                }
+                                if msg.total_tokens > 0 {
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            i18n.t("chat.tokenSummary")
+                                                .replace("{input}", &msg.input_tokens.to_string())
+                                                .replace("{output}", &msg.output_tokens.to_string())
+                                                .replace("{total}", &msg.total_tokens.to_string()),
+                                        )
+                                        .size(11.0)
+                                        .color(egui::Color32::from_rgb(140, 142, 150)),
+                                    );
+                                }
                             });
                     });
                 });
             }
             ui.add_space(4.0);
         }
+
+        // Feature 5: show aggregate token estimate below last AI message
+        if self.last_token_estimate > 0 {
+            let msgs = self.messages();
+            if let Some(last) = msgs.last() {
+                if last.role == "assistant" {
+                    ui.horizontal(|ui| {
+                        ui.add_space(36.0);
+                        ui.colored_label(
+                            egui::Color32::from_rgb(140, 142, 150),
+                            format!(
+                                "\u{26a1} {}",
+                                i18n.t("chat.tokenSummary")
+                                    .replace("{input}", &self.input_token_estimate.to_string())
+                                    .replace("{output}", &self.output_token_estimate.to_string())
+                                    .replace("{total}", &self.last_token_estimate.to_string())
+                            ),
+                        );
+                    });
+                }
+            }
+        }
+
+        // Feature 3: handle deferred retry
+        if let Some(retry_content) = msg_to_retry {
+            self.input = retry_content;
+        }
+
+        // Feature 3: handle deferred delete
+        if let Some(idx) = msg_to_delete {
+            if let Some(session) = self.sessions.get_mut(self.active_session) {
+                if idx < session.messages.len() {
+                    session.messages.remove(idx);
+                    self.save_sessions_to_disk();
+                }
+            }
+        }
+    }
+
+    /// Draw a small colored avatar circle with initials, returning the interaction response
+    fn avatar_circle_with_actions(
+        ui: &mut egui::Ui,
+        size: f32,
+        color: egui::Color32,
+        label: &str,
+        _msg_idx: &usize,
+    ) -> egui::Response {
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+        let painter = ui.painter();
+        painter.circle_filled(rect.center(), size / 2.0, color);
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(12.0),
+            egui::Color32::WHITE,
+        );
+        resp
     }
 
     /// Draw a small colored avatar circle with initials
+    #[allow(dead_code)]
     fn avatar_circle(ui: &mut egui::Ui, size: f32, color: egui::Color32, label: &str) {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
         let painter = ui.painter();
@@ -711,8 +2163,250 @@ impl ChatView {
         );
     }
 
+    fn render_markdown(
+        ui: &mut egui::Ui,
+        text: &str,
+        copy_code_hint: &str,
+        text_color: egui::Color32,
+    ) {
+        let arena = Arena::new();
+        let root = parse_document(&arena, text, &Options::default());
+        for child in root.children() {
+            Self::render_markdown_block(ui, child, copy_code_hint, text_color);
+        }
+    }
+
+    fn render_markdown_block<'a>(
+        ui: &mut egui::Ui,
+        node: &'a AstNode<'a>,
+        copy_code_hint: &str,
+        text_color: egui::Color32,
+    ) {
+        match node.data.borrow().value.clone() {
+            NodeValue::Paragraph => {
+                ui.horizontal_wrapped(|ui| {
+                    for child in node.children() {
+                        Self::render_markdown_inline(ui, child, text_color, false, false, false);
+                    }
+                });
+                ui.add_space(4.0);
+            }
+            NodeValue::Heading(heading) => {
+                let size: f32 = match heading.level {
+                    1 => 22.0,
+                    2 => 20.0,
+                    3 => 18.0,
+                    4 => 16.0,
+                    _ => 15.0,
+                };
+                ui.horizontal_wrapped(|ui| {
+                    for child in node.children() {
+                        Self::render_markdown_inline(ui, child, text_color, true, false, false);
+                    }
+                });
+                let rect = ui.min_rect();
+                ui.painter().hline(
+                    rect.x_range(),
+                    rect.bottom() + 2.0,
+                    egui::Stroke::new(
+                        heading.level as f32 / size.max(1.0),
+                        text_color.gamma_multiply(0.35),
+                    ),
+                );
+                ui.add_space(6.0);
+            }
+            NodeValue::CodeBlock(block) => {
+                Self::render_code_block(ui, &block.info, &block.literal, copy_code_hint);
+                ui.add_space(4.0);
+            }
+            NodeValue::BlockQuote => {
+                egui::Frame::new()
+                    .fill(text_color.gamma_multiply(0.08))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(10i8, 8i8))
+                    .show(ui, |ui| {
+                        for child in node.children() {
+                            Self::render_markdown_block(ui, child, copy_code_hint, text_color);
+                        }
+                    });
+                ui.add_space(4.0);
+            }
+            NodeValue::List(list) => {
+                let mut ordinal = list.start.max(1);
+                for item in node.children() {
+                    ui.horizontal_top(|ui| {
+                        let bullet = match list.list_type {
+                            ListType::Bullet => "•".to_string(),
+                            ListType::Ordered => {
+                                let marker = format!("{ordinal}.");
+                                ordinal += 1;
+                                marker
+                            }
+                        };
+                        ui.label(egui::RichText::new(bullet).strong().color(text_color));
+                        ui.vertical(|ui| {
+                            for child in item.children() {
+                                Self::render_markdown_block(ui, child, copy_code_hint, text_color);
+                            }
+                        });
+                    });
+                }
+                ui.add_space(4.0);
+            }
+            NodeValue::ThematicBreak => {
+                ui.separator();
+            }
+            NodeValue::HtmlBlock(html) => {
+                ui.add(egui::Label::new(
+                    egui::RichText::new(html.literal)
+                        .font(egui::FontId::monospace(12.0))
+                        .color(text_color.gamma_multiply(0.85)),
+                ));
+            }
+            NodeValue::Table(_) | NodeValue::TableRow(_) | NodeValue::TableCell => {
+                for child in node.children() {
+                    Self::render_markdown_block(ui, child, copy_code_hint, text_color);
+                }
+            }
+            _ => {
+                for child in node.children() {
+                    Self::render_markdown_block(ui, child, copy_code_hint, text_color);
+                }
+            }
+        }
+    }
+
+    fn render_markdown_inline<'a>(
+        ui: &mut egui::Ui,
+        node: &'a AstNode<'a>,
+        text_color: egui::Color32,
+        strong: bool,
+        italic: bool,
+        code: bool,
+    ) {
+        match node.data.borrow().value.clone() {
+            NodeValue::Text(text) => {
+                let mut rich = egui::RichText::new(text).color(text_color);
+                if strong {
+                    rich = rich.strong();
+                }
+                if italic {
+                    rich = rich.italics();
+                }
+                if code {
+                    rich = rich.font(egui::FontId::monospace(12.0));
+                }
+                ui.label(rich);
+            }
+            NodeValue::Code(code_span) => {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(40, 44, 52))
+                    .corner_radius(3.0)
+                    .inner_margin(egui::Margin::symmetric(4i8, 1i8))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(code_span.literal)
+                                .font(egui::FontId::monospace(12.0))
+                                .color(egui::Color32::from_rgb(230, 120, 80)),
+                        );
+                    });
+            }
+            NodeValue::LineBreak | NodeValue::SoftBreak => {
+                ui.label(egui::RichText::new(" ").color(text_color));
+            }
+            NodeValue::Strong => {
+                for child in node.children() {
+                    Self::render_markdown_inline(ui, child, text_color, true, italic, code);
+                }
+            }
+            NodeValue::Emph => {
+                for child in node.children() {
+                    Self::render_markdown_inline(ui, child, text_color, strong, true, code);
+                }
+            }
+            NodeValue::Strikethrough => {
+                let text = Self::collect_plain_text(node);
+                ui.label(
+                    egui::RichText::new(text)
+                        .strikethrough()
+                        .color(text_color.gamma_multiply(0.9)),
+                );
+            }
+            NodeValue::Link(link) => {
+                let label = Self::collect_plain_text(node);
+                ui.hyperlink_to(label, link.url);
+            }
+            NodeValue::HtmlInline(html) => {
+                ui.label(egui::RichText::new(html).color(text_color.gamma_multiply(0.8)));
+            }
+            _ => {
+                for child in node.children() {
+                    Self::render_markdown_inline(ui, child, text_color, strong, italic, code);
+                }
+            }
+        }
+    }
+
+    fn collect_plain_text<'a>(node: &'a AstNode<'a>) -> String {
+        let mut out = String::new();
+        Self::collect_plain_text_into(node, &mut out);
+        out
+    }
+
+    fn collect_plain_text_into<'a>(node: &'a AstNode<'a>, output: &mut String) {
+        match node.data.borrow().value.clone() {
+            NodeValue::Text(text) => output.push_str(&text),
+            NodeValue::Code(code) => output.push_str(&code.literal),
+            NodeValue::LineBreak | NodeValue::SoftBreak => output.push(' '),
+            _ => {
+                for child in node.children() {
+                    Self::collect_plain_text_into(child, output);
+                }
+            }
+        }
+    }
+
+    fn render_code_block(ui: &mut egui::Ui, lang: &str, code_text: &str, copy_code_hint: &str) {
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(40, 44, 52))
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::symmetric(8i8, 6i8))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let lang_display = if lang.trim().is_empty() {
+                        "code"
+                    } else {
+                        lang.trim()
+                    };
+                    ui.colored_label(egui::Color32::from_rgb(150, 152, 160), lang_display);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button("\u{1f4cb}")
+                            .on_hover_text(copy_code_hint)
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(code_text.to_string());
+                        }
+                    });
+                });
+                ui.add_space(2.0);
+                ui.add(egui::Label::new(
+                    egui::RichText::new(code_text)
+                        .font(egui::FontId::monospace(13.0))
+                        .color(egui::Color32::from_rgb(200, 204, 212)),
+                ));
+            });
+    }
+
+    #[allow(dead_code)]
     /// Render the content inside a message bubble
-    fn message_bubble_content(&mut self, ui: &mut egui::Ui, msg: &Message, text_color: egui::Color32, i18n: &I18n) {
+    fn message_bubble_content(
+        &mut self,
+        ui: &mut egui::Ui,
+        msg: &Message,
+        text_color: egui::Color32,
+        i18n: &I18n,
+    ) {
         // Timestamp + copy row
         ui.horizontal(|ui| {
             let ts_color = egui::Color32::from_rgb(160, 162, 170);
@@ -722,7 +2416,11 @@ impl ChatView {
                 let copy_btn = egui::Button::new("\u{1f4cb}")
                     .min_size(egui::vec2(18.0, 14.0))
                     .fill(egui::Color32::from_rgba_premultiplied(0, 0, 0, 0));
-                if ui.add(copy_btn).on_hover_text("Copy").clicked() {
+                if ui
+                    .add(copy_btn)
+                    .on_hover_text(i18n.t("chat.copy"))
+                    .clicked()
+                {
                     ui.ctx().copy_text(msg.content.clone());
                 }
             });
@@ -730,20 +2428,27 @@ impl ChatView {
 
         // Attachments
         for att in &msg.attachments {
-            let icon = if att.mime.starts_with("image/") { "\u{1f5bc}" } else { "\u{1f4ce}" };
+            let icon = if att.mime.starts_with("image/") {
+                "\u{1f5bc}"
+            } else {
+                "\u{1f4ce}"
+            };
             ui.label(egui::RichText::new(format!("{} {}", icon, att.name)).color(text_color));
         }
 
         // Think toggle
         if msg.role == "assistant" && !msg.thinking.is_empty() {
             let toggle = if msg.show_thinking_msg {
-                ui.button("\u{25b2} Think")
+                ui.button(format!("\u{25b2} {}", i18n.t("chat.thinkingLabel")))
             } else {
-                ui.button("\u{25bc} Think")
+                ui.button(format!("\u{25bc} {}", i18n.t("chat.thinkingLabel")))
             };
             if toggle.clicked() {
                 let session_msgs = &mut self.session().messages;
-                if let Some(m) = session_msgs.iter_mut().find(|m| m.timestamp == msg.timestamp) {
+                if let Some(m) = session_msgs
+                    .iter_mut()
+                    .find(|m| m.timestamp == msg.timestamp)
+                {
                     m.show_thinking_msg = !m.show_thinking_msg;
                 }
             }
@@ -756,10 +2461,19 @@ impl ChatView {
                 .corner_radius(4.0)
                 .inner_margin(egui::Margin::symmetric(8i8, 6i8))
                 .show(ui, |ui| {
-                    ui.colored_label(egui::Color32::from_rgb(180, 130, 30), "\u{1f4ad} Thinking");
-                    let think_resp = ui.label(egui::RichText::new(&msg.thinking).color(egui::Color32::from_rgb(80, 60, 20)));
+                    ui.colored_label(
+                        egui::Color32::from_rgb(180, 130, 30),
+                        i18n.t("chat.thinkingLabel"),
+                    );
+                    let think_resp = ui.label(
+                        egui::RichText::new(&msg.thinking)
+                            .color(egui::Color32::from_rgb(80, 60, 20)),
+                    );
                     think_resp.context_menu(|ui| {
-                        if ui.button("\u{1f4cb} Copy").clicked() {
+                        if ui
+                            .button(format!("\u{1f4cb} {}", i18n.t("chat.copy")))
+                            .clicked()
+                        {
                             ui.ctx().copy_text(msg.thinking.clone());
                             ui.close_menu();
                         }
@@ -767,14 +2481,155 @@ impl ChatView {
                 });
         }
 
-        // Main content
+        // Main content - now handled inline in show_messages via render_markdown
+        // Keep this method for backward compatibility / other callers
         let content_resp = ui.label(egui::RichText::new(&msg.content).color(text_color));
         content_resp.context_menu(|ui| {
-            if ui.button("\u{1f4cb} Copy").clicked() {
+            if ui
+                .button(format!("\u{1f4cb} {}", i18n.t("chat.copy")))
+                .clicked()
+            {
                 ui.ctx().copy_text(msg.content.clone());
                 ui.close_menu();
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n::Lang;
+
+    fn test_chat_view() -> ChatView {
+        let (pending_tx, pending_rx) = mpsc::channel();
+        ChatView {
+            sessions: vec![Session {
+                id: "session_1".to_string(),
+                name: "New Chat".to_string(),
+                messages: Vec::new(),
+                created_at: 0,
+                workflow_type: "chat".to_string(),
+                phase: String::new(),
+                mode: "ask".to_string(),
+                model: "auto".to_string(),
+                models: vec!["auto".to_string()],
+                phase_records: Vec::new(),
+            }],
+            active_session: 0,
+            input: String::new(),
+            sending: false,
+            error: String::new(),
+            ai_status: AiStatus::Idle,
+            selected_phase: String::new(),
+            selected_mode: "ask".to_string(),
+            attachments: Vec::new(),
+            phases: Vec::new(),
+            phases_loaded: false,
+            pending_rx,
+            pending_tx,
+            edit_msg_idx: None,
+            edit_msg_buf: String::new(),
+            stop_requested: false,
+            generation_states: Vec::new(),
+            next_generation_id: 1,
+            last_token_estimate: 0,
+            input_token_estimate: 0,
+            output_token_estimate: 0,
+            show_prompts: false,
+            show_model_picker: false,
+            prompt_templates: Vec::new(),
+            selected_template_idx: None,
+            template_name_buf: String::new(),
+            template_command_buf: String::new(),
+            template_content_buf: String::new(),
+            template_search_query: String::new(),
+            templates_bootstrapped: false,
+            session_search_query: String::new(),
+            message_search_query: String::new(),
+            selected_model: "auto".to_string(),
+            selected_models: vec!["auto".to_string()],
+            available_models: vec!["auto".to_string()],
+            models_loaded: false,
+        }
+    }
+
+    #[test]
+    fn normalize_models_dedupes_and_drops_auto_for_multi_select() {
+        let normalized = ChatView::normalize_models(&[
+            "auto".to_string(),
+            "gpt-4.1".to_string(),
+            "gpt-4.1".to_string(),
+            "claude-sonnet".to_string(),
+        ]);
+
+        assert_eq!(normalized, vec!["gpt-4.1", "claude-sonnet"]);
+    }
+
+    #[test]
+    fn expand_prompt_command_replaces_input_placeholder() {
+        let mut view = test_chat_view();
+        view.prompt_templates.push(PromptTemplate {
+            id: "explain".to_string(),
+            name: "Explain".to_string(),
+            command: "/explain".to_string(),
+            content: "Explain:\n{{input}}".to_string(),
+        });
+
+        assert_eq!(
+            view.expand_prompt_command("/explain hello"),
+            "Explain:\nhello"
+        );
+    }
+
+    #[test]
+    fn expand_prompt_command_appends_arguments_when_template_has_no_placeholder() {
+        let mut view = test_chat_view();
+        view.prompt_templates.push(PromptTemplate {
+            id: "sum".to_string(),
+            name: "Summary".to_string(),
+            command: "/summary".to_string(),
+            content: "Summarize the following".to_string(),
+        });
+
+        assert_eq!(
+            view.expand_prompt_command("/summary release notes"),
+            "Summarize the following\n\nrelease notes"
+        );
+    }
+
+    #[test]
+    fn refresh_default_session_names_localizes_empty_sessions() {
+        let mut view = test_chat_view();
+        view.sessions.push(Session {
+            id: "session_2".to_string(),
+            name: "Chat 2".to_string(),
+            messages: Vec::new(),
+            created_at: 0,
+            workflow_type: "chat".to_string(),
+            phase: String::new(),
+            mode: "ask".to_string(),
+            model: "auto".to_string(),
+            models: vec!["auto".to_string()],
+            phase_records: Vec::new(),
+        });
+        let i18n = I18n::new(Lang::ZhCn);
+
+        view.refresh_default_session_names(&i18n);
+
+        assert_eq!(view.sessions[0].name, "新对话");
+        assert_eq!(view.sessions[1].name, "新对话 2");
+    }
+
+    #[test]
+    fn refresh_default_session_names_preserves_named_sessions() {
+        let mut view = test_chat_view();
+        view.sessions[0].name = "Release review".to_string();
+        let i18n = I18n::new(Lang::ZhCn);
+
+        view.refresh_default_session_names(&i18n);
+
+        assert_eq!(view.sessions[0].name, "Release review");
     }
 }
 

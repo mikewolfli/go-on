@@ -20,7 +20,13 @@ impl MonitorView {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, i18n: &I18n, backend_configured: bool, backend: &BackendClient) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        i18n: &I18n,
+        backend_configured: bool,
+        backend: &BackendClient,
+    ) {
         self.backend_configured = backend_configured;
 
         ui.heading(i18n.t("monitor.health"));
@@ -34,37 +40,71 @@ impl MonitorView {
                     // No health info yet – backend may not be running
                     ui.horizontal(|ui| {
                         ui.colored_label(egui::Color32::GRAY, "◌");
-                        ui.label(i18n.t("app.connecting"));
+                        let text = i18n.t("app.connecting").to_string();
+                        let resp = ui.label(&text);
+                        resp.context_menu(|ui| {
+                            if ui.button("📋 Copy").clicked() {
+                                ui.ctx().copy_text(text.clone());
+                                ui.close_menu();
+                            }
+                        });
                     });
                 }
                 Some(health) => {
                     ui.horizontal(|ui| {
-                        let (icon, color, text) = if !health.connected {
+                        let (_icon, color, text) = if !health.connected {
                             ("◌", egui::Color32::RED, i18n.t("monitor.offline"))
                         } else if health.healthy {
                             ("●", egui::Color32::GREEN, i18n.t("monitor.healthy"))
                         } else {
                             ("◉", egui::Color32::YELLOW, i18n.t("monitor.unhealthy"))
                         };
-                        ui.colored_label(color, icon);
-                        ui.colored_label(color, text);
+                        let text = text.to_string();
+                        let resp = ui.colored_label(color, &text);
+                        resp.context_menu(|ui| {
+                            if ui.button("📋 Copy").clicked() {
+                                ui.ctx().copy_text(text.clone());
+                                ui.close_menu();
+                            }
+                        });
                     });
-                    ui.label(format!(
+                    let text = format!(
                         "{}: {} ms",
                         i18n.t("monitor.latency"),
                         health.avg_latency_ms
-                    ));
-                    ui.label(format!(
+                    );
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
+                    let text = format!(
                         "{}: {}% (uptime: {}s)",
                         i18n.t("monitor.success"),
                         health.success_rate,
                         health.uptime
-                    ));
-                    ui.label(format!(
+                    );
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
+                    let text = format!(
                         "{}: {:.1}",
                         i18n.t("monitor.rpm"),
                         health.requests_per_minute
-                    ));
+                    );
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
                 }
             }
         });
@@ -89,7 +129,14 @@ impl MonitorView {
             // Show a more descriptive message when health is known but no providers
             match &self.health {
                 Some(h) if h.connected => {
-                    ui.label(i18n.t("monitor.notReady"));
+                    let text = i18n.t("monitor.notReady").to_string();
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
                 }
                 _ => {
                     // Either no health data or backend offline – no point showing
@@ -108,9 +155,23 @@ impl MonitorView {
                                 ("○", egui::Color32::RED)
                             };
                             ui.colored_label(color, icon);
-                            ui.label(&p.name);
+                            let text = p.name.clone();
+                            let resp = ui.label(&text);
+                            resp.context_menu(|ui| {
+                                if ui.button("📋 Copy").clicked() {
+                                    ui.ctx().copy_text(text.clone());
+                                    ui.close_menu();
+                                }
+                            });
                             if !p.model.is_empty() {
-                                ui.label(format!("({})", p.model));
+                                let text = format!("({})", p.model);
+                                let resp = ui.label(&text);
+                                resp.context_menu(|ui| {
+                                    if ui.button("📋 Copy").clicked() {
+                                        ui.ctx().copy_text(text.clone());
+                                        ui.close_menu();
+                                    }
+                                });
                             }
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -151,7 +212,14 @@ impl MonitorView {
                 });
             }
             if self.restarting {
-                ui.label(i18n.t("monitor.restartHint"));
+                let text = i18n.t("monitor.restartHint").to_string();
+                let resp = ui.label(&text);
+                resp.context_menu(|ui| {
+                    if ui.button("📋 Copy").clicked() {
+                        ui.ctx().copy_text(text.clone());
+                        ui.close_menu();
+                    }
+                });
             }
         });
 

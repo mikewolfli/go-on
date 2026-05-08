@@ -637,7 +637,7 @@ impl AdvancedRpcHarness {
                 path.file_name().unwrap_or_default()
             );
             // Re-spawn harness for retry
-            let config_path = path
+            let _config_path = path
                 .parent()
                 .and_then(|_| Some(std::env::temp_dir().join("config_retry.toml")));
             // Re-create harness by calling spawn again (inner is replaced)

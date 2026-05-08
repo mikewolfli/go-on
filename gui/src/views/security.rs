@@ -35,7 +35,14 @@ impl SecurityView {
         self.process_pending();
 
         ui.heading("Security");
-        ui.label("Manage client-side safety policies and runtime restart controls.");
+        let text = "Manage client-side safety policies and runtime restart controls.".to_string();
+        let resp = ui.label(&text);
+        resp.context_menu(|ui| {
+            if ui.button("📋 Copy").clicked() {
+                ui.ctx().copy_text(text.clone());
+                ui.close_menu();
+            }
+        });
         ui.separator();
 
         let mut changed = false;
@@ -97,7 +104,14 @@ impl SecurityView {
         }
 
         if !self.status.is_empty() {
-            ui.label(&self.status);
+            let text = self.status.clone();
+            let resp = ui.label(&text);
+            resp.context_menu(|ui| {
+                if ui.button("📋 Copy").clicked() {
+                    ui.ctx().copy_text(text.clone());
+                    ui.close_menu();
+                }
+            });
         }
     }
 }

@@ -894,6 +894,7 @@ pub(crate) async fn process_chat_request(
 
     let mut selected_agent = String::new();
     let mut response_text = String::new();
+    let mut reasoning_text = String::new();
     let mut last_err: Option<anyhow::Error> = None;
     let candidate_agents = resolved
         .agents
@@ -1074,7 +1075,7 @@ pub(crate) async fn process_chat_request(
             )
             .await
             {
-                Ok(output) => {
+                Ok((output_text, reasoning_output)) => {
                     if let Ok(mut ctrl) = server.online_controller.lock() {
                         ctrl.record_agent_outcome(
                             phase_name,
@@ -1089,7 +1090,8 @@ pub(crate) async fn process_chat_request(
                         "duration_ms": attempt_started.elapsed().as_millis() as u64
                     }));
                     selected_agent = agent_name.clone();
-                    response_text = output.clone();
+                    response_text = output_text.clone();
+                    reasoning_text = reasoning_output.clone();
 
                     // ── Store result in token cache ─────────────────────
                     // After a successful agent execution, store the input/output
@@ -1098,14 +1100,15 @@ pub(crate) async fn process_chat_request(
                         let input_text =
                             crate::intelligence::token_cache::messages_to_text(&agent_messages);
                         let token_count =
-                            crate::intelligence::token_cache::estimate_token_count(&output);
+                            crate::intelligence::token_cache::estimate_token_count(&output_text);
                         let cache = server.cache.token_cache.clone();
                         let agent_name_for_cache = Some(agent_name.clone());
+                        let cached_output = output_text.clone();
                         tokio::spawn(async move {
                             cache
                                 .store(
                                     &input_text,
-                                    &output,
+                                    &cached_output,
                                     token_count,
                                     agent_name_for_cache,
                                     model_name,
@@ -2010,6 +2013,9 @@ pub(crate) async fn process_chat_request(
             serde_json::json!(evaluation_results),
         );
         obj.insert("tenant_id".to_string(), serde_json::json!(tenant_id));
+        if !reasoning_text.is_empty() {
+            obj.insert("thinking".to_string(), serde_json::json!(reasoning_text));
+        }
     }
 
     Ok(result)
@@ -2023,7 +2029,7 @@ async fn run_agent_collecting(
     principles: Option<Vec<String>>,
     options: Option<std::collections::HashMap<String, Value>>,
     timeout_duration: Option<Duration>,
-) -> Result<String> {
+) -> Result<(String, String)> {
     let (sender, mut receiver) = mpsc::channel::<String>(2048);
     let sender = crate::agent::StreamingSender::from(sender);
     let task = tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
@@ -2031,6 +2037,7 @@ async fn run_agent_collecting(
     let collect = async move {
         let stream_started = Instant::now();
         let mut response = String::new();
+        let mut reasoning_buffer = String::new();
         let mut chunk_index = 0usize;
         let mut total_chars = 0usize;
         while let Some(token) = receiver.recv().await {
@@ -2038,9 +2045,22 @@ async fn run_agent_collecting(
             if stream_would_exceed_limits(chunk_index, total_chars, next_chars) {
                 anyhow::bail!("stream output exceeded configured safety limits");
             }
-            response.push_str(&token);
+
+            // Check for reasoning tokens (prefixed with __thinking__)
+            if let Some(reasoning_token) = token.strip_prefix("__thinking__") {
+                reasoning_buffer.push_str(reasoning_token);
+            } else {
+                response.push_str(&token);
+            }
+
             chunk_index += 1;
             total_chars += next_chars;
+
+            let display_token = if token.starts_with("__thinking__") {
+                ""
+            } else {
+                &token
+            };
             emit_stream_chunk(
                 server,
                 stream_ctx.stream_observer.as_ref(),
@@ -2049,7 +2069,7 @@ async fn run_agent_collecting(
                     phase_name: stream_ctx.phase_name,
                     trace_id: stream_ctx.trace_id,
                 },
-                &token,
+                display_token,
                 chunk_index,
                 total_chars,
             )
@@ -2071,7 +2091,7 @@ async fn run_agent_collecting(
                     stream_started.elapsed().as_millis() as u64,
                 )
                 .await?;
-                Ok::<String, anyhow::Error>(response)
+                Ok::<(String, String), anyhow::Error>((response, reasoning_buffer))
             }
             Ok(Err(err)) => Err(err.into()),
             Err(join_err) => Err(anyhow::anyhow!("agent task panicked: {join_err}")),
@@ -2827,7 +2847,7 @@ async fn generate_phase_summary_text(
     )
     .await
     {
-        Ok(text) => text,
+        Ok((text, _)) => text,
         Err(e) => {
             tracing::warn!("phase summary generation failed: {}", e);
             return None;

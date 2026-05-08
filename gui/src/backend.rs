@@ -4,7 +4,10 @@ use std::time::Duration;
 
 #[derive(Clone)]
 pub struct BackendClient {
-    client: reqwest::Client,
+    /// Client for short-lived requests (health checks, probes - 5s timeout)
+    quick_client: reqwest::Client,
+    /// Client for long-lived requests (chat - 180s timeout)
+    long_client: reqwest::Client,
     base_url: String,
 }
 
@@ -27,24 +30,27 @@ pub struct ProviderStatus {
 
 impl BackendClient {
     pub fn new(base_url: &str) -> Self {
-        let client = reqwest::Client::builder()
-            // Use a generous timeout (120s) for chat requests that may wait
-            // for AI provider responses. The per-request chat() method also
-            // has its own timeout via tokio::time::timeout to allow a longer
-            // wait for long-running LLM calls.
-            .timeout(Duration::from_secs(120))
+        let quick_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
             .build()
             .unwrap_or_else(|e| {
-                eprintln!("Failed to build HTTP client with custom timeout: {e}");
+                eprintln!("Failed to build quick HTTP client: {e}");
+                reqwest::Client::new()
+            });
+        let long_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(180))
+            .build()
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to build long HTTP client: {e}");
                 reqwest::Client::new()
             });
         Self {
-            client,
+            quick_client,
+            long_client,
             base_url: base_url.trim_end_matches('/').to_string(),
         }
     }
 
-    /// Fetch available models from the backend. Returns a map of provider → list of model IDs.
     pub async fn fetch_models(&self) -> std::collections::HashMap<String, Vec<String>> {
         let resp = self.rpc_call("models.list", None).await;
         match resp {
@@ -70,7 +76,6 @@ impl BackendClient {
         }
     }
 
-    /// Update the base URL at runtime (e.g. when user changes it in settings)
     pub fn set_base_url(&mut self, url: &str) {
         self.base_url = url.trim_end_matches('/').to_string();
     }
@@ -79,7 +84,31 @@ impl BackendClient {
         &self.base_url
     }
 
-    /// Call a JSON-RPC method on the backend
+    /// Quick RPC call for health / status checks (5s timeout).
+    /// Returns None if the backend is unreachable (no error message).
+    async fn rpc_call_quick(&self, method: &str, params: Option<Value>) -> Option<Value> {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": params.unwrap_or(Value::Null),
+        });
+        let resp = self
+            .quick_client
+            .post(format!("{}/rpc", self.base_url))
+            .json(&body)
+            .send()
+            .await
+            .ok()?;
+        let resp = resp.error_for_status().ok()?;
+        let result: Value = resp.json().await.ok()?;
+        if result.get("error").is_some() {
+            return None;
+        }
+        result.get("result").cloned()
+    }
+
+    /// Full RPC call for normal requests (180s timeout).
     pub async fn rpc_call(&self, method: &str, params: Option<Value>) -> Result<Value, String> {
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -87,34 +116,27 @@ impl BackendClient {
             "method": method,
             "params": params.unwrap_or(Value::Null),
         });
-
         let resp = self
-            .client
+            .long_client
             .post(format!("{}/rpc", self.base_url))
             .json(&body)
             .send()
             .await
             .map_err(|e| format!("HTTP error: {e}"))?;
-
-        // Check for HTTP-level errors (4xx, 5xx)
         let resp = resp
             .error_for_status()
             .map_err(|e| format!("HTTP status error: {e}"))?;
-
         let result: Value = resp.json().await.map_err(|e| format!("JSON error: {e}"))?;
-
         if let Some(err) = result.get("error") {
-            return Err(format!("RPC error: {err}"));
+            return Err(format!("{}", err));
         }
-
         Ok(result.get("result").cloned().unwrap_or(result))
     }
 
-    /// Check backend health
+    /// Check backend health (5s timeout, silent on failure)
     pub async fn health(&self) -> HealthStatus {
-        let resp = self.rpc_call("runtime.health", None).await;
-        match resp {
-            Ok(val) => HealthStatus {
+        match self.rpc_call_quick("runtime.health", None).await {
+            Some(val) => HealthStatus {
                 connected: true,
                 healthy: val["lifecycle"]["is_healthy"].as_bool().unwrap_or(false),
                 uptime: val["lifecycle"]["uptime_seconds"].as_u64().unwrap_or(0),
@@ -122,7 +144,7 @@ impl BackendClient {
                 success_rate: val["stats"]["success_rate"].as_f64().unwrap_or(0.0),
                 avg_latency_ms: val["stats"]["avg_latency_ms"].as_f64().unwrap_or(0.0),
             },
-            Err(_) => HealthStatus {
+            None => HealthStatus {
                 connected: false,
                 healthy: false,
                 uptime: 0,
@@ -133,17 +155,15 @@ impl BackendClient {
         }
     }
 
-    /// Get provider status
+    /// Get provider status (5s timeout, silent on failure)
     pub async fn provider_status(&self) -> Vec<ProviderStatus> {
-        let resp = self.rpc_call("health.probes", None).await;
-        match resp {
-            Ok(val) => {
+        match self.rpc_call_quick("health.probes", None).await {
+            Some(val) => {
                 let probes = val.get("probes");
                 let deps = probes
                     .and_then(|p| p.get("dependencies"))
                     .and_then(|d| d.as_array());
                 if let Some(deps) = deps {
-                    // Find the provider_dependency entry which contains the actual provider list
                     for dep in deps {
                         if dep.get("name").and_then(|n| n.as_str()) == Some("provider_dependency") {
                             if let Some(details) = dep.get("details") {
@@ -169,20 +189,19 @@ impl BackendClient {
                 }
                 Vec::new()
             }
-            Err(_) => Vec::new(),
+            None => Vec::new(),
         }
     }
 
-    /// Send a chat message. Returns (response_text, thinking_text).
-    ///
-    /// Uses the `/chat` endpoint directly (NOT JSON-RPC `/rpc`) to avoid
-    /// the pipe/NDJSON overhead that happens when streaming chunks are
-    /// captured through server.output on the backend.
+    /// Send a chat message via /chat endpoint. Works on all platforms.
+    /// Backend returns JSON with "response" and optionally "thinking" fields.
+    /// Uses the long timeout client (180s) for AI provider response time.
     pub async fn chat(
         &self,
         message: &str,
         mode: &str,
         phase: &str,
+        model: Option<&str>,
     ) -> Result<(String, String), String> {
         let phase_val = if phase.is_empty() {
             serde_json::Value::Null
@@ -190,16 +209,20 @@ impl BackendClient {
             serde_json::Value::String(phase.to_string())
         };
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "messages": [{"role": "user", "content": message}],
             "mode": mode,
             "phase": phase_val,
         });
 
-        // POST directly to /chat endpoint (not /rpc) — returns the result
-        // JSON directly without going through the pipe/stdout mechanism.
+        if let Some(selected_model) = model.filter(|m| !m.trim().is_empty() && *m != "auto") {
+            body["options"] = serde_json::json!({
+                "model": selected_model,
+            });
+        }
+
         let resp = self
-            .client
+            .long_client
             .post(format!("{}/chat", self.base_url))
             .json(&body)
             .send()
@@ -214,27 +237,29 @@ impl BackendClient {
             .await
             .map_err(|e| format!("JSON parse error: {}", e))?;
 
-        // Check for error field
         if let Some(err_msg) = value.get("error").and_then(|e| e.as_str()) {
             return Err(format!("Chat error: {}", err_msg));
         }
 
-        // Extract response text and optional reasoning (thinking) text
         let response_text = value
             .get("response")
             .and_then(|r| r.as_str())
             .unwrap_or("")
             .to_string();
-        let reasoning_text = String::new();
 
-        if response_text.is_empty() {
-            Ok(("(empty)".to_string(), reasoning_text))
+        let thinking_text = value
+            .get("thinking")
+            .and_then(|r| r.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if response_text.is_empty() && thinking_text.is_empty() {
+            Ok(("(empty)".to_string(), String::new()))
         } else {
-            Ok((response_text, reasoning_text))
+            Ok((response_text, thinking_text))
         }
     }
 
-    /// Configure a provider on the backend (send API key so backend can use it)
     pub async fn configure_provider(
         &self,
         name: &str,
@@ -249,12 +274,10 @@ impl BackendClient {
         self.rpc_call("provider.configure", Some(params)).await
     }
 
-    /// Restart the backend runtime (so it picks up new env vars)
     pub async fn restart_backend(&self) -> Result<Value, String> {
         self.rpc_call("runtime.restart", None).await
     }
 
-    /// Create a new skill on the backend
     pub async fn create_skill(
         &self,
         name: &str,
@@ -262,9 +285,8 @@ impl BackendClient {
         prompt: &str,
         input_schema: &str,
     ) -> Result<Value, String> {
-        // Parse input_schema string as JSON so backend receives an object, not a string
-        let schema_value: serde_json::Value = serde_json::from_str(input_schema)
-            .unwrap_or_else(|_| serde_json::json!({}));
+        let schema_value: serde_json::Value =
+            serde_json::from_str(input_schema).unwrap_or_else(|_| serde_json::json!({}));
         let params = serde_json::json!({
             "name": name,
             "description": description,
@@ -274,12 +296,10 @@ impl BackendClient {
         self.rpc_call("skill.create", Some(params)).await
     }
 
-    /// List imported skills from the backend
     pub async fn list_skills(&self) -> Result<Value, String> {
         self.rpc_call("skill.list_imported", None).await
     }
 
-    /// Get config baseline from backend (includes phase list, providers, etc.)
     pub async fn config_baseline(&self) -> Result<Value, String> {
         self.rpc_call("config.baseline", None).await
     }

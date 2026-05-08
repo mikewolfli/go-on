@@ -189,6 +189,71 @@ fn normalize_imported_record(record: ImportedSkillRecord) -> Value {
     })
 }
 
+static SKILL_VERSION_HISTORY: OnceLock<StdMutex<HashMap<String, Vec<Value>>>> = OnceLock::new();
+
+fn skill_version_history() -> &'static StdMutex<HashMap<String, Vec<Value>>> {
+    SKILL_VERSION_HISTORY.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+fn load_skill_manifest(path: &str) -> Result<Value> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("failed to read skill manifest {}", path))?;
+    serde_json::from_str::<Value>(&raw)
+        .with_context(|| format!("failed to parse skill manifest {}", path))
+}
+
+fn save_skill_manifest(path: &str, manifest: &Value) -> Result<()> {
+    let payload = serde_json::to_string_pretty(manifest)
+        .context("failed to serialize skill manifest payload")?;
+    fs::write(path, payload).with_context(|| format!("failed to write skill manifest {}", path))
+}
+
+fn parse_semver_patch(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.trim().split('.');
+    let major = parts.next()?.parse::<u64>().ok()?;
+    let minor = parts.next()?.parse::<u64>().ok()?;
+    let patch = parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+fn bump_patch_version(version: &str) -> String {
+    parse_semver_patch(version)
+        .map(|(major, minor, patch)| format!("{}.{}.{}", major, minor, patch + 1))
+        .unwrap_or_else(|| "1.0.0".to_string())
+}
+
+fn build_skill_version_snapshot(record: &ImportedSkillRecord, manifest: &Value) -> Value {
+    json!({
+        "name": record.name,
+        "version": manifest
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or(record.version.as_str()),
+        "description": manifest
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or(record.description.as_str()),
+        "input_schema": manifest.get("input_schema").cloned().unwrap_or_else(|| json!({"type":"object"})),
+        "prompt_template": manifest.get("prompt_template").cloned().unwrap_or(Value::Null),
+        "manifest_path": record.manifest_path,
+        "saved_at": crate::acp::prelude::now_ts(),
+    })
+}
+
+fn push_skill_version_snapshot(name: &str, snapshot: Value) {
+    if let Ok(mut history) = skill_version_history().lock() {
+        let entries = history.entry(name.to_string()).or_default();
+        entries.push(snapshot);
+        if entries.len() > 100 {
+            let overflow = entries.len() - 100;
+            entries.drain(0..overflow);
+        }
+    }
+}
+
 pub(super) async fn handle_skill_import(
     server: &AcpServer,
     params: Value,
@@ -391,6 +456,219 @@ pub(super) async fn handle_skill_create(
         json!({
             "ok": true,
             "name": name,
+        }),
+    )
+    .await
+}
+
+pub(super) async fn handle_skill_update(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let name = match parse_skill_name_param(&params) {
+        Ok(name) => name,
+        Err(err) => {
+            record_skill_admin_audit("update", "skill.update", false, &err.to_string());
+            return send_error(server, request_id, -32602, err.to_string(), None).await;
+        }
+    };
+
+    let mut store = open_skill_import_store(server)?;
+    let Some(mut record) = store.get(&name) else {
+        let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
+        record_skill_admin_audit("update", &name, false, &reason);
+        return send_error(server, request_id, -32602, reason, None).await;
+    };
+
+    let mut manifest = load_skill_manifest(&record.manifest_path)?;
+    push_skill_version_snapshot(&name, build_skill_version_snapshot(&record, &manifest));
+
+    if let Some(description) = params.get("description").and_then(Value::as_str) {
+        manifest["description"] = json!(description);
+        record.description = description.to_string();
+    }
+    if let Some(schema) = params.get("input_schema") {
+        manifest["input_schema"] = schema.clone();
+    }
+    if let Some(prompt_template) = params.get("prompt_template").and_then(Value::as_str) {
+        manifest["prompt_template"] = json!(prompt_template);
+    }
+
+    let current_version = manifest
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or(record.version.as_str());
+    let target_version = params
+        .get("version")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| bump_patch_version(current_version));
+    manifest["version"] = json!(target_version.clone());
+    record.version = target_version;
+
+    save_skill_manifest(&record.manifest_path, &manifest)?;
+    push_skill_version_snapshot(&name, build_skill_version_snapshot(&record, &manifest));
+
+    store.upsert_record(record.clone());
+    store.save()?;
+
+    record_skill_admin_audit("update", &name, true, "updated imported skill manifest");
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "action": "update",
+            "name": name,
+            "skill": normalize_imported_record(record),
+        }),
+    )
+    .await
+}
+
+pub(super) async fn handle_skill_version_list(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let name = match parse_skill_name_param(&params) {
+        Ok(name) => name,
+        Err(err) => {
+            record_skill_admin_audit(
+                "version.list",
+                "skill.version.list",
+                false,
+                &err.to_string(),
+            );
+            return send_error(server, request_id, -32602, err.to_string(), None).await;
+        }
+    };
+
+    let store = open_skill_import_store(server)?;
+    let Some(record) = store.get(&name) else {
+        let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
+        record_skill_admin_audit("version.list", &name, false, &reason);
+        return send_error(server, request_id, -32602, reason, None).await;
+    };
+
+    let manifest = load_skill_manifest(&record.manifest_path)?;
+    let mut versions = skill_version_history()
+        .lock()
+        .ok()
+        .and_then(|history| history.get(&name).cloned())
+        .unwrap_or_default();
+    versions.push(build_skill_version_snapshot(&record, &manifest));
+
+    record_skill_admin_audit("version.list", &name, true, "listed skill versions");
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "name": name,
+            "versions": versions,
+        }),
+    )
+    .await
+}
+
+pub(super) async fn handle_skill_version_rollback(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let name = match parse_skill_name_param(&params) {
+        Ok(name) => name,
+        Err(err) => {
+            record_skill_admin_audit(
+                "version.rollback",
+                "skill.version.rollback",
+                false,
+                &err.to_string(),
+            );
+            return send_error(server, request_id, -32602, err.to_string(), None).await;
+        }
+    };
+    let Some(target_version) = params.get("version").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "version is required".to_string(),
+            None,
+        )
+        .await;
+    };
+
+    let mut store = open_skill_import_store(server)?;
+    let Some(mut record) = store.get(&name) else {
+        let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
+        record_skill_admin_audit("version.rollback", &name, false, &reason);
+        return send_error(server, request_id, -32602, reason, None).await;
+    };
+
+    let history = skill_version_history()
+        .lock()
+        .ok()
+        .and_then(|entries| entries.get(&name).cloned())
+        .unwrap_or_default();
+    let Some(snapshot) = history.into_iter().rev().find(|entry| {
+        entry
+            .get("version")
+            .and_then(Value::as_str)
+            .map(|version| version == target_version)
+            .unwrap_or(false)
+    }) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            format!(
+                "version '{}' not found for skill '{}'",
+                target_version, name
+            ),
+            None,
+        )
+        .await;
+    };
+
+    let mut manifest = load_skill_manifest(&record.manifest_path)?;
+    if let Some(description) = snapshot.get("description") {
+        manifest["description"] = description.clone();
+        if let Some(text) = description.as_str() {
+            record.description = text.to_string();
+        }
+    }
+    if let Some(schema) = snapshot.get("input_schema") {
+        manifest["input_schema"] = schema.clone();
+    }
+    if let Some(prompt_template) = snapshot.get("prompt_template") {
+        manifest["prompt_template"] = prompt_template.clone();
+    }
+    manifest["version"] = json!(target_version);
+    record.version = target_version.to_string();
+
+    save_skill_manifest(&record.manifest_path, &manifest)?;
+    store.upsert_record(record.clone());
+    store.save()?;
+    push_skill_version_snapshot(&name, build_skill_version_snapshot(&record, &manifest));
+
+    record_skill_admin_audit(
+        "version.rollback",
+        &name,
+        true,
+        "rolled back imported skill version",
+    );
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "action": "rollback",
+            "name": name,
+            "version": target_version,
+            "skill": normalize_imported_record(record),
         }),
     )
     .await

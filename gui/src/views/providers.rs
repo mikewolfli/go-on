@@ -85,7 +85,10 @@ impl ProvidersView {
     fn process_pending(&mut self) {
         while let Ok(msg) = self.pending_rx.try_recv() {
             if let Some(models_json) = msg.strip_prefix("__models__:") {
-                if let Ok(models) = serde_json::from_str::<std::collections::HashMap<String, Vec<String>>>(models_json) {
+                if let Ok(models) = serde_json::from_str::<
+                    std::collections::HashMap<String, Vec<String>>,
+                >(models_json)
+                {
                     self.remote_models = models;
                 }
             } else {
@@ -114,7 +117,10 @@ impl ProvidersView {
             tokio::spawn(async move {
                 let models = backend_clone.fetch_models().await;
                 // Send models back via pending channel
-                let msg = format!("__models__:{}", serde_json::to_string(&models).unwrap_or_default());
+                let msg = format!(
+                    "__models__:{}",
+                    serde_json::to_string(&models).unwrap_or_default()
+                );
                 let _ = tx.send(msg);
                 ctx_clone.request_repaint();
             });
@@ -128,9 +134,23 @@ impl ProvidersView {
         ui.add_space(8.0);
 
         // ── Add new provider section ──────────────────────────────────
-        ui.label(i18n.t("providers.add_new"));
+        let text = i18n.t("providers.add_new").to_string();
+        let resp = ui.label(&text);
+        resp.context_menu(|ui| {
+            if ui.button("📋 Copy").clicked() {
+                ui.ctx().copy_text(text.clone());
+                ui.close_menu();
+            }
+        });
         ui.horizontal(|ui| {
-            ui.label(i18n.t("providers.provider"));
+            let text = i18n.t("providers.provider").to_string();
+            let resp = ui.label(&text);
+            resp.context_menu(|ui| {
+                if ui.button("📋 Copy").clicked() {
+                    ui.ctx().copy_text(text.clone());
+                    ui.close_menu();
+                }
+            });
             egui::ComboBox::from_id_salt("add_provider_sel")
                 .selected_text(&self.selected_provider)
                 .show_ui(ui, |ui| {
@@ -143,14 +163,28 @@ impl ProvidersView {
                         }
                     }
                 });
-            ui.label(i18n.t("providers.api_key"));
+            let text = i18n.t("providers.api_key").to_string();
+            let resp = ui.label(&text);
+            resp.context_menu(|ui| {
+                if ui.button("📋 Copy").clicked() {
+                    ui.ctx().copy_text(text.clone());
+                    ui.close_menu();
+                }
+            });
             ui.add(
                 egui::TextEdit::singleline(&mut self.new_key)
                     .password(true)
                     .hint_text("sk-...")
                     .desired_width(260.0),
             );
-            ui.label(i18n.t("providers.model"));
+            let text = i18n.t("providers.model").to_string();
+            let resp = ui.label(&text);
+            resp.context_menu(|ui| {
+                if ui.button("📋 Copy").clicked() {
+                    ui.ctx().copy_text(text.clone());
+                    ui.close_menu();
+                }
+            });
             egui::ComboBox::from_id_salt("add_model_sel")
                 .selected_text({
                     if self.new_model == "auto" {
@@ -162,14 +196,17 @@ impl ProvidersView {
                 .show_ui(ui, |ui| {
                     // Show hint for copilot
                     if self.selected_provider.to_lowercase() == "copilot" {
-                        ui.label(i18n.t("providers.copilot_hint"));
+                        let text = i18n.t("providers.copilot_hint").to_string();
+                        let resp = ui.label(&text);
+                        resp.context_menu(|ui| {
+                            if ui.button("📋 Copy").clicked() {
+                                ui.ctx().copy_text(text.clone());
+                                ui.close_menu();
+                            }
+                        });
                     }
                     let models: &[&str] = match self.selected_provider.to_lowercase().as_str() {
-                        "deepseek" => &[
-                            "auto",
-                            "deepseek-v4-flash",
-                            "deepseek-v4-pro",
-                        ],
+                        "deepseek" => &["auto", "deepseek-v4-flash", "deepseek-v4-pro"],
                         "openai" => &[
                             "auto",
                             "gpt-4o",
@@ -290,32 +327,52 @@ impl ProvidersView {
         ui.add_space(8.0);
 
         // ── Existing providers list ────────────────────────────────────
-        ui.label(i18n.t("providers.saved"));
+        let text = i18n.t("providers.saved").to_string();
+        let resp = ui.label(&text);
+        resp.context_menu(|ui| {
+            if ui.button("📋 Copy").clicked() {
+                ui.ctx().copy_text(text.clone());
+                ui.close_menu();
+            }
+        });
         let mut remove_idx = None;
         for (idx, provider) in config.providers.iter_mut().enumerate() {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(&provider.name);
-                    let key_preview = if security.redact_api_keys_in_ui {
-                        "********"
+                    let text = provider.name.clone();
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
+                    let key_preview_str = if security.redact_api_keys_in_ui {
+                        "********".to_string()
                     } else if provider.api_key.len() > 8 {
-                        &provider.api_key[..8]
+                        provider.api_key[..8].to_string()
                     } else {
-                        &provider.api_key
+                        provider.api_key.clone()
                     };
-                    ui.label(format!(
-                        "{} {}",
-                        i18n.t("providers.key_preview"),
-                        key_preview
-                    ));
-                    ui.label(i18n.t("providers.model"));
+                    let text = format!("{} {}", i18n.t("providers.key_preview"), key_preview_str);
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
+                    let text = i18n.t("providers.model").to_string();
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
                     // Model dropdown for saved providers
                     let models: &[&str] = match provider.name.to_lowercase().as_str() {
-                        "deepseek" => &[
-                            "auto",
-                            "deepseek-v4-flash",
-                            "deepseek-v4-pro",
-                        ],
+                        "deepseek" => &["auto", "deepseek-v4-flash", "deepseek-v4-pro"],
                         "openai" => &[
                             "auto",
                             "gpt-4o",
@@ -402,8 +459,13 @@ impl ProvidersView {
                                 let provider_lower = provider.name.to_lowercase();
                                 let provider_name = provider.name.clone();
                                 // Try keyring, don't block save if it fails
-                                if let Err(e) = crate::keyring_util::store_api_key(&provider_lower, &new_key) {
-                                    eprintln!("Warning: failed to store API key in system keyring: {}", e);
+                                if let Err(e) =
+                                    crate::keyring_util::store_api_key(&provider_lower, &new_key)
+                                {
+                                    eprintln!(
+                                        "Warning: failed to store API key in system keyring: {}",
+                                        e
+                                    );
                                 }
                                 provider.api_key = new_key;
                                 provider.validated = true;
@@ -499,7 +561,14 @@ impl ProvidersView {
         }
 
         if !self.status.is_empty() {
-            ui.label(&self.status);
+            let text = self.status.clone();
+            let resp = ui.label(&text);
+            resp.context_menu(|ui| {
+                if ui.button("📋 Copy").clicked() {
+                    ui.ctx().copy_text(text.clone());
+                    ui.close_menu();
+                }
+            });
         }
     }
 }

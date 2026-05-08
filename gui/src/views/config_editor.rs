@@ -22,7 +22,14 @@ impl ConfigEditorView {
         }
 
         ui.heading("Config");
-        ui.label("Edit GUI config as JSON. Apply updates live and persist to disk.");
+        let text = "Edit GUI config as JSON. Apply updates live and persist to disk.".to_string();
+        let resp = ui.label(&text);
+        resp.context_menu(|ui| {
+            if ui.button("📋 Copy").clicked() {
+                ui.ctx().copy_text(text.clone());
+                ui.close_menu();
+            }
+        });
         ui.separator();
 
         ui.add(
@@ -51,7 +58,14 @@ impl ConfigEditorView {
         });
 
         if !self.status.is_empty() {
-            ui.label(&self.status);
+            let text = self.status.clone();
+            let resp = ui.label(&text);
+            resp.context_menu(|ui| {
+                if ui.button("📋 Copy").clicked() {
+                    ui.ctx().copy_text(text.clone());
+                    ui.close_menu();
+                }
+            });
         }
     }
 }

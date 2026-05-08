@@ -28,11 +28,25 @@ impl SetupView {
                 ui.add_space(60.0);
                 ui.heading(i18n.t("setup.title"));
                 ui.add_space(10.0);
-                ui.label(i18n.t("setup.hint"));
+                let text = i18n.t("setup.hint").to_string();
+                let resp = ui.label(&text);
+                resp.context_menu(|ui| {
+                    if ui.button("📋 Copy").clicked() {
+                        ui.ctx().copy_text(text.clone());
+                        ui.close_menu();
+                    }
+                });
                 ui.add_space(20.0);
 
                 if !self.success_msg.is_empty() {
-                    ui.colored_label(egui::Color32::GREEN, &self.success_msg);
+                    let text = self.success_msg.clone();
+                    let resp = ui.colored_label(egui::Color32::GREEN, &text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
                     ui.add_space(10.0);
                     if ui.button(i18n.t("app.start")).clicked() {
                         done = true;
@@ -41,7 +55,14 @@ impl SetupView {
                 }
 
                 ui.horizontal(|ui| {
-                    ui.label(i18n.t("setup.provider"));
+                    let text = i18n.t("setup.provider").to_string();
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
                     egui::ComboBox::from_id_salt("provider_sel")
                         .selected_text(&self.selected_provider)
                         .show_ui(ui, |ui| {
@@ -63,7 +84,14 @@ impl SetupView {
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
-                    ui.label(i18n.t("setup.apiKey"));
+                    let text = i18n.t("setup.apiKey").to_string();
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
                     ui.add(
                         egui::TextEdit::singleline(&mut self.api_key)
                             .password(true)
@@ -74,7 +102,14 @@ impl SetupView {
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
-                    ui.label(i18n.t("setup.model"));
+                    let text = i18n.t("setup.model").to_string();
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
                     egui::ComboBox::from_id_salt("model_sel")
                         .selected_text(&self.selected_model)
                         .show_ui(ui, |ui| {
@@ -94,7 +129,14 @@ impl SetupView {
                 ui.add_space(10.0);
 
                 if !self.error_msg.is_empty() {
-                    ui.colored_label(egui::Color32::RED, &self.error_msg);
+                    let text = self.error_msg.clone();
+                    let resp = ui.colored_label(egui::Color32::RED, &text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
                 }
 
                 ui.horizontal(|ui| {

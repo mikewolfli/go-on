@@ -147,6 +147,14 @@ impl SkillImportStore {
         Ok(record.clone())
     }
 
+    pub fn get(&self, name: &str) -> Option<ImportedSkillRecord> {
+        self.records.get(name).cloned()
+    }
+
+    pub fn upsert_record(&mut self, record: ImportedSkillRecord) {
+        self.records.insert(record.name.clone(), record);
+    }
+
     pub fn remove(&mut self, name: &str) -> bool {
         self.records.remove(name).is_some()
     }

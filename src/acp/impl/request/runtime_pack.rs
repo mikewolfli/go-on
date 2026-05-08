@@ -155,6 +155,172 @@ pub(super) async fn handle_metrics_reset(
     .await
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct MetricWindowPoint {
+    ts: i64,
+    qps: f64,
+    p95: f64,
+    error_rate: f64,
+    success_rate: f64,
+}
+
+static METRIC_WINDOW_HISTORY: OnceLock<StdMutex<Vec<MetricWindowPoint>>> = OnceLock::new();
+
+fn metric_window_history() -> &'static StdMutex<Vec<MetricWindowPoint>> {
+    METRIC_WINDOW_HISTORY.get_or_init(|| StdMutex::new(Vec::new()))
+}
+
+fn append_metric_window_sample(server: &AcpServer) -> MetricWindowPoint {
+    let snapshot = server.observability.metrics.snapshot();
+    let total = snapshot.total_requests.max(1) as f64;
+    let point = MetricWindowPoint {
+        ts: crate::acp::prelude::now_ts(),
+        qps: (snapshot.total_requests as f64 / 60.0),
+        p95: snapshot.avg_request_duration_ms,
+        error_rate: (snapshot.failed_requests as f64 / total).clamp(0.0, 1.0),
+        success_rate: ((snapshot
+            .total_requests
+            .saturating_sub(snapshot.failed_requests)) as f64
+            / total)
+            .clamp(0.0, 1.0),
+    };
+
+    if let Ok(mut history) = metric_window_history().lock() {
+        history.push(point.clone());
+        let cutoff = point.ts - 3600;
+        history.retain(|item| item.ts >= cutoff);
+    }
+
+    point
+}
+
+pub(super) async fn handle_metrics_window_query(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let window = params.get("window").and_then(Value::as_str).unwrap_or("5m");
+    let seconds = match window {
+        "1m" => 60,
+        "5m" => 300,
+        "1h" => 3600,
+        _ => 300,
+    };
+
+    let latest = append_metric_window_sample(server);
+    let cutoff = latest.ts - seconds;
+    let series = metric_window_history()
+        .lock()
+        .map(|history| {
+            history
+                .iter()
+                .filter(|point| point.ts >= cutoff)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "window": window,
+            "series": series,
+        }),
+    )
+    .await
+}
+
+pub(super) async fn handle_metrics_errors_summary(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let limit = params
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(20)
+        .min(200);
+
+    let snapshot = server.observability.metrics.snapshot();
+    let trace_events = trace_events()
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+
+    let failed_events = trace_events
+        .iter()
+        .filter(|event| event.status.eq_ignore_ascii_case("error"))
+        .collect::<Vec<_>>();
+
+    let mut error_groups: HashMap<String, usize> = HashMap::new();
+    for event in &failed_events {
+        let key = if event.phase.is_empty() {
+            "unknown".to_string()
+        } else {
+            event.phase.clone()
+        };
+        *error_groups.entry(key).or_insert(0) += 1;
+    }
+
+    let mut grouped = error_groups
+        .into_iter()
+        .map(|(error_type, count)| json!({"error_type": error_type, "count": count}))
+        .collect::<Vec<_>>();
+    grouped.sort_by(|left, right| {
+        right
+            .get("count")
+            .and_then(Value::as_u64)
+            .cmp(&left.get("count").and_then(Value::as_u64))
+    });
+
+    let sample_failures = failed_events
+        .iter()
+        .rev()
+        .take(limit)
+        .map(|event| {
+            json!({
+                "timestamp": event.timestamp,
+                "event_type": event.event_type,
+                "task_id": event.task_id,
+                "phase": event.phase,
+                "status": event.status,
+                "duration_ms": event.duration_ms,
+                "error": event.error,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "window": params.get("window").and_then(Value::as_str).unwrap_or("5m"),
+            "series": {
+                "qps": snapshot.total_requests as f64 / 60.0,
+                "p95": snapshot.avg_request_duration_ms,
+                "error_rate": if snapshot.total_requests > 0 {
+                    snapshot.failed_requests as f64 / snapshot.total_requests as f64
+                } else {
+                    0.0
+                },
+                "success_rate": if snapshot.total_requests > 0 {
+                    (snapshot.total_requests.saturating_sub(snapshot.failed_requests)) as f64
+                        / snapshot.total_requests as f64
+                } else {
+                    1.0
+                },
+            },
+            "error_groups": grouped,
+            "sample_failures": sample_failures,
+        }),
+    )
+    .await
+}
+
 pub(super) async fn handle_debug_panel_get(
     server: &AcpServer,
     _params: Value,
@@ -4887,6 +5053,209 @@ pub(super) async fn handle_governance_config_save(
         json!({
             "ok": true,
             "applied": applied,
+        }),
+    )
+    .await
+}
+
+fn provider_models_for(server: &AcpServer, provider: &str) -> Vec<crate::agent::ModelInfo> {
+    server
+        .agent_registry
+        .as_ref()
+        .map(|registry| {
+            registry
+                .models()
+                .into_iter()
+                .find(|(name, _, _)| name == provider)
+                .map(|(_, _, models)| models)
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
+pub(super) async fn handle_provider_test_connection(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let started = Instant::now();
+    let provider = params
+        .get("provider")
+        .or_else(|| params.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    if provider.trim().is_empty() {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "provider is required".to_string(),
+            None,
+        )
+        .await;
+    }
+
+    let models = provider_models_for(server, provider);
+    let account = format!("{}_api_key", provider);
+    let key_configured = keyring::Entry::new("go-on", &account)
+        .ok()
+        .and_then(|entry| entry.get_password().ok())
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+
+    let ok = !models.is_empty() && key_configured;
+    let message = if ok {
+        "provider configuration is ready"
+    } else if models.is_empty() {
+        "provider has no available models"
+    } else {
+        "provider api key is not configured"
+    };
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": ok,
+            "provider": provider,
+            "latency_ms": started.elapsed().as_millis() as u64,
+            "model_count": models.len(),
+            "key_configured": key_configured,
+            "message": message,
+            "error_code": if ok { Value::Null } else { json!("provider_not_ready") },
+            "error_message": if ok { Value::Null } else { json!(message) },
+        }),
+    )
+    .await
+}
+
+pub(super) async fn handle_provider_test_completion(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let started = Instant::now();
+    let provider = params
+        .get("provider")
+        .or_else(|| params.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    if provider.trim().is_empty() {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "provider is required".to_string(),
+            None,
+        )
+        .await;
+    }
+
+    let models = provider_models_for(server, provider);
+    let selected_model = params
+        .get("model")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| {
+            models
+                .iter()
+                .find(|model| model.is_default)
+                .map(|model| model.id.clone())
+        })
+        .or_else(|| models.first().map(|model| model.id.clone()));
+
+    let ok = selected_model.is_some();
+    let message = if ok {
+        "provider completion route resolved"
+    } else {
+        "provider has no available model for completion"
+    };
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": ok,
+            "provider": provider,
+            "model": selected_model,
+            "latency_ms": started.elapsed().as_millis() as u64,
+            "error_code": if ok { Value::Null } else { json!("model_not_found") },
+            "error_message": if ok { Value::Null } else { json!(message) },
+            "preview": if ok {
+                json!({
+                    "type": "route_preview",
+                    "note": "request routing validated; execution can use this provider/model"
+                })
+            } else {
+                Value::Null
+            },
+        }),
+    )
+    .await
+}
+
+pub(super) async fn handle_provider_capabilities(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let provider = params
+        .get("provider")
+        .or_else(|| params.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    if provider.trim().is_empty() {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "provider is required".to_string(),
+            None,
+        )
+        .await;
+    }
+
+    let models = provider_models_for(server, provider)
+        .into_iter()
+        .map(|model| {
+            let supports_tool_calling = model.capabilities.iter().any(|cap| {
+                cap.eq_ignore_ascii_case("function_calling")
+                    || cap.eq_ignore_ascii_case("tool_calling")
+            });
+            let supports_vision = model
+                .capabilities
+                .iter()
+                .any(|cap| cap.eq_ignore_ascii_case("vision"));
+            json!({
+                "id": model.id,
+                "name": model.name,
+                "description": model.description,
+                "is_default": model.is_default,
+                "context_window": model.context_window,
+                "capabilities": model.capabilities,
+                "tool_calling": supports_tool_calling,
+                "vision": supports_vision,
+                "rate_limit": {
+                    "rpm": server.runtime_config.entry_rate_limit_rpm,
+                    "burst": server.runtime_config.entry_rate_limit_burst,
+                },
+                "cost_tier": "unknown",
+            })
+        })
+        .collect::<Vec<_>>();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": !models.is_empty(),
+            "provider": provider,
+            "capabilities": {
+                "models": models,
+            },
         }),
     )
     .await

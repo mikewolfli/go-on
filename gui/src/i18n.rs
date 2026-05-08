@@ -55,6 +55,74 @@ impl I18n {
             tr!(en, "Connecting...", cn, "连接中...", tw, "連接中..."),
         );
 
+        m.insert(
+            "chat.exportTitle",
+            tr!(en, "Chat Export", cn, "聊天导出", tw, "聊天匯出"),
+        );
+        m.insert(
+            "chat.exportedAt",
+            tr!(
+                en,
+                "Exported: {time}",
+                cn,
+                "导出时间: {time}",
+                tw,
+                "匯出時間: {time}"
+            ),
+        );
+        m.insert("chat.exportRoleYou", tr!(en, "You", cn, "你", tw, "你"));
+        m.insert(
+            "chat.exportRoleAssistant",
+            tr!(en, "Assistant", cn, "助手", tw, "助手"),
+        );
+        m.insert(
+            "chat.exportModel",
+            tr!(
+                en,
+                "Model: {model}",
+                cn,
+                "模型: {model}",
+                tw,
+                "模型: {model}"
+            ),
+        );
+        m.insert(
+            "chat.exportThinking",
+            tr!(
+                en,
+                "Thinking: {thinking}",
+                cn,
+                "思考: {thinking}",
+                tw,
+                "思考: {thinking}"
+            ),
+        );
+        m.insert(
+            "chat.copyCode",
+            tr!(en, "Copy code", cn, "复制代码", tw, "複製程式碼"),
+        );
+        m.insert(
+            "chat.tokenSummary",
+            tr!(
+                en,
+                "Tokens in:{input} out:{output} total:{total}",
+                cn,
+                "Token 输入:{input} 输出:{output} 总计:{total}",
+                tw,
+                "Token 輸入:{input} 輸出:{output} 總計:{total}"
+            ),
+        );
+        m.insert(
+            "chat.chatError",
+            tr!(
+                en,
+                "Chat error: {message}",
+                cn,
+                "聊天错误: {message}",
+                tw,
+                "聊天錯誤: {message}"
+            ),
+        );
         // Tabs
         m.insert("tab.monitor", tr!(en, "Monitor", cn, "监控", tw, "監控"));
         m.insert("tab.chat", tr!(en, "Chat", cn, "对话", tw, "對話"));
@@ -148,6 +216,192 @@ impl I18n {
         m.insert("chat.title", tr!(en, "Chat", cn, "对话", tw, "對話"));
         m.insert("chat.phase", tr!(en, "Phase", cn, "阶段", tw, "階段"));
         m.insert("chat.mode", tr!(en, "Mode", cn, "模式", tw, "模式"));
+        m.insert("chat.model", tr!(en, "Model", cn, "模型", tw, "模型"));
+        m.insert("chat.search", tr!(en, "Search", cn, "搜索", tw, "搜尋"));
+        m.insert(
+            "chat.searchMessages",
+            tr!(
+                en,
+                "Search messages...",
+                cn,
+                "搜索消息...",
+                tw,
+                "搜尋訊息..."
+            ),
+        );
+        m.insert(
+            "chat.searchSessions",
+            tr!(
+                en,
+                "Search sessions...",
+                cn,
+                "搜索会话...",
+                tw,
+                "搜尋會話..."
+            ),
+        );
+        m.insert(
+            "chat.searchTemplates",
+            tr!(
+                en,
+                "Search templates...",
+                cn,
+                "搜索模板...",
+                tw,
+                "搜尋模板..."
+            ),
+        );
+        m.insert(
+            "chat.chooseModels",
+            tr!(en, "Choose Models", cn, "选择模型", tw, "選擇模型"),
+        );
+        m.insert(
+            "chat.multiModelHint",
+            tr!(
+                en,
+                "Select one or more models to run the same prompt in parallel.",
+                cn,
+                "选择一个或多个模型，并行运行同一条消息。",
+                tw,
+                "選擇一個或多個模型，並行執行同一條訊息。"
+            ),
+        );
+        m.insert(
+            "chat.multiModelEnabled",
+            tr!(en, "Multi-model", cn, "多模型", tw, "多模型"),
+        );
+        m.insert(
+            "chat.modelAutoOnly",
+            tr!(en, "Auto Only", cn, "仅自动", tw, "僅自動"),
+        );
+        m.insert(
+            "chat.promptTemplates",
+            tr!(en, "Prompt Templates", cn, "提示模板", tw, "提示模板"),
+        );
+        m.insert(
+            "chat.templateName",
+            tr!(en, "Template name", cn, "模板名称", tw, "模板名稱"),
+        );
+        m.insert(
+            "chat.templateCommand",
+            tr!(en, "Slash command", cn, "快捷指令", tw, "快捷指令"),
+        );
+        m.insert(
+            "chat.templateBody",
+            tr!(en, "Template body", cn, "模板内容", tw, "模板內容"),
+        );
+        m.insert(
+            "chat.templatePlaceholderHint",
+            tr!(
+                en,
+                "Use {{input}} to inject text after the slash command.",
+                cn,
+                "使用 {{input}} 注入快捷指令后的附加文本。",
+                tw,
+                "使用 {{input}} 注入快捷指令後的附加文字。"
+            ),
+        );
+        m.insert(
+            "chat.templateInsert",
+            tr!(en, "Insert", cn, "插入", tw, "插入"),
+        );
+        m.insert(
+            "chat.templateSave",
+            tr!(en, "Save Template", cn, "保存模板", tw, "儲存模板"),
+        );
+        m.insert(
+            "chat.templateDelete",
+            tr!(en, "Delete Template", cn, "删除模板", tw, "刪除模板"),
+        );
+        m.insert(
+            "chat.templateNew",
+            tr!(en, "New Template", cn, "新建模板", tw, "新增模板"),
+        );
+        m.insert(
+            "chat.templateValidation",
+            tr!(
+                en,
+                "Template name, slash command, and body are required.",
+                cn,
+                "模板名称、快捷指令和模板内容均为必填。",
+                tw,
+                "模板名稱、快捷指令和模板內容均為必填。"
+            ),
+        );
+        m.insert(
+            "chat.templateDuplicate",
+            tr!(
+                en,
+                "Slash command already exists.",
+                cn,
+                "快捷指令已存在。",
+                tw,
+                "快捷指令已存在。"
+            ),
+        );
+        m.insert("chat.close", tr!(en, "Close", cn, "关闭", tw, "關閉"));
+        m.insert("chat.stop", tr!(en, "Stop", cn, "停止", tw, "停止"));
+        m.insert("chat.retry", tr!(en, "Retry", cn, "重试", tw, "重試"));
+        m.insert("chat.edit", tr!(en, "Edit", cn, "编辑", tw, "編輯"));
+        m.insert("chat.delete", tr!(en, "Delete", cn, "删除", tw, "刪除"));
+        m.insert("chat.save", tr!(en, "Save", cn, "保存", tw, "儲存"));
+        m.insert("chat.cancel", tr!(en, "Cancel", cn, "取消", tw, "取消"));
+        m.insert(
+            "chat.tokens",
+            tr!(en, "Tokens", cn, "Token 用量", tw, "Token 用量"),
+        );
+        m.insert(
+            "chat.exportSuccess",
+            tr!(
+                en,
+                "Exported session to {path}",
+                cn,
+                "会话已导出到 {path}",
+                tw,
+                "會話已匯出到 {path}"
+            ),
+        );
+        m.insert(
+            "chat.exportFailed",
+            tr!(
+                en,
+                "Export failed: {error}",
+                cn,
+                "导出失败: {error}",
+                tw,
+                "匯出失敗: {error}"
+            ),
+        );
+        m.insert(
+            "chat.template.explain",
+            tr!(en, "Explain Code", cn, "解释代码", tw, "解釋程式碼"),
+        );
+        m.insert("chat.template.explain.body", tr!(en, "Explain the following code in detail. Cover the control flow, key data structures, and any risks or tradeoffs.\n\n{{input}}", cn, "请详细解释下面的代码，说明控制流、关键数据结构，以及潜在风险或权衡。\n\n{{input}}", tw, "請詳細解釋下面的程式碼，說明控制流程、關鍵資料結構，以及潛在風險或權衡。\n\n{{input}}"));
+        m.insert(
+            "chat.template.test",
+            tr!(en, "Write Test", cn, "编写测试", tw, "編寫測試"),
+        );
+        m.insert("chat.template.test.body", tr!(en, "Write focused automated tests for the following code or behavior. Prefer edge cases and failure paths.\n\n{{input}}", cn, "请为下面的代码或行为编写聚焦的自动化测试，优先覆盖边界条件和失败路径。\n\n{{input}}", tw, "請為下面的程式碼或行為編寫聚焦的自動化測試，優先覆蓋邊界條件和失敗路徑。\n\n{{input}}"));
+        m.insert(
+            "chat.template.debug",
+            tr!(en, "Debug Issue", cn, "调试问题", tw, "除錯問題"),
+        );
+        m.insert("chat.template.debug.body", tr!(en, "Analyze the issue below. Identify the most likely root cause, the cheapest discriminating check, and the concrete fix.\n\n{{input}}", cn, "请分析下面的问题，给出最可能的根因、最便宜的鉴别检查，以及具体修复方案。\n\n{{input}}", tw, "請分析下面的問題，給出最可能的根因、最低成本的鑑別檢查，以及具體修復方案。\n\n{{input}}"));
+        m.insert(
+            "chat.template.refactor",
+            tr!(en, "Refactor", cn, "重构", tw, "重構"),
+        );
+        m.insert("chat.template.refactor.body", tr!(en, "Refactor the following code while preserving behavior. Explain the before/after structure and why the new version is better.\n\n{{input}}", cn, "请在保持行为一致的前提下重构下面的代码，并说明重构前后结构及收益。\n\n{{input}}", tw, "請在保持行為一致的前提下重構下面的程式碼，並說明重構前後的結構與收益。\n\n{{input}}"));
+        m.insert(
+            "chat.template.summary",
+            tr!(en, "Summarize", cn, "总结", tw, "總結"),
+        );
+        m.insert("chat.template.summary.body", tr!(en, "Summarize the current conversation into decisions, open questions, risks, and next steps.\n\n{{input}}", cn, "请将当前对话总结为决策、待确认问题、风险和下一步。\n\n{{input}}", tw, "請將目前對話總結為決策、待確認問題、風險與下一步。\n\n{{input}}"));
+        m.insert(
+            "chat.template.docs",
+            tr!(en, "Write Docs", cn, "编写文档", tw, "撰寫文件"),
+        );
+        m.insert("chat.template.docs.body", tr!(en, "Write concise developer-facing documentation for the following code or feature. Include purpose, usage, constraints, and examples when helpful.\n\n{{input}}", cn, "请为下面的代码或功能编写简洁的开发者文档，包含用途、用法、约束和必要示例。\n\n{{input}}", tw, "請為下面的程式碼或功能撰寫簡潔的開發者文件，包含用途、用法、限制與必要範例。\n\n{{input}}"));
 
         // Phase options
         m.insert("phase.coding", tr!(en, "Coding", cn, "编码", tw, "編碼"));
@@ -222,6 +476,63 @@ impl I18n {
                 "在下方输入消息开始对话",
                 tw,
                 "在下方輸入消息開始對話"
+            ),
+        );
+        m.insert("chat.copy", tr!(en, "Copy", cn, "复制", tw, "複製"));
+        m.insert(
+            "chat.thinkingLabel",
+            tr!(
+                en,
+                "\u{1f9e0} Thinking",
+                cn,
+                "\u{1f9e0} 思考",
+                tw,
+                "\u{1f9e0} 思考"
+            ),
+        );
+        m.insert(
+            "chat.thinking",
+            tr!(en, "AI is thinking", cn, "AI 思考中", tw, "AI 思考中"),
+        );
+        m.insert(
+            "chat.newSession",
+            tr!(en, "New session", cn, "新对话", tw, "新對話"),
+        );
+        m.insert(
+            "chat.clearAttachments",
+            tr!(en, "Clear attachments", cn, "清除附件", tw, "清除附件"),
+        );
+        m.insert(
+            "chat.modelName",
+            tr!(
+                en,
+                "DeepSeek Chat",
+                cn,
+                "DeepSeek 对话",
+                tw,
+                "DeepSeek 對話"
+            ),
+        );
+        m.insert(
+            "chat.imeHint",
+            tr!(
+                en,
+                "IME issue? Use external editor",
+                cn,
+                "输入法有问题？点击 外部编辑器",
+                tw,
+                "輸入法有問題？點擊 外部編輯器"
+            ),
+        );
+        m.insert(
+            "chat.externalEditor",
+            tr!(
+                en,
+                "Open external editor",
+                cn,
+                "打开外部编辑器",
+                tw,
+                "打開外部編輯器"
             ),
         );
 
@@ -770,40 +1081,135 @@ impl I18n {
             ),
         );
         // Provider display names
-        m.insert("provider.openai", tr!(en, "OpenAI", cn, "OpenAI", tw, "OpenAI"));
-        m.insert("provider.openai_compatible", tr!(en, "OpenAI Compatible", cn, "OpenAI 兼容", tw, "OpenAI 兼容"));
-        m.insert("provider.anthropic", tr!(en, "Anthropic", cn, "Anthropic", tw, "Anthropic"));
-        m.insert("provider.cohere", tr!(en, "Cohere", cn, "Cohere", tw, "Cohere"));
-        m.insert("provider.deepseek", tr!(en, "DeepSeek", cn, "深度求索", tw, "深度求索"));
-        m.insert("provider.wenxin", tr!(en, "文心一言", cn, "文心一言", tw, "文心一言"));
+        m.insert(
+            "provider.openai",
+            tr!(en, "OpenAI", cn, "OpenAI", tw, "OpenAI"),
+        );
+        m.insert(
+            "provider.openai_compatible",
+            tr!(
+                en,
+                "OpenAI Compatible",
+                cn,
+                "OpenAI 兼容",
+                tw,
+                "OpenAI 兼容"
+            ),
+        );
+        m.insert(
+            "provider.anthropic",
+            tr!(en, "Anthropic", cn, "Anthropic", tw, "Anthropic"),
+        );
+        m.insert(
+            "provider.cohere",
+            tr!(en, "Cohere", cn, "Cohere", tw, "Cohere"),
+        );
+        m.insert(
+            "provider.deepseek",
+            tr!(en, "DeepSeek", cn, "深度求索", tw, "深度求索"),
+        );
+        m.insert(
+            "provider.wenxin",
+            tr!(en, "文心一言", cn, "文心一言", tw, "文心一言"),
+        );
         m.insert("provider.qianfan", tr!(en, "千帆", cn, "千帆", tw, "千帆"));
-        m.insert("provider.qwen", tr!(en, "通义千问", cn, "通义千问", tw, "通義千問"));
-        m.insert("provider.glm", tr!(en, "智谱 GLM", cn, "智谱 GLM", tw, "智譜 GLM"));
-        m.insert("provider.yi", tr!(en, "零一万物", cn, "零一万物", tw, "零一萬物"));
-        m.insert("provider.hunyuan", tr!(en, "腾讯混元", cn, "腾讯混元", tw, "騰訊混元"));
+        m.insert(
+            "provider.qwen",
+            tr!(en, "通义千问", cn, "通义千问", tw, "通義千問"),
+        );
+        m.insert(
+            "provider.glm",
+            tr!(en, "智谱 GLM", cn, "智谱 GLM", tw, "智譜 GLM"),
+        );
+        m.insert(
+            "provider.yi",
+            tr!(en, "零一万物", cn, "零一万物", tw, "零一萬物"),
+        );
+        m.insert(
+            "provider.hunyuan",
+            tr!(en, "腾讯混元", cn, "腾讯混元", tw, "騰訊混元"),
+        );
         m.insert("provider.doubao", tr!(en, "豆包", cn, "豆包", tw, "豆包"));
         m.insert("provider.facewall", tr!(en, "面壁", cn, "面壁", tw, "面壁"));
-        m.insert("provider.langboat", tr!(en, "出门问问", cn, "出门问问", tw, "出門問問"));
+        m.insert(
+            "provider.langboat",
+            tr!(en, "出门问问", cn, "出门问问", tw, "出門問問"),
+        );
         m.insert("provider.skywork", tr!(en, "天工", cn, "天工", tw, "天工"));
-        m.insert("provider.stepfun", tr!(en, "阶跃星辰", cn, "阶跃星辰", tw, "階躍星辰"));
+        m.insert(
+            "provider.stepfun",
+            tr!(en, "阶跃星辰", cn, "阶跃星辰", tw, "階躍星辰"),
+        );
         m.insert("provider.xihu", tr!(en, "西湖", cn, "西湖", tw, "西湖"));
-        m.insert("provider.moonshot", tr!(en, "Moonshot", cn, "月之暗面", tw, "月之暗面"));
-        m.insert("provider.minimax", tr!(en, "MiniMax", cn, "MiniMax", tw, "MiniMax"));
-        m.insert("provider.ai21", tr!(en, "AI21 Labs", cn, "AI21 Labs", tw, "AI21 Labs"));
-        m.insert("provider.aleph", tr!(en, "Aleph Alpha", cn, "Aleph Alpha", tw, "Aleph Alpha"));
-        m.insert("provider.copilot", tr!(en, "GitHub Copilot", cn, "GitHub Copilot", tw, "GitHub Copilot"));
-        m.insert("provider.deepquest", tr!(en, "DeepQuest", cn, "DeepQuest", tw, "DeepQuest"));
-        m.insert("provider.fireworks", tr!(en, "Fireworks", cn, "Fireworks", tw, "Fireworks"));
-        m.insert("provider.gemini", tr!(en, "Gemini", cn, "Gemini", tw, "Gemini"));
+        m.insert(
+            "provider.moonshot",
+            tr!(en, "Moonshot", cn, "月之暗面", tw, "月之暗面"),
+        );
+        m.insert(
+            "provider.minimax",
+            tr!(en, "MiniMax", cn, "MiniMax", tw, "MiniMax"),
+        );
+        m.insert(
+            "provider.ai21",
+            tr!(en, "AI21 Labs", cn, "AI21 Labs", tw, "AI21 Labs"),
+        );
+        m.insert(
+            "provider.aleph",
+            tr!(en, "Aleph Alpha", cn, "Aleph Alpha", tw, "Aleph Alpha"),
+        );
+        m.insert(
+            "provider.copilot",
+            tr!(
+                en,
+                "GitHub Copilot",
+                cn,
+                "GitHub Copilot",
+                tw,
+                "GitHub Copilot"
+            ),
+        );
+        m.insert(
+            "provider.deepquest",
+            tr!(en, "DeepQuest", cn, "DeepQuest", tw, "DeepQuest"),
+        );
+        m.insert(
+            "provider.fireworks",
+            tr!(en, "Fireworks", cn, "Fireworks", tw, "Fireworks"),
+        );
+        m.insert(
+            "provider.gemini",
+            tr!(en, "Gemini", cn, "Gemini", tw, "Gemini"),
+        );
         m.insert("provider.groq", tr!(en, "Groq", cn, "Groq", tw, "Groq"));
         m.insert("provider.llama", tr!(en, "Llama", cn, "Llama", tw, "Llama"));
-        m.insert("provider.loopai", tr!(en, "Loop AI", cn, "Loop AI", tw, "Loop AI"));
-        m.insert("provider.mistral", tr!(en, "Mistral", cn, "Mistral", tw, "Mistral"));
-        m.insert("provider.nim", tr!(en, "NVIDIA NIM", cn, "NVIDIA NIM", tw, "NVIDIA NIM"));
-        m.insert("provider.perplexity", tr!(en, "Perplexity", cn, "Perplexity", tw, "Perplexity"));
-        m.insert("provider.replicate", tr!(en, "Replicate", cn, "Replicate", tw, "Replicate"));
-        m.insert("provider.titan", tr!(en, "Amazon Titan", cn, "Amazon Titan", tw, "Amazon Titan"));
-        m.insert("provider.together", tr!(en, "Together", cn, "Together", tw, "Together"));
+        m.insert(
+            "provider.loopai",
+            tr!(en, "Loop AI", cn, "Loop AI", tw, "Loop AI"),
+        );
+        m.insert(
+            "provider.mistral",
+            tr!(en, "Mistral", cn, "Mistral", tw, "Mistral"),
+        );
+        m.insert(
+            "provider.nim",
+            tr!(en, "NVIDIA NIM", cn, "NVIDIA NIM", tw, "NVIDIA NIM"),
+        );
+        m.insert(
+            "provider.perplexity",
+            tr!(en, "Perplexity", cn, "Perplexity", tw, "Perplexity"),
+        );
+        m.insert(
+            "provider.replicate",
+            tr!(en, "Replicate", cn, "Replicate", tw, "Replicate"),
+        );
+        m.insert(
+            "provider.titan",
+            tr!(en, "Amazon Titan", cn, "Amazon Titan", tw, "Amazon Titan"),
+        );
+        m.insert(
+            "provider.together",
+            tr!(en, "Together", cn, "Together", tw, "Together"),
+        );
 
         m.insert(
             "feature.config.desc",

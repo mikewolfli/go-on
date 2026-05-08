@@ -226,15 +226,36 @@ impl WorkflowView {
         self.process_pending();
 
         ui.heading("Workflow");
-        ui.label("Create reusable multi-step workflow presets and run enabled steps.");
+        let text = "Create reusable multi-step workflow presets and run enabled steps.".to_string();
+        let resp = ui.label(&text);
+        resp.context_menu(|ui| {
+            if ui.button("📋 Copy").clicked() {
+                ui.ctx().copy_text(text.clone());
+                ui.close_menu();
+            }
+        });
         ui.separator();
 
         let security = security_prefs::load();
 
         ui.horizontal(|ui| {
-            ui.label("Step");
+            let text = "Step".to_string();
+            let resp = ui.label(&text);
+            resp.context_menu(|ui| {
+                if ui.button("📋 Copy").clicked() {
+                    ui.ctx().copy_text(text.clone());
+                    ui.close_menu();
+                }
+            });
             ui.text_edit_singleline(&mut self.new_name);
-            ui.label("Command");
+            let text = "Command".to_string();
+            let resp = ui.label(&text);
+            resp.context_menu(|ui| {
+                if ui.button("📋 Copy").clicked() {
+                    ui.ctx().copy_text(text.clone());
+                    ui.close_menu();
+                }
+            });
             ui.text_edit_singleline(&mut self.new_command);
             if ui.button("Add").clicked() {
                 let name = self.new_name.trim();
@@ -254,7 +275,14 @@ impl WorkflowView {
 
         ui.add_space(8.0);
         if self.state.steps.is_empty() {
-            ui.label("No steps yet.");
+            let text = "No steps yet.".to_string();
+            let resp = ui.label(&text);
+            resp.context_menu(|ui| {
+                if ui.button("📋 Copy").clicked() {
+                    ui.ctx().copy_text(text.clone());
+                    ui.close_menu();
+                }
+            });
         }
 
         let mut changed = false;
@@ -265,9 +293,23 @@ impl WorkflowView {
                     if ui.checkbox(&mut step.enabled, "").changed() {
                         changed = true;
                     }
-                    ui.label(&step.name);
+                    let text = step.name.clone();
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
                     ui.separator();
-                    ui.label(&step.command);
+                    let text = step.command.clone();
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
                     let delete_label = if self.pending_confirm_delete == Some(idx) {
                         "Confirm Delete"
                     } else {
@@ -318,7 +360,14 @@ impl WorkflowView {
         }
 
         if let Some(result) = &self.state.last_result {
-            ui.label(result);
+            let text = result.clone();
+            let resp = ui.label(&text);
+            resp.context_menu(|ui| {
+                if ui.button("📋 Copy").clicked() {
+                    ui.ctx().copy_text(text.clone());
+                    ui.close_menu();
+                }
+            });
         }
 
         if changed {

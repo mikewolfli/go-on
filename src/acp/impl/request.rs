@@ -23,6 +23,8 @@ fn is_acp_request(method: &str) -> bool {
             | "metrics.get"
             | "metrics"
             | "metrics.prometheus"
+            | "metrics.window.query"
+            | "metrics.errors.summary"
             | "shutdown"
             | "health"
             | "runtime.health"
@@ -66,6 +68,11 @@ fn is_acp_request(method: &str) -> bool {
             | "workflow.consult"
             | "workflow.generate"
             | "workflow.execute"
+            | "workflow.run.list"
+            | "workflow.run.get"
+            | "workflow.run.cancel"
+            | "workflow.run.pause"
+            | "workflow.run.resume"
             | "task.plan"
             | "task.execute"
             | "learning.summary"
@@ -83,6 +90,12 @@ fn is_acp_request(method: &str) -> bool {
                 | "skill.list"
                 | "skill.remove"
                 | "skill.create"
+                | "skill.update"
+                | "skill.version.list"
+                | "skill.version.rollback"
+                | "provider.test_connection"
+                | "provider.test_completion"
+                | "provider.capabilities"
             | "phase.policy.replay"
             | "primary_secondary.summary"
             | "summary/primary_secondary"
@@ -431,6 +444,30 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
+                "skill.update" => {
+                    protocol_pack::handle_skill_update(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "skill.version.list" => {
+                    protocol_pack::handle_skill_version_list(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "skill.version.rollback" => {
+                    protocol_pack::handle_skill_version_rollback(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
                 "skill.remove" => {
                     protocol_pack::handle_skill_remove(
                         server,
@@ -461,6 +498,22 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                 "metrics" => runtime_pack::handle_metrics(server, request_id).await,
                 "metrics.prometheus" => {
                     runtime_pack::handle_metrics_prometheus(server, request_id).await
+                }
+                "metrics.window.query" => {
+                    runtime_pack::handle_metrics_window_query(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "metrics.errors.summary" => {
+                    runtime_pack::handle_metrics_errors_summary(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
                 }
                 "metrics.reset" => runtime_pack::handle_metrics_reset(server, request_id).await,
                 "debug_panel.get" | "debug.panel.get" => {
@@ -687,6 +740,38 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
+                "workflow.run.list" => {
+                    handle_workflow_run_list(server, request.params.unwrap_or_default(), request_id)
+                        .await
+                }
+                "workflow.run.get" => {
+                    handle_workflow_run_get(server, request.params.unwrap_or_default(), request_id)
+                        .await
+                }
+                "workflow.run.cancel" => {
+                    handle_workflow_run_cancel(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "workflow.run.pause" => {
+                    handle_workflow_run_pause(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "workflow.run.resume" => {
+                    handle_workflow_run_resume(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
                 "task.plan" => {
                     workflow_pack::handle_task_plan(
                         server,
@@ -818,6 +903,30 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                 }
                 "provider.configure" => {
                     runtime_pack::handle_provider_configure(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "provider.test_connection" => {
+                    runtime_pack::handle_provider_test_connection(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "provider.test_completion" => {
+                    runtime_pack::handle_provider_test_completion(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "provider.capabilities" => {
+                    runtime_pack::handle_provider_capabilities(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
