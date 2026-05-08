@@ -1,10 +1,5 @@
 use crate::backend::BackendClient;
 use crate::i18n::I18n;
-use crate::views::autotune::AutoTuneView;
-use comrak::{
-    nodes::{AstNode, ListType, NodeValue},
-    parse_document, Arena, Options,
-};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -2323,235 +2318,92 @@ impl ChatView {
         copy_code_hint: &str,
         text_color: egui::Color32,
     ) {
-        let arena = Arena::new();
-        let root = parse_document(&arena, text, &Options::default());
-        for child in root.children() {
-            Self::render_markdown_block(ui, child, copy_code_hint, text_color);
-        }
-    }
-
-    fn render_markdown_block<'a>(
-        ui: &mut egui::Ui,
-        node: &'a AstNode<'a>,
-        copy_code_hint: &str,
-        text_color: egui::Color32,
-    ) {
-        match node.data.borrow().value.clone() {
-            NodeValue::Paragraph => {
-                ui.horizontal_wrapped(|ui| {
-                    for child in node.children() {
-                        Self::render_markdown_inline(ui, child, text_color, false, false, false);
-                    }
-                });
-                ui.add_space(4.0);
-            }
-            NodeValue::Heading(heading) => {
-                let size: f32 = match heading.level {
-                    1 => 22.0,
-                    2 => 20.0,
-                    3 => 18.0,
-                    4 => 16.0,
-                    _ => 15.0,
-                };
-                ui.horizontal_wrapped(|ui| {
-                    for child in node.children() {
-                        Self::render_markdown_inline(ui, child, text_color, true, false, false);
-                    }
-                });
-                let rect = ui.min_rect();
-                ui.painter().hline(
-                    rect.x_range(),
-                    rect.bottom() + 2.0,
-                    egui::Stroke::new(
-                        heading.level as f32 / size.max(1.0),
-                        text_color.gamma_multiply(0.35),
-                    ),
-                );
-                ui.add_space(6.0);
-            }
-            NodeValue::CodeBlock(block) => {
-                Self::render_code_block(ui, &block.info, &block.literal, copy_code_hint);
-                ui.add_space(4.0);
-            }
-            NodeValue::BlockQuote => {
-                egui::Frame::new()
-                    .fill(text_color.gamma_multiply(0.08))
-                    .corner_radius(6.0)
-                    .inner_margin(egui::Margin::symmetric(10i8, 8i8))
-                    .show(ui, |ui| {
-                        for child in node.children() {
-                            Self::render_markdown_block(ui, child, copy_code_hint, text_color);
+        // Simple markdown renderer: handles code blocks (```...```) and plain text.
+        // Avoids comrak which can cause UI hangs with certain inputs.
+        let mut remaining = text;
+        loop {
+            if let Some(start) = remaining.find("```") {
+                let before = &remaining[..start];
+                if !before.trim().is_empty() {
+                    for para in before.trim().split("\n\n") {
+                        let p = para.trim();
+                        if !p.is_empty() {
+                            ui.label(egui::RichText::new(p).color(text_color));
                         }
-                    });
-                ui.add_space(4.0);
-            }
-            NodeValue::List(list) => {
-                let mut ordinal = list.start.max(1);
-                for item in node.children() {
-                    ui.horizontal_top(|ui| {
-                        let bullet = match list.list_type {
-                            ListType::Bullet => "•".to_string(),
-                            ListType::Ordered => {
-                                let marker = format!("{ordinal}.");
-                                ordinal += 1;
-                                marker
-                            }
-                        };
-                        ui.label(egui::RichText::new(bullet).strong().color(text_color));
-                        ui.vertical(|ui| {
-                            for child in item.children() {
-                                Self::render_markdown_block(ui, child, copy_code_hint, text_color);
-                            }
+                    }
+                }
+                remaining = &remaining[start + 3..];
+                let endline = remaining.find('\n').unwrap_or(remaining.len());
+                let _lang = remaining[..endline].trim().to_string();
+                remaining = &remaining[endline.min(remaining.len())..];
+                if remaining.starts_with('\n') {
+                    remaining = &remaining[1..];
+                }
+                if let Some(end) = remaining.find("```") {
+                    let code = &remaining[..end].trim_end();
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgb(40, 44, 52))
+                        .corner_radius(6.0)
+                        .inner_margin(egui::Margin::symmetric(8, 6))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.colored_label(egui::Color32::from_rgb(150, 152, 160), "code");
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::TOP),
+                                    |ui| {
+                                        if ui
+                                            .button("\u{1f4cb}")
+                                            .on_hover_text(copy_code_hint)
+                                            .clicked()
+                                        {
+                                            ui.ctx().copy_text(code.to_string());
+                                        }
+                                    },
+                                );
+                            });
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(code)
+                                    .font(egui::FontId::monospace(13.0))
+                                    .color(egui::Color32::from_rgb(200, 204, 212)),
+                            ));
                         });
-                    });
+                    remaining = &remaining[end + 3..];
                 }
-                ui.add_space(4.0);
-            }
-            NodeValue::ThematicBreak => {
-                ui.separator();
-            }
-            NodeValue::HtmlBlock(html) => {
-                ui.add(egui::Label::new(
-                    egui::RichText::new(html.literal)
-                        .font(egui::FontId::monospace(12.0))
-                        .color(text_color.gamma_multiply(0.85)),
-                ));
-            }
-            NodeValue::Table(_) | NodeValue::TableRow(_) | NodeValue::TableCell => {
-                for child in node.children() {
-                    Self::render_markdown_block(ui, child, copy_code_hint, text_color);
-                }
-            }
-            _ => {
-                for child in node.children() {
-                    Self::render_markdown_block(ui, child, copy_code_hint, text_color);
-                }
-            }
-        }
-    }
-
-    fn render_markdown_inline<'a>(
-        ui: &mut egui::Ui,
-        node: &'a AstNode<'a>,
-        text_color: egui::Color32,
-        strong: bool,
-        italic: bool,
-        code: bool,
-    ) {
-        match node.data.borrow().value.clone() {
-            NodeValue::Text(text) => {
-                let mut rich = egui::RichText::new(text).color(text_color);
-                if strong {
-                    rich = rich.strong();
-                }
-                if italic {
-                    rich = rich.italics();
-                }
-                if code {
-                    rich = rich.font(egui::FontId::monospace(12.0));
-                }
-                ui.label(rich);
-            }
-            NodeValue::Code(code_span) => {
-                egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(40, 44, 52))
-                    .corner_radius(3.0)
-                    .inner_margin(egui::Margin::symmetric(4i8, 1i8))
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(code_span.literal)
-                                .font(egui::FontId::monospace(12.0))
-                                .color(egui::Color32::from_rgb(230, 120, 80)),
-                        );
-                    });
-            }
-            NodeValue::LineBreak | NodeValue::SoftBreak => {
-                ui.label(egui::RichText::new(" ").color(text_color));
-            }
-            NodeValue::Strong => {
-                for child in node.children() {
-                    Self::render_markdown_inline(ui, child, text_color, true, italic, code);
-                }
-            }
-            NodeValue::Emph => {
-                for child in node.children() {
-                    Self::render_markdown_inline(ui, child, text_color, strong, true, code);
-                }
-            }
-            NodeValue::Strikethrough => {
-                let text = Self::collect_plain_text(node);
-                ui.label(
-                    egui::RichText::new(text)
-                        .strikethrough()
-                        .color(text_color.gamma_multiply(0.9)),
-                );
-            }
-            NodeValue::Link(link) => {
-                let label = Self::collect_plain_text(node);
-                ui.hyperlink_to(label, link.url);
-            }
-            NodeValue::HtmlInline(html) => {
-                ui.label(egui::RichText::new(html).color(text_color.gamma_multiply(0.8)));
-            }
-            _ => {
-                for child in node.children() {
-                    Self::render_markdown_inline(ui, child, text_color, strong, italic, code);
-                }
-            }
-        }
-    }
-
-    fn collect_plain_text<'a>(node: &'a AstNode<'a>) -> String {
-        let mut out = String::new();
-        Self::collect_plain_text_into(node, &mut out);
-        out
-    }
-
-    fn collect_plain_text_into<'a>(node: &'a AstNode<'a>, output: &mut String) {
-        match node.data.borrow().value.clone() {
-            NodeValue::Text(text) => output.push_str(&text),
-            NodeValue::Code(code) => output.push_str(&code.literal),
-            NodeValue::LineBreak | NodeValue::SoftBreak => output.push(' '),
-            _ => {
-                for child in node.children() {
-                    Self::collect_plain_text_into(child, output);
-                }
-            }
-        }
-    }
-
-    fn render_code_block(ui: &mut egui::Ui, lang: &str, code_text: &str, copy_code_hint: &str) {
-        egui::Frame::new()
-            .fill(egui::Color32::from_rgb(40, 44, 52))
-            .corner_radius(6.0)
-            .inner_margin(egui::Margin::symmetric(8i8, 6i8))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let lang_display = if lang.trim().is_empty() {
-                        "code"
-                    } else {
-                        lang.trim()
-                    };
-                    ui.colored_label(egui::Color32::from_rgb(150, 152, 160), lang_display);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button("\u{1f4cb}")
-                            .on_hover_text(copy_code_hint)
-                            .clicked()
-                        {
-                            ui.ctx().copy_text(code_text.to_string());
+            } else {
+                if !remaining.trim().is_empty() {
+                    for para in remaining.trim().split("\n\n") {
+                        let p = para.trim();
+                        if !p.is_empty() {
+                            // Handle inline code with backticks
+                            let parts: Vec<&str> = p.split('`').collect();
+                            ui.horizontal_wrapped(|ui| {
+                                for (i, part) in parts.iter().enumerate() {
+                                    if i % 2 == 0 && !part.trim().is_empty() {
+                                        ui.label(
+                                            egui::RichText::new(part.trim()).color(text_color),
+                                        );
+                                    } else if !part.trim().is_empty() {
+                                        ui.label(
+                                            egui::RichText::new(part.trim())
+                                                .color(egui::Color32::from_rgb(220, 80, 80))
+                                                .family(egui::FontFamily::Monospace),
+                                        );
+                                    }
+                                }
+                            });
+                            ui.add_space(2.0);
                         }
-                    });
-                });
-                ui.add_space(2.0);
-                ui.add(egui::Label::new(
-                    egui::RichText::new(code_text)
-                        .font(egui::FontId::monospace(13.0))
-                        .color(egui::Color32::from_rgb(200, 204, 212)),
-                ));
-            });
+                    }
+                }
+                break;
+            }
+        }
     }
 
+    }
+
+    /// Draw a small colored avatar circle with initials
+#[cfg(test)]
     #[allow(dead_code)]
     /// Render the content inside a message bubble
     fn message_bubble_content(
