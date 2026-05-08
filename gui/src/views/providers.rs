@@ -133,7 +133,19 @@ impl ProvidersView {
             let tx = self.pending_tx.clone();
             let ctx_clone = ctx.clone();
             tokio::spawn(async move {
-                let models = backend_clone.fetch_models().await;
+                // Add timeout to prevent hanging
+                let models = match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    backend_clone.fetch_models(),
+                )
+                .await
+                {
+                    Ok(m) => m,
+                    Err(_) => {
+                        eprintln!("Warning: Failed to fetch models from backend (timeout)");
+                        std::collections::HashMap::new()
+                    }
+                };
                 // Send models back via pending channel
                 let msg = format!(
                     "__models__:{}",
@@ -547,11 +559,23 @@ impl ProvidersView {
                         );
                         let err_fmt = format!("{} %s", i18n.t("providers.push_failed"));
                         tokio::spawn(async move {
-                            let msg =
-                                match backend_clone.configure_provider(&name, &key, &model).await {
-                                    Ok(_) => ok_fmt.replace("%s", &name),
-                                    Err(e) => err_fmt.replace("%s", &e.to_string()),
-                                };
+                            // Add timeout to prevent hanging
+                            let result = match tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                backend_clone.configure_provider(&name, &key, &model),
+                            )
+                            .await
+                            {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    eprintln!("Warning: configure_provider timed out");
+                                    Err("timeout".to_string())
+                                }
+                            };
+                            let msg = match result {
+                                Ok(_) => ok_fmt.replace("%s", &name),
+                                Err(e) => err_fmt.replace("%s", &e.to_string()),
+                            };
                             let _ = tx.send(msg);
                             ctx_clone.request_repaint();
                         });
@@ -562,7 +586,20 @@ impl ProvidersView {
                         let backend_clone = backend.clone();
                         let ctx_clone = ctx.clone();
                         tokio::spawn(async move {
-                            let msg = match backend_clone.provider_test_connection(&name).await {
+                            // Add timeout to prevent hanging
+                            let result = match tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                backend_clone.provider_test_connection(&name),
+                            )
+                            .await
+                            {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    eprintln!("Warning: provider_test_connection timed out");
+                                    Err("timeout".to_string())
+                                }
+                            };
+                            let msg = match result {
                                 Ok(v) => {
                                     let ok = v
                                         .get("ok")
@@ -591,10 +628,20 @@ impl ProvidersView {
                         let backend_clone = backend.clone();
                         let ctx_clone = ctx.clone();
                         tokio::spawn(async move {
-                            let msg = match backend_clone
-                                .provider_test_completion(&name, model.as_deref())
-                                .await
+                            // Add timeout to prevent hanging
+                            let result = match tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                backend_clone.provider_test_completion(&name, model.as_deref()),
+                            )
+                            .await
                             {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    eprintln!("Warning: provider_test_completion timed out");
+                                    Err("timeout".to_string())
+                                }
+                            };
+                            let msg = match result {
                                 Ok(v) => {
                                     let ok = v
                                         .get("ok")
@@ -618,7 +665,20 @@ impl ProvidersView {
                         let backend_clone = backend.clone();
                         let ctx_clone = ctx.clone();
                         tokio::spawn(async move {
-                            let msg = match backend_clone.provider_capabilities(&name).await {
+                            // Add timeout to prevent hanging
+                            let result = match tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                backend_clone.provider_capabilities(&name),
+                            )
+                            .await
+                            {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    eprintln!("Warning: provider_capabilities timed out");
+                                    Err("timeout".to_string())
+                                }
+                            };
+                            let msg = match result {
                                 Ok(models) => {
                                     let count = models.len();
                                     format!("__ops__:{}:capabilities models={}", name, count)

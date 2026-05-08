@@ -83,67 +83,69 @@ impl GoOnApp {
 
         let (backend_tx, backend_updates) = mpsc::channel();
 
-        // Auto-start backend
-        let (backend, backend_child) = match find_backend_binary() {
-            Some(path) => {
-                let config_dir = path.parent().unwrap_or(std::path::Path::new("."));
-                let mut cmd = std::process::Command::new(&path);
-                cmd.current_dir(config_dir)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null());
-                // 从 gui_config.json 读取所有 provider key 设为环境变量传给后端
-                // 同时也从 keyring 读取（兼容 CLI --secret set 配置的 key）
-                let mut set_env = |name: &str, key: &str| {
-                    let env_var = match name {
-                        "deepseek" => "DEEPSEEK_API_KEY",
-                        "openai" => "OPENAI_API_KEY",
-                        "anthropic" => "ANTHROPIC_API_KEY",
-                        "qwen" => "QWEN_API_KEY",
-                        "gemini" => "GEMINI_API_KEY",
-                        "groq" => "GROQ_API_KEY",
-                        "mistral" => "MISTRAL_API_KEY",
-                        "copilot" => "GITHUB_COPILOT_TOKEN",
-                        _ => return,
+        // Only start backend if valid API keys exist
+        let (backend, backend_child) = if providers_valid {
+            match find_backend_binary() {
+                Some(path) => {
+                    let config_dir = path.parent().unwrap_or(std::path::Path::new("."));
+                    let mut cmd = std::process::Command::new(&path);
+                    cmd.current_dir(config_dir)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null());
+                    // Load API keys from config and keyring
+                    let mut set_env = |name: &str, key: &str| {
+                        let env_var = match name {
+                            "deepseek" => "DEEPSEEK_API_KEY",
+                            "openai" => "OPENAI_API_KEY",
+                            "anthropic" => "ANTHROPIC_API_KEY",
+                            "qwen" => "QWEN_API_KEY",
+                            "gemini" => "GEMINI_API_KEY",
+                            "groq" => "GROQ_API_KEY",
+                            "mistral" => "MISTRAL_API_KEY",
+                            "copilot" => "GITHUB_COPILOT_TOKEN",
+                            _ => return,
+                        };
+                        cmd.env(env_var, key);
                     };
-                    cmd.env(env_var, key);
-                };
-                // 1. From gui_config.json providers
-                for p in &config.providers {
-                    if !p.api_key.is_empty() {
-                        set_env(&p.name.to_lowercase(), &p.api_key);
+                    for p in &config.providers {
+                        if !p.api_key.is_empty() {
+                            set_env(&p.name.to_lowercase(), &p.api_key);
+                        }
+                    }
+                    let known = [
+                        "deepseek",
+                        "openai",
+                        "anthropic",
+                        "qwen",
+                        "gemini",
+                        "groq",
+                        "mistral",
+                        "copilot",
+                    ];
+                    for name in &known {
+                        if let Some(key) = crate::keyring_util::get_api_key(name) {
+                            set_env(name, &key);
+                        }
+                    }
+                    match cmd.spawn() {
+                        Ok(child) => {
+                            eprintln!("go-on 后端已启动 (PID: {})", child.id());
+                            (BackendClient::new(&config.backend_url), Some(child))
+                        }
+                        Err(e) => {
+                            eprintln!("警告: 启动后端失败: {}", e);
+                            (BackendClient::new(&config.backend_url), None)
+                        }
                     }
                 }
-                // 2. From keyring (covers CLI --secret set cases)
-                let known = [
-                    "deepseek",
-                    "openai",
-                    "anthropic",
-                    "qwen",
-                    "gemini",
-                    "groq",
-                    "mistral",
-                    "copilot",
-                ];
-                for name in &known {
-                    if let Some(key) = crate::keyring_util::get_api_key(name) {
-                        set_env(name, &key);
-                    }
-                }
-                match cmd.spawn() {
-                    Ok(child) => {
-                        eprintln!("go-on 后端已启动 (PID: {})", child.id());
-                        (BackendClient::new(&config.backend_url), Some(child))
-                    }
-                    Err(e) => {
-                        eprintln!("警告: 启动后端失败: {}", e);
-                        (BackendClient::new(&config.backend_url), None)
-                    }
+                None => {
+                    eprintln!("警告: 找不到 go-on 后端程序");
+                    (BackendClient::new(&config.backend_url), None)
                 }
             }
-            None => {
-                eprintln!("警告: 找不到 go-on 后端程序");
-                (BackendClient::new(&config.backend_url), None)
-            }
+        } else {
+            eprintln!("警告: 没有有效的 API Key，不启动后端");
+            (BackendClient::new(&config.backend_url), None)
         };
 
         Self {
@@ -201,9 +203,38 @@ impl GoOnApp {
             let tx = self.backend_tx.clone();
             let backend = self.backend.clone();
             tokio::spawn(async move {
-                let health = backend.health().await;
+                // Add timeout to prevent hanging if backend is not responding
+                let health =
+                    match tokio::time::timeout(std::time::Duration::from_secs(5), backend.health())
+                        .await
+                    {
+                        Ok(h) => h,
+                        Err(_) => {
+                            eprintln!("Warning: Backend health check timed out");
+                            HealthStatus {
+                                connected: false,
+                                healthy: false,
+                                uptime: 0,
+                                requests_per_minute: 0.0,
+                                success_rate: 0.0,
+                                avg_latency_ms: 0.0,
+                            }
+                        }
+                    };
                 let _ = tx.send(BackendUpdate::Health(health));
-                let providers = backend.provider_status().await;
+
+                let providers = match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    backend.provider_status(),
+                )
+                .await
+                {
+                    Ok(p) => p,
+                    Err(_) => {
+                        eprintln!("Warning: Backend provider status check timed out");
+                        vec![]
+                    }
+                };
                 let _ = tx.send(BackendUpdate::Providers(providers));
                 let _ = tx.send(BackendUpdate::RefreshDone);
             });

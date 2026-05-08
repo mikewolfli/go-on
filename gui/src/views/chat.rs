@@ -140,6 +140,8 @@ pub struct ChatView {
     phases: Vec<String>,
     /// Whether phases have been fetched
     phases_loaded: bool,
+    /// Whether phases loading has been scheduled
+    phases_load_scheduled: bool,
     pending_rx: mpsc::Receiver<PendingResponse>,
     pending_tx: mpsc::Sender<PendingResponse>,
     // Feature 3: edit/retry/delete
@@ -363,6 +365,7 @@ impl ChatView {
             attachments: Vec::new(),
             phases: Vec::new(),
             phases_loaded: false,
+            phases_load_scheduled: false,
             pending_rx,
             pending_tx,
             // Feature 3
@@ -979,6 +982,7 @@ impl ChatView {
             match pending {
                 PendingResponse::Phases(list) => {
                     self.phases = list;
+                    self.phases_loaded = true;
                 }
                 PendingResponse::Models(list) => {
                     self.available_models = if list.is_empty() {
@@ -1132,56 +1136,104 @@ impl ChatView {
         ctx: &egui::Context,
         autotune_chain_enabled: bool,
     ) {
-        // Process any pending async responses
+        // Debug: timer to detect hangs
+        let _start = std::time::Instant::now();
+
+        // Process any pending async responses (non-blocking)
         self.process_pending(i18n);
-        self.bootstrap_default_templates(i18n);
+
+        // Bail out early if processing_pending took too long
+        if _start.elapsed().as_millis() > 100 {
+            eprintln!(
+                "[CHAT_DEBUG] process_pending took {}ms",
+                _start.elapsed().as_millis()
+            );
+        }
+
+        // Lazy initialization of templates and name refresh
+        if !self.templates_bootstrapped {
+            self.bootstrap_default_templates(i18n);
+        }
         self.sync_model_selection();
         self.refresh_default_session_names(i18n);
 
-        // Fetch available phases from backend if not yet loaded
-        if !self.phases_loaded {
-            self.phases_loaded = true;
+        // Delayed loading: Schedule backend queries after first render to avoid UI freeze
+        // Only schedule once to prevent repeated triggers
+        if !self.phases_load_scheduled && !self.phases_loaded {
+            self.phases_load_scheduled = true;
             let backend_clone = backend.clone();
             let tx = self.pending_tx.clone();
             let ctx_clone = ctx.clone();
+
             tokio::spawn(async move {
-                if let Ok(baseline) = backend_clone.config_baseline().await {
-                    let phases = baseline
-                        .get("config")
-                        .and_then(|c| c.get("flow"))
-                        .and_then(|f| f.get("phases"))
-                        .and_then(|p| p.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|v| v.as_str().map(String::from))
-                                .collect::<Vec<_>>()
-                        });
-                    if let Some(list) = phases {
-                        let _ = tx.send(PendingResponse::Phases(list));
+                // Wait 100ms to let UI render first
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+                // Add timeout to prevent hanging
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    backend_clone.config_baseline(),
+                )
+                .await
+                {
+                    Ok(Ok(baseline)) => {
+                        let phases = baseline
+                            .get("config")
+                            .and_then(|c| c.get("flow"))
+                            .and_then(|f| f.get("phases"))
+                            .and_then(|p| p.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect::<Vec<_>>()
+                            });
+                        if let Some(list) = phases {
+                            let _ = tx.send(PendingResponse::Phases(list));
+                            ctx_clone.request_repaint();
+                        }
+                    }
+                    _ => {
+                        eprintln!("Warning: Failed to load phases from backend (timeout or error)");
                     }
                 }
-                ctx_clone.request_repaint();
             });
         }
 
         if !self.models_loaded {
-            self.models_loaded = true;
             let backend_clone = backend.clone();
             let tx = self.pending_tx.clone();
             let ctx_clone = ctx.clone();
+
             tokio::spawn(async move {
-                let mut options = vec!["auto".to_string()];
-                let models = backend_clone.fetch_models().await;
-                let mut ids: Vec<String> = models
-                    .into_iter()
-                    .flat_map(|(_, ids)| ids.into_iter())
-                    .collect();
-                ids.sort();
-                ids.dedup();
-                options.extend(ids);
-                let _ = tx.send(PendingResponse::Models(options));
-                ctx_clone.request_repaint();
+                // Wait 150ms (slightly after phases) to stagger requests
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+                // Add timeout to prevent hanging
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    backend_clone.fetch_models(),
+                )
+                .await
+                {
+                    Ok(models) => {
+                        let mut options = vec!["auto".to_string()];
+                        let mut ids: Vec<String> = models
+                            .into_values()
+                            .flat_map(|ids| ids.into_iter())
+                            .collect();
+                        ids.sort();
+                        ids.dedup();
+                        options.extend(ids);
+                        let _ = tx.send(PendingResponse::Models(options));
+                        ctx_clone.request_repaint();
+                    }
+                    Err(_) => {
+                        eprintln!("Warning: Failed to load models from backend (timeout)");
+                    }
+                }
             });
+
+            self.models_loaded = true;
         }
 
         // ── Layout: left sidebar (200px) + right content ──────────────
@@ -1877,7 +1929,35 @@ impl ChatView {
 
     // ── Messages area (Cherry Studio style) ─────────────────────
     fn show_messages(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
+        let render_start = std::time::Instant::now();
         let msgs = self.messages().to_vec();
+
+        // Performance optimization: limit rendered messages if too many
+        const MAX_RENDERED_MESSAGES: usize = 500;
+        let total_msgs = msgs.len();
+        let msgs_to_render = if total_msgs > MAX_RENDERED_MESSAGES {
+            &msgs[total_msgs - MAX_RENDERED_MESSAGES..]
+        } else {
+            &msgs[..]
+        };
+
+        if total_msgs > MAX_RENDERED_MESSAGES {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "⚠️ {} {} / {} {}",
+                        i18n.t("chat.showing"),
+                        MAX_RENDERED_MESSAGES,
+                        total_msgs,
+                        i18n.t("chat.messages")
+                    ))
+                    .color(egui::Color32::YELLOW)
+                    .size(12.0),
+                );
+            });
+            ui.add_space(8.0);
+        }
+
         let dark_mode = ui.visuals().dark_mode;
         let user_bubble = if dark_mode {
             egui::Color32::from_rgb(32, 112, 210)
@@ -1895,7 +1975,7 @@ impl ChatView {
             egui::Color32::from_rgb(28, 28, 32)
         };
 
-        if msgs.is_empty() {
+        if msgs_to_render.is_empty() {
             ui.add_space(80.0);
             ui.vertical_centered(|ui| {
                 ui.label(
@@ -1910,7 +1990,20 @@ impl ChatView {
         }
 
         // Take an index so we know which message to edit/delete
-        let msgs_with_idx: Vec<(usize, &Message)> = msgs.iter().enumerate().collect();
+        // Note: indices are adjusted if we're showing a subset of messages
+        let msgs_with_idx: Vec<(usize, &Message)> = msgs_to_render
+            .iter()
+            .enumerate()
+            .map(|(i, msg)| {
+                // Calculate actual index in the full message list
+                let actual_idx = if total_msgs > MAX_RENDERED_MESSAGES {
+                    total_msgs - MAX_RENDERED_MESSAGES + i
+                } else {
+                    i
+                };
+                (actual_idx, msg)
+            })
+            .collect();
         let mut msg_to_delete: Option<usize> = None;
         let mut msg_to_retry: Option<String> = None;
         let query = self.message_search_query.trim().to_ascii_lowercase();

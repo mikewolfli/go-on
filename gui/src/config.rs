@@ -113,14 +113,49 @@ impl Default for AppConfig {
     }
 }
 
-/// Load GUI app config from JSON file
+/// Load GUI app config from JSON file and auto-migrate keyring providers
 pub fn load_app_config() -> AppConfig {
     let path = app_config_path();
-    if let Ok(content) = std::fs::read_to_string(&path) {
+    let mut config = if let Ok(content) = std::fs::read_to_string(&path) {
         serde_json::from_str(&content).unwrap_or_default()
     } else {
         AppConfig::default()
+    };
+
+    // Auto-migrate: detect providers in keyring but not in config
+    let mut changed = false;
+    for provider_name in [
+        "deepseek",
+        "openai",
+        "anthropic",
+        "qwen",
+        "gemini",
+        "groq",
+        "mistral",
+    ] {
+        if config.providers.iter().any(|p| p.name == provider_name) {
+            continue;
+        }
+        if let Some(key) = crate::keyring_util::get_api_key(provider_name) {
+            eprintln!(
+                "Auto-migrating '{}' from keyring to gui_config.json",
+                provider_name
+            );
+            config.providers.push(ProviderConfig {
+                name: provider_name.to_string(),
+                api_key: key,
+                model: "auto".to_string(),
+                validated: true,
+            });
+            changed = true;
+        }
     }
+
+    if changed {
+        save_app_config(&config);
+    }
+
+    config
 }
 
 /// Save GUI app config to JSON file

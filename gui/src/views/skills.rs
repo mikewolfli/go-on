@@ -108,7 +108,24 @@ impl SkillsView {
         let ctx_clone = ctx.clone();
         let fetch_failed = i18n.t("skills.fetchFailed").to_string();
         tokio::spawn(async move {
-            let result = backend_clone.list_skills().await;
+            // Add timeout to prevent hanging
+            let result = match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                backend_clone.list_skills(),
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    eprintln!("Warning: list_skills timed out");
+                    let _ = tx.send(SkillsUpdate::List(
+                        Vec::new(),
+                        Some(format!("{}: timeout", fetch_failed)),
+                    ));
+                    ctx_clone.request_repaint();
+                    return;
+                }
+            };
             match result {
                 Ok(val) => {
                     let items = val.as_array().cloned().unwrap_or_default();
@@ -397,14 +414,24 @@ impl SkillsView {
                         let schema_clone = schema.clone();
                         let rpc_error = i18n.t("skills.error.rpc").to_string();
                         tokio::spawn(async move {
-                            let result = backend_clone
-                                .create_skill(
+                            // Add timeout to prevent hanging
+                            let result = match tokio::time::timeout(
+                                std::time::Duration::from_secs(15),
+                                backend_clone.create_skill(
                                     &name_clone,
                                     &desc_clone,
                                     &prompt_clone,
                                     &schema_clone,
-                                )
-                                .await;
+                                ),
+                            )
+                            .await
+                            {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    eprintln!("Warning: create_skill timed out");
+                                    Err("timeout".to_string())
+                                }
+                            };
                             let _ = tx.send(match result {
                                 Ok(_) => SkillsUpdate::Create(Ok(SkillRecord {
                                     name: Some(name_clone),
@@ -552,15 +579,28 @@ impl SkillsView {
                                     let input_schema_str = serde_json::to_string(&input_schema)
                                         .map_err(|e| format!("{}: {e}", serialize_schema_error))?;
 
-                                    backend_clone
-                                        .create_skill(
+                                    // Add timeout to prevent hanging
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_secs(15),
+                                        backend_clone.create_skill(
                                             &name,
                                             &description,
                                             &prompt_template,
                                             &input_schema_str,
-                                        )
-                                        .await
-                                        .map_err(|e| format!("{}: {e}", rpc_error))?;
+                                        ),
+                                    )
+                                    .await
+                                    {
+                                        Ok(result) => {
+                                            result.map_err(|e| format!("{}: {e}", rpc_error))?
+                                        }
+                                        Err(_) => {
+                                            eprintln!(
+                                                "Warning: import skill create_skill timed out"
+                                            );
+                                            return Err(format!("{}: timeout", rpc_error));
+                                        }
+                                    };
 
                                     Ok(SkillRecord {
                                         name: Some(name),
@@ -659,12 +699,22 @@ impl SkillsView {
                                 i18n.t("skills.defaultCreator.description").to_string();
                             let default_loaded = i18n.t("skills.defaultCreator.loaded").to_string();
                             tokio::spawn(async move {
-                                let result = backend_clone.create_skill(
+                                // Add timeout to prevent hanging
+                                let result = match tokio::time::timeout(
+                                    std::time::Duration::from_secs(15),
+                                    backend_clone.create_skill(
                                         "create-a-skill",
                                         &seed_description,
                                         "You are a Skill Creator assistant. Your role is to help the user design, create, and manage AI skills.\n\nWhen the user describes a task they want to automate:\n1. Understand the core objective\n2. Suggest a skill name and description\n3. Help them define the input schema\n4. Generate an effective prompt template\n\nAsk clarifying questions to refine the skill design before finalizing.",
                                         r#"{"query": "string", "context": "string"}"#,
-                                    ).await;
+                                    )
+                                ).await {
+                                    Ok(r) => r,
+                                    Err(_) => {
+                                        eprintln!("Warning: create-a-skill creation timed out");
+                                        Err("timeout".to_string())
+                                    }
+                                };
                                 match result {
                                     Ok(_) => {
                                         let _ = tx.send(SkillsUpdate::Create(Ok(SkillRecord {
@@ -759,10 +809,33 @@ impl SkillsView {
                             let enabled_tpl = i18n.t("skills.lifecycle.enabled").to_string();
                             let failed_tpl = i18n.t("skills.lifecycle.toggleFailed").to_string();
                             tokio::spawn(async move {
+                                // Add timeout to prevent hanging
                                 let result = if is_enabled {
-                                    backend_clone.disable_skill(&skill_name).await
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_secs(10),
+                                        backend_clone.disable_skill(&skill_name),
+                                    )
+                                    .await
+                                    {
+                                        Ok(r) => r,
+                                        Err(_) => {
+                                            eprintln!("Warning: disable_skill timed out");
+                                            Err("timeout".to_string())
+                                        }
+                                    }
                                 } else {
-                                    backend_clone.enable_skill(&skill_name).await
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_secs(10),
+                                        backend_clone.enable_skill(&skill_name),
+                                    )
+                                    .await
+                                    {
+                                        Ok(r) => r,
+                                        Err(_) => {
+                                            eprintln!("Warning: enable_skill timed out");
+                                            Err("timeout".to_string())
+                                        }
+                                    }
                                 };
                                 let is_error = result.is_err();
                                 let msg = match result {
@@ -795,7 +868,19 @@ impl SkillsView {
                             let removed_tpl = i18n.t("skills.lifecycle.removed").to_string();
                             let failed_tpl = i18n.t("skills.lifecycle.removeFailed").to_string();
                             tokio::spawn(async move {
-                                let result = backend_clone.remove_skill(&skill_name).await;
+                                // Add timeout to prevent hanging
+                                let result = match tokio::time::timeout(
+                                    std::time::Duration::from_secs(10),
+                                    backend_clone.remove_skill(&skill_name),
+                                )
+                                .await
+                                {
+                                    Ok(r) => r,
+                                    Err(_) => {
+                                        eprintln!("Warning: remove_skill timed out");
+                                        Err("timeout".to_string())
+                                    }
+                                };
                                 let is_error = result.is_err();
                                 let msg = match result {
                                     Ok(_) => removed_tpl.replace("{name}", &skill_name),
@@ -821,7 +906,19 @@ impl SkillsView {
                             let count_tpl = i18n.t("skills.lifecycle.versionCount").to_string();
                             let failed_tpl = i18n.t("skills.lifecycle.versionsFailed").to_string();
                             tokio::spawn(async move {
-                                let result = backend_clone.list_skill_versions(&skill_name).await;
+                                // Add timeout to prevent hanging
+                                let result = match tokio::time::timeout(
+                                    std::time::Duration::from_secs(10),
+                                    backend_clone.list_skill_versions(&skill_name),
+                                )
+                                .await
+                                {
+                                    Ok(r) => r,
+                                    Err(_) => {
+                                        eprintln!("Warning: list_skill_versions timed out");
+                                        Err("timeout".to_string())
+                                    }
+                                };
                                 let is_error = result.is_err();
                                 let msg = match result {
                                     Ok(v) => {
@@ -904,9 +1001,25 @@ impl SkillsView {
                         let updated_tpl = i18n.t("skills.lifecycle.updated").to_string();
                         let failed_tpl = i18n.t("skills.lifecycle.updateFailed").to_string();
                         tokio::spawn(async move {
-                            let result = backend_clone
-                                .update_skill(&skill_name, desc, prompt, Some(schema), None)
-                                .await;
+                            // Add timeout to prevent hanging
+                            let result = match tokio::time::timeout(
+                                std::time::Duration::from_secs(15),
+                                backend_clone.update_skill(
+                                    &skill_name,
+                                    desc,
+                                    prompt,
+                                    Some(schema),
+                                    None,
+                                ),
+                            )
+                            .await
+                            {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    eprintln!("Warning: update_skill timed out");
+                                    Err("timeout".to_string())
+                                }
+                            };
                             let is_error = result.is_err();
                             let msg = match result {
                                 Ok(_) => updated_tpl.replace("{name}", &skill_name),
@@ -948,7 +1061,19 @@ impl SkillsView {
                     let result_tpl = i18n.t("skills.lifecycle.testResult").to_string();
                     let failed_tpl = i18n.t("skills.lifecycle.testFailed").to_string();
                     tokio::spawn(async move {
-                        let result = backend_clone.test_skill(&skill_name, input).await;
+                        // Add timeout to prevent hanging (30s for test_skill as it may take longer)
+                        let result = match tokio::time::timeout(
+                            std::time::Duration::from_secs(30),
+                            backend_clone.test_skill(&skill_name, input),
+                        )
+                        .await
+                        {
+                            Ok(r) => r,
+                            Err(_) => {
+                                eprintln!("Warning: test_skill timed out");
+                                Err("timeout".to_string())
+                            }
+                        };
                         let is_error = result.is_err();
                         let msg = match result {
                             Ok(v) => result_tpl

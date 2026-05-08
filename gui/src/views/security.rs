@@ -103,7 +103,20 @@ impl SecurityView {
             let restart_requested = i18n.t("security.restartRequested").to_string();
             let restart_failed = i18n.t("security.restartFailed").to_string();
             tokio::spawn(async move {
-                let msg = match backend_clone.restart_backend().await {
+                // Add timeout to prevent hanging
+                let result = match tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    backend_clone.restart_backend(),
+                )
+                .await
+                {
+                    Ok(r) => r,
+                    Err(_) => {
+                        eprintln!("Warning: restart_backend timed out");
+                        Err("timeout".to_string())
+                    }
+                };
+                let msg = match result {
                     Ok(_) => restart_requested,
                     Err(e) => format!("{}: {e}", restart_failed),
                 };

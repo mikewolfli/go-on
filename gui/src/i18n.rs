@@ -478,6 +478,11 @@ impl I18n {
                 "在下方輸入消息開始對話"
             ),
         );
+        m.insert("chat.showing", tr!(en, "Showing", cn, "显示", tw, "顯示"));
+        m.insert(
+            "chat.messages",
+            tr!(en, "messages", cn, "条消息", tw, "條消息"),
+        );
         m.insert("chat.copy", tr!(en, "Copy", cn, "复制", tw, "複製"));
         m.insert(
             "chat.thinkingLabel",

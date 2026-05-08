@@ -197,7 +197,13 @@ impl WorkflowView {
         tokio::spawn(async move {
             let mut lines = Vec::new();
             for (idx, (name, command)) in steps.iter().enumerate() {
-            lines.push(format!("{} {} [{}]: {}", step_label, idx + 1, name, command));
+                lines.push(format!(
+                    "{} {} [{}]: {}",
+                    step_label,
+                    idx + 1,
+                    name,
+                    command
+                ));
                 #[cfg(target_os = "windows")]
                 let child_spawn = tokio::process::Command::new("cmd")
                     .arg("/C")
@@ -511,7 +517,20 @@ impl WorkflowView {
                         } else {
                             Some(filter.as_str())
                         };
-                        let msg = match backend_clone.list_workflow_runs(50, 0, status).await {
+                        // Add timeout to prevent hanging
+                        let result = match tokio::time::timeout(
+                            std::time::Duration::from_secs(10),
+                            backend_clone.list_workflow_runs(50, 0, status),
+                        )
+                        .await
+                        {
+                            Ok(r) => r,
+                            Err(_) => {
+                                eprintln!("Warning: list_workflow_runs timed out");
+                                Err("timeout".to_string())
+                            }
+                        };
+                        let msg = match result {
                             Ok(v) => format!("__runs__:{v}"),
                             Err(e) => format!("__runs_error__:{e}"),
                         };
@@ -538,7 +557,20 @@ impl WorkflowView {
                         let tx = self.pending_tx.clone();
                         let ctx_clone = ctx.clone();
                         tokio::spawn(async move {
-                            let msg = match backend_clone.get_workflow_run(&run_id).await {
+                            // Add timeout to prevent hanging
+                            let result = match tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                backend_clone.get_workflow_run(&run_id),
+                            )
+                            .await
+                            {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    eprintln!("Warning: get_workflow_run timed out");
+                                    Err("timeout".to_string())
+                                }
+                            };
+                            let msg = match result {
                                 Ok(v) => format!("__run_detail__:{v}"),
                                 Err(e) => format!("__run_detail_error__:{e}"),
                             };
@@ -569,10 +601,20 @@ impl WorkflowView {
                             let requested_tpl = i18n.t("workflow.runActionRequested").to_string();
                             let failed_tpl = i18n.t("workflow.runActionFailed").to_string();
                             tokio::spawn(async move {
-                                let msg = match backend_clone
-                                    .transition_workflow_run(&run_id, action)
-                                    .await
+                                // Add timeout to prevent hanging
+                                let result = match tokio::time::timeout(
+                                    std::time::Duration::from_secs(10),
+                                    backend_clone.transition_workflow_run(&run_id, action),
+                                )
+                                .await
                                 {
+                                    Ok(r) => r,
+                                    Err(_) => {
+                                        eprintln!("Warning: transition_workflow_run timed out");
+                                        Err("timeout".to_string())
+                                    }
+                                };
+                                let msg = match result {
                                     Ok(_) => requested_tpl
                                         .replace("{run_id}", &run_id)
                                         .replace("{action}", action),

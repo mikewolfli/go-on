@@ -148,7 +148,18 @@ impl MonitorView {
                         let window = self.metrics_window.clone();
                         let tx = self.pending_tx.clone();
                         tokio::spawn(async move {
-                            let payload = match backend_clone.metrics_window_query(&window).await {
+                            // Add timeout to prevent hanging
+                            let result = match tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                backend_clone.metrics_window_query(&window)
+                            ).await {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    eprintln!("Warning: metrics_window_query timed out");
+                                    Err("timeout".to_string())
+                                }
+                            };
+                            let payload = match result {
                                 Ok(series) => {
                                     let mut out = vec![format!("window={window} points={}", series.len())];
                                     if let Some(last) = series.last() {
@@ -169,7 +180,18 @@ impl MonitorView {
                         let window = self.metrics_window.clone();
                         let tx = self.pending_tx.clone();
                         tokio::spawn(async move {
-                            let payload = match backend_clone.metrics_errors_summary(&window, 10).await {
+                            // Add timeout to prevent hanging
+                            let result = match tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                backend_clone.metrics_errors_summary(&window, 10)
+                            ).await {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    eprintln!("Warning: metrics_errors_summary timed out");
+                                    Err("timeout".to_string())
+                                }
+                            };
+                            let payload = match result {
                                 Ok((groups, failures)) => {
                                     let mut out = vec![format!("error_groups={}", groups.len())];
                                     for g in groups.into_iter().take(5) {
