@@ -39,6 +39,7 @@ impl SecurityView {
         backend: &BackendClient,
         ctx: &egui::Context,
     ) {
+egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
         self.process_pending();
 
         ui.heading(i18n.t("tab.security"));
@@ -135,5 +136,6 @@ impl SecurityView {
                 }
             });
         }
+        });
     }
 }

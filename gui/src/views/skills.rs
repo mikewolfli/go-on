@@ -223,6 +223,7 @@ impl SkillsView {
         ctx: &egui::Context,
         lifecycle_enabled: bool,
     ) {
+egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
         self.process_pending(i18n);
         if !self.initialized {
             self.initialized = true;
@@ -1132,5 +1133,6 @@ impl SkillsView {
                 });
             });
         }
+        });
     }
 }

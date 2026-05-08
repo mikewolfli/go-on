@@ -691,6 +691,10 @@ impl I18n {
             "settings.language",
             tr!(en, "Language", cn, "语言", tw, "語言"),
         );
+        m.insert(
+            "settings.theme",
+            tr!(en, "Theme", cn, "主题", tw, "主題"),
+        );
 
         // Status bar
         m.insert(

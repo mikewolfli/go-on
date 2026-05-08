@@ -315,6 +315,7 @@ impl WorkflowView {
         backend: &BackendClient,
         run_center_enabled: bool,
     ) {
+egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
         self.process_pending(i18n);
 
         ui.heading(i18n.t("tab.workflow"));
@@ -663,5 +664,6 @@ impl WorkflowView {
         if changed {
             self.save_state();
         }
+        });
     }
 }

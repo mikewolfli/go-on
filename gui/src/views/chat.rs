@@ -3,12 +3,28 @@ use crate::i18n::I18n;
 use crate::views::autotune::AutoTuneView;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
+
+const CHAT_PERF_WINDOW: usize = 120;
+const CHAT_PERF_SUMMARY_INTERVAL: u64 = 60;
+const CHAT_DISABLE_MARKDOWN_RENDER: bool = true;
+const CHAT_SAFE_MODE: bool = true;
+// Isolation stages for step-by-step freeze diagnosis:
+// 1=minimal list only, 2=+input widget, 3=+Enter send, 4=+show_messages,
+// 5=+sidebar, 6=full original layout (safe mode bypassed).
+const CHAT_ISOLATION_STAGE: u8 = 6;
+// Stage-6 probe: metadata sync can trigger frequent disk writes if values flap each frame.
+const CHAT_STAGE6_ENABLE_METADATA_SYNC: bool = true;
+const CHAT_STAGE6_ENABLE_SEARCH_ROW: bool = true;
+const CHAT_STAGE6_ENABLE_MODE_ROW: bool = true;
+const CHAT_STAGE6_ENABLE_EXTRA_BUTTONS: bool = true;
+const CHAT_STAGE6_ENABLE_MODEL_PICKER_WINDOW: bool = true;
+const CHAT_STAGE6_FORCE_SAFE_LAYOUT_SKELETON: bool = true;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -169,9 +185,103 @@ pub struct ChatView {
     selected_models: Vec<String>,
     available_models: Vec<String>,
     models_loaded: bool,
+    input_ready: bool,
+    perf_total_samples: VecDeque<u128>,
+    perf_sidebar_samples: VecDeque<u128>,
+    perf_messages_samples: VecDeque<u128>,
+    perf_composer_samples: VecDeque<u128>,
+    perf_frame_counter: u64,
+    debug_log_bootstrapped: bool,
+    // Message pagination
+    messages_page: usize,
+    const_messages_per_page: usize,
 }
 
 impl ChatView {
+    fn chat_debug_enabled() -> bool {
+        std::env::var("GOON_GUI_CHAT_DEBUG")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+            .unwrap_or(false)
+    }
+
+    fn chat_debug_log(msg: &str) {
+        eprintln!("{}", msg);
+        let path = std::env::temp_dir().join("go-on-chat-debug.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "{}", msg);
+        }
+    }
+
+    fn push_perf_sample(samples: &mut VecDeque<u128>, value: u128) {
+        if samples.len() >= CHAT_PERF_WINDOW {
+            samples.pop_front();
+        }
+        samples.push_back(value);
+    }
+
+    fn perf_avg(samples: &VecDeque<u128>) -> u128 {
+        if samples.is_empty() {
+            return 0;
+        }
+        samples.iter().sum::<u128>() / samples.len() as u128
+    }
+
+    fn perf_p95(samples: &VecDeque<u128>) -> u128 {
+        if samples.is_empty() {
+            return 0;
+        }
+        let mut sorted: Vec<u128> = samples.iter().copied().collect();
+        sorted.sort_unstable();
+        let idx = ((sorted.len() - 1) * 95) / 100;
+        sorted[idx]
+    }
+
+    fn perf_max(samples: &VecDeque<u128>) -> u128 {
+        samples.iter().copied().max().unwrap_or(0)
+    }
+
+    fn markdown_to_plain_text(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut in_code_fence = false;
+
+        for line in text.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") {
+                in_code_fence = !in_code_fence;
+                continue;
+            }
+
+            if in_code_fence {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let mut l = line.to_string();
+            if l.starts_with('#') {
+                l = l.trim_start_matches('#').trim_start().to_string();
+            }
+            if l.starts_with('>') {
+                l = l.trim_start_matches('>').trim_start().to_string();
+            }
+
+            l = l.replace("**", "");
+            l = l.replace("__", "");
+            l = l.replace('`', "");
+            l = l.replace("* ", "- ");
+
+            out.push_str(&l);
+            out.push('\n');
+        }
+
+        out.trim().to_string()
+    }
+
     fn localized_default_session_name(index: usize, i18n: &I18n) -> String {
         if index == 0 {
             i18n.t("chat.newSession").to_string()
@@ -257,26 +367,29 @@ impl ChatView {
     }
 
     fn save_templates_to_disk(&self) {
+        let templates = self.prompt_templates.clone();
         let path = Self::templates_path();
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!(
-                    "Failed to create chat template directory {}: {e}",
-                    parent.display()
-                );
-                return;
-            }
-        }
-        match serde_json::to_string_pretty(&self.prompt_templates) {
-            Ok(content) => {
-                if let Err(e) = std::fs::write(&path, content) {
-                    eprintln!("Failed to write chat templates to {}: {e}", path.display());
+        tokio::spawn(async move {
+            if let Some(parent) = path.parent() {
+                if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                    eprintln!(
+                        "Failed to create chat template directory {}: {e}",
+                        parent.display()
+                    );
+                    return;
                 }
             }
-            Err(e) => {
-                eprintln!("Failed to serialize chat templates: {e}");
+            match serde_json::to_string_pretty(&templates) {
+                Ok(content) => {
+                    if let Err(e) = tokio::fs::write(&path, content).await {
+                        eprintln!("Failed to write chat templates to {}: {e}", path.display());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to serialize chat templates: {e}");
+                }
             }
-        }
+        });
     }
 
     fn sessions_path() -> PathBuf {
@@ -296,26 +409,31 @@ impl ChatView {
     }
 
     fn save_sessions_to_disk(&self) {
+        // Clone data for the background task to avoid blocking the UI thread.
+        let sessions = self.sessions.clone();
         let path = Self::sessions_path();
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!(
-                    "Failed to create chat session directory {}: {e}",
-                    parent.display()
-                );
-                return;
-            }
-        }
-        match serde_json::to_string_pretty(&self.sessions) {
-            Ok(content) => {
-                if let Err(e) = std::fs::write(&path, content) {
-                    eprintln!("Failed to write chat sessions to {}: {e}", path.display());
+        tokio::spawn(async move {
+            if let Some(parent) = path.parent() {
+                if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                    eprintln!(
+                        "Failed to create chat session directory {}: {e}",
+                        parent.display()
+                    );
+                    return;
                 }
             }
-            Err(e) => {
-                eprintln!("Failed to serialize chat sessions: {e}");
+            // Serialize on the async task (off UI thread).
+            match serde_json::to_string_pretty(&sessions) {
+                Ok(content) => {
+                    if let Err(e) = tokio::fs::write(&path, content).await {
+                        eprintln!("Failed to write chat sessions to {}: {e}", path.display());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to serialize chat sessions: {e}");
+                }
             }
-        }
+        });
     }
 
     pub fn new() -> Self {
@@ -393,6 +511,16 @@ impl ChatView {
             selected_models: initial_models,
             available_models: vec!["auto".to_string()],
             models_loaded: false,
+            input_ready: false,
+            perf_total_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
+            perf_sidebar_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
+            perf_messages_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
+            perf_composer_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
+            perf_frame_counter: 0,
+            debug_log_bootstrapped: false,
+            // Pagination
+            messages_page: 0,
+            const_messages_per_page: 3,
         }
     }
 
@@ -493,12 +621,19 @@ impl ChatView {
     }
 
     fn sync_model_selection(&mut self) {
-        self.selected_models = Self::normalize_models(&self.selected_models);
-        self.selected_model = self
+        // Avoid allocating a new Vec every frame when nothing needs normalizing.
+        let normalized = Self::normalize_models(&self.selected_models);
+        if normalized != self.selected_models {
+            self.selected_models = normalized;
+        }
+        let first = self
             .selected_models
             .first()
             .cloned()
             .unwrap_or_else(|| "auto".to_string());
+        if first != self.selected_model {
+            self.selected_model = first;
+        }
     }
 
     fn selected_models_summary(&self, i18n: &I18n) -> String {
@@ -1133,10 +1268,26 @@ impl ChatView {
         autotune_chain_enabled: bool,
     ) {
         // Debug: timer to detect hangs
-        let _start = std::time::Instant::now();
+        let _start = Instant::now();
+        let debug_enabled = Self::chat_debug_enabled();
+        if debug_enabled && !self.debug_log_bootstrapped {
+            self.debug_log_bootstrapped = true;
+            let path = std::env::temp_dir().join("go-on-chat-debug.log");
+            Self::chat_debug_log(&format!(
+                "[CHAT_DEBUG_BOOT] logging enabled; file={}",
+                path.display()
+            ));
+        }
+
+        // Log entry
+        Self::chat_debug_log("[CHAT_SHOW] Entry");
 
         // Process any pending async responses (non-blocking)
         self.process_pending(i18n);
+        Self::chat_debug_log(&format!(
+            "[CHAT_SHOW] process_pending done: {}ms",
+            _start.elapsed().as_millis()
+        ));
 
         // Bail out early if processing_pending took too long
         if _start.elapsed().as_millis() > 100 {
@@ -1147,11 +1298,14 @@ impl ChatView {
         }
 
         // Lazy initialization of templates and name refresh
-        if !self.templates_bootstrapped {
+        // Capture before bootstrap so we can detect the very first run.
+        let is_first_init = !self.templates_bootstrapped;
+        if is_first_init {
             self.bootstrap_default_templates(i18n);
+            // Refresh localized session names once at startup.
+            self.refresh_default_session_names(i18n);
         }
         self.sync_model_selection();
-        self.refresh_default_session_names(i18n);
 
         // Delayed loading: Schedule backend queries after first render to avoid UI freeze
         // Only schedule once to prevent repeated triggers
@@ -1232,439 +1386,789 @@ impl ChatView {
             self.models_loaded = true;
         }
 
+        let use_safe_mode = (CHAT_SAFE_MODE && CHAT_ISOLATION_STAGE < 6)
+            || (CHAT_ISOLATION_STAGE == 6 && CHAT_STAGE6_FORCE_SAFE_LAYOUT_SKELETON);
+        if use_safe_mode {
+            let (sidebar_ms, messages_ms, composer_ms) =
+                self.show_safe_chat_layout(ui, i18n, backend, ctx, autotune_chain_enabled);
+
+            if debug_enabled {
+                let total_ms = _start.elapsed().as_millis();
+                Self::push_perf_sample(&mut self.perf_total_samples, total_ms);
+                Self::push_perf_sample(&mut self.perf_sidebar_samples, sidebar_ms);
+                Self::push_perf_sample(&mut self.perf_messages_samples, messages_ms);
+                Self::push_perf_sample(&mut self.perf_composer_samples, composer_ms);
+                self.perf_frame_counter = self.perf_frame_counter.saturating_add(1);
+
+                if total_ms > 40 || messages_ms > 30 || composer_ms > 25 || sidebar_ms > 20 {
+                    Self::chat_debug_log(&format!(
+                        "[CHAT_PERF_SAFE] total={}ms sidebar={}ms messages={}ms composer={}ms sessions={} msgs={}",
+                        total_ms,
+                        sidebar_ms,
+                        messages_ms,
+                        composer_ms,
+                        self.sessions.len(),
+                        self.messages().len()
+                    ));
+                }
+            }
+            return;
+        }
+
         // ── Layout: left sidebar (200px) + right content ──────────────
-        egui::SidePanel::left("chat_sessions")
-            .resizable(true)
-            .default_width(200.0)
-            .min_width(140.0)
-            .show_inside(ui, |ui| {
+        let mut sidebar_ms: u128 = 0;
+        let mut messages_ms: u128 = 0;
+        let mut composer_ms: u128 = 0;
+
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                let t_sidebar = Instant::now();
+                ui.set_min_width(160.0);
                 self.show_sidebar(ui, i18n);
+                sidebar_ms = t_sidebar.elapsed().as_millis();
             });
+            ui.separator();
+            ui.vertical(|ui| {
+                let dark_mode = ui.visuals().dark_mode;
+                let panel_bg = if dark_mode {
+                    egui::Color32::from_rgb(36, 38, 44)
+                } else {
+                    egui::Color32::from_rgb(240, 242, 245)
+                };
+                let panel_text = if dark_mode {
+                    egui::Color32::from_rgb(220, 224, 234)
+                } else {
+                    egui::Color32::from_rgb(34, 34, 34)
+                };
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            let dark_mode = ui.visuals().dark_mode;
-            let panel_bg = if dark_mode {
-                egui::Color32::from_rgb(36, 38, 44)
-            } else {
-                egui::Color32::from_rgb(240, 242, 245)
-            };
-            let panel_text = if dark_mode {
-                egui::Color32::from_rgb(220, 224, 234)
-            } else {
-                egui::Color32::from_rgb(34, 34, 34)
-            };
+                // Feature 9: message search in current session.
+                if CHAT_STAGE6_ENABLE_SEARCH_ROW {
+                    ui.horizontal(|ui| {
+                        ui.label(i18n.t("chat.search"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.message_search_query)
+                                .hint_text(i18n.t("chat.searchMessages"))
+                                .desired_width(ui.available_width()),
+                        );
+                    });
+                    ui.add_space(4.0);
+                }
 
-            // Feature 9: message search in current session.
-            ui.horizontal(|ui| {
-                ui.label(i18n.t("chat.search"));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.message_search_query)
-                        .hint_text(i18n.t("chat.searchMessages"))
+                // ── Top: conversation messages ──────────────────────────
+                let avail = ui.available_height();
+                // Keep enough room for mode row + attachments/input + button row.
+                // Without this cap, ScrollArea can consume nearly all height and push controls off-screen.
+                let reserved_bottom = 280.0;
+                let top_height = (avail - reserved_bottom).max(120.0);
+                let t_messages = Instant::now();
+                egui::ScrollArea::vertical()
+                    .max_height(top_height.max(100.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        self.show_messages(ui, i18n);
+                    });
+                messages_ms = t_messages.elapsed().as_millis();
+
+                ui.separator();
+                ui.add_space(4.0);
+
+                // ── Mode selector row ──────────────────────────────────
+                if CHAT_STAGE6_ENABLE_MODE_ROW {
+                    egui::Frame::new()
+                        .fill(panel_bg)
+                        .corner_radius(6.0)
+                        .inner_margin(egui::Margin::symmetric(10i8, 6i8))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(i18n.t("chat.mode"))
+                                        .color(panel_text)
+                                        .strong(),
+                                );
+                                ui.add_space(6.0);
+                                egui::ComboBox::from_id_salt("mode_sel")
+                                    .selected_text(i18n.t(&format!("mode.{}", self.selected_mode)))
+                                    .show_ui(ui, |ui| {
+                                        let modes =
+                                            ["ask", "plan", "edit", "safeguard", "full_auto"];
+                                        for val in &modes {
+                                            ui.selectable_value(
+                                                &mut self.selected_mode,
+                                                val.to_string(),
+                                                i18n.t(&format!("mode.{val}")),
+                                            );
+                                        }
+                                    });
+
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new(i18n.t("chat.model")).color(panel_text),
+                                );
+                                if ui
+                                    .button(i18n.t("chat.chooseModels"))
+                                    .on_hover_text(i18n.t("chat.multiModelHint"))
+                                    .clicked()
+                                {
+                                    self.show_model_picker = true;
+                                }
+
+                                // Feature 6: show active model name
+                                ui.add_space(12.0);
+                                ui.label(
+                                    egui::RichText::new(self.selected_models_summary(i18n))
+                                        .color(panel_text)
+                                        .size(12.0),
+                                );
+                            });
+                        });
+                }
+                if CHAT_STAGE6_ENABLE_METADATA_SYNC {
+                    let mut metadata_changed = false;
+                    if self.active_session < self.sessions.len() {
+                        let session = &mut self.sessions[self.active_session];
+                        if session.mode != self.selected_mode {
+                            session.mode = self.selected_mode.clone();
+                            metadata_changed = true;
+                        }
+                        if session.phase != self.selected_phase {
+                            session.phase = self.selected_phase.clone();
+                            metadata_changed = true;
+                        }
+                        if session.model != self.selected_model {
+                            session.model = self.selected_model.clone();
+                            metadata_changed = true;
+                        }
+                        if session.models != self.selected_models {
+                            session.models = self.selected_models.clone();
+                            metadata_changed = true;
+                        }
+                    }
+                    if metadata_changed {
+                        self.save_sessions_to_disk();
+                    }
+                }
+
+                ui.add_space(4.0);
+
+                if !self.input_ready {
+                    self.input_ready = true;
+                    ui.ctx().request_repaint();
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(10.0);
+                        ui.label("Building input...");
+                    });
+                    return;
+                }
+
+                let t_composer = Instant::now();
+
+                // ── Input area with attachments ────────────────────────
+                if !self.attachments.is_empty() {
+                    ui.horizontal(|ui| {
+                        for att in &self.attachments {
+                            let icon = if att.mime.starts_with("image/") {
+                                "🖼️"
+                            } else {
+                                "📎"
+                            };
+                            ui.label(format!("{} {}", icon, att.name));
+                        }
+                        if ui.button("✕").clicked() {
+                            self.attachments.clear();
+                        }
+                    });
+                }
+                // ── Input box ────────────────────────────────────────────
+                let resp = ui.add(
+                    egui::TextEdit::multiline(&mut self.input)
+                        .hint_text(i18n.t("chat.input"))
+                        .desired_rows(3)
                         .desired_width(ui.available_width()),
                 );
-            });
-            ui.add_space(4.0);
-
-            // ── Top: conversation messages ──────────────────────────
-            let avail = ui.available_height();
-            let top_height = avail - 160.0; // leave room for input area
-            egui::ScrollArea::vertical()
-                .max_height(top_height.max(100.0))
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    self.show_messages(ui, i18n);
-                });
-
-            ui.separator();
-            ui.add_space(4.0);
-
-            // ── Mode selector row ──────────────────────────────────
-            egui::Frame::new()
-                .fill(panel_bg)
-                .corner_radius(6.0)
-                .inner_margin(egui::Margin::symmetric(10i8, 6i8))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(i18n.t("chat.mode"))
-                                .color(panel_text)
-                                .strong(),
-                        );
-                        ui.add_space(6.0);
-                        egui::ComboBox::from_id_salt("mode_sel")
-                            .selected_text(i18n.t(&format!("mode.{}", self.selected_mode)))
-                            .show_ui(ui, |ui| {
-                                let modes = ["ask", "plan", "edit", "safeguard", "full_auto"];
-                                for val in &modes {
-                                    ui.selectable_value(
-                                        &mut self.selected_mode,
-                                        val.to_string(),
-                                        i18n.t(&format!("mode.{val}")),
+                // ── Button row (keep for testing) ─────────────────────────
+                ui.horizontal(|ui| {
+                    if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS
+                        && ui
+                            .button("\u{1f4ce}")
+                            .on_hover_text(i18n.t("chat.attach"))
+                            .clicked()
+                    {
+                        if let Some(files) = rfd::FileDialog::new().pick_files() {
+                            for f in files {
+                                let n = f
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("file")
+                                    .to_string();
+                                self.attachments.push(Attachment {
+                                    name: n,
+                                    mime: Self::guess_mime(&f),
+                                    data: f.display().to_string(),
+                                });
+                            }
+                            self.error.clear();
+                        }
+                    }
+                    if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS
+                        && ui
+                            .button("\u{1f4dd}")
+                            .on_hover_text(i18n.t("chat.externalEditor"))
+                            .clicked()
+                    {
+                        let p = std::env::temp_dir().join("go_on_chat_input.txt");
+                        let _ = std::fs::write(&p, &self.input);
+                        for e in &["zed", "code", "gedit", "vim", "nano"] {
+                            if std::process::Command::new(e).arg(&p).spawn().is_ok() {
+                                break;
+                            }
+                        }
+                    }
+                    // Feature 7: quick prompts button
+                    if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS
+                        && ui
+                            .button("\u{1f4a1}")
+                            .on_hover_text(i18n.t("chat.promptTemplates"))
+                            .clicked()
+                    {
+                        self.show_prompts = !self.show_prompts;
+                    }
+                    // Feature 7: show prompt dropdown
+                    if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS && self.show_prompts {
+                        egui::Window::new(i18n.t("chat.promptTemplates"))
+                            .id(egui::Id::new("quick_prompts_window"))
+                            .collapsible(false)
+                            .resizable(true)
+                            .default_width(520.0)
+                            .anchor(egui::Align2::LEFT_TOP, egui::vec2(0.0, 0.0))
+                            .show(ui.ctx(), |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.template_search_query)
+                                            .hint_text(i18n.t("chat.searchTemplates"))
+                                            .desired_width(220.0),
                                     );
+                                    if ui.button(i18n.t("chat.templateNew")).clicked() {
+                                        self.selected_template_idx = None;
+                                        self.template_name_buf.clear();
+                                        self.template_command_buf.clear();
+                                        self.template_content_buf.clear();
+                                    }
+                                });
+                                ui.separator();
+                                ui.columns(2, |columns| {
+                                    columns[0].vertical(|ui| {
+                                        let query = self.template_search_query.to_ascii_lowercase();
+                                        let mut pick_idx = None;
+                                        for (idx, template) in
+                                            self.prompt_templates.iter().enumerate()
+                                        {
+                                            if !query.is_empty()
+                                                && !template
+                                                    .name
+                                                    .to_ascii_lowercase()
+                                                    .contains(&query)
+                                                && !template
+                                                    .command
+                                                    .to_ascii_lowercase()
+                                                    .contains(&query)
+                                            {
+                                                continue;
+                                            }
+                                            let label =
+                                                format!("{}  {}", template.command, template.name);
+                                            if ui
+                                                .selectable_label(
+                                                    self.selected_template_idx == Some(idx),
+                                                    label,
+                                                )
+                                                .clicked()
+                                            {
+                                                pick_idx = Some(idx);
+                                            }
+                                        }
+                                        if let Some(idx) = pick_idx {
+                                            self.load_template_into_editor(idx);
+                                        }
+                                    });
+
+                                    columns[1].vertical(|ui| {
+                                        ui.label(i18n.t("chat.templateName"));
+                                        ui.text_edit_singleline(&mut self.template_name_buf);
+                                        ui.label(i18n.t("chat.templateCommand"));
+                                        ui.text_edit_singleline(&mut self.template_command_buf);
+                                        ui.label(i18n.t("chat.templateBody"));
+                                        ui.add(
+                                            egui::TextEdit::multiline(
+                                                &mut self.template_content_buf,
+                                            )
+                                            .desired_rows(10)
+                                            .desired_width(ui.available_width()),
+                                        );
+                                        ui.label(i18n.t("chat.templatePlaceholderHint"));
+                                        ui.horizontal(|ui| {
+                                            if ui.button(i18n.t("chat.templateInsert")).clicked() {
+                                                self.input = self.template_content_buf.clone();
+                                                self.show_prompts = false;
+                                            }
+                                            if ui.button(i18n.t("chat.templateSave")).clicked() {
+                                                let name = self.template_name_buf.trim();
+                                                let command = Self::normalize_command(
+                                                    &self.template_command_buf,
+                                                );
+                                                let content = self.template_content_buf.trim();
+                                                if name.is_empty()
+                                                    || command.is_empty()
+                                                    || content.is_empty()
+                                                {
+                                                    self.error = i18n
+                                                        .t("chat.templateValidation")
+                                                        .to_string();
+                                                } else if self
+                                                    .prompt_templates
+                                                    .iter()
+                                                    .enumerate()
+                                                    .any(|(idx, t)| {
+                                                        t.command == command
+                                                            && Some(idx)
+                                                                != self.selected_template_idx
+                                                    })
+                                                {
+                                                    self.error = i18n
+                                                        .t("chat.templateDuplicate")
+                                                        .to_string();
+                                                } else {
+                                                    let template = PromptTemplate {
+                                                        id: self
+                                                            .selected_template_idx
+                                                            .and_then(|idx| {
+                                                                self.prompt_templates
+                                                                    .get(idx)
+                                                                    .map(|t| t.id.clone())
+                                                            })
+                                                            .unwrap_or_else(|| {
+                                                                format!(
+                                                                    "tpl_{}",
+                                                                    self.prompt_templates.len() + 1
+                                                                )
+                                                            }),
+                                                        name: name.to_string(),
+                                                        command,
+                                                        content: content.to_string(),
+                                                    };
+                                                    if let Some(idx) = self.selected_template_idx {
+                                                        self.prompt_templates[idx] = template;
+                                                    } else {
+                                                        self.prompt_templates.push(template);
+                                                        self.selected_template_idx =
+                                                            Some(self.prompt_templates.len() - 1);
+                                                    }
+                                                    self.save_templates_to_disk();
+                                                    self.error.clear();
+                                                }
+                                            }
+                                            if ui.button(i18n.t("chat.templateDelete")).clicked() {
+                                                if let Some(idx) = self.selected_template_idx.take()
+                                                {
+                                                    if idx < self.prompt_templates.len() {
+                                                        self.prompt_templates.remove(idx);
+                                                        self.save_templates_to_disk();
+                                                        self.template_name_buf.clear();
+                                                        self.template_command_buf.clear();
+                                                        self.template_content_buf.clear();
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    });
+                                });
+                                if ui.button(i18n.t("chat.close")).clicked() {
+                                    self.show_prompts = false;
                                 }
                             });
+                    }
+                    // Fill remaining space, then Send/Stop button on the right
+                    ui.add_space(8.0);
+                    let send_hint_key = if cfg!(target_os = "linux") {
+                        "chat.sendShortcutHintLinux"
+                    } else {
+                        "chat.sendShortcutHint"
+                    };
+                    ui.label(egui::RichText::new(i18n.t(send_hint_key)).small().weak());
 
-                        ui.add_space(8.0);
-                        ui.label(egui::RichText::new(i18n.t("chat.model")).color(panel_text));
-                        if ui
-                            .button(i18n.t("chat.chooseModels"))
-                            .on_hover_text(i18n.t("chat.multiModelHint"))
-                            .clicked()
+                    // Feature 4: stop button replaces send when thinking
+                    if self.sending && self.ai_status == AiStatus::Thinking {
+                        let stop_btn =
+                            egui::Button::new(format!("\u{23f9} {}", i18n.t("chat.stop")))
+                                .fill(egui::Color32::RED)
+                                .min_size(egui::vec2(80.0, 28.0));
+                        if ui.add(stop_btn).clicked() {
+                            self.stop_sending();
+                        }
+                    } else {
+                        let (icon, col) = match self.ai_status {
+                            AiStatus::Idle => (
+                                i18n.t("chat.send").to_string(),
+                                egui::Color32::from_rgb(40, 120, 220),
+                            ),
+                            AiStatus::Thinking => {
+                                ("...".to_string(), egui::Color32::from_rgb(200, 160, 60))
+                            }
+                            AiStatus::Error => {
+                                (i18n.t("chat.retry").to_string(), egui::Color32::RED)
+                            }
+                        };
+                        let snd = egui::Button::new(format!("\u{25b6} {}", icon))
+                            .fill(col)
+                            .min_size(egui::vec2(80.0, 28.0));
+                        if ui.add_enabled(!self.sending, snd).clicked() {
+                            self.send_message(backend, ctx, autotune_chain_enabled);
+                        }
+                    }
+                });
+
+                if CHAT_STAGE6_ENABLE_MODEL_PICKER_WINDOW && self.show_model_picker {
+                    egui::Window::new(i18n.t("chat.chooseModels"))
+                        .id(egui::Id::new("chat_model_picker_window"))
+                        .collapsible(false)
+                        .resizable(true)
+                        .default_width(360.0)
+                        .show(ui.ctx(), |ui| {
+                            ui.label(i18n.t("chat.multiModelHint"));
+                            ui.separator();
+                            let available_models = self.available_models.clone();
+                            for model in &available_models {
+                                let mut checked = self.selected_models.iter().any(|m| m == model);
+                                if ui.checkbox(&mut checked, model).changed() {
+                                    if checked {
+                                        self.selected_models.push(model.clone());
+                                    } else {
+                                        self.selected_models.retain(|m| m != model);
+                                    }
+                                    self.sync_model_selection();
+                                }
+                            }
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                if ui.button(i18n.t("chat.modelAutoOnly")).clicked() {
+                                    self.selected_models = vec!["auto".to_string()];
+                                    self.sync_model_selection();
+                                }
+                                if ui.button(i18n.t("chat.close")).clicked() {
+                                    self.show_model_picker = false;
+                                }
+                            });
+                        });
+                }
+
+                // ── Enter to send ─────────────────────────────────────────
+                let should_send_with_enter = ui.input(|i| {
+                    if !resp.has_focus() || !i.key_pressed(egui::Key::Enter) || i.modifiers.shift {
+                        return false;
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        // On Linux/fcitx5, plain Enter is used by IME candidate selection.
+                        // Require Ctrl/Command+Enter for sending to avoid accidental submits.
+                        i.modifiers.ctrl || i.modifiers.command
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        true
+                    }
+                });
+                if should_send_with_enter {
+                    self.send_message(backend, ctx, autotune_chain_enabled);
+                }
+
+                // Show error if present
+                if !self.error.is_empty() {
+                    ui.colored_label(egui::Color32::RED, &self.error);
+                }
+
+                composer_ms = t_composer.elapsed().as_millis();
+            });
+        });
+
+        if debug_enabled {
+            let total_ms = _start.elapsed().as_millis();
+            Self::push_perf_sample(&mut self.perf_total_samples, total_ms);
+            Self::push_perf_sample(&mut self.perf_sidebar_samples, sidebar_ms);
+            Self::push_perf_sample(&mut self.perf_messages_samples, messages_ms);
+            Self::push_perf_sample(&mut self.perf_composer_samples, composer_ms);
+            self.perf_frame_counter = self.perf_frame_counter.saturating_add(1);
+
+            if total_ms > 40 || messages_ms > 30 || composer_ms > 25 || sidebar_ms > 20 {
+                Self::chat_debug_log(&format!(
+                    "[CHAT_PERF] total={}ms sidebar={}ms messages={}ms composer={}ms sessions={} msgs={}",
+                    total_ms,
+                    sidebar_ms,
+                    messages_ms,
+                    composer_ms,
+                    self.sessions.len(),
+                    self.messages().len()
+                ));
+            }
+
+            if self.perf_frame_counter % CHAT_PERF_SUMMARY_INTERVAL == 0 {
+                Self::chat_debug_log(&format!(
+                    "[CHAT_PERF_SUMMARY] window={} avg(total/sidebar/messages/composer)={}/{}/{}/{}ms p95(total/messages)={}/{}ms max(total/messages)={}/{}ms",
+                    self.perf_total_samples.len(),
+                    Self::perf_avg(&self.perf_total_samples),
+                    Self::perf_avg(&self.perf_sidebar_samples),
+                    Self::perf_avg(&self.perf_messages_samples),
+                    Self::perf_avg(&self.perf_composer_samples),
+                    Self::perf_p95(&self.perf_total_samples),
+                    Self::perf_p95(&self.perf_messages_samples),
+                    Self::perf_max(&self.perf_total_samples),
+                    Self::perf_max(&self.perf_messages_samples),
+                ));
+            }
+        }
+    }
+
+    fn show_safe_chat_layout(
+        &mut self,
+        ui: &mut egui::Ui,
+        i18n: &I18n,
+        backend: &BackendClient,
+        ctx: &egui::Context,
+        autotune_chain_enabled: bool,
+    ) -> (u128, u128, u128) {
+        let mut sidebar_ms: u128 = 0;
+        let mut messages_ms: u128 = 0;
+        let mut composer_ms: u128 = 0;
+
+        let enable_input_widget = CHAT_ISOLATION_STAGE >= 2;
+        let enable_enter_send = CHAT_ISOLATION_STAGE >= 3;
+        let enable_show_messages = CHAT_ISOLATION_STAGE >= 4;
+        let enable_sidebar = CHAT_ISOLATION_STAGE >= 5;
+
+        let total_w = ui.available_width();
+        let total_h = ui.available_height().min(4096.0); // guard against infinity
+        let sidebar_w = (total_w / 3.0).max(160.0);
+        // separator takes ~1px + 8px margin
+        let content_w = (total_w - sidebar_w - 9.0).max(200.0);
+        // Reserve ~130px for input area (multiline 3 rows + button bar + separator + spacing)
+        let msg_area_h = (total_h - 130.0).max(150.0);
+
+        ui.horizontal(|ui| {
+            ui.allocate_ui(egui::vec2(sidebar_w, total_h), |ui| {
+                if enable_sidebar {
+                    let t_sidebar = Instant::now();
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            self.show_sidebar(ui, i18n);
+                        });
+                    sidebar_ms = t_sidebar.elapsed().as_millis();
+                } else {
+                    ui.label("Sidebar disabled");
+                }
+            });
+
+            ui.separator();
+
+            // Right panel: use bottom_up layout so composer (input+buttons)
+            // is always pinned at the bottom and messages fill the rest.
+            ui.allocate_ui(egui::vec2(content_w, total_h), |ui| {
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    let t_composer = Instant::now();
+
+                    // ── Render bottom items first (they appear at the bottom) ──
+
+                    // Model picker window (floating, no layout impact)
+                    if CHAT_STAGE6_ENABLE_MODEL_PICKER_WINDOW && self.show_model_picker {
+                        egui::Window::new(i18n.t("chat.chooseModels"))
+                            .id(egui::Id::new("chat_model_picker_window_safe"))
+                            .collapsible(false)
+                            .resizable(true)
+                            .default_width(360.0)
+                            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                            .show(ui.ctx(), |ui| {
+                                ui.label(i18n.t("chat.multiModelHint"));
+                                ui.separator();
+                                let available_models = self.available_models.clone();
+                                for model in &available_models {
+                                    let mut checked =
+                                        self.selected_models.iter().any(|m| m == model);
+                                    if ui.checkbox(&mut checked, model).changed() {
+                                        if checked {
+                                            self.selected_models.push(model.clone());
+                                        } else {
+                                            self.selected_models.retain(|m| m != model);
+                                        }
+                                        self.sync_model_selection();
+                                    }
+                                }
+                                ui.separator();
+                                ui.horizontal(|ui| {
+                                    if ui.button(i18n.t("chat.modelAutoOnly")).clicked() {
+                                        self.selected_models = vec!["auto".to_string()];
+                                        self.sync_model_selection();
+                                    }
+                                    if ui.button(i18n.t("chat.close")).clicked() {
+                                        self.show_model_picker = false;
+                                    }
+                                });
+                            });
+                    }
+
+                    // Error label (very bottom)
+                    if !self.error.is_empty() {
+                        ui.colored_label(egui::Color32::RED, &self.error);
+                    }
+
+                    // Send / Stop button row
+                    ui.horizontal(|ui| {
+                        if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS {
+                            if ui
+                                .button("📎")
+                                .on_hover_text(i18n.t("chat.attach"))
+                                .clicked()
+                            {
+                                if let Some(files) = rfd::FileDialog::new().pick_files() {
+                                    for f in files {
+                                        let n = f
+                                            .file_name()
+                                            .and_then(|s| s.to_str())
+                                            .unwrap_or("file")
+                                            .to_string();
+                                        self.attachments.push(Attachment {
+                                            name: n,
+                                            mime: Self::guess_mime(&f),
+                                            data: f.display().to_string(),
+                                        });
+                                    }
+                                    self.error.clear();
+                                }
+                            }
+                            if ui
+                                .button("📝")
+                                .on_hover_text(i18n.t("chat.externalEditor"))
+                                .clicked()
+                            {
+                                let p = std::env::temp_dir().join("go_on_chat_input.txt");
+                                let _ = std::fs::write(&p, &self.input);
+                                for e in &["zed", "code", "gedit", "vim", "nano"] {
+                                    if std::process::Command::new(e).arg(&p).spawn().is_ok() {
+                                        break;
+                                    }
+                                }
+                            }
+                            if ui
+                                .button("💡")
+                                .on_hover_text(i18n.t("chat.promptTemplates"))
+                                .clicked()
+                            {
+                                self.show_prompts = !self.show_prompts;
+                            }
+                        }
+
+                        if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS
+                            && ui
+                                .button(i18n.t("chat.chooseModels"))
+                                .on_hover_text(i18n.t("chat.multiModelHint"))
+                                .clicked()
                         {
                             self.show_model_picker = true;
                         }
 
-                        // Feature 6: show active model name
-                        ui.add_space(12.0);
-                        ui.label(
-                            egui::RichText::new(self.selected_models_summary(i18n))
-                                .color(panel_text)
-                                .size(12.0),
-                        );
+                        if self.sending && self.ai_status == AiStatus::Thinking {
+                            if ui
+                                .add(
+                                    egui::Button::new(format!("⏹ {}", i18n.t("chat.stop")))
+                                        .fill(egui::Color32::RED),
+                                )
+                                .clicked()
+                            {
+                                self.stop_sending();
+                            }
+                        } else if ui
+                            .add_enabled(
+                                !self.sending,
+                                egui::Button::new(format!("▶ {}", i18n.t("chat.send")))
+                                    .fill(egui::Color32::from_rgb(40, 120, 220)),
+                            )
+                            .clicked()
+                        {
+                            self.send_message(backend, ctx, autotune_chain_enabled);
+                        }
                     });
-                });
-            let mut metadata_changed = false;
-            if self.active_session < self.sessions.len() {
-                let session = &mut self.sessions[self.active_session];
-                if session.mode != self.selected_mode {
-                    session.mode = self.selected_mode.clone();
-                    metadata_changed = true;
-                }
-                if session.phase != self.selected_phase {
-                    session.phase = self.selected_phase.clone();
-                    metadata_changed = true;
-                }
-                if session.model != self.selected_model {
-                    session.model = self.selected_model.clone();
-                    metadata_changed = true;
-                }
-                if session.models != self.selected_models {
-                    session.models = self.selected_models.clone();
-                    metadata_changed = true;
-                }
-            }
-            if metadata_changed {
-                self.save_sessions_to_disk();
-            }
 
-            ui.add_space(4.0);
-
-            // ── Input area with attachments ────────────────────────
-            if !self.attachments.is_empty() {
-                ui.horizontal(|ui| {
-                    for att in &self.attachments {
-                        let icon = if att.mime.starts_with("image/") {
-                            "🖼️"
-                        } else {
-                            "📎"
-                        };
-                        ui.label(format!("{} {}", icon, att.name));
-                    }
-                    if ui.button("✕").clicked() {
-                        self.attachments.clear();
-                    }
-                });
-            }
-            // ── Input box ────────────────────────────────────────────
-            let resp = egui::Frame::new()
-                .fill(if dark_mode {
-                    egui::Color32::from_rgb(28, 30, 36)
-                } else {
-                    egui::Color32::from_rgb(255, 255, 255)
-                })
-                .corner_radius(6.0)
-                .inner_margin(egui::Margin::symmetric(6i8, 4i8))
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.input)
-                            .hint_text(i18n.t("chat.input"))
-                            .desired_width(ui.available_width())
-                            .desired_rows(1)
-                            .frame(false),
-                    )
-                })
-                .inner;
-
-            // ── Button row ────────────────────────────────────────────
-            ui.horizontal(|ui| {
-                if ui
-                    .button("\u{1f4ce}")
-                    .on_hover_text(i18n.t("chat.attach"))
-                    .clicked()
-                {
-                    if let Some(files) = rfd::FileDialog::new().pick_files() {
-                        for f in files {
-                            let n = f
-                                .file_name()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("file")
-                                .to_string();
-                            self.attachments.push(Attachment {
-                                name: n,
-                                mime: Self::guess_mime(&f),
-                                data: f.display().to_string(),
-                            });
-                        }
-                        self.error.clear();
-                    }
-                }
-                if ui
-                    .button("\u{1f4dd}")
-                    .on_hover_text(i18n.t("chat.externalEditor"))
-                    .clicked()
-                {
-                    let p = std::env::temp_dir().join("go_on_chat_input.txt");
-                    let _ = std::fs::write(&p, &self.input);
-                    for e in &["zed", "code", "gedit", "vim", "nano"] {
-                        if std::process::Command::new(e).arg(&p).spawn().is_ok() {
-                            break;
-                        }
-                    }
-                }
-                // Feature 7: quick prompts button
-                if ui
-                    .button("\u{1f4a1}")
-                    .on_hover_text(i18n.t("chat.promptTemplates"))
-                    .clicked()
-                {
-                    self.show_prompts = !self.show_prompts;
-                }
-                // Feature 7: show prompt dropdown
-                if self.show_prompts {
-                    egui::Window::new(i18n.t("chat.promptTemplates"))
-                        .id(egui::Id::new("quick_prompts_window"))
-                        .collapsible(false)
-                        .resizable(true)
-                        .default_width(520.0)
-                        .anchor(egui::Align2::LEFT_TOP, egui::vec2(0.0, 0.0))
-                        .show(ui.ctx(), |ui| {
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.template_search_query)
-                                        .hint_text(i18n.t("chat.searchTemplates"))
-                                        .desired_width(220.0),
-                                );
-                                if ui.button(i18n.t("chat.templateNew")).clicked() {
-                                    self.selected_template_idx = None;
-                                    self.template_name_buf.clear();
-                                    self.template_command_buf.clear();
-                                    self.template_content_buf.clear();
-                                }
-                            });
-                            ui.separator();
-                            ui.columns(2, |columns| {
-                                columns[0].vertical(|ui| {
-                                    let query = self.template_search_query.to_ascii_lowercase();
-                                    let mut pick_idx = None;
-                                    for (idx, template) in self.prompt_templates.iter().enumerate()
-                                    {
-                                        if !query.is_empty()
-                                            && !template.name.to_ascii_lowercase().contains(&query)
-                                            && !template
-                                                .command
-                                                .to_ascii_lowercase()
-                                                .contains(&query)
-                                        {
-                                            continue;
-                                        }
-                                        let label =
-                                            format!("{}  {}", template.command, template.name);
-                                        if ui
-                                            .selectable_label(
-                                                self.selected_template_idx == Some(idx),
-                                                label,
-                                            )
-                                            .clicked()
-                                        {
-                                            pick_idx = Some(idx);
-                                        }
-                                    }
-                                    if let Some(idx) = pick_idx {
-                                        self.load_template_into_editor(idx);
-                                    }
-                                });
-
-                                columns[1].vertical(|ui| {
-                                    ui.label(i18n.t("chat.templateName"));
-                                    ui.text_edit_singleline(&mut self.template_name_buf);
-                                    ui.label(i18n.t("chat.templateCommand"));
-                                    ui.text_edit_singleline(&mut self.template_command_buf);
-                                    ui.label(i18n.t("chat.templateBody"));
-                                    ui.add(
-                                        egui::TextEdit::multiline(&mut self.template_content_buf)
-                                            .desired_rows(10)
-                                            .desired_width(ui.available_width()),
-                                    );
-                                    ui.label(i18n.t("chat.templatePlaceholderHint"));
-                                    ui.horizontal(|ui| {
-                                        if ui.button(i18n.t("chat.templateInsert")).clicked() {
-                                            self.input = self.template_content_buf.clone();
-                                            self.show_prompts = false;
-                                        }
-                                        if ui.button(i18n.t("chat.templateSave")).clicked() {
-                                            let name = self.template_name_buf.trim();
-                                            let command =
-                                                Self::normalize_command(&self.template_command_buf);
-                                            let content = self.template_content_buf.trim();
-                                            if name.is_empty()
-                                                || command.is_empty()
-                                                || content.is_empty()
-                                            {
-                                                self.error =
-                                                    i18n.t("chat.templateValidation").to_string();
-                                            } else if self.prompt_templates.iter().enumerate().any(
-                                                |(idx, t)| {
-                                                    t.command == command
-                                                        && Some(idx) != self.selected_template_idx
-                                                },
-                                            ) {
-                                                self.error =
-                                                    i18n.t("chat.templateDuplicate").to_string();
-                                            } else {
-                                                let template = PromptTemplate {
-                                                    id: self
-                                                        .selected_template_idx
-                                                        .and_then(|idx| {
-                                                            self.prompt_templates
-                                                                .get(idx)
-                                                                .map(|t| t.id.clone())
-                                                        })
-                                                        .unwrap_or_else(|| {
-                                                            format!(
-                                                                "tpl_{}",
-                                                                self.prompt_templates.len() + 1
-                                                            )
-                                                        }),
-                                                    name: name.to_string(),
-                                                    command,
-                                                    content: content.to_string(),
-                                                };
-                                                if let Some(idx) = self.selected_template_idx {
-                                                    self.prompt_templates[idx] = template;
-                                                } else {
-                                                    self.prompt_templates.push(template);
-                                                    self.selected_template_idx =
-                                                        Some(self.prompt_templates.len() - 1);
-                                                }
-                                                self.save_templates_to_disk();
-                                                self.error.clear();
-                                            }
-                                        }
-                                        if ui.button(i18n.t("chat.templateDelete")).clicked() {
-                                            if let Some(idx) = self.selected_template_idx.take() {
-                                                if idx < self.prompt_templates.len() {
-                                                    self.prompt_templates.remove(idx);
-                                                    self.save_templates_to_disk();
-                                                    self.template_name_buf.clear();
-                                                    self.template_command_buf.clear();
-                                                    self.template_content_buf.clear();
-                                                }
-                                            }
-                                        }
-                                    });
-                                });
-                            });
-                            if ui.button(i18n.t("chat.close")).clicked() {
-                                self.show_prompts = false;
-                            }
-                        });
-                }
-                // Fill remaining space, then Send/Stop button on the right
-                ui.add_space(8.0);
-                let send_hint_key = if cfg!(target_os = "linux") {
-                    "chat.sendShortcutHintLinux"
-                } else {
-                    "chat.sendShortcutHint"
-                };
-                ui.label(egui::RichText::new(i18n.t(send_hint_key)).small().weak());
-
-                // Feature 4: stop button replaces send when thinking
-                if self.sending && self.ai_status == AiStatus::Thinking {
-                    let stop_btn = egui::Button::new(format!("\u{23f9} {}", i18n.t("chat.stop")))
-                        .fill(egui::Color32::RED)
-                        .min_size(egui::vec2(80.0, 28.0));
-                    if ui.add(stop_btn).clicked() {
-                        self.stop_sending();
-                    }
-                } else {
-                    let (icon, col) = match self.ai_status {
-                        AiStatus::Idle => (
-                            i18n.t("chat.send").to_string(),
-                            egui::Color32::from_rgb(40, 120, 220),
-                        ),
-                        AiStatus::Thinking => {
-                            ("...".to_string(), egui::Color32::from_rgb(200, 160, 60))
-                        }
-                        AiStatus::Error => (i18n.t("chat.retry").to_string(), egui::Color32::RED),
-                    };
-                    let snd = egui::Button::new(format!("\u{25b6} {}", icon))
-                        .fill(col)
-                        .min_size(egui::vec2(80.0, 28.0));
-                    if ui.add_enabled(!self.sending, snd).clicked() {
-                        self.send_message(backend, ctx, autotune_chain_enabled);
-                    }
-                }
-            });
-
-            if self.show_model_picker {
-                egui::Window::new(i18n.t("chat.chooseModels"))
-                    .id(egui::Id::new("chat_model_picker_window"))
-                    .collapsible(false)
-                    .resizable(true)
-                    .default_width(360.0)
-                    .show(ui.ctx(), |ui| {
-                        ui.label(i18n.t("chat.multiModelHint"));
-                        ui.separator();
-                        let available_models = self.available_models.clone();
-                        for model in &available_models {
-                            let mut checked = self.selected_models.iter().any(|m| m == model);
-                            if ui.checkbox(&mut checked, model).changed() {
-                                if checked {
-                                    self.selected_models.push(model.clone());
-                                } else {
-                                    self.selected_models.retain(|m| m != model);
-                                }
-                                self.sync_model_selection();
-                            }
-                        }
-                        ui.separator();
+                    // Attachments row
+                    if !self.attachments.is_empty() {
                         ui.horizontal(|ui| {
-                            if ui.button(i18n.t("chat.modelAutoOnly")).clicked() {
-                                self.selected_models = vec!["auto".to_string()];
-                                self.sync_model_selection();
+                            for att in &self.attachments {
+                                let icon = if att.mime.starts_with("image/") {
+                                    "🖼️"
+                                } else {
+                                    "📎"
+                                };
+                                ui.label(format!("{} {}", icon, att.name));
                             }
-                            if ui.button(i18n.t("chat.close")).clicked() {
-                                self.show_model_picker = false;
+                            if ui.button("✕").clicked() {
+                                self.attachments.clear();
                             }
                         });
-                    });
-            }
+                    }
 
-            // ── Enter to send ─────────────────────────────────────────
-            let should_send_with_enter = ui.input(|i| {
-                if !resp.has_focus() || !i.key_pressed(egui::Key::Enter) || i.modifiers.shift {
-                    return false;
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    // On Linux/fcitx5, plain Enter is used by IME candidate selection.
-                    // Require Ctrl/Command+Enter for sending to avoid accidental submits.
-                    i.modifiers.ctrl || i.modifiers.command
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    true
-                }
-            });
-            if should_send_with_enter {
-                self.send_message(backend, ctx, autotune_chain_enabled);
-            }
+                    // Text input
+                    let mut input_has_focus = false;
+                    if enable_input_widget {
+                        let input_resp = ui.add(
+                            egui::TextEdit::multiline(&mut self.input)
+                                .hint_text(i18n.t("chat.input"))
+                                .desired_rows(3)
+                                .desired_width(content_w),
+                        );
+                        input_has_focus = input_resp.has_focus();
+                        // Enter-to-send (check immediately after input while has_focus is valid)
+                        if enable_enter_send
+                            && ui.input(|i| {
+                                input_has_focus
+                                    && i.key_pressed(egui::Key::Enter)
+                                    && !i.modifiers.shift
+                            })
+                        {
+                            self.send_message(backend, ctx, autotune_chain_enabled);
+                        }
+                    }
 
-            // Show error if present
-            if !self.error.is_empty() {
-                ui.colored_label(egui::Color32::RED, &self.error);
-            }
-        });
+                    composer_ms = t_composer.elapsed().as_millis();
+
+                    ui.separator();
+
+                    // ── Messages fill all remaining height (rendered last = top) ──
+                    let t_messages = Instant::now();
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            if enable_show_messages {
+                                self.show_messages(ui, i18n);
+                            } else {
+                                const MAX_SHOWN: usize = 20;
+                                let msgs = self.messages();
+                                let start = msgs.len().saturating_sub(MAX_SHOWN);
+                                for msg in msgs.iter().skip(start) {
+                                    let role = if msg.role == "user" { "U" } else { "A" };
+                                    let mut text = if CHAT_DISABLE_MARKDOWN_RENDER {
+                                        Self::markdown_to_plain_text(&msg.content)
+                                    } else {
+                                        msg.content.clone()
+                                    };
+                                    if text.chars().count() > 240 {
+                                        text = text.chars().take(240).collect::<String>() + "...";
+                                    }
+                                    ui.label(format!("[{}] {}", role, text));
+                                }
+                            }
+                        });
+                    messages_ms = t_messages.elapsed().as_millis();
+                }); // end bottom_up layout
+            }); // end allocate_ui (right panel)
+        }); // end ui.horizontal
+
+        (sidebar_ms, messages_ms, composer_ms)
     }
 
     // ── Sidebar: session list ───────────────────────────────────
@@ -1926,52 +2430,17 @@ impl ChatView {
     // ── Messages area (Cherry Studio style) ─────────────────────
     fn show_messages(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
         let render_start = std::time::Instant::now();
-        let msgs = self.messages().to_vec();
 
-        // Performance optimization: limit rendered messages if too many
-        const MAX_RENDERED_MESSAGES: usize = 500;
-        let total_msgs = msgs.len();
-        let msgs_to_render = if total_msgs > MAX_RENDERED_MESSAGES {
-            &msgs[total_msgs - MAX_RENDERED_MESSAGES..]
-        } else {
-            &msgs[..]
-        };
-
-        if total_msgs > MAX_RENDERED_MESSAGES {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "⚠️ {} {} / {} {}",
-                        i18n.t("chat.showing"),
-                        MAX_RENDERED_MESSAGES,
-                        total_msgs,
-                        i18n.t("chat.messages")
-                    ))
-                    .color(egui::Color32::YELLOW)
-                    .size(12.0),
-                );
-            });
-            ui.add_space(8.0);
+        // Immediate bootstrap on function entry
+        if !self.debug_log_bootstrapped {
+            self.debug_log_bootstrapped = true;
+            Self::chat_debug_log("[CHAT_DEBUG_ENTER] show_messages() called");
         }
 
-        let dark_mode = ui.visuals().dark_mode;
-        let user_bubble = if dark_mode {
-            egui::Color32::from_rgb(32, 112, 210)
-        } else {
-            egui::Color32::from_rgb(10, 106, 255)
-        };
-        let assistant_bubble = if dark_mode {
-            egui::Color32::from_rgb(42, 44, 50)
-        } else {
-            egui::Color32::from_rgb(240, 241, 245)
-        };
-        let assistant_text = if dark_mode {
-            egui::Color32::from_rgb(232, 236, 244)
-        } else {
-            egui::Color32::from_rgb(28, 28, 32)
-        };
+        let msgs = self.messages().to_vec();
+        let total_msgs = msgs.len();
 
-        if msgs_to_render.is_empty() {
+        if total_msgs == 0 {
             ui.add_space(80.0);
             ui.vertical_centered(|ui| {
                 ui.label(
@@ -1985,255 +2454,112 @@ impl ChatView {
             return;
         }
 
-        // Take an index so we know which message to edit/delete
-        // Note: indices are adjusted if we're showing a subset of messages
-        let msgs_with_idx: Vec<(usize, &Message)> = msgs_to_render
-            .iter()
-            .enumerate()
-            .map(|(i, msg)| {
-                // Calculate actual index in the full message list
-                let actual_idx = if total_msgs > MAX_RENDERED_MESSAGES {
-                    total_msgs - MAX_RENDERED_MESSAGES + i
-                } else {
-                    i
-                };
-                (actual_idx, msg)
-            })
-            .collect();
-        let mut msg_to_delete: Option<usize> = None;
-        let mut msg_to_retry: Option<String> = None;
-        let query = self.message_search_query.trim().to_ascii_lowercase();
+        // Calculate pagination
+        let pages = (total_msgs + self.const_messages_per_page - 1) / self.const_messages_per_page;
+        if self.messages_page >= pages {
+            self.messages_page = if pages > 0 { pages - 1 } else { 0 };
+        }
 
-        // Guard: if rendering takes more than 500ms total, skip remaining messages
-        const MAX_RENDER_TIME_MS: u128 = 500;
+        let start_idx = self.messages_page * self.const_messages_per_page;
+        let end_idx = (start_idx + self.const_messages_per_page).min(total_msgs);
+        let msgs_to_show = &msgs[start_idx..end_idx];
 
-        for (msg_idx, msg) in &msgs_with_idx {
-            if render_start.elapsed().as_millis() > MAX_RENDER_TIME_MS {
-                eprintln!(
-                    "[CHAT_DEBUG] show_messages exceeded {}ms, skipping {} remaining messages",
-                    MAX_RENDER_TIME_MS,
-                    msgs_with_idx.len()
-                        - msgs_with_idx
-                            .iter()
-                            .position(|(i, _)| i == msg_idx)
-                            .unwrap_or(0)
-                );
-                break;
+        // Pagination controls
+        ui.horizontal(|ui| {
+            if ui.button("◀ Prev").clicked() && self.messages_page > 0 {
+                self.messages_page -= 1;
             }
-            if !query.is_empty() {
-                let content_match = msg.content.to_ascii_lowercase().contains(&query);
-                let thinking_match = msg.thinking.to_ascii_lowercase().contains(&query);
-                if !content_match && !thinking_match {
-                    continue;
-                }
+            ui.label(format!(
+                "Page {} / {} ({}-{})",
+                self.messages_page + 1,
+                pages,
+                start_idx + 1,
+                end_idx
+            ));
+            if ui.button("Next ▶").clicked() && self.messages_page + 1 < pages {
+                self.messages_page += 1;
             }
+        });
+        ui.separator();
 
+        // Render only current page messages
+        let dark_mode = ui.visuals().dark_mode;
+        for msg in msgs_to_show.iter() {
             let is_user = msg.role == "user";
+            let bubble_color = if is_user {
+                if dark_mode {
+                    egui::Color32::from_rgb(32, 112, 210)
+                } else {
+                    egui::Color32::from_rgb(10, 106, 255)
+                }
+            } else {
+                if dark_mode {
+                    egui::Color32::from_rgb(42, 44, 50)
+                } else {
+                    egui::Color32::from_rgb(240, 241, 245)
+                }
+            };
+            let text_color = if is_user {
+                egui::Color32::WHITE
+            } else {
+                if dark_mode {
+                    egui::Color32::from_rgb(232, 236, 244)
+                } else {
+                    egui::Color32::from_rgb(28, 28, 32)
+                }
+            };
 
-            // ── Avatar + Bubble row ──────────────────────────────
-            // ── Message row ───────────────────────────────────────
-            let bw = (ui.available_width() * 0.65).max(120.0);
             if is_user {
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        // Feature 3: actions button for user messages
-                        let resp_actions = Self::avatar_circle_with_actions(
-                            ui,
-                            28.0,
-                            egui::Color32::from_rgb(100, 180, 80),
-                            "U",
-                            msg_idx,
-                        );
-                        // Feature 3: context menu for message actions
-                        resp_actions.context_menu(|ui| {
-                            // Edit for user msgs
-                            if msg.role == "user" {
-                                if ui.button(i18n.t("chat.edit")).clicked() {
-                                    self.edit_msg_idx = Some(*msg_idx);
-                                    self.edit_msg_buf = msg.content.clone();
-                                    ui.close_menu();
-                                }
-                            }
-                            // Retry: copy last user message to input
-                            if ui.button(i18n.t("chat.retry")).clicked() {
-                                // Find the user message content at this index
-                                msg_to_retry = Some(msg.content.clone());
-                                ui.close_menu();
-                            }
-                            if ui.button(i18n.t("chat.delete")).clicked() {
-                                msg_to_delete = Some(*msg_idx);
-                                ui.close_menu();
-                            }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                    ui.label(egui::RichText::new("👤").size(20.0));
+                    const MAX_DISPLAY: usize = 500;
+                    let display_text = if CHAT_DISABLE_MARKDOWN_RENDER {
+                        Self::markdown_to_plain_text(&msg.content)
+                    } else {
+                        msg.content.clone()
+                    };
+                    let preview = if display_text.len() > MAX_DISPLAY {
+                        let safe_str: String = display_text.chars().take(MAX_DISPLAY).collect();
+                        format!("{}...", safe_str)
+                    } else {
+                        display_text
+                    };
+                    egui::Frame::new()
+                        .fill(bubble_color)
+                        .corner_radius(8.0)
+                        .inner_margin(egui::Margin::symmetric(10i8, 8i8))
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(preview).color(text_color));
                         });
-
-                        ui.add_space(6.0);
-                        // Feature 3: check if editing this message
-                        let is_editing = self.edit_msg_idx == Some(*msg_idx);
-
-                        ui.allocate_ui(egui::vec2(bw, ui.available_height()), |ui| {
-                            egui::Frame::new()
-                                .fill(user_bubble)
-                                .corner_radius(egui::CornerRadius {
-                                    nw: 12,
-                                    ne: 4,
-                                    sw: 12,
-                                    se: 12,
-                                })
-                                .inner_margin(egui::Margin::symmetric(12i8, 8i8))
-                                .show(ui, |ui| {
-                                    if is_editing {
-                                        // Edit mode: show TextEdit
-                                        ui.add(
-                                            egui::TextEdit::multiline(&mut self.edit_msg_buf)
-                                                .desired_width(bw - 24.0)
-                                                .desired_rows(3)
-                                                .text_color(egui::Color32::WHITE),
-                                        );
-                                        ui.horizontal(|ui| {
-                                            if ui.button(i18n.t("chat.save")).clicked() {
-                                                if let Some(session) =
-                                                    self.sessions.get_mut(self.active_session)
-                                                {
-                                                    if let Some(m) =
-                                                        session.messages.get_mut(*msg_idx)
-                                                    {
-                                                        m.content = self.edit_msg_buf.clone();
-                                                    }
-                                                }
-                                                self.edit_msg_idx = None;
-                                                self.edit_msg_buf.clear();
-                                                self.save_sessions_to_disk();
-                                            }
-                                            if ui.button(i18n.t("chat.cancel")).clicked() {
-                                                self.edit_msg_idx = None;
-                                                self.edit_msg_buf.clear();
-                                            }
-                                        });
-                                    } else {
-                                        // Feature 1 & 10: render markdown with theme colors
-                                        Self::render_markdown(
-                                            ui,
-                                            &msg.content,
-                                            i18n.t("chat.copyCode").as_ref(),
-                                            egui::Color32::WHITE,
-                                        );
-                                    }
-                                });
-                        });
-                    });
                 });
             } else {
                 ui.horizontal(|ui| {
-                    // Feature 3: actions avatar for AI messages too
-                    let resp_actions =
-                        Self::avatar_circle_with_actions(ui, 28.0, user_bubble, "A", msg_idx);
-                    resp_actions.context_menu(|ui| {
-                        if ui.button(i18n.t("chat.retry")).clicked() {
-                            // Retry from this point: pick nearest previous user message.
-                            if let Some(previous_user) = msgs
-                                .iter()
-                                .take(*msg_idx + 1)
-                                .rev()
-                                .find(|m| m.role == "user")
-                            {
-                                msg_to_retry = Some(previous_user.content.clone());
-                            }
-                            ui.close_menu();
-                        }
-                        if ui.button(i18n.t("chat.delete")).clicked() {
-                            msg_to_delete = Some(*msg_idx);
-                            ui.close_menu();
-                        }
-                    });
-                    ui.add_space(6.0);
-                    ui.allocate_ui(egui::vec2(bw, ui.available_height()), |ui| {
-                        egui::Frame::new()
-                            .fill(assistant_bubble)
-                            .corner_radius(egui::CornerRadius {
-                                nw: 4,
-                                ne: 12,
-                                sw: 12,
-                                se: 12,
-                            })
-                            .inner_margin(egui::Margin::symmetric(12i8, 8i8))
-                            .show(ui, |ui| {
-                                if !msg.model.is_empty() {
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{} {}",
-                                            i18n.t("chat.model"),
-                                            msg.model
-                                        ))
-                                        .size(11.0)
-                                        .color(egui::Color32::from_rgb(120, 148, 210)),
-                                    );
-                                    ui.add_space(2.0);
-                                }
-                                // Feature 1: render markdown with AI text color
-                                Self::render_markdown(
-                                    ui,
-                                    &msg.content,
-                                    i18n.t("chat.copyCode").as_ref(),
-                                    assistant_text,
-                                );
-                                if !msg.thinking.is_empty() {
-                                    ui.add_space(6.0);
-                                    let toggle_label = if msg.show_thinking_msg {
-                                        format!("▴ {}", i18n.t("chat.thinkingLabel"))
+                    ui.label(egui::RichText::new("🤖").size(20.0));
+                    ui.allocate_ui(
+                        egui::vec2(ui.available_width() - 10.0, ui.available_height()),
+                        |ui| {
+                            egui::Frame::new()
+                                .fill(bubble_color)
+                                .corner_radius(8.0)
+                                .inner_margin(egui::Margin::symmetric(10i8, 8i8))
+                                .show(ui, |ui| {
+                                    const MAX_DISPLAY: usize = 500;
+                                    let display_text = if CHAT_DISABLE_MARKDOWN_RENDER {
+                                        Self::markdown_to_plain_text(&msg.content)
                                     } else {
-                                        format!("▾ {}", i18n.t("chat.thinkingLabel"))
+                                        msg.content.clone()
                                     };
-                                    if ui.button(toggle_label).clicked() {
-                                        if let Some(session) =
-                                            self.sessions.get_mut(self.active_session)
-                                        {
-                                            if let Some(m) = session.messages.get_mut(*msg_idx) {
-                                                m.show_thinking_msg = !m.show_thinking_msg;
-                                            }
-                                        }
-                                    }
-                                    if msg.show_thinking_msg {
-                                        egui::Frame::new()
-                                            .fill(if dark_mode {
-                                                egui::Color32::from_rgb(64, 58, 34)
-                                            } else {
-                                                egui::Color32::from_rgb(250, 242, 220)
-                                            })
-                                            .corner_radius(4.0)
-                                            .inner_margin(egui::Margin::symmetric(8i8, 6i8))
-                                            .show(ui, |ui| {
-                                                ui.colored_label(
-                                                    egui::Color32::from_rgb(180, 130, 30),
-                                                    i18n.t("chat.thinkingLabel"),
-                                                );
-                                                Self::render_markdown(
-                                                    ui,
-                                                    &msg.thinking,
-                                                    i18n.t("chat.copyCode").as_ref(),
-                                                    if dark_mode {
-                                                        egui::Color32::from_rgb(240, 230, 180)
-                                                    } else {
-                                                        egui::Color32::from_rgb(80, 60, 20)
-                                                    },
-                                                );
-                                            });
-                                    }
-                                }
-                                if msg.total_tokens > 0 {
-                                    ui.add_space(6.0);
-                                    ui.label(
-                                        egui::RichText::new(
-                                            i18n.t("chat.tokenSummary")
-                                                .replace("{input}", &msg.input_tokens.to_string())
-                                                .replace("{output}", &msg.output_tokens.to_string())
-                                                .replace("{total}", &msg.total_tokens.to_string()),
-                                        )
-                                        .size(11.0)
-                                        .color(egui::Color32::from_rgb(140, 142, 150)),
-                                    );
-                                }
-                            });
-                    });
+                                    let preview = if display_text.len() > MAX_DISPLAY {
+                                        let safe_str: String =
+                                            display_text.chars().take(MAX_DISPLAY).collect();
+                                        format!("{}...", safe_str)
+                                    } else {
+                                        display_text
+                                    };
+                                    ui.label(egui::RichText::new(preview).color(text_color));
+                                });
+                        },
+                    );
                 });
             }
             ui.add_space(4.0);
@@ -2261,20 +2587,15 @@ impl ChatView {
             }
         }
 
-        // Feature 3: handle deferred retry
-        if let Some(retry_content) = msg_to_retry {
-            self.input = retry_content;
-        }
-
-        // Feature 3: handle deferred delete
-        if let Some(idx) = msg_to_delete {
-            if let Some(session) = self.sessions.get_mut(self.active_session) {
-                if idx < session.messages.len() {
-                    session.messages.remove(idx);
-                    self.save_sessions_to_disk();
-                }
-            }
-        }
+        // Log performance
+        let total_ms = render_start.elapsed().as_millis();
+        Self::chat_debug_log(&format!(
+            "[CHAT_PERF_PAGINATED] total={}ms page={}/{} messages_shown={}",
+            total_ms,
+            self.messages_page + 1,
+            pages,
+            msgs_to_show.len()
+        ));
     }
 
     /// Draw a small colored avatar circle with initials, returning the interaction response
@@ -2319,6 +2640,26 @@ impl ChatView {
         copy_code_hint: &str,
         text_color: egui::Color32,
     ) {
+        if CHAT_DISABLE_MARKDOWN_RENDER {
+            ui.label(egui::RichText::new(Self::markdown_to_plain_text(text)).color(text_color));
+            return;
+        }
+
+        const MAX_MARKDOWN_CHARS: usize = 5_000;
+        if text.len() > MAX_MARKDOWN_CHARS {
+            let preview: String = text.chars().take(MAX_MARKDOWN_CHARS).collect();
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 170, 80),
+                format!(
+                    "⚠️ Large message ({} chars) truncated for UI safety",
+                    text.len()
+                ),
+            );
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(preview).color(text_color));
+            return;
+        }
+
         // Simple markdown renderer: handles code blocks (```...```) and plain text.
         // Avoids comrak which can cause UI hangs with certain inputs.
         let mut remaining = text;
@@ -2409,7 +2750,7 @@ impl ChatView {
     }
 
     /// Draw a small colored avatar circle with initials
-#[cfg(test)]
+    #[cfg(test)]
     #[allow(dead_code)]
     /// Render the content inside a message bubble
     fn message_bubble_content(
@@ -2563,6 +2904,13 @@ mod tests {
             selected_models: vec!["auto".to_string()],
             available_models: vec!["auto".to_string()],
             models_loaded: false,
+            input_ready: false,
+            perf_total_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
+            perf_sidebar_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
+            perf_messages_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
+            perf_composer_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
+            perf_frame_counter: 0,
+            debug_log_bootstrapped: false,
         }
     }
 

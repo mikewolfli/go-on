@@ -1,5 +1,23 @@
 use crate::backend::BackendClient;
 use crate::config::{self, has_valid_providers, save_app_config, AppConfig};
+
+/// Write a line to go-on-gui.log in the temp directory.
+/// Only active in debug builds to avoid blocking the UI thread.
+#[allow(dead_code)]
+pub fn log_msg(msg: &str) {
+    #[cfg(debug_assertions)]
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        let path = std::env::temp_dir().join("go-on-gui.log");
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = writeln!(f, "{}", msg);
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = msg;
+}
+
 use crate::i18n::{I18n, Lang};
 use crate::views::{
     autotune::AutoTuneView, chat::ChatView, config_editor::ConfigEditorView, monitor::MonitorView,
@@ -69,15 +87,60 @@ pub struct GoOnApp {
     last_refresh: Instant,
     /// Managed backend child process
     backend_child: Option<std::process::Child>,
+    /// Cache the last applied theme name to avoid calling ctx.set_style() every frame.
+    last_applied_theme: String,
+}
+
+/// Detect system locale from environment variables.
+/// Checks LC_ALL, LC_MESSAGES, LANG on Unix; GetUserDefaultLocaleName on Windows.
+fn detect_system_language() -> Lang {
+    // Check env vars (cross-platform: Linux, macOS, Windows)
+    for var in &["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Some(val) = std::env::var_os(var) {
+            let s = val.to_string_lossy().to_lowercase();
+            if s.contains("zh_cn")
+                || s.contains("zh-cn")
+                || s.contains("zh_cn.")
+                || s.contains("chinese")
+            {
+                return Lang::ZhCn;
+            }
+            if s.contains("zh_tw")
+                || s.contains("zh-tw")
+                || s.contains("zh_tw.")
+                || s.contains("taiwan")
+            {
+                return Lang::ZhTw;
+            }
+        }
+    }
+    // Fallback: try common locale env vars set by desktop environments
+    for var in &["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Some(val) = std::env::var_os(var) {
+            let s = val.to_string_lossy().to_lowercase();
+            if s.contains("zh") {
+                if s.contains("hant") || s.contains("tw") || s.contains("hk") {
+                    return Lang::ZhTw;
+                }
+                return Lang::ZhCn;
+            }
+        }
+    }
+    Lang::En
 }
 
 impl GoOnApp {
     pub fn new() -> Self {
         let config = config::load_app_config();
-        let lang = match config.language.as_str() {
-            "zh-CN" => Lang::ZhCn,
-            "zh-TW" => Lang::ZhTw,
-            _ => Lang::En,
+        // Auto-detect: if user hasn't explicitly set a language, try system locale
+        let lang = if config.language.is_empty() || config.language == "en" {
+            detect_system_language()
+        } else {
+            match config.language.as_str() {
+                "zh-CN" => Lang::ZhCn,
+                "zh-TW" => Lang::ZhTw,
+                _ => Lang::En,
+            }
         };
         let providers_valid = has_valid_providers(&config);
 
@@ -162,13 +225,15 @@ impl GoOnApp {
             providers_view: ProvidersView::new(),
             config,
             show_setup: !providers_valid,
-            active_tab: "monitor".to_string(),
+            // Internal tab IDs must stay stable (English keys); labels are localized in UI.
+            active_tab: "chat".to_string(),
             has_providers: providers_valid,
             backend_updates,
             backend_tx,
             pending_refresh: false,
             last_refresh: Instant::now(),
             backend_child,
+            last_applied_theme: String::new(),
         }
     }
 
@@ -210,7 +275,7 @@ impl GoOnApp {
                     {
                         Ok(h) => h,
                         Err(_) => {
-                            eprintln!("Warning: Backend health check timed out");
+                            log_msg("Warning: Backend health check timed out");
                             HealthStatus {
                                 connected: false,
                                 healthy: false,
@@ -231,7 +296,7 @@ impl GoOnApp {
                 {
                     Ok(p) => p,
                     Err(_) => {
-                        eprintln!("Warning: Backend provider status check timed out");
+                        log_msg("Warning: Backend provider status check timed out");
                         vec![]
                     }
                 };
@@ -245,9 +310,16 @@ impl GoOnApp {
 
 impl eframe::App for GoOnApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let _frame_start = std::time::Instant::now();
+
         self.i18n.switch(self.current_lang());
-        let theme = crate::theme::Theme::from_name(&self.config.theme);
-        theme.apply(ctx);
+        // Only apply theme when it actually changes — calling ctx.set_style() every
+        // frame invalidates egui's text cache and forces a full re-layout each frame.
+        if self.last_applied_theme != self.config.theme {
+            self.last_applied_theme = self.config.theme.clone();
+            let theme = crate::theme::Theme::from_name(&self.config.theme);
+            theme.apply(ctx);
+        }
         ctx.request_repaint_after(Duration::from_millis(200));
 
         // Reap zombie child if backend exited
@@ -381,8 +453,13 @@ impl eframe::App for GoOnApp {
                     monitor_history_alerts_enabled,
                 ),
                 "chat" => {
-                    self.chat_view
-                        .show(ui, &self.i18n, &self.backend, ctx, autotune_chain_enabled)
+                    let _ = self.chat_view.show(
+                        ui,
+                        &self.i18n,
+                        &self.backend,
+                        ctx,
+                        autotune_chain_enabled,
+                    );
                 }
                 "skills" => self.skills_view.show(
                     ui,
@@ -421,6 +498,16 @@ impl eframe::App for GoOnApp {
                 }
             }
         });
+
+        // Frame timing diagnostics — write to log file
+        let frame_elapsed = _frame_start.elapsed();
+        if frame_elapsed.as_millis() > 50 {
+            log_msg(&format!(
+                "FRAME_DIAG: [{}] took {}ms",
+                self.active_tab,
+                frame_elapsed.as_millis()
+            ));
+        }
     }
 }
 

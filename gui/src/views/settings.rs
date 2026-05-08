@@ -356,18 +356,28 @@ impl SettingsView {
                 ui.label(egui::RichText::new("🎨 主题 / Theme").strong());
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
+                    ui.label(i18n.t("settings.theme"));
                     let themes = crate::theme::Theme::all();
-                    for (theme_variant, config_name) in themes {
-                        let label = theme_variant.display_name(i18n);
-                        if ui
-                            .selectable_label(config.theme == *config_name, label)
-                            .clicked()
-                        {
-                            config.theme = config_name.to_string();
-                            save_app_config(config);
-                            ui.ctx().request_repaint();
-                        }
-                    }
+                    let current_display = themes
+                        .iter()
+                        .find(|(_, name)| *name == config.theme)
+                        .map(|(v, _)| v.display_name(i18n))
+                        .unwrap_or_else(|| std::borrow::Cow::Borrowed(config.theme.as_str()));
+                    egui::ComboBox::from_id_salt("theme_selector")
+                        .selected_text(current_display)
+                        .show_ui(ui, |ui| {
+                            for (theme_variant, config_name) in themes {
+                                let label = theme_variant.display_name(i18n);
+                                if ui
+                                    .selectable_label(config.theme == *config_name, label)
+                                    .clicked()
+                                {
+                                    config.theme = config_name.to_string();
+                                    save_app_config(config);
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+                        });
                 });
 
                 ui.add_space(20.0); // 底部留白，确保可以滚动到最后

@@ -48,6 +48,7 @@ impl MonitorView {
         backend: &BackendClient,
         monitor_history_alerts_enabled: bool,
     ) {
+egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
         self.process_pending();
         self.backend_configured = backend_configured;
 
@@ -329,5 +330,6 @@ impl MonitorView {
         if !self.error.is_empty() {
             ui.colored_label(egui::Color32::RED, &self.error);
         }
+        });
     }
 }

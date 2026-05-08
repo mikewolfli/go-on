@@ -25,6 +25,7 @@ impl ConfigEditorView {
         config: &mut AppConfig,
         safe_mode_enabled: bool,
     ) {
+        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
         if !self.initialized {
             self.draft = serde_json::to_string_pretty(config).unwrap_or_default();
             self.initialized = true;
@@ -103,5 +104,6 @@ impl ConfigEditorView {
                 }
             });
         }
+        });
     }
 }

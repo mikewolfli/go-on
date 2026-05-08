@@ -78,6 +78,7 @@ impl AutoTuneView {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
+        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
         ui.heading(i18n.t("tab.autotune"));
         ui.label(i18n.t("autotune.hint"));
         ui.separator();
@@ -104,5 +105,6 @@ impl AutoTuneView {
         if changed {
             self.save_state();
         }
+        });
     }
 }
