@@ -228,7 +228,7 @@ impl GoOnApp {
             config,
             show_setup: !providers_valid,
             // Internal tab IDs must stay stable (English keys); labels are localized in UI.
-            active_tab: "chat".to_string(),
+            active_tab: "monitor".to_string(),
             has_providers: providers_valid,
             backend_updates,
             backend_tx,

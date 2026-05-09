@@ -1,6 +1,32 @@
 use super::*;
 
 impl ChatView {
+    fn viewport_height(ui: &egui::Ui) -> f32 {
+        let mut h = ui.ctx().screen_rect().height();
+        if !h.is_finite() || h <= 0.0 {
+            h = 720.0;
+        }
+        h.clamp(320.0, 1600.0)
+    }
+
+    fn bounded_panel_height(ui: &egui::Ui, min_height: f32) -> f32 {
+        let mut height = ui.available_height();
+        let viewport_height = Self::viewport_height(ui);
+
+        if !height.is_finite() || height <= 0.0 || height > viewport_height {
+            height = viewport_height;
+        }
+
+        height.max(min_height).min(viewport_height)
+    }
+
+    fn adaptive_messages_height(total_height: f32, min_top: f32) -> f32 {
+        // Keep the bottom composer area visible on small windows while
+        // allowing message history to expand on larger windows.
+        let reserved_bottom = (total_height * 0.40).clamp(220.0, 360.0);
+        (total_height - reserved_bottom).max(min_top)
+    }
+
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -162,7 +188,7 @@ impl ChatView {
         let mut messages_ms: u128 = 0;
         let mut composer_ms: u128 = 0;
 
-        ui.horizontal(|ui| {
+        ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 let t_sidebar = Instant::now();
                 ui.set_min_width(160.0);
@@ -197,11 +223,8 @@ impl ChatView {
                 }
 
                 // ── Top: conversation messages ──────────────────────────
-                let avail = ui.available_height();
-                // Keep enough room for mode row + attachments/input + button row.
-                // Without this cap, ScrollArea can consume nearly all height and push controls off-screen.
-                let reserved_bottom = 280.0;
-                let top_height = (avail - reserved_bottom).max(120.0);
+                let panel_h = Self::bounded_panel_height(ui, 320.0);
+                let top_height = Self::adaptive_messages_height(panel_h, 120.0);
                 let t_messages = Instant::now();
                 egui::ScrollArea::vertical()
                     .max_height(top_height.max(100.0))
@@ -688,14 +711,14 @@ impl ChatView {
         let enable_sidebar = CHAT_ISOLATION_STAGE >= 5;
 
         let total_w = ui.available_width();
-        let total_h = ui.available_height().min(4096.0); // guard against infinity
+        let total_h = Self::bounded_panel_height(ui, 320.0);
         let sidebar_w = (total_w / 3.0).max(160.0);
         // separator takes ~1px + 8px margin
         let content_w = (total_w - sidebar_w - 9.0).max(200.0);
         // Reserve ~130px for input area (multiline 3 rows + button bar + separator + spacing)
         let _msg_area_h = (total_h - 130.0).max(150.0);
 
-        ui.horizontal(|ui| {
+        ui.horizontal_top(|ui| {
             ui.allocate_ui(egui::vec2(sidebar_w, total_h), |ui| {
                 if enable_sidebar {
                     let t_sidebar = Instant::now();
@@ -738,8 +761,8 @@ impl ChatView {
                     ui.add_space(4.0);
                 }
 
-                let reserved_bottom = 340.0;
-                let top_height = (total_h - reserved_bottom).max(140.0);
+                let panel_h = Self::bounded_panel_height(ui, 320.0).min(total_h);
+                let top_height = Self::adaptive_messages_height(panel_h, 140.0);
 
                 let t_messages = Instant::now();
                 egui::ScrollArea::vertical()
@@ -1380,31 +1403,30 @@ impl ChatView {
             } else {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("🤖").size(20.0));
-                    ui.allocate_ui(
-                        egui::vec2(ui.available_width() - 10.0, ui.available_height()),
-                        |ui| {
-                            egui::Frame::new()
-                                .fill(bubble_color)
-                                .corner_radius(8.0)
-                                .inner_margin(egui::Margin::symmetric(10i8, 8i8))
-                                .show(ui, |ui| {
-                                    const MAX_DISPLAY: usize = 500;
-                                    let display_text = if CHAT_DISABLE_MARKDOWN_RENDER {
-                                        Self::markdown_to_plain_text(&msg.content)
-                                    } else {
-                                        msg.content.clone()
-                                    };
-                                    let preview = if display_text.len() > MAX_DISPLAY {
-                                        let safe_str: String =
-                                            display_text.chars().take(MAX_DISPLAY).collect();
-                                        format!("{}...", safe_str)
-                                    } else {
-                                        display_text
-                                    };
-                                    ui.label(egui::RichText::new(preview).color(text_color));
-                                });
-                        },
-                    );
+                    let bubble_w = (ui.available_width() - 10.0).max(0.0);
+                    let bubble_h = ui.available_height().max(0.0);
+                    ui.allocate_ui(egui::vec2(bubble_w, bubble_h), |ui| {
+                        egui::Frame::new()
+                            .fill(bubble_color)
+                            .corner_radius(8.0)
+                            .inner_margin(egui::Margin::symmetric(10i8, 8i8))
+                            .show(ui, |ui| {
+                                const MAX_DISPLAY: usize = 500;
+                                let display_text = if CHAT_DISABLE_MARKDOWN_RENDER {
+                                    Self::markdown_to_plain_text(&msg.content)
+                                } else {
+                                    msg.content.clone()
+                                };
+                                let preview = if display_text.len() > MAX_DISPLAY {
+                                    let safe_str: String =
+                                        display_text.chars().take(MAX_DISPLAY).collect();
+                                    format!("{}...", safe_str)
+                                } else {
+                                    display_text
+                                };
+                                ui.label(egui::RichText::new(preview).color(text_color));
+                            });
+                    });
                 });
             }
             ui.add_space(4.0);
