@@ -80,7 +80,6 @@ pub struct ChatView {
     selected_models: Vec<String>,
     available_models: Vec<String>,
     models_loaded: bool,
-    input_ready: bool,
     perf_total_samples: VecDeque<u128>,
     perf_sidebar_samples: VecDeque<u128>,
     perf_messages_samples: VecDeque<u128>,
@@ -100,6 +99,9 @@ impl ChatView {
     }
 
     fn chat_debug_log(msg: &str) {
+        if !Self::chat_debug_enabled() {
+            return;
+        }
         eprintln!("{}", msg);
         let path = std::env::temp_dir().join("go-on-chat-debug.log");
         if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -318,7 +320,6 @@ impl ChatView {
             selected_models: initial_models,
             available_models: vec!["auto".to_string()],
             models_loaded: false,
-            input_ready: false,
             perf_total_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
             perf_sidebar_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
             perf_messages_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
@@ -635,7 +636,6 @@ mod tests {
             selected_models: vec!["auto".to_string()],
             available_models: vec!["auto".to_string()],
             models_loaded: false,
-            input_ready: false,
             perf_total_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
             perf_sidebar_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
             perf_messages_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
