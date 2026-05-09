@@ -871,11 +871,13 @@ impl ChatView {
                             ui.add_space(4.0);
                         }
 
-                        // ── Split remaining area: messages (80%) + composer (20%, i.e. 1/4 of messages) ──
+                        // ── Split remaining area: messages (flex) + composer (bottom) ──
                         let avail = ui.available_height();
                         let gap = 8.0;
-                        let messages_height = ((avail - gap) * 0.8).max(80.0);
-                        let composer_height = ((avail - gap) * 0.2).clamp(100.0, 260.0);
+                        // Composer: ≈20% of avail (~1/4 of messages area), clamped
+                        let composer_height = (avail * 0.2).clamp(100.0, 260.0);
+                        // Messages: everything above composer + gap
+                        let messages_height = (avail - composer_height - gap).max(60.0);
 
                         // Top: Messages area
                         let t_messages = Instant::now();

@@ -115,6 +115,8 @@ fn is_acp_request(method: &str) -> bool {
             | "mcp.tools.call"
             | "models.list"
             | "models/list"
+            | "provider.configure"
+            | "provider.list_models"
     )
 }
 // Request handling implementation functions for ACP server
