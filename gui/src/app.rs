@@ -44,10 +44,15 @@ fn find_backend_binary() -> Option<std::path::PathBuf> {
     } else {
         "go-on"
     };
-    let candidates = [
+    let mut candidates = vec![
         exe_dir.join("backend").join(exe_name),
         exe_dir.join(exe_name),
     ];
+    // Also search in Resources/backend (macOS .app bundle layout)
+    if let Some(resources) = exe_dir.parent().map(|p| p.join("Resources")) {
+        candidates.push(resources.join("backend").join(exe_name));
+        candidates.push(resources.join(exe_name));
+    }
     for path in &candidates {
         if path.exists() {
             return Some(path.clone());
@@ -146,71 +151,88 @@ impl GoOnApp {
 
         let (backend_tx, backend_updates) = mpsc::channel();
 
-        // Only start backend if valid API keys exist
-        let (backend, backend_child) = if providers_valid {
-            match find_backend_binary() {
-                Some(path) => {
-                    let config_dir = path.parent().unwrap_or(std::path::Path::new("."));
-                    let mut cmd = std::process::Command::new(&path);
-                    cmd.current_dir(config_dir)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null());
-                    // Load API keys from config and keyring
-                    let mut set_env = |name: &str, key: &str| {
-                        let env_var = match name {
-                            "deepseek" => "DEEPSEEK_API_KEY",
-                            "openai" => "OPENAI_API_KEY",
-                            "anthropic" => "ANTHROPIC_API_KEY",
-                            "qwen" => "QWEN_API_KEY",
-                            "gemini" => "GEMINI_API_KEY",
-                            "groq" => "GROQ_API_KEY",
-                            "mistral" => "MISTRAL_API_KEY",
-                            "copilot" => "GITHUB_COPILOT_TOKEN",
-                            _ => return,
-                        };
-                        cmd.env(env_var, key);
+        // Always try to start backend, loading API keys from keyring
+        let (backend, backend_child) = match find_backend_binary() {
+            Some(path) => {
+                let config_dir = path.parent().unwrap_or(std::path::Path::new("."));
+                let mut cmd = std::process::Command::new(&path);
+                cmd.current_dir(config_dir)
+                    .arg("--protocol-mode")
+                    .arg("acp_http")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                // Load API keys from GUI config providers and keyring
+                let mut set_env = |name: &str, key: &str| {
+                    let env_var = match name {
+                        "deepseek" => "DEEPSEEK_API_KEY",
+                        "openai" => "OPENAI_API_KEY",
+                        "anthropic" => "ANTHROPIC_API_KEY",
+                        "qwen" => "QWEN_API_KEY",
+                        "gemini" => "GEMINI_API_KEY",
+                        "groq" => "GROQ_API_KEY",
+                        "mistral" => "MISTRAL_API_KEY",
+                        "copilot" => "GITHUB_COPILOT_TOKEN",
+                        _ => return,
                     };
-                    for p in &config.providers {
-                        if !p.api_key.is_empty() {
-                            set_env(&p.name.to_lowercase(), &p.api_key);
-                        }
+                    cmd.env(env_var, key);
+                };
+                for p in &config.providers {
+                    if !p.api_key.is_empty() {
+                        set_env(&p.name.to_lowercase(), &p.api_key);
                     }
-                    let known = [
-                        "deepseek",
-                        "openai",
-                        "anthropic",
-                        "qwen",
-                        "gemini",
-                        "groq",
-                        "mistral",
-                        "copilot",
-                    ];
-                    for name in &known {
-                        if let Some(key) = crate::keyring_util::get_api_key(name) {
-                            set_env(name, &key);
-                        }
+                }
+                // Load keys from macOS Keychain (GUI is a foreground app, can access keychain)
+                let known = [
+                    "deepseek",
+                    "openai",
+                    "anthropic",
+                    "qwen",
+                    "gemini",
+                    "groq",
+                    "mistral",
+                    "copilot",
+                ];
+                for name in &known {
+                    if let Some(key) = crate::keyring_util::get_api_key(name) {
+                        set_env(name, &key);
                     }
-                    // Sync language between GUI and backend
-                    cmd.env("LANG", &config.language);
-                    match cmd.spawn() {
-                        Ok(child) => {
-                            eprintln!("go-on 后端已启动 (PID: {})", child.id());
-                            (BackendClient::new(&config.backend_url), Some(child))
-                        }
-                        Err(e) => {
-                            eprintln!("警告: 启动后端失败: {}", e);
-                            (BackendClient::new(&config.backend_url), None)
+                }
+                // Also pass through any env vars already set by the user
+                for name in &known {
+                    let env_var = match *name {
+                        "deepseek" => "DEEPSEEK_API_KEY",
+                        "openai" => "OPENAI_API_KEY",
+                        "anthropic" => "ANTHROPIC_API_KEY",
+                        "qwen" => "QWEN_API_KEY",
+                        "gemini" => "GEMINI_API_KEY",
+                        "groq" => "GROQ_API_KEY",
+                        "mistral" => "MISTRAL_API_KEY",
+                        "copilot" => "GITHUB_COPILOT_TOKEN",
+                        _ => continue,
+                    };
+                    if let Ok(val) = std::env::var(env_var) {
+                        if !val.is_empty() {
+                            cmd.env(env_var, val);
                         }
                     }
                 }
-                None => {
-                    eprintln!("警告: 找不到 go-on 后端程序");
-                    (BackendClient::new(&config.backend_url), None)
+                // Sync language between GUI and backend
+                cmd.env("LANG", &config.language);
+                match cmd.spawn() {
+                    Ok(child) => {
+                        eprintln!("go-on 后端已启动 (PID: {})", child.id());
+                        (BackendClient::new(&config.backend_url), Some(child))
+                    }
+                    Err(e) => {
+                        eprintln!("警告: 启动后端失败: {}", e);
+                        (BackendClient::new(&config.backend_url), None)
+                    }
                 }
             }
-        } else {
-            eprintln!("警告: 没有有效的 API Key，不启动后端");
-            (BackendClient::new(&config.backend_url), None)
+            None => {
+                eprintln!("警告: 找不到 go-on 后端程序");
+                (BackendClient::new(&config.backend_url), None)
+            }
         };
 
         Self {

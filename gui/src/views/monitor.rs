@@ -7,7 +7,6 @@ pub struct MonitorView {
     pub providers: Vec<ProviderStatus>,
     pub backend_configured: bool,
     error: String,
-    restarting: bool,
     metrics_window: String,
     metrics_lines: Vec<String>,
     pending_rx: mpsc::Receiver<String>,
@@ -22,7 +21,6 @@ impl MonitorView {
             providers: Vec::new(),
             backend_configured: false,
             error: String::new(),
-            restarting: false,
             metrics_window: "5m".to_string(),
             metrics_lines: Vec::new(),
             pending_rx,
@@ -292,39 +290,6 @@ impl MonitorView {
                 ui.add_space(2.0);
             }
         }
-
-        // ── Restart button ───────────────────────────────────────
-        ui.add_space(24.0);
-        ui.separator();
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            let restart_label = if self.restarting {
-                i18n.t("monitor.restarting").to_string()
-            } else {
-                i18n.t("monitor.restart").to_string()
-            };
-            let btn = egui::Button::new(format!("\u{1f504} {}", restart_label))
-                .min_size(egui::vec2(140.0, 32.0));
-            if ui.add_enabled(!self.restarting, btn).clicked() {
-                self.restarting = true;
-                let backend_clone = backend.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = backend_clone.restart_backend().await {
-                        eprintln!("重启后端失败: {}", e);
-                    }
-                });
-            }
-            if self.restarting {
-                let text = i18n.t("monitor.restartHint").to_string();
-                let resp = ui.label(&text);
-                resp.context_menu(|ui| {
-                    if ui.button("📋 Copy").clicked() {
-                        ui.ctx().copy_text(text.clone());
-                        ui.close_menu();
-                    }
-                });
-            }
-        });
 
         // ── Error message ───────────────────────────────────────
         if !self.error.is_empty() {

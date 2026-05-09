@@ -10,7 +10,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const CHAT_PERF_WINDOW: usize = 120;
 const CHAT_PERF_SUMMARY_INTERVAL: u64 = 60;
-const CHAT_DISABLE_MARKDOWN_RENDER: bool = true;
+const CHAT_DISABLE_MARKDOWN_RENDER: bool = false;
 const CHAT_SAFE_MODE: bool = true;
 // Isolation stages for step-by-step freeze diagnosis:
 // 1=minimal list only, 2=+input widget, 3=+Enter send, 4=+show_messages,

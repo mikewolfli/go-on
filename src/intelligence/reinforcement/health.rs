@@ -212,69 +212,80 @@ pub fn persist_runtime_healthcheck(
 // ── Internal helpers ──────────────────────────────────────────────────────
 
 fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
-    let mut details = Vec::new();
     let mut status = CheckStatus::Healthy;
     let mut message = String::from("provider dependencies:");
+    let mut agents = Vec::new();
+    let mut ready_count: u64 = 0;
+    let mut degraded_count: u64 = 0;
+    let mut total_count: u64 = 0;
 
-    let provider_api_map: Vec<(&str, &str)> = vec![
-        ("copilot", "COPILOT_API_KEY"),
-        ("deepseek", "DEEPSEEK_API_KEY"),
-        ("anthropic", "ANTHROPIC_API_KEY"),
-        ("openai", "OPENAI_API_KEY"),
-        ("gemini", "GEMINI_API_KEY"),
-        ("wenxin", "WENXIN_API_KEY"),
-        ("qwen", "QWEN_API_KEY"),
-        ("glm", "GLM_API_KEY"),
-        ("hunyuan", "HUNYUAN_API_KEY"),
-        ("doubao", "DOUBAO_API_KEY"),
-        ("groq", "GROQ_API_KEY"),
-        ("mistral", "MISTRAL_API_KEY"),
-        ("minimax", "MINIMAX_API_KEY"),
-    ];
-
-    let mut found_vendor = false;
     for agent_config in config.agents.values() {
-        for (vendor_name, env_var) in &provider_api_map {
-            if agent_config.agent_type == *vendor_name {
-                found_vendor = true;
-                match std::env::var(env_var) {
-                    Ok(_) => {
-                        details.push(json!({
-                            "provider": vendor_name,
-                            "env_var": env_var,
-                            "status": "set"
-                        }));
-                    }
-                    Err(_) => {
-                        status = CheckStatus::Warn;
-                        details.push(json!({
-                            "provider": vendor_name,
-                            "env_var": env_var,
-                            "status": "missing"
-                        }));
-                    }
-                }
-            }
+        let env_var = agent_config.api_key_env.as_deref().unwrap_or("");
+        let agent_name = &agent_config.agent_type;
+
+        if env_var.is_empty() {
+            continue;
         }
+
+        total_count += 1;
+
+        // Try keyring first, then env var
+        let is_ready = if env_var.starts_with("keyring://") {
+            let locator = env_var.trim_start_matches("keyring://");
+            if let Some((service, account)) = locator.split_once('/') {
+                keyring::Entry::new(service, account)
+                    .and_then(|e| e.get_password())
+                    .is_ok()
+            } else {
+                false
+            }
+        } else {
+            // Direct env var name or other reference
+            std::env::var(env_var).is_ok()
+        };
+
+        if is_ready {
+            ready_count += 1;
+        } else {
+            degraded_count += 1;
+            status = CheckStatus::Warn;
+        }
+
+        agents.push(json!({
+            "name": agent_name,
+            "env_var": env_var,
+            "ready": is_ready,
+        }));
     }
 
-    if !found_vendor {
+    if total_count == 0 {
         status = CheckStatus::Skipped;
-        message.push_str(" no known provider found");
+        message.push_str(" no agents configured");
+    } else if ready_count == total_count {
+        message.push_str(&format!(" {} of {} ready", ready_count, total_count));
+    } else {
+        message.push_str(&format!(
+            " {} of {} ready ({} missing)",
+            ready_count,
+            total_count,
+            total_count - ready_count
+        ));
     }
 
     ComponentReport {
-        name: "provider_dependency".to_string(),
+        name: "provider_dependencies".to_string(),
         status,
         message,
         details: json!({
-            "provider_api_map": details,
-            "secrets": secret_pool_status(config),
-            "missing_envs": missing_envs_for_agent(config),
+            "ready": ready_count,
+            "degraded": degraded_count,
+            "total": total_count,
+            "agents": agents,
         }),
     }
 }
 
+#[allow(dead_code)]
 fn secret_pool_status(config: &AppConfig) -> Value {
     let mut secrets = Vec::new();
     for agent_config in config.agents.values() {
@@ -289,6 +300,7 @@ fn secret_pool_status(config: &AppConfig) -> Value {
     json!(secrets)
 }
 
+#[allow(dead_code)]
 fn missing_envs_for_agent(config: &AppConfig) -> Vec<Value> {
     let mut missing = Vec::new();
     for agent_config in config.agents.values() {

@@ -38,8 +38,7 @@ impl ChatView {
         );
     }
 
-    #[allow(dead_code)]
-    fn render_markdown(
+    pub(super) fn render_markdown(
         ui: &mut egui::Ui,
         text: &str,
         copy_code_hint: &str,

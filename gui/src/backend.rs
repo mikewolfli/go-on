@@ -283,39 +283,90 @@ impl BackendClient {
 
     /// Get provider status (5s timeout, silent on failure)
     pub async fn provider_status(&self) -> Vec<ProviderStatus> {
-        match self.rpc_call_quick("health.probes", None).await {
+        // Try provider.status RPC first (new format with agents array)
+        match self.rpc_call_quick("provider.status", None).await {
             Some(val) => {
-                let probes = val.get("probes");
-                let deps = probes
-                    .and_then(|p| p.get("dependencies"))
-                    .and_then(|d| d.as_array());
-                if let Some(deps) = deps {
-                    for dep in deps {
-                        if dep.get("name").and_then(|n| n.as_str()) == Some("provider_dependency") {
-                            if let Some(details) = dep.get("details") {
-                                if let Some(api_map) =
-                                    details.get("provider_api_map").and_then(|m| m.as_array())
-                                {
-                                    return api_map
-                                        .iter()
-                                        .filter_map(|p| {
-                                            let name = p.get("provider")?.as_str()?;
-                                            let status = p.get("status")?.as_str()?;
-                                            Some(ProviderStatus {
-                                                name: name.to_string(),
-                                                ready: status == "set",
-                                                model: String::new(),
-                                            })
-                                        })
-                                        .collect();
-                                }
-                            }
+                if let Some(ps) = val.get("provider_status") {
+                    if let Some(agents) = ps.get("configured_agents").and_then(|a| a.as_array()) {
+                        return agents
+                            .iter()
+                            .filter_map(|a| {
+                                let name = a.get("name")?.as_str()?;
+                                let ready = a.get("ready")?.as_bool().unwrap_or(false);
+                                Some(ProviderStatus {
+                                    name: name.to_string(),
+                                    ready,
+                                    model: String::new(),
+                                })
+                            })
+                            .collect();
+                    }
+                    let summary = ps.get("summary").and_then(|s| s.as_object());
+                    let configured = summary
+                        .and_then(|s| s.get("configured"))
+                        .and_then(|c| c.as_u64())
+                        .unwrap_or(0);
+                    if configured > 0 {
+                        // Agents exist in registry but not in configured_agents array
+                        // Fallback: read from registry_catalog
+                        if let Some(catalog) = ps.get("registry_catalog").and_then(|c| c.as_array())
+                        {
+                            return catalog
+                                .iter()
+                                .filter_map(|a| {
+                                    let name = a.get("agent")?.as_str()?;
+                                    Some(ProviderStatus {
+                                        name: name.to_string(),
+                                        ready: false,
+                                        model: String::new(),
+                                    })
+                                })
+                                .collect();
                         }
                     }
                 }
                 Vec::new()
             }
-            None => Vec::new(),
+            None => {
+                // Fallback to legacy health.probes format
+                match self.rpc_call_quick("health.probes", None).await {
+                    Some(val) => {
+                        let probes = val.get("probes");
+                        let deps = probes
+                            .and_then(|p| p.get("dependencies"))
+                            .and_then(|d| d.as_array());
+                        if let Some(deps) = deps {
+                            for dep in deps {
+                                if dep.get("name").and_then(|n| n.as_str())
+                                    == Some("provider_dependencies")
+                                {
+                                    if let Some(details) = dep.get("details") {
+                                        if let Some(api_map) = details
+                                            .get("provider_api_map")
+                                            .and_then(|m| m.as_array())
+                                        {
+                                            return api_map
+                                                .iter()
+                                                .filter_map(|p| {
+                                                    let name = p.get("provider")?.as_str()?;
+                                                    let status = p.get("status")?.as_str()?;
+                                                    Some(ProviderStatus {
+                                                        name: name.to_string(),
+                                                        ready: status == "set",
+                                                        model: String::new(),
+                                                    })
+                                                })
+                                                .collect();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Vec::new()
+                    }
+                    None => Vec::new(),
+                }
+            }
         }
     }
 
