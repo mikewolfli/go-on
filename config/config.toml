@@ -11,7 +11,7 @@ default_phase = "think"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "adaptive"
+mode = "acp_http"
 
 [cache]
 enabled = true
