@@ -725,27 +725,145 @@ impl ChatView {
 
             ui.separator();
 
-            // ── Right: Messages (top) + Composer (bottom) ────────
-            ui.allocate_ui_with_layout(
-                egui::vec2(content_w, total_h),
-                egui::Layout::top_down_justified(egui::Align::Min),
-                |ui| {
-                    let dark = ui.visuals().dark_mode;
-                    let bg = if dark {
-                        egui::Color32::from_rgb(36, 38, 44)
-                    } else {
-                        egui::Color32::from_rgb(240, 242, 245)
-                    };
-                    let fg = if dark {
-                        egui::Color32::from_rgb(220, 224, 234)
-                    } else {
-                        egui::Color32::from_rgb(34, 34, 34)
-                    };
-                    match egui::Color32::TRANSPARENT {
-                        _ => {}
-                    } // dummy use to suppress unused
+            // ── Right panel: bottom_up keeps composer at bottom ─
+            ui.allocate_ui(egui::vec2(content_w, total_h), |ui| {
+                let dark = ui.visuals().dark_mode;
+                let bg = if dark {
+                    egui::Color32::from_rgb(36, 38, 44)
+                } else {
+                    egui::Color32::from_rgb(240, 242, 245)
+                };
+                let fg = if dark {
+                    egui::Color32::from_rgb(220, 224, 234)
+                } else {
+                    egui::Color32::from_rgb(34, 34, 34)
+                };
 
-                    // ── Mode row ────────────────────────────────
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    // ── Error (bottom) ────────────────────────────
+                    if !self.error.is_empty() {
+                        ui.colored_label(egui::Color32::RED, &self.error);
+                    }
+
+                    // ── Input text ──────────────────────────
+                    if enable_input_widget {
+                        let r = ui.add_sized(
+                            [ui.available_width(), 74.0],
+                            egui::TextEdit::multiline(&mut self.input)
+                                .hint_text(i18n.t("chat.input")),
+                        );
+                        let input_focus = r.has_focus();
+
+                        if enable_enter_send
+                            && ui.input(|i| {
+                                input_focus && i.key_pressed(egui::Key::Enter) && !i.modifiers.shift
+                            })
+                        {
+                            self.send_message(backend, ctx, autotune_chain_enabled);
+                        }
+                    }
+
+                    // ── Attachments ──────────────────────────
+                    if !self.attachments.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            for a in &self.attachments {
+                                let icon = if a.mime.starts_with("image/") {
+                                    "🖼️"
+                                } else {
+                                    "📎"
+                                };
+                                ui.label(format!("{icon} {}", a.name));
+                            }
+                            if ui.button("✕").clicked() {
+                                self.attachments.clear();
+                            }
+                        });
+                    }
+
+                    // ── Button row ────────────────────────────
+                    ui.horizontal(|ui| {
+                        if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS {
+                            if ui
+                                .button("📎")
+                                .on_hover_text(i18n.t("chat.attach"))
+                                .clicked()
+                            {
+                                if let Some(files) = rfd::FileDialog::new().pick_files() {
+                                    for f in files {
+                                        let n = f
+                                            .file_name()
+                                            .and_then(|s| s.to_str())
+                                            .unwrap_or("file")
+                                            .to_string();
+                                        self.attachments.push(Attachment {
+                                            name: n,
+                                            mime: Self::guess_mime(&f),
+                                            data: f.display().to_string(),
+                                        });
+                                    }
+                                    self.error.clear();
+                                }
+                            }
+                            if ui
+                                .button("📝")
+                                .on_hover_text(i18n.t("chat.externalEditor"))
+                                .clicked()
+                            {
+                                let p = std::env::temp_dir().join("go_on_chat_input.txt");
+                                let _ = std::fs::write(&p, &self.input);
+                                for e in &["zed", "code", "gedit", "vim", "nano"] {
+                                    if std::process::Command::new(e).arg(&p).spawn().is_ok() {
+                                        break;
+                                    }
+                                }
+                            }
+                            if ui
+                                .button("💡")
+                                .on_hover_text(i18n.t("chat.promptTemplates"))
+                                .clicked()
+                            {
+                                self.show_prompts = !self.show_prompts;
+                            }
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if self.sending && self.ai_status == AiStatus::Thinking {
+                                if ui
+                                    .add(
+                                        egui::Button::new(format!("⏹ {}", i18n.t("chat.stop")))
+                                            .fill(egui::Color32::RED),
+                                    )
+                                    .clicked()
+                                {
+                                    self.stop_sending();
+                                }
+                            } else if ui
+                                .add_enabled(
+                                    !self.sending,
+                                    egui::Button::new(format!("▶ {}", i18n.t("chat.send")))
+                                        .fill(egui::Color32::from_rgb(40, 120, 220)),
+                                )
+                                .clicked()
+                            {
+                                self.send_message(backend, ctx, autotune_chain_enabled);
+                            }
+                            ui.label(
+                                egui::RichText::new(i18n.t("chat.sendShortcutHint"))
+                                    .small()
+                                    .weak(),
+                            );
+                        });
+                    });
+
+                    // ── Messages (fills remaining space) ──────────
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            if enable_show_messages {
+                                self.show_messages(ui, i18n);
+                            }
+                        });
+
+                    // ── Mode row (top) ───────────────────────
                     if CHAT_STAGE6_ENABLE_MODE_ROW {
                         egui::Frame::new()
                             .fill(bg)
@@ -789,167 +907,9 @@ impl ChatView {
                                     );
                                 });
                             });
-                        ui.add_space(4.0);
                     }
-
-                    // ── Messages (fills remaining space) ──────────
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            if enable_show_messages {
-                                self.show_messages(ui, i18n);
-                            } else {
-                                for msg in self.messages().iter().rev().take(20).rev() {
-                                    let r = if msg.role == "user" { "U" } else { "A" };
-                                    let t = Self::markdown_to_plain_text(&msg.content);
-                                    let t = if t.chars().count() > 240 {
-                                        t.chars().take(240).collect::<String>() + "..."
-                                    } else {
-                                        t
-                                    };
-                                    ui.label(format!("[{r}] {t}"));
-                                }
-                            }
-                        });
-
-                    // ── Composer (fixed at bottom) ──────────────
-                    egui::Frame::new()
-                        .fill(bg)
-                        .stroke(egui::Stroke::new(
-                            1.0,
-                            egui::Color32::from_rgba_unmultiplied(120, 120, 120, 72),
-                        ))
-                        .corner_radius(8.0)
-                        .inner_margin(egui::Margin::symmetric(10i8, 8i8))
-                        .show(ui, |ui| {
-                            let mut input_focus = false;
-
-                            ui.horizontal(|ui| {
-                                if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS {
-                                    if ui
-                                        .button("📎")
-                                        .on_hover_text(i18n.t("chat.attach"))
-                                        .clicked()
-                                    {
-                                        if let Some(files) = rfd::FileDialog::new().pick_files() {
-                                            for f in files {
-                                                let n = f
-                                                    .file_name()
-                                                    .and_then(|s| s.to_str())
-                                                    .unwrap_or("file")
-                                                    .to_string();
-                                                self.attachments.push(Attachment {
-                                                    name: n,
-                                                    mime: Self::guess_mime(&f),
-                                                    data: f.display().to_string(),
-                                                });
-                                            }
-                                            self.error.clear();
-                                        }
-                                    }
-                                    if ui
-                                        .button("📝")
-                                        .on_hover_text(i18n.t("chat.externalEditor"))
-                                        .clicked()
-                                    {
-                                        let p = std::env::temp_dir().join("go_on_chat_input.txt");
-                                        let _ = std::fs::write(&p, &self.input);
-                                        for e in &["zed", "code", "gedit", "vim", "nano"] {
-                                            if std::process::Command::new(e).arg(&p).spawn().is_ok()
-                                            {
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if ui
-                                        .button("💡")
-                                        .on_hover_text(i18n.t("chat.promptTemplates"))
-                                        .clicked()
-                                    {
-                                        self.show_prompts = !self.show_prompts;
-                                    }
-                                }
-
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if self.sending && self.ai_status == AiStatus::Thinking {
-                                            if ui
-                                                .add(
-                                                    egui::Button::new(format!(
-                                                        "⏹ {}",
-                                                        i18n.t("chat.stop")
-                                                    ))
-                                                    .fill(egui::Color32::RED),
-                                                )
-                                                .clicked()
-                                            {
-                                                self.stop_sending();
-                                            }
-                                        } else if ui
-                                            .add_enabled(
-                                                !self.sending,
-                                                egui::Button::new(format!(
-                                                    "▶ {}",
-                                                    i18n.t("chat.send")
-                                                ))
-                                                .fill(egui::Color32::from_rgb(40, 120, 220)),
-                                            )
-                                            .clicked()
-                                        {
-                                            self.send_message(backend, ctx, autotune_chain_enabled);
-                                        }
-                                        ui.label(
-                                            egui::RichText::new(i18n.t("chat.sendShortcutHint"))
-                                                .small()
-                                                .weak(),
-                                        );
-                                    },
-                                );
-                            });
-
-                            if !self.attachments.is_empty() {
-                                ui.horizontal_wrapped(|ui| {
-                                    for a in &self.attachments {
-                                        let icon = if a.mime.starts_with("image/") {
-                                            "🖼️"
-                                        } else {
-                                            "📎"
-                                        };
-                                        ui.label(format!("{icon} {}", a.name));
-                                    }
-                                    if ui.button("✕").clicked() {
-                                        self.attachments.clear();
-                                    }
-                                });
-                            }
-
-                            if enable_input_widget {
-                                let r = ui.add_sized(
-                                    [ui.available_width(), 74.0],
-                                    egui::TextEdit::multiline(&mut self.input)
-                                        .hint_text(i18n.t("chat.input")),
-                                );
-                                input_focus = r.has_focus();
-                            }
-
-                            if !self.error.is_empty() {
-                                ui.colored_label(egui::Color32::RED, &self.error);
-                            }
-
-                            if enable_input_widget
-                                && enable_enter_send
-                                && ui.input(|i| {
-                                    input_focus
-                                        && i.key_pressed(egui::Key::Enter)
-                                        && !i.modifiers.shift
-                                })
-                            {
-                                self.send_message(backend, ctx, autotune_chain_enabled);
-                            }
-                        });
-                },
-            );
+                });
+            });
         });
     }
 
