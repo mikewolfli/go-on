@@ -225,7 +225,13 @@ fn bump_patch_version(version: &str) -> String {
         .unwrap_or_else(|| "1.0.0".to_string())
 }
 
-fn build_skill_version_snapshot(record: &ImportedSkillRecord, manifest: &Value) -> Value {
+fn build_skill_version_snapshot(
+    record: &ImportedSkillRecord,
+    manifest: &Value,
+    updated_by: &str,
+    change_summary: &str,
+) -> Value {
+    let updated_at = crate::acp::prelude::now_ts();
     json!({
         "name": record.name,
         "version": manifest
@@ -239,7 +245,10 @@ fn build_skill_version_snapshot(record: &ImportedSkillRecord, manifest: &Value) 
         "input_schema": manifest.get("input_schema").cloned().unwrap_or_else(|| json!({"type":"object"})),
         "prompt_template": manifest.get("prompt_template").cloned().unwrap_or(Value::Null),
         "manifest_path": record.manifest_path,
-        "saved_at": crate::acp::prelude::now_ts(),
+        "saved_at": updated_at,
+        "updated_at": updated_at,
+        "updated_by": updated_by,
+        "change_summary": change_summary,
     })
 }
 
@@ -473,7 +482,7 @@ pub(super) async fn handle_skill_update(
 }
 
 pub(super) fn skill_update_payload(server: &AcpServer, params: &Value) -> Result<Value> {
-    let name = match parse_skill_name_param(&params) {
+    let name = match parse_skill_name_param(params) {
         Ok(name) => name,
         Err(err) => {
             record_skill_admin_audit("update", "skill.update", false, &err.to_string());
@@ -489,7 +498,10 @@ pub(super) fn skill_update_payload(server: &AcpServer, params: &Value) -> Result
     };
 
     let mut manifest = load_skill_manifest(&record.manifest_path)?;
-    push_skill_version_snapshot(&name, build_skill_version_snapshot(&record, &manifest));
+    push_skill_version_snapshot(
+        &name,
+        build_skill_version_snapshot(&record, &manifest, "system", "initial skill import"),
+    );
 
     if let Some(description) = params.get("description").and_then(Value::as_str) {
         manifest["description"] = json!(description);
@@ -515,7 +527,15 @@ pub(super) fn skill_update_payload(server: &AcpServer, params: &Value) -> Result
     record.version = target_version;
 
     save_skill_manifest(&record.manifest_path, &manifest)?;
-    push_skill_version_snapshot(&name, build_skill_version_snapshot(&record, &manifest));
+    push_skill_version_snapshot(
+        &name,
+        build_skill_version_snapshot(
+            &record,
+            &manifest,
+            "system",
+            "updated imported skill manifest",
+        ),
+    );
 
     store.upsert_record(record.clone());
     store.save()?;
@@ -541,7 +561,7 @@ pub(super) async fn handle_skill_version_list(
 }
 
 pub(super) fn skill_version_list_payload(server: &AcpServer, params: &Value) -> Result<Value> {
-    let name = match parse_skill_name_param(&params) {
+    let name = match parse_skill_name_param(params) {
         Ok(name) => name,
         Err(err) => {
             record_skill_admin_audit(
@@ -567,7 +587,12 @@ pub(super) fn skill_version_list_payload(server: &AcpServer, params: &Value) -> 
         .ok()
         .and_then(|history| history.get(&name).cloned())
         .unwrap_or_default();
-    versions.push(build_skill_version_snapshot(&record, &manifest));
+    versions.push(build_skill_version_snapshot(
+        &record,
+        &manifest,
+        "system",
+        "current imported skill snapshot",
+    ));
 
     record_skill_admin_audit("version.list", &name, true, "listed skill versions");
     Ok(json!({
@@ -589,7 +614,7 @@ pub(super) async fn handle_skill_version_rollback(
 }
 
 pub(super) fn skill_version_rollback_payload(server: &AcpServer, params: &Value) -> Result<Value> {
-    let name = match parse_skill_name_param(&params) {
+    let name = match parse_skill_name_param(params) {
         Ok(name) => name,
         Err(err) => {
             record_skill_admin_audit(
@@ -650,7 +675,15 @@ pub(super) fn skill_version_rollback_payload(server: &AcpServer, params: &Value)
     save_skill_manifest(&record.manifest_path, &manifest)?;
     store.upsert_record(record.clone());
     store.save()?;
-    push_skill_version_snapshot(&name, build_skill_version_snapshot(&record, &manifest));
+    push_skill_version_snapshot(
+        &name,
+        build_skill_version_snapshot(
+            &record,
+            &manifest,
+            "system",
+            "rolled back imported skill version",
+        ),
+    );
 
     record_skill_admin_audit(
         "version.rollback",

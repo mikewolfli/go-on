@@ -190,6 +190,8 @@ impl GoOnApp {
                             set_env(name, &key);
                         }
                     }
+                    // Sync language between GUI and backend
+                    cmd.env("LANG", &config.language);
                     match cmd.spawn() {
                         Ok(child) => {
                             eprintln!("go-on 后端已启动 (PID: {})", child.id());
@@ -453,13 +455,8 @@ impl eframe::App for GoOnApp {
                     monitor_history_alerts_enabled,
                 ),
                 "chat" => {
-                    let _ = self.chat_view.show(
-                        ui,
-                        &self.i18n,
-                        &self.backend,
-                        ctx,
-                        autotune_chain_enabled,
-                    );
+                    self.chat_view
+                        .show(ui, &self.i18n, &self.backend, ctx, autotune_chain_enabled);
                 }
                 "skills" => self.skills_view.show(
                     ui,
@@ -494,7 +491,7 @@ impl eframe::App for GoOnApp {
                 ),
                 _ => {
                     ui.heading(&tab);
-                    ui.label("Unknown tab id.");
+                    ui.label(self.i18n.t("app.unknownTab"));
                 }
             }
         });
@@ -514,10 +511,10 @@ impl eframe::App for GoOnApp {
 impl Drop for GoOnApp {
     fn drop(&mut self) {
         if let Some(mut child) = self.backend_child.take() {
-            eprintln!("正在关闭 go-on 后端 (PID: {})...", child.id());
+            eprintln!("Shutting down go-on backend (PID: {})...", child.id());
             let _ = child.kill();
             let _ = child.wait();
-            eprintln!("go-on 后端已关闭");
+            eprintln!("go-on backend stopped");
         }
     }
 }

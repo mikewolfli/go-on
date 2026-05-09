@@ -569,7 +569,7 @@ cargo test（新增单元测试）：2 / 2 通过
 
 - 新增 `handle_provider_test_connection`：向目标 provider 地址发起连通性探测，返回 `ok`、`latency_ms`、`model`、`error_code`、`error_message`。
 - 新增 `handle_provider_test_completion`：发起最小补全请求，验证模型可用性，返回响应摘要与延迟。
-- 新增 `handle_provider_capabilities`：读取 `AgentRegistry::models()` 元数据并结合 keyring 检查，返回 `tool_calling`、`vision`、`context_window`、`rate_limit`、`cost_tier`。
+- 新增 `handle_provider_capabilities`：读取 `AgentRegistry::models()` 元数据并结合 keyring 检查，返回 `tool_calling`、`vision`、`context_window`、`rate_limit`、`cost_tier`；`cost_tier` 依据上下文窗口推断，不再固定为 `unknown`。
 
 **BE-03（`exec_pack.rs`）**
 
@@ -581,16 +581,16 @@ cargo test（新增单元测试）：2 / 2 通过
 
 - 新增 `SKILL_VERSION_HISTORY`（`OnceLock<StdMutex<HashMap<String, VecDeque<SkillVersionSnapshot>>>>`），每个 Skill 保留最近 100 个版本快照。
 - 新增 `handle_skill_update`：更新 Skill 名称/描述/prompt/input_schema，写回磁盘 manifest，自动 bump patch 版本。
-- 新增 `handle_skill_version_list`：返回版本历史列表与当前版本。
-- 新增 `handle_skill_version_rollback`：查找指定版本快照并恢复到 manifest 文件，写回磁盘。
+- 新增 `handle_skill_version_list`：返回版本历史列表与当前版本，并补齐 `updated_at`、`updated_by`、`change_summary` 元数据。
+- 新增 `handle_skill_version_rollback`：查找指定版本快照并恢复到 manifest 文件，写回磁盘，同时回写版本快照元数据。
 - `SkillImportStore` 新增 `get()` 与 `upsert_record()` 公开方法。
 
 **BE-05（`runtime_pack.rs`）**
 
 - 新增 `MetricWindowPoint` 结构体，按时间戳记录 `total_requests`、`failed_requests`、`avg_request_duration_ms`。
 - 新增 `METRIC_WINDOW_HISTORY` 滑动缓冲，保留最近 1 小时数据（3600 个采样点），由 `append_metric_window_sample` 周期性写入。
-- 新增 `handle_metrics_window_query`：支持 `"1m"`、`"5m"`、`"1h"` 窗口，按窗口聚合 QPS、P95 代理、error_rate、success_rate，以 `series` 数组返回。
-- 新增 `handle_metrics_errors_summary`：读取 trace 事件，按 phase/type 聚类统计，返回 `error_groups` 与 `sample_failures`。
+- 新增 `handle_metrics_window_query`：支持 `"1m"`、`"5m"`、`"1h"` 窗口，按窗口聚合 QPS、P95 代理、error_rate、success_rate，并增加 `summary` 视图。
+- 新增 `handle_metrics_errors_summary`：读取 trace 事件，按错误类型/错误码聚类统计，返回 `error_groups` 与 `sample_failures`。
 
 ### 8.4 新增 dispatch 路由（`request.rs`）
 

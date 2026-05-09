@@ -109,7 +109,7 @@ impl SetupView {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.api_key)
                             .password(true)
-                            .hint_text("sk-...")
+                            .hint_text(i18n.t("common.apiKeyPlaceholder"))
                             .desired_width(300.0),
                     );
                 });
@@ -229,11 +229,7 @@ impl SetupView {
                                 );
                             }
                             Err(e) => {
-                                self.error_msg = format!(
-                                    "{}: {}",
-                                    i18n.t("setup.keyringError"),
-                                    e
-                                );
+                                self.error_msg = format!("{}: {}", i18n.t("setup.keyringError"), e);
                                 return;
                             }
                         }

@@ -17,8 +17,8 @@ impl SettingsView {
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                // ─── 核心功能 ────────────────────────────────────
-                ui.label(egui::RichText::new("🔷 核心功能 / Core Features").strong());
+                // Core features section
+                ui.label(egui::RichText::new(i18n.t("settings.section.core")).strong());
                 ui.add_space(4.0);
                 egui::Grid::new("core_features_grid")
                     .striped(true)
@@ -76,8 +76,8 @@ impl SettingsView {
                 ui.separator();
                 ui.add_space(8.0);
 
-                // ─── 高级功能 ────────────────────────────────────
-                ui.label(egui::RichText::new("⚡ 高级功能 / Advanced Features").strong());
+                // Advanced features section
+                ui.label(egui::RichText::new(i18n.t("settings.section.advanced")).strong());
                 ui.add_space(4.0);
                 egui::Grid::new("advanced_features_grid")
                     .striped(true)
@@ -132,8 +132,8 @@ impl SettingsView {
                 ui.separator();
                 ui.add_space(8.0);
 
-                // ─── 系统设置 ────────────────────────────────────
-                ui.label(egui::RichText::new("⚙️ 系统设置 / System Settings").strong());
+                // System settings section
+                ui.label(egui::RichText::new(i18n.t("settings.section.system")).strong());
                 ui.add_space(4.0);
                 egui::Grid::new("system_features_grid")
                     .striped(true)
@@ -166,9 +166,9 @@ impl SettingsView {
                 ui.separator();
                 ui.add_space(8.0);
 
-                // ─── 企业设置 ────────────────────────────────────
+                // Enterprise settings section
                 if config.features.setup_enterprise {
-                    ui.label(egui::RichText::new("🏢 企业设置 / Enterprise Settings").strong());
+                    ui.label(egui::RichText::new(i18n.t("settings.section.enterprise")).strong());
                     ui.add_space(4.0);
 
                     ui.horizontal(|ui| {
@@ -305,15 +305,15 @@ impl SettingsView {
                     ui.add_space(8.0);
                 }
 
-                // ─── 后端地址 ────────────────────────────────────
-                ui.label(egui::RichText::new("🔗 后端地址 / Backend URL").strong());
+                // Backend URL section
+                ui.label(egui::RichText::new(i18n.t("settings.section.backend")).strong());
                 ui.add_space(4.0);
                 ui.label(i18n.t("settings.backendUrlHint"));
                 ui.horizontal(|ui| {
                     let mut url = config.backend_url.clone();
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut url)
-                            .hint_text("http://127.0.0.1:8090")
+                            .hint_text(i18n.t("settings.backendUrlPlaceholder"))
                             .desired_width(300.0),
                     );
                     if resp.changed() && !url.is_empty() {
@@ -327,8 +327,8 @@ impl SettingsView {
                 ui.separator();
                 ui.add_space(8.0);
 
-                // ─── 语言 ────────────────────────────────────
-                ui.label(egui::RichText::new("🌐 语言 / Language").strong());
+                // Language section
+                ui.label(egui::RichText::new(i18n.t("settings.section.language")).strong());
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     let langs = [
@@ -352,8 +352,8 @@ impl SettingsView {
                 ui.separator();
                 ui.add_space(8.0);
 
-                // ─── 主题 ────────────────────────────────────
-                ui.label(egui::RichText::new("🎨 主题 / Theme").strong());
+                // Theme section
+                ui.label(egui::RichText::new(i18n.t("settings.section.theme")).strong());
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label(i18n.t("settings.theme"));

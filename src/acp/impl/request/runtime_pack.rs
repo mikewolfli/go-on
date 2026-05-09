@@ -194,6 +194,64 @@ fn append_metric_window_sample(server: &AcpServer) -> MetricWindowPoint {
     point
 }
 
+fn percentile_value(mut values: Vec<f64>, percentile: f64) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let clamped = percentile.clamp(0.0, 1.0);
+    let index = ((values.len() - 1) as f64 * clamped).round() as usize;
+    values[index.min(values.len() - 1)]
+}
+
+fn classify_error_group(event: &TraceEvent) -> String {
+    let error_text = event.error.as_deref().unwrap_or_default().trim();
+    if !error_text.is_empty() {
+        let lowered = error_text.to_ascii_lowercase();
+        for (needle, label) in [
+            ("timeout", "timeout"),
+            ("rate limit", "rate_limited"),
+            ("unauthorized", "auth_error"),
+            ("permission denied", "auth_error"),
+            ("not found", "not_found"),
+            ("invalid", "validation_error"),
+            ("parse", "parse_error"),
+            ("network", "network_error"),
+        ] {
+            if lowered.contains(needle) {
+                return label.to_string();
+            }
+        }
+
+        if let Some((code, _)) = error_text.split_once(':') {
+            let code = code.trim();
+            if !code.is_empty() && code.len() <= 48 && !code.contains(' ') {
+                return code.to_ascii_lowercase();
+            }
+        }
+
+        return lowered
+            .split_whitespace()
+            .take(4)
+            .collect::<Vec<_>>()
+            .join("_");
+    }
+
+    if !event.tool.as_deref().unwrap_or_default().trim().is_empty() {
+        return format!("tool:{}", event.tool.as_deref().unwrap_or_default());
+    }
+
+    if event.event_type.starts_with("phase.") {
+        return event.event_type.clone();
+    }
+
+    if !event.phase.trim().is_empty() {
+        return event.phase.clone();
+    }
+
+    event.status.clone()
+}
+
 pub(super) fn metrics_window_query_payload(server: &AcpServer, params: &Value) -> Value {
     let window = params.get("window").and_then(Value::as_str).unwrap_or("5m");
     let seconds = match window {
@@ -216,9 +274,17 @@ pub(super) fn metrics_window_query_payload(server: &AcpServer, params: &Value) -
         })
         .unwrap_or_default();
 
+    let latency_samples = series.iter().map(|point| point.p95).collect::<Vec<_>>();
+    let window_p95 = percentile_value(latency_samples, 0.95);
+
     json!({
         "ok": true,
         "window": window,
+        "summary": {
+            "samples": series.len(),
+            "p95": window_p95,
+            "window_seconds": seconds,
+        },
         "series": series,
     })
 }
@@ -244,11 +310,7 @@ pub(super) fn metrics_errors_summary_payload(server: &AcpServer, params: &Value)
 
     let mut error_groups: HashMap<String, usize> = HashMap::new();
     for event in &failed_events {
-        let key = if event.phase.is_empty() {
-            "unknown".to_string()
-        } else {
-            event.phase.clone()
-        };
+        let key = classify_error_group(event);
         *error_groups.entry(key).or_insert(0) += 1;
     }
 
@@ -275,6 +337,7 @@ pub(super) fn metrics_errors_summary_payload(server: &AcpServer, params: &Value)
                 "phase": event.phase,
                 "status": event.status,
                 "duration_ms": event.duration_ms,
+                "error_code": classify_error_group(event),
                 "error": event.error,
             })
         })
@@ -283,6 +346,10 @@ pub(super) fn metrics_errors_summary_payload(server: &AcpServer, params: &Value)
     json!({
         "ok": true,
         "window": params.get("window").and_then(Value::as_str).unwrap_or("5m"),
+        "summary": {
+            "failed_events": failed_events.len(),
+            "error_groups": grouped.len(),
+        },
         "series": {
             "qps": snapshot.total_requests as f64 / 60.0,
             "p95": snapshot.avg_request_duration_ms,
@@ -5200,6 +5267,12 @@ pub(super) fn provider_capabilities_payload(server: &AcpServer, params: &Value) 
                 .capabilities
                 .iter()
                 .any(|cap| cap.eq_ignore_ascii_case("vision"));
+            let cost_tier = match model.context_window {
+                Some(window) if window >= 128_000 => "high",
+                Some(window) if window >= 32_000 => "standard",
+                Some(_) => "economy",
+                None => "unknown",
+            };
             json!({
                 "id": model.id,
                 "name": model.name,
@@ -5213,7 +5286,7 @@ pub(super) fn provider_capabilities_payload(server: &AcpServer, params: &Value) 
                     "rpm": server.runtime_config.entry_rate_limit_rpm,
                     "burst": server.runtime_config.entry_rate_limit_burst,
                 },
-                "cost_tier": "unknown",
+                "cost_tier": cost_tier,
             })
         })
         .collect::<Vec<_>>();

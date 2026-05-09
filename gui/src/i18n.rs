@@ -142,6 +142,25 @@ impl I18n {
             "tab.providers",
             tr!(en, "Providers", cn, "供应商", tw, "供應商"),
         );
+        m.insert(
+            "app.unknownTab",
+            tr!(
+                en,
+                "Unknown tab id.",
+                cn,
+                "未知标签页 ID。",
+                tw,
+                "未知分頁 ID。"
+            ),
+        );
+        m.insert(
+            "common.copyButton",
+            tr!(en, "📋 Copy", cn, "📋 复制", tw, "📋 複製"),
+        );
+        m.insert(
+            "common.apiKeyPlaceholder",
+            tr!(en, "sk-...", cn, "sk-...", tw, "sk-..."),
+        );
 
         // Monitor
         m.insert(
@@ -691,10 +710,7 @@ impl I18n {
             "settings.language",
             tr!(en, "Language", cn, "语言", tw, "語言"),
         );
-        m.insert(
-            "settings.theme",
-            tr!(en, "Theme", cn, "主题", tw, "主題"),
-        );
+        m.insert("settings.theme", tr!(en, "Theme", cn, "主题", tw, "主題"));
 
         // Status bar
         m.insert(
@@ -1055,6 +1071,66 @@ impl I18n {
                 tw,
                 "Go-On 後端服務器地址"
             ),
+        );
+        m.insert(
+            "settings.backendUrlPlaceholder",
+            tr!(
+                en,
+                "http://127.0.0.1:8090",
+                cn,
+                "http://127.0.0.1:8090",
+                tw,
+                "http://127.0.0.1:8090"
+            ),
+        );
+        m.insert(
+            "settings.section.core",
+            tr!(en, "🔷 Core Features", cn, "🔷 核心功能", tw, "🔷 核心功能"),
+        );
+        m.insert(
+            "settings.section.advanced",
+            tr!(
+                en,
+                "⚡ Advanced Features",
+                cn,
+                "⚡ 高级功能",
+                tw,
+                "⚡ 進階功能"
+            ),
+        );
+        m.insert(
+            "settings.section.system",
+            tr!(
+                en,
+                "⚙️ System Settings",
+                cn,
+                "⚙️ 系统设置",
+                tw,
+                "⚙️ 系統設定"
+            ),
+        );
+        m.insert(
+            "settings.section.enterprise",
+            tr!(
+                en,
+                "🏢 Enterprise Settings",
+                cn,
+                "🏢 企业设置",
+                tw,
+                "🏢 企業設定"
+            ),
+        );
+        m.insert(
+            "settings.section.backend",
+            tr!(en, "🔗 Backend URL", cn, "🔗 后端地址", tw, "🔗 後端位址"),
+        );
+        m.insert(
+            "settings.section.language",
+            tr!(en, "🌐 Language", cn, "🌐 语言", tw, "🌐 語言"),
+        );
+        m.insert(
+            "settings.section.theme",
+            tr!(en, "🎨 Theme", cn, "🎨 主题", tw, "🎨 主題"),
         );
         m.insert("common.close", tr!(en, "Close", cn, "关闭", tw, "關閉"));
         m.insert(

@@ -39,103 +39,105 @@ impl SecurityView {
         backend: &BackendClient,
         ctx: &egui::Context,
     ) {
-egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-        self.process_pending();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                self.process_pending();
 
-        ui.heading(i18n.t("tab.security"));
-        let text = i18n.t("security.hint").to_string();
-        let resp = ui.label(&text);
-        resp.context_menu(|ui| {
-            if ui.button("📋 Copy").clicked() {
-                ui.ctx().copy_text(text.clone());
-                ui.close_menu();
-            }
-        });
-        ui.separator();
-
-        let mut changed = false;
-        changed |= ui
-            .checkbox(
-                &mut self.state.confirm_dangerous_actions,
-                i18n.t("security.confirmDangerousActions"),
-            )
-            .changed();
-        changed |= ui
-            .checkbox(
-                &mut self.state.redact_api_keys_in_ui,
-                i18n.t("security.redactApiKeys"),
-            )
-            .changed();
-        changed |= ui
-            .checkbox(
-                &mut self.state.block_external_urls,
-                i18n.t("security.blockExternalUrls"),
-            )
-            .changed();
-
-        if changed {
-            security_prefs::save(&self.state);
-            self.status = i18n.t("security.saved").to_string();
-            self.pending_restart_confirmation = false;
-        }
-
-        ui.add_space(8.0);
-        let restart_label = if self.pending_restart_confirmation {
-            i18n.t("security.confirmRestart")
-        } else {
-            i18n.t("security.restart")
-        };
-        if ui
-            .add_enabled(!self.sending, egui::Button::new(restart_label))
-            .clicked()
-        {
-            if self.state.confirm_dangerous_actions && !self.pending_restart_confirmation {
-                self.pending_restart_confirmation = true;
-                self.status = i18n.t("security.confirmAgain").to_string();
-                return;
-            }
-
-            self.sending = true;
-            self.status.clear();
-            self.pending_restart_confirmation = false;
-            let tx = self.pending_tx.clone();
-            let backend_clone = backend.clone();
-            let ctx_clone = ctx.clone();
-            let restart_requested = i18n.t("security.restartRequested").to_string();
-            let restart_failed = i18n.t("security.restartFailed").to_string();
-            tokio::spawn(async move {
-                // Add timeout to prevent hanging
-                let result = match tokio::time::timeout(
-                    std::time::Duration::from_secs(10),
-                    backend_clone.restart_backend(),
-                )
-                .await
-                {
-                    Ok(r) => r,
-                    Err(_) => {
-                        eprintln!("Warning: restart_backend timed out");
-                        Err("timeout".to_string())
+                ui.heading(i18n.t("tab.security"));
+                let text = i18n.t("security.hint").to_string();
+                let resp = ui.label(&text);
+                resp.context_menu(|ui| {
+                    if ui.button("📋 Copy").clicked() {
+                        ui.ctx().copy_text(text.clone());
+                        ui.close_menu();
                     }
-                };
-                let msg = match result {
-                    Ok(_) => restart_requested,
-                    Err(e) => format!("{}: {e}", restart_failed),
-                };
-                let _ = tx.send(msg);
-                ctx_clone.request_repaint();
-            });
-        }
+                });
+                ui.separator();
 
-        if !self.status.is_empty() {
-            let text = self.status.clone();
-            let resp = ui.label(&text);
-            resp.context_menu(|ui| {
-                if ui.button("📋 Copy").clicked() {
-                    ui.ctx().copy_text(text.clone());
-                    ui.close_menu();
+                let mut changed = false;
+                changed |= ui
+                    .checkbox(
+                        &mut self.state.confirm_dangerous_actions,
+                        i18n.t("security.confirmDangerousActions"),
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut self.state.redact_api_keys_in_ui,
+                        i18n.t("security.redactApiKeys"),
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut self.state.block_external_urls,
+                        i18n.t("security.blockExternalUrls"),
+                    )
+                    .changed();
+
+                if changed {
+                    security_prefs::save(&self.state);
+                    self.status = i18n.t("security.saved").to_string();
+                    self.pending_restart_confirmation = false;
+                }
+
+                ui.add_space(8.0);
+                let restart_label = if self.pending_restart_confirmation {
+                    i18n.t("security.confirmRestart")
+                } else {
+                    i18n.t("security.restart")
+                };
+                if ui
+                    .add_enabled(!self.sending, egui::Button::new(restart_label))
+                    .clicked()
+                {
+                    if self.state.confirm_dangerous_actions && !self.pending_restart_confirmation {
+                        self.pending_restart_confirmation = true;
+                        self.status = i18n.t("security.confirmAgain").to_string();
+                        return;
+                    }
+
+                    self.sending = true;
+                    self.status.clear();
+                    self.pending_restart_confirmation = false;
+                    let tx = self.pending_tx.clone();
+                    let backend_clone = backend.clone();
+                    let ctx_clone = ctx.clone();
+                    let restart_requested = i18n.t("security.restartRequested").to_string();
+                    let restart_failed = i18n.t("security.restartFailed").to_string();
+                    tokio::spawn(async move {
+                        // Add timeout to prevent hanging
+                        let result = match tokio::time::timeout(
+                            std::time::Duration::from_secs(10),
+                            backend_clone.restart_backend(),
+                        )
+                        .await
+                        {
+                            Ok(r) => r,
+                            Err(_) => {
+                                eprintln!("Warning: restart_backend timed out");
+                                Err("timeout".to_string())
+                            }
+                        };
+                        let msg = match result {
+                            Ok(_) => restart_requested,
+                            Err(e) => format!("{}: {e}", restart_failed),
+                        };
+                        let _ = tx.send(msg);
+                        ctx_clone.request_repaint();
+                    });
+                }
+
+                if !self.status.is_empty() {
+                    let text = self.status.clone();
+                    let resp = ui.label(&text);
+                    resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                            ui.close_menu();
+                        }
+                    });
                 }
             });
-        }
-        });
     }
 }

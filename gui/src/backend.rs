@@ -160,7 +160,7 @@ impl BackendClient {
         if trimmed.is_empty() {
             return "empty response body".to_string();
         }
-        let mut compact = trimmed.replace('\n', " ").replace('\r', " ");
+        let mut compact = trimmed.replace(['\n', '\r'], " ");
         if compact.len() > 240 {
             compact.truncate(240);
             compact.push_str("...");

@@ -48,7 +48,7 @@ impl MonitorView {
         backend: &BackendClient,
         monitor_history_alerts_enabled: bool,
     ) {
-egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
         self.process_pending();
         self.backend_configured = backend_configured;
 
