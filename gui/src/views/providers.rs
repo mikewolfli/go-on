@@ -4,7 +4,7 @@ use crate::i18n::I18n;
 use crate::views::security_prefs;
 use serde_json;
 use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub struct ProvidersView {
     /// Selected provider name from a predefined list (for Add)
@@ -185,7 +185,7 @@ impl ProvidersView {
                             serde_json::to_string(&models).unwrap_or_default()
                         );
                         let _ = tx.send(msg);
-                        ctx_clone.request_repaint();
+                        ctx_clone.request_repaint_after(Duration::from_millis(16));
                     });
                 }
 
@@ -456,7 +456,7 @@ impl ProvidersView {
                                                 Err(_) => err_fmt.replace("%s", "timeout"),
                                             };
                                             let _ = tx.send(msg);
-                                            ctx_clone.request_repaint();
+                                            ctx_clone.request_repaint_after(Duration::from_millis(16));
                                         });
                                     }
                                 } else {
@@ -513,7 +513,7 @@ impl ProvidersView {
                                             Err(_) => err_fmt.replace("%s", "timeout"),
                                         };
                                         let _ = tx.send(msg);
-                                        ctx_clone.request_repaint();
+                                        ctx_clone.request_repaint_after(Duration::from_millis(16));
                                     });
                                 }
                             }
@@ -688,7 +688,7 @@ impl ProvidersView {
                                                         .await;
                                                     // Clear sending flag after push
                                                     let _ = tx_push.send(String::new());
-                                                    ctx_push.request_repaint();
+                                                    ctx_push.request_repaint_after(Duration::from_millis(16));
                                                 });
                                             }
                                         }
@@ -780,7 +780,7 @@ impl ProvidersView {
                                                     Err(e) => err_fmt.replace("%s", &e.to_string()),
                                                 };
                                                 let _ = tx.send(msg);
-                                                ctx_clone.request_repaint();
+                                                ctx_clone.request_repaint_after(Duration::from_millis(16));
                                             });
                                         }
                                     }
@@ -844,7 +844,7 @@ impl ProvidersView {
                                         Err(e) => err_fmt.replace("%s", &e.to_string()),
                                     };
                                     let _ = tx.send(msg);
-                                    ctx_clone.request_repaint();
+                                    ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
                             if ops_enabled && ui.button(i18n.t("providers.ops.testConn")).clicked()
@@ -896,7 +896,7 @@ impl ProvidersView {
                                         ),
                                     };
                                     let _ = tx.send(msg);
-                                    ctx_clone.request_repaint();
+                                    ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
                             if ops_enabled
@@ -956,7 +956,7 @@ impl ProvidersView {
                                         ),
                                     };
                                     let _ = tx.send(msg);
-                                    ctx_clone.request_repaint();
+                                    ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
                             if ops_enabled
@@ -1009,7 +1009,7 @@ impl ProvidersView {
                                         ),
                                     };
                                     let _ = tx.send(msg);
-                                    ctx_clone.request_repaint();
+                                    ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
                             let delete_label = if self.pending_delete_confirmation == Some(idx) {

@@ -97,6 +97,7 @@ pub enum PendingResponse {
         generation_id: u64,
         content: String,
         thinking: String,
+        agent: String,
         conversation_id: Option<String>,
         branch_id: Option<String>,
     },

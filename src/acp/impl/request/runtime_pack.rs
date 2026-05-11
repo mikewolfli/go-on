@@ -537,7 +537,7 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
                 "is_healthy": status.lifecycle.is_healthy,
                 "uptime_seconds": status.lifecycle.uptime_seconds,
                 "version": env!("CARGO_PKG_VERSION"),
-                "build": option_env!("VERGEN_GIT_SHA").unwrap_or("unknown"),
+                "build": backend_build_label(),
             },
             "version": env!("CARGO_PKG_VERSION"),
             "stats": {
@@ -822,6 +822,18 @@ pub(super) async fn handle_capabilities_list(
         }),
     )
     .await
+}
+
+fn backend_build_label() -> String {
+    if let Some(sha) = option_env!("VERGEN_GIT_SHA").filter(|sha| !sha.is_empty()) {
+        return sha.chars().take(12).collect();
+    }
+
+    if cfg!(debug_assertions) {
+        format!("debug ({})", env!("CARGO_PKG_VERSION"))
+    } else {
+        format!("release ({})", env!("CARGO_PKG_VERSION"))
+    }
 }
 
 pub(super) async fn handle_health_probes(

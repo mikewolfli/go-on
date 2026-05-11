@@ -177,19 +177,22 @@ impl ChatView {
                                     autotune_extra_clone.clone(),
                                 )
                                 .await
-                                .map(|(content, thinking)| PendingResponse::ChatCompleted {
-                                    generation_id,
-                                    content,
-                                    thinking,
-                                    conversation_id: None,
-                                    branch_id: None,
-                                })
+                                .map(
+                                    |(content, thinking, agent)| PendingResponse::ChatCompleted {
+                                        generation_id,
+                                        content,
+                                        thinking,
+                                        agent,
+                                        conversation_id: None,
+                                        branch_id: None,
+                                    },
+                                )
                                 .unwrap_or_else(|e| PendingResponse::Error {
                                     generation_id: Some(generation_id),
                                     message: format!("stream error: {err}; fallback: {e}"),
                                 });
                             let _ = tx.send(fallback);
-                            ctx_clone.request_repaint();
+                            ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
                             return;
                         } else {
                             resp
@@ -198,6 +201,7 @@ impl ChatView {
                         let mut sse_buffer = String::new();
                         let mut final_content: Option<String> = None;
                         let mut final_thinking: Option<String> = None;
+                        let mut final_agent: Option<String> = None;
                         let mut final_conv_id: Option<String> = None;
                         let mut final_branch_id: Option<String> = None;
                         let mut buffered_token = String::new();
@@ -210,10 +214,12 @@ impl ChatView {
                                 Ok(None) => break,
                                 Err(e) => {
                                     let _ = tx.send(PendingResponse::Error {
-                                            generation_id: Some(generation_id),
-                                            message: format!("read error: {e}"),
-                                        });
-                                    ctx_clone.request_repaint();
+                                        generation_id: Some(generation_id),
+                                        message: format!("read error: {e}"),
+                                    });
+                                    ctx_clone.request_repaint_after(
+                                        std::time::Duration::from_millis(16),
+                                    );
                                     return;
                                 }
                             };
@@ -297,6 +303,14 @@ impl ChatView {
                                             .get("thinking")
                                             .and_then(|v| v.as_str())
                                             .map(ToOwned::to_owned);
+                                        final_agent = data
+                                            .get("agent")
+                                            .or_else(|| data.get("selected_agent"))
+                                            .or_else(|| {
+                                                data.pointer("/capability_routing/selected_agent")
+                                            })
+                                            .and_then(|v| v.as_str())
+                                            .map(String::from);
                                         final_conv_id = data
                                             .get("conversation_id")
                                             .and_then(|v| v.as_str())
@@ -325,7 +339,9 @@ impl ChatView {
                                             generation_id: Some(generation_id),
                                             message,
                                         });
-                                        ctx_clone.request_repaint();
+                                        ctx_clone.request_repaint_after(
+                                            std::time::Duration::from_millis(16),
+                                        );
                                         return;
                                     }
                                     _ => {}
@@ -357,6 +373,7 @@ impl ChatView {
                             generation_id,
                             content: final_content.unwrap_or_default(),
                             thinking: final_thinking.unwrap_or_default(),
+                            agent: final_agent.unwrap_or_default(),
                             conversation_id: final_conv_id,
                             branch_id: final_branch_id,
                         });
@@ -365,21 +382,25 @@ impl ChatView {
                         let fallback = backend_clone
                             .chat(&msg_clone, &mode_clone, &phase_clone, Some(&model_clone))
                             .await
-                            .map(|(content, thinking)| PendingResponse::ChatCompleted {
-                                generation_id,
-                                content,
-                                thinking,
-                                conversation_id: None,
-                                branch_id: None,
-                            })
+                            .map(
+                                |(content, thinking, agent)| PendingResponse::ChatCompleted {
+                                    generation_id,
+                                    content,
+                                    thinking,
+                                    agent,
+                                    conversation_id: None,
+                                    branch_id: None,
+                                },
+                            )
                             .unwrap_or_else(|e| PendingResponse::Error {
                                 generation_id: Some(generation_id),
                                 message: format!("request error: {err}; fallback: {e}"),
                             });
                         let _ = tx.send(fallback);
+                        ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
                     }
                 }
-                ctx_clone.request_repaint();
+                ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
             });
             self.generation_states.push(GenerationState {
                 id: generation_id,
@@ -458,6 +479,7 @@ impl ChatView {
                     generation_id,
                     content,
                     thinking,
+                    agent,
                     conversation_id,
                     branch_id,
                 } => {
@@ -471,6 +493,10 @@ impl ChatView {
                         if let Some(session) = self.sessions.get_mut(self.active_session) {
                             session.branch_id = Some(b_id);
                         }
+                    }
+
+                    if !agent.is_empty() {
+                        self.last_selected_agent = agent.clone();
                     }
 
                     let generation_meta = self.generation_meta(generation_id);

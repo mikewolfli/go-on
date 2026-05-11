@@ -81,6 +81,7 @@ pub struct ChatView {
     selected_models: Vec<String>,
     available_models: Vec<String>,
     models_loaded: bool,
+    last_selected_agent: String,
     stream_chunk_flush_interval: std::time::Duration,
     stream_repaint_interval: std::time::Duration,
     max_pending_events_per_frame: usize,
@@ -360,6 +361,7 @@ impl ChatView {
             selected_models: initial_models,
             available_models: vec!["auto".to_string()],
             models_loaded: false,
+            last_selected_agent: String::new(),
             stream_chunk_flush_interval: std::time::Duration::from_millis(33),
             stream_repaint_interval: std::time::Duration::from_millis(33),
             max_pending_events_per_frame: 256,
@@ -617,6 +619,7 @@ impl ChatView {
         self.rename_session_idx = None;
         self.rename_session_buf.clear();
         self.selected_models = vec![self.selected_model.clone()];
+        self.last_selected_agent.clear();
         self.save_sessions_to_disk();
     }
 
@@ -720,6 +723,7 @@ mod tests {
             selected_models: vec!["auto".to_string()],
             available_models: vec!["auto".to_string()],
             models_loaded: false,
+            last_selected_agent: String::new(),
         }
     }
 

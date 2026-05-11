@@ -171,7 +171,7 @@ impl ChatView {
                             });
                         if let Some(list) = phases {
                             let _ = tx.send(PendingResponse::Phases(list));
-                            ctx_clone.request_repaint();
+                            ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
                         }
                     }
                     _ => {
@@ -205,7 +205,7 @@ impl ChatView {
                         ids.dedup();
                         options.extend(ids);
                         let _ = tx.send(PendingResponse::Models(options));
-                        ctx_clone.request_repaint();
+                        ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
                     }
                     Err(_) => {
                         eprintln!("Warning: Failed to load models from backend (timeout)");
@@ -465,6 +465,17 @@ impl ChatView {
                                     .color(fg)
                                     .size(12.0),
                             );
+                            if !self.last_selected_agent.is_empty() {
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "agent: {}",
+                                        self.last_selected_agent
+                                    ))
+                                    .color(fg)
+                                    .size(11.0),
+                                );
+                            }
                             ui.add_space(12.0);
                             ui.checkbox(
                                 &mut self.show_token_details,
@@ -519,7 +530,7 @@ impl ChatView {
             let pasted_atts = self.handle_paste_events(ui);
             if !pasted_atts.is_empty() {
                 self.attachments.extend(pasted_atts);
-                ctx.request_repaint();
+                ctx.request_repaint_after(self.stream_repaint_interval);
             }
 
             // Fixed-height input area with scroll for long content.
@@ -581,7 +592,11 @@ impl ChatView {
                         let editors = &["open", "code", "zed", "TextEdit"];
                         #[cfg(target_os = "linux")]
                         let editors = &["zed", "code", "gedit", "vim", "nano"];
-                        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+                        #[cfg(not(any(
+                            target_os = "windows",
+                            target_os = "macos",
+                            target_os = "linux"
+                        )))]
                         let editors: &[&str] = &["code", "vim", "nano"];
                         for e in editors {
                             if let Ok(mut child) = std::process::Command::new(e).arg(&p).spawn() {
@@ -773,14 +788,16 @@ impl ChatView {
                             .args(["/c", "start", "", &config_dir.display().to_string()])
                             .spawn();
                         #[cfg(target_os = "macos")]
-                        let _ = std::process::Command::new("open")
-                            .arg(&config_dir)
-                            .spawn();
+                        let _ = std::process::Command::new("open").arg(&config_dir).spawn();
                         #[cfg(target_os = "linux")]
                         let _ = std::process::Command::new("xdg-open")
                             .arg(&config_dir)
                             .spawn();
-                        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+                        #[cfg(not(any(
+                            target_os = "windows",
+                            target_os = "macos",
+                            target_os = "linux"
+                        )))]
                         let _ = std::process::Command::new("xdg-open")
                             .arg(&config_dir)
                             .spawn();
@@ -905,7 +922,11 @@ impl ChatView {
                                     self.rename_session_buf.clear();
                                 }
                                 // Delete button
-                                if ui.button("✕").on_hover_text(i18n.t("chat.deleteSession")).clicked() {
+                                if ui
+                                    .button("✕")
+                                    .on_hover_text(i18n.t("chat.deleteSession"))
+                                    .clicked()
+                                {
                                     to_remove = Some(idx);
                                 }
                             });
@@ -995,7 +1016,11 @@ impl ChatView {
                     .show(ui, |ui| {
                         let edit_title = i18n.t("chat.editTitle");
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(format!("✏️ {edit_title}")).strong().size(13.0));
+                            ui.label(
+                                egui::RichText::new(format!("✏️ {edit_title}"))
+                                    .strong()
+                                    .size(13.0),
+                            );
                         });
                         ui.add_space(4.0);
 
@@ -1007,7 +1032,13 @@ impl ChatView {
 
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
-                            if ui.button(egui::RichText::new(format!("💾 {}", i18n.t("chat.saveEdit"))).strong()).clicked() {
+                            if ui
+                                .button(
+                                    egui::RichText::new(format!("💾 {}", i18n.t("chat.saveEdit")))
+                                        .strong(),
+                                )
+                                .clicked()
+                            {
                                 let new_content = self.edit_msg_buf.trim().to_string();
                                 if !new_content.is_empty() {
                                     if let Some(session) =
@@ -1022,7 +1053,10 @@ impl ChatView {
                                 self.edit_msg_idx = None;
                                 self.edit_msg_buf.clear();
                             }
-                            if ui.button(format!("✕ {}", i18n.t("chat.cancelEdit"))).clicked() {
+                            if ui
+                                .button(format!("✕ {}", i18n.t("chat.cancelEdit")))
+                                .clicked()
+                            {
                                 self.edit_msg_idx = None;
                                 self.edit_msg_buf.clear();
                             }

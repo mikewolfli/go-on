@@ -423,7 +423,7 @@ impl BackendClient {
         mode: &str,
         phase: &str,
         model: Option<&str>,
-    ) -> Result<(String, String), String> {
+    ) -> Result<(String, String, String), String> {
         self.chat_with_options(message, mode, phase, model, None)
             .await
     }
@@ -435,7 +435,7 @@ impl BackendClient {
         phase: &str,
         model: Option<&str>,
         options_extra: Option<Value>,
-    ) -> Result<(String, String), String> {
+    ) -> Result<(String, String, String), String> {
         let phase_val = if phase.is_empty() {
             serde_json::Value::Null
         } else {
@@ -505,10 +505,18 @@ impl BackendClient {
             .unwrap_or("")
             .to_string();
 
+        let agent_text = value
+            .get("agent")
+            .or_else(|| value.get("selected_agent"))
+            .or_else(|| value.pointer("/capability_routing/selected_agent"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+
         if response_text.is_empty() && thinking_text.is_empty() {
-            Ok(("(empty)".to_string(), String::new()))
+            Ok(("(empty)".to_string(), String::new(), agent_text))
         } else {
-            Ok((response_text, thinking_text))
+            Ok((response_text, thinking_text, agent_text))
         }
     }
 
