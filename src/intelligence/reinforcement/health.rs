@@ -229,19 +229,32 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
 
         total_count += 1;
 
-        // Try keyring first, then env var
+        // Try keyring first, fall back to env var (same chain as load_secret_value)
         let is_ready = if env_var.starts_with("keyring://") {
             let locator = env_var.trim_start_matches("keyring://");
             if let Some((service, account)) = locator.split_once('/') {
-                keyring::Entry::new(service, account)
+                // Try keyring
+                if keyring::Entry::new(service, account)
                     .and_then(|e| e.get_password())
                     .is_ok()
+                {
+                    true
+                } else {
+                    // Keyring unavailable — try env var fallbacks
+                    let candidates = [
+                        account.replace('-', "_").to_ascii_uppercase(),
+                        format!("{}_{}", service, account)
+                            .replace('-', "_")
+                            .to_ascii_uppercase(),
+                    ];
+                    candidates.iter().any(|var| std::env::var(var).is_ok_and(|v| !v.is_empty()))
+                }
             } else {
                 false
             }
         } else {
-            // Direct env var name or other reference
-            std::env::var(env_var).is_ok()
+            // Direct env var name
+            std::env::var(env_var).is_ok_and(|v| !v.is_empty())
         };
 
         if is_ready {
