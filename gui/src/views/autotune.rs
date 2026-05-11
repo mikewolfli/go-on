@@ -25,12 +25,15 @@ impl Default for AutoTuneState {
 
 pub struct AutoTuneView {
     state: AutoTuneState,
+    /// Timestamp of the last successful save, used to show a brief "Saved ✓" flash.
+    saved_at: Option<std::time::Instant>,
 }
 
 impl AutoTuneView {
     pub fn new() -> Self {
         Self {
             state: Self::load_state(),
+            saved_at: None,
         }
     }
 
@@ -115,6 +118,20 @@ impl AutoTuneView {
 
                 if changed {
                     self.save_state();
+                    self.saved_at = Some(std::time::Instant::now());
+                }
+
+                // Show a brief "Saved ✓" flash for 2 seconds after any change.
+                if let Some(at) = self.saved_at {
+                    if at.elapsed() < std::time::Duration::from_secs(2) {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(60, 180, 100),
+                            i18n.t("autotune.saved"),
+                        );
+                        ui.ctx().request_repaint();
+                    } else {
+                        self.saved_at = None;
+                    }
                 }
             });
     }

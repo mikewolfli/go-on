@@ -1,9 +1,10 @@
-use crate::backend::BackendClient;
+use crate::backend::{BackendClient, ProviderCapabilityModel};
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;
 use crate::views::security_prefs;
 use serde_json;
 use std::sync::mpsc;
+use std::time::Instant;
 
 pub struct ProvidersView {
     /// Selected provider name from a predefined list (for Add)
@@ -22,6 +23,10 @@ pub struct ProvidersView {
     /// Whether we've tried to fetch models
     models_loaded: bool,
     provider_ops_status: std::collections::HashMap<String, String>,
+    provider_capabilities: std::collections::HashMap<String, Vec<ProviderCapabilityModel>>,
+    /// Cached security prefs — reloaded at most once per 10s to avoid per-frame disk reads.
+    cached_security: security_prefs::SecurityPrefs,
+    security_last_load: Instant,
 }
 
 /// Provider names for the dropdown (34 total, matching providers.toml)
@@ -91,6 +96,9 @@ impl ProvidersView {
             remote_models: std::collections::HashMap::new(),
             models_loaded: false,
             provider_ops_status: std::collections::HashMap::new(),
+            provider_capabilities: std::collections::HashMap::new(),
+            cached_security: security_prefs::load(),
+            security_last_load: Instant::now(),
         }
     }
 
@@ -108,6 +116,15 @@ impl ProvidersView {
                     self.provider_ops_status
                         .insert(provider.to_string(), status.to_string());
                 }
+            } else if let Some(rest) = msg.strip_prefix("__caps__:") {
+                if let Some((provider, payload)) = rest.split_once(':') {
+                    if let Ok(models) =
+                        serde_json::from_str::<Vec<ProviderCapabilityModel>>(payload)
+                    {
+                        self.provider_capabilities
+                            .insert(provider.to_string(), models);
+                    }
+                }
             } else {
                 self.sending = false;
                 self.status = msg;
@@ -123,7 +140,8 @@ impl ProvidersView {
         backend: &BackendClient,
         ctx: &egui::Context,
         ops_enabled: bool,
-    ) {
+    ) -> bool {
+        let mut changed = false;
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
@@ -159,8 +177,14 @@ impl ProvidersView {
                     });
                 }
 
-                let mut changed = false;
-                let security = security_prefs::load();
+                // Reload security prefs at most once per 10 seconds to avoid per-frame disk reads.
+                if self.security_last_load.elapsed() >= std::time::Duration::from_secs(10) {
+                    self.cached_security = security_prefs::load();
+                    self.security_last_load = Instant::now();
+                }
+                // Copy needed bools to avoid holding a reference to self over closures.
+                let redact_keys = self.cached_security.redact_api_keys_in_ui;
+                let confirm_dangerous = self.cached_security.confirm_dangerous_actions;
 
                 ui.heading(i18n.t("providers.title"));
                 ui.separator();
@@ -171,7 +195,7 @@ impl ProvidersView {
                     let text = i18n.t("providers.add_new").to_string();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
@@ -180,7 +204,7 @@ impl ProvidersView {
                         let text = i18n.t("providers.provider").to_string();
                         let resp = ui.label(&text);
                         resp.context_menu(|ui| {
-                            if ui.button("📋 Copy").clicked() {
+                            if ui.button(i18n.t("common.copyButton")).clicked() {
                                 ui.ctx().copy_text(text.clone());
                                 ui.close_menu();
                             }
@@ -204,7 +228,7 @@ impl ProvidersView {
                         let text = i18n.t("providers.api_key").to_string();
                         let resp = ui.label(&text);
                         resp.context_menu(|ui| {
-                            if ui.button("📋 Copy").clicked() {
+                            if ui.button(i18n.t("common.copyButton")).clicked() {
                                 ui.ctx().copy_text(text.clone());
                                 ui.close_menu();
                             }
@@ -215,10 +239,17 @@ impl ProvidersView {
                                 .hint_text(i18n.t("common.apiKeyPlaceholder"))
                                 .desired_width(260.0),
                         );
+                        // Show auto-push hint when updating an existing provider
+                        if self.update_target >= 0 {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(100, 180, 100),
+                                i18n.t("providers.auto_push_hint")
+                            );
+                        }
                         let text = i18n.t("providers.model").to_string();
                         let resp = ui.label(&text);
                         resp.context_menu(|ui| {
-                            if ui.button("📋 Copy").clicked() {
+                            if ui.button(i18n.t("common.copyButton")).clicked() {
                                 ui.ctx().copy_text(text.clone());
                                 ui.close_menu();
                             }
@@ -241,7 +272,7 @@ impl ProvidersView {
                                     let text = i18n.t("providers.copilot_hint").to_string();
                                     let resp = ui.label(&text);
                                     resp.context_menu(|ui| {
-                                        if ui.button("📋 Copy").clicked() {
+                                        if ui.button(i18n.t("common.copyButton")).clicked() {
                                             ui.ctx().copy_text(text.clone());
                                             ui.close_menu();
                                         }
@@ -362,8 +393,8 @@ impl ProvidersView {
                             if !config.providers.iter().any(|p| p.name == name) {
                                 config.providers.push(ProviderConfig {
                                     name: name.clone(),
-                                    api_key: key,
-                                    model,
+                                    api_key: key.clone(),
+                                    model: model.clone(),
                                     validated: true,
                                 });
                                 save_app_config(config);
@@ -373,6 +404,41 @@ impl ProvidersView {
                                     provider_label(i18n, &name),
                                     i18n.t("providers.added")
                                 );
+                                // Auto-push new provider key to backend so it takes effect immediately.
+                                if !self.sending {
+                                    self.sending = true;
+                                    let tx = self.pending_tx.clone();
+                                    let backend_clone = backend.clone();
+                                    let push_name = name.clone();
+                                    let push_key = key.clone();
+                                    let push_model = model.clone();
+                                    let ctx_clone = ctx.clone();
+                                    let ok_fmt = format!(
+                                        "{} '{}' {}",
+                                        i18n.t("providers.api_key"),
+                                        provider_label(i18n, &name),
+                                        i18n.t("providers.push_success")
+                                    );
+                                    let err_fmt = format!(
+                                        "{} '{}': %s",
+                                        i18n.t("providers.push_failed"),
+                                        provider_label(i18n, &name)
+                                    );
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                                        let result = tokio::time::timeout(
+                                            std::time::Duration::from_secs(10),
+                                            backend_clone.configure_provider(&push_name, &push_key, &push_model),
+                                        ).await;
+                                        let msg = match result {
+                                            Ok(Ok(_)) => ok_fmt,
+                                            Ok(Err(e)) => err_fmt.replace("%s", &e),
+                                            Err(_) => err_fmt.replace("%s", "timeout"),
+                                        };
+                                        let _ = tx.send(msg);
+                                        ctx_clone.request_repaint();
+                                    });
+                                }
                             } else {
                                 self.status = format!(
                                     "{} '{}' {}.",
@@ -397,7 +463,7 @@ impl ProvidersView {
                 let text = i18n.t("providers.saved").to_string();
                 let resp = ui.label(&text);
                 resp.context_menu(|ui| {
-                    if ui.button("📋 Copy").clicked() {
+                    if ui.button(i18n.t("common.copyButton")).clicked() {
                         ui.ctx().copy_text(text.clone());
                         ui.close_menu();
                     }
@@ -409,23 +475,28 @@ impl ProvidersView {
                             let text = provider_label(i18n, &provider.name);
                             let resp = ui.label(&text);
                             resp.context_menu(|ui| {
-                                if ui.button("📋 Copy").clicked() {
+                                if ui.button(i18n.t("common.copyButton")).clicked() {
                                     ui.ctx().copy_text(text.clone());
                                     ui.close_menu();
                                 }
                             });
-                            let key_preview_str = if security.redact_api_keys_in_ui {
+                            let cached_key =
+                                crate::keyring_util::get_api_key(&provider.name.to_lowercase())
+                                    .unwrap_or_default();
+                            let key_preview_str = if redact_keys {
                                 "********".to_string()
-                            } else if provider.api_key.len() > 8 {
-                                provider.api_key[..8].to_string()
+                            } else if cached_key.len() > 8 {
+                                cached_key[..8].to_string()
+                            } else if !cached_key.is_empty() {
+                                cached_key.clone()
                             } else {
-                                provider.api_key.clone()
+                                i18n.t("providers.noKey").to_string()
                             };
                             let text =
                                 format!("{} {}", i18n.t("providers.key_preview"), key_preview_str);
                             let resp = ui.label(&text);
                             resp.context_menu(|ui| {
-                                if ui.button("📋 Copy").clicked() {
+                                if ui.button(i18n.t("common.copyButton")).clicked() {
                                     ui.ctx().copy_text(text.clone());
                                     ui.close_menu();
                                 }
@@ -433,7 +504,7 @@ impl ProvidersView {
                             let text = i18n.t("providers.model").to_string();
                             let resp = ui.label(&text);
                             resp.context_menu(|ui| {
-                                if ui.button("📋 Copy").clicked() {
+                                if ui.button(i18n.t("common.copyButton")).clicked() {
                                     ui.ctx().copy_text(text.clone());
                                     ui.close_menu();
                                 }
@@ -536,17 +607,26 @@ impl ProvidersView {
                                     if !new_key.is_empty() {
                                         let provider_lower = provider.name.to_lowercase();
                                         let provider_name = provider.name.clone();
-                                        // Try keyring, don't block save if it fails
-                                        if let Err(e) = crate::keyring_util::store_api_key(
+                                        // Store to system keyring
+                                        match crate::keyring_util::store_api_key(
                                             &provider_lower,
                                             &new_key,
                                         ) {
-                                            eprintln!(
-                                        "Warning: failed to store API key in system keyring: {}",
-                                        e
-                                    );
+                                            Ok(_) => {
+                                                eprintln!(
+                                                    "keyring: stored key for '{}'",
+                                                    provider_lower
+                                                );
+                                            }
+                                            Err(e) => {
+                                                eprintln!(
+                                                    "keyring: failed to store key for '{}': {}",
+                                                    provider_lower, e
+                                                );
+                                            }
                                         }
-                                        provider.api_key = new_key;
+                                        // Always save to config as well (dual storage)
+                                        provider.api_key = new_key.clone();
                                         provider.validated = true;
                                         self.status = format!(
                                             "{} '{}' {}.",
@@ -557,6 +637,51 @@ impl ProvidersView {
                                         self.new_key.clear();
                                         self.update_target = -1;
                                         changed = true;
+                                        
+                                        // Auto-push to backend after saving
+                                        if !self.sending {
+                                            self.sending = true;
+                                            let tx = self.pending_tx.clone();
+                                            let backend_clone = backend.clone();
+                                            let name = provider_name.clone();
+                                            let key = new_key;
+                                            let model = provider.model.clone();
+                                            let ctx_clone = ctx.clone();
+                                            let ok_fmt = format!(
+                                                "{} '{}' {}",
+                                                i18n.t("providers.api_key"),
+                                                provider_label(i18n, &name),
+                                                i18n.t("providers.push_success")
+                                            );
+                                            let err_fmt = format!(
+                                                "{} '{}': %s",
+                                                i18n.t("providers.push_failed"),
+                                                provider_label(i18n, &name)
+                                            );
+                                            tokio::spawn(async move {
+                                                // Small delay to ensure keyring write completes
+                                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                                
+                                                let result = match tokio::time::timeout(
+                                                    std::time::Duration::from_secs(10),
+                                                    backend_clone.configure_provider(&name, &key, &model),
+                                                )
+                                                .await
+                                                {
+                                                    Ok(r) => r,
+                                                    Err(_) => {
+                                                        eprintln!("Warning: auto-push configure_provider timed out");
+                                                        Err("timeout".to_string())
+                                                    }
+                                                };
+                                                let msg = match result {
+                                                    Ok(_) => ok_fmt,
+                                                    Err(e) => err_fmt.replace("%s", &e.to_string()),
+                                                };
+                                                let _ = tx.send(msg);
+                                                ctx_clone.request_repaint();
+                                            });
+                                        }
                                     }
                                 }
                                 if ui.button(i18n.t("providers.cancel")).clicked() {
@@ -585,7 +710,9 @@ impl ProvidersView {
                                 let tx = self.pending_tx.clone();
                                 let backend_clone = backend.clone();
                                 let name = provider.name.clone();
-                                let key = provider.api_key.clone();
+                                // Read API key from keyring
+                                let key = crate::keyring_util::get_api_key(&name.to_lowercase())
+                                    .unwrap_or_default();
                                 let model = provider.model.clone();
                                 let ctx_clone = ctx.clone();
                                 let ok_fmt = format!(
@@ -622,6 +749,8 @@ impl ProvidersView {
                                 let tx = self.pending_tx.clone();
                                 let backend_clone = backend.clone();
                                 let ctx_clone = ctx.clone();
+                                let ok_tpl = i18n.t("providers.ops.connStatus").to_string();
+                                let err_tpl = i18n.t("providers.ops.connStatusFailed").to_string();
                                 tokio::spawn(async move {
                                     // Add timeout to prevent hanging
                                     let result = match tokio::time::timeout(
@@ -649,11 +778,18 @@ impl ProvidersView {
                                                 .and_then(serde_json::Value::as_u64)
                                                 .unwrap_or(0);
                                             format!(
-                                                "__ops__:{}:conn ok={} latency={}ms",
-                                                name, ok, latency
+                                                "__ops__:{}:{}",
+                                                name,
+                                                ok_tpl
+                                                    .replace("{ok}", &ok.to_string())
+                                                    .replace("{latency}", &latency.to_string())
                                             )
                                         }
-                                        Err(e) => format!("__ops__:{}:conn failed {}", name, e),
+                                        Err(e) => format!(
+                                            "__ops__:{}:{}",
+                                            name,
+                                            err_tpl.replace("{error}", &e.to_string())
+                                        ),
                                     };
                                     let _ = tx.send(msg);
                                     ctx_clone.request_repaint();
@@ -671,6 +807,9 @@ impl ProvidersView {
                                 let tx = self.pending_tx.clone();
                                 let backend_clone = backend.clone();
                                 let ctx_clone = ctx.clone();
+                                let ok_tpl = i18n.t("providers.ops.completionStatus").to_string();
+                                let err_tpl =
+                                    i18n.t("providers.ops.completionStatusFailed").to_string();
                                 tokio::spawn(async move {
                                     // Add timeout to prevent hanging
                                     let result = match tokio::time::timeout(
@@ -699,13 +838,18 @@ impl ProvidersView {
                                                 .and_then(serde_json::Value::as_str)
                                                 .unwrap_or("-");
                                             format!(
-                                                "__ops__:{}:completion ok={} model={}",
-                                                name, ok, model
+                                                "__ops__:{}:{}",
+                                                name,
+                                                ok_tpl
+                                                    .replace("{ok}", &ok.to_string())
+                                                    .replace("{model}", model)
                                             )
                                         }
-                                        Err(e) => {
-                                            format!("__ops__:{}:completion failed {}", name, e)
-                                        }
+                                        Err(e) => format!(
+                                            "__ops__:{}:{}",
+                                            name,
+                                            err_tpl.replace("{error}", &e.to_string())
+                                        ),
                                     };
                                     let _ = tx.send(msg);
                                     ctx_clone.request_repaint();
@@ -718,6 +862,12 @@ impl ProvidersView {
                                 let tx = self.pending_tx.clone();
                                 let backend_clone = backend.clone();
                                 let ctx_clone = ctx.clone();
+                                let count_tpl =
+                                    i18n.t("providers.ops.capabilitiesCount").to_string();
+                                let failed_tpl =
+                                    i18n.t("providers.ops.capabilitiesFailed").to_string();
+                                let encode_failed_tpl =
+                                    i18n.t("providers.ops.capabilitiesEncodeFailed").to_string();
                                 tokio::spawn(async move {
                                     // Add timeout to prevent hanging
                                     let result = match tokio::time::timeout(
@@ -733,16 +883,26 @@ impl ProvidersView {
                                         }
                                     };
                                     let msg = match result {
-                                        Ok(models) => {
-                                            let count = models.len();
-                                            format!(
-                                                "__ops__:{}:capabilities models={}",
-                                                name, count
-                                            )
-                                        }
-                                        Err(e) => {
-                                            format!("__ops__:{}:capabilities failed {}", name, e)
-                                        }
+                                        Ok(models) => match serde_json::to_string(&models) {
+                                            Ok(payload) => {
+                                                let _ = tx.send(format!(
+                                                    "__ops__:{}:{}",
+                                                    name,
+                                                    count_tpl.replace("{count}", &models.len().to_string())
+                                                ));
+                                                format!("__caps__:{}:{}", name, payload)
+                                            }
+                                            Err(e) => format!(
+                                                "__ops__:{}:{}",
+                                                name,
+                                                encode_failed_tpl.replace("{error}", &e.to_string())
+                                            ),
+                                        },
+                                        Err(e) => format!(
+                                            "__ops__:{}:{}",
+                                            name,
+                                            failed_tpl.replace("{error}", &e.to_string())
+                                        ),
                                     };
                                     let _ = tx.send(msg);
                                     ctx_clone.request_repaint();
@@ -754,7 +914,7 @@ impl ProvidersView {
                                 i18n.t("providers.delete")
                             };
                             if ops_enabled && ui.button(delete_label).clicked() {
-                                if security.confirm_dangerous_actions
+                                if confirm_dangerous
                                     && self.pending_delete_confirmation != Some(idx)
                                 {
                                     self.pending_delete_confirmation = Some(idx);
@@ -772,6 +932,44 @@ impl ProvidersView {
                         if let Some(ops_status) = self.provider_ops_status.get(&provider.name) {
                             ui.label(ops_status);
                         }
+                        if let Some(models) = self.provider_capabilities.get(&provider.name) {
+                            for model in models.iter().take(3) {
+                                let model_name = model
+                                    .name
+                                    .as_deref()
+                                    .unwrap_or(model.id.as_str())
+                                    .to_string();
+                                let context = model
+                                    .context_window
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_else(|| "-".to_string());
+                                let tool = model.tool_calling.unwrap_or(false);
+                                let vision = model.vision.unwrap_or(false);
+                                let cost = model
+                                    .cost_tier
+                                    .clone()
+                                    .unwrap_or_else(|| "-".to_string());
+                                ui.label(format!(
+                                    "{} | {}={} | {}={} | {}={} | {}={}",
+                                    model_name,
+                                    i18n.t("providers.cap.context"),
+                                    context,
+                                    i18n.t("providers.cap.tool"),
+                                    tool,
+                                    i18n.t("providers.cap.vision"),
+                                    vision,
+                                    i18n.t("providers.cap.cost"),
+                                    cost
+                                ));
+                            }
+                            if models.len() > 3 {
+                                ui.label(
+                                    i18n
+                                        .t("providers.cap.moreModels")
+                                        .replace("{count}", &(models.len() - 3).to_string()),
+                                );
+                            }
+                        }
                     });
                     ui.add_space(4.0);
                 }
@@ -787,20 +985,17 @@ impl ProvidersView {
                     self.pending_delete_confirmation = None;
                 }
 
-                if changed {
-                    save_app_config(config);
-                }
-
                 if !self.status.is_empty() {
                     let text = self.status.clone();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
                     });
                 }
             });
+        changed
     }
 }

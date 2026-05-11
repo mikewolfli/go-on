@@ -22,6 +22,8 @@ pub struct HealthStatus {
     pub requests_per_minute: f64,
     pub success_rate: f64,
     pub avg_latency_ms: f64,
+    pub backend_version: Option<String>,
+    pub backend_build: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -269,6 +271,19 @@ impl BackendClient {
                 requests_per_minute: val["stats"]["requests_per_minute"].as_f64().unwrap_or(0.0),
                 success_rate: val["stats"]["success_rate"].as_f64().unwrap_or(0.0),
                 avg_latency_ms: val["stats"]["avg_latency_ms"].as_f64().unwrap_or(0.0),
+                backend_version: val
+                    .pointer("/lifecycle/version")
+                    .and_then(Value::as_str)
+                    .or_else(|| val.get("version").and_then(Value::as_str))
+                    .or_else(|| val.pointer("/meta/version").and_then(Value::as_str))
+                    .map(ToString::to_string),
+                backend_build: val
+                    .pointer("/lifecycle/build")
+                    .and_then(Value::as_str)
+                    .or_else(|| val.pointer("/lifecycle/build_id").and_then(Value::as_str))
+                    .or_else(|| val.pointer("/meta/build").and_then(Value::as_str))
+                    .or_else(|| val.pointer("/meta/git_commit").and_then(Value::as_str))
+                    .map(ToString::to_string),
             },
             None => HealthStatus {
                 connected: false,
@@ -277,6 +292,8 @@ impl BackendClient {
                 requests_per_minute: 0.0,
                 success_rate: 0.0,
                 avg_latency_ms: 0.0,
+                backend_version: None,
+                backend_build: None,
             },
         }
     }

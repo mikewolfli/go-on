@@ -92,9 +92,17 @@ impl Default for FeatureToggles {
     }
 }
 
+/// Provider configuration stored in GUI config file.
+///
+/// Strategy:
+///   - System keyring is tried FIRST (no macOS prompt issue on modern keyring crate).
+///   - api_key is ALSO stored in config as fallback (so key is never lost on any platform).
+///   - At backend startup, keyring is checked first; if empty, config's api_key is used.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub name: String,
+    /// API key stored directly in config (fallback when keyring unavailable).
+    /// Can be empty if key is only in system keyring.
     pub api_key: String,
     pub model: String,
     pub validated: bool,
@@ -113,18 +121,57 @@ impl Default for AppConfig {
     }
 }
 
-/// Load GUI app config from JSON file and auto-migrate keyring providers
+/// Load GUI app config from JSON file.
+///
+/// Strategy (dual storage):
+///   - api_key is stored in BOTH config file AND system keyring.
+///   - On load: migrate key from config → keyring if keyring is empty (fills keyring).
+///   - On load: migrate key from keyring → config if config is empty (fills config).
+///   - This ensures keys are never lost regardless of platform quirks.
 pub fn load_app_config() -> AppConfig {
     let path = app_config_path();
-    let mut config = if let Ok(content) = std::fs::read_to_string(&path) {
-        serde_json::from_str(&content).unwrap_or_default()
-    } else {
-        AppConfig::default()
-    };
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    let raw: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+    let mut config: AppConfig = serde_json::from_str(&content).unwrap_or_default();
 
-    // Auto-migrate: detect providers in keyring but not in config
     let mut changed = false;
-    for provider_name in [
+
+    // Step 1: If old JSON has provider data but deserialize gave empty list,
+    // rebuild from raw JSON (compatibility with intermediate format that dropped api_key field).
+    if config.providers.is_empty() {
+        if let Some(old_providers) = raw.get("providers").and_then(|p| p.as_array()) {
+            for old_p in old_providers {
+                let name = match old_p.get("name").and_then(|n| n.as_str()) {
+                    Some(n) => n.to_string(),
+                    None => continue,
+                };
+                let api_key = old_p
+                    .get("api_key")
+                    .and_then(|k| k.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let model = old_p
+                    .get("model")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("auto")
+                    .to_string();
+                let validated = old_p
+                    .get("validated")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                config.providers.push(ProviderConfig {
+                    name,
+                    api_key,
+                    model,
+                    validated,
+                });
+                changed = true;
+            }
+        }
+    }
+
+    // Step 2: Sync keys between config and keyring (bidirectional)
+    let known = [
         "deepseek",
         "openai",
         "anthropic",
@@ -132,22 +179,54 @@ pub fn load_app_config() -> AppConfig {
         "gemini",
         "groq",
         "mistral",
-    ] {
-        if config.providers.iter().any(|p| p.name == provider_name) {
-            continue;
-        }
-        if let Some(key) = crate::keyring_util::get_api_key(provider_name) {
+    ];
+    for provider_name in &known {
+        // Find matching provider in config (or any, if name matches)
+        let config_key = config
+            .providers
+            .iter()
+            .find(|p| p.name == *provider_name)
+            .map(|p| p.api_key.clone())
+            .unwrap_or_default();
+        let keyring_key = crate::keyring_util::get_api_key(provider_name);
+
+        // If config has key but keyring doesn't → write to keyring
+        if !config_key.is_empty() && config_key != "********" && keyring_key.is_none() {
             eprintln!(
-                "Auto-migrating '{}' from keyring to gui_config.json",
+                "load_config: keyring missing '{}', copying from config",
                 provider_name
             );
-            config.providers.push(ProviderConfig {
-                name: provider_name.to_string(),
-                api_key: key,
-                model: "auto".to_string(),
-                validated: true,
-            });
-            changed = true;
+            let _ = crate::keyring_util::store_api_key(provider_name, &config_key);
+        }
+
+        // If keyring has key but config doesn't → write to config
+        if let Some(kk) = &keyring_key {
+            if !kk.is_empty() && config_key.is_empty() {
+                if let Some(p) = config
+                    .providers
+                    .iter_mut()
+                    .find(|p| p.name == *provider_name)
+                {
+                    p.api_key = kk.clone();
+                    changed = true;
+                    eprintln!(
+                        "load_config: config missing '{}', copying from keyring",
+                        provider_name
+                    );
+                } else {
+                    config.providers.push(ProviderConfig {
+                        name: provider_name.to_string(),
+                        api_key: kk.clone(),
+                        model: "auto".to_string(),
+                        validated: true,
+                    });
+                    changed = true;
+                    eprintln!(
+                        "load_config: added '{}' to config from keyring",
+                        provider_name
+                    );
+                }
+            }
         }
     }
 
@@ -190,19 +269,20 @@ fn app_config_path() -> PathBuf {
     }
 }
 
-/// Check if any AI provider is configured, validated, or exists in keyring
+/// Check if any AI provider has a key available (in config or keyring).
 pub fn has_valid_providers(config: &AppConfig) -> bool {
-    // Check local config first
-    if config
-        .providers
-        .iter()
-        .any(|p| p.validated && !p.api_key.is_empty())
-    {
-        return true;
+    for p in &config.providers {
+        // Key in config
+        if !p.api_key.is_empty() && p.api_key != "********" {
+            return true;
+        }
+        // Key in keyring
+        if crate::keyring_util::has_api_key(&p.name.to_lowercase()) {
+            return true;
+        }
     }
-    // Also check if any known provider has a key in the system keyring
-    // This handles the case where key was set via CLI (--secret set) or backend
-    let known_providers = [
+    // Also check known providers in keyring not in config
+    let known = [
         "deepseek",
         "openai",
         "anthropic",
@@ -212,11 +292,9 @@ pub fn has_valid_providers(config: &AppConfig) -> bool {
         "mistral",
         "copilot",
     ];
-    for name in &known_providers {
-        if let Some(key) = crate::keyring_util::get_api_key(name) {
-            if !key.is_empty() {
-                return true;
-            }
+    for name in &known {
+        if crate::keyring_util::has_api_key(name) {
+            return true;
         }
     }
     false

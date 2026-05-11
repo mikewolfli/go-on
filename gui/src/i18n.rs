@@ -142,6 +142,7 @@ impl I18n {
             "tab.providers",
             tr!(en, "Providers", cn, "供应商", tw, "供應商"),
         );
+        m.insert("tab.about", tr!(en, "About", cn, "关于", tw, "關於"));
         m.insert(
             "app.unknownTab",
             tr!(
@@ -160,6 +161,103 @@ impl I18n {
         m.insert(
             "common.apiKeyPlaceholder",
             tr!(en, "sk-...", cn, "sk-...", tw, "sk-..."),
+        );
+
+        // About
+        m.insert(
+            "about.title",
+            tr!(en, "About This GUI", cn, "关于此 GUI", tw, "關於此 GUI"),
+        );
+        m.insert(
+            "about.subtitle",
+            tr!(
+                en,
+                "Current GUI and backend runtime information",
+                cn,
+                "当前 GUI 与后端运行信息",
+                tw,
+                "當前 GUI 與後端運行資訊"
+            ),
+        );
+        m.insert(
+            "about.guiVersion",
+            tr!(en, "GUI Version", cn, "GUI 版本", tw, "GUI 版本"),
+        );
+        m.insert(
+            "about.backendStatus",
+            tr!(en, "Backend Status", cn, "后端状态", tw, "後端狀態"),
+        );
+        m.insert(
+            "about.backendVersion",
+            tr!(en, "Backend Version", cn, "后端版本", tw, "後端版本"),
+        );
+        m.insert(
+            "about.backendBuild",
+            tr!(en, "Backend Build", cn, "后端构建", tw, "後端構建"),
+        );
+        m.insert(
+            "about.backendPid",
+            tr!(en, "Backend PID", cn, "后端 PID", tw, "後端 PID"),
+        );
+        m.insert("about.unknown", tr!(en, "unknown", cn, "未知", tw, "未知"));
+        m.insert(
+            "about.improvedTitle",
+            tr!(en, "Improved", cn, "已改进", tw, "已改進"),
+        );
+        m.insert(
+            "about.improved.monitor",
+            tr!(
+                en,
+                "Monitor data path stability and structured summaries",
+                cn,
+                "监控数据链路稳定性与结构化摘要",
+                tw,
+                "監控資料鏈路穩定性與結構化摘要"
+            ),
+        );
+        m.insert(
+            "about.improved.workflow",
+            tr!(
+                en,
+                "Workflow run center auto-polling and state-aware actions",
+                cn,
+                "工作流运行中心自动轮询与状态感知操作",
+                tw,
+                "工作流運行中心自動輪詢與狀態感知操作"
+            ),
+        );
+        m.insert(
+            "about.improved.providers",
+            tr!(
+                en,
+                "Provider capability rendering and ops diagnostics",
+                cn,
+                "供应商能力渲染与运维诊断",
+                tw,
+                "供應商能力渲染與運維診斷"
+            ),
+        );
+        m.insert(
+            "about.improved.skills",
+            tr!(
+                en,
+                "Skill version lifecycle and rollback consistency",
+                cn,
+                "技能版本生命周期与回滚一致性",
+                tw,
+                "技能版本生命週期與回滾一致性"
+            ),
+        );
+        m.insert(
+            "about.improved.i18n",
+            tr!(
+                en,
+                "Localized operational texts for better usability",
+                cn,
+                "运维文案本地化提升易用性",
+                tw,
+                "運維文案本地化提升易用性"
+            ),
         );
 
         // Monitor
@@ -952,6 +1050,17 @@ impl I18n {
             ),
         );
         m.insert(
+            "providers.auto_push_hint",
+            tr!(
+                en,
+                "💡 Key will be automatically pushed to backend after saving.",
+                cn,
+                "💡 保存后将自动推送到后端。",
+                tw,
+                "💡 保存後將自動推送到後端。"
+            ),
+        );
+        m.insert(
             "providers.enter_new_key",
             tr!(
                 en,
@@ -995,6 +1104,17 @@ impl I18n {
                 "推送提供商失败:",
                 tw,
                 "推送提供商失敗:"
+            ),
+        );
+        m.insert(
+            "providers.push_success",
+            tr!(
+                en,
+                "pushed to backend successfully.",
+                cn,
+                "已成功推送到后端。",
+                tw,
+                "已成功推送到後端。"
             ),
         );
         m.insert(
@@ -1341,6 +1461,22 @@ impl I18n {
             ),
         );
         m.insert("workflow.phase", tr!(en, "Phase", cn, "阶段", tw, "階段"));
+        m.insert(
+            "workflow.createdAt",
+            tr!(en, "Created At", cn, "创建时间", tw, "建立時間"),
+        );
+        m.insert(
+            "workflow.startedAt",
+            tr!(en, "Started At", cn, "开始时间", tw, "開始時間"),
+        );
+        m.insert(
+            "workflow.endedAt",
+            tr!(en, "Ended At", cn, "结束时间", tw, "結束時間"),
+        );
+        m.insert(
+            "workflow.duration",
+            tr!(en, "Duration", cn, "耗时", tw, "耗時"),
+        );
         m.insert("workflow.error", tr!(en, "Error", cn, "错误", tw, "錯誤"));
         m.insert(
             "workflow.artifacts",
@@ -2034,6 +2170,10 @@ impl I18n {
             tr!(en, "Reset Defaults", cn, "重置默认值", tw, "重置默認值"),
         );
         m.insert(
+            "autotune.saved",
+            tr!(en, "✓ Saved", cn, "✓ 已保存", tw, "✓ 已儲存"),
+        );
+        m.insert(
             "config.hint",
             tr!(
                 en,
@@ -2132,6 +2272,42 @@ impl I18n {
             tr!(en, "Load Errors", cn, "加载错误", tw, "載入錯誤"),
         );
         m.insert(
+            "monitor.trendSummary",
+            tr!(en, "Trend Summary", cn, "趋势摘要", tw, "趨勢摘要"),
+        );
+        m.insert("monitor.qps", tr!(en, "QPS", cn, "QPS", tw, "QPS"));
+        m.insert("monitor.p95", tr!(en, "P95", cn, "P95", tw, "P95"));
+        m.insert(
+            "monitor.errorRate",
+            tr!(en, "Error Rate", cn, "错误率", tw, "錯誤率"),
+        );
+        m.insert(
+            "monitor.successRate",
+            tr!(en, "Success Rate", cn, "成功率", tw, "成功率"),
+        );
+        m.insert(
+            "monitor.errorTopGroups",
+            tr!(
+                en,
+                "Top Error Groups",
+                cn,
+                "错误分组 Top",
+                tw,
+                "錯誤分組 Top"
+            ),
+        );
+        m.insert(
+            "monitor.sampleFailures",
+            tr!(
+                en,
+                "Sample failures: {count}",
+                cn,
+                "失败样本数: {count}",
+                tw,
+                "失敗樣本數: {count}"
+            ),
+        );
+        m.insert(
             "providers.ops.hidden",
             tr!(
                 en,
@@ -2153,6 +2329,110 @@ impl I18n {
         m.insert(
             "providers.ops.capabilities",
             tr!(en, "Capabilities", cn, "能力", tw, "能力"),
+        );
+        m.insert(
+            "providers.ops.connStatus",
+            tr!(
+                en,
+                "Conn ok={ok} latency={latency}ms",
+                cn,
+                "连接 ok={ok} 延迟={latency}ms",
+                tw,
+                "連接 ok={ok} 延遲={latency}ms"
+            ),
+        );
+        m.insert(
+            "providers.ops.connStatusFailed",
+            tr!(
+                en,
+                "Conn failed: {error}",
+                cn,
+                "连接失败: {error}",
+                tw,
+                "連接失敗: {error}"
+            ),
+        );
+        m.insert(
+            "providers.ops.completionStatus",
+            tr!(
+                en,
+                "Completion ok={ok} model={model}",
+                cn,
+                "补全 ok={ok} 模型={model}",
+                tw,
+                "補全 ok={ok} 模型={model}"
+            ),
+        );
+        m.insert(
+            "providers.ops.completionStatusFailed",
+            tr!(
+                en,
+                "Completion failed: {error}",
+                cn,
+                "补全失败: {error}",
+                tw,
+                "補全失敗: {error}"
+            ),
+        );
+        m.insert(
+            "providers.ops.capabilitiesCount",
+            tr!(
+                en,
+                "Capabilities models={count}",
+                cn,
+                "能力模型数={count}",
+                tw,
+                "能力模型數={count}"
+            ),
+        );
+        m.insert(
+            "providers.ops.capabilitiesFailed",
+            tr!(
+                en,
+                "Capabilities failed: {error}",
+                cn,
+                "能力查询失败: {error}",
+                tw,
+                "能力查詢失敗: {error}"
+            ),
+        );
+        m.insert(
+            "providers.ops.capabilitiesEncodeFailed",
+            tr!(
+                en,
+                "Capabilities encode failed: {error}",
+                cn,
+                "能力编码失败: {error}",
+                tw,
+                "能力編碼失敗: {error}"
+            ),
+        );
+        m.insert(
+            "providers.cap.context",
+            tr!(en, "ctx", cn, "上下文", tw, "上下文"),
+        );
+        m.insert(
+            "providers.cap.tool",
+            tr!(en, "tool", cn, "工具调用", tw, "工具調用"),
+        );
+        m.insert(
+            "providers.cap.vision",
+            tr!(en, "vision", cn, "视觉", tw, "視覺"),
+        );
+        m.insert(
+            "providers.cap.cost",
+            tr!(en, "cost", cn, "成本层级", tw, "成本層級"),
+        );
+        m.insert(
+            "providers.cap.moreModels",
+            tr!(
+                en,
+                "+{count} more models",
+                cn,
+                "另有 {count} 个模型",
+                tw,
+                "另有 {count} 個模型"
+            ),
         );
 
         // Language names (for settings display)

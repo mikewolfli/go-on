@@ -1,0 +1,84 @@
+use crate::backend::HealthStatus;
+use crate::i18n::I18n;
+
+pub struct AboutView;
+
+impl AboutView {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        i18n: &I18n,
+        health: Option<&HealthStatus>,
+        backend_pid: Option<u32>,
+    ) {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                ui.heading(i18n.t("about.title"));
+                ui.label(i18n.t("about.subtitle"));
+                ui.separator();
+
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    let gui_version = env!("CARGO_PKG_VERSION");
+                    ui.label(format!("{}: {}", i18n.t("about.guiVersion"), gui_version));
+                    let unknown_text = i18n.t("about.unknown").to_string();
+
+                    let backend_status = if health.is_some_and(|h| h.connected) {
+                        i18n.t("status.connected")
+                    } else {
+                        i18n.t("status.disconnected")
+                    };
+                    ui.label(format!(
+                        "{}: {}",
+                        i18n.t("about.backendStatus"),
+                        backend_status
+                    ));
+
+                    let backend_version = health
+                        .and_then(|h| h.backend_version.as_deref())
+                        .filter(|v| !v.is_empty())
+                        .unwrap_or(unknown_text.as_str());
+                    ui.label(format!(
+                        "{}: {}",
+                        i18n.t("about.backendVersion"),
+                        backend_version
+                    ));
+
+                    let backend_build = health
+                        .and_then(|h| h.backend_build.as_deref())
+                        .filter(|v| !v.is_empty())
+                        .unwrap_or(unknown_text.as_str());
+                    ui.label(format!(
+                        "{}: {}",
+                        i18n.t("about.backendBuild"),
+                        backend_build
+                    ));
+
+                    let pid_text = backend_pid
+                        .map(|pid| pid.to_string())
+                        .unwrap_or_else(|| unknown_text.clone());
+                    ui.label(format!("{}: {}", i18n.t("about.backendPid"), pid_text));
+                });
+
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new(i18n.t("about.improvedTitle")).strong());
+                ui.add_space(4.0);
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    let items = [
+                        i18n.t("about.improved.monitor"),
+                        i18n.t("about.improved.workflow"),
+                        i18n.t("about.improved.providers"),
+                        i18n.t("about.improved.skills"),
+                        i18n.t("about.improved.i18n"),
+                    ];
+                    for (idx, item) in items.iter().enumerate() {
+                        ui.label(format!("{}. {}", idx + 1, item));
+                    }
+                });
+            });
+    }
+}

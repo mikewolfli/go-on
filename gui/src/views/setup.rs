@@ -41,7 +41,7 @@ impl SetupView {
                 let text = i18n.t("setup.hint").to_string();
                 let resp = ui.label(&text);
                 resp.context_menu(|ui| {
-                    if ui.button("📋 Copy").clicked() {
+                    if ui.button(i18n.t("common.copyButton")).clicked() {
                         ui.ctx().copy_text(text.clone());
                         ui.close_menu();
                     }
@@ -52,7 +52,7 @@ impl SetupView {
                     let text = self.success_msg.clone();
                     let resp = ui.colored_label(egui::Color32::GREEN, &text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
@@ -68,7 +68,7 @@ impl SetupView {
                     let text = i18n.t("setup.provider").to_string();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
@@ -101,7 +101,7 @@ impl SetupView {
                     let text = i18n.t("setup.apiKey").to_string();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
@@ -119,7 +119,7 @@ impl SetupView {
                     let text = i18n.t("setup.model").to_string();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
@@ -146,7 +146,7 @@ impl SetupView {
                         let text = i18n.t("setup.environment").to_string();
                         let resp = ui.label(&text);
                         resp.context_menu(|ui| {
-                            if ui.button("📋 Copy").clicked() {
+                            if ui.button(i18n.t("common.copyButton")).clicked() {
                                 ui.ctx().copy_text(text.clone());
                                 ui.close_menu();
                             }
@@ -173,7 +173,7 @@ impl SetupView {
                         let text = i18n.t("setup.secretSource").to_string();
                         let resp = ui.label(&text);
                         resp.context_menu(|ui| {
-                            if ui.button("📋 Copy").clicked() {
+                            if ui.button(i18n.t("common.copyButton")).clicked() {
                                 ui.ctx().copy_text(text.clone());
                                 ui.close_menu();
                             }
@@ -202,7 +202,7 @@ impl SetupView {
                     let text = self.error_msg.clone();
                     let resp = ui.colored_label(egui::Color32::RED, &text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
@@ -220,21 +220,10 @@ impl SetupView {
                         let api_key = self.api_key.trim().to_string();
                         let provider_lower = self.selected_provider.to_lowercase();
 
-                        // Store in system keyring (shared with backend)
-                        match crate::keyring_util::store_api_key(&provider_lower, &api_key) {
-                            Ok(_) => {
-                                eprintln!(
-                                    "API key for '{}' saved to system keyring",
-                                    provider_lower
-                                );
-                            }
-                            Err(e) => {
-                                self.error_msg = format!("{}: {}", i18n.t("setup.keyringError"), e);
-                                return;
-                            }
-                        }
+                        // Store to system keyring (best-effort, may fail on some platforms)
+                        let _ = crate::keyring_util::store_api_key(&provider_lower, &api_key);
 
-                        // Persist provider info to local config
+                        // Persist to config (always works)
                         if let Some(existing) = config
                             .providers
                             .iter_mut()

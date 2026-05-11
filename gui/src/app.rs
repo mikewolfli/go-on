@@ -1,5 +1,5 @@
 use crate::backend::BackendClient;
-use crate::config::{self, has_valid_providers, save_app_config, AppConfig};
+use crate::config::{has_valid_providers, save_app_config, AppConfig};
 
 /// Write a line to go-on-gui.log in the temp directory.
 /// Only active in debug builds to avoid blocking the UI thread.
@@ -20,9 +20,9 @@ pub fn log_msg(msg: &str) {
 
 use crate::i18n::{I18n, Lang};
 use crate::views::{
-    autotune::AutoTuneView, chat::ChatView, config_editor::ConfigEditorView, monitor::MonitorView,
-    providers::ProvidersView, security::SecurityView, settings::SettingsView, setup::SetupView,
-    skills::SkillsView, workflow::WorkflowView,
+    about::AboutView, autotune::AutoTuneView, chat::ChatView, config_editor::ConfigEditorView,
+    monitor::MonitorView, providers::ProvidersView, security::SecurityView, settings::SettingsView,
+    setup::SetupView, skills::SkillsView, workflow::WorkflowView,
 };
 use std::sync::mpsc;
 use std::time::Duration;
@@ -83,6 +83,7 @@ pub struct GoOnApp {
     pub security_view: SecurityView,
     pub config_editor_view: ConfigEditorView,
     pub providers_view: ProvidersView,
+    pub about_view: AboutView,
     pub show_setup: bool,
     pub active_tab: String,
     pub has_providers: bool,
@@ -135,8 +136,155 @@ fn detect_system_language() -> Lang {
 }
 
 impl GoOnApp {
+    /// Print diagnostic info about key sources for debugging.
+    fn diagnostic_key_report(config: &AppConfig) {
+        eprintln!("=== KEY DIAGNOSTIC ===");
+        let known = [
+            "deepseek",
+            "openai",
+            "anthropic",
+            "qwen",
+            "gemini",
+            "groq",
+            "mistral",
+            "copilot",
+        ];
+        for name in &known {
+            let config_key = config
+                .providers
+                .iter()
+                .find(|p| p.name.to_lowercase() == *name)
+                .map(|p| {
+                    if p.api_key.is_empty() {
+                        "(empty)".to_string()
+                    } else {
+                        format!("{}...", &p.api_key[..4.min(p.api_key.len())])
+                    }
+                })
+                .unwrap_or_else(|| "(not in config)".to_string());
+            let keyring_key = crate::keyring_util::get_api_key(name)
+                .map(|k| format!("{}...", &k[..4.min(k.len())]))
+                .unwrap_or_else(|| "(not in keyring)".to_string());
+            eprintln!("  {}: config={}, keyring={}", name, config_key, keyring_key);
+        }
+        eprintln!("=== END DIAGNOSTIC ===");
+    }
+
+    /// Start or restart the backend child process with fresh env vars from keyring.
+    fn spawn_backend(config: &AppConfig) -> (BackendClient, Option<std::process::Child>) {
+        Self::diagnostic_key_report(config);
+        match find_backend_binary() {
+            Some(path) => {
+                let config_dir = path.parent().unwrap_or(std::path::Path::new("."));
+                let mut cmd = std::process::Command::new(&path);
+                cmd.current_dir(config_dir)
+                    .arg("--protocol-mode")
+                    .arg("acp_http")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+
+                let known = [
+                    "deepseek",
+                    "openai",
+                    "anthropic",
+                    "qwen",
+                    "gemini",
+                    "groq",
+                    "mistral",
+                    "copilot",
+                ];
+
+                // Inject API keys into backend process environment.
+                // Priority: keyring > config file > inherited env.
+                for name in &known {
+                    let env_var = match *name {
+                        "deepseek" => "DEEPSEEK_API_KEY",
+                        "openai" => "OPENAI_API_KEY",
+                        "anthropic" => "ANTHROPIC_API_KEY",
+                        "qwen" => "QWEN_API_KEY",
+                        "gemini" => "GEMINI_API_KEY",
+                        "groq" => "GROQ_API_KEY",
+                        "mistral" => "MISTRAL_API_KEY",
+                        "copilot" => "GITHUB_COPILOT_TOKEN",
+                        _ => continue,
+                    };
+
+                    // Try keyring first
+                    let mut key = crate::keyring_util::get_api_key(name);
+
+                    // Fallback: config file
+                    if key.is_none() {
+                        key = config
+                            .providers
+                            .iter()
+                            .find(|p| p.name.to_lowercase() == *name)
+                            .map(|p| p.api_key.clone())
+                            .filter(|k| !k.is_empty() && k != "********");
+                    }
+
+                    // Fallback: inherited env var
+                    if key.is_none() {
+                        key = std::env::var(env_var).ok().filter(|v| !v.is_empty());
+                    }
+
+                    if let Some(k) = key {
+                        let preview = if k.len() > 4 {
+                            format!("{}...", &k[..4])
+                        } else {
+                            "[short]".to_string()
+                        };
+                        eprintln!("backend: set {}={}", env_var, preview);
+                        cmd.env(env_var, k);
+                    } else {
+                        eprintln!("backend: no key found for '{}'", name);
+                    }
+                }
+
+                // Sync language between GUI and backend
+                cmd.env("LANG", &config.language);
+
+                match cmd.spawn() {
+                    Ok(child) => {
+                        eprintln!("go-on backend started (PID: {})", child.id());
+                        (BackendClient::new(&config.backend_url), Some(child))
+                    }
+                    Err(e) => {
+                        eprintln!("warning: failed to start backend: {}", e);
+                        (BackendClient::new(&config.backend_url), None)
+                    }
+                }
+            }
+            None => {
+                eprintln!("warning: go-on backend binary not found");
+                (BackendClient::new(&config.backend_url), None)
+            }
+        }
+    }
+
+    /// Kill the current backend child and start a new one with fresh env vars.
+    /// Called after adding/updating API keys so the new keys take effect immediately.
+    fn restart_backend(&mut self) {
+        // Kill old process
+        if let Some(mut child) = self.backend_child.take() {
+            eprintln!("Restarting backend (old PID: {})...", child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        // Start new
+        let (backend, child) = Self::spawn_backend(&self.config);
+        self.backend = backend;
+        self.backend_child = child;
+        // Force immediate refresh on next update() cycle
+        self.pending_refresh = false;
+        self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+        // Clear stale health/providers so monitor shows correct state
+        self.monitor_view.health = None;
+        self.monitor_view.providers = Vec::new();
+        eprintln!("Backend restarted");
+    }
+
     pub fn new() -> Self {
-        let config = config::load_app_config();
+        let config = crate::config::load_app_config();
         // Auto-detect: if user hasn't explicitly set a language, try system locale
         let lang = if config.language.is_empty() || config.language == "en" {
             detect_system_language()
@@ -151,89 +299,8 @@ impl GoOnApp {
 
         let (backend_tx, backend_updates) = mpsc::channel();
 
-        // Always try to start backend, loading API keys from keyring
-        let (backend, backend_child) = match find_backend_binary() {
-            Some(path) => {
-                let config_dir = path.parent().unwrap_or(std::path::Path::new("."));
-                let mut cmd = std::process::Command::new(&path);
-                cmd.current_dir(config_dir)
-                    .arg("--protocol-mode")
-                    .arg("acp_http")
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null());
-                // Load API keys from GUI config providers and keyring
-                let mut set_env = |name: &str, key: &str| {
-                    let env_var = match name {
-                        "deepseek" => "DEEPSEEK_API_KEY",
-                        "openai" => "OPENAI_API_KEY",
-                        "anthropic" => "ANTHROPIC_API_KEY",
-                        "qwen" => "QWEN_API_KEY",
-                        "gemini" => "GEMINI_API_KEY",
-                        "groq" => "GROQ_API_KEY",
-                        "mistral" => "MISTRAL_API_KEY",
-                        "copilot" => "GITHUB_COPILOT_TOKEN",
-                        _ => return,
-                    };
-                    cmd.env(env_var, key);
-                };
-                for p in &config.providers {
-                    if !p.api_key.is_empty() {
-                        set_env(&p.name.to_lowercase(), &p.api_key);
-                    }
-                }
-                // Load keys from macOS Keychain (GUI is a foreground app, can access keychain)
-                let known = [
-                    "deepseek",
-                    "openai",
-                    "anthropic",
-                    "qwen",
-                    "gemini",
-                    "groq",
-                    "mistral",
-                    "copilot",
-                ];
-                for name in &known {
-                    if let Some(key) = crate::keyring_util::get_api_key(name) {
-                        set_env(name, &key);
-                    }
-                }
-                // Also pass through any env vars already set by the user
-                for name in &known {
-                    let env_var = match *name {
-                        "deepseek" => "DEEPSEEK_API_KEY",
-                        "openai" => "OPENAI_API_KEY",
-                        "anthropic" => "ANTHROPIC_API_KEY",
-                        "qwen" => "QWEN_API_KEY",
-                        "gemini" => "GEMINI_API_KEY",
-                        "groq" => "GROQ_API_KEY",
-                        "mistral" => "MISTRAL_API_KEY",
-                        "copilot" => "GITHUB_COPILOT_TOKEN",
-                        _ => continue,
-                    };
-                    if let Ok(val) = std::env::var(env_var) {
-                        if !val.is_empty() {
-                            cmd.env(env_var, val);
-                        }
-                    }
-                }
-                // Sync language between GUI and backend
-                cmd.env("LANG", &config.language);
-                match cmd.spawn() {
-                    Ok(child) => {
-                        eprintln!("go-on 后端已启动 (PID: {})", child.id());
-                        (BackendClient::new(&config.backend_url), Some(child))
-                    }
-                    Err(e) => {
-                        eprintln!("警告: 启动后端失败: {}", e);
-                        (BackendClient::new(&config.backend_url), None)
-                    }
-                }
-            }
-            None => {
-                eprintln!("警告: 找不到 go-on 后端程序");
-                (BackendClient::new(&config.backend_url), None)
-            }
-        };
+        // Start backend with env vars from keyring
+        let (backend, backend_child) = Self::spawn_backend(&config);
 
         Self {
             backend,
@@ -247,6 +314,7 @@ impl GoOnApp {
             security_view: SecurityView::new(),
             config_editor_view: ConfigEditorView::new(),
             providers_view: ProvidersView::new(),
+            about_view: AboutView::new(),
             config,
             show_setup: !providers_valid,
             // Internal tab IDs must stay stable (English keys); labels are localized in UI.
@@ -307,6 +375,8 @@ impl GoOnApp {
                                 requests_per_minute: 0.0,
                                 success_rate: 0.0,
                                 avg_latency_ms: 0.0,
+                                backend_version: None,
+                                backend_build: None,
                             }
                         }
                     };
@@ -344,7 +414,7 @@ impl eframe::App for GoOnApp {
             let theme = crate::theme::Theme::from_name(&self.config.theme);
             theme.apply(ctx);
         }
-        ctx.request_repaint_after(Duration::from_millis(200));
+        ctx.request_repaint_after(Duration::from_millis(500));
 
         // Reap zombie child if backend exited
         if let Some(ref mut child) = self.backend_child {
@@ -368,6 +438,8 @@ impl eframe::App for GoOnApp {
                 self.show_setup = false;
                 self.has_providers = has_valid_providers(&self.config);
                 save_app_config(&self.config);
+                // Restart backend so it picks up the new API key from env
+                self.restart_backend();
             }
             ctx.request_repaint();
             return;
@@ -503,14 +575,30 @@ impl eframe::App for GoOnApp {
                     &mut self.config,
                     config_safe_mode_enabled,
                 ),
-                "providers" => self.providers_view.show(
-                    ui,
-                    &self.i18n,
-                    &mut self.config,
-                    &self.backend,
-                    ctx,
-                    providers_ops_enabled,
-                ),
+                "providers" => {
+                    let changed = self.providers_view.show(
+                        ui,
+                        &self.i18n,
+                        &mut self.config,
+                        &self.backend,
+                        ctx,
+                        providers_ops_enabled,
+                    );
+                    if changed {
+                        save_app_config(&self.config);
+                        // Providers page may have added/updated API keys in keyring.
+                        // Restart backend so it picks up the new keys.
+                        self.restart_backend();
+                    }
+                }
+                "about" => {
+                    self.about_view.show(
+                        ui,
+                        &self.i18n,
+                        self.monitor_view.health.as_ref(),
+                        self.backend_child.as_ref().map(std::process::Child::id),
+                    );
+                }
                 _ => {
                     ui.heading(&tab);
                     ui.label(self.i18n.t("app.unknownTab"));
@@ -568,6 +656,7 @@ impl GoOnApp {
         if self.config.features.providers {
             tabs.push("providers".into());
         }
+        tabs.push("about".into());
         tabs.push("settings".into());
         tabs
     }
@@ -582,6 +671,7 @@ impl GoOnApp {
             "security" => self.i18n.t("tab.security"),
             "config" => self.i18n.t("tab.config"),
             "providers" => self.i18n.t("tab.providers"),
+            "about" => self.i18n.t("tab.about"),
             "settings" => self.i18n.t("tab.settings"),
             _ => std::borrow::Cow::Borrowed(tab),
         }

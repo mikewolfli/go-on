@@ -37,7 +37,7 @@ impl ConfigEditorView {
                 let text = i18n.t("config.hint").to_string();
                 let resp = ui.label(&text);
                 resp.context_menu(|ui| {
-                    if ui.button("📋 Copy").clicked() {
+                    if ui.button(i18n.t("common.copyButton")).clicked() {
                         ui.ctx().copy_text(text.clone());
                         ui.close_menu();
                     }
@@ -112,7 +112,7 @@ impl ConfigEditorView {
                     let text = self.status.clone();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }

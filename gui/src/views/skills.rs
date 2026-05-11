@@ -8,7 +8,15 @@ enum SkillsUpdate {
     List(Vec<SkillRecord>, Option<String>),
     Create(Result<SkillRecord, String>),
     Import(Result<SkillRecord, String>),
-    Message { text: String, is_error: bool },
+    Versions {
+        skill_name: String,
+        versions: Vec<String>,
+        err: Option<String>,
+    },
+    Message {
+        text: String,
+        is_error: bool,
+    },
 }
 
 pub struct SkillsView {
@@ -30,6 +38,8 @@ pub struct SkillsView {
     edit_schema: String,
     test_input: String,
     rollback_version: String,
+    versions_for_skill: String,
+    versions: Vec<String>,
     initialized: bool,
     pending_rx: mpsc::Receiver<SkillsUpdate>,
     pending_tx: mpsc::Sender<SkillsUpdate>,
@@ -57,6 +67,8 @@ impl SkillsView {
             edit_schema: r#"{"query":"string"}"#.to_string(),
             test_input: r#"{"query":"health check"}"#.to_string(),
             rollback_version: String::new(),
+            versions_for_skill: String::new(),
+            versions: Vec::new(),
             initialized: false,
             pending_rx,
             pending_tx,
@@ -85,6 +97,8 @@ impl SkillsView {
         self.edit_schema = r#"{"query":"string"}"#.to_string();
         self.test_input = r#"{"query":"health check"}"#.to_string();
         self.rollback_version = skill.version.clone().unwrap_or_default();
+        self.versions_for_skill.clear();
+        self.versions.clear();
     }
 
     fn load_skill_editor_by_name(&mut self, name: &str) -> bool {
@@ -211,6 +225,26 @@ impl SkillsView {
                         self.error.clear();
                     }
                 }
+                SkillsUpdate::Versions {
+                    skill_name,
+                    versions,
+                    err,
+                } => {
+                    self.sending = false;
+                    if let Some(err) = err {
+                        self.error = err;
+                        self.success.clear();
+                    } else {
+                        self.error.clear();
+                        self.success = i18n
+                            .t("skills.lifecycle.versionCount")
+                            .replace("{name}", &skill_name)
+                            .replace("{count}", &versions.len().to_string())
+                            .to_string();
+                        self.versions_for_skill = skill_name;
+                        self.versions = versions;
+                    }
+                }
             }
         }
     }
@@ -242,7 +276,7 @@ impl SkillsView {
                 let text = i18n.t("skills.loading").to_string();
                 let resp = ui.label(&text);
                 resp.context_menu(|ui| {
-                    if ui.button("📋 Copy").clicked() {
+                    if ui.button(i18n.t("common.copyButton")).clicked() {
                         ui.ctx().copy_text(text.clone());
                         ui.close_menu();
                     }
@@ -256,7 +290,7 @@ impl SkillsView {
             let text = self.error.clone();
             let resp = ui.colored_label(egui::Color32::RED, &text);
             resp.context_menu(|ui| {
-                if ui.button("📋 Copy").clicked() {
+                if ui.button(i18n.t("common.copyButton")).clicked() {
                     ui.ctx().copy_text(text.clone());
                     ui.close_menu();
                 }
@@ -269,7 +303,7 @@ impl SkillsView {
             let text = self.success.clone();
             let resp = ui.colored_label(egui::Color32::GREEN, &text);
             resp.context_menu(|ui| {
-                if ui.button("📋 Copy").clicked() {
+                if ui.button(i18n.t("common.copyButton")).clicked() {
                     ui.ctx().copy_text(text.clone());
                     ui.close_menu();
                 }
@@ -326,7 +360,7 @@ impl SkillsView {
                 let text = i18n.t("skills.create.title").to_string();
                 let resp = ui.label(&text);
                 resp.context_menu(|ui| {
-                    if ui.button("📋 Copy").clicked() {
+                    if ui.button(i18n.t("common.copyButton")).clicked() {
                         ui.ctx().copy_text(text.clone());
                         ui.close_menu();
                     }
@@ -335,7 +369,7 @@ impl SkillsView {
                     let text = i18n.t("skills.create.name").to_string();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
@@ -346,7 +380,7 @@ impl SkillsView {
                     let text = i18n.t("skills.create.desc").to_string();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
@@ -356,7 +390,7 @@ impl SkillsView {
                 let text = i18n.t("skills.create.prompt").to_string();
                 let resp = ui.label(&text);
                 resp.context_menu(|ui| {
-                    if ui.button("📋 Copy").clicked() {
+                    if ui.button(i18n.t("common.copyButton")).clicked() {
                         ui.ctx().copy_text(text.clone());
                         ui.close_menu();
                     }
@@ -365,7 +399,7 @@ impl SkillsView {
                 let text = i18n.t("skills.create.schema").to_string();
                 let resp = ui.label(&text);
                 resp.context_menu(|ui| {
-                    if ui.button("📋 Copy").clicked() {
+                    if ui.button(i18n.t("common.copyButton")).clicked() {
                         ui.ctx().copy_text(text.clone());
                         ui.close_menu();
                     }
@@ -463,7 +497,7 @@ impl SkillsView {
                 let text = i18n.t("skills.import.title").to_string();
                 let resp = ui.label(&text);
                 resp.context_menu(|ui| {
-                    if ui.button("📋 Copy").clicked() {
+                    if ui.button(i18n.t("common.copyButton")).clicked() {
                         ui.ctx().copy_text(text.clone());
                         ui.close_menu();
                     }
@@ -642,7 +676,7 @@ impl SkillsView {
                 let text_none = i18n.t("skills.none").to_string();
                 let resp = ui.label(egui::RichText::new(&text_none).size(14.0).color(egui::Color32::from_rgb(140, 142, 150)));
                 resp.context_menu(|ui| {
-                    if ui.button("📋 Copy").clicked() {
+                    if ui.button(i18n.t("common.copyButton")).clicked() {
                         ui.ctx().copy_text(text_none.clone());
                         ui.close_menu();
                     }
@@ -663,7 +697,7 @@ impl SkillsView {
                                     .strong(),
                             );
                             resp.context_menu(|ui| {
-                                if ui.button("📋 Copy").clicked() {
+                                if ui.button(i18n.t("common.copyButton")).clicked() {
                                     ui.ctx().copy_text(text.clone());
                                     ui.close_menu();
                                 }
@@ -676,7 +710,7 @@ impl SkillsView {
                                 .size(13.0),
                         );
                         resp.context_menu(|ui| {
-                            if ui.button("📋 Copy").clicked() {
+                            if ui.button(i18n.t("common.copyButton")).clicked() {
                                 ui.ctx().copy_text(text.clone());
                                 ui.close_menu();
                             }
@@ -763,7 +797,7 @@ impl SkillsView {
                         .to_string();
                     let resp = ui.colored_label(egui::Color32::from_rgb(100, 150, 255), &name_text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(name_text.clone());
                             ui.close_menu();
                         }
@@ -776,12 +810,21 @@ impl SkillsView {
                         };
                         ui.colored_label(color, label);
                     }
+                    if let Some(ver) = &skill.version {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("v{ver}"))
+                                    .small()
+                                    .color(egui::Color32::from_rgb(140, 142, 150)),
+                            );
+                        });
+                    }
                 });
                 if let Some(desc) = &skill.description {
                     let text = desc.clone();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
@@ -904,7 +947,6 @@ impl SkillsView {
                             let backend_clone = backend.clone();
                             let ctx_clone = ctx.clone();
                             let skill_name = name.clone();
-                            let count_tpl = i18n.t("skills.lifecycle.versionCount").to_string();
                             let failed_tpl = i18n.t("skills.lifecycle.versionsFailed").to_string();
                             tokio::spawn(async move {
                                 // Add timeout to prevent hanging
@@ -921,25 +963,55 @@ impl SkillsView {
                                     }
                                 };
                                 let is_error = result.is_err();
-                                let msg = match result {
-                                    Ok(v) => {
-                                        let count = v
-                                            .get("versions")
-                                            .and_then(serde_json::Value::as_array)
-                                            .map(|arr| arr.len())
-                                            .unwrap_or(0);
-                                        count_tpl
-                                            .replace("{name}", &skill_name)
-                                            .replace("{count}", &count.to_string())
-                                    }
-                                    Err(e) => failed_tpl
+                                if is_error {
+                                    let msg = failed_tpl
                                         .replace("{name}", &skill_name)
-                                        .replace("{error}", &e.to_string()),
-                                };
-                                let _ = tx.send(SkillsUpdate::Message {
-                                    text: msg,
-                                    is_error,
-                                });
+                                        .replace(
+                                            "{error}",
+                                            &result.err().unwrap_or_else(|| "unknown".to_string()),
+                                        );
+                                    let _ = tx.send(SkillsUpdate::Versions {
+                                        skill_name,
+                                        versions: Vec::new(),
+                                        err: Some(msg),
+                                    });
+                                } else {
+                                    let mut versions = Vec::new();
+                                    if let Ok(v) = result {
+                                        if let Some(arr) =
+                                            v.get("versions").and_then(serde_json::Value::as_array)
+                                        {
+                                            for item in arr {
+                                                if let Some(version) = item.as_str() {
+                                                    versions.push(version.to_string());
+                                                } else if let Some(version) = item
+                                                    .get("version")
+                                                    .and_then(serde_json::Value::as_str)
+                                                {
+                                                    versions.push(version.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if versions.is_empty() {
+                                        let _ = tx.send(SkillsUpdate::Versions {
+                                            skill_name,
+                                            versions: Vec::new(),
+                                            err: None,
+                                        });
+                                    } else {
+                                        versions.sort_by(|a, b| {
+                                            let a_num = a.parse::<i64>().unwrap_or(-1);
+                                            let b_num = b.parse::<i64>().unwrap_or(-1);
+                                            b_num.cmp(&a_num).then_with(|| b.cmp(a))
+                                        });
+                                        let _ = tx.send(SkillsUpdate::Versions {
+                                            skill_name,
+                                            versions,
+                                            err: None,
+                                        });
+                                    }
+                                }
                                 ctx_clone.request_repaint();
                             });
                         }
@@ -1110,15 +1182,68 @@ impl SkillsView {
                         let skill_name = self.selected_skill_name.clone();
                         let rolled_back_tpl = i18n.t("skills.lifecycle.rolledBack").to_string();
                         let failed_tpl = i18n.t("skills.lifecycle.rollbackFailed").to_string();
+                        let version_count_tpl = i18n.t("skills.lifecycle.versionCount").to_string();
                         tokio::spawn(async move {
-                            let result = backend_clone
-                                .rollback_skill_version(&skill_name, &version)
-                                .await;
+                            let result = match tokio::time::timeout(
+                                std::time::Duration::from_secs(15),
+                                backend_clone.rollback_skill_version(&skill_name, &version),
+                            )
+                            .await
+                            {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    eprintln!("Warning: rollback_skill_version timed out");
+                                    Err("timeout".to_string())
+                                }
+                            };
                             let is_error = result.is_err();
                             let msg = match result {
-                                Ok(_) => rolled_back_tpl
-                                    .replace("{name}", &skill_name)
-                                    .replace("{version}", &version),
+                                Ok(_) => {
+                                    // Refresh versions right after rollback for immediate consistency.
+                                    if let Ok(Ok(v)) = tokio::time::timeout(
+                                        std::time::Duration::from_secs(10),
+                                        backend_clone.list_skill_versions(&skill_name),
+                                    )
+                                    .await
+                                    {
+                                        let mut versions = Vec::new();
+                                        if let Some(arr) =
+                                            v.get("versions").and_then(serde_json::Value::as_array)
+                                        {
+                                            for item in arr {
+                                                if let Some(ver) = item.as_str() {
+                                                    versions.push(ver.to_string());
+                                                } else if let Some(ver) = item
+                                                    .get("version")
+                                                    .and_then(serde_json::Value::as_str)
+                                                {
+                                                    versions.push(ver.to_string());
+                                                }
+                                            }
+                                        }
+                                        versions.sort_by(|a, b| {
+                                            let a_num = a.parse::<i64>().unwrap_or(-1);
+                                            let b_num = b.parse::<i64>().unwrap_or(-1);
+                                            b_num.cmp(&a_num).then_with(|| b.cmp(a))
+                                        });
+                                        let _ = tx.send(SkillsUpdate::Versions {
+                                            skill_name: skill_name.clone(),
+                                            versions,
+                                            err: None,
+                                        });
+                                    } else {
+                                        let _ = tx.send(SkillsUpdate::Message {
+                                            text: version_count_tpl
+                                                .replace("{name}", &skill_name)
+                                                .replace("{count}", "0")
+                                                .to_string(),
+                                            is_error: false,
+                                        });
+                                    }
+                                    rolled_back_tpl
+                                        .replace("{name}", &skill_name)
+                                        .replace("{version}", &version)
+                                }
                                 Err(e) => failed_tpl
                                     .replace("{name}", &skill_name)
                                     .replace("{error}", &e.to_string()),
@@ -1131,6 +1256,19 @@ impl SkillsView {
                         });
                     }
                 });
+
+                if self.versions_for_skill == self.selected_skill_name && !self.versions.is_empty() {
+                    ui.add_space(6.0);
+                    ui.label(i18n.t("skills.lifecycle.versions"));
+                    ui.horizontal_wrapped(|ui| {
+                        for ver in &self.versions {
+                            let selected = self.rollback_version == *ver;
+                            if ui.selectable_label(selected, format!("v{}", ver)).clicked() {
+                                self.rollback_version = ver.clone();
+                            }
+                        }
+                    });
+                }
             });
         }
         });

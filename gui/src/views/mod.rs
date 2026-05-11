@@ -1,3 +1,4 @@
+pub mod about;
 pub mod autotune;
 pub mod chat;
 pub mod config_editor;

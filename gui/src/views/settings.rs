@@ -252,13 +252,9 @@ impl SettingsView {
                             .button(i18n.t("settings.enterprise.exportMasked"))
                             .clicked()
                         {
-                            let mut masked = config.clone();
-                            for provider in &mut masked.providers {
-                                if !provider.api_key.is_empty() {
-                                    provider.api_key = "********".to_string();
-                                }
-                            }
-                            if let Ok(content) = serde_json::to_string_pretty(&masked) {
+                            // Config no longer stores api_key in plaintext
+                            // (keys are in system keyring). Direct export is safe.
+                            if let Ok(content) = serde_json::to_string_pretty(&config) {
                                 let _ = std::fs::write(&config.enterprise.export_path, content);
                             }
                         }

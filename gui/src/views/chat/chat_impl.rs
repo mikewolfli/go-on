@@ -2,27 +2,17 @@ use crate::backend::BackendClient;
 use crate::i18n::I18n;
 use crate::views::autotune::AutoTuneView;
 use serde_json::Value;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-const CHAT_PERF_WINDOW: usize = 120;
-const CHAT_PERF_SUMMARY_INTERVAL: u64 = 60;
 const CHAT_DISABLE_MARKDOWN_RENDER: bool = false;
-const CHAT_SAFE_MODE: bool = true;
-// Isolation stages for step-by-step freeze diagnosis:
-// 1=minimal list only, 2=+input widget, 3=+Enter send, 4=+show_messages,
-// 5=+sidebar, 6=full original layout (safe mode bypassed).
+#[allow(dead_code)]
 const CHAT_ISOLATION_STAGE: u8 = 6;
-// Stage-6 probe: metadata sync can trigger frequent disk writes if values flap each frame.
-const CHAT_STAGE6_ENABLE_METADATA_SYNC: bool = true;
-const CHAT_STAGE6_ENABLE_SEARCH_ROW: bool = true;
 const CHAT_STAGE6_ENABLE_MODE_ROW: bool = true;
 const CHAT_STAGE6_ENABLE_EXTRA_BUTTONS: bool = true;
-const CHAT_STAGE6_ENABLE_MODEL_PICKER_WINDOW: bool = true;
-const CHAT_STAGE6_FORCE_SAFE_LAYOUT_SKELETON: bool = true;
 
 use super::types::{
     AiStatus, Attachment, GenerationState, Message, PendingResponse, PhaseRecord, PromptTemplate,
@@ -70,78 +60,26 @@ pub struct ChatView {
     template_name_buf: String,
     template_command_buf: String,
     template_content_buf: String,
+    #[allow(dead_code)]
     template_search_query: String,
     templates_bootstrapped: bool,
     // Feature 9: search (sessions + messages)
     session_search_query: String,
+    #[allow(dead_code)]
     message_search_query: String,
     // Feature 6: multi-model
     selected_model: String,
     selected_models: Vec<String>,
     available_models: Vec<String>,
     models_loaded: bool,
-    perf_total_samples: VecDeque<u128>,
-    perf_sidebar_samples: VecDeque<u128>,
-    perf_messages_samples: VecDeque<u128>,
-    perf_composer_samples: VecDeque<u128>,
-    perf_frame_counter: u64,
-    debug_log_bootstrapped: bool,
-    // Message pagination
+    // Message pagination (reserved for future use)
+    #[allow(dead_code)]
     messages_page: usize,
+    #[allow(dead_code)]
     const_messages_per_page: usize,
 }
 
 impl ChatView {
-    fn chat_debug_enabled() -> bool {
-        std::env::var("GOON_GUI_CHAT_DEBUG")
-            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
-            .unwrap_or(false)
-    }
-
-    fn chat_debug_log(msg: &str) {
-        if !Self::chat_debug_enabled() {
-            return;
-        }
-        eprintln!("{}", msg);
-        let path = std::env::temp_dir().join("go-on-chat-debug.log");
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-        {
-            use std::io::Write;
-            let _ = writeln!(f, "{}", msg);
-        }
-    }
-
-    fn push_perf_sample(samples: &mut VecDeque<u128>, value: u128) {
-        if samples.len() >= CHAT_PERF_WINDOW {
-            samples.pop_front();
-        }
-        samples.push_back(value);
-    }
-
-    fn perf_avg(samples: &VecDeque<u128>) -> u128 {
-        if samples.is_empty() {
-            return 0;
-        }
-        samples.iter().sum::<u128>() / samples.len() as u128
-    }
-
-    fn perf_p95(samples: &VecDeque<u128>) -> u128 {
-        if samples.is_empty() {
-            return 0;
-        }
-        let mut sorted: Vec<u128> = samples.iter().copied().collect();
-        sorted.sort_unstable();
-        let idx = ((sorted.len() - 1) * 95) / 100;
-        sorted[idx]
-    }
-
-    fn perf_max(samples: &VecDeque<u128>) -> u128 {
-        samples.iter().copied().max().unwrap_or(0)
-    }
-
     fn markdown_to_plain_text(text: &str) -> String {
         let mut out = String::with_capacity(text.len());
         let mut in_code_fence = false;
@@ -320,12 +258,6 @@ impl ChatView {
             selected_models: initial_models,
             available_models: vec!["auto".to_string()],
             models_loaded: false,
-            perf_total_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
-            perf_sidebar_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
-            perf_messages_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
-            perf_composer_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
-            perf_frame_counter: 0,
-            debug_log_bootstrapped: false,
             // Pagination
             messages_page: 0,
             const_messages_per_page: 3,
@@ -495,6 +427,7 @@ impl ChatView {
         }
     }
 
+    #[allow(dead_code)]
     fn normalize_command(command: &str) -> String {
         let trimmed = command.trim();
         if trimmed.is_empty() {
@@ -532,6 +465,7 @@ impl ChatView {
         trimmed.to_string()
     }
 
+    #[allow(dead_code)]
     fn load_template_into_editor(&mut self, idx: usize) {
         if let Some(template) = self.prompt_templates.get(idx) {
             self.selected_template_idx = Some(idx);
@@ -636,12 +570,6 @@ mod tests {
             selected_models: vec!["auto".to_string()],
             available_models: vec!["auto".to_string()],
             models_loaded: false,
-            perf_total_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
-            perf_sidebar_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
-            perf_messages_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
-            perf_composer_samples: VecDeque::with_capacity(CHAT_PERF_WINDOW),
-            perf_frame_counter: 0,
-            debug_log_bootstrapped: false,
             messages_page: 0,
             const_messages_per_page: 3,
         }
@@ -731,14 +659,11 @@ mod tests {
 
 /// Format timestamp as absolute date+time in local timezone (e.g. "2025-05-07 14:30")
 fn format_absolute_time(ts: u64) -> String {
-    // Use chrono for proper local timezone handling
-    let naive = chrono::DateTime::from_timestamp(ts as i64, 0)
-        .map(|dt| dt.naive_local())
-        .unwrap_or_else(|| {
-            chrono::NaiveDateTime::new(
-                chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
-                chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
-            )
-        });
-    naive.format("%Y-%m-%d %H:%M").to_string()
+    use chrono::{Local, TimeZone};
+    // Convert UTC timestamp to local timezone
+    let local = Local
+        .timestamp_opt(ts as i64, 0)
+        .single()
+        .unwrap_or_else(|| Local.timestamp_opt(0, 0).single().unwrap());
+    local.format("%Y-%m-%d %H:%M").to_string()
 }

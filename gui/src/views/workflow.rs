@@ -1,12 +1,11 @@
 use crate::backend::{BackendClient, WorkflowRunRecord};
 use crate::i18n::I18n;
 use crate::views::autotune::AutoTuneView;
-use crate::views::security_prefs;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::mpsc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const STEP_TIMEOUT_SECS: u64 = 120;
 
@@ -39,9 +38,33 @@ pub struct WorkflowView {
     run_status_filter: String,
     runs_loading: bool,
     run_center_msg: String,
+    last_run_center_poll: Instant,
+    /// Cached security prefs — reloaded at most once per 10s to avoid per-frame disk reads.
+    cached_security: crate::views::security_prefs::SecurityPrefs,
+    security_last_load: Instant,
 }
 
 impl WorkflowView {
+    fn format_local_ts(ts: i64) -> String {
+        use chrono::{Local, TimeZone};
+        Local
+            .timestamp_opt(ts, 0)
+            .single()
+            .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| ts.to_string())
+    }
+
+    fn run_duration_secs(run: &WorkflowRunRecord) -> Option<i64> {
+        let started = run.started_at?;
+        let end = run.ended_at.unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64
+        });
+        Some((end - started).max(0))
+    }
+
     fn status_label<'a>(i18n: &'a I18n, status: &'a str) -> std::borrow::Cow<'a, str> {
         match status {
             "all" => i18n.t("workflow.runStatus.all"),
@@ -53,6 +76,79 @@ impl WorkflowView {
             "cancelled" => i18n.t("workflow.runStatus.cancelled"),
             _ => std::borrow::Cow::Borrowed(status),
         }
+    }
+
+    fn status_color(status: &str) -> egui::Color32 {
+        match status {
+            "queued" => egui::Color32::from_rgb(240, 180, 70),
+            "running" => egui::Color32::from_rgb(80, 180, 120),
+            "paused" => egui::Color32::from_rgb(140, 145, 160),
+            "succeeded" => egui::Color32::from_rgb(70, 175, 110),
+            "failed" => egui::Color32::from_rgb(220, 90, 90),
+            "cancelled" => egui::Color32::from_rgb(170, 130, 130),
+            _ => egui::Color32::from_rgb(140, 145, 160),
+        }
+    }
+
+    fn request_runs(&mut self, backend: &BackendClient, ctx: &egui::Context) {
+        self.runs_loading = true;
+        self.run_center_msg.clear();
+        let backend_clone = backend.clone();
+        let filter = self.run_status_filter.clone();
+        let tx = self.pending_tx.clone();
+        let ctx_clone = ctx.clone();
+        tokio::spawn(async move {
+            let status = if filter == "all" {
+                None
+            } else {
+                Some(filter.as_str())
+            };
+            let result = match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                backend_clone.list_workflow_runs(50, 0, status),
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    eprintln!("Warning: list_workflow_runs timed out");
+                    Err("timeout".to_string())
+                }
+            };
+            let msg = match result {
+                Ok(v) => format!("__runs__:{v}"),
+                Err(e) => format!("__runs_error__:{e}"),
+            };
+            let _ = tx.send(msg);
+            ctx_clone.request_repaint();
+        });
+    }
+
+    fn request_run_detail(&self, run_id: &str, backend: &BackendClient, ctx: &egui::Context) {
+        let run_id = run_id.to_string();
+        let backend_clone = backend.clone();
+        let tx = self.pending_tx.clone();
+        let ctx_clone = ctx.clone();
+        tokio::spawn(async move {
+            let result = match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                backend_clone.get_workflow_run(&run_id),
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    eprintln!("Warning: get_workflow_run timed out");
+                    Err("timeout".to_string())
+                }
+            };
+            let msg = match result {
+                Ok(v) => format!("__run_detail__:{v}"),
+                Err(e) => format!("__run_detail_error__:{e}"),
+            };
+            let _ = tx.send(msg);
+            ctx_clone.request_repaint();
+        });
     }
 
     pub fn new() -> Self {
@@ -72,6 +168,9 @@ impl WorkflowView {
             run_status_filter: "all".to_string(),
             runs_loading: false,
             run_center_msg: String::new(),
+            last_run_center_poll: Instant::now(),
+            cached_security: crate::views::security_prefs::load(),
+            security_last_load: Instant::now(),
         }
     }
 
@@ -127,6 +226,9 @@ impl WorkflowView {
                         if let Some(first) = self.runs.first() {
                             self.selected_run_id = first.run_id.clone();
                         }
+                    } else if !self.runs.iter().any(|r| r.run_id == self.selected_run_id) {
+                        self.selected_run_id.clear();
+                        self.selected_run_detail = None;
                     }
                 }
                 continue;
@@ -324,7 +426,7 @@ impl WorkflowView {
                 let text = i18n.t("workflow.hint").to_string();
                 let resp = ui.label(&text);
                 resp.context_menu(|ui| {
-                    if ui.button("📋 Copy").clicked() {
+                    if ui.button(i18n.t("common.copyButton")).clicked() {
                         ui.ctx().copy_text(text.clone());
                         ui.close_menu();
                     }
@@ -336,13 +438,19 @@ impl WorkflowView {
                     ui.add_space(6.0);
                 }
 
-                let security = security_prefs::load();
+                // Reload security prefs at most once per 10 seconds to avoid per-frame disk reads.
+                if self.security_last_load.elapsed() >= std::time::Duration::from_secs(10) {
+                    self.cached_security = crate::views::security_prefs::load();
+                    self.security_last_load = Instant::now();
+                }
+                // Copy the needed bool to avoid holding a borrow over closures.
+                let confirm_dangerous = self.cached_security.confirm_dangerous_actions;
 
                 ui.horizontal(|ui| {
                     let text = i18n.t("workflow.step").to_string();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
@@ -351,7 +459,7 @@ impl WorkflowView {
                     let text = i18n.t("workflow.command").to_string();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
@@ -378,7 +486,7 @@ impl WorkflowView {
                     let text = i18n.t("workflow.noSteps").to_string();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
@@ -396,7 +504,7 @@ impl WorkflowView {
                             let text = step.name.clone();
                             let resp = ui.label(&text);
                             resp.context_menu(|ui| {
-                                if ui.button("📋 Copy").clicked() {
+                                if ui.button(i18n.t("common.copyButton")).clicked() {
                                     ui.ctx().copy_text(text.clone());
                                     ui.close_menu();
                                 }
@@ -405,7 +513,7 @@ impl WorkflowView {
                             let text = step.command.clone();
                             let resp = ui.label(&text);
                             resp.context_menu(|ui| {
-                                if ui.button("📋 Copy").clicked() {
+                                if ui.button(i18n.t("common.copyButton")).clicked() {
                                     ui.ctx().copy_text(text.clone());
                                     ui.close_menu();
                                 }
@@ -416,9 +524,7 @@ impl WorkflowView {
                                 i18n.t("workflow.delete")
                             };
                             if ui.button(delete_label).clicked() {
-                                if security.confirm_dangerous_actions
-                                    && self.pending_confirm_delete != Some(idx)
-                                {
+                                if confirm_dangerous && self.pending_confirm_delete != Some(idx) {
                                     self.pending_confirm_delete = Some(idx);
                                     self.state.last_result = Some(
                                         i18n.t("workflow.deleteConfirmAgain")
@@ -450,7 +556,7 @@ impl WorkflowView {
                     .add_enabled(!self.running, egui::Button::new(run_label))
                     .clicked()
                 {
-                    if security.confirm_dangerous_actions && !self.pending_confirm_run {
+                    if confirm_dangerous && !self.pending_confirm_run {
                         self.pending_confirm_run = true;
                         self.state.last_result =
                             Some(i18n.t("workflow.runConfirmAgain").to_string());
@@ -479,6 +585,31 @@ impl WorkflowView {
                 }
 
                 if run_center_enabled {
+                    // Auto-refresh run center while there is active work, so operators don't have to spam refresh.
+                    let active_selected = self
+                        .selected_run_detail
+                        .as_ref()
+                        .map(|r| matches!(r.status.as_str(), "queued" | "running" | "paused"))
+                        .or_else(|| {
+                            self.runs
+                                .iter()
+                                .find(|r| r.run_id == self.selected_run_id)
+                                .map(|r| {
+                                    matches!(r.status.as_str(), "queued" | "running" | "paused")
+                                })
+                        })
+                        .unwrap_or(false);
+                    if active_selected
+                        && !self.runs_loading
+                        && self.last_run_center_poll.elapsed() >= std::time::Duration::from_secs(3)
+                    {
+                        self.request_runs(backend, ctx);
+                        if !self.selected_run_id.is_empty() {
+                            self.request_run_detail(&self.selected_run_id.clone(), backend, ctx);
+                        }
+                        self.last_run_center_poll = Instant::now();
+                    }
+
                     ui.add_space(14.0);
                     ui.separator();
                     ui.heading(i18n.t("workflow.runCenter.title"));
@@ -509,38 +640,8 @@ impl WorkflowView {
                             )
                             .clicked()
                         {
-                            self.runs_loading = true;
-                            self.run_center_msg.clear();
-                            let backend_clone = backend.clone();
-                            let filter = self.run_status_filter.clone();
-                            let tx = self.pending_tx.clone();
-                            let ctx_clone = ctx.clone();
-                            tokio::spawn(async move {
-                                let status = if filter == "all" {
-                                    None
-                                } else {
-                                    Some(filter.as_str())
-                                };
-                                // Add timeout to prevent hanging
-                                let result = match tokio::time::timeout(
-                                    std::time::Duration::from_secs(10),
-                                    backend_clone.list_workflow_runs(50, 0, status),
-                                )
-                                .await
-                                {
-                                    Ok(r) => r,
-                                    Err(_) => {
-                                        eprintln!("Warning: list_workflow_runs timed out");
-                                        Err("timeout".to_string())
-                                    }
-                                };
-                                let msg = match result {
-                                    Ok(v) => format!("__runs__:{v}"),
-                                    Err(e) => format!("__runs_error__:{e}"),
-                                };
-                                let _ = tx.send(msg);
-                                ctx_clone.request_repaint();
-                            });
+                            self.request_runs(backend, ctx);
+                            self.last_run_center_poll = Instant::now();
                         }
                     });
 
@@ -548,7 +649,8 @@ impl WorkflowView {
                         ui.colored_label(egui::Color32::RED, &self.run_center_msg);
                     }
 
-                    for run in &self.runs {
+                    let mut pending_detail_run_id: Option<String> = None;
+                    for run in self.runs.clone() {
                         ui.horizontal(|ui| {
                             if ui
                                 .selectable_label(self.selected_run_id == run.run_id, &run.run_id)
@@ -556,90 +658,142 @@ impl WorkflowView {
                             {
                                 self.selected_run_id = run.run_id.clone();
                                 self.selected_run_detail = None;
-                                let run_id = run.run_id.clone();
-                                let backend_clone = backend.clone();
-                                let tx = self.pending_tx.clone();
-                                let ctx_clone = ctx.clone();
-                                tokio::spawn(async move {
-                                    // Add timeout to prevent hanging
-                                    let result = match tokio::time::timeout(
-                                        std::time::Duration::from_secs(10),
-                                        backend_clone.get_workflow_run(&run_id),
-                                    )
-                                    .await
-                                    {
-                                        Ok(r) => r,
-                                        Err(_) => {
-                                            eprintln!("Warning: get_workflow_run timed out");
-                                            Err("timeout".to_string())
-                                        }
-                                    };
-                                    let msg = match result {
-                                        Ok(v) => format!("__run_detail__:{v}"),
-                                        Err(e) => format!("__run_detail_error__:{e}"),
-                                    };
-                                    let _ = tx.send(msg);
-                                    ctx_clone.request_repaint();
-                                });
+                                pending_detail_run_id = Some(run.run_id.clone());
                             }
+                            ui.colored_label(Self::status_color(&run.status), "●");
                             ui.label(format!(
                                 "{} [{}]",
                                 run.task,
                                 Self::status_label(i18n, &run.status)
                             ));
+                            if let Some(duration_secs) = Self::run_duration_secs(&run) {
+                                ui.label(format!("{}s", duration_secs));
+                            }
                         });
+                    }
+                    if let Some(run_id) = pending_detail_run_id {
+                        self.request_run_detail(&run_id, backend, ctx);
                     }
 
                     if !self.selected_run_id.is_empty() {
-                        ui.horizontal(|ui| {
-                            for (label, action) in [
-                                (i18n.t("workflow.pause"), "pause"),
-                                (i18n.t("workflow.resume"), "resume"),
-                                (i18n.t("workflow.cancel"), "cancel"),
-                            ] {
-                                if ui.button(label).clicked() {
-                                    let run_id = self.selected_run_id.clone();
-                                    let backend_clone = backend.clone();
-                                    let tx = self.pending_tx.clone();
-                                    let ctx_clone = ctx.clone();
-                                    let requested_tpl =
-                                        i18n.t("workflow.runActionRequested").to_string();
-                                    let failed_tpl = i18n.t("workflow.runActionFailed").to_string();
-                                    tokio::spawn(async move {
-                                        // Add timeout to prevent hanging
-                                        let result = match tokio::time::timeout(
-                                            std::time::Duration::from_secs(10),
-                                            backend_clone.transition_workflow_run(&run_id, action),
-                                        )
-                                        .await
-                                        {
-                                            Ok(r) => r,
-                                            Err(_) => {
-                                                eprintln!(
+                        // Determine the current status of the selected run from the list or detail.
+                        let selected_status = self
+                            .selected_run_detail
+                            .as_ref()
+                            .map(|r| r.status.as_str())
+                            .or_else(|| {
+                                self.runs
+                                    .iter()
+                                    .find(|r| r.run_id == self.selected_run_id)
+                                    .map(|r| r.status.as_str())
+                            })
+                            .unwrap_or("");
+
+                        // Build a context-sensitive list of actions based on run status.
+                        let available_actions: Vec<(std::borrow::Cow<str>, &str)> =
+                            match selected_status {
+                                "running" => vec![
+                                    (i18n.t("workflow.pause"), "pause"),
+                                    (i18n.t("workflow.cancel"), "cancel"),
+                                ],
+                                "paused" => vec![
+                                    (i18n.t("workflow.resume"), "resume"),
+                                    (i18n.t("workflow.cancel"), "cancel"),
+                                ],
+                                "queued" => vec![(i18n.t("workflow.cancel"), "cancel")],
+                                _ => vec![],
+                            };
+
+                        if !available_actions.is_empty() {
+                            ui.horizontal(|ui| {
+                                for (label, action) in available_actions {
+                                    if ui.button(label).clicked() {
+                                        let run_id = self.selected_run_id.clone();
+                                        let backend_clone = backend.clone();
+                                        let tx = self.pending_tx.clone();
+                                        let ctx_clone = ctx.clone();
+                                        let requested_tpl =
+                                            i18n.t("workflow.runActionRequested").to_string();
+                                        let failed_tpl =
+                                            i18n.t("workflow.runActionFailed").to_string();
+                                        tokio::spawn(async move {
+                                            // Add timeout to prevent hanging
+                                            let result = match tokio::time::timeout(
+                                                std::time::Duration::from_secs(10),
+                                                backend_clone
+                                                    .transition_workflow_run(&run_id, action),
+                                            )
+                                            .await
+                                            {
+                                                Ok(r) => r,
+                                                Err(_) => {
+                                                    eprintln!(
                                                     "Warning: transition_workflow_run timed out"
                                                 );
-                                                Err("timeout".to_string())
+                                                    Err("timeout".to_string())
+                                                }
+                                            };
+                                            let msg = match result {
+                                                Ok(_) => requested_tpl
+                                                    .replace("{run_id}", &run_id)
+                                                    .replace("{action}", action),
+                                                Err(e) => failed_tpl
+                                                    .replace("{run_id}", &run_id)
+                                                    .replace("{action}", action)
+                                                    .replace("{error}", &e.to_string()),
+                                            };
+                                            let _ = tx.send(msg);
+
+                                            // Pull latest run detail after action so UI reflects new state quickly.
+                                            if let Ok(Ok(detail)) = tokio::time::timeout(
+                                                std::time::Duration::from_secs(10),
+                                                backend_clone.get_workflow_run(&run_id),
+                                            )
+                                            .await
+                                            {
+                                                let _ = tx.send(format!("__run_detail__:{detail}"));
                                             }
-                                        };
-                                        let msg = match result {
-                                            Ok(_) => requested_tpl
-                                                .replace("{run_id}", &run_id)
-                                                .replace("{action}", action),
-                                            Err(e) => failed_tpl
-                                                .replace("{run_id}", &run_id)
-                                                .replace("{action}", action)
-                                                .replace("{error}", &e.to_string()),
-                                        };
-                                        let _ = tx.send(msg);
-                                        ctx_clone.request_repaint();
-                                    });
+                                            ctx_clone.request_repaint();
+                                        });
+                                    }
                                 }
-                            }
-                        });
+                            });
+                        } // end if !available_actions.is_empty()
 
                         if let Some(run) = &self.selected_run_detail {
                             ui.add_space(6.0);
+                            ui.label(format!(
+                                "{}: {}",
+                                i18n.t("workflow.runStatus.all"),
+                                Self::status_label(i18n, &run.status)
+                            ));
                             ui.label(format!("{}: {}", i18n.t("workflow.phase"), run.phase));
+                            ui.label(format!(
+                                "{}: {}",
+                                i18n.t("workflow.createdAt"),
+                                Self::format_local_ts(run.created_at)
+                            ));
+                            if let Some(started_at) = run.started_at {
+                                ui.label(format!(
+                                    "{}: {}",
+                                    i18n.t("workflow.startedAt"),
+                                    Self::format_local_ts(started_at)
+                                ));
+                            }
+                            if let Some(ended_at) = run.ended_at {
+                                ui.label(format!(
+                                    "{}: {}",
+                                    i18n.t("workflow.endedAt"),
+                                    Self::format_local_ts(ended_at)
+                                ));
+                            }
+                            if let Some(duration_secs) = Self::run_duration_secs(run) {
+                                ui.label(format!(
+                                    "{}: {}s",
+                                    i18n.t("workflow.duration"),
+                                    duration_secs
+                                ));
+                            }
                             if let Some(error) = &run.error {
                                 ui.colored_label(
                                     egui::Color32::RED,
@@ -660,7 +814,7 @@ impl WorkflowView {
                     let text = result.clone();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
                             ui.close_menu();
                         }
