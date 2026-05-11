@@ -82,6 +82,7 @@ impl ChatView {
         self.sync_model_selection();
 
         let comparison_id = now;
+        let stream_chunk_flush_interval = self.stream_chunk_flush_interval;
         for model_name in selected_models {
             let generation_id = self.next_generation_id();
             let input_tokens = self.input_token_estimate;
@@ -182,6 +183,9 @@ impl ChatView {
                         let mut sse_buffer = String::new();
                         let mut final_content: Option<String> = None;
                         let mut final_thinking: Option<String> = None;
+                        let mut buffered_token = String::new();
+                        let mut buffered_reasoning = String::new();
+                        let mut last_stream_flush = std::time::Instant::now();
 
                         loop {
                             let chunk = match resp.chunk().await {
@@ -238,11 +242,8 @@ impl ChatView {
                                             .unwrap_or_default()
                                             .to_string();
                                         if !token.is_empty() || !reasoning.is_empty() {
-                                            let _ = tx.send(PendingResponse::StreamChunk {
-                                                generation_id,
-                                                token,
-                                                reasoning,
-                                            });
+                                            buffered_token.push_str(&token);
+                                            buffered_reasoning.push_str(&reasoning);
                                         }
                                     }
                                     "telemetry" => {
@@ -281,6 +282,15 @@ impl ChatView {
                                             .map(ToOwned::to_owned);
                                     }
                                     "error" => {
+                                        if !buffered_token.is_empty()
+                                            || !buffered_reasoning.is_empty()
+                                        {
+                                            let _ = tx.send(PendingResponse::StreamChunk {
+                                                generation_id,
+                                                token: std::mem::take(&mut buffered_token),
+                                                reasoning: std::mem::take(&mut buffered_reasoning),
+                                            });
+                                        }
                                         let message = data
                                             .get("message")
                                             .and_then(|v| v.as_str())
@@ -295,8 +305,27 @@ impl ChatView {
                                     }
                                     _ => {}
                                 }
+
+                                if (!buffered_token.is_empty() || !buffered_reasoning.is_empty())
+                                    && last_stream_flush.elapsed() >= stream_chunk_flush_interval
+                                {
+                                    let _ = tx.send(PendingResponse::StreamChunk {
+                                        generation_id,
+                                        token: std::mem::take(&mut buffered_token),
+                                        reasoning: std::mem::take(&mut buffered_reasoning),
+                                    });
+                                    ctx_clone.request_repaint();
+                                    last_stream_flush = std::time::Instant::now();
+                                }
                             }
-                            ctx_clone.request_repaint();
+                        }
+
+                        if !buffered_token.is_empty() || !buffered_reasoning.is_empty() {
+                            let _ = tx.send(PendingResponse::StreamChunk {
+                                generation_id,
+                                token: buffered_token,
+                                reasoning: buffered_reasoning,
+                            });
                         }
 
                         let _ = tx.send(PendingResponse::ChatCompleted {
@@ -336,7 +365,10 @@ impl ChatView {
 
     /// Drain any pending async responses and update the session / `ai_status`.
     pub(super) fn process_pending(&mut self, i18n: &I18n) {
-        while let Ok(pending) = self.pending_rx.try_recv() {
+        for _ in 0..self.max_pending_events_per_frame {
+            let Ok(pending) = self.pending_rx.try_recv() else {
+                break;
+            };
             match pending {
                 PendingResponse::Phases(list) => {
                     self.phases = list;

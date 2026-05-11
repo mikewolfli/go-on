@@ -82,6 +82,9 @@ impl Theme {
         style.spacing.scroll.bar_outer_margin = 1.0;
         style.spacing.window_margin = egui::Margin::symmetric(12, 8);
 
+        // Anti-jitter: stable selection without size changes
+        style.visuals.selection.stroke = Stroke::new(1.0, style.visuals.selection.stroke.color);
+
         match self {
             Theme::Minimal => Self::apply_minimal(&mut style),
             Theme::GuoFeng => Self::apply_guofeng(&mut style),
@@ -109,6 +112,7 @@ impl Theme {
 
         let w = &mut style.visuals.widgets;
         w.noninteractive.bg_fill = Color32::from_rgb(255, 255, 255);
+        // All stroke widths are uniform to prevent hover/active layout jitter.
         w.noninteractive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(224, 226, 232));
         w.noninteractive.corner_radius = r8;
 
@@ -117,11 +121,11 @@ impl Theme {
         w.inactive.corner_radius = r8;
 
         w.hovered.bg_fill = Color32::from_rgb(240, 241, 245);
-        w.hovered.fg_stroke = Stroke::new(1.5, accent);
+        w.hovered.fg_stroke = Stroke::new(1.0, accent);
         w.hovered.corner_radius = r8;
 
         w.active.bg_fill = accent;
-        w.active.fg_stroke = Stroke::new(2.0, Color32::WHITE);
+        w.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
         w.active.corner_radius = r8;
 
         w.open.bg_fill = Color32::from_rgb(255, 255, 255);
@@ -153,11 +157,11 @@ impl Theme {
         w.inactive.corner_radius = r7;
 
         w.hovered.bg_fill = Color32::from_rgb(108, 26, 34);
-        w.hovered.fg_stroke = Stroke::new(1.5, gold);
+        w.hovered.fg_stroke = Stroke::new(1.0, gold);
         w.hovered.corner_radius = r7;
 
         w.active.bg_fill = accent;
-        w.active.fg_stroke = Stroke::new(2.0, Color32::from_rgb(255, 242, 214));
+        w.active.fg_stroke = Stroke::new(1.0, Color32::from_rgb(255, 242, 214));
         w.active.corner_radius = r7;
 
         w.open.bg_fill = Color32::from_rgb(96, 24, 31);
@@ -184,9 +188,9 @@ impl Theme {
         w.inactive.fg_stroke = Stroke::new(1.0, text_pri);
         w.inactive.corner_radius = r6;
         w.hovered.bg_fill = Color32::from_rgb(235, 220, 200);
-        w.hovered.fg_stroke = Stroke::new(1.5, accent);
+        w.hovered.fg_stroke = Stroke::new(1.0, accent);
         w.active.bg_fill = accent;
-        w.active.fg_stroke = Stroke::new(2.0, gold);
+        w.active.fg_stroke = Stroke::new(1.0, gold);
         w.active.corner_radius = r6;
         style.visuals.selection.bg_fill = Color32::from_rgb(240, 215, 210);
     }
@@ -211,9 +215,9 @@ impl Theme {
         w.inactive.fg_stroke = Stroke::new(1.0, text_pri);
         w.inactive.corner_radius = r6;
         w.hovered.bg_fill = Color32::from_rgb(52, 46, 40);
-        w.hovered.fg_stroke = Stroke::new(1.5, accent);
+        w.hovered.fg_stroke = Stroke::new(1.0, accent);
         w.active.bg_fill = accent;
-        w.active.fg_stroke = Stroke::new(2.0, Color32::from_rgb(240, 220, 185));
+        w.active.fg_stroke = Stroke::new(1.0, Color32::from_rgb(240, 220, 185));
         w.active.corner_radius = r6;
         style.visuals.selection.bg_fill = Color32::from_rgb(80, 40, 40);
     }
@@ -238,9 +242,9 @@ impl Theme {
         w.inactive.fg_stroke = Stroke::new(1.0, text_pri);
         w.inactive.corner_radius = r6;
         w.hovered.bg_fill = Color32::from_rgb(215, 230, 225);
-        w.hovered.fg_stroke = Stroke::new(1.5, accent);
+        w.hovered.fg_stroke = Stroke::new(1.0, accent);
         w.active.bg_fill = accent;
-        w.active.fg_stroke = Stroke::new(2.0, Color32::from_rgb(230, 248, 240));
+        w.active.fg_stroke = Stroke::new(1.0, Color32::from_rgb(230, 248, 240));
         w.active.corner_radius = r6;
         style.visuals.selection.bg_fill = Color32::from_rgb(210, 235, 228);
     }
@@ -265,9 +269,9 @@ impl Theme {
         w.inactive.fg_stroke = Stroke::new(1.0, text_pri);
         w.inactive.corner_radius = r6;
         w.hovered.bg_fill = Color32::from_rgb(248, 222, 232);
-        w.hovered.fg_stroke = Stroke::new(1.5, accent);
+        w.hovered.fg_stroke = Stroke::new(1.0, accent);
         w.active.bg_fill = accent;
-        w.active.fg_stroke = Stroke::new(2.0, Color32::WHITE);
+        w.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
         w.active.corner_radius = r6;
         style.visuals.selection.bg_fill = Color32::from_rgb(250, 220, 230);
     }

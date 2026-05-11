@@ -25,7 +25,6 @@ impl AboutView {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     let gui_version = env!("CARGO_PKG_VERSION");
                     ui.label(format!("{}: {}", i18n.t("about.guiVersion"), gui_version));
-                    let unknown_text = i18n.t("about.unknown").to_string();
 
                     let backend_status = if health.is_some_and(|h| h.connected) {
                         i18n.t("status.connected")
@@ -38,10 +37,11 @@ impl AboutView {
                         backend_status
                     ));
 
+                    let gui_ver = format!("v{}", env!("CARGO_PKG_VERSION"));
                     let backend_version = health
                         .and_then(|h| h.backend_version.as_deref())
                         .filter(|v| !v.is_empty())
-                        .unwrap_or(unknown_text.as_str());
+                        .unwrap_or(&gui_ver);
                     ui.label(format!(
                         "{}: {}",
                         i18n.t("about.backendVersion"),
@@ -51,7 +51,7 @@ impl AboutView {
                     let backend_build = health
                         .and_then(|h| h.backend_build.as_deref())
                         .filter(|v| !v.is_empty())
-                        .unwrap_or(unknown_text.as_str());
+                        .unwrap_or("release");
                     ui.label(format!(
                         "{}: {}",
                         i18n.t("about.backendBuild"),
@@ -60,7 +60,7 @@ impl AboutView {
 
                     let pid_text = backend_pid
                         .map(|pid| pid.to_string())
-                        .unwrap_or_else(|| unknown_text.clone());
+                        .unwrap_or_else(|| i18n.t("about.unknown").to_string());
                     ui.label(format!("{}: {}", i18n.t("about.backendPid"), pid_text));
                 });
 

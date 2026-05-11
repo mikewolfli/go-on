@@ -103,6 +103,16 @@ pub struct GoOnApp {
     last_backend_url_hash: u64,
     /// Original backend URL to detect changes for showing restart button
     backend_url_original: String,
+    /// Staging buffer for backend health updates; committed in batches to reduce UI jitter.
+    staged_health: Option<HealthStatus>,
+    /// Staging buffer for provider updates; committed in batches to reduce UI jitter.
+    staged_providers: Option<Vec<ProviderStatus>>,
+    /// Marks the end of a refresh cycle so staged values can be committed atomically.
+    staged_refresh_done: bool,
+    /// Last time staged backend data was committed into visible UI state.
+    last_backend_ui_commit: Instant,
+    /// Consecutive backend disconnect samples; used to debounce transient failures.
+    health_disconnect_streak: u8,
 }
 
 /// Detect system locale from environment variables.
@@ -144,6 +154,31 @@ fn detect_system_language() -> Lang {
 }
 
 impl GoOnApp {
+    fn backend_refresh_interval(&self) -> Duration {
+        Duration::from_secs(
+            self.config
+                .ui_stability
+                .backend_refresh_interval_secs
+                .clamp(1, 60),
+        )
+    }
+
+    fn backend_ui_commit_debounce(&self) -> Duration {
+        Duration::from_millis(
+            self.config
+                .ui_stability
+                .backend_ui_commit_debounce_ms
+                .clamp(16, 1000),
+        )
+    }
+
+    fn health_disconnect_debounce_count(&self) -> u8 {
+        self.config
+            .ui_stability
+            .health_disconnect_debounce_count
+            .clamp(1, 8)
+    }
+
     /// Print diagnostic info about key sources for debugging.
     fn diagnostic_key_report(config: &AppConfig) {
         eprintln!("=== KEY DIAGNOSTIC ===");
@@ -268,6 +303,10 @@ impl GoOnApp {
         // Force immediate refresh on next update() cycle
         self.pending_refresh = false;
         self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+        self.staged_health = None;
+        self.staged_providers = None;
+        self.staged_refresh_done = false;
+        self.health_disconnect_streak = 0;
         // Clear stale health/providers so monitor shows correct state
         self.monitor_view.health = None;
         self.monitor_view.providers = Vec::new();
@@ -332,7 +371,36 @@ impl GoOnApp {
             backend_crash_time: None,
             last_backend_url_hash: initial_url_hash,
             backend_url_original: initial_url,
+            staged_health: None,
+            staged_providers: None,
+            staged_refresh_done: false,
+            last_backend_ui_commit: Instant::now(),
+            health_disconnect_streak: 0,
         }
+    }
+
+    fn apply_health_debounce(&mut self, mut next: HealthStatus) -> HealthStatus {
+        let was_connected = self
+            .monitor_view
+            .health
+            .as_ref()
+            .is_some_and(|h| h.connected);
+
+        if next.connected {
+            self.health_disconnect_streak = 0;
+            return next;
+        }
+
+        if was_connected {
+            self.health_disconnect_streak = self.health_disconnect_streak.saturating_add(1);
+            if self.health_disconnect_streak < self.health_disconnect_debounce_count() {
+                if let Some(prev) = self.monitor_view.health.clone() {
+                    next = prev;
+                }
+            }
+        }
+
+        next
     }
 
     fn current_lang(&self) -> Lang {
@@ -350,18 +418,61 @@ impl GoOnApp {
         }
     }
 
-    fn poll_backend_updates(&mut self) {
+    fn poll_backend_updates(&mut self, ctx: &egui::Context) {
+        let mut received_any = false;
         while let Ok(update) = self.backend_updates.try_recv() {
+            received_any = true;
             match update {
-                BackendUpdate::Health(h) => self.monitor_view.health = Some(h),
-                BackendUpdate::Providers(p) => self.monitor_view.providers = p,
-                BackendUpdate::RefreshDone => self.pending_refresh = false,
+                BackendUpdate::Health(h) => self.staged_health = Some(h),
+                BackendUpdate::Providers(p) => self.staged_providers = Some(p),
+                BackendUpdate::RefreshDone => self.staged_refresh_done = true,
             }
+        }
+
+        if !received_any {
+            return;
+        }
+
+        let should_commit = self.staged_refresh_done
+            || self.last_backend_ui_commit.elapsed() >= self.backend_ui_commit_debounce();
+        if !should_commit {
+            return;
+        }
+
+        let mut changed = false;
+
+        if let Some(next_health) = self.staged_health.take() {
+            let debounced = self.apply_health_debounce(next_health);
+            if self.monitor_view.health.as_ref() != Some(&debounced) {
+                self.monitor_view.health = Some(debounced);
+                changed = true;
+            }
+        }
+
+        if let Some(next_providers) = self.staged_providers.take() {
+            if self.monitor_view.providers != next_providers {
+                self.monitor_view.providers = next_providers;
+                changed = true;
+            }
+        }
+
+        if self.staged_refresh_done {
+            self.staged_refresh_done = false;
+            if self.pending_refresh {
+                self.pending_refresh = false;
+                changed = true;
+            }
+        }
+
+        self.last_backend_ui_commit = Instant::now();
+
+        if changed {
+            ctx.request_repaint();
         }
     }
 
     fn maybe_refresh_backend(&mut self) {
-        if self.last_refresh.elapsed().as_secs() >= 5 && !self.pending_refresh {
+        if self.last_refresh.elapsed() >= self.backend_refresh_interval() && !self.pending_refresh {
             self.pending_refresh = true;
             let tx = self.backend_tx.clone();
             let backend = self.backend.clone();
@@ -420,7 +531,8 @@ impl eframe::App for GoOnApp {
             let theme = crate::theme::Theme::from_name(&self.config.theme);
             theme.apply(ctx);
         }
-        ctx.request_repaint_after(Duration::from_millis(500));
+        // No periodic repaint — egui redraws on user interaction automatically.
+        // Async callbacks (health poll, streaming) call ctx.request_repaint() when data arrives.
 
         // Reap zombie child if backend exited
         if let Some(ref mut child) = self.backend_child {
@@ -478,7 +590,7 @@ impl eframe::App for GoOnApp {
             self.chat_view.reset_loaded_state();
         }
 
-        self.poll_backend_updates();
+        self.poll_backend_updates(ctx);
         self.maybe_refresh_backend();
         self.has_providers = has_valid_providers(&self.config);
 
@@ -541,20 +653,20 @@ impl eframe::App for GoOnApp {
                         });
                 });
 
-                // Pending refresh spinner
-                if self.pending_refresh {
-                    let secs = _frame_start.elapsed().as_secs_f64();
-                    let alpha = ((secs * 4.0).sin() * 0.5 + 0.5) as f32;
-                    let color = egui::Color32::from_rgba_premultiplied(
-                        100,
-                        180,
-                        255,
-                        (alpha * 255.0) as u8,
-                    );
-                    ui.add(egui::Label::new(
-                        egui::RichText::new("⟳").color(color).size(16.0),
-                    ));
-                }
+                // Reserve a fixed spinner slot to avoid toolbar width shifts.
+                ui.allocate_ui_with_layout(
+                    egui::vec2(20.0, 20.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        if self.pending_refresh {
+                            ui.add(egui::Label::new(
+                                egui::RichText::new("⟳")
+                                    .color(egui::Color32::from_rgb(100, 180, 255))
+                                    .size(16.0),
+                            ));
+                        }
+                    },
+                );
             });
         });
 
@@ -595,42 +707,7 @@ impl eframe::App for GoOnApp {
                 for tab in &tabs {
                     let label = self.tab_label(tab);
                     let is_active = self.active_tab == *tab;
-
-                    let shortcut_hint = match tab.as_str() {
-                        "monitor" => "Ctrl+1",
-                        "chat" => "Ctrl+2",
-                        "skills" => "Ctrl+3",
-                        "workflow" => "Ctrl+4",
-                        "autotune" => "Ctrl+5",
-                        "security" => "Ctrl+6",
-                        "config" => "Ctrl+7",
-                        "providers" => "Ctrl+8",
-                        "about" => "",
-                        "settings" => "Ctrl+9",
-                        _ => "",
-                    };
-
-                    let resp = egui::Frame::new()
-                        .fill(if is_active {
-                            if ctx.style().visuals.dark_mode {
-                                egui::Color32::from_rgb(45, 50, 60)
-                            } else {
-                                egui::Color32::from_rgb(220, 224, 232)
-                            }
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        })
-                        .corner_radius(6.0)
-                        .inner_margin(egui::Margin::symmetric(10i8, 4i8))
-                        .show(ui, |ui| ui.selectable_label(is_active, label))
-                        .response;
-
-                    let resp = if !shortcut_hint.is_empty() {
-                        resp.on_hover_text(format!("{} ({})", self.tab_label(tab), shortcut_hint))
-                    } else {
-                        resp
-                    };
-
+                    let resp = ui.selectable_label(is_active, label);
                     if resp.clicked() {
                         new_tab = Some(tab.clone());
                     }
@@ -663,8 +740,17 @@ impl eframe::App for GoOnApp {
                     monitor_history_alerts_enabled,
                 ),
                 "chat" => {
-                    self.chat_view
-                        .show(ui, &self.i18n, &self.backend, ctx, autotune_chain_enabled);
+                    let stability = &self.config.ui_stability;
+                    self.chat_view.show(
+                        ui,
+                        &self.i18n,
+                        &self.backend,
+                        ctx,
+                        autotune_chain_enabled,
+                        stability.chat_repaint_interval_ms,
+                        stability.chat_stream_chunk_flush_ms,
+                        stability.chat_max_pending_events_per_frame,
+                    );
                 }
                 "skills" => self.skills_view.show(
                     ui,

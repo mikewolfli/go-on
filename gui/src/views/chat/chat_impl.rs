@@ -72,6 +72,9 @@ pub struct ChatView {
     selected_models: Vec<String>,
     available_models: Vec<String>,
     models_loaded: bool,
+    stream_chunk_flush_interval: std::time::Duration,
+    stream_repaint_interval: std::time::Duration,
+    max_pending_events_per_frame: usize,
 }
 
 impl ChatView {
@@ -313,7 +316,22 @@ impl ChatView {
             selected_models: initial_models,
             available_models: vec!["auto".to_string()],
             models_loaded: false,
+            stream_chunk_flush_interval: std::time::Duration::from_millis(33),
+            stream_repaint_interval: std::time::Duration::from_millis(33),
+            max_pending_events_per_frame: 256,
         }
+    }
+
+    fn apply_stability_settings(
+        &mut self,
+        repaint_ms: u64,
+        flush_ms: u64,
+        max_pending_events_per_frame: usize,
+    ) {
+        self.stream_repaint_interval = std::time::Duration::from_millis(repaint_ms.clamp(16, 200));
+        self.stream_chunk_flush_interval =
+            std::time::Duration::from_millis(flush_ms.clamp(16, 200));
+        self.max_pending_events_per_frame = max_pending_events_per_frame.clamp(16, 4096);
     }
 
     fn session(&mut self) -> &mut Session {

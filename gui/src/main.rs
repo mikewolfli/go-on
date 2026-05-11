@@ -57,6 +57,10 @@ async fn main() -> eframe::Result<()> {
             .with_title("Go-On GUI")
             .with_inner_size([1200.0, 800.0])
             .with_icon(icon),
+        // Explicitly keep vsync on to avoid tearing/jitter on most desktops.
+        vsync: true,
+        // Pin renderer choice to avoid backend switching differences across environments.
+        renderer: eframe::Renderer::default(),
         ..Default::default()
     };
 

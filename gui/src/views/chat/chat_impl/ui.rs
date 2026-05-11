@@ -38,9 +38,23 @@ impl ChatView {
         backend: &BackendClient,
         ctx: &egui::Context,
         autotune_chain_enabled: bool,
+        chat_repaint_interval_ms: u64,
+        chat_stream_chunk_flush_ms: u64,
+        chat_max_pending_events_per_frame: usize,
     ) {
+        self.apply_stability_settings(
+            chat_repaint_interval_ms,
+            chat_stream_chunk_flush_ms,
+            chat_max_pending_events_per_frame,
+        );
+
         // Process any pending async responses (non-blocking)
         self.process_pending(i18n);
+
+        // Keep streaming repaint cadence stable (~30 FPS) to avoid high-frequency jitter.
+        if self.sending {
+            ctx.request_repaint_after(self.stream_repaint_interval);
+        }
 
         // Lazy initialization of templates and name refresh
         let is_first_init = !self.templates_bootstrapped;
@@ -318,10 +332,12 @@ impl ChatView {
             });
 
         // Right side: use the remaining space with a manual vertical layout.
-        // We use the remaining width after SidePanel by allocating explicitly.
         let avail = ui.available_size();
         let right_w = avail.x.max(200.0);
         let right_h = avail.y.max(200.0);
+        // Reserve input area (260px) up front for stable height calculation
+        // Includes: error(~20px) + attachments(~20px) + input_scroll(100px) + counter(20px) + buttons(40px) + spacing(~40px)
+        let msg_h = (right_h - 260.0).max(80.0);
 
         ui.allocate_ui(egui::vec2(right_w, right_h), |ui| {
             // ── Mode/Model row (top, fixed) ────────────
@@ -376,16 +392,15 @@ impl ChatView {
                 ui.separator();
             }
 
-            // ── Messages (fills remaining space with ScrollArea) ─
-            // Reserve space for input area (error + input + buttons ≈ 180px)
-            let input_area_h = 180.0;
-            let msg_h = (ui.available_height() - input_area_h).max(80.0);
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, true])
-                .max_height(msg_h)
-                .show(ui, |ui| {
-                    self.show_messages(ui, i18n);
-                });
+            // ── Messages area: fixed height from outer pre-computed value ─
+            if msg_h > 80.0 {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .max_height(msg_h)
+                    .show(ui, |ui| {
+                        self.show_messages(ui, i18n);
+                    });
+            }
 
             ui.separator();
 
@@ -420,13 +435,19 @@ impl ChatView {
                 ctx.request_repaint();
             }
 
-            let input_rows = self.input.lines().count().clamp(1, 8);
-            let input_h = (input_rows as f32 * 20.0 + 10.0).clamp(50.0, 170.0);
-            let resp = ui.add_sized(
-                [ui.available_width(), input_h],
-                egui::TextEdit::multiline(&mut self.input).hint_text(i18n.t("chat.input")),
-            );
-            let input_focus = resp.has_focus();
+            // Fixed-height input area with scroll for long content.
+            let input_resp = egui::ScrollArea::vertical()
+                .id_salt("chat_input_scroll")
+                .max_height(100.0)
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    ui.add_sized(
+                        [ui.available_width(), 100.0],
+                        egui::TextEdit::multiline(&mut self.input).hint_text(i18n.t("chat.input")),
+                    )
+                });
+            // Check focus of the inner TextEdit via ScrollArea's inner response
+            let input_focus = input_resp.inner.has_focus();
 
             // Character counter
             ui.horizontal(|ui| {
@@ -468,7 +489,14 @@ impl ChatView {
                         let p = std::env::temp_dir().join("go_on_chat_input.txt");
                         let _ = std::fs::write(&p, &self.input);
                         for e in &["zed", "code", "gedit", "vim", "nano"] {
-                            if std::process::Command::new(e).arg(&p).spawn().is_ok() {
+                            if let Ok(mut child) = std::process::Command::new(e).arg(&p).spawn() {
+                                let _ = child.wait();
+                                if let Ok(edited) = std::fs::read_to_string(&p) {
+                                    let trimmed = edited.trim().to_string();
+                                    if !trimmed.is_empty() {
+                                        self.input = trimmed;
+                                    }
+                                }
                                 break;
                             }
                         }
@@ -916,163 +944,77 @@ impl ChatView {
                         .position(|m| m.timestamp == ts && m.content == content)
                 };
 
-            if is_user {
-                ui.horizontal_top(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        Self::draw_role_avatar(ui, true);
-                        ui.add_space(6.0);
-                        // Use vertical to allow content to expand naturally
-                        ui.vertical(|ui| {
-                            ui.set_max_width(max_bubble_width);
-                            let bubble_resp = egui::Frame::new()
-                                .fill(bubble_color)
-                                .corner_radius(8.0)
-                                .inner_margin(egui::Margin::symmetric(10i8, 8i8))
-                                .show(ui, |ui| {
-                                    ui.set_max_width(max_bubble_width - 20.0);
-                                    Self::render_markdown(
-                                        ui,
-                                        &display_text,
-                                        &i18n.t("chat.copyCode"),
-                                        text_color,
-                                    );
-                                })
-                                .response;
+            // All messages left-aligned — color differentiates user vs AI.
+            ui.horizontal_top(|ui| {
+                Self::draw_role_avatar(ui, is_user);
+                ui.add_space(6.0);
+                ui.vertical(|ui| {
+                    ui.set_max_width(max_bubble_width);
+                    let bubble_resp = egui::Frame::new()
+                        .fill(bubble_color)
+                        .corner_radius(8.0)
+                        .inner_margin(egui::Margin::symmetric(10i8, 8i8))
+                        .show(ui, |ui| {
+                            ui.set_max_width(max_bubble_width - 20.0);
+                            Self::render_markdown(
+                                ui,
+                                &display_text,
+                                &i18n.t("chat.copyCode"),
+                                text_color,
+                            );
+                        })
+                        .response;
 
-                            // ── Context menu for message bubble ────────
-                            // context_menu is lazy — only runs when the menu opens
-                            let ctx_msg_ts = msg_timestamp;
-                            let ctx_session_msgs = self.messages().to_vec();
-                            // Clone original content once for context actions
-                            let ctx_content = msg.content.clone();
-                            let ctx_plain = Self::markdown_to_plain_text(&ctx_content);
-                            bubble_resp.context_menu(|ui| {
-                                if ui.button("📋 Copy").clicked() {
-                                    ui.ctx().copy_text(ctx_content.clone());
-                                    ui.close_menu();
+                    // ── Context menu for message bubble ────────
+                    let ctx_msg_ts = msg_timestamp;
+                    let ctx_session_msgs = self.messages().to_vec();
+                    let ctx_content = msg.content.clone();
+                    let ctx_plain = Self::markdown_to_plain_text(&ctx_content);
+                    bubble_resp.context_menu(|ui| {
+                        if ui.button("📋 Copy").clicked() {
+                            ui.ctx().copy_text(ctx_content.clone());
+                            ui.close_menu();
+                        }
+                        if ui.button("📝 Copy (plain text)").clicked() {
+                            ui.ctx().copy_text(ctx_plain.clone());
+                            ui.close_menu();
+                        }
+                        if ui.button("✏️ Edit").clicked() {
+                            if let Some(real_idx) =
+                                find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
+                            {
+                                self.edit_msg_idx = Some(real_idx);
+                                self.edit_msg_buf = msg.content.clone();
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("🗑️ Delete").clicked() {
+                            if let Some(real_idx) =
+                                find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
+                            {
+                                if real_idx < ctx_session_msgs.len() {
+                                    self.remove_message_at(real_idx);
+                                    self.save_sessions_to_disk();
                                 }
-                                if ui.button("📝 Copy (plain text)").clicked() {
-                                    ui.ctx().copy_text(ctx_plain.clone());
-                                    ui.close_menu();
-                                }
-                                if ui.button("✏️ Edit").clicked() {
-                                    if let Some(real_idx) = find_in_messages(
-                                        &ctx_session_msgs,
-                                        ctx_msg_ts,
-                                        &ctx_content,
-                                    ) {
-                                        self.edit_msg_idx = Some(real_idx);
-                                        self.edit_msg_buf = ctx_content.clone();
+                            }
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("📋 Copy as JSON").clicked() {
+                            if let Some(real_idx) =
+                                find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
+                            {
+                                if let Some(target) = ctx_session_msgs.get(real_idx) {
+                                    if let Ok(json) = serde_json::to_string_pretty(target) {
+                                        ui.ctx().copy_text(json);
                                     }
-                                    ui.close_menu();
                                 }
-                                if ui.button("🗑️ Delete").clicked() {
-                                    if let Some(real_idx) = find_in_messages(
-                                        &ctx_session_msgs,
-                                        ctx_msg_ts,
-                                        &ctx_content,
-                                    ) {
-                                        if real_idx < ctx_session_msgs.len() {
-                                            self.remove_message_at(real_idx);
-                                            self.save_sessions_to_disk();
-                                        }
-                                    }
-                                    ui.close_menu();
-                                }
-                                ui.separator();
-                                if ui.button("📋 Copy as JSON").clicked() {
-                                    if let Some(real_idx) = find_in_messages(
-                                        &ctx_session_msgs,
-                                        ctx_msg_ts,
-                                        &ctx_content,
-                                    ) {
-                                        if let Some(target) = ctx_session_msgs.get(real_idx) {
-                                            if let Ok(json) = serde_json::to_string_pretty(target) {
-                                                ui.ctx().copy_text(json);
-                                            }
-                                        }
-                                    }
-                                    ui.close_menu();
-                                }
-                            });
-                        });
+                            }
+                            ui.close_menu();
+                        }
                     });
                 });
-            } else {
-                ui.horizontal_top(|ui| {
-                    Self::draw_role_avatar(ui, false);
-                    ui.add_space(6.0);
-                    // Use vertical to allow content to expand naturally
-                    ui.vertical(|ui| {
-                        ui.set_max_width(max_bubble_width);
-                        let bubble_resp = egui::Frame::new()
-                            .fill(bubble_color)
-                            .corner_radius(8.0)
-                            .inner_margin(egui::Margin::symmetric(10i8, 8i8))
-                            .show(ui, |ui| {
-                                ui.set_max_width(max_bubble_width - 20.0);
-                                Self::render_markdown(
-                                    ui,
-                                    &display_text,
-                                    &i18n.t("chat.copyCode"),
-                                    text_color,
-                                );
-                            })
-                            .response;
-
-                        // ── Context menu for message bubble ────────
-                        // context_menu is lazy — only runs when the menu opens
-                        let ctx_msg_ts = msg_timestamp;
-                        let ctx_session_msgs = self.messages().to_vec();
-                        // Clone original content once for context actions
-                        let ctx_content = msg.content.clone();
-                        let ctx_plain = Self::markdown_to_plain_text(&ctx_content);
-                        bubble_resp.context_menu(|ui| {
-                            if ui.button("📋 Copy").clicked() {
-                                ui.ctx().copy_text(ctx_content.clone());
-                                ui.close_menu();
-                            }
-                            if ui.button("📝 Copy (plain text)").clicked() {
-                                ui.ctx().copy_text(ctx_plain.clone());
-                                ui.close_menu();
-                            }
-                            if ui.button("✏️ Edit").clicked() {
-                                if let Some(real_idx) =
-                                    find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
-                                {
-                                    self.edit_msg_idx = Some(real_idx);
-                                    self.edit_msg_buf = ctx_content.clone();
-                                }
-                                ui.close_menu();
-                            }
-                            if ui.button("🗑️ Delete").clicked() {
-                                if let Some(real_idx) =
-                                    find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
-                                {
-                                    if real_idx < ctx_session_msgs.len() {
-                                        self.remove_message_at(real_idx);
-                                        self.save_sessions_to_disk();
-                                    }
-                                }
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button("📋 Copy as JSON").clicked() {
-                                if let Some(real_idx) =
-                                    find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
-                                {
-                                    if let Some(target) = ctx_session_msgs.get(real_idx) {
-                                        if let Ok(json) = serde_json::to_string_pretty(target) {
-                                            ui.ctx().copy_text(json);
-                                        }
-                                    }
-                                }
-                                ui.close_menu();
-                            }
-                        });
-                    });
-                });
-            }
+            });
             ui.add_space(6.0);
         }
 

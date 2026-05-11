@@ -6,9 +6,34 @@ pub struct AppConfig {
     pub backend_url: String,
     pub language: String,
     pub theme: String,
+    #[serde(default)]
+    pub ui_stability: UiStabilityConfig,
     pub features: FeatureToggles,
     pub enterprise: EnterpriseConfig,
     pub providers: Vec<ProviderConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiStabilityConfig {
+    pub backend_refresh_interval_secs: u64,
+    pub backend_ui_commit_debounce_ms: u64,
+    pub health_disconnect_debounce_count: u8,
+    pub chat_stream_chunk_flush_ms: u64,
+    pub chat_repaint_interval_ms: u64,
+    pub chat_max_pending_events_per_frame: usize,
+}
+
+impl Default for UiStabilityConfig {
+    fn default() -> Self {
+        Self {
+            backend_refresh_interval_secs: 5,
+            backend_ui_commit_debounce_ms: 120,
+            health_disconnect_debounce_count: 2,
+            chat_stream_chunk_flush_ms: 33,
+            chat_repaint_interval_ms: 33,
+            chat_max_pending_events_per_frame: 256,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +139,7 @@ impl Default for AppConfig {
             backend_url: "http://127.0.0.1:8090".to_string(),
             language: "en".to_string(),
             theme: "简约".to_string(),
+            ui_stability: UiStabilityConfig::default(),
             features: FeatureToggles::default(),
             enterprise: EnterpriseConfig::default(),
             providers: Vec::new(),

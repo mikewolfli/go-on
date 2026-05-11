@@ -14,7 +14,7 @@ pub struct BackendClient {
     base_url: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HealthStatus {
     pub connected: bool,
     pub healthy: bool,
@@ -26,7 +26,7 @@ pub struct HealthStatus {
     pub backend_build: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProviderStatus {
     pub name: String,
     pub ready: bool,

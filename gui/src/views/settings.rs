@@ -1,10 +1,85 @@
 use crate::config::save_app_config;
 use crate::config::AppConfig;
+use crate::config::UiStabilityConfig;
 use crate::i18n::I18n;
 
 pub struct SettingsView;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UiStabilityPreset {
+    Balanced,
+    Stable,
+    LowEnd,
+    LowLatency,
+    Custom,
+}
+
 impl SettingsView {
+    fn ui_stability_preset(config: &UiStabilityConfig) -> UiStabilityPreset {
+        match (
+            config.backend_refresh_interval_secs,
+            config.backend_ui_commit_debounce_ms,
+            config.health_disconnect_debounce_count,
+            config.chat_stream_chunk_flush_ms,
+            config.chat_repaint_interval_ms,
+            config.chat_max_pending_events_per_frame,
+        ) {
+            (5, 120, 2, 33, 33, 256) => UiStabilityPreset::Balanced,
+            (8, 180, 3, 50, 50, 320) => UiStabilityPreset::Stable,
+            (10, 220, 3, 66, 66, 192) => UiStabilityPreset::LowEnd,
+            (3, 80, 2, 24, 24, 384) => UiStabilityPreset::LowLatency,
+            _ => UiStabilityPreset::Custom,
+        }
+    }
+
+    fn apply_ui_stability_preset(config: &mut UiStabilityConfig, preset: UiStabilityPreset) {
+        match preset {
+            UiStabilityPreset::Balanced => {
+                config.backend_refresh_interval_secs = 5;
+                config.backend_ui_commit_debounce_ms = 120;
+                config.health_disconnect_debounce_count = 2;
+                config.chat_stream_chunk_flush_ms = 33;
+                config.chat_repaint_interval_ms = 33;
+                config.chat_max_pending_events_per_frame = 256;
+            }
+            UiStabilityPreset::Stable => {
+                config.backend_refresh_interval_secs = 8;
+                config.backend_ui_commit_debounce_ms = 180;
+                config.health_disconnect_debounce_count = 3;
+                config.chat_stream_chunk_flush_ms = 50;
+                config.chat_repaint_interval_ms = 50;
+                config.chat_max_pending_events_per_frame = 320;
+            }
+            UiStabilityPreset::LowEnd => {
+                config.backend_refresh_interval_secs = 10;
+                config.backend_ui_commit_debounce_ms = 220;
+                config.health_disconnect_debounce_count = 3;
+                config.chat_stream_chunk_flush_ms = 66;
+                config.chat_repaint_interval_ms = 66;
+                config.chat_max_pending_events_per_frame = 192;
+            }
+            UiStabilityPreset::LowLatency => {
+                config.backend_refresh_interval_secs = 3;
+                config.backend_ui_commit_debounce_ms = 80;
+                config.health_disconnect_debounce_count = 2;
+                config.chat_stream_chunk_flush_ms = 24;
+                config.chat_repaint_interval_ms = 24;
+                config.chat_max_pending_events_per_frame = 384;
+            }
+            UiStabilityPreset::Custom => {}
+        }
+    }
+
+    fn ui_stability_preset_label(preset: UiStabilityPreset) -> &'static str {
+        match preset {
+            UiStabilityPreset::Balanced => "Balanced / 平衡",
+            UiStabilityPreset::Stable => "Stable / 稳态优先",
+            UiStabilityPreset::LowEnd => "Low-end / 低性能机器",
+            UiStabilityPreset::LowLatency => "Low latency / 低延迟",
+            UiStabilityPreset::Custom => "Custom / 自定义",
+        }
+    }
+
     pub fn show(ui: &mut egui::Ui, i18n: &I18n, config: &mut AppConfig) {
         ui.heading(i18n.t("settings.title"));
         ui.label(i18n.t("settings.hint"));
@@ -375,6 +450,120 @@ impl SettingsView {
                             }
                         });
                 });
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                // UI stability section (anti-jitter tuning)
+                ui.label(egui::RichText::new("UI Stability / 防抖参数").strong());
+                ui.add_space(4.0);
+                ui.label("Adjust repaint batching and cadence to reduce periodic shaking.");
+                ui.add_space(4.0);
+
+                let stability = &mut config.ui_stability;
+
+                ui.horizontal(|ui| {
+                    ui.label("Preset");
+                    let mut selected_preset = Self::ui_stability_preset(stability);
+                    egui::ComboBox::from_id_salt("ui_stability_preset_selector")
+                        .selected_text(Self::ui_stability_preset_label(selected_preset))
+                        .show_ui(ui, |ui| {
+                            for preset in [
+                                UiStabilityPreset::Balanced,
+                                UiStabilityPreset::Stable,
+                                UiStabilityPreset::LowEnd,
+                                UiStabilityPreset::LowLatency,
+                            ] {
+                                if ui
+                                    .selectable_label(
+                                        selected_preset == preset,
+                                        Self::ui_stability_preset_label(preset),
+                                    )
+                                    .clicked()
+                                {
+                                    selected_preset = preset;
+                                }
+                            }
+                        });
+
+                    if selected_preset != UiStabilityPreset::Custom
+                        && selected_preset != Self::ui_stability_preset(stability)
+                    {
+                        Self::apply_ui_stability_preset(stability, selected_preset);
+                        changed = true;
+                    }
+                });
+                ui.add_space(4.0);
+
+                egui::Grid::new("ui_stability_grid")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.label("Backend refresh interval (s)");
+                        let mut v = stability.backend_refresh_interval_secs;
+                        if ui
+                            .add(egui::Slider::new(&mut v, 1..=60).suffix(" s"))
+                            .changed()
+                        {
+                            stability.backend_refresh_interval_secs = v;
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Backend UI commit debounce (ms)");
+                        let mut v = stability.backend_ui_commit_debounce_ms;
+                        if ui
+                            .add(egui::Slider::new(&mut v, 16..=1000).suffix(" ms"))
+                            .changed()
+                        {
+                            stability.backend_ui_commit_debounce_ms = v;
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Disconnect debounce samples");
+                        let mut v = u64::from(stability.health_disconnect_debounce_count);
+                        if ui.add(egui::Slider::new(&mut v, 1..=8)).changed() {
+                            stability.health_disconnect_debounce_count = v as u8;
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Chat stream chunk flush (ms)");
+                        let mut v = stability.chat_stream_chunk_flush_ms;
+                        if ui
+                            .add(egui::Slider::new(&mut v, 16..=200).suffix(" ms"))
+                            .changed()
+                        {
+                            stability.chat_stream_chunk_flush_ms = v;
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Chat repaint interval (ms)");
+                        let mut v = stability.chat_repaint_interval_ms;
+                        if ui
+                            .add(egui::Slider::new(&mut v, 16..=200).suffix(" ms"))
+                            .changed()
+                        {
+                            stability.chat_repaint_interval_ms = v;
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Chat max pending events/frame");
+                        let mut v = stability.chat_max_pending_events_per_frame as u64;
+                        if ui.add(egui::Slider::new(&mut v, 16..=4096)).changed() {
+                            stability.chat_max_pending_events_per_frame = v as usize;
+                            changed = true;
+                        }
+                        ui.end_row();
+                    });
+
+                if changed {
+                    save_app_config(config);
+                    ui.ctx().request_repaint();
+                }
 
                 ui.add_space(20.0); // 底部留白，确保可以滚动到最后
             }); // ScrollArea 结束
