@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +76,8 @@ pub struct PromptTemplate {
 pub struct GenerationState {
     pub id: u64,
     pub msg_idx: usize,
+    pub model: String,
+    pub started_at: Instant,
     pub handle: JoinHandle<()>,
 }
 
@@ -108,4 +111,14 @@ pub enum PendingResponse {
     },
     Phases(Vec<String>),
     Models(Vec<String>),
+}
+
+/// Model performance statistics for caching and analysis
+#[derive(Debug, Clone, Default)]
+pub struct ModelPerfStats {
+    pub response_time_ms: u64,
+    pub token_count: usize,
+    pub success_count: u32,
+    pub error_count: u32,
+    pub avg_tokens_per_minute: f64,
 }

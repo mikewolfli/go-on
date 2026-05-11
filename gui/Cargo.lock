@@ -1724,6 +1724,7 @@ dependencies = [
  "keyring",
  "reqwest",
  "rfd",
+ "security-framework",
  "serde",
  "serde_json",
  "tokio",

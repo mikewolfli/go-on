@@ -110,7 +110,12 @@ impl ProvidersView {
     }
 
     fn process_pending(&mut self) {
-        while let Ok(msg) = self.pending_rx.try_recv() {
+        // Limit event processing per frame to prevent UI freeze
+        const MAX_EVENTS_PER_FRAME: usize = 12;
+        for _ in 0..MAX_EVENTS_PER_FRAME {
+            let Ok(msg) = self.pending_rx.try_recv() else {
+                break;
+            };
             if let Some(models_json) = msg.strip_prefix("__models__:") {
                 if let Ok(models) = serde_json::from_str::<
                     std::collections::HashMap<String, Vec<String>>,
@@ -545,9 +550,11 @@ impl ProvidersView {
                                     ui.close_menu();
                                 }
                             });
-                            let cached_key =
-                                crate::keyring_util::get_api_key(&provider.name.to_lowercase())
-                                    .unwrap_or_default();
+                            let cached_key = crate::keyring_util::get_api_key_with_fallback(
+                                &provider.name.to_lowercase(),
+                                Some(&provider.api_key),
+                            )
+                            .unwrap_or_default();
                             let key_preview_str = if redact_keys {
                                 "********".to_string()
                             } else if cached_key.len() > 8 {
@@ -655,6 +662,35 @@ impl ProvidersView {
                                             .clicked()
                                         {
                                             changed = true;
+                                            // Auto-push updated model to backend
+                                            if !self.sending {
+                                                self.sending = true;
+                                                let tx_push = self.pending_tx.clone();
+                                                let backend_push = backend.clone();
+                                                let name_push = provider.name.clone();
+                                                let model_push = m.to_string();
+                                                let ctx_push = ctx.clone();
+                                                let key_push = crate::keyring_util::get_api_key_with_fallback(
+                                                    &name_push.to_lowercase(),
+                                                    Some(&provider.api_key),
+                                                ).unwrap_or_default();
+                                                tokio::spawn(async move {
+                                                    tokio::time::sleep(
+                                                        std::time::Duration::from_millis(100),
+                                                    )
+                                                    .await;
+                                                    let _ = backend_push
+                                                        .configure_provider(
+                                                            &name_push,
+                                                            &key_push,
+                                                            &model_push,
+                                                        )
+                                                        .await;
+                                                    // Clear sending flag after push
+                                                    let _ = tx_push.send(String::new());
+                                                    ctx_push.request_repaint();
+                                                });
+                                            }
                                         }
                                     }
                                 });
@@ -775,9 +811,12 @@ impl ProvidersView {
                                 let tx = self.pending_tx.clone();
                                 let backend_clone = backend.clone();
                                 let name = provider.name.clone();
-                                // Read API key from keyring
-                                let key = crate::keyring_util::get_api_key(&name.to_lowercase())
-                                    .unwrap_or_default();
+                                // Read API key from keyring (fallback to config)
+                                let key = crate::keyring_util::get_api_key_with_fallback(
+                                    &name.to_lowercase(),
+                                    Some(&provider.api_key),
+                                )
+                                .unwrap_or_default();
                                 let model = provider.model.clone();
                                 let ctx_clone = ctx.clone();
                                 let ok_fmt = format!(
@@ -1040,6 +1079,10 @@ impl ProvidersView {
                 }
 
                 if let Some(idx) = remove_idx {
+                    // Clean up keyring entry before removing from config
+                    if let Some(removed) = config.providers.get(idx) {
+                        let _ = crate::keyring_util::delete_api_key(&removed.name.to_lowercase());
+                    }
                     config.providers.remove(idx);
                     changed = true;
                     self.status = i18n.t("providers.removed").to_string();

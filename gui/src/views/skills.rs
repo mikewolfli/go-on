@@ -164,7 +164,12 @@ impl SkillsView {
 
     /// Drain any pending async results
     fn process_pending(&mut self, i18n: &I18n) {
-        while let Ok(update) = self.pending_rx.try_recv() {
+        // Limit event processing per frame to prevent UI freeze
+        const MAX_EVENTS_PER_FRAME: usize = 8;
+        for _ in 0..MAX_EVENTS_PER_FRAME {
+            let Ok(update) = self.pending_rx.try_recv() else {
+                break;
+            };
             match update {
                 SkillsUpdate::List(skills, err) => {
                     self.loading = false;

@@ -205,6 +205,7 @@ pub fn load_app_config() -> AppConfig {
         "gemini",
         "groq",
         "mistral",
+        "copilot",
     ];
     for provider_name in &known {
         // Find matching provider in config (or any, if name matches)
@@ -297,17 +298,13 @@ fn app_config_path() -> PathBuf {
 
 /// Check if any AI provider has a key available (in config or keyring).
 pub fn has_valid_providers(config: &AppConfig) -> bool {
+    // PRIMARY: check keyring for all configured providers + known providers
     for p in &config.providers {
-        // Key in config
-        if !p.api_key.is_empty() && p.api_key != "********" {
-            return true;
-        }
-        // Key in keyring
         if crate::keyring_util::has_api_key(&p.name.to_lowercase()) {
             return true;
         }
     }
-    // Also check known providers in keyring not in config
+
     let known = [
         "deepseek",
         "openai",
@@ -323,5 +320,14 @@ pub fn has_valid_providers(config: &AppConfig) -> bool {
             return true;
         }
     }
+
+    // FALLBACK: if keyring didn't yield any keys (e.g. macOS blocked),
+    // check config.api_key as a fallback
+    for p in &config.providers {
+        if !p.api_key.is_empty() && p.api_key != "********" {
+            return true;
+        }
+    }
+
     false
 }

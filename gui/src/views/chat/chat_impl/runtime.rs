@@ -49,7 +49,7 @@ impl ChatView {
             attachments: atts,
             model: String::new(),
             comparison_id: 0,
-            input_tokens: expanded_msg.chars().count() / 4,
+            input_tokens: Self::estimate_tokens_improved(&expanded_msg),
             output_tokens: 0,
             total_tokens: 0,
             thinking: String::new(),
@@ -57,7 +57,7 @@ impl ChatView {
         self.save_sessions_to_disk();
 
         self.last_token_estimate = 0;
-        self.input_token_estimate = expanded_msg.chars().count() / 4;
+        self.input_token_estimate = Self::estimate_tokens_improved(&expanded_msg);
         self.output_token_estimate = 0;
 
         // Add a "running" phase record
@@ -155,7 +155,7 @@ impl ChatView {
                         let mut resp = if let Err(err) = resp.error_for_status_ref() {
                             let fallback = backend_clone
                                 .chat_with_options(
-                                    &msg_clone,
+                                    &outbound_clone,
                                     &mode_clone,
                                     &phase_clone,
                                     Some(&model_clone),
@@ -169,9 +169,7 @@ impl ChatView {
                                 })
                                 .unwrap_or_else(|e| PendingResponse::Error {
                                     generation_id: Some(generation_id),
-                                    message: format!(
-                                        "stream status error: {err}; fallback failed: {e}"
-                                    ),
+                                    message: format!("stream error: {err}; fallback: {e}"),
                                 });
                             let _ = tx.send(fallback);
                             ctx_clone.request_repaint();
@@ -193,9 +191,9 @@ impl ChatView {
                                 Ok(None) => break,
                                 Err(e) => {
                                     let _ = tx.send(PendingResponse::Error {
-                                        generation_id: Some(generation_id),
-                                        message: format!("stream read error: {e}"),
-                                    });
+                                            generation_id: Some(generation_id),
+                                            message: format!("read error: {e}"),
+                                        });
                                     ctx_clone.request_repaint();
                                     return;
                                 }
@@ -345,9 +343,7 @@ impl ChatView {
                             })
                             .unwrap_or_else(|e| PendingResponse::Error {
                                 generation_id: Some(generation_id),
-                                message: format!(
-                                    "stream request error: {err}; fallback failed: {e}"
-                                ),
+                                message: format!("request error: {err}; fallback: {e}"),
                             });
                         let _ = tx.send(fallback);
                     }
@@ -357,6 +353,8 @@ impl ChatView {
             self.generation_states.push(GenerationState {
                 id: generation_id,
                 msg_idx,
+                model: model_name,
+                started_at: std::time::Instant::now(),
                 handle,
             });
         }
@@ -430,6 +428,9 @@ impl ChatView {
                     content,
                     thinking,
                 } => {
+                    let generation_meta = self.generation_meta(generation_id);
+                    let mut model_name = None;
+                    let mut output_tokens_to_record = self.output_token_estimate;
                     if let Some(idx) = self.generation_msg_idx(generation_id) {
                         if let Some(session) = self.sessions.get_mut(self.active_session) {
                             if let Some(m) = session.messages.get_mut(idx) {
@@ -440,12 +441,26 @@ impl ChatView {
                                     m.thinking = thinking;
                                 }
                                 if self.last_token_estimate == 0 {
-                                    self.output_token_estimate = m.content.chars().count() / 4;
+                                    self.output_token_estimate =
+                                        Self::estimate_tokens_improved(&m.content);
                                     self.last_token_estimate =
                                         self.input_token_estimate + self.output_token_estimate;
                                 }
+                                m.output_tokens = self.output_token_estimate.max(m.output_tokens);
+                                m.total_tokens = self.last_token_estimate.max(m.total_tokens);
+                                output_tokens_to_record = m.output_tokens;
+                                model_name = Some(m.model.clone());
                             }
                         }
+                    }
+
+                    if let Some((_, state_model, started_at)) = generation_meta {
+                        let duration_ms = started_at.elapsed().as_millis() as u64;
+                        self.update_model_stats(
+                            model_name.as_deref().unwrap_or(&state_model),
+                            output_tokens_to_record,
+                            duration_ms,
+                        );
                     }
 
                     if let Some(record) = self
@@ -482,6 +497,12 @@ impl ChatView {
                     message,
                 } => {
                     self.error = i18n.t("chat.chatError").replace("{message}", &message);
+                    if let Some(id) = generation_id {
+                        if let Some((_, model, _)) = self.generation_meta(id) {
+                            let stats = self.model_stats.entry(model).or_default();
+                            stats.error_count = stats.error_count.saturating_add(1);
+                        }
+                    }
                     if let Some(record) = self
                         .session()
                         .phase_records

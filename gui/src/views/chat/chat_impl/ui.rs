@@ -1,6 +1,8 @@
 use super::*;
 
 impl ChatView {
+    const MAX_RENDERED_MESSAGES: usize = 250;
+
     /// Draw a colored circle avatar with the role initial letter.
     /// User gets a blue circle with "U", AI gets a green circle with "A".
     fn draw_role_avatar(ui: &mut egui::Ui, is_user: bool) {
@@ -29,6 +31,82 @@ impl ChatView {
             egui::FontId::proportional(14.0),
             egui::Color32::WHITE,
         );
+    }
+
+    fn render_token_stats(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
+        if !self.show_token_details || self.model_stats.is_empty() {
+            return;
+        }
+
+        let current_model = self.selected_model.clone();
+        let Some(stats) = self.model_stats.get(&current_model) else {
+            return;
+        };
+
+        let success_count = stats.success_count as f64;
+        let total_count = success_count + stats.error_count as f64;
+        let success_rate = if total_count > 0.0 {
+            (success_count / total_count * 100.0).round() as u32
+        } else {
+            0
+        };
+
+        let time_color = if stats.response_time_ms < 2_000 {
+            egui::Color32::from_rgb(76, 175, 80)
+        } else if stats.response_time_ms < 5_000 {
+            egui::Color32::from_rgb(255, 193, 7)
+        } else {
+            egui::Color32::from_rgb(244, 67, 54)
+        };
+
+        egui::Frame::new()
+            .fill(ui.visuals().window_fill().gamma_multiply(0.8))
+            .corner_radius(4.0)
+            .inner_margin(egui::Margin::symmetric(8i8, 4i8))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new(i18n.t("chat.tokenStats"))
+                            .strong()
+                            .size(11.0),
+                    );
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}: {} ms",
+                            i18n.t("chat.responseTime"),
+                            stats.response_time_ms
+                        ))
+                        .color(time_color)
+                        .size(11.0),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}: {}",
+                            i18n.t("chat.tokens"),
+                            stats.token_count
+                        ))
+                        .size(11.0),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}: {}%",
+                            i18n.t("chat.successRate"),
+                            success_rate
+                        ))
+                        .size(11.0),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}: {:.0}",
+                            i18n.t("chat.tokensPerMinute"),
+                            stats.avg_tokens_per_minute
+                        ))
+                        .size(11.0)
+                        .weak(),
+                    );
+                });
+            });
     }
 
     pub fn show(
@@ -387,6 +465,11 @@ impl ChatView {
                                     .color(fg)
                                     .size(12.0),
                             );
+                            ui.add_space(12.0);
+                            ui.checkbox(
+                                &mut self.show_token_details,
+                                i18n.t("chat.showTokenDetails"),
+                            );
                         });
                     });
                 ui.separator();
@@ -410,6 +493,8 @@ impl ChatView {
             if !self.error.is_empty() {
                 ui.colored_label(egui::Color32::RED, &self.error);
             }
+
+            self.render_token_stats(ui, i18n);
 
             if !self.attachments.is_empty() {
                 ui.horizontal(|ui| {
@@ -490,7 +575,15 @@ impl ChatView {
                     {
                         let p = std::env::temp_dir().join("go_on_chat_input.txt");
                         let _ = std::fs::write(&p, &self.input);
-                        for e in &["zed", "code", "gedit", "vim", "nano"] {
+                        #[cfg(target_os = "windows")]
+                        let editors = &["notepad", "code", "zed"];
+                        #[cfg(target_os = "macos")]
+                        let editors = &["open", "code", "zed", "TextEdit"];
+                        #[cfg(target_os = "linux")]
+                        let editors = &["zed", "code", "gedit", "vim", "nano"];
+                        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+                        let editors: &[&str] = &["code", "vim", "nano"];
+                        for e in editors {
                             if let Ok(mut child) = std::process::Command::new(e).arg(&p).spawn() {
                                 let _ = child.wait();
                                 if let Ok(edited) = std::fs::read_to_string(&p) {
@@ -560,6 +653,7 @@ impl ChatView {
             });
 
             // Enter send
+            // Enter to send (Ctrl+Enter on Linux to avoid accidental sends in terminal)
             if ui.input(|i| {
                 if !input_focus || !i.key_pressed(egui::Key::Enter) || i.modifiers.shift {
                     return false;
@@ -598,10 +692,10 @@ impl ChatView {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.label(i18n.t("chat.title"));
-                // Feature 8: export button
+                // Export button
                 if ui
                     .button("📤")
-                    .on_hover_text(i18n.t("chat.export"))
+                    .on_hover_text(i18n.t("chat.exportSession"))
                     .clicked()
                 {
                     let msgs = self.messages();
@@ -669,13 +763,26 @@ impl ChatView {
                 }
                 if ui
                     .button("📂")
-                    .on_hover_text(i18n.t("chat.openWorkspace"))
+                    .on_hover_text(i18n.t("chat.openConfigDir"))
                     .clicked()
                 {
                     if let Some(dirs) = directories::ProjectDirs::from("com", "goon", "go-on-gui") {
                         let config_dir = dirs.config_dir();
+                        #[cfg(target_os = "windows")]
+                        let _ = std::process::Command::new("cmd")
+                            .args(["/c", "start", "", &config_dir.display().to_string()])
+                            .spawn();
+                        #[cfg(target_os = "macos")]
+                        let _ = std::process::Command::new("open")
+                            .arg(&config_dir)
+                            .spawn();
+                        #[cfg(target_os = "linux")]
                         let _ = std::process::Command::new("xdg-open")
-                            .arg(config_dir)
+                            .arg(&config_dir)
+                            .spawn();
+                        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+                        let _ = std::process::Command::new("xdg-open")
+                            .arg(&config_dir)
                             .spawn();
                     }
                 }
@@ -689,7 +796,7 @@ impl ChatView {
                 }
                 if ui
                     .button("🗑️")
-                    .on_hover_text(i18n.t("chat.clearAll"))
+                    .on_hover_text(i18n.t("chat.clearSession"))
                     .clicked()
                 {
                     if let Some(session) = self.sessions.get_mut(self.active_session) {
@@ -750,28 +857,59 @@ impl ChatView {
                     {
                         let selected = idx == self.active_session;
 
-                        // Simple horizontal row for each session
-                        ui.horizontal(|ui| {
-                            let resp = ui.selectable_label(selected, &session_name);
-                            if resp.clicked() {
-                                self.active_session = idx;
-                                self.selected_mode = session_mode.clone();
-                                self.selected_phase = session_phase.clone();
-                                self.selected_models = if session_models.is_empty() {
-                                    vec!["auto".to_string()]
-                                } else {
-                                    session_models.clone()
-                                };
-                                self.sync_model_selection();
-                                self.ai_status = AiStatus::Idle;
-                                self.edit_msg_idx = None;
-                                self.edit_msg_buf.clear();
-                            }
-                            // Delete button
-                            if ui.button("✕").on_hover_text(i18n.t("chat.clear")).clicked() {
-                                to_remove = Some(idx);
-                            }
-                        });
+                        // Session row with rename support
+                        let is_renaming = self.rename_session_idx == Some(idx);
+                        if is_renaming {
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.rename_session_buf)
+                                        .hint_text(i18n.t("chat.sessionNamePlaceholder"))
+                                        .desired_width(140.0),
+                                );
+                                if ui.button(i18n.t("chat.save")).clicked() {
+                                    let new_name = self.rename_session_buf.trim().to_string();
+                                    if !new_name.is_empty() {
+                                        if let Some(s) = self.sessions.get_mut(idx) {
+                                            s.name = new_name;
+                                            self.save_sessions_to_disk();
+                                        }
+                                    }
+                                    self.rename_session_idx = None;
+                                    self.rename_session_buf.clear();
+                                }
+                                if ui.button(i18n.t("chat.cancel")).clicked() {
+                                    self.rename_session_idx = None;
+                                    self.rename_session_buf.clear();
+                                }
+                            });
+                        } else {
+                            ui.horizontal(|ui| {
+                                let resp = ui.selectable_label(selected, &session_name);
+                                if resp.double_clicked() {
+                                    self.rename_session_idx = Some(idx);
+                                    self.rename_session_buf = session_name.clone();
+                                } else if resp.clicked() {
+                                    self.active_session = idx;
+                                    self.selected_mode = session_mode.clone();
+                                    self.selected_phase = session_phase.clone();
+                                    self.selected_models = if session_models.is_empty() {
+                                        vec!["auto".to_string()]
+                                    } else {
+                                        session_models.clone()
+                                    };
+                                    self.sync_model_selection();
+                                    self.ai_status = AiStatus::Idle;
+                                    self.edit_msg_idx = None;
+                                    self.edit_msg_buf.clear();
+                                    self.rename_session_idx = None;
+                                    self.rename_session_buf.clear();
+                                }
+                                // Delete button
+                                if ui.button("✕").on_hover_text(i18n.t("chat.deleteSession")).clicked() {
+                                    to_remove = Some(idx);
+                                }
+                            });
+                        }
                         // Mode/phase indicator as a simple label
                         ui.label(format!(
                             "{} | {}",
@@ -818,6 +956,7 @@ impl ChatView {
     fn show_messages(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
         let msgs = self.messages().to_vec();
         let total_msgs = msgs.len();
+        let start_idx = total_msgs.saturating_sub(Self::MAX_RENDERED_MESSAGES);
 
         if total_msgs == 0 {
             ui.add_space(80.0);
@@ -833,9 +972,19 @@ impl ChatView {
             return;
         }
 
+        if start_idx > 0 {
+            ui.colored_label(
+                egui::Color32::from_rgb(140, 142, 150),
+                i18n.t("chat.showingLatest")
+                    .replace("{shown}", &(total_msgs - start_idx).to_string())
+                    .replace("{total}", &total_msgs.to_string()),
+            );
+            ui.add_space(4.0);
+        }
+
         // Show ALL messages (no pagination)
         let dark_mode = ui.visuals().dark_mode;
-        for (msg_idx, msg) in msgs.iter().enumerate() {
+        for (msg_idx, msg) in msgs.iter().enumerate().skip(start_idx) {
             // ── Edit mode: show TextEdit instead of bubble ────────
             if self.edit_msg_idx == Some(msg_idx) {
                 ui.add_space(4.0);
@@ -844,20 +993,21 @@ impl ChatView {
                     .corner_radius(6.0)
                     .inner_margin(egui::Margin::symmetric(8i8, 6i8))
                     .show(ui, |ui| {
+                        let edit_title = i18n.t("chat.editTitle");
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("✏️ Edit:").strong().size(13.0));
+                            ui.label(egui::RichText::new(format!("✏️ {edit_title}")).strong().size(13.0));
                         });
                         ui.add_space(4.0);
 
                         let _edit_resp = ui.add_sized(
                             [ui.available_width(), 100.0],
                             egui::TextEdit::multiline(&mut self.edit_msg_buf)
-                                .hint_text("Edit message..."),
+                                .hint_text(i18n.t("chat.editTitle")),
                         );
 
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
-                            if ui.button(egui::RichText::new("💾 Save").strong()).clicked() {
+                            if ui.button(egui::RichText::new(format!("💾 {}", i18n.t("chat.saveEdit"))).strong()).clicked() {
                                 let new_content = self.edit_msg_buf.trim().to_string();
                                 if !new_content.is_empty() {
                                     if let Some(session) =
@@ -872,7 +1022,7 @@ impl ChatView {
                                 self.edit_msg_idx = None;
                                 self.edit_msg_buf.clear();
                             }
-                            if ui.button("✕ Cancel").clicked() {
+                            if ui.button(format!("✕ {}", i18n.t("chat.cancelEdit"))).clicked() {
                                 self.edit_msg_idx = None;
                                 self.edit_msg_buf.clear();
                             }
@@ -958,14 +1108,17 @@ impl ChatView {
                         .inner_margin(egui::Margin::symmetric(10i8, 8i8))
                         .show(ui, |ui| {
                             ui.set_max_width(max_bubble_width - 20.0);
+                            let trunc_hint = i18n.t("chat.largeMessageTruncated").to_string();
                             Self::render_markdown(
-                                ui,
-                                &display_text,
-                                &i18n.t("chat.copyCode"),
-                                text_color,
-                            );
+                                    ui,
+                                    &display_text,
+                                    &i18n.t("chat.copyCode"),
+                                    self.enable_markdown,
+                                    text_color,
+                                    &trunc_hint,
+                                );
 
-                            // ── Collapsible thinking content (AI only) ──
+                                // ── Collapsible thinking content (AI only) ──
                             if !msg.thinking.is_empty() && !is_user {
                                 ui.add_space(6.0);
                                 let thinking_id = egui::Id::new((msg.timestamp, "thinking"));
@@ -990,11 +1143,13 @@ impl ChatView {
                                         .inner_margin(egui::Margin::symmetric(8i8, 6i8))
                                         .show(ui, |ui| {
                                             Self::render_markdown(
-                                                ui,
-                                                &msg.thinking,
-                                                &i18n.t("chat.copyCode"),
-                                                egui::Color32::from_rgb(140, 142, 155),
-                                            );
+                                                    ui,
+                                                    &msg.thinking,
+                                                    &i18n.t("chat.copyCode"),
+                                                    self.enable_markdown,
+                                                    egui::Color32::from_rgb(140, 142, 155),
+                                                    &trunc_hint,
+                                                );
                                         });
                                 });
                             }
@@ -1006,16 +1161,21 @@ impl ChatView {
                     let ctx_session_msgs = self.messages().to_vec();
                     let ctx_content = msg.content.clone();
                     let ctx_plain = Self::markdown_to_plain_text(&ctx_content);
+                    let copy_lbl = i18n.t("chat.copyMessage").to_string();
+                    let copy_plain_lbl = i18n.t("chat.copyPlain").to_string();
+                    let edit_lbl = i18n.t("chat.edit").to_string();
+                    let delete_lbl = i18n.t("chat.delete").to_string();
+                    let copy_json_lbl = i18n.t("chat.copyJson").to_string();
                     bubble_resp.context_menu(|ui| {
-                        if ui.button("📋 Copy").clicked() {
+                        if ui.button(format!("📋 {copy_lbl}")).clicked() {
                             ui.ctx().copy_text(ctx_content.clone());
                             ui.close_menu();
                         }
-                        if ui.button("📝 Copy (plain text)").clicked() {
+                        if ui.button(format!("📝 {copy_plain_lbl}")).clicked() {
                             ui.ctx().copy_text(ctx_plain.clone());
                             ui.close_menu();
                         }
-                        if ui.button("✏️ Edit").clicked() {
+                        if ui.button(format!("✏️ {edit_lbl}")).clicked() {
                             if let Some(real_idx) =
                                 find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
                             {
@@ -1024,7 +1184,7 @@ impl ChatView {
                             }
                             ui.close_menu();
                         }
-                        if ui.button("🗑️ Delete").clicked() {
+                        if ui.button(format!("🗑️ {delete_lbl}")).clicked() {
                             if let Some(real_idx) =
                                 find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
                             {
@@ -1036,7 +1196,7 @@ impl ChatView {
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("📋 Copy as JSON").clicked() {
+                        if ui.button(format!("📋 {copy_json_lbl}")).clicked() {
                             if let Some(real_idx) =
                                 find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
                             {

@@ -224,7 +224,7 @@ impl GoOnApp {
                     .arg("--protocol-mode")
                     .arg("acp_http")
                     .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null());
+                    .stderr(std::process::Stdio::piped());
 
                 // Inject API keys for ALL configured providers into backend process environment.
                 // Priority: keyring > config file > inherited env.
@@ -239,6 +239,14 @@ impl GoOnApp {
 
                     // Try keyring first
                     let mut key = crate::keyring_util::get_api_key(&provider_lower);
+
+                    // Log when keyring fails (useful for debugging macOS keychain issues)
+                    if key.is_none() {
+                        eprintln!(
+                            "backend: keyring returned no key for '{}', falling back to config",
+                            provider_lower
+                        );
+                    }
 
                     // Fallback: config file api_key
                     if key.is_none() {
@@ -269,9 +277,35 @@ impl GoOnApp {
                 // Sync language between GUI and backend
                 cmd.env("LANG", &config.language);
 
+                // Regenerate backend config.toml on every start to keep it
+                // in sync with the GUI's provider configuration.
+                // The file includes a header marking it as auto-generated.
+                let backend_cfg_path = config_dir.join("config.toml");
+                Self::generate_backend_config(&backend_cfg_path, config);
+
+                let log_path = config_dir.join("backend.log");
+                let log_file_for_reader = std::fs::File::create(&log_path).ok();
                 match cmd.spawn() {
-                    Ok(child) => {
+                    Ok(mut child) => {
                         eprintln!("go-on backend started (PID: {})", child.id());
+                        // Spawn a thread to capture backend stderr to log file
+                        if let Some(stderr) = child.stderr.take() {
+                            if let Some(mut log) = log_file_for_reader {
+                                use std::io::Write;
+                                std::thread::spawn(move || {
+                                    use std::io::Read;
+                                    let mut buf = [0u8; 4096];
+                                    let mut reader = std::io::BufReader::new(stderr);
+                                    while let Ok(n) = reader.read(&mut buf) {
+                                        if n == 0 {
+                                            break;
+                                        }
+                                        let _ = log.write_all(&buf[..n]);
+                                        let _ = log.flush();
+                                    }
+                                });
+                            }
+                        }
                         (BackendClient::new(&config.backend_url), Some(child))
                     }
                     Err(e) => {
@@ -284,6 +318,151 @@ impl GoOnApp {
                 eprintln!("warning: go-on backend binary not found");
                 (BackendClient::new(&config.backend_url), None)
             }
+        }
+    }
+
+    /// Generate a backend config.toml with all configured providers.
+    /// Called every time the backend is (re)started to keep the config in sync
+    /// with the GUI's provider list.
+    ///
+    /// Uses `keyring://go-on/<provider>_api_key` references so the backend reads
+    /// API keys from the system keyring (libsecret on Linux, Credential Manager on
+    /// Windows, Keychain on macOS). The backend also falls back to env vars if the
+    /// keyring is unavailable — see `load_secret_value()` in the backend code.
+    fn generate_backend_config(path: &std::path::Path, config: &AppConfig) {
+        let provider_lines: Vec<String> = config
+            .providers
+            .iter()
+            .filter(|p| {
+                // Priority: keyring first, then config as fallback
+                crate::keyring_util::has_api_key(&p.name.to_lowercase())
+                    || (!p.api_key.is_empty() && p.api_key != "********")
+            })
+            .map(|p| {
+                let name = p.name.to_lowercase();
+                let model = if p.model.is_empty() || p.model == "auto" {
+                    match name.as_str() {
+                        "deepseek" => "deepseek-chat",
+                        "openai" => "gpt-4o",
+                        "anthropic" => "claude-sonnet-4-20250514",
+                        "gemini" => "gemini-2.5-flash-preview-04-17",
+                        "qwen" => "qwen-max-2025-01-25",
+                        _ => "auto",
+                    }
+                } else {
+                    &p.model
+                };
+                let keyring_ref = format!("keyring://go-on/{}_api_key", name);
+                format!(
+                    r#"[agents.{}]
+type = "{}"
+api_key_env = "{}"
+model = "{}"
+supports_system = true
+"#,
+                    name, name, keyring_ref, model
+                )
+            })
+            .collect();
+
+        let agent_section = if provider_lines.is_empty() {
+            String::new()
+        } else {
+            let agents_toml = provider_lines.join("\n");
+            let agent_names: Vec<String> = config
+                .providers
+                .iter()
+                .filter(|p| {
+                    // Priority: keyring first, then config as fallback
+                    crate::keyring_util::has_api_key(&p.name.to_lowercase())
+                        || (!p.api_key.is_empty() && p.api_key != "********")
+                })
+                .map(|p| p.name.to_lowercase())
+                .collect();
+            let agents_list = if agent_names.is_empty() {
+                "[]".to_string()
+            } else {
+                let quoted: Vec<String> = agent_names.iter().map(|n| format!("\"{}\"", n)).collect();
+                format!("[{}]", quoted.join(", "))
+            };
+            format!(
+                r#"{agents_toml}
+
+[flow]
+name = "go-on-gui"
+phases = ["coding"]
+
+[phases.coding]
+description = "Coding phase with configured providers"
+agents = {agents_list}
+fallback = true
+
+[phases.coding.options]
+request_timeout_seconds = 300
+review_timeout_seconds = 60
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 24
+global_max_inflight = 128
+"#
+            )
+        };
+
+        // Bind address must match GUI's backend_url
+        let bind_addr = config
+            .backend_url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .trim_end_matches('/');
+
+        let toml = format!(
+            r#"# Auto-generated by go-on-gui — do not edit manually.
+# Provider settings are managed from the GUI's Providers/Settings page.
+
+default_phase = "coding"
+model_selection_mode = "adaptive"
+
+[protocol]
+mode = "acp_http"
+
+[cache]
+enabled = true
+path = "acp_cache.sqlite3"
+default_ttl_seconds = 3600
+max_entries = 5000
+
+[vector]
+enabled = true
+auto_mode = true
+path = "acp_vector.sqlite3"
+dimensions = 192
+min_query_chars = 80
+top_k = 2
+min_similarity = 0.82
+max_snippet_chars = 800
+max_entries = 10000
+summary_enabled = true
+summary_trigger_messages = 8
+summary_max_chars = 1200
+
+[runtime]
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 30
+sqlite_vacuum_interval_cycles = 60
+acp_http_bind_addr = "{bind_addr}"
+
+[autotune]
+enabled = false
+evaluate_interval = 20
+state_path = "acp_autotune_state.json"
+
+{agent_section}"#
+        );
+
+        match std::fs::write(path, &toml) {
+            Ok(_) => eprintln!("backend: wrote config.toml to {}", path.display()),
+            Err(e) => eprintln!("backend: failed to write config.toml: {}", e),
         }
     }
 

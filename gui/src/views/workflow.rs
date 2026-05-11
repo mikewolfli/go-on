@@ -3,11 +3,8 @@ use crate::i18n::I18n;
 use crate::views::autotune::AutoTuneView;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-
-const STEP_TIMEOUT_SECS: u64 = 120;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkflowStep {
@@ -45,6 +42,27 @@ pub struct WorkflowView {
 }
 
 impl WorkflowView {
+    fn estimated_progress(run: &WorkflowRunRecord) -> f32 {
+        match run.status.as_str() {
+            "queued" => 0.05,
+            "running" | "paused" => {
+                let elapsed = Self::run_duration_secs(run).unwrap_or(0) as f32;
+                (elapsed / 300.0).clamp(0.08, 0.92)
+            }
+            "succeeded" | "failed" | "cancelled" => 1.0,
+            _ => 0.0,
+        }
+    }
+
+    fn estimated_remaining_secs(run: &WorkflowRunRecord) -> Option<i64> {
+        if !matches!(run.status.as_str(), "queued" | "running" | "paused") {
+            return None;
+        }
+
+        let elapsed = Self::run_duration_secs(run).unwrap_or(0);
+        Some((300 - elapsed).max(0))
+    }
+
     fn format_local_ts(ts: i64) -> String {
         use chrono::{Local, TimeZone};
         Local
@@ -209,7 +227,12 @@ impl WorkflowView {
     }
 
     fn process_pending(&mut self, i18n: &I18n) {
-        while let Ok(result) = self.pending_rx.try_recv() {
+        // Limit event processing per frame to prevent UI freeze
+        const MAX_EVENTS_PER_FRAME: usize = 8;
+        for _ in 0..MAX_EVENTS_PER_FRAME {
+            let Ok(result) = self.pending_rx.try_recv() else {
+                break;
+            };
             if let Some(payload) = result.strip_prefix("__runs__:") {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
                     let runs = v
@@ -260,6 +283,20 @@ impl WorkflowView {
                 continue;
             }
 
+            if let Some(payload) = result.strip_prefix("__workflow_execute__:") {
+                self.state.last_result = Some(payload.to_string());
+                self.state.last_run_at = Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                );
+                self.running = false;
+                self.pending_confirm_run = false;
+                self.save_state();
+                continue;
+            }
+
             self.state.last_run_at = Some(
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -272,15 +309,16 @@ impl WorkflowView {
         }
     }
 
-    fn trigger_run(&mut self, i18n: &I18n, ctx: &egui::Context) {
-        let steps: Vec<(String, String)> = self
+    fn trigger_run(&mut self, i18n: &I18n, ctx: &egui::Context, backend: &BackendClient) {
+        let task = self
             .state
             .steps
             .iter()
             .filter(|s| s.enabled)
-            .map(|s| (s.name.clone(), s.command.clone()))
-            .collect();
-        if steps.is_empty() {
+            .map(|s| format!("{}: {}", s.name, s.command))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if task.trim().is_empty() {
             self.state.last_result = Some(i18n.t("workflow.noEnabledSteps").to_string());
             self.save_state();
             return;
@@ -292,120 +330,21 @@ impl WorkflowView {
 
         let tx = self.pending_tx.clone();
         let ctx_clone = ctx.clone();
-        let step_label = i18n.t("workflow.step").to_string();
-        let exec_error = i18n.t("workflow.executionError").to_string();
-        let step_failure = i18n.t("workflow.stepFailure").to_string();
-        let step_timeout = i18n.t("workflow.stepTimeout").to_string();
-        let no_output = i18n.t("workflow.noOutput").to_string();
+        let backend = backend.clone();
         tokio::spawn(async move {
-            let mut lines = Vec::new();
-            for (idx, (name, command)) in steps.iter().enumerate() {
-                lines.push(format!(
-                    "{} {} [{}]: {}",
-                    step_label,
-                    idx + 1,
-                    name,
-                    command
-                ));
-                #[cfg(target_os = "windows")]
-                let child_spawn = tokio::process::Command::new("cmd")
-                    .arg("/C")
-                    .arg(command)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn();
-
-                #[cfg(not(target_os = "windows"))]
-                let child_spawn = tokio::process::Command::new("sh")
-                    .arg("-lc")
-                    .arg(command)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn();
-
-                let mut child = match child_spawn {
-                    Ok(c) => c,
-                    Err(e) => {
-                        lines.push(format!("  failed to spawn: {e}"));
-                        lines.push(exec_error.clone());
-                        break;
-                    }
-                };
-
-                let stdout_task = child.stdout.take().map(|mut stdout| {
-                    tokio::spawn(async move {
-                        let mut buf = Vec::new();
-                        let _ = tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut buf).await;
-                        buf
-                    })
-                });
-                let stderr_task = child.stderr.take().map(|mut stderr| {
-                    tokio::spawn(async move {
-                        let mut buf = Vec::new();
-                        let _ = tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut buf).await;
-                        buf
-                    })
-                });
-
-                let timed = tokio::time::timeout(
-                    std::time::Duration::from_secs(STEP_TIMEOUT_SECS),
-                    child.wait(),
-                )
-                .await;
-
-                match timed {
-                    Ok(wait_result) => match wait_result {
-                        Ok(status) => {
-                            let code = status.code().unwrap_or(-1);
-                            let stdout = if let Some(task) = stdout_task {
-                                task.await
-                                    .map(|b| String::from_utf8_lossy(&b).trim().to_string())
-                                    .unwrap_or_default()
-                            } else {
-                                String::new()
-                            };
-                            let stderr = if let Some(task) = stderr_task {
-                                task.await
-                                    .map(|b| String::from_utf8_lossy(&b).trim().to_string())
-                                    .unwrap_or_default()
-                            } else {
-                                String::new()
-                            };
-                            lines.push(format!("  exit={code}"));
-                            if !stdout.is_empty() {
-                                lines.push(format!("  stdout: {stdout}"));
-                            }
-                            if !stderr.is_empty() {
-                                lines.push(format!("  stderr: {stderr}"));
-                            }
-                            if !status.success() {
-                                lines.push(step_failure.clone());
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            lines.push(format!("  failed to wait process: {e}"));
-                            lines.push(exec_error.clone());
-                            break;
-                        }
-                    },
-                    Err(_) => {
-                        let _ = child.kill().await;
-                        let _ = child.wait().await;
-                        lines.push(format!(
-                            "  timed out after {}s and process was terminated",
-                            STEP_TIMEOUT_SECS
-                        ));
-                        lines.push(step_timeout.clone());
-                        break;
-                    }
+            let payload = match tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                backend.execute_workflow(&task, None, Some(AutoTuneView::load_runtime_options())),
+            )
+            .await
+            {
+                Ok(Ok(result)) => {
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string())
                 }
-            }
-
-            if lines.is_empty() {
-                lines.push(no_output);
-            }
-            let _ = tx.send(lines.join("\n"));
+                Ok(Err(err)) => format!("workflow.execute failed: {err}"),
+                Err(_) => "workflow.execute timed out".to_string(),
+            };
+            let _ = tx.send(format!("__workflow_execute__:{payload}"));
             ctx_clone.request_repaint();
         });
     }
@@ -564,24 +503,7 @@ impl WorkflowView {
                         changed = true;
                     } else {
                         self.pending_confirm_run = false;
-                        let options = AutoTuneView::load_runtime_options();
-                        let task = self
-                            .state
-                            .steps
-                            .iter()
-                            .filter(|s| s.enabled)
-                            .map(|s| format!("{}: {}", s.name, s.command))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        let backend_clone = backend.clone();
-                        let ctx_clone = ctx.clone();
-                        tokio::spawn(async move {
-                            let _ = backend_clone
-                                .execute_workflow(&task, None, Some(options))
-                                .await;
-                            ctx_clone.request_repaint();
-                        });
-                        self.trigger_run(i18n, ctx);
+                        self.trigger_run(i18n, ctx, backend);
                     }
                 }
 
@@ -762,6 +684,34 @@ impl WorkflowView {
                         } // end if !available_actions.is_empty()
 
                         if let Some(run) = &self.selected_run_detail {
+                            ui.add_space(6.0);
+                            let estimated_progress = Self::estimated_progress(run);
+                            egui::Frame::group(ui.style()).show(ui, |ui| {
+                                ui.label(i18n.t("workflow.activeSummary"));
+                                ui.add(
+                                    egui::ProgressBar::new(estimated_progress)
+                                        .desired_width(ui.available_width())
+                                        .show_percentage(),
+                                );
+                                ui.horizontal_wrapped(|ui| {
+                                    if let Some(duration_secs) = Self::run_duration_secs(run) {
+                                        ui.label(format!(
+                                            "{}: {}s",
+                                            i18n.t("workflow.duration"),
+                                            duration_secs
+                                        ));
+                                    }
+                                    if let Some(remaining_secs) =
+                                        Self::estimated_remaining_secs(run)
+                                    {
+                                        ui.label(format!(
+                                            "{}: {}s",
+                                            i18n.t("workflow.estimatedRemaining"),
+                                            remaining_secs
+                                        ));
+                                    }
+                                });
+                            });
                             ui.add_space(6.0);
                             ui.label(format!(
                                 "{}: {}",

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Duration;
 
 const QUICK_RPC_ATTEMPTS: usize = 2;
@@ -12,6 +13,13 @@ pub struct BackendClient {
     /// Client for long-lived requests (chat - 180s timeout)
     long_client: reqwest::Client,
     base_url: String,
+    /// Model list cache with timestamp
+    models_cache: Arc<
+        std::sync::Mutex<(
+            Option<std::collections::HashMap<String, Vec<String>>>,
+            std::time::Instant,
+        )>,
+    >,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -94,12 +102,23 @@ impl BackendClient {
             quick_client,
             long_client,
             base_url: base_url.trim_end_matches('/').to_string(),
+            models_cache: Arc::new(std::sync::Mutex::new((None, std::time::Instant::now()))),
         }
     }
 
     pub async fn fetch_models(&self) -> std::collections::HashMap<String, Vec<String>> {
+        // Check cache (valid for 5 minutes)
+        if let Ok(cache) = self.models_cache.lock() {
+            let (cached_models, timestamp) = &*cache;
+            if let Some(models) = cached_models {
+                if timestamp.elapsed() < Duration::from_secs(300) {
+                    return models.clone();
+                }
+            }
+        }
+
         let resp = self.rpc_call("models.list", None).await;
-        match resp {
+        let result = match resp {
             Ok(val) => {
                 let mut result: std::collections::HashMap<String, Vec<String>> =
                     std::collections::HashMap::new();
@@ -119,7 +138,15 @@ impl BackendClient {
                 result
             }
             Err(_) => std::collections::HashMap::new(),
+        };
+
+        // Update cache
+        if let Ok(mut cache) = self.models_cache.lock() {
+            cache.0 = Some(result.clone());
+            cache.1 = std::time::Instant::now();
         }
+
+        result
     }
 
     pub fn set_base_url(&mut self, url: &str) {

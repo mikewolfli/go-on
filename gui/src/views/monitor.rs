@@ -9,6 +9,7 @@ pub struct MonitorView {
     pub backend_configured: bool,
     error: String,
     metrics_window: String,
+    available_windows: Vec<String>,
     metrics_lines: Vec<String>,
     trend_series: Vec<MetricsWindowPoint>,
     error_groups: Vec<ErrorGroup>,
@@ -17,6 +18,8 @@ pub struct MonitorView {
     pending_rx: mpsc::Receiver<String>,
     pending_tx: mpsc::Sender<String>,
     last_metrics_load: Instant,
+    auto_refresh_interval: u64,
+    consecutive_metrics_failures: u32,
 }
 
 impl MonitorView {
@@ -28,6 +31,12 @@ impl MonitorView {
             backend_configured: false,
             error: String::new(),
             metrics_window: "5m".to_string(),
+            available_windows: vec![
+                "1m".to_string(),
+                "5m".to_string(),
+                "15m".to_string(),
+                "1h".to_string(),
+            ],
             metrics_lines: Vec::new(),
             trend_series: Vec::new(),
             error_groups: Vec::new(),
@@ -36,14 +45,26 @@ impl MonitorView {
             pending_rx,
             pending_tx,
             last_metrics_load: Instant::now(),
+            auto_refresh_interval: 30,
+            consecutive_metrics_failures: 0,
         }
     }
 
+    fn effective_refresh_interval(&self) -> Duration {
+        let multiplier = 2_u64.pow(self.consecutive_metrics_failures.min(3));
+        Duration::from_secs(self.auto_refresh_interval.saturating_mul(multiplier))
+    }
+
     fn process_pending(&mut self) {
-        while let Ok(msg) = self.pending_rx.try_recv() {
+        const MAX_EVENTS_PER_FRAME: usize = 10;
+        for _ in 0..MAX_EVENTS_PER_FRAME {
+            let Ok(msg) = self.pending_rx.try_recv() else {
+                break;
+            };
             if let Some(payload) = msg.strip_prefix("__metrics__:") {
                 self.metrics_lines = payload.lines().map(ToString::to_string).collect();
                 self.error.clear();
+                self.consecutive_metrics_failures = 0;
             } else if let Some(payload) = msg.strip_prefix("__trends__:") {
                 if let Ok(series) = serde_json::from_str::<Vec<MetricsWindowPoint>>(payload) {
                     self.trend_series = series;
@@ -68,6 +89,8 @@ impl MonitorView {
                 self.trend_series.clear();
                 self.error_groups.clear();
                 self.sample_failures_count = 0;
+                self.consecutive_metrics_failures =
+                    self.consecutive_metrics_failures.saturating_add(1);
             }
         }
     }
@@ -86,8 +109,10 @@ impl MonitorView {
                 self.process_pending();
                 self.backend_configured = backend_configured;
 
-                // Auto-refresh metrics every 30 seconds
-                if self.last_metrics_load.elapsed() >= Duration::from_secs(30) && backend_configured
+                let effective_refresh_interval = self.effective_refresh_interval();
+
+                if self.last_metrics_load.elapsed() >= effective_refresh_interval
+                    && backend_configured
                 {
                     self.last_metrics_load = Instant::now();
                     let backend_clone = backend.clone();
@@ -101,13 +126,21 @@ impl MonitorView {
                             backend_clone.metrics_window_query(&window),
                         )
                         .await;
-                        if let Ok(Ok(series)) = result {
-                            let trends_json =
-                                serde_json::to_string(&series).unwrap_or_else(|_| "[]".to_string());
-                            let metrics = format!("window={window} points={}", series.len());
-                            let _ = tx.send(format!("__metrics__:{metrics}"));
-                            let _ = tx.send(format!("__trends__:{trends_json}"));
-                        };
+                        match result {
+                            Ok(Ok(series)) => {
+                                let trends_json = serde_json::to_string(&series)
+                                    .unwrap_or_else(|_| "[]".to_string());
+                                let metrics = format!("window={window} points={}", series.len());
+                                let _ = tx.send(format!("__metrics__:{metrics}"));
+                                let _ = tx.send(format!("__trends__:{trends_json}"));
+                            }
+                            Ok(Err(err)) => {
+                                let _ = tx.send(format!("__metrics_error__:{err}"));
+                            }
+                            Err(_) => {
+                                let _ = tx.send("__metrics_error__:timeout".to_string());
+                            }
+                        }
 
                         // Load errors
                         let err_result = tokio::time::timeout(
@@ -115,12 +148,20 @@ impl MonitorView {
                             backend_clone.metrics_errors_summary(&window, 10),
                         )
                         .await;
-                        if let Ok(Ok((groups, failures))) = err_result {
-                            let summary_json = serde_json::json!({
-                                "groups": groups,
-                                "sample_failures_count": failures.len()
-                            });
-                            let _ = tx.send(format!("__errors_summary__:{summary_json}"));
+                        match err_result {
+                            Ok(Ok((groups, failures))) => {
+                                let summary_json = serde_json::json!({
+                                    "groups": groups,
+                                    "sample_failures_count": failures.len()
+                                });
+                                let _ = tx.send(format!("__errors_summary__:{summary_json}"));
+                            }
+                            Ok(Err(err)) => {
+                                let _ = tx.send(format!("__metrics_error__:{err}"));
+                            }
+                            Err(_) => {
+                                let _ = tx.send("__metrics_error__:timeout".to_string());
+                            }
                         }
                         ctx_clone.request_repaint();
                     });
@@ -210,22 +251,42 @@ impl MonitorView {
                     }
                 });
 
+                if !self.error.is_empty() {
+                    let retry_in = effective_refresh_interval
+                        .saturating_sub(self.last_metrics_load.elapsed())
+                        .as_secs()
+                        .max(1);
+                    ui.add_space(6.0);
+                    ui.colored_label(egui::Color32::from_rgb(220, 120, 80), &self.error);
+                    ui.label(
+                        i18n.t("monitor.retryIn")
+                            .replace("{seconds}", &retry_in.to_string()),
+                    );
+                }
+
                 ui.add_space(16.0);
 
                 if monitor_history_alerts_enabled {
                     egui::Frame::group(ui.style()).show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            ui.label(i18n.t("monitor.timeWindow"));
                             egui::ComboBox::from_id_salt("monitor_metrics_window")
                                 .selected_text(self.metrics_window.clone())
                                 .show_ui(ui, |ui| {
-                                    for w in ["1m", "5m", "1h"] {
-                                        ui.selectable_value(
-                                            &mut self.metrics_window,
-                                            w.to_string(),
-                                            w,
-                                        );
+                                    for w in &self.available_windows {
+                                        ui.selectable_value(&mut self.metrics_window, w.clone(), w);
                                     }
                                 });
+                            ui.separator();
+                            ui.label(i18n.t("monitor.refreshInterval"));
+                            let mut refresh_interval = self.auto_refresh_interval as i32;
+                            if ui
+                                .add(egui::Slider::new(&mut refresh_interval, 10..=120))
+                                .changed()
+                            {
+                                self.auto_refresh_interval = refresh_interval as u64;
+                            }
+                            ui.label(format!("{}s", self.auto_refresh_interval));
                             if ui.button(i18n.t("monitor.loadTrends")).clicked() {
                                 let backend_clone = backend.clone();
                                 let window = self.metrics_window.clone();
@@ -270,7 +331,8 @@ impl MonitorView {
                                 .on_hover_text(i18n.t("monitor.refreshNow"))
                                 .clicked()
                             {
-                                self.last_metrics_load = Instant::now() - Duration::from_secs(31);
+                                self.last_metrics_load =
+                                    Instant::now() - self.effective_refresh_interval();
                             }
                             if ui.button(i18n.t("monitor.loadErrors")).clicked() {
                                 let backend_clone = backend.clone();

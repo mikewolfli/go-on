@@ -2548,6 +2548,142 @@ impl I18n {
             ),
         );
         m.insert(
+            "monitor.timeWindow",
+            tr!(en, "Time Window", cn, "时间窗口", tw, "時間窗口"),
+        );
+        m.insert(
+            "monitor.refreshInterval",
+            tr!(en, "Refresh Interval", cn, "刷新间隔", tw, "刷新間隔"),
+        );
+        m.insert(
+            "monitor.retryIn",
+            tr!(en, "Retrying in {seconds}s", cn, "{seconds}秒后重试", tw, "{seconds}秒後重試"),
+        );
+        m.insert(
+            "chat.tokenStats",
+            tr!(en, "Token Stats", cn, "Token统计", tw, "Token統計"),
+        );
+        m.insert(
+            "chat.responseTime",
+            tr!(en, "Response Time", cn, "响应时间", tw, "回應時間"),
+        );
+        m.insert(
+            "chat.successRate",
+            tr!(en, "Success Rate", cn, "成功率", tw, "成功率"),
+        );
+        m.insert(
+            "chat.tokensPerMinute",
+            tr!(en, "Tokens/Min", cn, "Token/分钟", tw, "Token/分鐘"),
+        );
+        m.insert(
+            "chat.showTokenDetails",
+            tr!(en, "Token Details", cn, "Token详情", tw, "Token詳情"),
+        );
+        m.insert(
+            "chat.showingLatest",
+            tr!(en, "Showing latest {shown} of {total} messages", cn, "显示最新 {shown}/{total} 条消息", tw, "顯示最新 {shown}/{total} 則訊息"),
+        );
+        m.insert(
+            "chat.largeMessageTruncated",
+            tr!(en, "⚠️ Large message ({chars} chars) truncated for UI safety", cn, "⚠️ 消息过长（{chars}字符）已截断", tw, "⚠️ 訊息過長（{chars}字元）已截斷"),
+        );
+        m.insert(
+            "chat.streamError",
+            tr!(en, "Stream error: {error}", cn, "流式错误: {error}", tw, "串流錯誤: {error}"),
+        );
+        m.insert(
+            "chat.streamFallbackError",
+            tr!(en, "Chat failed: {error}", cn, "聊天失败: {error}", tw, "聊天失敗: {error}"),
+        );
+        m.insert(
+            "chat.editTitle",
+            tr!(en, "Edit message", cn, "编辑消息", tw, "編輯訊息"),
+        );
+        m.insert(
+            "chat.saveEdit",
+            tr!(en, "Save", cn, "保存", tw, "儲存"),
+        );
+        m.insert(
+            "chat.cancelEdit",
+            tr!(en, "Cancel", cn, "取消", tw, "取消"),
+        );
+        m.insert(
+            "chat.copyMessage",
+            tr!(en, "Copy", cn, "复制", tw, "複製"),
+        );
+        m.insert(
+            "chat.copyPlain",
+            tr!(en, "Copy (plain text)", cn, "复制（纯文本）", tw, "複製（純文字）"),
+        );
+        m.insert(
+            "chat.copyJson",
+            tr!(en, "Copy as JSON", cn, "复制为 JSON", tw, "複製為 JSON"),
+        );
+        m.insert(
+            "chat.newSession",
+            tr!(en, "New session", cn, "新建会话", tw, "新建會話"),
+        );
+        m.insert(
+            "chat.clearSession",
+            tr!(en, "Clear messages", cn, "清空消息", tw, "清空訊息"),
+        );
+        m.insert(
+            "chat.deleteSession",
+            tr!(en, "Delete session", cn, "删除会话", tw, "刪除會話"),
+        );
+        m.insert(
+            "chat.exportSession",
+            tr!(en, "Export session", cn, "导出会话", tw, "匯出會話"),
+        );
+        m.insert(
+            "chat.openConfigDir",
+            tr!(en, "Open config folder", cn, "打开配置目录", tw, "開啟設定目錄"),
+        );
+        m.insert(
+            "chat.sendShortcutHint",
+            tr!(en, "Enter to send · Shift+Enter for newline", cn, "Enter 发送 · Shift+Enter 换行", tw, "Enter 傳送 · Shift+Enter 換行"),
+        );
+        m.insert(
+            "chat.sendShortcutHintLinux",
+            tr!(en, "Ctrl+Enter to send · Enter for newline", cn, "Ctrl+Enter 发送 · Enter 换行", tw, "Ctrl+Enter 傳送 · Enter 換行"),
+        );
+        m.insert(
+            "chat.stopShortcut",
+            tr!(en, "Stop generation", cn, "停止生成", tw, "停止生成"),
+        );
+        m.insert(
+            "chat.renameSession",
+            tr!(en, "Rename", cn, "重命名", tw, "重新命名"),
+        );
+        m.insert(
+            "chat.sessionNamePlaceholder",
+            tr!(en, "Session name...", cn, "会话名称...", tw, "會話名稱..."),
+        );
+        m.insert(
+            "chat.resend",
+            tr!(en, "Resend", cn, "重新发送", tw, "重新發送"),
+        );
+        m.insert(
+            "mode.ask",
+            tr!(en, "Ask", cn, "问答", tw, "問答"),
+        );
+        m.insert(
+            "mode.plan",
+            tr!(en, "Plan", cn, "计划", tw, "計劃"),
+        );
+        m.insert(
+            "mode.edit",
+            tr!(en, "Edit", cn, "编辑", tw, "編輯"),
+        );
+        m.insert(
+            "mode.safeguard",
+            tr!(en, "Safeguard", cn, "安全审查", tw, "安全審查"),
+        );
+        m.insert(
+            "mode.full_auto",
+            tr!(en, "Full Auto", cn, "全自动", tw, "全自動"),
+        );
+        m.insert(
             "providers.ops.hidden",
             tr!(
                 en,
@@ -4026,6 +4162,14 @@ impl I18n {
         m.insert(
             "workflow.endedAt",
             tr!(en, "Ended At", cn, "结束时间", tw, "結束時間"),
+        );
+        m.insert(
+            "workflow.activeSummary",
+            tr!(en, "Active Run Summary", cn, "活动运行摘要", tw, "活動運行摘要"),
+        );
+        m.insert(
+            "workflow.estimatedRemaining",
+            tr!(en, "Estimated Remaining", cn, "预计剩余", tw, "預計剩餘"),
         );
 
         // ── Skills keys ──────────────────────────────────

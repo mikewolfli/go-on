@@ -15,8 +15,8 @@ const CHAT_STAGE6_ENABLE_MODE_ROW: bool = true;
 const CHAT_STAGE6_ENABLE_EXTRA_BUTTONS: bool = true;
 
 use super::types::{
-    AiStatus, Attachment, GenerationState, Message, PendingResponse, PhaseRecord, PromptTemplate,
-    Session,
+    AiStatus, Attachment, GenerationState, Message, ModelPerfStats, PendingResponse, PhaseRecord,
+    PromptTemplate, Session,
 };
 mod render;
 mod runtime;
@@ -41,17 +41,26 @@ pub struct ChatView {
     phases_load_scheduled: bool,
     pending_rx: mpsc::Receiver<PendingResponse>,
     pending_tx: mpsc::Sender<PendingResponse>,
-    // Feature 3: edit/retry/delete
+    // Session rename (double-click on session name)
+    rename_session_idx: Option<usize>,
+    rename_session_buf: String,
+    // Message edit
     edit_msg_idx: Option<usize>,
     edit_msg_buf: String,
     // Feature 4: stop button
     stop_requested: bool,
     generation_states: Vec<GenerationState>,
     next_generation_id: u64,
-    // Feature 5: token display
+    // Feature 5: token display with improved accuracy
     last_token_estimate: usize,
     input_token_estimate: usize,
     output_token_estimate: usize,
+    /// Enable markdown rendering (default: true)
+    enable_markdown: bool,
+    /// Show token details (default: true)
+    show_token_details: bool,
+    /// Model performance stats cache
+    model_stats: std::collections::HashMap<String, ModelPerfStats>,
     // Feature 7: quick prompts
     show_prompts: bool,
     show_model_picker: bool,
@@ -113,6 +122,38 @@ impl ChatView {
         }
 
         out.trim().to_string()
+    }
+
+    /// Improved token counting algorithm
+    /// Uses a more accurate estimation based on character and word count
+    fn estimate_tokens_improved(text: &str) -> usize {
+        // Clean text by removing markdown and extra whitespace
+        let clean_text = Self::markdown_to_plain_text(text);
+
+        // Token estimation formula (OpenAI compatible)
+        // Approximately: 1 token per 4 characters for English text
+        // Plus 1 token per word for better accuracy
+        let char_count = clean_text.chars().count();
+        let word_count = clean_text.split_whitespace().count();
+
+        // Weighted average: 40% from chars, 60% from words
+        let from_chars = (char_count as f64 / 4.0).ceil() as usize;
+        let from_words = (word_count as f64 / 0.75).ceil() as usize;
+
+        ((from_chars as f64 * 0.4 + from_words as f64 * 0.6).ceil() as usize).max(1)
+    }
+
+    /// Update model performance stats after message generation
+    fn update_model_stats(&mut self, model: &str, tokens: usize, duration_ms: u64) {
+        let stats = self.model_stats.entry(model.to_string()).or_default();
+        stats.response_time_ms = duration_ms;
+        stats.token_count = tokens;
+        stats.success_count = stats.success_count.saturating_add(1);
+
+        // Calculate tokens per minute
+        if duration_ms > 0 {
+            stats.avg_tokens_per_minute = (tokens as f64 / (duration_ms as f64 / 60000.0)).round();
+        }
     }
 
     fn localized_default_session_name(index: usize, i18n: &I18n) -> String {
@@ -285,7 +326,8 @@ impl ChatView {
             phases_load_scheduled: false,
             pending_rx,
             pending_tx,
-            // Feature 3
+            rename_session_idx: None,
+            rename_session_buf: String::new(),
             edit_msg_idx: None,
             edit_msg_buf: String::new(),
             // Feature 4
@@ -319,6 +361,10 @@ impl ChatView {
             stream_chunk_flush_interval: std::time::Duration::from_millis(33),
             stream_repaint_interval: std::time::Duration::from_millis(33),
             max_pending_events_per_frame: 256,
+            // Enhanced features (Phase 2)
+            enable_markdown: true,
+            show_token_details: true,
+            model_stats: std::collections::HashMap::new(),
         }
     }
 
@@ -471,6 +517,13 @@ impl ChatView {
             .map(|state| state.msg_idx)
     }
 
+    fn generation_meta(&self, generation_id: u64) -> Option<(usize, String, std::time::Instant)> {
+        self.generation_states
+            .iter()
+            .find(|state| state.id == generation_id)
+            .map(|state| (state.msg_idx, state.model.clone(), state.started_at))
+    }
+
     fn remove_generation(&mut self, generation_id: u64) {
         self.generation_states
             .retain(|state| state.id != generation_id);
@@ -559,6 +612,8 @@ impl ChatView {
         self.attachments.clear();
         self.edit_msg_idx = None;
         self.edit_msg_buf.clear();
+        self.rename_session_idx = None;
+        self.rename_session_buf.clear();
         self.selected_models = vec![self.selected_model.clone()];
         self.save_sessions_to_disk();
     }
@@ -637,6 +692,8 @@ mod tests {
             phases_load_scheduled: false,
             pending_rx,
             pending_tx,
+            rename_session_idx: None,
+            rename_session_buf: String::new(),
             edit_msg_idx: None,
             edit_msg_buf: String::new(),
             stop_requested: false,

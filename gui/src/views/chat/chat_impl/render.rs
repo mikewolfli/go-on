@@ -5,9 +5,11 @@ impl ChatView {
         ui: &mut egui::Ui,
         text: &str,
         copy_code_hint: &str,
+        enable_markdown: bool,
         text_color: egui::Color32,
+        truncation_hint: &str,
     ) {
-        if CHAT_DISABLE_MARKDOWN_RENDER {
+        if CHAT_DISABLE_MARKDOWN_RENDER || !enable_markdown {
             ui.label(egui::RichText::new(Self::markdown_to_plain_text(text)).color(text_color));
             return;
         }
@@ -17,10 +19,7 @@ impl ChatView {
             let preview: String = text.chars().take(MAX_MARKDOWN_CHARS).collect();
             ui.colored_label(
                 egui::Color32::from_rgb(220, 170, 80),
-                format!(
-                    "⚠️ Large message ({} chars) truncated for UI safety",
-                    text.len()
-                ),
+                truncation_hint.replace("{chars}", &text.len().to_string()),
             );
             ui.add_space(4.0);
             ui.label(egui::RichText::new(preview).color(text_color));
