@@ -110,6 +110,8 @@ impl ChatView {
             let model_clone = model_name.clone();
             let base_url_clone = base_url.clone();
             let autotune_extra_clone = autotune_extra.clone();
+            let conv_id_clone = self.sessions[self.active_session].conversation_id.clone();
+            let branch_id_clone = self.sessions[self.active_session].branch_id.clone();
             let handle = tokio::spawn(async move {
                 let phase_val = if phase_clone.is_empty() {
                     serde_json::Value::Null
@@ -133,7 +135,20 @@ impl ChatView {
                     if body.get("options").is_none() {
                         body["options"] = serde_json::json!({});
                     }
-                    body["options"]["extra"] = extra;
+                    // Flatten extra values into options, NOT under "extra" key
+                    if let Some(obj) = extra.as_object() {
+                        for (k, v) in obj {
+                            body["options"][k] = v.clone();
+                        }
+                    }
+                }
+
+                // NEW: pass conversation tracking IDs
+                if let Some(conv_id) = conv_id_clone.clone() {
+                    body["conversation_id"] = serde_json::json!(conv_id);
+                }
+                if let Some(b_id) = branch_id_clone.clone() {
+                    body["branch_id"] = serde_json::json!(b_id);
                 }
 
                 let client = reqwest::Client::builder()
@@ -166,6 +181,8 @@ impl ChatView {
                                     generation_id,
                                     content,
                                     thinking,
+                                    conversation_id: None,
+                                    branch_id: None,
                                 })
                                 .unwrap_or_else(|e| PendingResponse::Error {
                                     generation_id: Some(generation_id),
@@ -181,6 +198,8 @@ impl ChatView {
                         let mut sse_buffer = String::new();
                         let mut final_content: Option<String> = None;
                         let mut final_thinking: Option<String> = None;
+                        let mut final_conv_id: Option<String> = None;
+                        let mut final_branch_id: Option<String> = None;
                         let mut buffered_token = String::new();
                         let mut buffered_reasoning = String::new();
                         let mut last_stream_flush = std::time::Instant::now();
@@ -278,6 +297,14 @@ impl ChatView {
                                             .get("thinking")
                                             .and_then(|v| v.as_str())
                                             .map(ToOwned::to_owned);
+                                        final_conv_id = data
+                                            .get("conversation_id")
+                                            .and_then(|v| v.as_str())
+                                            .map(String::from);
+                                        final_branch_id = data
+                                            .get("branch_id")
+                                            .and_then(|v| v.as_str())
+                                            .map(String::from);
                                     }
                                     "error" => {
                                         if !buffered_token.is_empty()
@@ -330,6 +357,8 @@ impl ChatView {
                             generation_id,
                             content: final_content.unwrap_or_default(),
                             thinking: final_thinking.unwrap_or_default(),
+                            conversation_id: final_conv_id,
+                            branch_id: final_branch_id,
                         });
                     }
                     Err(err) => {
@@ -340,6 +369,8 @@ impl ChatView {
                                 generation_id,
                                 content,
                                 thinking,
+                                conversation_id: None,
+                                branch_id: None,
                             })
                             .unwrap_or_else(|e| PendingResponse::Error {
                                 generation_id: Some(generation_id),
@@ -427,7 +458,21 @@ impl ChatView {
                     generation_id,
                     content,
                     thinking,
+                    conversation_id,
+                    branch_id,
                 } => {
+                    // Store conversation tracking IDs on the session
+                    if let Some(conv_id) = conversation_id {
+                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                            session.conversation_id = Some(conv_id);
+                        }
+                    }
+                    if let Some(b_id) = branch_id {
+                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                            session.branch_id = Some(b_id);
+                        }
+                    }
+
                     let generation_meta = self.generation_meta(generation_id);
                     let mut model_name = None;
                     let mut output_tokens_to_record = self.output_token_estimate;

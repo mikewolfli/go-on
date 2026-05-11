@@ -454,11 +454,23 @@ impl BackendClient {
             });
         }
 
-        if let Some(extra) = options_extra {
+        if let Some(ref extra) = options_extra {
             if body.get("options").is_none() {
                 body["options"] = serde_json::json!({});
             }
-            body["options"]["extra"] = extra;
+            // Flatten extra values into options, NOT under "extra" key
+            if let Some(obj) = extra.as_object() {
+                for (k, v) in obj {
+                    body["options"][k] = v.clone();
+                }
+            }
+            // Include conversation tracking IDs if available
+            if let Some(cid) = extra.get("conversation_id").and_then(|v| v.as_str()) {
+                body["conversation_id"] = serde_json::json!(cid);
+            }
+            if let Some(bid) = extra.get("branch_id").and_then(|v| v.as_str()) {
+                body["branch_id"] = serde_json::json!(bid);
+            }
         }
 
         let resp = self

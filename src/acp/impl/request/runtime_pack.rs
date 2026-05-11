@@ -536,7 +536,10 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
                 "shutting_down": status.lifecycle.shutdown_requested,
                 "is_healthy": status.lifecycle.is_healthy,
                 "uptime_seconds": status.lifecycle.uptime_seconds,
+                "version": env!("CARGO_PKG_VERSION"),
+                "build": option_env!("VERGEN_GIT_SHA").unwrap_or("unknown"),
             },
+            "version": env!("CARGO_PKG_VERSION"),
             "stats": {
                 "total_requests": status.metrics.total_requests,
                 "successful_requests": status.metrics.successful_requests,

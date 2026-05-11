@@ -48,10 +48,11 @@ impl AboutView {
                         backend_version
                     ));
 
+                    let release_fallback = i18n.t("about.backendRelease").to_string();
                     let backend_build = health
                         .and_then(|h| h.backend_build.as_deref())
                         .filter(|v| !v.is_empty())
-                        .unwrap_or("release");
+                        .unwrap_or(&release_fallback);
                     ui.label(format!(
                         "{}: {}",
                         i18n.t("about.backendBuild"),

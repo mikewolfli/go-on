@@ -143,17 +143,7 @@ impl I18n {
             tr!(en, "Providers", cn, "供应商", tw, "供應商"),
         );
         m.insert("tab.about", tr!(en, "About", cn, "关于", tw, "關於"));
-        m.insert(
-            "app.unknownTab",
-            tr!(
-                en,
-                "Unknown tab id.",
-                cn,
-                "未知标签页 ID。",
-                tw,
-                "未知分頁 ID。"
-            ),
-        );
+
         m.insert(
             "app.backendRequired",
             tr!(
@@ -201,34 +191,10 @@ impl I18n {
                 "當前 GUI 與後端運行資訊"
             ),
         );
-        m.insert(
-            "about.guiVersion",
-            tr!(en, "GUI Version", cn, "GUI 版本", tw, "GUI 版本"),
-        );
-        m.insert(
-            "about.backendStatus",
-            tr!(en, "Backend Status", cn, "后端状态", tw, "後端狀態"),
-        );
-        m.insert(
-            "about.backendVersion",
-            tr!(en, "Backend Version", cn, "后端版本", tw, "後端版本"),
-        );
-        m.insert(
-            "about.backendBuild",
-            tr!(en, "Backend Build", cn, "后端构建", tw, "後端構建"),
-        );
-        m.insert(
-            "about.backendPid",
-            tr!(en, "Backend PID", cn, "后端 PID", tw, "後端 PID"),
-        );
         m.insert("about.unknown", tr!(en, "unknown", cn, "未知", tw, "未知"));
         m.insert(
             "about.external",
             tr!(en, "external", cn, "外部进程", tw, "外部進程"),
-        );
-        m.insert(
-            "about.improvedTitle",
-            tr!(en, "Improved", cn, "已改进", tw, "已改進"),
         );
         m.insert(
             "about.improved.monitor",
@@ -300,6 +266,10 @@ impl I18n {
         m.insert(
             "about.backendPid",
             tr!(en, "Backend PID", cn, "后端进程 PID", tw, "後端進程 PID"),
+        );
+        m.insert(
+            "about.backendRelease",
+            tr!(en, "release", cn, "正式版", tw, "正式版"),
         );
         m.insert(
             "about.guiVersion",
@@ -780,17 +750,6 @@ impl I18n {
 
         // Setup
         m.insert(
-            "setup.title",
-            tr!(
-                en,
-                "AI Provider Setup",
-                cn,
-                "AI 供应商配置",
-                tw,
-                "AI 供應商配置"
-            ),
-        );
-        m.insert(
             "setup.hint",
             tr!(
                 en,
@@ -804,10 +763,6 @@ impl I18n {
         m.insert(
             "setup.provider",
             tr!(en, "Provider", cn, "供应商", tw, "供應商"),
-        );
-        m.insert(
-            "setup.apiKey",
-            tr!(en, "API Key", cn, "API 密钥", tw, "API 密鑰"),
         );
         m.insert("setup.model", tr!(en, "Model", cn, "模型", tw, "模型"));
         m.insert(
@@ -855,45 +810,8 @@ impl I18n {
 
         // Skills validation errors
         m.insert(
-            "skills.create.errorName",
-            tr!(
-                en,
-                "Name is required.",
-                cn,
-                "名称是必填项。",
-                tw,
-                "名稱是必填項。"
-            ),
-        );
-        m.insert(
-            "skills.create.errorPrompt",
-            tr!(
-                en,
-                "Prompt is required.",
-                cn,
-                "提示是必填项。",
-                tw,
-                "提示是必填項。"
-            ),
-        );
-        m.insert(
-            "skills.import.errorUrl",
-            tr!(
-                en,
-                "URL is required.",
-                cn,
-                "URL 是必填项。",
-                tw,
-                "URL 是必填項。"
-            ),
-        );
-        m.insert(
             "skills.import.unnamed",
             tr!(en, "imported", cn, "已导入", tw, "已導入"),
-        );
-        m.insert(
-            "skills.import.importedFrom",
-            tr!(en, "Imported from {}", cn, "从 {} 导入", tw, "從 {} 導入"),
         );
 
         // Settings (feature toggles)
@@ -1288,17 +1206,6 @@ impl I18n {
             tr!(en, "Backend URL", cn, "后端地址", tw, "後端地址"),
         );
         m.insert(
-            "settings.backendUrlHint",
-            tr!(
-                en,
-                "URL of the Go-On backend server",
-                cn,
-                "Go-On 后端服务器地址",
-                tw,
-                "Go-On 後端服務器地址"
-            ),
-        );
-        m.insert(
             "settings.backendUrlPlaceholder",
             tr!(
                 en,
@@ -1358,7 +1265,6 @@ impl I18n {
             "settings.section.theme",
             tr!(en, "🎨 Theme", cn, "🎨 主题", tw, "🎨 主題"),
         );
-        m.insert("common.close", tr!(en, "Close", cn, "关闭", tw, "關閉"));
         m.insert(
             "settings.feature.workflowRunCenter",
             tr!(
@@ -1599,10 +1505,7 @@ impl I18n {
             "setup.environment",
             tr!(en, "Environment", cn, "环境", tw, "環境"),
         );
-        m.insert(
-            "setup.secretSource",
-            tr!(en, "Secret Source", cn, "密钥来源", tw, "密鑰來源"),
-        );
+        // (setup.secretSource moved to Setup section later)
         m.insert(
             "setup.keyringError",
             tr!(
@@ -1651,17 +1554,7 @@ impl I18n {
                 "運行已啟用步驟"
             ),
         );
-        m.insert(
-            "workflow.confirmRun",
-            tr!(
-                en,
-                "Confirm Run Enabled Steps",
-                cn,
-                "确认运行已启用步骤",
-                tw,
-                "確認運行已啟用步驟"
-            ),
-        );
+
         m.insert(
             "workflow.runCenter.title",
             tr!(en, "Run Center", cn, "运行中心", tw, "運行中心"),
@@ -1823,30 +1716,6 @@ impl I18n {
         m.insert(
             "workflow.runStatus.all",
             tr!(en, "All", cn, "全部", tw, "全部"),
-        );
-        m.insert(
-            "workflow.runStatus.queued",
-            tr!(en, "Queued", cn, "排队中", tw, "排隊中"),
-        );
-        m.insert(
-            "workflow.runStatus.running",
-            tr!(en, "Running", cn, "运行中", tw, "運行中"),
-        );
-        m.insert(
-            "workflow.runStatus.paused",
-            tr!(en, "Paused", cn, "已暂停", tw, "已暫停"),
-        );
-        m.insert(
-            "workflow.runStatus.succeeded",
-            tr!(en, "Succeeded", cn, "已成功", tw, "已成功"),
-        );
-        m.insert(
-            "workflow.runStatus.failed",
-            tr!(en, "Failed", cn, "已失败", tw, "已失敗"),
-        );
-        m.insert(
-            "workflow.runStatus.cancelled",
-            tr!(en, "Cancelled", cn, "已取消", tw, "已取消"),
         );
         m.insert(
             "skills.lifecycle.hidden",
@@ -2089,21 +1958,6 @@ impl I18n {
         m.insert(
             "skills.defaultCreator.title",
             tr!(en, "Skill Creator", cn, "技能创建器", tw, "技能創建器"),
-        );
-        m.insert(
-            "skills.defaultCreator.description",
-            tr!(en, "Create and manage your own AI skills using natural language. Describe what you want, and this skill will help you build it.", cn, "使用自然语言创建和管理你的 AI 技能。描述你的目标，这个技能会帮你把它构建出来。", tw, "使用自然語言創建和管理你的 AI 技能。描述你的目標，這個技能會幫你把它構建出來。"),
-        );
-        m.insert(
-            "skills.defaultCreator.button",
-            tr!(
-                en,
-                "➕ Create Default Skill",
-                cn,
-                "➕ 创建默认技能",
-                tw,
-                "➕ 創建默認技能"
-            ),
         );
         m.insert(
             "skills.defaultCreator.loaded",
@@ -2404,43 +2258,6 @@ impl I18n {
                 tw,
                 "以 JSON 編輯 GUI 配置，即時應用並持久化到磁碟。"
             ),
-        );
-        m.insert(
-            "config.safeModeHidden",
-            tr!(
-                en,
-                "Safe config controls are hidden. Enable 'Config Safe Mode' in Settings.",
-                cn,
-                "安全配置控制已隐藏。请在设置中启用“配置安全模式”。",
-                tw,
-                "安全配置控制已隱藏。請在設置中啟用「配置安全模式」。"
-            ),
-        );
-        m.insert(
-            "config.reloadCurrent",
-            tr!(
-                en,
-                "Reload From Current",
-                cn,
-                "从当前配置重载",
-                tw,
-                "從當前配置重載"
-            ),
-        );
-        m.insert(
-            "config.reloaded",
-            tr!(
-                en,
-                "Reloaded from in-memory config.",
-                cn,
-                "已从内存配置重载。",
-                tw,
-                "已從記憶體配置重載。"
-            ),
-        );
-        m.insert(
-            "config.createSnapshot",
-            tr!(en, "Create Snapshot", cn, "创建快照", tw, "創建快照"),
         );
         m.insert(
             "config.snapshotSaved",
@@ -4000,6 +3817,10 @@ impl I18n {
         m.insert(
             "workflow.confirmRun",
             tr!(en, "Confirm Run", cn, "确认运行", tw, "確認運行"),
+        );
+        m.insert(
+            "workflow.status",
+            tr!(en, "Status", cn, "状态", tw, "狀態"),
         );
         m.insert(
             "workflow.runConfirmAgain",

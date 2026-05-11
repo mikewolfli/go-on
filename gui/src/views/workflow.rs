@@ -715,7 +715,7 @@ impl WorkflowView {
                             ui.add_space(6.0);
                             ui.label(format!(
                                 "{}: {}",
-                                i18n.t("workflow.runStatus.all"),
+                                i18n.t("workflow.status"),
                                 Self::status_label(i18n, &run.status)
                             ));
                             ui.label(format!("{}: {}", i18n.t("workflow.phase"), run.phase));

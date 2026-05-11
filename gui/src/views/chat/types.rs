@@ -55,6 +55,10 @@ pub struct Session {
     pub models: Vec<String>,
     #[serde(default)]
     pub phase_records: Vec<PhaseRecord>,
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub branch_id: Option<String>,
 }
 
 fn default_model() -> String {
@@ -93,6 +97,8 @@ pub enum PendingResponse {
         generation_id: u64,
         content: String,
         thinking: String,
+        conversation_id: Option<String>,
+        branch_id: Option<String>,
     },
     StreamChunk {
         generation_id: u64,

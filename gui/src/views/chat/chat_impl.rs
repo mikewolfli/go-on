@@ -277,6 +277,8 @@ impl ChatView {
             model: "auto".to_string(),
             models: vec!["auto".to_string()],
             phase_records: Vec::new(),
+            conversation_id: None,
+            branch_id: None,
         }
     }
 

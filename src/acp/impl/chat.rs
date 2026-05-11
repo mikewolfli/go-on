@@ -1027,7 +1027,16 @@ pub(crate) async fn process_chat_request(
         .unwrap_or_default();
     if let Some(request_options) = params.options.as_ref() {
         for (key, value) in &request_options.extra {
-            base_agent_options.insert(key.clone(), value.clone());
+            if key == "extra" {
+                // Defensive flatten: legacy clients may nest options under "extra" key
+                if let Some(obj) = value.as_object() {
+                    for (k, v) in obj {
+                        base_agent_options.insert(k.clone(), v.clone());
+                    }
+                }
+            } else {
+                base_agent_options.insert(key.clone(), value.clone());
+            }
         }
     }
 

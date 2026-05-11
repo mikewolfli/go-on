@@ -718,12 +718,12 @@ impl eframe::App for GoOnApp {
             match child.try_wait() {
                 Ok(None) => {} // still running
                 Ok(Some(status)) => {
-                    eprintln!("go-on 后端已退出 (code: {:?})", status.code());
+                    eprintln!("go-on backend exited (code: {:?})", status.code());
                     self.backend_child = None;
                     self.backend_crash_time = Some(Instant::now());
                 }
                 Err(e) => {
-                    eprintln!("go-on 后端 wait 错误: {}", e);
+                    eprintln!("go-on backend wait error: {}", e);
                     self.backend_child = None;
                     self.backend_crash_time = Some(Instant::now());
                 }
