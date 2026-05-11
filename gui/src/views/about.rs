@@ -58,9 +58,13 @@ impl AboutView {
                         backend_build
                     ));
 
-                    let pid_text = backend_pid
-                        .map(|pid| pid.to_string())
-                        .unwrap_or_else(|| i18n.t("about.unknown").to_string());
+                    let pid_text = match backend_pid {
+                        Some(pid) => pid.to_string(),
+                        None if health.is_some_and(|h| h.connected) => {
+                            i18n.t("about.external").to_string()
+                        }
+                        None => i18n.t("about.unknown").to_string(),
+                    };
                     ui.label(format!("{}: {}", i18n.t("about.backendPid"), pid_text));
                 });
 

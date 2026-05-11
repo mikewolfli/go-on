@@ -155,6 +155,28 @@ impl I18n {
             ),
         );
         m.insert(
+            "app.backendRequired",
+            tr!(
+                en,
+                "Backend not connected",
+                cn,
+                "后端未连接",
+                tw,
+                "後端未連接"
+            ),
+        );
+        m.insert(
+            "app.backendRequiredHint",
+            tr!(
+                en,
+                "Wait for backend to connect, or check Monitor / Settings to adjust.",
+                cn,
+                "请等待后端连接，或检查监控/设置页面进行调整。",
+                tw,
+                "請等待後端連接，或檢查監控/設置頁面進行調整。"
+            ),
+        );
+        m.insert(
             "common.copyButton",
             tr!(en, "📋 Copy", cn, "📋 复制", tw, "📋 複製"),
         );
@@ -200,6 +222,10 @@ impl I18n {
             tr!(en, "Backend PID", cn, "后端 PID", tw, "後端 PID"),
         );
         m.insert("about.unknown", tr!(en, "unknown", cn, "未知", tw, "未知"));
+        m.insert(
+            "about.external",
+            tr!(en, "external", cn, "外部进程", tw, "外部進程"),
+        );
         m.insert(
             "about.improvedTitle",
             tr!(en, "Improved", cn, "已改进", tw, "已改進"),
@@ -1454,6 +1480,121 @@ impl I18n {
             "settings.enterprise.hint",
             tr!(en, "Use named backend environments and import/export config packages for controlled rollout.", cn, "使用命名环境和配置包导入导出，便于受控发布与切换。", tw, "使用命名環境和配置包導入導出，便於受控發布與切換。"),
         );
+
+        // ── UI Stability keys ──────────────────────────────
+        m.insert(
+            "settings.uiStability.title",
+            tr!(
+                en,
+                "UI Stability Settings",
+                cn,
+                "界面防抖设置",
+                tw,
+                "界面防抖設置"
+            ),
+        );
+        m.insert(
+            "settings.uiStability.hint",
+            tr!(
+                en,
+                "Adjust repaint batching and cadence to reduce periodic shaking.",
+                cn,
+                "调整重绘批处理与节奏以减少周期性抖动。",
+                tw,
+                "調整重繪批處理與節奏以減少週期性抖動。"
+            ),
+        );
+        m.insert(
+            "settings.uiStability.preset",
+            tr!(en, "Preset", cn, "预设", tw, "預設"),
+        );
+        m.insert(
+            "settings.uiStability.preset.balanced",
+            tr!(en, "Balanced", cn, "平衡", tw, "平衡"),
+        );
+        m.insert(
+            "settings.uiStability.preset.stable",
+            tr!(en, "Stable", cn, "稳态优先", tw, "穩態優先"),
+        );
+        m.insert(
+            "settings.uiStability.preset.lowend",
+            tr!(en, "Low-end Machine", cn, "低性能机器", tw, "低性能機器"),
+        );
+        m.insert(
+            "settings.uiStability.preset.lowlatency",
+            tr!(en, "Low Latency", cn, "低延迟", tw, "低延遲"),
+        );
+        m.insert(
+            "settings.uiStability.preset.custom",
+            tr!(en, "Custom", cn, "自定义", tw, "自定義"),
+        );
+        m.insert(
+            "settings.uiStability.backendRefreshInterval",
+            tr!(
+                en,
+                "Backend refresh interval",
+                cn,
+                "后端刷新间隔",
+                tw,
+                "後端刷新間隔"
+            ),
+        );
+        m.insert(
+            "settings.uiStability.backendCommitDebounce",
+            tr!(
+                en,
+                "Backend UI commit debounce",
+                cn,
+                "后端 UI 提交去抖",
+                tw,
+                "後端 UI 提交去抖"
+            ),
+        );
+        m.insert(
+            "settings.uiStability.disconnectDebounce",
+            tr!(
+                en,
+                "Disconnect debounce samples",
+                cn,
+                "断连去抖采样数",
+                tw,
+                "斷連去抖採樣數"
+            ),
+        );
+        m.insert(
+            "settings.uiStability.chatStreamFlush",
+            tr!(
+                en,
+                "Chat stream chunk flush",
+                cn,
+                "聊天流数据块刷新",
+                tw,
+                "聊天流數據塊刷新"
+            ),
+        );
+        m.insert(
+            "settings.uiStability.chatRepaintInterval",
+            tr!(
+                en,
+                "Chat repaint interval",
+                cn,
+                "聊天重绘间隔",
+                tw,
+                "聊天重繪間隔"
+            ),
+        );
+        m.insert(
+            "settings.uiStability.chatMaxPendingEvents",
+            tr!(
+                en,
+                "Chat max pending events/frame",
+                cn,
+                "聊天每帧最大待处理事件",
+                tw,
+                "聊天每幀最大待處理事件"
+            ),
+        );
+
         m.insert(
             "setup.environment",
             tr!(en, "Environment", cn, "环境", tw, "環境"),

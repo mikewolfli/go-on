@@ -177,6 +177,14 @@ impl BudgetTracker {
         Ok(())
     }
 
+    /// Reset all budget counters for a fresh request budget.
+    /// Prevents long-running backends from hitting accumulated limits.
+    pub fn reset(&mut self) {
+        self.started_at = Instant::now();
+        self.tokens_used = 0;
+        self.tool_calls_made = 0;
+    }
+
     pub fn check_wall_clock(&self) -> Result<(), BudgetExceededError> {
         let elapsed = self.started_at.elapsed().as_secs() as usize;
         let limit = self.task_budget.max_wall_clock_seconds as usize;

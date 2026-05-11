@@ -303,7 +303,7 @@ impl SkillsView {
         // Success message
         if !self.success.is_empty() {
             let text = self.success.clone();
-            let resp = ui.colored_label(egui::Color32::GREEN, &text);
+            let resp = ui.colored_label(egui::Color32::from_rgb(20, 120, 70), &text);
             resp.context_menu(|ui| {
                 if ui.button(i18n.t("common.copyButton")).clicked() {
                     ui.ctx().copy_text(text.clone());
@@ -819,7 +819,7 @@ impl SkillsView {
                     });
                     if let Some(enabled) = skill.enabled {
                         let (color, label) = if enabled {
-                            (egui::Color32::GREEN, "●")
+                            (egui::Color32::from_rgb(20, 120, 70), "●")
                         } else {
                             (egui::Color32::GRAY, "○")
                         };

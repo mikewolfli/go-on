@@ -630,7 +630,7 @@ impl eframe::App for GoOnApp {
                         self.i18n.t("status.disconnected")
                     };
                     let status_color = if is_connected {
-                        egui::Color32::from_rgb(32, 160, 95)
+                        egui::Color32::from_rgb(20, 120, 70)
                     } else {
                         egui::Color32::from_rgb(198, 60, 60)
                     };
@@ -699,17 +699,26 @@ impl eframe::App for GoOnApp {
             }
         });
 
-        // Tab bar
+        // Tab bar — when disconnected, only monitor/providers/settings are accessible
+        let allowed_when_offline = ["monitor", "providers", "settings"];
         let mut new_tab: Option<String> = None;
+        let mut blocked_tab: Option<String> = None;
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(4.0);
                 for tab in &tabs {
                     let label = self.tab_label(tab);
                     let is_active = self.active_tab == *tab;
-                    let resp = ui.selectable_label(is_active, label);
+                    let blocked = !is_connected && !allowed_when_offline.contains(&tab.as_str());
+                    let resp = ui
+                        .add_enabled_ui(!blocked, |ui| ui.selectable_label(is_active, label))
+                        .inner;
                     if resp.clicked() {
-                        new_tab = Some(tab.clone());
+                        if blocked {
+                            blocked_tab = Some(tab.clone());
+                        } else {
+                            new_tab = Some(tab.clone());
+                        }
                     }
                 }
             });
@@ -718,7 +727,35 @@ impl eframe::App for GoOnApp {
             self.active_tab = t;
         }
         if let Some(t) = tab_shortcut {
-            self.active_tab = t;
+            // Apply offline guard for keyboard shortcuts too
+            if is_connected || allowed_when_offline.contains(&t.as_str()) {
+                self.active_tab = t;
+            }
+        }
+
+        // Show toast when a blocked tab is clicked
+        if let Some(_blocked) = &blocked_tab {
+            egui::Window::new("⚠")
+                .id(egui::Id::new("blocked_tab_toast"))
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -80.0])
+                .collapsible(false)
+                .resizable(false)
+                .auto_sized()
+                .show(ctx, |ui| {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 160, 50),
+                        self.i18n.t("app.backendRequired"),
+                    );
+                    ui.label(
+                        egui::RichText::new(self.i18n.t("app.backendRequiredHint"))
+                            .size(13.0)
+                            .weak(),
+                    );
+                    ui.add_space(4.0);
+                    if ui.button(self.i18n.t("common.close")).clicked() {
+                        blocked_tab = None;
+                    }
+                });
         }
 
         // Main content

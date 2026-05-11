@@ -152,7 +152,11 @@ impl MonitorView {
                                 let (_icon, color, text) = if !health.connected {
                                     ("◌", egui::Color32::RED, i18n.t("monitor.offline"))
                                 } else if health.healthy {
-                                    ("●", egui::Color32::GREEN, i18n.t("monitor.healthy"))
+                                    (
+                                        "●",
+                                        egui::Color32::from_rgb(20, 120, 70),
+                                        i18n.t("monitor.healthy"),
+                                    )
                                 } else {
                                     ("◉", egui::Color32::YELLOW, i18n.t("monitor.unhealthy"))
                                 };
@@ -419,7 +423,7 @@ impl MonitorView {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     let (icon, color) = if p.ready {
-                                        ("●", egui::Color32::GREEN)
+                                        ("●", egui::Color32::from_rgb(20, 120, 70))
                                     } else {
                                         ("○", egui::Color32::RED)
                                     };
@@ -451,7 +455,7 @@ impl MonitorView {
                                                 i18n.t("monitor.notReady")
                                             };
                                             let status_color = if p.ready {
-                                                egui::Color32::from_rgb(32, 160, 95)
+                                                egui::Color32::from_rgb(20, 120, 70)
                                             } else {
                                                 egui::Color32::from_rgb(198, 60, 60)
                                             };

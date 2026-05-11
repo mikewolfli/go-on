@@ -70,13 +70,17 @@ impl SettingsView {
         }
     }
 
-    fn ui_stability_preset_label(preset: UiStabilityPreset) -> &'static str {
+    fn ui_stability_preset_label(preset: UiStabilityPreset, i18n: &I18n) -> String {
         match preset {
-            UiStabilityPreset::Balanced => "Balanced / 平衡",
-            UiStabilityPreset::Stable => "Stable / 稳态优先",
-            UiStabilityPreset::LowEnd => "Low-end / 低性能机器",
-            UiStabilityPreset::LowLatency => "Low latency / 低延迟",
-            UiStabilityPreset::Custom => "Custom / 自定义",
+            UiStabilityPreset::Balanced => {
+                i18n.t("settings.uiStability.preset.balanced").to_string()
+            }
+            UiStabilityPreset::Stable => i18n.t("settings.uiStability.preset.stable").to_string(),
+            UiStabilityPreset::LowEnd => i18n.t("settings.uiStability.preset.lowend").to_string(),
+            UiStabilityPreset::LowLatency => {
+                i18n.t("settings.uiStability.preset.lowlatency").to_string()
+            }
+            UiStabilityPreset::Custom => i18n.t("settings.uiStability.preset.custom").to_string(),
         }
     }
 
@@ -456,18 +460,18 @@ impl SettingsView {
                 ui.add_space(8.0);
 
                 // UI stability section (anti-jitter tuning)
-                ui.label(egui::RichText::new("UI Stability / 防抖参数").strong());
+                ui.label(egui::RichText::new(i18n.t("settings.uiStability.title")).strong());
                 ui.add_space(4.0);
-                ui.label("Adjust repaint batching and cadence to reduce periodic shaking.");
+                ui.label(i18n.t("settings.uiStability.hint"));
                 ui.add_space(4.0);
 
                 let stability = &mut config.ui_stability;
 
                 ui.horizontal(|ui| {
-                    ui.label("Preset");
+                    ui.label(i18n.t("settings.uiStability.preset"));
                     let mut selected_preset = Self::ui_stability_preset(stability);
                     egui::ComboBox::from_id_salt("ui_stability_preset_selector")
-                        .selected_text(Self::ui_stability_preset_label(selected_preset))
+                        .selected_text(Self::ui_stability_preset_label(selected_preset, i18n))
                         .show_ui(ui, |ui| {
                             for preset in [
                                 UiStabilityPreset::Balanced,
@@ -478,7 +482,7 @@ impl SettingsView {
                                 if ui
                                     .selectable_label(
                                         selected_preset == preset,
-                                        Self::ui_stability_preset_label(preset),
+                                        Self::ui_stability_preset_label(preset, i18n),
                                     )
                                     .clicked()
                                 {
@@ -499,7 +503,7 @@ impl SettingsView {
                 egui::Grid::new("ui_stability_grid")
                     .striped(true)
                     .show(ui, |ui| {
-                        ui.label("Backend refresh interval (s)");
+                        ui.label(i18n.t("settings.uiStability.backendRefreshInterval"));
                         let mut v = stability.backend_refresh_interval_secs;
                         if ui
                             .add(egui::Slider::new(&mut v, 1..=60).suffix(" s"))
@@ -510,7 +514,7 @@ impl SettingsView {
                         }
                         ui.end_row();
 
-                        ui.label("Backend UI commit debounce (ms)");
+                        ui.label(i18n.t("settings.uiStability.backendCommitDebounce"));
                         let mut v = stability.backend_ui_commit_debounce_ms;
                         if ui
                             .add(egui::Slider::new(&mut v, 16..=1000).suffix(" ms"))
@@ -521,7 +525,7 @@ impl SettingsView {
                         }
                         ui.end_row();
 
-                        ui.label("Disconnect debounce samples");
+                        ui.label(i18n.t("settings.uiStability.disconnectDebounce"));
                         let mut v = u64::from(stability.health_disconnect_debounce_count);
                         if ui.add(egui::Slider::new(&mut v, 1..=8)).changed() {
                             stability.health_disconnect_debounce_count = v as u8;
@@ -529,7 +533,7 @@ impl SettingsView {
                         }
                         ui.end_row();
 
-                        ui.label("Chat stream chunk flush (ms)");
+                        ui.label(i18n.t("settings.uiStability.chatStreamFlush"));
                         let mut v = stability.chat_stream_chunk_flush_ms;
                         if ui
                             .add(egui::Slider::new(&mut v, 16..=200).suffix(" ms"))
@@ -540,7 +544,7 @@ impl SettingsView {
                         }
                         ui.end_row();
 
-                        ui.label("Chat repaint interval (ms)");
+                        ui.label(i18n.t("settings.uiStability.chatRepaintInterval"));
                         let mut v = stability.chat_repaint_interval_ms;
                         if ui
                             .add(egui::Slider::new(&mut v, 16..=200).suffix(" ms"))
@@ -551,7 +555,7 @@ impl SettingsView {
                         }
                         ui.end_row();
 
-                        ui.label("Chat max pending events/frame");
+                        ui.label(i18n.t("settings.uiStability.chatMaxPendingEvents"));
                         let mut v = stability.chat_max_pending_events_per_frame as u64;
                         if ui.add(egui::Slider::new(&mut v, 16..=4096)).changed() {
                             stability.chat_max_pending_events_per_frame = v as usize;

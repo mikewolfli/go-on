@@ -18,7 +18,7 @@ impl ChatView {
             if dark {
                 egui::Color32::from_rgb(20, 90, 60)
             } else {
-                egui::Color32::from_rgb(32, 160, 95)
+                egui::Color32::from_rgb(20, 120, 70)
             }
         };
         painter.circle_filled(rect.center(), size / 2.0, color);
@@ -395,8 +395,10 @@ impl ChatView {
             // ── Messages area: fixed height from outer pre-computed value ─
             if msg_h > 80.0 {
                 egui::ScrollArea::vertical()
+                    .id_salt("chat_messages_scroll")
                     .auto_shrink([false; 2])
                     .max_height(msg_h)
+                    .stick_to_bottom(true)
                     .show(ui, |ui| {
                         self.show_messages(ui, i18n);
                     });
@@ -962,6 +964,40 @@ impl ChatView {
                                 &i18n.t("chat.copyCode"),
                                 text_color,
                             );
+
+                            // ── Collapsible thinking content (AI only) ──
+                            if !msg.thinking.is_empty() && !is_user {
+                                ui.add_space(6.0);
+                                let thinking_id = egui::Id::new((msg.timestamp, "thinking"));
+                                let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                                    ui.ctx(),
+                                    thinking_id,
+                                    false,
+                                );
+                                let header_resp = state.show_header(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(i18n.t("chat.thinkingLabel"))
+                                            .size(11.0)
+                                            .color(egui::Color32::from_rgb(120, 122, 135)),
+                                    );
+                                });
+                                header_resp.body(|ui| {
+                                    egui::Frame::new()
+                                        .fill(egui::Color32::from_rgba_premultiplied(
+                                            128, 128, 128, 20,
+                                        ))
+                                        .corner_radius(4.0)
+                                        .inner_margin(egui::Margin::symmetric(8i8, 6i8))
+                                        .show(ui, |ui| {
+                                            Self::render_markdown(
+                                                ui,
+                                                &msg.thinking,
+                                                &i18n.t("chat.copyCode"),
+                                                egui::Color32::from_rgb(140, 142, 155),
+                                            );
+                                        });
+                                });
+                            }
                         })
                         .response;
 

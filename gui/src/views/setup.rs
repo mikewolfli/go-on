@@ -50,7 +50,7 @@ impl SetupView {
 
                 if !self.success_msg.is_empty() {
                     let text = self.success_msg.clone();
-                    let resp = ui.colored_label(egui::Color32::GREEN, &text);
+                    let resp = ui.colored_label(egui::Color32::from_rgb(20, 120, 70), &text);
                     resp.context_menu(|ui| {
                         if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());

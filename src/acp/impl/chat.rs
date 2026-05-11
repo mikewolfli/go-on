@@ -461,10 +461,11 @@ pub(crate) async fn process_chat_request(
     let (flow, registry) = routing_handles(server)?;
 
     // ── HarnessBus pre-route policy evaluation ─────────────────────────
-    // Evaluate the incoming chat request against the HarnessBus strategy
-    // engine. If the verdict is Deny or Escalate, bail early with error or
-    // fallback behaviour before allocating any compute resources.
+    // Reset budget clock so long-running backends don't exceed wall clock budget.
     if let Some(ref harness) = server.harness_bus {
+        if let Ok(mut budget) = harness.evaluator.budget.lock() {
+            budget.reset();
+        }
         let task_ctx = crate::governance::pua::TaskContext {
             task_type: crate::governance::pua::TaskType::Other,
             file_count: params.messages.len(),
