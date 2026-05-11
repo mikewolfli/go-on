@@ -99,6 +99,8 @@ impl SkillsView {
         self.rollback_version = skill.version.clone().unwrap_or_default();
         self.versions_for_skill.clear();
         self.versions.clear();
+        self.error.clear();
+        self.success.clear();
     }
 
     fn load_skill_editor_by_name(&mut self, name: &str) -> bool {
@@ -405,6 +407,12 @@ impl SkillsView {
                     }
                 });
                 ui.text_edit_multiline(&mut self.create_input_schema);
+                if self.sending && self.show_create {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(i18n.t("skills.create.loading"));
+                    });
+                }
                 if ui
                     .add_enabled(
                         !self.sending,
@@ -507,6 +515,12 @@ impl SkillsView {
                         egui::TextEdit::singleline(&mut self.import_url)
                             .hint_text(i18n.t("skills.import.placeholder")),
                     );
+                    if self.sending && self.show_import {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(i18n.t("skills.import.loading"));
+                        });
+                    }
                     if ui
                         .add_enabled(
                             !self.sending,
@@ -787,7 +801,8 @@ impl SkillsView {
             return;
         }
 
-        for skill in self.skills.clone() {
+        let skills = self.skills.clone();
+        for skill in &skills {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let name_text = skill
@@ -841,7 +856,7 @@ impl SkillsView {
                         };
                         if ui.button(i18n.t("skills.lifecycle.edit")).clicked() && !name.is_empty()
                         {
-                            self.load_skill_editor(&skill);
+                            self.load_skill_editor(skill);
                         }
                         if ui.button(toggle_label).clicked() && !name.is_empty() {
                             self.sending = true;

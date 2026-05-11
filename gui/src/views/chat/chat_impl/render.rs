@@ -1,43 +1,6 @@
 use super::*;
 
 impl ChatView {
-    /// Draw a small colored avatar circle with initials, returning the interaction response
-    #[allow(dead_code)]
-    fn avatar_circle_with_actions(
-        ui: &mut egui::Ui,
-        size: f32,
-        color: egui::Color32,
-        label: &str,
-        _msg_idx: &usize,
-    ) -> egui::Response {
-        let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
-        let painter = ui.painter();
-        painter.circle_filled(rect.center(), size / 2.0, color);
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            label,
-            egui::FontId::proportional(12.0),
-            egui::Color32::WHITE,
-        );
-        resp
-    }
-
-    /// Draw a small colored avatar circle with initials
-    #[allow(dead_code)]
-    fn avatar_circle(ui: &mut egui::Ui, size: f32, color: egui::Color32, label: &str) {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
-        let painter = ui.painter();
-        painter.circle_filled(rect.center(), size / 2.0, color);
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            label,
-            egui::FontId::proportional(12.0),
-            egui::Color32::WHITE,
-        );
-    }
-
     pub(super) fn render_markdown(
         ui: &mut egui::Ui,
         text: &str,
@@ -263,38 +226,4 @@ fn collect_text_children<'a>(node: &'a comrak::nodes::AstNode<'a>) -> String {
         result.push_str(&collect_text(child));
     }
     result
-}
-
-/// Render the content inside a message bubble (test only)
-#[cfg(test)]
-#[allow(dead_code)]
-fn message_bubble_content(
-    _chat_view: &mut ChatView,
-    ui: &mut egui::Ui,
-    msg: &Message,
-    text_color: egui::Color32,
-    i18n: &I18n,
-) {
-    ui.horizontal(|ui| {
-        let time_str = format_absolute_time(msg.timestamp);
-        ui.colored_label(egui::Color32::from_rgb(160, 162, 170), time_str);
-    });
-    for att in &msg.attachments {
-        let icon = if att.mime.starts_with("image/") {
-            "\u{1f5bc}"
-        } else {
-            "\u{1f4ce}"
-        };
-        ui.label(egui::RichText::new(format!("{} {}", icon, att.name)).color(text_color));
-    }
-    let content_resp = ui.label(egui::RichText::new(&msg.content).color(text_color));
-    content_resp.context_menu(|ui| {
-        if ui
-            .button(format!("\u{1f4cb} {}", i18n.t("chat.copy")))
-            .clicked()
-        {
-            ui.ctx().copy_text(msg.content.clone());
-            ui.close_menu();
-        }
-    });
 }

@@ -173,6 +173,7 @@ struct ProviderSpec {
     #[serde(default)]
     supports_system: Option<bool>,
     #[serde(default)]
+    #[allow(dead_code)]
     supports_vision: Option<bool>,
 }
 

@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc;
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,9 +19,6 @@ pub struct Message {
     pub total_tokens: usize,
     #[serde(default)]
     pub thinking: String,
-    #[allow(dead_code)]
-    #[serde(skip)]
-    pub show_thinking_msg: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,18 +109,3 @@ pub enum PendingResponse {
     Phases(Vec<String>),
     Models(Vec<String>),
 }
-
-#[allow(dead_code)]
-pub(crate) fn default_model_public() -> String {
-    default_model()
-}
-
-#[allow(dead_code)]
-pub(crate) fn default_models_public() -> Vec<String> {
-    default_models()
-}
-
-#[allow(dead_code)]
-pub(crate) type PendingResponseSender = mpsc::Sender<PendingResponse>;
-#[allow(dead_code)]
-pub(crate) type PendingResponseReceiver = mpsc::Receiver<PendingResponse>;

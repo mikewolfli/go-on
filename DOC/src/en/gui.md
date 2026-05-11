@@ -1,8 +1,13 @@
-# GUI Console
+# GUI Desktop Console
 
-The GUI is a Tauri desktop console around the backend. It is designed for operators who want process control, integration status, configuration editing, and local environment management without staying in a terminal.
+The GUI is an EGUI (Rust native) desktop application located in the `gui/` directory.
+It provides backend monitoring, multi-session chat, skills management, and settings editing,
+so operations and integration debugging don't have to stay in the terminal.
 
-## What the GUI needs
+## Architecture Overview
+
+The GUI is a Rust native desktop app built with the EGUI framework (based on `eframe`/`egui`).
+It communicates with the backend via ACP+HTTP JSON-RPC and manages the backend process lifecycle.
 
 The GUI stores and uses three core values:
 
@@ -12,26 +17,46 @@ The GUI stores and uses three core values:
 
 The backend process is started from the configured working directory. The GUI expects `config.toml` to live there.
 
+## Feature Tabs
+
+### Monitor Tab
+- Backend health: auto-polls `/health` endpoint
+- AI provider status: real-time provider connection status
+- Live metrics: request count, latency, error rate
+
+### Chat Tab
+- Multi-session management: create, switch, delete sessions
+- Multi-model support: each session can select a different AI model
+- Phase selection: coding / review / debug / test / deploy
+- Mode switching: Ask / Plan / Edit / Safeguard / Full Auto
+- File attachments: upload files as chat context
+- Dynamic send button: changes based on AI status (loading / ready / error)
+
+### Skills Tab
+- Create and import AI skills
+- Built-in `skill-creator`: lets AI define new skills autonomously
+- Skill list management: enable, disable, delete
+
+### Settings Tab
+- **Provider Management**: dynamic environment variable injection (all 34+ providers), no longer hardcoded to 8
+- **Config Editor**: manages `gui_config.json` with JSON syntax validation
+- **Theme Selection**: 6 visual themes (Minimal / Chinese-Classic / Wuxia / Landscape / Hello Kitty / Dark)
+- **Language Switching**: English, Simplified Chinese, Traditional Chinese
+- **Feature Toggles**: enable/disable GUI features
+
 ## Development and build commands
 
-From `GUI/`:
+From `gui/`:
 
 ```bash
-npm install
-npm run dev
-```
+# Run in development mode
+cargo run
 
-Production build:
+# Build release
+cargo build --release
 
-```bash
-npm run build
-```
-
-Desktop packaging and native shell:
-
-```bash
-npm run tauri dev
-npm run tauri build
+# From project root
+cargo run --manifest-path gui/Cargo.toml
 ```
 
 ## Linking the backend
@@ -44,25 +69,20 @@ If auto-discovery does not succeed, configure manually:
 2. set the working directory
 3. ensure `config.toml` exists in that directory
 
-## Config and environment behavior
+## Key Management
 
-The GUI manages:
+The GUI uses dual storage for secrets:
 
-- `config.toml`
-- `config.toml.autopilot-adaptive` as the reset template source
-- `.env.goon` for persisted environment variables
+- **System keyring**: priority storage using OS-level key management (Linux Secret Service, macOS Keychain, Windows Credential Manager)
+- **Config file**: backup and portable fallback
 
-That means a practical GUI-based onboarding sequence is:
-
-1. link the backend executable
-2. restore default config if needed
-3. save provider API keys through the GUI
-4. start the backend process
-5. verify integration probes
+API keys no longer need to be written to `.env.goon` — all keys are injected dynamically through the GUI's Provider management panel.
 
 ## Runtime process behavior
 
 When the GUI starts the backend process, it launches the configured executable from the working directory and writes stdout and stderr to `go-on.log`.
+
+**Auto-restart**: if the backend crashes, the GUI automatically restarts it after a 3-second cool-down.
 
 Because startup depends on the working directory, the most common operator mistake is pointing the GUI at the correct binary but the wrong directory.
 
@@ -89,16 +109,19 @@ The GUI itself can still manage the backend executable even when a different mod
 
 ## Recommended operator flow
 
-1. Build the backend.
-2. Launch the GUI.
-3. Use auto-link or manual executable-path configuration.
-4. Confirm the working directory contains `config.toml`.
-5. Save API keys into `.env.goon` if needed.
-6. Start the backend.
-7. Check health and integration status.
+1. Build the backend: `cargo build`
+2. Initialize backend (first time): `cargo run -- --init`
+3. Build the GUI: `cargo build --manifest-path gui/Cargo.toml`
+4. Launch the GUI: `cargo run --manifest-path gui/Cargo.toml`
+5. Use auto-link or manual executable-path configuration
+6. Confirm the working directory contains `config.toml`
+7. Configure API keys in Provider management (auto-stored in system keyring)
+8. Start the backend
+9. Check health and integration status
 
 ## Troubleshooting
 
 - If startup fails with a file error, re-check the executable path first.
 - If startup succeeds but probes fail, re-check protocol mode and provider readiness.
 - If the GUI shows health but editors still fail, compare the editor transport contract against the current runtime mode.
+- GUI-specific issues: check if `gui_config.json` is corrupted; delete it to reset if necessary.

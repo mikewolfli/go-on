@@ -53,7 +53,6 @@ impl ChatView {
             output_tokens: 0,
             total_tokens: 0,
             thinking: String::new(),
-            show_thinking_msg: false,
         });
         self.save_sessions_to_disk();
 
@@ -97,7 +96,6 @@ impl ChatView {
                 output_tokens: 0,
                 total_tokens: 0,
                 thinking: String::new(),
-                show_thinking_msg: false,
             });
             let msg_idx = self.session().messages.len().saturating_sub(1);
 

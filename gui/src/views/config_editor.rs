@@ -6,6 +6,10 @@ pub struct ConfigEditorView {
     status: String,
     initialized: bool,
     snapshots: Vec<String>,
+    search_query: String,
+    is_valid_json: bool,
+    json_parse_error: String,
+    pub applied: bool,
 }
 
 impl ConfigEditorView {
@@ -15,6 +19,10 @@ impl ConfigEditorView {
             status: String::new(),
             initialized: false,
             snapshots: Vec::new(),
+            search_query: String::new(),
+            is_valid_json: true,
+            json_parse_error: String::new(),
+            applied: false,
         }
     }
 
@@ -44,6 +52,23 @@ impl ConfigEditorView {
                 });
                 ui.separator();
 
+                // Search bar
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.search_query)
+                            .hint_text(i18n.t("config.search"))
+                            .desired_width(200.0),
+                    );
+                    if !self.search_query.is_empty() {
+                        if ui.button("✕").clicked() {
+                            self.search_query.clear();
+                        }
+                        // Live search count
+                        let count = self.draft.matches(&self.search_query).count();
+                        ui.label(format!("{} matches", count));
+                    }
+                });
+
                 if !safe_mode_enabled {
                     ui.label(i18n.t("config.safeModeHidden"));
                     ui.add_space(6.0);
@@ -54,6 +79,34 @@ impl ConfigEditorView {
                         .desired_rows(20)
                         .desired_width(f32::INFINITY),
                 );
+
+                // Live JSON validation
+                let validation_result = serde_json::from_str::<serde_json::Value>(&self.draft);
+                match &validation_result {
+                    Ok(_) => {
+                        self.is_valid_json = true;
+                        self.json_parse_error.clear();
+                    }
+                    Err(e) => {
+                        self.is_valid_json = false;
+                        self.json_parse_error = format!("⚠ {}", e);
+                    }
+                }
+
+                // Validation status display
+                ui.horizontal(|ui| {
+                    if !self.is_valid_json {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(220, 80, 80),
+                            &self.json_parse_error,
+                        );
+                    } else if !self.draft.trim().is_empty() {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(60, 180, 100),
+                            i18n.t("config.validJson"),
+                        );
+                    }
+                });
 
                 ui.horizontal(|ui| {
                     if ui.button(i18n.t("config.reloadCurrent")).clicked() {
@@ -79,6 +132,7 @@ impl ConfigEditorView {
                                 *config = new_cfg;
                                 save_app_config(config);
                                 self.status = i18n.t("config.applied").to_string();
+                                self.applied = true;
                             }
                             Err(e) => {
                                 self.status = format!("{}: {e}", i18n.t("config.invalidJson"));

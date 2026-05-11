@@ -234,19 +234,22 @@ mod tests {
     fn available_models_includes_default() {
         let agent = DeepSeekAgent::new(
             "DEEPSEEK_API_KEY".to_string(),
-            "deepseek-chat".to_string(),
+            "deepseek-v4-flash".to_string(),
             reqwest::Client::new(),
         );
 
         let models = agent.available_models();
-        assert!(models.len() >= 3, "should have at least 3 models");
+        assert!(models.len() >= 2, "should have at least 2 models");
 
-        let has_deepseek_v3 = models.iter().any(|m| m.id == "deepseek-v3");
-        assert!(has_deepseek_v3, "should include deepseek-v3");
+        let has_flash = models.iter().any(|m| m.id == "deepseek-v4-flash");
+        assert!(has_flash, "should include deepseek-v4-flash");
+
+        let has_pro = models.iter().any(|m| m.id == "deepseek-v4-pro");
+        assert!(has_pro, "should include deepseek-v4-pro");
 
         let default = agent.default_model();
         assert!(default.is_some(), "should have a default model");
-        assert_eq!(default.unwrap().id, "deepseek-chat");
+        assert_eq!(default.unwrap().id, "deepseek-v4-flash");
     }
 
     #[test]

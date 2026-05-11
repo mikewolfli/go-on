@@ -135,7 +135,7 @@ curl http://127.0.0.1:8090/health?verbose=true
 ### IDE Integration
 - **Zed**: Uses ACP over stdio or HTTP
 - **VS Code**: Uses the go-on extension with local runtime
-- **GUI Console**: Tauri-based desktop interface
+- **GUI Console**: EGUI (Rust native) desktop GUI
 
 ## Storage Management
 

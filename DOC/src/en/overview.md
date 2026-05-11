@@ -3,14 +3,14 @@
 `go-on` is a three-surface runtime around a Rust backend:
 
 - **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 14-bus capability architecture with 21 F-GAP modules.
-- **GUI**: the Tauri desktop console manages backend discovery, process lifecycle, integration probes, and local operator workflows.
+- **GUI**: the EGUI (Rust native) desktop app manages backend discovery, process lifecycle, integration probes, monitoring, chat, and configuration management.
 - **VS Code addon**: the extension launches or probes the runtime, exposes RPC-backed commands, and can override protocol mode per workspace.
 
 ## Version
 
-- Core runtime: **0.8.4**
-- GUI desktop: **0.8.4**
-- VS Code addon: **0.8.4**
+- Core runtime: **0.9.5**
+- GUI desktop: **0.9.5**
+- VS Code addon: **0.9.5**
 
 ## GUI Desktop App
 
@@ -37,13 +37,13 @@ Three build profiles support different deployment scenarios:
 | `profile-simple-server` | SQLite + sqlite-vec | Single-server deployment | `cargo build --no-default-features -F profile-simple-server` |
 | `profile-multi-users-server` | PostgreSQL + pgvector | Multi-user production | `cargo build --no-default-features -F profile-multi-users-server` |
 
-## Verification Status (Phase 4 Complete)
+## Verification Status (Phase 4+ — 25 Rounds of Deep Scan Complete, GUI 7 Rounds)
 
 | Profile | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **866 passed** (766 unit + 86 RPC + 14 transport) |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **905 passed** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **898 passed** |
+| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **781 passed** |
+| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **827 passed** |
+| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **890 passed** |
 
 ## Runtime Protocol Modes
 
@@ -177,9 +177,9 @@ go-on provides full i18n coverage (~95%) across the Rust backend:
 
 | Language | File | Keys |
 |:---------|:-----|:----:|
-| English (US) | `languages/en_US.json` | 372+ |
-| Chinese (Simplified) | `languages/zh_CN.json` | 372+ |
-| Chinese (Traditional) | `languages/zh_TW.json` | 372+ |
+| English (US) | `languages/en_US.json` | 448+ |
+| Chinese (Simplified) | `languages/zh_CN.json` | 448+ |
+| Chinese (Traditional) | `languages/zh_TW.json` | 448+ |
 
 Covered layers: ACP/MCP HTTP errors (100%), agent provider modules (100%), config validation (100%), CLI setup (100%), API handler errors (100%), orchestration (100%), GUI (~98%), VS Code addon (70+ keys).
 
@@ -196,7 +196,7 @@ Covered layers: ACP/MCP HTTP errors (100%), agent provider modules (100%), confi
   - `src/resilience/`: Hyper resilience engine
   - `src/protocol/`: Protocol server, JSON-RPC, multi-channel transport
   - `src/i18n/`: Language runtime
-- `GUI/`: Tauri desktop console
+- `gui/`: EGUI (Rust native) desktop GUI
 - `vscode-addon/`: VS Code extension with i18n (en_US, zh_CN, zh_TW)
 - `config/`: Configuration files
 - `tests/`: Integration tests and replay assets

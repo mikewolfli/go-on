@@ -5,12 +5,12 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const CHAT_DISABLE_MARKDOWN_RENDER: bool = false;
-#[allow(dead_code)]
-const CHAT_ISOLATION_STAGE: u8 = 6;
 const CHAT_STAGE6_ENABLE_MODE_ROW: bool = true;
 const CHAT_STAGE6_ENABLE_EXTRA_BUTTONS: bool = true;
 
@@ -60,23 +60,18 @@ pub struct ChatView {
     template_name_buf: String,
     template_command_buf: String,
     template_content_buf: String,
-    #[allow(dead_code)]
     template_search_query: String,
     templates_bootstrapped: bool,
     // Feature 9: search (sessions + messages)
     session_search_query: String,
-    #[allow(dead_code)]
-    message_search_query: String,
+    // Save serialization guards (AtomicBool ensures no concurrent file writes)
+    session_save_in_flight: Arc<AtomicBool>,
+    template_save_in_flight: Arc<AtomicBool>,
     // Feature 6: multi-model
     selected_model: String,
     selected_models: Vec<String>,
     available_models: Vec<String>,
     models_loaded: bool,
-    // Message pagination (reserved for future use)
-    #[allow(dead_code)]
-    messages_page: usize,
-    #[allow(dead_code)]
-    const_messages_per_page: usize,
 }
 
 impl ChatView {
@@ -139,6 +134,64 @@ impl ChatView {
                 session.name = Self::localized_default_session_name(idx, i18n);
             }
         }
+    }
+
+    /// Handle paste events from the egui input system.
+    /// Detects pasted file paths (common on Linux with Ctrl+Shift+V) and data:image/ URLs.
+    /// Returns any attachments that were created from paste events.
+    fn handle_paste_events(&mut self, ui: &mut egui::Ui) -> Vec<Attachment> {
+        let pasted = ui.input_mut(|i| {
+            let mut result = Vec::new();
+            i.events.retain(|e| {
+                if let egui::Event::Paste(text) = e {
+                    // Check if it looks like a file path (common on Linux)
+                    let path = std::path::Path::new(text.as_str());
+                    if path.exists() {
+                        let mime = Self::guess_mime(path);
+                        if mime.starts_with("image/") {
+                            if let Ok(data) = std::fs::read(path) {
+                                use base64::Engine;
+                                let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                                result.push(Attachment {
+                                    name: path
+                                        .file_name()
+                                        .and_then(|s| s.to_str())
+                                        .unwrap_or("pasted")
+                                        .to_string(),
+                                    mime,
+                                    data: b64,
+                                });
+                                return false; // consume event
+                            }
+                        }
+                    }
+                    // If text looks like a base64 data URL for an image
+                    if text.starts_with("data:image/") {
+                        if let Some(comma_pos) = text.find(',') {
+                            let mime_end = text.find(';').unwrap_or(comma_pos);
+                            let mime = text[5..mime_end].to_string();
+                            let b64 = text[comma_pos + 1..].to_string();
+                            result.push(Attachment {
+                                name: "pasted_image".to_string(),
+                                mime,
+                                data: b64,
+                            });
+                            return false;
+                        }
+                    }
+                    // Regular text paste - don't consume, let it go to TextEdit
+                }
+                true
+            });
+            result
+        });
+
+        if !pasted.is_empty() {
+            // We can't call ctx.request_repaint() here because we don't have ctx.
+            // The caller will handle this.
+        }
+
+        pasted
     }
 
     fn guess_mime(path: &Path) -> String {
@@ -252,15 +305,14 @@ impl ChatView {
             templates_bootstrapped: false,
             // Feature 9
             session_search_query: String::new(),
-            message_search_query: String::new(),
+            // Save guards
+            session_save_in_flight: Arc::new(AtomicBool::new(false)),
+            template_save_in_flight: Arc::new(AtomicBool::new(false)),
             // Feature 6
             selected_model: initial_model,
             selected_models: initial_models,
             available_models: vec!["auto".to_string()],
             models_loaded: false,
-            // Pagination
-            messages_page: 0,
-            const_messages_per_page: 3,
         }
     }
 
@@ -427,7 +479,6 @@ impl ChatView {
         }
     }
 
-    #[allow(dead_code)]
     fn normalize_command(command: &str) -> String {
         let trimmed = command.trim();
         if trimmed.is_empty() {
@@ -465,7 +516,6 @@ impl ChatView {
         trimmed.to_string()
     }
 
-    #[allow(dead_code)]
     fn load_template_into_editor(&mut self, idx: usize) {
         if let Some(template) = self.prompt_templates.get(idx) {
             self.selected_template_idx = Some(idx);
@@ -496,6 +546,14 @@ impl ChatView {
     }
 
     // Feature 4: stop sending
+    /// Reset loaded state flags to force re-fetch of phases and models from backend.
+    /// Used when backend URL changes.
+    pub fn reset_loaded_state(&mut self) {
+        self.phases_loaded = false;
+        self.phases_load_scheduled = false;
+        self.models_loaded = false;
+    }
+
     pub fn stop_sending(&mut self) {
         self.stop_requested = true;
         for state in self.generation_states.drain(..) {
@@ -512,6 +570,19 @@ impl ChatView {
         {
             record.status = "stopped".to_string();
         }
+    }
+}
+
+/// Format timestamp as absolute date+time in local timezone (e.g. "2025-05-07 14:30")
+fn format_absolute_time(ts: u64) -> String {
+    use chrono::{DateTime, Local, Utc};
+    // Convert UTC seconds to localized time, with safe fallback
+    match DateTime::<Utc>::from_timestamp(ts as i64, 0) {
+        Some(utc) => {
+            let local: DateTime<Local> = utc.with_timezone(&Local);
+            local.format("%Y-%m-%d %H:%M").to_string()
+        }
+        None => ts.to_string(), // fallback: show raw timestamp
     }
 }
 
@@ -536,6 +607,7 @@ mod tests {
                 phase_records: Vec::new(),
             }],
             active_session: 0,
+            input: String::new(),
             sending: false,
             error: String::new(),
             ai_status: AiStatus::Idle,
@@ -565,13 +637,12 @@ mod tests {
             template_search_query: String::new(),
             templates_bootstrapped: false,
             session_search_query: String::new(),
-            message_search_query: String::new(),
+            session_save_in_flight: Arc::new(AtomicBool::new(false)),
+            template_save_in_flight: Arc::new(AtomicBool::new(false)),
             selected_model: "auto".to_string(),
             selected_models: vec!["auto".to_string()],
             available_models: vec!["auto".to_string()],
             models_loaded: false,
-            messages_page: 0,
-            const_messages_per_page: 3,
         }
     }
 
@@ -655,15 +726,4 @@ mod tests {
 
         assert_eq!(view.sessions[0].name, "Release review");
     }
-}
-
-/// Format timestamp as absolute date+time in local timezone (e.g. "2025-05-07 14:30")
-fn format_absolute_time(ts: u64) -> String {
-    use chrono::{Local, TimeZone};
-    // Convert UTC timestamp to local timezone
-    let local = Local
-        .timestamp_opt(ts as i64, 0)
-        .single()
-        .unwrap_or_else(|| Local.timestamp_opt(0, 0).single().unwrap());
-    local.format("%Y-%m-%d %H:%M").to_string()
 }

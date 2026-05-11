@@ -137,7 +137,7 @@ curl http://127.0.0.1:8090/health?verbose=true
 ### IDE 集成
 - **Zed**：使用 ACP over stdio 或 HTTP
 - **VS Code**：使用 go-on 扩展与本地运行时
-- **GUI 控制台**：基于 Tauri 的桌面界面
+- **GUI 控制台**：基于 EGUI（Rust 原生）的桌面图形界面
 
 ## 存储管理
 

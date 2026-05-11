@@ -7,9 +7,9 @@ go-on 是一个基于 Rust 的 **ACP/MCP 智能体编排、治理与生产安全
 
 ## 版本
 
-- 后端 Runtime：**0.9.4**
-- GUI 桌面端：**0.9.4**
-- VS Code 插件：**0.9.4**
+- 后端 Runtime：**0.9.5**
+- GUI 桌面端：**0.9.5**
+- VS Code 插件：**0.9.5**
 - 默认特性：`profile-local`
 - 可选特性：`profile-simple-server`、`profile-multi-users-server`
 
@@ -21,7 +21,21 @@ go-on 是一个基于 Rust 的 **ACP/MCP 智能体编排、治理与生产安全
 cargo run --manifest-path gui/Cargo.toml
 ```
 
-主要功能：
+### 截图预览
+
+| 监控面板 | 对话界面 |
+|:---:|:---:|
+| ![监控面板](snapshots/monitor.jpeg) | ![对话界面](snapshots/chat.jpeg) |
+
+| 供应商管理 | 设置 |
+|:---:|:---:|
+| ![供应商管理](snapshots/providers.jpeg) | ![设置](snapshots/settings.jpeg) |
+
+| 技能管理 |
+|:---:|
+| ![技能管理](snapshots/skills.jpeg) |
+
+### 主要功能
 - **监控面板**：后端健康状态、AI 供应商状态、实时指标
 - **对话界面**：多会话管理、阶段选择（coding/review/debug/test/deploy）、模式切换（Ask/Plan/Edit/Safeguard/Full Auto）、文件附件、动态发送按钮（依据 AI 状态变化）
 - **技能管理**：创建和导入 AI 技能；内置 `skill-creator` 让 AI 自主定义新技能
@@ -42,16 +56,19 @@ cargo run --manifest-path gui/Cargo.toml
 
 | 配置文件 | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **779 通过** |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **825 通过** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **888 通过** |
+| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **781 通过** |
+| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **827 通过** |
+| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **890 通过** |
 
 跨平台（Windows、Linux、macOS）：
 - 所有 `localStorage` 调用均已包装 try/catch
 - 所有 `Mutex::lock().unwrap()` 已替换为中毒恢复的 `lock_guard()`
 - 跨平台环境变量：`HOME`/`USERPROFILE`/`COMPUTERNAME`
 - vscode-addon：已设置 `activationEvents`，默认路径支持 `.exe`/`.bat` 平台感知
+- GUI（EGUI）：7 轮深度扫描（37+ GUI 优化），零 clippy 警告，5/5 测试通过
 - GUI：窗口最小尺寸约束已设置，CSP 允许后端连接
+- 后端：崩溃后自动重启（3 秒冷却）
+- Provider 环境变量注入：动态（支持全部 34+ 供应商）
 
 ## 仓库结构
 
@@ -93,7 +110,7 @@ cargo run --manifest-path gui/Cargo.toml
   - `src/optimization/` — 成本/速度/可靠性优化
   - `src/protocol/` — 协议服务、JSON-RPC 支撑、多渠道消息传输
   - `src/shared/` — 共享类型、协议模式、工具描述符
-- `GUI/` — Tauri + Vue 桌面控制台
+- `gui/` — EGUI（Rust 原生）桌面图形界面
 - `vscode-addon/` — VS Code 扩展（支持 en_US、zh_CN、zh_TW 多语言）
 
 ### 配置与脚本
@@ -340,7 +357,7 @@ Authorization: Bearer your-secret-key-here
 
 ## 三端协同组件
 
-- GUI 桌面控制台文档：`GUI/README.md`
+- GUI 桌面控制台文档：`gui/README.md`
 - VS Code 插件文档：`vscode-addon/README.md`
 
 二者已对齐后端 RPC 能力、治理状态与健康探针语义。

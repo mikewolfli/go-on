@@ -7,26 +7,42 @@ with full i18n support and a modular multi-bus architecture spanning 14 capabili
 
 ## Version
 
-- Core runtime: **0.9.4**
-- GUI desktop: **0.9.4**
-- VS Code addon: **0.9.4**
+- Core runtime: **0.9.5**
+- GUI desktop: **0.9.5**
+- VS Code addon: **0.9.5**
 - Default feature: `profile-local`
 - Alternative feature scaffolds: `profile-simple-server`, `profile-multi-users-server`
 
 ## GUI Desktop App
 
-The EGUI-based desktop GUI provides monitoring, chat, and configuration management:
+The EGUI-based desktop GUI (`gui/`) provides monitoring, chat, skills management, and settings:
 
 ```bash
 cargo run --manifest-path gui/Cargo.toml
 ```
 
-Features:
-- **Monitor**: Backend health, AI provider status
-- **Chat**: Multi-session conversations with phase/mode selection, file attachments, and dynamic AI status indicators
-- **Skills**: Create and manage AI skills, including the built-in skill-creator
-- **Settings**: Feature toggles, language (en/zh-CN/zh-TW), and 5 themes (简约/国风/武侠/山水/Hello Kitty)
+### Screenshots
+
+| Monitor Dashboard | Chat Interface |
+|:---:|:---:|
+| ![Monitor](snapshots/monitor.jpeg) | ![Chat](snapshots/chat.jpeg) |
+
+| Provider Management | Settings |
+|:---:|:---:|
+| ![Providers](snapshots/providers.jpeg) | ![Settings](snapshots/settings.jpeg) |
+
+| Skills & Tools |
+|:---:|
+| ![Skills](snapshots/skills.jpeg) |
+
+### Features
+- **Monitor tab**: Backend health, AI provider status, real-time metrics
+- **Chat tab**: Multi-session conversations with phase/mode selection, file attachments, and dynamic AI status indicators; multi-model support per session
+- **Skills tab**: Create and manage AI skills, including the built-in skill-creator
+- **Settings tab**: Provider management with dynamic env var injection (34+ providers), GUI config editor with JSON validation (`gui_config.json`), 6 themes, language switching (en/zh-CN/zh-TW)
 - **Backend Connection**: ACP+HTTP JSON-RPC, automatic health polling
+- **Keyring**: Dual storage (system keyring + config file)
+- **Auto-restart**: Backend auto-restarts on crash with 3-second cool-down
 
 ## Build Profiles
 
@@ -42,16 +58,19 @@ Three build profiles support different deployment scenarios:
 
 | Profile | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **779 passed** |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **825 passed** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **888 passed** |
+| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **781 passed** |
+| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **827 passed** |
+| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **890 passed** |
 
 Cross-platform (Windows, Linux, macOS):
 - All `localStorage` calls wrapped in try/catch
 - All `Mutex::lock().unwrap()` replaced with poison-recovering `lock_guard()`
 - Cross-platform env vars: `HOME`/`USERPROFILE`/`COMPUTERNAME`
 - vscode-addon: `activationEvents` set, `.exe`/`.bat` platform-aware defaults
+- GUI (EGUI): 7 rounds of deep scan (37+ GUI optimizations), zero clippy warnings, 5/5 tests passing
 - GUI: window min constraints set, CSP allows backend connection
+- Backend: auto-restart on crash with 3-second cool-down
+- Provider env var injection: dynamic (all 34+ providers)
 
 ## Repository Layout
 
@@ -93,7 +112,7 @@ Cross-platform (Windows, Linux, macOS):
   - `src/optimization/` — Cost/speed/reliability optimization
   - `src/protocol/` — Protocol server, JSON-RPC support, multi-channel transport
   - `src/shared/` — Shared types, protocol mode, tool descriptors
-- `GUI/` — Tauri + Vue desktop console
+- `gui/` — EGUI (Rust native) desktop GUI
 - `vscode-addon/` — VS Code extension with i18n (en_US, zh_CN, zh_TW)
 
 ### Configuration & Scripts
@@ -340,7 +359,7 @@ Gate scripts (located in `scripts/`):
 
 ## Cross-surface Components
 
-- GUI desktop console docs: `GUI/README.md`
+- GUI desktop console docs: `gui/README.md`
 - VS Code addon docs: `vscode-addon/README.md`
 
 Both are aligned with backend RPC surface and governance/health workflows.

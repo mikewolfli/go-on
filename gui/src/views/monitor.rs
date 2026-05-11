@@ -1,6 +1,7 @@
 use crate::backend::{BackendClient, ErrorGroup, HealthStatus, MetricsWindowPoint, ProviderStatus};
 use crate::i18n::I18n;
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 pub struct MonitorView {
     pub health: Option<HealthStatus>,
@@ -12,8 +13,10 @@ pub struct MonitorView {
     trend_series: Vec<MetricsWindowPoint>,
     error_groups: Vec<ErrorGroup>,
     sample_failures_count: usize,
+    provider_filter: String,
     pending_rx: mpsc::Receiver<String>,
     pending_tx: mpsc::Sender<String>,
+    last_metrics_load: Instant,
 }
 
 impl MonitorView {
@@ -29,8 +32,10 @@ impl MonitorView {
             trend_series: Vec::new(),
             error_groups: Vec::new(),
             sample_failures_count: 0,
+            provider_filter: String::new(),
             pending_rx,
             pending_tx,
+            last_metrics_load: Instant::now(),
         }
     }
 
@@ -80,6 +85,46 @@ impl MonitorView {
             .show(ui, |ui| {
                 self.process_pending();
                 self.backend_configured = backend_configured;
+
+                // Auto-refresh metrics every 30 seconds
+                if self.last_metrics_load.elapsed() >= Duration::from_secs(30) && backend_configured
+                {
+                    self.last_metrics_load = Instant::now();
+                    let backend_clone = backend.clone();
+                    let window = self.metrics_window.clone();
+                    let tx = self.pending_tx.clone();
+                    let ctx_clone = ui.ctx().clone();
+                    tokio::spawn(async move {
+                        // Load trends
+                        let result = tokio::time::timeout(
+                            std::time::Duration::from_secs(10),
+                            backend_clone.metrics_window_query(&window),
+                        )
+                        .await;
+                        if let Ok(Ok(series)) = result {
+                            let trends_json =
+                                serde_json::to_string(&series).unwrap_or_else(|_| "[]".to_string());
+                            let metrics = format!("window={window} points={}", series.len());
+                            let _ = tx.send(format!("__metrics__:{metrics}"));
+                            let _ = tx.send(format!("__trends__:{trends_json}"));
+                        };
+
+                        // Load errors
+                        let err_result = tokio::time::timeout(
+                            std::time::Duration::from_secs(10),
+                            backend_clone.metrics_errors_summary(&window, 10),
+                        )
+                        .await;
+                        if let Ok(Ok((groups, failures))) = err_result {
+                            let summary_json = serde_json::json!({
+                                "groups": groups,
+                                "sample_failures_count": failures.len()
+                            });
+                            let _ = tx.send(format!("__errors_summary__:{summary_json}"));
+                        }
+                        ctx_clone.request_repaint();
+                    });
+                }
 
                 ui.heading(i18n.t("monitor.health"));
                 ui.separator();
@@ -216,6 +261,13 @@ impl MonitorView {
                                     ctx_clone.request_repaint();
                                 });
                             }
+                            if ui
+                                .button("⟳")
+                                .on_hover_text(i18n.t("monitor.refreshNow"))
+                                .clicked()
+                            {
+                                self.last_metrics_load = Instant::now() - Duration::from_secs(31);
+                            }
                             if ui.button(i18n.t("monitor.loadErrors")).clicked() {
                                 let backend_clone = backend.clone();
                                 let window = self.metrics_window.clone();
@@ -324,6 +376,15 @@ impl MonitorView {
                 ui.separator();
                 ui.add_space(4.0);
 
+                // Provider search/filter
+                ui.add_space(8.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.provider_filter)
+                        .hint_text(i18n.t("monitor.filterProviders"))
+                        .desired_width(200.0),
+                );
+                ui.add_space(4.0);
+
                 if self.providers.is_empty() {
                     // Show a more descriptive message when health is known but no providers
                     match &self.health {
@@ -343,7 +404,16 @@ impl MonitorView {
                         }
                     }
                 } else {
-                    for p in &self.providers {
+                    let filtered_providers: Vec<_> = if self.provider_filter.is_empty() {
+                        self.providers.iter().collect()
+                    } else {
+                        let q = self.provider_filter.to_lowercase();
+                        self.providers
+                            .iter()
+                            .filter(|p| p.name.to_lowercase().contains(&q))
+                            .collect()
+                    };
+                    for p in filtered_providers {
                         egui::Frame::group(ui.style())
                             .inner_margin(egui::Margin::same(8))
                             .show(ui, |ui| {
@@ -375,12 +445,23 @@ impl MonitorView {
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            let label = if p.ready {
+                                            let status_label = if p.ready {
                                                 i18n.t("monitor.ready")
                                             } else {
                                                 i18n.t("monitor.notReady")
                                             };
-                                            ui.colored_label(color, label);
+                                            let status_color = if p.ready {
+                                                egui::Color32::from_rgb(32, 160, 95)
+                                            } else {
+                                                egui::Color32::from_rgb(198, 60, 60)
+                                            };
+                                            egui::Frame::new()
+                                                .fill(status_color.gamma_multiply(0.15))
+                                                .corner_radius(10.0)
+                                                .inner_margin(egui::Margin::symmetric(8i8, 2i8))
+                                                .show(ui, |ui| {
+                                                    ui.colored_label(status_color, status_label);
+                                                });
                                         },
                                     );
                                 });

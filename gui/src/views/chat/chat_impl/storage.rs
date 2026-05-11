@@ -20,6 +20,11 @@ impl ChatView {
     }
 
     pub(super) fn save_templates_to_disk(&self) {
+        let in_flight = self.template_save_in_flight.clone();
+        if in_flight.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        in_flight.store(true, std::sync::atomic::Ordering::Relaxed);
         let templates = self.prompt_templates.clone();
         let path = Self::templates_path();
         tokio::spawn(async move {
@@ -29,6 +34,7 @@ impl ChatView {
                         "Failed to create chat template directory {}: {e}",
                         parent.display()
                     );
+                    in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                     return;
                 }
             }
@@ -42,6 +48,7 @@ impl ChatView {
                     eprintln!("Failed to serialize chat templates: {e}");
                 }
             }
+            in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
         });
     }
 
@@ -62,6 +69,11 @@ impl ChatView {
     }
 
     pub(super) fn save_sessions_to_disk(&self) {
+        let in_flight = self.session_save_in_flight.clone();
+        if in_flight.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        in_flight.store(true, std::sync::atomic::Ordering::Relaxed);
         // Clone data for the background task to avoid blocking the UI thread.
         let sessions = self.sessions.clone();
         let path = Self::sessions_path();
@@ -72,6 +84,7 @@ impl ChatView {
                         "Failed to create chat session directory {}: {e}",
                         parent.display()
                     );
+                    in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                     return;
                 }
             }
@@ -86,6 +99,7 @@ impl ChatView {
                     eprintln!("Failed to serialize chat sessions: {e}");
                 }
             }
+            in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
         });
     }
 }

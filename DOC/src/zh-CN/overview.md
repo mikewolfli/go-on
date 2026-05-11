@@ -3,14 +3,14 @@
 `go-on` 是一个围绕 Rust 后端构建的三端运行时体系：
 
 - **后端**：负责配置加载、Provider 选择、路由、setup、健康检查、协议协商、stdio 或 HTTP 传输层，以及包含 14 条总线和 21 个 F-GAP 模块的能力架构。
-- **GUI**：Tauri 桌面控制台，负责后端发现、进程生命周期、集成探测和本地运维。
+- **GUI**：EGUI（Rust 原生）桌面图形界面，负责后端发现、进程生命周期、集成探测、监控、对话和配置管理。
 - **VS Code 插件**：负责拉起或探测运行时，暴露基于 RPC 的命令，并可在工作区级别覆盖协议模式。
 
 ## 版本
 
-- 后端 Runtime：**0.8.3**
-- GUI 桌面端：**0.8.3**
-- VS Code 插件：**0.8.3**
+- 后端 Runtime：**0.9.5**
+- GUI 桌面端：**0.9.5**
+- VS Code 插件：**0.9.5**
 
 ## GUI 桌面应用
 
@@ -37,13 +37,13 @@ cargo run --manifest-path gui/Cargo.toml
 | `profile-simple-server` | SQLite + sqlite-vec | 单服务器部署 | `cargo build --no-default-features -F profile-simple-server` |
 | `profile-multi-users-server` | PostgreSQL + pgvector | 多用户生产 | `cargo build --no-default-features -F profile-multi-users-server` |
 
-## 验证状态（Phase 4 完成）
+## 验证状态（Phase 4+ — 25 轮深度扫描完成，GUI 7 轮）
 
 | 配置文件 | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **866 通过**（766 单元 + 86 RPC + 14 transport） |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **905 通过** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **898 通过** |
+| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **781 通过** |
+| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **827 通过** |
+| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **890 通过** |
 
 ## 运行时协议模式
 
@@ -175,9 +175,9 @@ go-on 在后端实现了约 **95%** 的全链路国际化覆盖：
 
 | 语言 | 文件 | 键值数 |
 |:-----|:-----|:------:|
-| 英语（美国） | `languages/en_US.json` | 372+ |
-| 简体中文 | `languages/zh_CN.json` | 372+ |
-| 繁体中文 | `languages/zh_TW.json` | 372+ |
+| 英语（美国） | `languages/en_US.json` | 448+ |
+| 简体中文 | `languages/zh_CN.json` | 448+ |
+| 繁体中文 | `languages/zh_TW.json` | 448+ |
 
 覆盖层：ACP/MCP HTTP 错误（100%）、Agent 供应商模块（100%）、配置验证（100%）、CLI 初始化（100%）、API 处理错误（100%）、编排层（100%）、GUI（约 98%）、VS Code 插件（70+ 键值）。
 
@@ -194,7 +194,7 @@ go-on 在后端实现了约 **95%** 的全链路国际化覆盖：
   - `src/resilience/`：超弹性引擎
   - `src/protocol/`：协议服务、JSON-RPC、多渠道消息传输
   - `src/i18n/`：语言运行时
-- `GUI/`：Tauri 桌面控制台
+- `gui/`：EGUI（Rust 原生）桌面图形界面
 - `vscode-addon/`：VS Code 插件（支持 en_US、zh_CN、zh_TW 多语言）
 - `config/`：配置文件
 - `tests/`：集成测试与回放资产

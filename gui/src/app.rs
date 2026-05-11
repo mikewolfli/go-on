@@ -24,6 +24,7 @@ use crate::views::{
     monitor::MonitorView, providers::ProvidersView, security::SecurityView, settings::SettingsView,
     setup::SetupView, skills::SkillsView, workflow::WorkflowView,
 };
+use std::hash::{Hash, Hasher};
 use std::sync::mpsc;
 use std::time::Duration;
 use std::time::Instant;
@@ -35,6 +36,7 @@ enum BackendUpdate {
 }
 
 use crate::backend::{HealthStatus, ProviderStatus};
+use std::collections::hash_map::DefaultHasher;
 
 /// Find the go-on backend binary path relative to the GUI executable.
 fn find_backend_binary() -> Option<std::path::PathBuf> {
@@ -95,6 +97,12 @@ pub struct GoOnApp {
     backend_child: Option<std::process::Child>,
     /// Cache the last applied theme name to avoid calling ctx.set_style() every frame.
     last_applied_theme: String,
+    /// Track when the backend crashed to enable auto-restart with rate limiting
+    backend_crash_time: Option<Instant>,
+    /// Hash of backend URL to detect changes for cache invalidation
+    last_backend_url_hash: u64,
+    /// Original backend URL to detect changes for showing restart button
+    backend_url_original: String,
 }
 
 /// Detect system locale from environment variables.
@@ -183,43 +191,26 @@ impl GoOnApp {
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null());
 
-                let known = [
-                    "deepseek",
-                    "openai",
-                    "anthropic",
-                    "qwen",
-                    "gemini",
-                    "groq",
-                    "mistral",
-                    "copilot",
-                ];
-
-                // Inject API keys into backend process environment.
+                // Inject API keys for ALL configured providers into backend process environment.
                 // Priority: keyring > config file > inherited env.
-                for name in &known {
-                    let env_var = match *name {
-                        "deepseek" => "DEEPSEEK_API_KEY",
-                        "openai" => "OPENAI_API_KEY",
-                        "anthropic" => "ANTHROPIC_API_KEY",
-                        "qwen" => "QWEN_API_KEY",
-                        "gemini" => "GEMINI_API_KEY",
-                        "groq" => "GROQ_API_KEY",
-                        "mistral" => "MISTRAL_API_KEY",
+                for provider in &config.providers {
+                    let provider_lower = provider.name.to_lowercase();
+                    let derived_var = format!("{}_API_KEY", provider_lower.to_uppercase());
+                    let env_var = match provider_lower.as_str() {
                         "copilot" => "GITHUB_COPILOT_TOKEN",
-                        _ => continue,
+                        "replicate" => "REPLICATE_API_TOKEN",
+                        _ => &derived_var,
                     };
 
                     // Try keyring first
-                    let mut key = crate::keyring_util::get_api_key(name);
+                    let mut key = crate::keyring_util::get_api_key(&provider_lower);
 
-                    // Fallback: config file
+                    // Fallback: config file api_key
                     if key.is_none() {
-                        key = config
-                            .providers
-                            .iter()
-                            .find(|p| p.name.to_lowercase() == *name)
-                            .map(|p| p.api_key.clone())
-                            .filter(|k| !k.is_empty() && k != "********");
+                        let k = provider.api_key.clone();
+                        if !k.is_empty() && k != "********" {
+                            key = Some(k);
+                        }
                     }
 
                     // Fallback: inherited env var
@@ -236,7 +227,7 @@ impl GoOnApp {
                         eprintln!("backend: set {}={}", env_var, preview);
                         cmd.env(env_var, k);
                     } else {
-                        eprintln!("backend: no key found for '{}'", name);
+                        eprintln!("backend: no key found for '{}'", provider_lower);
                     }
                 }
 
@@ -280,6 +271,10 @@ impl GoOnApp {
         // Clear stale health/providers so monitor shows correct state
         self.monitor_view.health = None;
         self.monitor_view.providers = Vec::new();
+        // Also reset chat cache so it re-fetches models from new backend
+        self.chat_view.reset_loaded_state();
+        // Reset providers loaded state so models are re-fetched
+        self.providers_view.reset_loaded_state();
         eprintln!("Backend restarted");
     }
 
@@ -301,6 +296,14 @@ impl GoOnApp {
 
         // Start backend with env vars from keyring
         let (backend, backend_child) = Self::spawn_backend(&config);
+
+        // Compute hash before moving config
+        let initial_url_hash = {
+            let mut hasher = DefaultHasher::new();
+            config.backend_url.hash(&mut hasher);
+            hasher.finish()
+        };
+        let initial_url = config.backend_url.clone();
 
         Self {
             backend,
@@ -326,6 +329,9 @@ impl GoOnApp {
             last_refresh: Instant::now(),
             backend_child,
             last_applied_theme: String::new(),
+            backend_crash_time: None,
+            last_backend_url_hash: initial_url_hash,
+            backend_url_original: initial_url,
         }
     }
 
@@ -423,10 +429,12 @@ impl eframe::App for GoOnApp {
                 Ok(Some(status)) => {
                     eprintln!("go-on 后端已退出 (code: {:?})", status.code());
                     self.backend_child = None;
+                    self.backend_crash_time = Some(Instant::now());
                 }
                 Err(e) => {
                     eprintln!("go-on 后端 wait 错误: {}", e);
                     self.backend_child = None;
+                    self.backend_crash_time = Some(Instant::now());
                 }
             }
         }
@@ -446,6 +454,30 @@ impl eframe::App for GoOnApp {
         }
 
         self.sync_backend_url();
+
+        // Auto-restart backend if it crashed and enough time has passed
+        if self.backend_child.is_none() && !self.show_setup {
+            if let Some(crash_time) = self.backend_crash_time {
+                // Wait 3 seconds before auto-restart to avoid rapid restart loops
+                if crash_time.elapsed() >= Duration::from_secs(3) {
+                    self.backend_crash_time = None;
+                    eprintln!("Auto-restarting backend after crash...");
+                    self.restart_backend();
+                }
+            }
+        }
+
+        // Detect backend URL changes and reset chat cache
+        let current_hash = {
+            let mut hasher = DefaultHasher::new();
+            self.config.backend_url.hash(&mut hasher);
+            hasher.finish()
+        };
+        if current_hash != self.last_backend_url_hash {
+            self.last_backend_url_hash = current_hash;
+            self.chat_view.reset_loaded_state();
+        }
+
         self.poll_backend_updates();
         self.maybe_refresh_backend();
         self.has_providers = has_valid_providers(&self.config);
@@ -508,25 +540,107 @@ impl eframe::App for GoOnApp {
                             );
                         });
                 });
+
+                // Pending refresh spinner
+                if self.pending_refresh {
+                    let secs = _frame_start.elapsed().as_secs_f64();
+                    let alpha = ((secs * 4.0).sin() * 0.5 + 0.5) as f32;
+                    let color = egui::Color32::from_rgba_premultiplied(
+                        100,
+                        180,
+                        255,
+                        (alpha * 255.0) as u8,
+                    );
+                    ui.add(egui::Label::new(
+                        egui::RichText::new("⟳").color(color).size(16.0),
+                    ));
+                }
             });
+        });
+
+        // Global keyboard shortcuts for tab switching
+        let mut tab_shortcut: Option<String> = None;
+        ctx.input_mut(|i| {
+            // Ctrl+1 through Ctrl+9 -> tabs[0..8], Ctrl+0 -> tabs[9]
+            let tab_keys: [(egui::Key, usize); 10] = [
+                (egui::Key::Num1, 0),
+                (egui::Key::Num2, 1),
+                (egui::Key::Num3, 2),
+                (egui::Key::Num4, 3),
+                (egui::Key::Num5, 4),
+                (egui::Key::Num6, 5),
+                (egui::Key::Num7, 6),
+                (egui::Key::Num8, 7),
+                (egui::Key::Num9, 8),
+                (egui::Key::Num0, 9),
+            ];
+            for (key, idx) in tab_keys {
+                if i.consume_key(egui::Modifiers::CTRL, key) && idx < tabs.len() {
+                    tab_shortcut = Some(tabs[idx].clone());
+                }
+            }
+            // Ctrl+, for settings
+            if i.consume_key(egui::Modifiers::CTRL, egui::Key::Comma)
+                && tabs.contains(&"settings".to_string())
+            {
+                tab_shortcut = Some("settings".to_string());
+            }
         });
 
         // Tab bar
         let mut new_tab: Option<String> = None;
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                ui.add_space(4.0);
                 for tab in &tabs {
                     let label = self.tab_label(tab);
-                    if ui
-                        .selectable_label(self.active_tab == *tab, label)
-                        .clicked()
-                    {
+                    let is_active = self.active_tab == *tab;
+
+                    let shortcut_hint = match tab.as_str() {
+                        "monitor" => "Ctrl+1",
+                        "chat" => "Ctrl+2",
+                        "skills" => "Ctrl+3",
+                        "workflow" => "Ctrl+4",
+                        "autotune" => "Ctrl+5",
+                        "security" => "Ctrl+6",
+                        "config" => "Ctrl+7",
+                        "providers" => "Ctrl+8",
+                        "about" => "",
+                        "settings" => "Ctrl+9",
+                        _ => "",
+                    };
+
+                    let resp = egui::Frame::new()
+                        .fill(if is_active {
+                            if ctx.style().visuals.dark_mode {
+                                egui::Color32::from_rgb(45, 50, 60)
+                            } else {
+                                egui::Color32::from_rgb(220, 224, 232)
+                            }
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        })
+                        .corner_radius(6.0)
+                        .inner_margin(egui::Margin::symmetric(10i8, 4i8))
+                        .show(ui, |ui| ui.selectable_label(is_active, label))
+                        .response;
+
+                    let resp = if !shortcut_hint.is_empty() {
+                        resp.on_hover_text(format!("{} ({})", self.tab_label(tab), shortcut_hint))
+                    } else {
+                        resp
+                    };
+
+                    if resp.clicked() {
                         new_tab = Some(tab.clone());
                     }
                 }
             });
         });
         if let Some(t) = new_tab {
+            self.active_tab = t;
+        }
+        if let Some(t) = tab_shortcut {
             self.active_tab = t;
         }
 
@@ -559,7 +673,25 @@ impl eframe::App for GoOnApp {
                     ctx,
                     skills_lifecycle_enabled,
                 ),
-                "settings" => SettingsView::show(ui, &self.i18n, &mut self.config),
+                "settings" => {
+                    SettingsView::show(ui, &self.i18n, &mut self.config);
+                    // Show restart button if backend URL changed
+                    if self.config.backend_url != self.backend_url_original {
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                        if ui
+                            .button("🔄 ".to_string() + &self.i18n.t("app.restart"))
+                            .clicked()
+                        {
+                            self.backend_url_original = self.config.backend_url.clone();
+                            self.restart_backend();
+                        }
+                        ui.label(
+                            egui::RichText::new(self.i18n.t("settings.backendUrlHint")).weak(),
+                        );
+                    }
+                }
                 "workflow" => self.workflow_view.show(
                     ui,
                     &self.i18n,
@@ -569,12 +701,24 @@ impl eframe::App for GoOnApp {
                 ),
                 "autotune" => self.autotune_view.show(ui, &self.i18n),
                 "security" => self.security_view.show(ui, &self.i18n, &self.backend, ctx),
-                "config" => self.config_editor_view.show(
-                    ui,
-                    &self.i18n,
-                    &mut self.config,
-                    config_safe_mode_enabled,
-                ),
+                "config" => {
+                    self.config_editor_view.show(
+                        ui,
+                        &self.i18n,
+                        &mut self.config,
+                        config_safe_mode_enabled,
+                    );
+                    // Config changes may affect backend connectivity — reset chat cache only on apply
+                    if self.config_editor_view.applied {
+                        self.config_editor_view.applied = false;
+                        self.chat_view.reset_loaded_state();
+                        // Check if backend URL changed
+                        if self.config.backend_url != self.backend_url_original {
+                            self.backend_url_original = self.config.backend_url.clone();
+                            self.restart_backend();
+                        }
+                    }
+                }
                 "providers" => {
                     let changed = self.providers_view.show(
                         ui,

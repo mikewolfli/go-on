@@ -293,6 +293,17 @@ impl I18n {
             "monitor.providers",
             tr!(en, "AI Providers", cn, "AI 供应商", tw, "AI 供應商"),
         );
+        m.insert(
+            "monitor.filterProviders",
+            tr!(
+                en,
+                "Filter providers…",
+                cn,
+                "筛选供应商…",
+                tw,
+                "篩選供應商…"
+            ),
+        );
         m.insert("monitor.ready", tr!(en, "Ready", cn, "就绪", tw, "就緒"));
         m.insert(
             "monitor.notReady",
@@ -563,8 +574,30 @@ impl I18n {
             tr!(en, "Attach File", cn, "附件", tw, "附件"),
         );
         m.insert(
+            "chat.clearAll",
+            tr!(
+                en,
+                "Clear all messages",
+                cn,
+                "清除全部消息",
+                tw,
+                "清除全部訊息"
+            ),
+        );
+        m.insert(
             "chat.clear",
             tr!(en, "Clear Chat", cn, "清空对话", tw, "清空對話"),
+        );
+        m.insert(
+            "chat.cannotDeleteLastSession",
+            tr!(
+                en,
+                "Cannot delete the last session.",
+                cn,
+                "无法删除最后一个会话。",
+                tw,
+                "無法刪除最後一個會話。"
+            ),
         );
         m.insert("chat.export", tr!(en, "Export", cn, "导出", tw, "導出"));
         m.insert("chat.you", tr!(en, "You", cn, "你", tw, "你"));
@@ -615,6 +648,10 @@ impl I18n {
         m.insert(
             "chat.thinking",
             tr!(en, "AI is thinking", cn, "AI 思考中", tw, "AI 思考中"),
+        );
+        m.insert(
+            "chat.openWorkspace",
+            tr!(en, "Open workspace", cn, "打开工作目录", tw, "打開工作目錄"),
         );
         m.insert(
             "chat.newSession",
@@ -861,6 +898,10 @@ impl I18n {
             ),
         );
         m.insert(
+            "skills.create.loading",
+            tr!(en, "Creating...", cn, "创建中...", tw, "創建中..."),
+        );
+        m.insert(
             "skills.create.save",
             tr!(en, "Save Skill", cn, "保存技能", tw, "保存技能"),
         );
@@ -907,6 +948,10 @@ impl I18n {
                 tw,
                 "輸入技能 URL..."
             ),
+        );
+        m.insert(
+            "skills.import.loading",
+            tr!(en, "Importing...", cn, "导入中...", tw, "導入中..."),
         );
         m.insert(
             "skills.import.btn",
@@ -2262,6 +2307,25 @@ impl I18n {
                 tw,
                 "已將草稿回滾到最近快照。"
             ),
+        );
+        m.insert(
+            "config.search",
+            tr!(en, "Search JSON…", cn, "搜索 JSON…", tw, "搜索 JSON…"),
+        );
+        m.insert(
+            "config.validJson",
+            tr!(
+                en,
+                "✓ Valid JSON",
+                cn,
+                "✓ JSON 格式正确",
+                tw,
+                "✓ JSON 格式正確"
+            ),
+        );
+        m.insert(
+            "monitor.refreshNow",
+            tr!(en, "Refresh now", cn, "立即刷新", tw, "立即重新整理"),
         );
         m.insert(
             "monitor.loadTrends",

@@ -102,6 +102,13 @@ impl ProvidersView {
         }
     }
 
+    pub fn reset_loaded_state(&mut self) {
+        self.models_loaded = false;
+        self.remote_models.clear();
+        self.provider_capabilities.clear();
+        self.provider_ops_status.clear();
+    }
+
     fn process_pending(&mut self) {
         while let Ok(msg) = self.pending_rx.try_recv() {
             if let Some(models_json) = msg.strip_prefix("__models__:") {
@@ -390,7 +397,72 @@ impl ProvidersView {
                                 );
                             }
 
-                            if !config.providers.iter().any(|p| p.name == name) {
+                            let provider_exists = config.providers.iter().any(|p| p.name == name);
+                            if provider_exists {
+                                // Provider already exists — update key and model if a new key was provided
+                                if !key.is_empty() {
+                                    if let Some(existing) = config.providers.iter_mut().find(|p| p.name == name) {
+                                        existing.api_key = key.clone();
+                                        existing.validated = true;
+                                        if !model.is_empty() && model != "auto" {
+                                            existing.model = model.clone();
+                                        }
+                                    }
+                                    save_app_config(config);
+                                    self.status = format!(
+                                        "{} '{}' {}.",
+                                        i18n.t("providers.api_key"),
+                                        provider_label(i18n, &name),
+                                        i18n.t("providers.updated")
+                                    );
+                                    // Auto-push updated key to backend
+                                    if !self.sending {
+                                        self.sending = true;
+                                        let tx = self.pending_tx.clone();
+                                        let backend_clone = backend.clone();
+                                        let push_name = name.clone();
+                                        let push_key = key.clone();
+                                        let push_model = model.clone();
+                                        if push_model.is_empty() || push_model == "auto" {
+                                            // Get the model from config if exists
+                                            let _ = config.providers.iter().find(|p| p.name == name).map(|p| p.model.clone());
+                                        }
+                                        let ctx_clone = ctx.clone();
+                                        let ok_fmt = format!(
+                                            "{} '{}' {}",
+                                            i18n.t("providers.api_key"),
+                                            provider_label(i18n, &name),
+                                            i18n.t("providers.push_success")
+                                        );
+                                        let err_fmt = format!(
+                                            "{} '{}': %s",
+                                            i18n.t("providers.push_failed"),
+                                            provider_label(i18n, &name)
+                                        );
+                                        tokio::spawn(async move {
+                                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                                            let result = tokio::time::timeout(
+                                                std::time::Duration::from_secs(10),
+                                                backend_clone.configure_provider(&push_name, &push_key, &push_model),
+                                            ).await;
+                                            let msg = match result {
+                                                Ok(Ok(_)) => ok_fmt,
+                                                Ok(Err(e)) => err_fmt.replace("%s", &e),
+                                                Err(_) => err_fmt.replace("%s", "timeout"),
+                                            };
+                                            let _ = tx.send(msg);
+                                            ctx_clone.request_repaint();
+                                        });
+                                    }
+                                } else {
+                                    self.status = format!(
+                                        "{} '{}' {}.",
+                                        i18n.t("providers.provider"),
+                                        provider_label(i18n, &name),
+                                        i18n.t("providers.already_exists")
+                                    );
+                                }
+                            } else {
                                 config.providers.push(ProviderConfig {
                                     name: name.clone(),
                                     api_key: key.clone(),
@@ -439,13 +511,6 @@ impl ProvidersView {
                                         ctx_clone.request_repaint();
                                     });
                                 }
-                            } else {
-                                self.status = format!(
-                                    "{} '{}' {}.",
-                                    i18n.t("providers.provider"),
-                                    provider_label(i18n, &name),
-                                    i18n.t("providers.already_exists")
-                                );
                             }
                             self.new_key.clear();
                             changed = true;
@@ -637,7 +702,7 @@ impl ProvidersView {
                                         self.new_key.clear();
                                         self.update_target = -1;
                                         changed = true;
-                                        
+
                                         // Auto-push to backend after saving
                                         if !self.sending {
                                             self.sending = true;
@@ -661,7 +726,7 @@ impl ProvidersView {
                                             tokio::spawn(async move {
                                                 // Small delay to ensure keyring write completes
                                                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                                                
+
                                                 let result = match tokio::time::timeout(
                                                     std::time::Duration::from_secs(10),
                                                     backend_clone.configure_provider(&name, &key, &model),

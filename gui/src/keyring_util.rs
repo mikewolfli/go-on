@@ -44,15 +44,3 @@ pub fn get_api_key(provider: &str) -> Option<String> {
 pub fn has_api_key(provider: &str) -> bool {
     get_api_key(provider).is_some()
 }
-
-/// Delete an API key from the system keyring.
-#[allow(dead_code)]
-pub fn delete_api_key(provider: &str) -> Result<()> {
-    let account = format!("{}_api_key", provider);
-    let entry = keyring::Entry::new("go-on", &account)
-        .map_err(|e| anyhow::anyhow!("failed to create keyring entry: {}", e))?;
-    entry
-        .delete_credential()
-        .map_err(|e| anyhow::anyhow!("failed to delete API key from keyring: {}", e))?;
-    Ok(())
-}

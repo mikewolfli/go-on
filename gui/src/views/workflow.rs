@@ -222,6 +222,7 @@ impl WorkflowView {
                         .filter_map(|x| serde_json::from_value::<WorkflowRunRecord>(x).ok())
                         .collect();
                     self.runs_loading = false;
+                    self.run_center_msg.clear();
                     if self.selected_run_id.is_empty() {
                         if let Some(first) = self.runs.first() {
                             self.selected_run_id = first.run_id.clone();
@@ -650,7 +651,7 @@ impl WorkflowView {
                     }
 
                     let mut pending_detail_run_id: Option<String> = None;
-                    for run in self.runs.clone() {
+                    for run in &self.runs {
                         ui.horizontal(|ui| {
                             if ui
                                 .selectable_label(self.selected_run_id == run.run_id, &run.run_id)
@@ -666,7 +667,7 @@ impl WorkflowView {
                                 run.task,
                                 Self::status_label(i18n, &run.status)
                             ));
-                            if let Some(duration_secs) = Self::run_duration_secs(&run) {
+                            if let Some(duration_secs) = Self::run_duration_secs(run) {
                                 ui.label(format!("{}s", duration_secs));
                             }
                         });

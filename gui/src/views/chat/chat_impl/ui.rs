@@ -1,34 +1,34 @@
 use super::*;
 
 impl ChatView {
-    #[allow(dead_code)]
-    fn viewport_height(ui: &egui::Ui) -> f32 {
-        let mut h = ui.ctx().screen_rect().height();
-        if !h.is_finite() || h <= 0.0 {
-            h = 720.0;
-        }
-        h.clamp(320.0, 1600.0)
-    }
-
-    #[allow(dead_code)]
-    fn bounded_panel_height(ui: &egui::Ui, min_height: f32) -> f32 {
-        let mut height = ui.available_height();
-        let mut local_height = ui.max_rect().height();
-        let viewport_height = Self::viewport_height(ui);
-
-        if !local_height.is_finite() || local_height <= 0.0 {
-            local_height = viewport_height;
-        }
-
-        if !height.is_finite() || height <= 0.0 {
-            height = local_height;
-        }
-
-        // Keep within current panel and viewport; this avoids pushing
-        // the composer below the visible window when parent reports large height.
-        height = height.min(local_height).min(viewport_height);
-
-        height.max(min_height).min(viewport_height)
+    /// Draw a colored circle avatar with the role initial letter.
+    /// User gets a blue circle with "U", AI gets a green circle with "A".
+    fn draw_role_avatar(ui: &mut egui::Ui, is_user: bool) {
+        let size = 28.0;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+        let painter = ui.painter();
+        let dark = ui.visuals().dark_mode;
+        let color = if is_user {
+            if dark {
+                egui::Color32::from_rgb(32, 112, 210)
+            } else {
+                egui::Color32::from_rgb(10, 106, 255)
+            }
+        } else {
+            if dark {
+                egui::Color32::from_rgb(20, 90, 60)
+            } else {
+                egui::Color32::from_rgb(32, 160, 95)
+            }
+        };
+        painter.circle_filled(rect.center(), size / 2.0, color);
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            if is_user { "U" } else { "A" },
+            egui::FontId::proportional(14.0),
+            egui::Color32::WHITE,
+        );
     }
 
     pub fn show(
@@ -413,11 +413,29 @@ impl ChatView {
                 });
             }
 
+            // ── Paste event handling ────────────
+            let pasted_atts = self.handle_paste_events(ui);
+            if !pasted_atts.is_empty() {
+                self.attachments.extend(pasted_atts);
+                ctx.request_repaint();
+            }
+
+            let input_rows = self.input.lines().count().clamp(1, 8);
+            let input_h = (input_rows as f32 * 20.0 + 10.0).clamp(50.0, 170.0);
             let resp = ui.add_sized(
-                [ui.available_width(), 74.0],
+                [ui.available_width(), input_h],
                 egui::TextEdit::multiline(&mut self.input).hint_text(i18n.t("chat.input")),
             );
             let input_focus = resp.has_focus();
+
+            // Character counter
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("{} chars", self.input.len()))
+                        .weak()
+                        .size(10.0),
+                );
+            });
 
             ui.horizontal(|ui| {
                 if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS {
@@ -527,6 +545,21 @@ impl ChatView {
             }) {
                 self.send_message(backend, ctx, autotune_chain_enabled);
             }
+
+            // ── Global keyboard shortcuts ─────────
+            ui.input_mut(|i| {
+                if i.consume_key(egui::Modifiers::CTRL, egui::Key::N) {
+                    self.new_session();
+                    self.refresh_default_session_names(i18n);
+                }
+                if i.consume_key(egui::Modifiers::CTRL, egui::Key::L) {
+                    self.input.clear();
+                }
+                if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                    self.show_prompts = false;
+                    self.show_model_picker = false;
+                }
+            });
         });
     }
 
@@ -605,12 +638,34 @@ impl ChatView {
                     }
                 }
                 if ui
+                    .button("📂")
+                    .on_hover_text(i18n.t("chat.openWorkspace"))
+                    .clicked()
+                {
+                    if let Some(dirs) = directories::ProjectDirs::from("com", "goon", "go-on-gui") {
+                        let config_dir = dirs.config_dir();
+                        let _ = std::process::Command::new("xdg-open")
+                            .arg(config_dir)
+                            .spawn();
+                    }
+                }
+                if ui
                     .button("＋")
                     .on_hover_text(i18n.t("chat.newSession"))
                     .clicked()
                 {
                     self.new_session();
                     self.refresh_default_session_names(i18n);
+                }
+                if ui
+                    .button("🗑️")
+                    .on_hover_text(i18n.t("chat.clearAll"))
+                    .clicked()
+                {
+                    if let Some(session) = self.sessions.get_mut(self.active_session) {
+                        session.messages.clear();
+                        self.save_sessions_to_disk();
+                    }
                 }
             });
             // Feature 9: search field
@@ -720,6 +775,9 @@ impl ChatView {
                                 self.sync_model_selection();
                             }
                             self.save_sessions_to_disk();
+                        } else {
+                            // Can't delete last session — show feedback
+                            self.error = i18n.t("chat.cannotDeleteLastSession").to_string();
                         }
                     }
                 });
@@ -747,7 +805,53 @@ impl ChatView {
 
         // Show ALL messages (no pagination)
         let dark_mode = ui.visuals().dark_mode;
-        for msg in msgs.iter() {
+        for (msg_idx, msg) in msgs.iter().enumerate() {
+            // ── Edit mode: show TextEdit instead of bubble ────────
+            if self.edit_msg_idx == Some(msg_idx) {
+                ui.add_space(4.0);
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgba_premultiplied(255, 220, 100, 30))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(8i8, 6i8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("✏️ Edit:").strong().size(13.0));
+                        });
+                        ui.add_space(4.0);
+
+                        let _edit_resp = ui.add_sized(
+                            [ui.available_width(), 100.0],
+                            egui::TextEdit::multiline(&mut self.edit_msg_buf)
+                                .hint_text("Edit message..."),
+                        );
+
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if ui.button(egui::RichText::new("💾 Save").strong()).clicked() {
+                                let new_content = self.edit_msg_buf.trim().to_string();
+                                if !new_content.is_empty() {
+                                    if let Some(session) =
+                                        self.sessions.get_mut(self.active_session)
+                                    {
+                                        if msg_idx < session.messages.len() {
+                                            session.messages[msg_idx].content = new_content;
+                                            self.save_sessions_to_disk();
+                                        }
+                                    }
+                                }
+                                self.edit_msg_idx = None;
+                                self.edit_msg_buf.clear();
+                            }
+                            if ui.button("✕ Cancel").clicked() {
+                                self.edit_msg_idx = None;
+                                self.edit_msg_buf.clear();
+                            }
+                        });
+                    });
+                ui.add_space(8.0);
+                continue;
+            }
+
             let is_user = msg.role == "user";
             let (bubble_color, text_color) = if is_user {
                 let bc = if dark_mode {
@@ -772,8 +876,9 @@ impl ChatView {
             };
 
             let time_str = format_absolute_time(msg.timestamp);
+            let model_name = msg.model.clone();
 
-            // Display full message content with auto-wrapping
+            // Single clone: compute display_text once, keep content reference for context menu
             let display_text = if CHAT_DISABLE_MARKDOWN_RENDER {
                 Self::markdown_to_plain_text(&msg.content)
             } else {
@@ -787,9 +892,9 @@ impl ChatView {
                         .color(egui::Color32::from_rgb(160, 162, 170))
                         .size(11.0),
                 );
-                if !msg.model.is_empty() {
+                if !model_name.is_empty() {
                     ui.label(
-                        egui::RichText::new(&msg.model)
+                        egui::RichText::new(&model_name)
                             .color(egui::Color32::from_rgb(140, 142, 150))
                             .size(10.0),
                     );
@@ -800,15 +905,26 @@ impl ChatView {
             // Leave space for avatar and margins (about 60px total)
             let max_bubble_width = (ui.available_width() - 60.0).clamp(200.0, 800.0);
 
+            // Pre-compute the timestamp for context menu use
+            let msg_timestamp = msg.timestamp;
+
+            // Helper to find real message index in session messages
+            let find_in_messages =
+                |msgs_slice: &[Message], ts: u64, content: &str| -> Option<usize> {
+                    msgs_slice
+                        .iter()
+                        .position(|m| m.timestamp == ts && m.content == content)
+                };
+
             if is_user {
                 ui.horizontal_top(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        ui.add(egui::Label::new(egui::RichText::new("👤").size(18.0)));
+                        Self::draw_role_avatar(ui, true);
                         ui.add_space(6.0);
                         // Use vertical to allow content to expand naturally
                         ui.vertical(|ui| {
                             ui.set_max_width(max_bubble_width);
-                            egui::Frame::new()
+                            let bubble_resp = egui::Frame::new()
                                 .fill(bubble_color)
                                 .corner_radius(8.0)
                                 .inner_margin(egui::Margin::symmetric(10i8, 8i8))
@@ -820,18 +936,76 @@ impl ChatView {
                                         &i18n.t("chat.copyCode"),
                                         text_color,
                                     );
-                                });
+                                })
+                                .response;
+
+                            // ── Context menu for message bubble ────────
+                            // context_menu is lazy — only runs when the menu opens
+                            let ctx_msg_ts = msg_timestamp;
+                            let ctx_session_msgs = self.messages().to_vec();
+                            // Clone original content once for context actions
+                            let ctx_content = msg.content.clone();
+                            let ctx_plain = Self::markdown_to_plain_text(&ctx_content);
+                            bubble_resp.context_menu(|ui| {
+                                if ui.button("📋 Copy").clicked() {
+                                    ui.ctx().copy_text(ctx_content.clone());
+                                    ui.close_menu();
+                                }
+                                if ui.button("📝 Copy (plain text)").clicked() {
+                                    ui.ctx().copy_text(ctx_plain.clone());
+                                    ui.close_menu();
+                                }
+                                if ui.button("✏️ Edit").clicked() {
+                                    if let Some(real_idx) = find_in_messages(
+                                        &ctx_session_msgs,
+                                        ctx_msg_ts,
+                                        &ctx_content,
+                                    ) {
+                                        self.edit_msg_idx = Some(real_idx);
+                                        self.edit_msg_buf = ctx_content.clone();
+                                    }
+                                    ui.close_menu();
+                                }
+                                if ui.button("🗑️ Delete").clicked() {
+                                    if let Some(real_idx) = find_in_messages(
+                                        &ctx_session_msgs,
+                                        ctx_msg_ts,
+                                        &ctx_content,
+                                    ) {
+                                        if real_idx < ctx_session_msgs.len() {
+                                            self.remove_message_at(real_idx);
+                                            self.save_sessions_to_disk();
+                                        }
+                                    }
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                if ui.button("📋 Copy as JSON").clicked() {
+                                    if let Some(real_idx) = find_in_messages(
+                                        &ctx_session_msgs,
+                                        ctx_msg_ts,
+                                        &ctx_content,
+                                    ) {
+                                        if let Some(target) = ctx_session_msgs.get(real_idx) {
+                                            if let Ok(json) = serde_json::to_string_pretty(target) {
+                                                ui.ctx().copy_text(json);
+                                            }
+                                        }
+                                    }
+                                    ui.close_menu();
+                                }
+                            });
                         });
                     });
                 });
             } else {
                 ui.horizontal_top(|ui| {
-                    ui.add(egui::Label::new(egui::RichText::new("✨").size(18.0)));
+                    Self::draw_role_avatar(ui, false);
                     ui.add_space(6.0);
                     // Use vertical to allow content to expand naturally
                     ui.vertical(|ui| {
                         ui.set_max_width(max_bubble_width);
-                        egui::Frame::new()
+                        let bubble_resp = egui::Frame::new()
                             .fill(bubble_color)
                             .corner_radius(8.0)
                             .inner_margin(egui::Margin::symmetric(10i8, 8i8))
@@ -843,14 +1017,91 @@ impl ChatView {
                                     &i18n.t("chat.copyCode"),
                                     text_color,
                                 );
-                            });
+                            })
+                            .response;
+
+                        // ── Context menu for message bubble ────────
+                        // context_menu is lazy — only runs when the menu opens
+                        let ctx_msg_ts = msg_timestamp;
+                        let ctx_session_msgs = self.messages().to_vec();
+                        // Clone original content once for context actions
+                        let ctx_content = msg.content.clone();
+                        let ctx_plain = Self::markdown_to_plain_text(&ctx_content);
+                        bubble_resp.context_menu(|ui| {
+                            if ui.button("📋 Copy").clicked() {
+                                ui.ctx().copy_text(ctx_content.clone());
+                                ui.close_menu();
+                            }
+                            if ui.button("📝 Copy (plain text)").clicked() {
+                                ui.ctx().copy_text(ctx_plain.clone());
+                                ui.close_menu();
+                            }
+                            if ui.button("✏️ Edit").clicked() {
+                                if let Some(real_idx) =
+                                    find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
+                                {
+                                    self.edit_msg_idx = Some(real_idx);
+                                    self.edit_msg_buf = ctx_content.clone();
+                                }
+                                ui.close_menu();
+                            }
+                            if ui.button("🗑️ Delete").clicked() {
+                                if let Some(real_idx) =
+                                    find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
+                                {
+                                    if real_idx < ctx_session_msgs.len() {
+                                        self.remove_message_at(real_idx);
+                                        self.save_sessions_to_disk();
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button("📋 Copy as JSON").clicked() {
+                                if let Some(real_idx) =
+                                    find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
+                                {
+                                    if let Some(target) = ctx_session_msgs.get(real_idx) {
+                                        if let Ok(json) = serde_json::to_string_pretty(target) {
+                                            ui.ctx().copy_text(json);
+                                        }
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                        });
                     });
                 });
             }
             ui.add_space(6.0);
         }
 
-        // Feature 5: show aggregate token estimate below last AI message
+        // Feature 5a: show AI thinking indicator while streaming
+        if self.ai_status == AiStatus::Thinking && !self.sessions.is_empty() {
+            if let Some(session) = self.sessions.get(self.active_session) {
+                if let Some(last) = session.messages.last() {
+                    if last.role == "assistant"
+                        && last.content.is_empty()
+                        && last.thinking.is_empty()
+                    {
+                        // Show thinking indicator after the last placeholder message
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            Self::draw_role_avatar(ui, false);
+                            ui.add_space(6.0);
+                            ui.add(egui::Spinner::new());
+                            ui.colored_label(
+                                egui::Color32::from_rgb(160, 162, 170),
+                                i18n.t("chat.thinking"),
+                            );
+                        });
+                        ui.add_space(6.0);
+                    }
+                }
+            }
+        }
+
+        // Feature 5b: show aggregate token estimate below last AI message
         if self.last_token_estimate > 0 {
             let msgs = self.messages();
             if let Some(last) = msgs.last() {
