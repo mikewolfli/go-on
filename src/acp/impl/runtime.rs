@@ -988,6 +988,14 @@ fn store_responses_api_payload(server: &AcpServer, payload: &serde_json::Value) 
         return;
     };
     if let Ok(mut store) = server.responses_api_store.lock() {
+        // Evict oldest entries when store exceeds 1000 items
+        if store.len() >= 1000 {
+            // Remove 200 oldest entries
+            let keys: Vec<String> = store.keys().take(200).cloned().collect();
+            for key in keys {
+                store.remove(&key);
+            }
+        }
         let previous = store.get(id).cloned();
         let mut next = payload.clone();
         merge_responses_status_history(previous.as_ref(), &mut next);

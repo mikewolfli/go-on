@@ -157,6 +157,7 @@ impl SkillRegistry {
         let removed = self.skills.remove(name).is_some();
         if removed {
             self.stats.remove(name);
+            self.evolution_history.remove(name); // Clean up history too
         }
         removed
     }
@@ -271,6 +272,12 @@ impl SkillRegistry {
                     .unwrap_or_default()
                     .as_millis() as u64,
             });
+        // Cap evolution history at 50 records per skill
+        if let Some(history) = self.evolution_history.get_mut(name) {
+            if history.len() > 50 {
+                history.drain(0..history.len() - 50);
+            }
+        }
 
         Ok(())
     }
@@ -324,6 +331,12 @@ impl SkillRegistry {
                     .unwrap_or_default()
                     .as_millis() as u64,
             });
+        // Cap evolution history at 50 records per skill
+        if let Some(history) = self.evolution_history.get_mut(name) {
+            if history.len() > 50 {
+                history.drain(0..history.len() - 50);
+            }
+        }
 
         Ok(())
     }

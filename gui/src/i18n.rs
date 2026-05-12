@@ -4390,6 +4390,17 @@ impl I18n {
             ),
         );
         m.insert(
+            "setup.saveError",
+            tr!(
+                en,
+                "Failed to save configuration. Check disk space and permissions.",
+                cn,
+                "保存配置失败。请检查磁盘空间和权限。",
+                tw,
+                "保存配置失敗。請檢查磁碟空間和權限。"
+            ),
+        );
+        m.insert(
             "skills.lifecycle.rolledBack",
             tr!(
                 en,

@@ -21,6 +21,15 @@ fn font_cache_path() -> Option<std::path::PathBuf> {
 
 fn read_cached_font_path() -> Option<String> {
     let path = font_cache_path()?;
+    // Limit font cache read to 4KB to prevent OOM on corrupted/malicious files
+    let metadata = std::fs::metadata(&path).ok()?;
+    if metadata.len() > 4096 {
+        eprintln!(
+            "WARNING: font cache file too large ({} bytes), ignoring",
+            metadata.len()
+        );
+        return None;
+    }
     let raw = std::fs::read_to_string(path).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -192,7 +201,7 @@ async fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    eframe::run_native(
+    match eframe::run_native(
         "Go-On GUI",
         options,
         Box::new(|cc| {
@@ -213,5 +222,17 @@ async fn main() -> eframe::Result<()> {
             cc.egui_ctx.set_fonts(fonts);
             Ok(Box::new(GoOnApp::new(config)))
         }),
-    )
+    ) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            eprintln!("FATAL: Failed to start GUI: {}", e);
+            eprintln!();
+            eprintln!("Troubleshooting:");
+            eprintln!("  - Ensure a display server is running (X11/Wayland on Linux)");
+            eprintln!("  - On macOS, run from the .app bundle, not a symlink");
+            eprintln!("  - On Windows, ensure DirectX or Vulkan drivers are installed");
+            eprintln!("  - Try setting WINIT_UNIX_BACKEND=x11 on Wayland");
+            Err(anyhow::anyhow!("GUI initialization failed: {}", e))
+        }
+    }
 }

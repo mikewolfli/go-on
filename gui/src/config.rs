@@ -169,7 +169,35 @@ pub fn load_app_config() -> AppConfig {
     }
 
     let raw: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
-    let mut config: AppConfig = serde_json::from_str(&content).unwrap_or_default();
+    let mut config: AppConfig = match serde_json::from_str(&content) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!(
+                "ERROR: Failed to parse config file at {}: {e}",
+                path.display()
+            );
+            eprintln!("Attempting recovery from backup...");
+            let bak_path = path.with_extension("json.bak");
+            match std::fs::read_to_string(&bak_path) {
+                Ok(bak) => match serde_json::from_str(&bak) {
+                    Ok(cfg) => {
+                        eprintln!("Recovered config from backup.");
+                        // Restore backup to main path
+                        let _ = std::fs::write(&path, &bak);
+                        cfg
+                    }
+                    Err(_) => {
+                        eprintln!("Backup also corrupted. Starting with default config.");
+                        AppConfig::default()
+                    }
+                },
+                Err(_) => {
+                    eprintln!("No backup found. Starting with default config.");
+                    AppConfig::default()
+                }
+            }
+        }
+    };
 
     if file_exists
         && !content.trim().is_empty()

@@ -290,7 +290,14 @@ impl GoOnApp {
         Self::diagnostic_key_report(config);
         match find_backend_binary() {
             Some(path) => {
-                let config_dir = path.parent().unwrap_or(std::path::Path::new("."));
+                let config_dir = path.parent().unwrap_or_else(|| {
+                    // When backend binary has no parent path (e.g. "/go-on"),
+                    // use the user's home directory as a writable fallback.
+                    std::env::var("HOME")
+                        .map(std::path::PathBuf::from)
+                        .or_else(|_| std::env::var("USERPROFILE").map(std::path::PathBuf::from))
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                });
                 let mut cmd = std::process::Command::new(&path);
                 cmd.current_dir(config_dir)
                     .arg("--protocol-mode")

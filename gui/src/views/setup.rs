@@ -194,7 +194,11 @@ impl SetupView {
                                 validated: true,
                             });
                         }
-                        save_app_config(config);
+                        if !save_app_config(config) {
+                            self.error_msg = i18n.t("setup.saveError").to_string();
+                            ctx.request_repaint();
+                            return;
+                        }
 
                         self.api_key = api_key;
                         self.error_msg.clear();

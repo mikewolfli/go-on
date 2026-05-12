@@ -25,15 +25,15 @@ cargo run --manifest-path gui/Cargo.toml
 
 | Monitor Dashboard | Chat Interface |
 |:---:|:---:|
-| ![Monitor](snapshots/monitor.jpeg) | ![Chat](snapshots/chat.jpeg) |
+| ![Monitor](snapshots/monitor.png) | ![Chat](snapshots/chat.png) |
 
 | Provider Management | Settings |
 |:---:|:---:|
-| ![Providers](snapshots/providers.jpeg) | ![Settings](snapshots/settings.jpeg) |
+| ![Providers](snapshots/providers.png) | ![Settings](snapshots/settings.png) |
 
 | Skills & Tools |
 |:---:|
-| ![Skills](snapshots/skills.jpeg) |
+| ![Skills](snapshots/skills.png) |
 
 ### Features
 - **Monitor tab**: Backend health, AI provider status, real-time metrics

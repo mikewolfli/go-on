@@ -25,15 +25,15 @@ cargo run --manifest-path gui/Cargo.toml
 
 | 监控面板 | 对话界面 |
 |:---:|:---:|
-| ![监控面板](snapshots/monitor.jpeg) | ![对话界面](snapshots/chat.jpeg) |
+| ![监控面板](snapshots/monitor.png) | ![对话界面](snapshots/chat.png) |
 
 | 供应商管理 | 设置 |
 |:---:|:---:|
-| ![供应商管理](snapshots/providers.jpeg) | ![设置](snapshots/settings.jpeg) |
+| ![供应商管理](snapshots/providers.png) | ![设置](snapshots/settings.png) |
 
 | 技能管理 |
 |:---:|
-| ![技能管理](snapshots/skills.jpeg) |
+| ![技能管理](snapshots/skills.png) |
 
 ### 主要功能
 - **监控面板**：后端健康状态、AI 供应商状态、实时指标

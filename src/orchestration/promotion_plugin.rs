@@ -281,6 +281,12 @@ impl PromotionPlugin for EvidenceWeightedPromotion {
                         multiplier,
                         reason: reason.clone(),
                     });
+                // Cap history at 100 entries per agent
+                if let Some(entries) = hist.get_mut(agent.as_str()) {
+                    if entries.len() > 100 {
+                        entries.drain(0..entries.len() - 100);
+                    }
+                }
             }
 
             PromotionResult::new(agent, self.name(), true, multiplier, reason)

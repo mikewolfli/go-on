@@ -2205,8 +2205,15 @@ async fn run_agent_collecting(
                 // ── Execute tool calls ────────────────────────────────
                 // If the LLM responded with tool calls, execute each
                 // registered skill and append the results to the response.
+                const MAX_TOOL_CALLS_PER_AGENT: usize = 100;
+                if tool_calls.len() >= MAX_TOOL_CALLS_PER_AGENT {
+                    warn!(
+                        "run_agent_collecting: tool_calls limit reached ({}), truncating",
+                        MAX_TOOL_CALLS_PER_AGENT
+                    );
+                }
                 let mut tool_results: Vec<String> = Vec::new();
-                for (tool_name, tool_args_str) in &tool_calls {
+                for (tool_name, tool_args_str) in tool_calls.iter().take(MAX_TOOL_CALLS_PER_AGENT) {
                     let parsed_args: Value =
                         serde_json::from_str(tool_args_str).unwrap_or(json!({}));
                     match execute_mcp_tool_call(server, tool_name, &parsed_args).await {
