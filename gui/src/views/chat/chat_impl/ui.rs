@@ -1015,8 +1015,7 @@ impl ChatView {
 
     // ── Messages area ─────────────────────
     fn show_messages(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
-        let msgs = self.messages().to_vec();
-        let total_msgs = msgs.len();
+        let total_msgs = self.messages().len();
         let start_idx = total_msgs.saturating_sub(Self::MAX_RENDERED_MESSAGES);
 
         if total_msgs == 0 {
@@ -1045,6 +1044,14 @@ impl ChatView {
 
         // Show ALL messages (no pagination)
         let dark_mode = ui.visuals().dark_mode;
+
+        // Clone messages to avoid self-borrow conflict with closures in the loop.
+        // This is a Vec<Message> clone — intentionally traded for correctness.
+        let msgs = self.messages().to_vec();
+
+        // Cache formatted timestamps to avoid re-allocating per message per frame
+        let mut last_ts: u64 = 0;
+        let mut last_time_str = String::new();
         for (msg_idx, msg) in msgs.iter().enumerate().skip(start_idx) {
             // ── Edit mode: show TextEdit instead of bubble ────────
             if self.edit_msg_idx == Some(msg_idx) {
@@ -1129,7 +1136,13 @@ impl ChatView {
                 (bc, tc)
             };
 
-            let time_str = format_absolute_time(msg.timestamp);
+            let time_str = if msg.timestamp == last_ts {
+                last_time_str.as_str()
+            } else {
+                last_ts = msg.timestamp;
+                last_time_str = format_absolute_time(msg.timestamp);
+                last_time_str.as_str()
+            };
             let model_name = msg.model.clone();
 
             // Single clone: compute display_text once, keep content reference for context menu
@@ -1142,7 +1155,7 @@ impl ChatView {
             // Timestamp row
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(&time_str)
+                    egui::RichText::new(time_str)
                         .color(egui::Color32::from_rgb(160, 162, 170))
                         .size(11.0),
                 );
@@ -1205,17 +1218,6 @@ impl ChatView {
                                     &msg.model,
                                 ));
 
-                                let preview_len = 64usize;
-                                let mut thinking_chars = msg.thinking.chars();
-                                let thinking_preview: String =
-                                    thinking_chars.by_ref().take(preview_len).collect();
-                                let has_more = thinking_chars.next().is_some();
-                                let thinking_preview = if has_more {
-                                    format!("{}…", thinking_preview)
-                                } else {
-                                    thinking_preview
-                                };
-
                                 // Add visual indicator + thinking label to make it obvious it's clickable
                                 let thinking_label = format!("▸ {}", i18n.t("chat.thinkingLabel"));
 
@@ -1227,6 +1229,18 @@ impl ChatView {
                                 .id_salt(thinking_id)
                                 .default_open(false)
                                 .show(ui, |ui| {
+                                    // Compute preview lazily — only when user expands the header
+                                    let preview_len = 64usize;
+                                    let mut thinking_chars = msg.thinking.chars();
+                                    let thinking_preview: String =
+                                        thinking_chars.by_ref().take(preview_len).collect();
+                                    let has_more = thinking_chars.next().is_some();
+                                    let thinking_preview = if has_more {
+                                        format!("{}…", thinking_preview)
+                                    } else {
+                                        thinking_preview
+                                    };
+
                                     ui.horizontal_wrapped(|ui| {
                                         ui.label(
                                             egui::RichText::new(&thinking_preview)

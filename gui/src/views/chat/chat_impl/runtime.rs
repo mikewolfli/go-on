@@ -78,7 +78,7 @@ impl ChatView {
     pub fn send_message(
         &mut self,
         backend: &BackendClient,
-        ctx: &egui::Context,
+        _ctx: &egui::Context,
         autotune_chain_enabled: bool,
     ) {
         let msg = self.input.trim().to_string();
@@ -210,7 +210,6 @@ impl ChatView {
 
             let tx = self.pending_tx.clone();
             let backend_clone = backend.clone();
-            let ctx_clone = ctx.clone();
             let mode_clone = mode.clone();
             let phase_clone = phase.clone();
             let outbound_clone = outbound_msg.clone();
@@ -355,7 +354,6 @@ impl ChatView {
                             });
                         }
                     }
-                    ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
                     return; // Skip the normal chat/stream flow
                 }
 
@@ -389,7 +387,6 @@ impl ChatView {
                                     message: format!("stream error: {err}; fallback: {e}"),
                                 });
                             let _ = tx.send(fallback);
-                            ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
                             return;
                         } else {
                             resp
@@ -415,9 +412,6 @@ impl ChatView {
                                         generation_id: Some(generation_id),
                                         message: format!("read error: {e}"),
                                     });
-                                    ctx_clone.request_repaint_after(
-                                        std::time::Duration::from_millis(16),
-                                    );
                                     return;
                                 }
                             };
@@ -434,8 +428,6 @@ impl ChatView {
                                         MAX_SSE_BUFFER_BYTES / (1024 * 1024)
                                     ),
                                 });
-                                ctx_clone
-                                    .request_repaint_after(std::time::Duration::from_millis(16));
                                 return;
                             }
 
@@ -519,7 +511,6 @@ impl ChatView {
                                                     ),
                                                 });
                                                 total_buffer_bytes = 0;
-                                                ctx_clone.request_repaint();
                                                 last_stream_flush = std::time::Instant::now();
                                             }
                                         }
@@ -594,9 +585,6 @@ impl ChatView {
                                             generation_id: Some(generation_id),
                                             message,
                                         });
-                                        ctx_clone.request_repaint_after(
-                                            std::time::Duration::from_millis(16),
-                                        );
                                         return;
                                     }
                                     _ => {
@@ -613,7 +601,6 @@ impl ChatView {
                                         token: std::mem::take(&mut buffered_token),
                                         reasoning: std::mem::take(&mut buffered_reasoning),
                                     });
-                                    ctx_clone.request_repaint();
                                     last_stream_flush = std::time::Instant::now();
                                 }
                             }
@@ -683,10 +670,8 @@ impl ChatView {
                                 message: format!("request error: {err}; fallback: {e}"),
                             });
                         let _ = tx.send(fallback);
-                        ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
                     }
                 }
-                ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
             });
             self.generation_states.push(GenerationState {
                 id: generation_id,

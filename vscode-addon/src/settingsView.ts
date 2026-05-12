@@ -1,10 +1,14 @@
 import * as vscode from "vscode";
+import { spawn } from "child_process";
 import * as fs from "fs/promises";
+import * as http from "http";
+import * as https from "https";
 import * as path from "path";
 import { i18n, MessageKeys } from "./i18n";
 import { configManager } from "./configManager";
 import { RuntimeManagerLike } from "./managerTypes";
 import { normalizeProtocolMode } from "./protocolContract";
+import { ensureGoOnBinary } from "./runtimeBinaryService";
 
 interface ProviderCatalogSpec {
   name: string;
@@ -39,6 +43,151 @@ interface ProviderConfigSnapshot {
   envVar?: string;
 }
 
+interface ProviderSecretTarget {
+  name: string;
+  envVar: string;
+}
+
+interface PersistedCopilotState {
+  authMode?: string;
+  accountLabel?: string;
+  oauthClientId?: string;
+  lastError?: string;
+  lastStatus?: string;
+}
+
+interface CopilotAuthState {
+  isAuthorized: boolean;
+  authMode: string;
+  accountLabel: string;
+  oauthClientId: string;
+  pending: boolean;
+  statusMessage: string;
+  lastError: string;
+  userCode?: string;
+  verificationUri?: string;
+  expiresAt?: number;
+  modelSource?: string;
+  modelCount?: number;
+}
+
+interface ProviderModelResolution {
+  modelOptions: string[];
+  copilotAuth?: CopilotAuthState;
+}
+
+interface CopilotTokenExchange {
+  token: string;
+  expiresAt: number;
+}
+
+interface CopilotModelCache {
+  models: string[];
+  fetchedAt: number;
+}
+
+interface PendingCopilotDeviceAuth {
+  cancelRequested: boolean;
+  userCode: string;
+  verificationUri: string;
+  expiresAt: number;
+}
+
+interface DeviceCodeResponse {
+  device_code?: string;
+  user_code?: string;
+  verification_uri?: string;
+  expires_in?: number;
+  interval?: number;
+}
+
+interface HttpJsonResponse {
+  status: number;
+  bodyText: string;
+  body: unknown;
+}
+
+const COPILOT_ENV_VAR = "GITHUB_COPILOT_TOKEN";
+const COPILOT_SECRET_NAME = "github_copilot_token";
+const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
+const COPILOT_MODELS_URL = "https://api.githubcopilot.com/models";
+const GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code";
+const GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
+const COPILOT_MODEL_CACHE_KEY = "go-on.copilot.modelsCache.v1";
+const COPILOT_STATE_KEY = "go-on.copilot.authState.v1";
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function createTransport(urlValue: URL): typeof http | typeof https {
+  return urlValue.protocol === "http:" ? http : https;
+}
+
+async function requestJson(
+  urlString: string,
+  options: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  } = {},
+): Promise<HttpJsonResponse> {
+  const target = new URL(urlString);
+  const body = options.body ?? "";
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    ...(options.headers || {}),
+  };
+
+  if (body && headers["Content-Length"] === undefined) {
+    headers["Content-Length"] = Buffer.byteLength(body).toString();
+  }
+
+  return new Promise<HttpJsonResponse>((resolve, reject) => {
+    const req = createTransport(target).request(
+      target,
+      {
+        method: options.method || "GET",
+        headers,
+      },
+      (res) => {
+        let chunks = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => {
+          chunks += chunk;
+        });
+        res.on("end", () => {
+          let parsed: unknown = undefined;
+          if (chunks.trim()) {
+            try {
+              parsed = JSON.parse(chunks);
+            } catch {
+              parsed = undefined;
+            }
+          }
+          resolve({
+            status: res.statusCode || 0,
+            bodyText: chunks,
+            body: parsed,
+          });
+        });
+      },
+    );
+
+    req.on("error", reject);
+    if (body) {
+      req.write(body);
+    }
+    req.end();
+  });
+}
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -48,6 +197,44 @@ function inferEnvVar(providerName: string): string {
     .trim()
     .toUpperCase()
     .replace(/[-\s]+/g, "_")}_API_KEY`;
+}
+
+function secretNameForEnvVar(envVar: string): string {
+  const normalized = String(envVar || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === "GITHUB_COPILOT_TOKEN") {
+    return "github_copilot_token";
+  }
+  return normalized.toLowerCase();
+}
+
+function collectProviderSecretTargets(
+  catalog: ProviderCatalogSpec[],
+): ProviderSecretTarget[] {
+  const targets = new Map<string, ProviderSecretTarget>();
+
+  for (const spec of catalog) {
+    for (const envVar of [spec.api_key_env, spec.secret_key_env]) {
+      const normalized = String(envVar || "").trim();
+      if (!normalized) {
+        continue;
+      }
+      const secretName = secretNameForEnvVar(normalized);
+      if (!secretName || targets.has(secretName)) {
+        continue;
+      }
+      targets.set(secretName, {
+        name: secretName,
+        envVar: normalized,
+      });
+    }
+  }
+
+  return Array.from(targets.values()).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
 }
 
 function parseSimpleTomlValue(raw: string): unknown {
@@ -234,6 +421,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private _runtimeFeatures: Record<string, boolean> = {};
   private _messageSubscription?: vscode.Disposable;
+  private _pendingCopilotDeviceAuth?: PendingCopilotDeviceAuth;
   private readonly manager: RuntimeManagerLike;
   private readonly context: vscode.ExtensionContext;
   private readonly _commandMessageMap: Record<string, string> = {
@@ -371,6 +559,14 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         this._updateAutotuneSetting(String(msg.key ?? ""), msg.value),
       requestProviderModels: async (msg) =>
         this._sendProviderModels(String(msg.provider ?? "")),
+      authorizeCopilotGitHubSession: async () =>
+        this._authorizeCopilotWithGitHubSession(),
+      authorizeCopilotDeviceFlow: async (msg) =>
+        this._startCopilotDeviceAuthorization(String(msg.oauthClientId ?? "")),
+      cancelCopilotDeviceFlow: async () =>
+        this._cancelCopilotDeviceAuthorization(),
+      deleteCopilotAuthorization: async () =>
+        this._deleteCopilotAuthorization(),
       saveProviderSelection: async (msg) =>
         this._saveProviderSelection(
           String(msg.provider ?? ""),
@@ -515,6 +711,529 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       : path.resolve(root, configured);
   }
 
+  private async _runSecretCommand(
+    action: "set" | "get" | "delete",
+    secretName: string,
+    secretValue?: string,
+  ): Promise<string> {
+    const config = vscode.workspace.getConfiguration("go-on");
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const runtime = await ensureGoOnBinary(workspaceRoot, config, this.context);
+
+    const args: string[] = ["--secret", action, "--secret-name", secretName];
+    if (secretValue !== undefined) {
+      args.push("--secret-value", secretValue);
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      const proc = spawn(runtime.executablePath, args, {
+        cwd: workspaceRoot || runtime.runtimeDir,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+
+      proc.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+
+      proc.on("error", reject);
+      proc.on("close", (code) => {
+        if (code === 0) {
+          resolve(stdout.trim());
+          return;
+        }
+        reject(
+          new Error(
+            `go-on secret command failed: ${(stderr || stdout || `exit code ${code}`).trim()}`,
+          ),
+        );
+      });
+    });
+  }
+
+  private async _readCopilotToken(): Promise<string | undefined> {
+    try {
+      const token = await this._runSecretCommand("get", COPILOT_SECRET_NAME);
+      return token.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async _writeCopilotToken(token: string): Promise<void> {
+    await this._runSecretCommand("set", COPILOT_SECRET_NAME, token);
+    this.manager.setRuntimeEnvOverrides?.({
+      [COPILOT_ENV_VAR]: token,
+    });
+  }
+
+  private _loadPersistedCopilotState(): PersistedCopilotState {
+    return (
+      this.context.workspaceState.get<PersistedCopilotState>(COPILOT_STATE_KEY) ||
+      {}
+    );
+  }
+
+  private async _updatePersistedCopilotState(
+    patch: Partial<PersistedCopilotState>,
+  ): Promise<void> {
+    await this.context.workspaceState.update(COPILOT_STATE_KEY, {
+      ...this._loadPersistedCopilotState(),
+      ...patch,
+    });
+  }
+
+  private _baseCopilotAuthState(
+    partial?: Partial<CopilotAuthState>,
+  ): CopilotAuthState {
+    const stored = this._loadPersistedCopilotState();
+    return {
+      isAuthorized: false,
+      authMode: stored.authMode || "none",
+      accountLabel: stored.accountLabel || "",
+      oauthClientId: stored.oauthClientId || "",
+      pending: false,
+      statusMessage: stored.lastStatus || "",
+      lastError: stored.lastError || "",
+      ...partial,
+    };
+  }
+
+  private async _currentCopilotAuthState(
+    partial?: Partial<CopilotAuthState>,
+  ): Promise<CopilotAuthState> {
+    const token = await this._readCopilotToken();
+    const pending = this._pendingCopilotDeviceAuth;
+    const state = this._baseCopilotAuthState({
+      isAuthorized: Boolean(token),
+      pending: Boolean(pending),
+      userCode: pending?.userCode,
+      verificationUri: pending?.verificationUri,
+      expiresAt: pending?.expiresAt,
+      ...partial,
+    });
+
+    if (!state.statusMessage) {
+      state.statusMessage = state.isAuthorized
+        ? "GitHub token is stored and ready for Copilot exchange."
+        : "Authorize GitHub Copilot to fetch models and enable runtime requests.";
+    }
+
+    return state;
+  }
+
+  private async _postCopilotAuthState(
+    partial?: Partial<CopilotAuthState>,
+  ): Promise<void> {
+    this._postMessage({
+      type: "copilotAuthState",
+      auth: await this._currentCopilotAuthState(partial),
+    });
+  }
+
+  private async _exchangeCopilotToken(
+    githubToken: string,
+  ): Promise<CopilotTokenExchange> {
+    const response = await requestJson(COPILOT_TOKEN_URL, {
+      headers: {
+        Authorization: `token ${githubToken}`,
+        "User-Agent": "go-on-vscode/1.0",
+      },
+    });
+
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(
+        `Copilot token exchange failed (${response.status}): ${response.bodyText || "empty response"}`,
+      );
+    }
+
+    const body = asRecord(response.body);
+    const token = typeof body.token === "string" ? body.token.trim() : "";
+    if (!token) {
+      throw new Error("Copilot token exchange returned no token field.");
+    }
+
+    return {
+      token,
+      expiresAt:
+        typeof body.expires_at === "number"
+          ? body.expires_at
+          : Math.floor(Date.now() / 1000) + 1500,
+    };
+  }
+
+  private _extractCopilotModelIds(payload: unknown): string[] {
+    const result = new Set<string>();
+    const root = asRecord(payload);
+    const candidates = Array.isArray(payload)
+      ? payload
+      : Array.isArray(root.data)
+        ? root.data
+        : Array.isArray(root.models)
+          ? root.models
+          : [];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        result.add(candidate.trim());
+        continue;
+      }
+      const record = asRecord(candidate);
+      const fields = [record.id, record.model, record.model_id, record.name];
+      for (const field of fields) {
+        if (typeof field === "string" && field.trim()) {
+          result.add(field.trim());
+          break;
+        }
+      }
+    }
+
+    return Array.from(result.values()).sort((left, right) =>
+      left.localeCompare(right),
+    );
+  }
+
+  private _loadCopilotModelCache(): CopilotModelCache | undefined {
+    return this.context.workspaceState.get<CopilotModelCache>(
+      COPILOT_MODEL_CACHE_KEY,
+    );
+  }
+
+  private async _storeCopilotModelCache(models: string[]): Promise<void> {
+    await this.context.workspaceState.update(COPILOT_MODEL_CACHE_KEY, {
+      models,
+      fetchedAt: Date.now(),
+    });
+  }
+
+  private async _resolveCopilotModels(): Promise<ProviderModelResolution> {
+    const githubToken = await this._readCopilotToken();
+    if (!githubToken) {
+      const cached = this._loadCopilotModelCache();
+      return {
+        modelOptions: cached?.models || [],
+        copilotAuth: await this._currentCopilotAuthState({
+          modelSource: cached?.models?.length ? "cache" : "config",
+          modelCount: cached?.models?.length || 0,
+        }),
+      };
+    }
+
+    try {
+      const copilotToken = await this._exchangeCopilotToken(githubToken);
+      const response = await requestJson(COPILOT_MODELS_URL, {
+        headers: {
+          Authorization: `Bearer ${copilotToken.token}`,
+          "User-Agent": "go-on-vscode/1.0",
+          "Editor-Version": "vscode/1.90.0",
+          "Editor-Plugin-Version": "copilot-chat/0.17.0",
+          "Copilot-Integration-Id": "copilot-chat",
+        },
+      });
+
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(
+          `Copilot model request failed (${response.status}): ${response.bodyText || "empty response"}`,
+        );
+      }
+
+      const models = this._extractCopilotModelIds(response.body);
+      if (models.length === 0) {
+        throw new Error("Copilot model request returned no model identifiers.");
+      }
+
+      await this._storeCopilotModelCache(models);
+      await this._updatePersistedCopilotState({
+        lastError: "",
+        lastStatus: `Fetched ${models.length} Copilot models from GitHub.`,
+      });
+      return {
+        modelOptions: models,
+        copilotAuth: await this._currentCopilotAuthState({
+          isAuthorized: true,
+          modelSource: "network",
+          modelCount: models.length,
+          statusMessage: `Fetched ${models.length} Copilot models from GitHub.`,
+          lastError: "",
+        }),
+      };
+    } catch (error: unknown) {
+      const cached = this._loadCopilotModelCache();
+      const message = errorMessage(error);
+      await this._updatePersistedCopilotState({
+        lastError: message,
+        lastStatus: cached?.models?.length
+          ? "Using cached Copilot models after refresh failure."
+          : "Copilot model refresh failed.",
+      });
+      return {
+        modelOptions: cached?.models || [],
+        copilotAuth: await this._currentCopilotAuthState({
+          isAuthorized: true,
+          modelSource: cached?.models?.length ? "cache" : "config",
+          modelCount: cached?.models?.length || 0,
+          statusMessage: cached?.models?.length
+            ? "Using cached Copilot models after refresh failure."
+            : "Copilot model refresh failed.",
+          lastError: message,
+        }),
+      };
+    }
+  }
+
+  private async _authorizeCopilotWithGitHubSession(): Promise<void> {
+    const session = await vscode.authentication.getSession(
+      "github",
+      ["read:user"],
+      { createIfNone: true },
+    );
+    if (!session?.accessToken) {
+      throw new Error("GitHub authentication did not return an access token.");
+    }
+
+    await this._exchangeCopilotToken(session.accessToken);
+    await this._writeCopilotToken(session.accessToken);
+    await this._updatePersistedCopilotState({
+      authMode: "github-session",
+      accountLabel: session.account.label,
+      lastError: "",
+      lastStatus: `Authenticated as ${session.account.label}.`,
+    });
+    await this._postCopilotAuthState({
+      isAuthorized: true,
+      authMode: "github-session",
+      accountLabel: session.account.label,
+      statusMessage: `Authenticated as ${session.account.label}.`,
+      lastError: "",
+    });
+    await this._sendProviderModels("copilot");
+  }
+
+  private async _startCopilotDeviceAuthorization(
+    oauthClientId: string,
+  ): Promise<void> {
+    const clientId = oauthClientId.trim();
+    if (!clientId) {
+      throw new Error(
+        "GitHub OAuth client ID is required for device authorization.",
+      );
+    }
+
+    const response = await requestJson(GITHUB_DEVICE_CODE_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "go-on-vscode/1.0",
+      },
+      body: new URLSearchParams({
+        client_id: clientId,
+        scope: "read:user",
+      }).toString(),
+    });
+
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(
+        `GitHub device code request failed (${response.status}): ${response.bodyText || "empty response"}`,
+      );
+    }
+
+    const payload = response.body as DeviceCodeResponse;
+    const deviceCode = String(payload.device_code || "").trim();
+    const userCode = String(payload.user_code || "").trim();
+    const verificationUri = String(payload.verification_uri || "").trim();
+    const expiresIn = Number(payload.expires_in || 900);
+    let intervalSeconds = Math.max(1, Number(payload.interval || 5));
+
+    if (!deviceCode || !userCode || !verificationUri) {
+      throw new Error("GitHub device authorization response is incomplete.");
+    }
+
+    const expiresAt = Date.now() + expiresIn * 1000;
+    this._pendingCopilotDeviceAuth = {
+      cancelRequested: false,
+      userCode,
+      verificationUri,
+      expiresAt,
+    };
+
+    await this._updatePersistedCopilotState({
+      oauthClientId: clientId,
+      lastError: "",
+      lastStatus: `Open ${verificationUri} and enter code ${userCode}.`,
+    });
+    await vscode.env.openExternal(vscode.Uri.parse(verificationUri));
+    await this._postCopilotAuthState({
+      authMode: "device-flow",
+      oauthClientId: clientId,
+      pending: true,
+      userCode,
+      verificationUri,
+      expiresAt,
+      statusMessage: `Open ${verificationUri} and enter code ${userCode}.`,
+      lastError: "",
+    });
+
+    const poll = async (): Promise<void> => {
+      while (this._pendingCopilotDeviceAuth && !this._pendingCopilotDeviceAuth.cancelRequested) {
+        if (Date.now() >= expiresAt) {
+          this._pendingCopilotDeviceAuth = undefined;
+          await this._updatePersistedCopilotState({
+            lastError: "Device authorization expired before completion.",
+            lastStatus: "GitHub device authorization expired.",
+          });
+          await this._postCopilotAuthState({
+            pending: false,
+            authMode: "device-flow",
+            oauthClientId: clientId,
+            statusMessage: "GitHub device authorization expired.",
+            lastError: "Device authorization expired before completion.",
+          });
+          return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, intervalSeconds * 1000));
+        if (!this._pendingCopilotDeviceAuth || this._pendingCopilotDeviceAuth.cancelRequested) {
+          break;
+        }
+
+        const tokenResponse = await requestJson(GITHUB_ACCESS_TOKEN_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "go-on-vscode/1.0",
+          },
+          body: new URLSearchParams({
+            client_id: clientId,
+            device_code: deviceCode,
+            grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+          }).toString(),
+        });
+
+        if (tokenResponse.status < 200 || tokenResponse.status >= 300) {
+          throw new Error(
+            `GitHub access token polling failed (${tokenResponse.status}): ${tokenResponse.bodyText || "empty response"}`,
+          );
+        }
+
+        const tokenPayload = asRecord(tokenResponse.body);
+        const accessToken =
+          typeof tokenPayload.access_token === "string"
+            ? tokenPayload.access_token.trim()
+            : "";
+        if (accessToken) {
+          await this._exchangeCopilotToken(accessToken);
+          await this._writeCopilotToken(accessToken);
+          this._pendingCopilotDeviceAuth = undefined;
+          await this._updatePersistedCopilotState({
+            authMode: "device-flow",
+            lastError: "",
+            lastStatus: "GitHub device authorization completed.",
+          });
+          await this._postCopilotAuthState({
+            isAuthorized: true,
+            authMode: "device-flow",
+            oauthClientId: clientId,
+            pending: false,
+            statusMessage: "GitHub device authorization completed.",
+            lastError: "",
+          });
+          await this._sendProviderModels("copilot");
+          return;
+        }
+
+        const pollError =
+          typeof tokenPayload.error === "string" ? tokenPayload.error : "";
+        if (pollError === "authorization_pending") {
+          continue;
+        }
+        if (pollError === "slow_down") {
+          intervalSeconds += 5;
+          continue;
+        }
+
+        this._pendingCopilotDeviceAuth = undefined;
+        const description =
+          typeof tokenPayload.error_description === "string"
+            ? tokenPayload.error_description
+            : pollError || "unknown error";
+        await this._updatePersistedCopilotState({
+          lastError: description,
+          lastStatus: "GitHub device authorization failed.",
+        });
+        await this._postCopilotAuthState({
+          pending: false,
+          authMode: "device-flow",
+          oauthClientId: clientId,
+          statusMessage: "GitHub device authorization failed.",
+          lastError: description,
+        });
+        return;
+      }
+    };
+
+    void poll().catch(async (error: unknown) => {
+      this._pendingCopilotDeviceAuth = undefined;
+      const message = errorMessage(error);
+      await this._updatePersistedCopilotState({
+        lastError: message,
+        lastStatus: "GitHub device authorization failed.",
+      });
+      await this._postCopilotAuthState({
+        pending: false,
+        authMode: "device-flow",
+        oauthClientId: clientId,
+        statusMessage: "GitHub device authorization failed.",
+        lastError: message,
+      });
+    });
+  }
+
+  private async _cancelCopilotDeviceAuthorization(): Promise<void> {
+    if (this._pendingCopilotDeviceAuth) {
+      this._pendingCopilotDeviceAuth.cancelRequested = true;
+    }
+    this._pendingCopilotDeviceAuth = undefined;
+    await this._updatePersistedCopilotState({
+      lastStatus: "Canceled pending GitHub device authorization.",
+    });
+    await this._postCopilotAuthState({
+      pending: false,
+      statusMessage: "Canceled pending GitHub device authorization.",
+    });
+  }
+
+  private async _deleteCopilotAuthorization(): Promise<void> {
+    try {
+      await this._runSecretCommand("delete", COPILOT_SECRET_NAME);
+    } catch {
+      // ignore missing secrets
+    }
+    this.manager.setRuntimeEnvOverrides?.({
+      [COPILOT_ENV_VAR]: "",
+    });
+    await this._updatePersistedCopilotState({
+      authMode: "none",
+      accountLabel: "",
+      lastError: "",
+      lastStatus: "Removed stored GitHub Copilot authorization.",
+    });
+    await this._postCopilotAuthState({
+      isAuthorized: false,
+      authMode: "none",
+      accountLabel: "",
+      pending: false,
+      statusMessage: "Removed stored GitHub Copilot authorization.",
+      lastError: "",
+    });
+    await this._sendProviderModels("copilot");
+  }
+
   private async _loadProviderCatalog(): Promise<ProviderCatalogSpec[]> {
     const root = this._workspaceRoot();
     const candidates = [
@@ -575,11 +1294,21 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
   private async _resolveProviderModels(
     providerName: string,
     spec?: ProviderCatalogEntry,
-  ): Promise<string[]> {
+  ): Promise<ProviderModelResolution> {
     const modelSet = new Set<string>();
     modelSet.add("auto");
     if (spec?.defaultModel) {
       modelSet.add(spec.defaultModel);
+    }
+
+    let copilotAuth: CopilotAuthState | undefined;
+
+    if (providerName === "copilot") {
+      const copilotModels = await this._resolveCopilotModels();
+      copilotAuth = copilotModels.copilotAuth;
+      for (const model of copilotModels.modelOptions) {
+        modelSet.add(model);
+      }
     }
 
     if (this.manager.isRunning()) {
@@ -618,12 +1347,16 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    return Array.from(modelSet.values());
+    return {
+      modelOptions: Array.from(modelSet.values()),
+      copilotAuth,
+    };
   }
 
   private async _buildProviderSettingsPayload() {
     const catalog = await this._loadProviderCatalog();
     const configured = await this._loadConfiguredAgentMap();
+    const secretTargets = collectProviderSecretTargets(catalog);
     const providers: ProviderCatalogEntry[] = catalog
       .map((spec) => {
         const configuredValue = configured.get(spec.name);
@@ -657,7 +1390,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       selectedSpec?.configuredEnvVar ||
       selectedSpec?.apiKeyEnv ||
       inferEnvVar(selectedProvider);
-    const modelOptions = await this._resolveProviderModels(
+    const modelResolution = await this._resolveProviderModels(
       selectedProvider,
       selectedSpec,
     );
@@ -667,7 +1400,11 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       selectedProvider,
       selectedModel,
       selectedEnvVar,
-      modelOptions,
+      modelOptions: modelResolution.modelOptions,
+      secretTargets,
+      copilotAuth:
+        modelResolution.copilotAuth ||
+        (await this._currentCopilotAuthState()),
     };
   }
 
@@ -680,7 +1417,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     const selectedSpec = payload.providers.find(
       (item) => item.name === providerName,
     );
-    const modelOptions = await this._resolveProviderModels(
+    const modelResolution = await this._resolveProviderModels(
       providerName,
       selectedSpec,
     );
@@ -688,13 +1425,14 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     this._postMessage({
       type: "providerModelsData",
       provider: providerName,
-      modelOptions,
+      modelOptions: modelResolution.modelOptions,
       selectedModel:
         selectedSpec?.configuredModel || selectedSpec?.defaultModel || "auto",
       selectedEnvVar:
         selectedSpec?.configuredEnvVar ||
         selectedSpec?.apiKeyEnv ||
         inferEnvVar(providerName),
+      copilotAuth: modelResolution.copilotAuth,
     });
   }
 
@@ -717,6 +1455,10 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     const normalizedModel = modelName.trim() || "auto";
     const normalizedEnvVar =
       (envVar || "").trim() || matched.api_key_env || inferEnvVar(provider);
+    const copilotConfigEnvVar =
+      provider === "copilot" && (await this._readCopilotToken())
+        ? `keyring://go-on/${COPILOT_SECRET_NAME}`
+        : normalizedEnvVar;
 
     const configPath = this._resolveConfigPath();
     let content = "";
@@ -730,7 +1472,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       type: matched.type,
       url: matched.url,
       chat_path: matched.chat_path,
-      api_key_env: normalizedEnvVar,
+      api_key_env: copilotConfigEnvVar,
       secret_key_env: matched.secret_key_env,
       anthropic_version: matched.anthropic_version,
       model: normalizedModel,
@@ -892,12 +1634,16 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       selectedModel: string;
       selectedEnvVar: string;
       modelOptions: string[];
+      secretTargets: ProviderSecretTarget[];
+      copilotAuth: CopilotAuthState;
     } = {
       providers: [],
       selectedProvider: "copilot",
       selectedModel: "auto",
       selectedEnvVar: inferEnvVar("copilot"),
       modelOptions: ["auto"],
+      secretTargets: [],
+      copilotAuth: await this._currentCopilotAuthState(),
     };
 
     try {
@@ -1065,7 +1811,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
 
       // 1. Store API key in keyring
       await vscode.commands.executeCommand("go-on.keyringSet", {
-        name: envVarName.toLowerCase(),
+        name: secretNameForEnvVar(envVarName),
         value: apiKey,
       });
 
@@ -1564,14 +2310,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                         <h3>🔐 System Keyring (Preferred)</h3>
                         <div class="setting-item">
                             <label for="secretName">Secret Name:</label>
-                            <select id="secretName">
-                                <option value="deepseek_api_key">deepseek_api_key</option>
-                                <option value="wenxin_api_key">wenxin_api_key</option>
-                                <option value="wenxin_secret_key">wenxin_secret_key</option>
-                                <option value="anthropic_api_key">anthropic_api_key</option>
-                                <option value="doubao_api_key">doubao_api_key</option>
-                                <option value="openai_compatible_api_key">openai_compatible_api_key</option>
-                            </select>
+                          <select id="secretName"></select>
                         </div>
                         <div class="setting-item">
                             <label for="secretValue">Secret Value:</label>
@@ -1636,6 +2375,21 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
                         <div class="setting-item">
                             <label for="providerEnvVar">API Key Env Var:</label>
                             <input type="text" id="providerEnvVar" placeholder="Optional, inferred when empty">
+                        </div>
+                        <div class="setting-item" id="copilotAuthPanel" style="display: none;">
+                          <label for="copilotOauthClientId">GitHub OAuth Client ID For Device Flow:</label>
+                          <input type="text" id="copilotOauthClientId" placeholder="Required only for device flow">
+                          <div class="action-buttons" style="margin-top: 8px;">
+                            <button class="action-button" id="authorizeCopilotGitHubSession">Authorize With GitHub Login</button>
+                            <button class="action-button" id="authorizeCopilotDeviceFlow">Authorize With Device Code</button>
+                            <button class="action-button" id="refreshCopilotModels">Refresh Copilot Models</button>
+                            <button class="action-button danger" id="cancelCopilotDeviceFlow">Cancel Device Flow</button>
+                            <button class="action-button danger" id="deleteCopilotAuthorization">Delete Stored Copilot Token</button>
+                          </div>
+                          <div class="setting-item" style="margin-top: 8px;">
+                            <label for="copilotAuthOutput">Copilot Authorization And Model Status:</label>
+                            <textarea id="copilotAuthOutput" rows="6" style="width: 100%;"></textarea>
+                          </div>
                         </div>
                         <div class="action-buttons">
                             <button class="action-button" id="applyProviderSelection">Apply Provider/Model To config.toml</button>

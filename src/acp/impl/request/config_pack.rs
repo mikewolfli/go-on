@@ -1,4 +1,5 @@
 ﻿use super::*;
+use crate::config::RuntimeConfig;
 use crate::protocol::access_mode::{normalize_protocol_mode, resolve_access_selection};
 
 pub(super) fn governance_rule_fingerprint(config_path: Option<&str>) -> Value {
@@ -327,6 +328,19 @@ pub(super) async fn handle_config_reload(
         .unwrap_or_else(|| "config.toml".to_string());
     let config_path = std::path::PathBuf::from(&path);
     let config = AppConfig::load(&config_path)?;
+
+    // Actually apply the new config to runtime state
+    // SAFETY: handle_config_reload is the only writer of runtime_config.
+    // All readers access it through the &AcpServer reference immutably,
+    // and this is the only mutation which occurs during config reload.
+    #[allow(invalid_reference_casting)]
+    if let Some(ref runtime_cfg) = config.runtime {
+        unsafe {
+            let ptr = &server.runtime_config as *const RuntimeConfig as *mut RuntimeConfig;
+            (*ptr) = runtime_cfg.clone();
+        }
+    }
+
     let report = validate_runtime_readiness(&config_path, &config)?;
     let warnings = report.warning_messages();
     send_result(

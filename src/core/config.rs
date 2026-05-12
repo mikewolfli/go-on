@@ -3492,7 +3492,12 @@ fn push_rule_warning(warnings: &mut Vec<ConfigWarning>, path: &Path, code: &str)
 fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> {
     let mut candidates = Vec::new();
 
+    if account == "openai_api_key" {
+        candidates.push("OPENAI_API_KEY".to_string());
+    }
+
     if account == "openai_compatible_api_key" {
+        candidates.push("OPENAI_COMPATIBLE_API_KEY".to_string());
         candidates.push("OPENAI_API_KEY".to_string());
     }
 

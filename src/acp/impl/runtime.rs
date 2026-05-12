@@ -16,6 +16,7 @@ use reqwest;
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::signal;
 use tokio::sync::{Mutex, Notify};
 use tracing::{debug, error, info, warn};
 
@@ -358,6 +359,18 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
     let stdin = tokio::io::stdin();
     let mut lines = BufReader::new(stdin).lines();
 
+    // Set up signal watchers for graceful shutdown
+    let mut sigterm = std::pin::pin!(async {
+        #[cfg(unix)]
+        {
+            let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("failed to register SIGTERM handler");
+            stream.recv().await;
+        }
+        #[cfg(not(unix))]
+        std::future::pending::<()>().await;
+    });
+
     loop {
         if server.shutdown_requested() {
             break;
@@ -365,6 +378,14 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
 
         let next_line = tokio::select! {
             _ = shutdown_notify.notified() => {
+                break;
+            }
+            _ = signal::ctrl_c() => {
+                info!("Received SIGINT (Ctrl+C), initiating graceful shutdown...");
+                break;
+            }
+            _ = sigterm.as_mut() => {
+                info!("Received SIGTERM, initiating graceful shutdown...");
                 break;
             }
             line = lines.next_line() => line?,
@@ -446,9 +467,29 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
         Err(_) => TcpListener::bind(&bind_addr).await?,
     };
 
+    // Set up signal watchers for graceful shutdown
+    let mut sigterm = std::pin::pin!(async {
+        #[cfg(unix)]
+        {
+            let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("failed to register SIGTERM handler");
+            stream.recv().await;
+        }
+        #[cfg(not(unix))]
+        std::future::pending::<()>().await;
+    });
+
     loop {
         tokio::select! {
             _ = shutdown_notify.notified() => {
+                break;
+            }
+            _ = signal::ctrl_c() => {
+                info!("Received SIGINT (Ctrl+C), initiating graceful shutdown...");
+                break;
+            }
+            _ = sigterm.as_mut() => {
+                info!("Received SIGTERM, initiating graceful shutdown...");
                 break;
             }
             incoming = listener.accept() => {
@@ -2921,8 +2962,8 @@ async fn apply_entry_guards(
 
         if expected_key.is_none() {
             warn!(
-                "entry auth enabled but env '{}' is missing/empty; denying {} {} from {}",
-                env_name, method, path, source
+                "entry auth enabled but env is missing/empty; denying {} {} from {}",
+                method, path, source
             );
             write_entry_rejection(
                 socket,

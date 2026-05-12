@@ -4,6 +4,8 @@
   const providerState = {
     providers: [],
     modelOptions: [],
+    copilotAuth: {},
+    secretTargets: [],
   };
 
   // Load settings when received
@@ -17,12 +19,16 @@
     } else if (message.type === "settingsData") {
       loadSettingsData(message.data || {});
     } else if (message.type === "providerModelsData") {
+      providerState.copilotAuth = message.copilotAuth || providerState.copilotAuth;
       updateProviderModels(
         message.provider,
         Array.isArray(message.modelOptions) ? message.modelOptions : [],
         message.selectedModel || "auto",
         message.selectedEnvVar || "",
       );
+    } else if (message.type === "copilotAuthState") {
+      providerState.copilotAuth = message.auth || {};
+      renderCopilotAuthState();
     } else if (message.type === "keyringResult") {
       renderKeyringOutput(message.message, message.value || "");
     } else if (message.type === "keyringError") {
@@ -113,6 +119,12 @@
     providerState.modelOptions = Array.isArray(providerSettings.modelOptions)
       ? providerSettings.modelOptions
       : [];
+    providerState.copilotAuth = providerSettings.copilotAuth || {};
+    providerState.secretTargets = Array.isArray(providerSettings.secretTargets)
+      ? providerSettings.secretTargets
+      : [];
+
+    populateSecretSelect(providerState.secretTargets);
 
     populateProviderSelect(
       providerState.providers,
@@ -126,6 +138,38 @@
     const envInput = document.getElementById("providerEnvVar");
     if (envInput && providerSettings.selectedEnvVar) {
       envInput.value = String(providerSettings.selectedEnvVar);
+    }
+
+    const clientIdInput = document.getElementById("copilotOauthClientId");
+    if (clientIdInput) {
+      clientIdInput.value = String(providerState.copilotAuth.oauthClientId || "");
+    }
+
+    toggleCopilotPanel(providerSettings.selectedProvider || "");
+    renderCopilotAuthState();
+  }
+
+  function populateSecretSelect(secretTargets) {
+    const select = document.getElementById("secretName");
+    if (!select) {
+      return;
+    }
+
+    const previousValue = select.value;
+    select.innerHTML = "";
+
+    secretTargets.forEach((target) => {
+      const option = document.createElement("option");
+      option.value = String(target.name || "");
+      option.textContent = String(target.name || "");
+      option.title = String(target.envVar || "");
+      select.appendChild(option);
+    });
+
+    if (previousValue && secretTargets.some((item) => item.name === previousValue)) {
+      select.value = previousValue;
+    } else if (secretTargets.length > 0) {
+      select.value = String(secretTargets[0].name || "");
     }
   }
 
@@ -238,6 +282,63 @@
           providerEntry?.apiKeyEnv ||
           inferProviderEnvVar(provider);
       }
+    }
+
+    toggleCopilotPanel(provider);
+    renderCopilotAuthState();
+  }
+
+  function toggleCopilotPanel(provider) {
+    const panel = document.getElementById("copilotAuthPanel");
+    if (!panel) {
+      return;
+    }
+    panel.style.display = provider === "copilot" ? "block" : "none";
+  }
+
+  function renderCopilotAuthState() {
+    const output = document.getElementById("copilotAuthOutput");
+    const cancelButton = document.getElementById("cancelCopilotDeviceFlow");
+    const clientIdInput = document.getElementById("copilotOauthClientId");
+    if (!output) {
+      return;
+    }
+
+    const auth = providerState.copilotAuth || {};
+    if (clientIdInput && auth.oauthClientId && !clientIdInput.value) {
+      clientIdInput.value = auth.oauthClientId;
+    }
+
+    const lines = [];
+    lines.push(`Authorized: ${auth.isAuthorized ? "yes" : "no"}`);
+    lines.push(`Auth mode: ${auth.authMode || "none"}`);
+    if (auth.accountLabel) {
+      lines.push(`GitHub account: ${auth.accountLabel}`);
+    }
+    if (auth.userCode) {
+      lines.push(`Device code: ${auth.userCode}`);
+    }
+    if (auth.verificationUri) {
+      lines.push(`Verification URL: ${auth.verificationUri}`);
+    }
+    if (auth.modelSource) {
+      lines.push(`Model source: ${auth.modelSource}`);
+    }
+    if (typeof auth.modelCount === "number") {
+      lines.push(`Model count: ${auth.modelCount}`);
+    }
+    if (auth.statusMessage) {
+      lines.push("");
+      lines.push(auth.statusMessage);
+    }
+    if (auth.lastError) {
+      lines.push("");
+      lines.push(`Error: ${auth.lastError}`);
+    }
+
+    output.value = lines.join("\n");
+    if (cancelButton) {
+      cancelButton.disabled = !auth.pending;
     }
   }
 
@@ -445,7 +546,64 @@
   if (providerSelect) {
     providerSelect.addEventListener("change", () => {
       const provider = providerSelect.value;
+      toggleCopilotPanel(provider);
       vscode.postMessage({ type: "requestProviderModels", provider });
+    });
+  }
+
+  const authorizeCopilotGitHubSessionButton = document.getElementById(
+    "authorizeCopilotGitHubSession",
+  );
+  if (authorizeCopilotGitHubSessionButton) {
+    authorizeCopilotGitHubSessionButton.addEventListener("click", () => {
+      vscode.postMessage({ type: "authorizeCopilotGitHubSession" });
+    });
+  }
+
+  const authorizeCopilotDeviceFlowButton = document.getElementById(
+    "authorizeCopilotDeviceFlow",
+  );
+  if (authorizeCopilotDeviceFlowButton) {
+    authorizeCopilotDeviceFlowButton.addEventListener("click", () => {
+      const oauthClientId =
+        document.getElementById("copilotOauthClientId")?.value?.trim() || "";
+      if (!oauthClientId) {
+        renderSettingsActionOutput(
+          "Error: GitHub OAuth client ID is required for device flow.",
+        );
+        return;
+      }
+      vscode.postMessage({
+        type: "authorizeCopilotDeviceFlow",
+        oauthClientId,
+      });
+    });
+  }
+
+  const refreshCopilotModelsButton = document.getElementById(
+    "refreshCopilotModels",
+  );
+  if (refreshCopilotModelsButton) {
+    refreshCopilotModelsButton.addEventListener("click", () => {
+      vscode.postMessage({ type: "requestProviderModels", provider: "copilot" });
+    });
+  }
+
+  const cancelCopilotDeviceFlowButton = document.getElementById(
+    "cancelCopilotDeviceFlow",
+  );
+  if (cancelCopilotDeviceFlowButton) {
+    cancelCopilotDeviceFlowButton.addEventListener("click", () => {
+      vscode.postMessage({ type: "cancelCopilotDeviceFlow" });
+    });
+  }
+
+  const deleteCopilotAuthorizationButton = document.getElementById(
+    "deleteCopilotAuthorization",
+  );
+  if (deleteCopilotAuthorizationButton) {
+    deleteCopilotAuthorizationButton.addEventListener("click", () => {
+      vscode.postMessage({ type: "deleteCopilotAuthorization" });
     });
   }
 

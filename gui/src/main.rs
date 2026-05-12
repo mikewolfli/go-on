@@ -232,7 +232,7 @@ async fn main() -> eframe::Result<()> {
             eprintln!("  - On macOS, run from the .app bundle, not a symlink");
             eprintln!("  - On Windows, ensure DirectX or Vulkan drivers are installed");
             eprintln!("  - Try setting WINIT_UNIX_BACKEND=x11 on Wayland");
-            Err(anyhow::anyhow!("GUI initialization failed: {}", e))
+            Err(Into::into(e))
         }
     }
 }

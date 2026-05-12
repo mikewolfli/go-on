@@ -293,10 +293,11 @@ impl GoOnApp {
                 let config_dir = path.parent().unwrap_or_else(|| {
                     // When backend binary has no parent path (e.g. "/go-on"),
                     // use the user's home directory as a writable fallback.
-                    std::env::var("HOME")
-                        .map(std::path::PathBuf::from)
-                        .or_else(|_| std::env::var("USERPROFILE").map(std::path::PathBuf::from))
-                        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                    let home = std::env::var("HOME")
+                        .or_else(|_| std::env::var("USERPROFILE"))
+                        .unwrap_or_else(|_| ".".to_string());
+                    // Leak the PathBuf to get a &'static Path (this is a spawned process)
+                    Box::leak(Box::new(std::path::PathBuf::from(home))).as_path()
                 });
                 let mut cmd = std::process::Command::new(&path);
                 cmd.current_dir(config_dir)

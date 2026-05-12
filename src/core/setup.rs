@@ -140,33 +140,7 @@ impl Default for ProviderRecommendations {
     }
 }
 
-// Secret key targets used for keyring operations.
-// Each tuple is (command name, keyring service, keyring account).
-const SECRET_TARGETS: &[(&str, &str, &str)] = &[
-    ("deepseek_api_key", "go-on", "deepseek_api_key"),
-    ("wenxin_api_key", "go-on", "wenxin_api_key"),
-    ("wenxin_secret_key", "go-on", "wenxin_secret_key"),
-    ("anthropic_api_key", "go-on", "anthropic_api_key"),
-    ("doubao_api_key", "go-on", "doubao_api_key"),
-    ("gemini_api_key", "go-on", "gemini_api_key"),
-    ("groq_api_key", "go-on", "groq_api_key"),
-    ("mistral_api_key", "go-on", "mistral_api_key"),
-    ("minimax_api_key", "go-on", "minimax_api_key"),
-    ("glm_api_key", "go-on", "glm_api_key"),
-    ("yi_api_key", "go-on", "yi_api_key"),
-    ("moonshot_api_key", "go-on", "moonshot_api_key"),
-    ("qianfan_api_key", "go-on", "qianfan_api_key"),
-    ("qianfan_secret_key", "go-on", "qianfan_secret_key"),
-    ("qwen_api_key", "go-on", "qwen_api_key"),
-    ("qwen_secret_key", "go-on", "qwen_secret_key"),
-    ("hunyuan_api_key", "go-on", "hunyuan_api_key"),
-    ("hunyuan_secret_key", "go-on", "hunyuan_secret_key"),
-    (
-        "openai_compatible_api_key",
-        "go-on",
-        "openai_compatible_api_key",
-    ),
-];
+const KEYRING_SERVICE: &str = "go-on";
 
 /// Setup profile mode: adaptive autopilot with AI-driven configuration.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -868,8 +842,8 @@ pub fn run_secret_command(
 ) -> Result<()> {
     match action {
         SecretAction::List => {
-            for (name, service, account) in SECRET_TARGETS {
-                let entry = keyring::Entry::new(service, account)
+            for (name, service, account) in secret_targets() {
+                let entry = keyring::Entry::new(&service, &account)
                     .map_err(|err| anyhow::anyhow!("failed to open keyring entry: {}", err))?;
                 match entry.get_password() {
                     Ok(secret) => {
@@ -1627,13 +1601,40 @@ fn keyring_secret_available(env_name: &str) -> bool {
         .is_ok()
 }
 
+fn keyring_account_for_env(env_name: &str) -> String {
+    match env_name {
+        "GITHUB_COPILOT_TOKEN" => "github_copilot_token".to_string(),
+        _ => env_name.to_ascii_lowercase(),
+    }
+}
+
+fn provider_secret_env_names() -> Vec<String> {
+    let mut env_names = BTreeSet::new();
+    for spec in provider_specs() {
+        if let Some(env_name) = spec.api_key_env.as_ref() {
+            env_names.insert(env_name.clone());
+        }
+        if let Some(env_name) = spec.secret_key_env.as_ref() {
+            env_names.insert(env_name.clone());
+        }
+    }
+    env_names.into_iter().collect()
+}
+
+fn secret_targets() -> Vec<(String, String, String)> {
+    let mut targets = BTreeSet::new();
+    for env_name in provider_secret_env_names() {
+        let account = keyring_account_for_env(&env_name);
+        targets.insert((account.clone(), KEYRING_SERVICE.to_string(), account));
+    }
+    targets.into_iter().collect()
+}
+
 fn keyring_target_for_env(env_name: &str) -> Option<(String, String)> {
-    let account = if env_name == "OPENAI_API_KEY" {
-        "openai_compatible_api_key".to_string()
-    } else {
-        env_name.to_ascii_lowercase()
-    };
-    Some(("go-on".to_string(), account))
+    Some((
+        KEYRING_SERVICE.to_string(),
+        keyring_account_for_env(env_name),
+    ))
 }
 
 fn secret_reference(env_name: &str, secret_mode: &SecretMode) -> String {
@@ -1851,35 +1852,16 @@ fn find_template(name: &str) -> Option<PathBuf> {
 ///
 /// This is used when setup is requested with keyring secret mode.
 fn convert_env_placeholders_to_keyring(content: &str) -> String {
-    let mappings = [
-        ("DEEPSEEK_API_KEY", "keyring://go-on/deepseek_api_key"),
-        ("WENXIN_API_KEY", "keyring://go-on/wenxin_api_key"),
-        ("WENXIN_SECRET_KEY", "keyring://go-on/wenxin_secret_key"),
-        ("ANTHROPIC_API_KEY", "keyring://go-on/anthropic_api_key"),
-        ("DOUBAO_API_KEY", "keyring://go-on/doubao_api_key"),
-        ("GEMINI_API_KEY", "keyring://go-on/gemini_api_key"),
-        ("GROQ_API_KEY", "keyring://go-on/groq_api_key"),
-        ("MISTRAL_API_KEY", "keyring://go-on/mistral_api_key"),
-        ("MINIMAX_API_KEY", "keyring://go-on/minimax_api_key"),
-        ("GLM_API_KEY", "keyring://go-on/glm_api_key"),
-        ("YI_API_KEY", "keyring://go-on/yi_api_key"),
-        ("MOONSHOT_API_KEY", "keyring://go-on/moonshot_api_key"),
-        ("QIANFAN_API_KEY", "keyring://go-on/qianfan_api_key"),
-        ("QIANFAN_SECRET_KEY", "keyring://go-on/qianfan_secret_key"),
-        ("QWEN_API_KEY", "keyring://go-on/qwen_api_key"),
-        ("QWEN_SECRET_KEY", "keyring://go-on/qwen_secret_key"),
-        ("HUNYUAN_API_KEY", "keyring://go-on/hunyuan_api_key"),
-        ("HUNYUAN_SECRET_KEY", "keyring://go-on/hunyuan_secret_key"),
-        (
-            "OTHER_PROVIDER_API_KEY",
-            "keyring://go-on/openai_compatible_api_key",
-        ),
-    ];
-
     let mut out = content.to_string();
-    for (from, to) in mappings {
-        out = out.replace(from, to);
+    for env_name in provider_secret_env_names() {
+        if let Some(reference) = keyring_reference(&env_name) {
+            out = out.replace(&env_name, &reference);
+        }
     }
+    out = out.replace(
+        "OTHER_PROVIDER_API_KEY",
+        "keyring://go-on/openai_compatible_api_key",
+    );
     out
 }
 
@@ -1960,20 +1942,20 @@ fn store_keyring_secrets_interactive(
 
     let mut handled_envs = BTreeSet::new();
 
-    for (name, service, account) in SECRET_TARGETS {
-        if let Some(env_name) = secret_name_to_env(name) {
+    for (name, service, account) in secret_targets() {
+        if let Some(env_name) = secret_name_to_env(&name) {
             handled_envs.insert(env_name.to_string());
-            if !required_envs.iter().any(|existing| existing == env_name) {
+            if !required_envs.iter().any(|existing| existing == &env_name) {
                 continue;
             }
         }
 
-        let values = prompt_secret_pool_values(name)?;
+        let values = prompt_secret_pool_values(&name)?;
         if values.is_empty() {
             continue;
         }
 
-        let entry = keyring::Entry::new(service, account)
+        let entry = keyring::Entry::new(&service, &account)
             .map_err(|err| anyhow::anyhow!("failed to open keyring entry: {}", err))?;
         entry
             .set_password(&join_secret_pool_entries(&values))
@@ -2001,40 +1983,21 @@ fn store_keyring_secrets_interactive(
     Ok(())
 }
 
-fn secret_name_to_env(secret_name: &str) -> Option<&'static str> {
-    match secret_name {
-        "deepseek_api_key" => Some("DEEPSEEK_API_KEY"),
-        "wenxin_api_key" => Some("WENXIN_API_KEY"),
-        "wenxin_secret_key" => Some("WENXIN_SECRET_KEY"),
-        "anthropic_api_key" => Some("ANTHROPIC_API_KEY"),
-        "doubao_api_key" => Some("DOUBAO_API_KEY"),
-        "gemini_api_key" => Some("GEMINI_API_KEY"),
-        "groq_api_key" => Some("GROQ_API_KEY"),
-        "mistral_api_key" => Some("MISTRAL_API_KEY"),
-        "minimax_api_key" => Some("MINIMAX_API_KEY"),
-        "glm_api_key" => Some("GLM_API_KEY"),
-        "yi_api_key" => Some("YI_API_KEY"),
-        "moonshot_api_key" => Some("MOONSHOT_API_KEY"),
-        "qianfan_api_key" => Some("QIANFAN_API_KEY"),
-        "qianfan_secret_key" => Some("QIANFAN_SECRET_KEY"),
-        "qwen_api_key" => Some("QWEN_API_KEY"),
-        "qwen_secret_key" => Some("QWEN_SECRET_KEY"),
-        "hunyuan_api_key" => Some("HUNYUAN_API_KEY"),
-        "hunyuan_secret_key" => Some("HUNYUAN_SECRET_KEY"),
-        "openai_compatible_api_key" => Some("OPENAI_API_KEY"),
-        _ => None,
-    }
+fn secret_name_to_env(secret_name: &str) -> Option<String> {
+    provider_secret_env_names()
+        .into_iter()
+        .find(|env_name| keyring_account_for_env(env_name) == secret_name)
 }
 
 /// Resolve secret command name to keyring service/account.
 /// Used by run_secret_command handlers to map human-readable secret names.
 fn resolve_secret_target(name: Option<&str>) -> Result<(String, String)> {
     let name = name.ok_or_else(|| anyhow::anyhow!("--secret-name is required"))?;
-    if let Some((_, service, account)) = SECRET_TARGETS
+    if let Some((_, service, account)) = secret_targets()
         .iter()
         .find(|(known_name, _, _)| *known_name == name)
     {
-        return Ok((service.to_string(), account.to_string()));
+        return Ok((service.clone(), account.clone()));
     }
 
     if let Some(locator) = name.strip_prefix("keyring://") {

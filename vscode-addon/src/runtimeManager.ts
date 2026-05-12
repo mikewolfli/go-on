@@ -37,6 +37,17 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function secretNameForEnvVar(envVar: string): string {
+  const normalized = String(envVar || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === "GITHUB_COPILOT_TOKEN") {
+    return "github_copilot_token";
+  }
+  return normalized.toLowerCase();
+}
+
 export class GoOnManager {
   private process: ChildProcess | null = null;
   private requestId = 0;
@@ -515,6 +526,7 @@ export class GoOnManager {
     detail: string;
     envVar?: string;
     apiKeyEnv?: string;
+    secretKeyEnv?: string;
   }> | null> {
     try {
       const catalog = await this.sendRequest(
@@ -538,6 +550,7 @@ export class GoOnManager {
         detail: `Model: ${p.model || "auto"} | Env: ${p.api_key_env || p.secret_key_env || "N/A"}`,
         envVar: String(p.api_key_env || p.secret_key_env || ""),
         apiKeyEnv: String(p.api_key_env || ""),
+        secretKeyEnv: String(p.secret_key_env || ""),
       }));
     } catch {
       return null;
@@ -606,21 +619,53 @@ export class GoOnManager {
 
     if (!apiKey || apiKey.trim().length < 4) return;
 
+    let secretKey = "";
+    if (selectedProvider.secretKeyEnv) {
+      const providedSecret = await vscode.window.showInputBox({
+        prompt: `Enter your secret key for ${selectedProvider.label}`,
+        password: true,
+        placeHolder: "secret-...",
+        validateInput: (value: string) => {
+          if (!value || value.trim().length < 4) {
+            return "Secret key must be at least 4 characters";
+          }
+          return null;
+        },
+      });
+
+      if (!providedSecret || providedSecret.trim().length < 4) return;
+      secretKey = providedSecret.trim();
+    }
+
     // Step 3: Save to keyring and configure
     try {
       // Save to keyring
       const envVarName = selectedProvider.envVar || selectedProvider.apiKeyEnv;
       if (envVarName) {
         await vscode.commands.executeCommand("go-on.keyringSet", {
-          name: envVarName.toLowerCase(),
+          name: secretNameForEnvVar(envVarName),
           value: apiKey.trim(),
         });
       }
 
+      if (selectedProvider.secretKeyEnv && secretKey) {
+        await vscode.commands.executeCommand("go-on.keyringSet", {
+          name: secretNameForEnvVar(selectedProvider.secretKeyEnv),
+          value: secretKey,
+        });
+      }
+
       // If provider has a known env var, also set it as runtime env override
+      const envOverrides: Record<string, string> = {};
       if (selectedProvider.envVar) {
+        envOverrides[selectedProvider.envVar] = apiKey.trim();
+      }
+      if (selectedProvider.secretKeyEnv && secretKey) {
+        envOverrides[selectedProvider.secretKeyEnv] = secretKey;
+      }
+      if (Object.keys(envOverrides).length > 0) {
         this.setRuntimeEnvOverrides({
-          [selectedProvider.envVar]: apiKey.trim(),
+          ...envOverrides,
         });
       }
 
