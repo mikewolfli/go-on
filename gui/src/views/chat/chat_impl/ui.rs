@@ -172,6 +172,7 @@ impl ChatView {
                         }
                     }
                     _ => {
+                        #[cfg(debug_assertions)]
                         eprintln!("Warning: Failed to load phases from backend (timeout or error)");
                     }
                 }
@@ -877,41 +878,22 @@ impl ChatView {
                 .show(ui, |ui| {
                     let mut to_remove: Option<usize> = None;
                     // Feature 9: filter by search query
-                    let filtered_sessions: Vec<(usize, String, String, String, Vec<String>)> =
-                        if self.session_search_query.is_empty() {
-                            self.sessions
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, s)| {
-                                    (
-                                        idx,
-                                        s.name.clone(),
-                                        s.mode.clone(),
-                                        s.phase.clone(),
-                                        s.models.clone(),
-                                    )
-                                })
-                                .collect()
-                        } else {
-                            let q = self.session_search_query.to_lowercase();
-                            self.sessions
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, s)| s.name.to_lowercase().contains(&q))
-                                .map(|(idx, s)| {
-                                    (
-                                        idx,
-                                        s.name.clone(),
-                                        s.mode.clone(),
-                                        s.phase.clone(),
-                                        s.models.clone(),
-                                    )
-                                })
-                                .collect()
-                        };
-                    for (idx, session_name, session_mode, session_phase, session_models) in
-                        filtered_sessions
-                    {
+                    let filtered_indices: Vec<usize> = if self.session_search_query.is_empty() {
+                        self.sessions
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, _)| idx)
+                            .collect()
+                    } else {
+                        let q = self.session_search_query.to_lowercase();
+                        self.sessions
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, s)| s.name.to_lowercase().contains(&q))
+                            .map(|(idx, _)| idx)
+                            .collect()
+                    };
+                    for idx in filtered_indices {
                         let selected = idx == self.active_session;
 
                         // Session row with rename support
@@ -941,18 +923,18 @@ impl ChatView {
                             });
                         } else {
                             ui.horizontal(|ui| {
-                                let resp = ui.selectable_label(selected, &session_name);
+                                let resp = ui.selectable_label(selected, &self.sessions[idx].name);
                                 if resp.double_clicked() {
                                     self.rename_session_idx = Some(idx);
-                                    self.rename_session_buf = session_name.clone();
+                                    self.rename_session_buf = self.sessions[idx].name.clone();
                                 } else if resp.clicked() {
                                     self.active_session = idx;
-                                    self.selected_mode = session_mode.clone();
-                                    self.selected_phase = session_phase.clone();
-                                    self.selected_models = if session_models.is_empty() {
+                                    self.selected_mode = self.sessions[idx].mode.clone();
+                                    self.selected_phase = self.sessions[idx].phase.clone();
+                                    self.selected_models = if self.sessions[idx].models.is_empty() {
                                         vec!["auto".to_string()]
                                     } else {
-                                        session_models.clone()
+                                        self.sessions[idx].models.clone()
                                     };
                                     self.sync_model_selection();
                                     self.ai_status = AiStatus::Idle;
@@ -974,8 +956,8 @@ impl ChatView {
                         // Mode/phase indicator as a simple label
                         ui.label(format!(
                             "{} | {}",
-                            i18n.t(&format!("mode.{}", session_mode)),
-                            i18n.t(&format!("phase.{}", session_phase)),
+                            i18n.t(&format!("mode.{}", self.sessions[idx].mode)),
+                            i18n.t(&format!("phase.{}", self.sessions[idx].phase)),
                         ));
                         ui.add_space(4.0);
                     }
@@ -1044,15 +1026,15 @@ impl ChatView {
 
         // Show ALL messages (no pagination)
         let dark_mode = ui.visuals().dark_mode;
-
-        // Clone messages to avoid self-borrow conflict with closures in the loop.
-        // This is a Vec<Message> clone — intentionally traded for correctness.
         let msgs = self.messages().to_vec();
 
         // Cache formatted timestamps to avoid re-allocating per message per frame
         let mut last_ts: u64 = 0;
         let mut last_time_str = String::new();
-        for (msg_idx, msg) in msgs.iter().enumerate().skip(start_idx) {
+        for (msg_idx, msg) in msgs.iter().enumerate() {
+            if msg_idx < start_idx {
+                continue;
+            }
             // ── Edit mode: show TextEdit instead of bubble ────────
             if self.edit_msg_idx == Some(msg_idx) {
                 ui.add_space(4.0);
@@ -1145,11 +1127,15 @@ impl ChatView {
             };
             let model_name = msg.model.clone();
 
+            // Clone content once — used for display_text AND context menu (avoids borrowing msg in closures)
+            let ctx_content = msg.content.clone();
+            let ctx_plain = Self::markdown_to_plain_text(&ctx_content);
+
             // Single clone: compute display_text once, keep content reference for context menu
             let display_text = if CHAT_DISABLE_MARKDOWN_RENDER {
-                Self::markdown_to_plain_text(&msg.content)
+                Self::markdown_to_plain_text(&ctx_content)
             } else {
-                msg.content.clone()
+                ctx_content.clone()
             };
 
             // Timestamp row
@@ -1183,6 +1169,14 @@ impl ChatView {
                         .position(|m| m.timestamp == ts && m.content == content)
                 };
 
+            // Pre-compute msg/self values before closures to avoid borrow conflicts
+            // with mutable self access in context_menu (nested closure).
+            let msg_thinking = msg.thinking.clone();
+            let msg_has_thinking = !msg_thinking.is_empty() && !is_user;
+            let msg_timestamp_val = msg_timestamp;
+            let msg_model_val = msg.model.clone();
+            let enable_markdown_val = self.enable_markdown;
+            let active_session_val = self.active_session;
             // All messages left-aligned — color differentiates user vs AI.
             ui.horizontal_top(|ui| {
                 Self::draw_role_avatar(ui, is_user);
@@ -1200,79 +1194,73 @@ impl ChatView {
                                 ui,
                                 &display_text,
                                 &i18n.t("chat.copyCode"),
-                                self.enable_markdown,
+                                enable_markdown_val,
                                 text_color,
                                 &trunc_hint,
                             );
 
                             // ── Collapsible thinking content (AI only) ──
-                            if !msg.thinking.is_empty() && !is_user {
+                            if msg_has_thinking {
                                 ui.add_space(6.0);
 
                                 // Use a stable and unique id to avoid collisions across messages/models.
                                 let thinking_id = egui::Id::new((
                                     "thinking",
-                                    self.active_session,
+                                    active_session_val,
                                     msg_idx,
-                                    msg.timestamp,
-                                    &msg.model,
+                                    msg_timestamp_val,
+                                    &msg_model_val,
                                 ));
 
-                                // Add visual indicator + thinking label to make it obvious it's clickable
-                                let thinking_label = format!("▸ {}", i18n.t("chat.thinkingLabel"));
+                                // Clickable header with distinct visual
+                                let thinking_icon = "💭";
+                                let thinking_label = format!(
+                                    "{}  {}  ({})",
+                                    thinking_icon,
+                                    i18n.t("chat.thinkingLabel"),
+                                    msg_thinking.chars().count()
+                                );
 
                                 egui::CollapsingHeader::new(
                                     egui::RichText::new(thinking_label)
                                         .size(11.0)
-                                        .color(egui::Color32::from_rgb(120, 122, 135)),
+                                        .color(egui::Color32::from_rgb(180, 140, 60)),
                                 )
                                 .id_salt(thinking_id)
                                 .default_open(false)
                                 .show(ui, |ui| {
-                                    // Compute preview lazily — only when user expands the header
-                                    let preview_len = 64usize;
-                                    let mut thinking_chars = msg.thinking.chars();
-                                    let thinking_preview: String =
-                                        thinking_chars.by_ref().take(preview_len).collect();
-                                    let has_more = thinking_chars.next().is_some();
-                                    let thinking_preview = if has_more {
-                                        format!("{}…", thinking_preview)
-                                    } else {
-                                        thinking_preview
-                                    };
-
-                                    ui.horizontal_wrapped(|ui| {
-                                        ui.label(
-                                            egui::RichText::new(&thinking_preview)
-                                                .size(10.0)
-                                                .color(egui::Color32::from_rgb(130, 132, 145)),
-                                        );
-                                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                                            ui.ctx().copy_text(msg.thinking.clone());
-                                        }
-                                    });
-                                    ui.add_space(4.0);
-
+                                    // Show full thinking content when expanded
                                     egui::Frame::new()
                                         .fill(egui::Color32::from_rgba_premultiplied(
-                                            128, 128, 128, 20,
+                                            60, 50, 20, 30,
                                         ))
-                                        .corner_radius(4.0)
+                                        .corner_radius(6.0)
                                         .inner_margin(egui::Margin::symmetric(8i8, 6i8))
                                         .show(ui, |ui| {
-                                            egui::ScrollArea::vertical()
-                                                .max_height(180.0)
-                                                .auto_shrink([false, true])
-                                                .show(ui, |ui| {
-                                                    Self::render_markdown(
-                                                        ui,
-                                                        &msg.thinking,
-                                                        &i18n.t("chat.copyCode"),
-                                                        self.enable_markdown,
-                                                        egui::Color32::from_rgb(140, 142, 155),
-                                                        &trunc_hint,
-                                                    );
-                                                });
+                                            Self::render_markdown(
+                                                ui,
+                                                &msg_thinking,
+                                                &i18n.t("chat.copyCode"),
+                                                enable_markdown_val,
+                                                egui::Color32::from_rgb(160, 162, 170),
+                                                &trunc_hint,
+                                            );
+                                            ui.horizontal(|ui| {
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(
+                                                        egui::Align::Center,
+                                                    ),
+                                                    |ui| {
+                                                        if ui
+                                                            .button(i18n.t("common.copyButton"))
+                                                            .clicked()
+                                                        {
+                                                            ui.ctx()
+                                                                .copy_text(msg_thinking.clone());
+                                                        }
+                                                    },
+                                                );
+                                            });
                                         });
                                 });
                             }
@@ -1282,8 +1270,6 @@ impl ChatView {
                     // ── Context menu for message bubble ────────
                     let ctx_msg_ts = msg_timestamp;
                     let ctx_session_msgs = self.messages().to_vec();
-                    let ctx_content = msg.content.clone();
-                    let ctx_plain = Self::markdown_to_plain_text(&ctx_content);
                     let copy_lbl = i18n.t("chat.copyMessage").to_string();
                     let copy_plain_lbl = i18n.t("chat.copyPlain").to_string();
                     let edit_lbl = i18n.t("chat.edit").to_string();
@@ -1303,7 +1289,7 @@ impl ChatView {
                                 find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
                             {
                                 self.edit_msg_idx = Some(real_idx);
-                                self.edit_msg_buf = msg.content.clone();
+                                self.edit_msg_buf = ctx_content.clone();
                             }
                             ui.close_menu();
                         }

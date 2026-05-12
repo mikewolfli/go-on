@@ -29,16 +29,30 @@
 
   // Enhanced message rendering with markdown support
   function renderMarkdown(text) {
-    // Basic markdown parsing for code blocks and formatting
-    return text
+    // First, handle <thinking>...</thinking> blocks - collapsed by default
+    text = text.replace(/<thinking>([\s\S]*?)<\/thinking>/gi, (match, content) => {
+      const escapedContent = escapeHtml(content.trim()).replace(/\n/g, '<br>');
+      return `<details class="thinking-block"><summary class="thinking-toggle">💭 Thinking</summary><div class="thinking-content">${escapedContent}</div></details>`;
+    });
+
+    // Then handle code blocks - collapsible via <details>
+    text = text
       .replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
         const language = lang || "plaintext";
-        return `<pre class="code-block" data-language="${language}"><code class="language-${language}">${escapeHtml(code.trim())}</code><button class="copy-btn" onclick="copyCode(this)">📋</button><button class="run-btn" onclick="runCode(this)" style="display: ${language === "javascript" || language === "python" || language === "bash" ? "inline" : "none"};">▶️</button></pre>`;
+        const canRun =
+          language === "javascript" ||
+          language === "python" ||
+          language === "bash";
+        // Process newlines in code content as <br> to preserve formatting
+        const escapedCode = escapeHtml(code.trim()).replace(/\n/g, '<br>');
+        return `<details class="code-block" open data-language="${language}"><summary class="code-header"><span class="code-lang">${escapeHtml(language)}</span><span class="code-actions">${canRun ? '<button class="run-btn" data-action="run">▶️</button>' : ''}<button class="copy-btn" data-action="copy">📋</button></span></summary><div class="code-content"><code class="language-${language}">${escapedCode}</code></div></details>`;
       })
       .replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
       .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
       .replace(/\*(.*?)\*/g, "<em>$1</em>")
       .replace(/\n/g, "<br>");
+
+    return text;
   }
 
   function escapeHtml(text) {
@@ -47,30 +61,31 @@
     return div.innerHTML;
   }
 
-  // Copy code to clipboard
-  // NOTE: navigator.clipboard may be blocked by webview CSP.
-  // Delegate to extension host via postMessage for reliable clipboard access.
-  window.copyCode = function (button) {
-    const codeElement = button.previousElementSibling;
-    const code = codeElement.textContent || codeElement.innerText;
-    vscode.postMessage({ type: "copyCode", code: code });
-    const originalText = button.textContent;
-    button.textContent = "✅";
-    setTimeout(() => (button.textContent = originalText), 1000);
-  };
+  // Event delegation for code block copy/run buttons (avoids CSP-blocked inline onclick)
+  messagesContainer.addEventListener("click", (e) => {
+    const button = e.target.closest("button[data-action]");
+    if (!button) return;
 
-  // Run code functionality
-  window.runCode = function (button) {
-    const codeElement = button.previousElementSibling;
-    const code = codeElement.textContent || codeElement.innerText;
-    const language = button.parentElement.getAttribute("data-language");
+    const action = button.getAttribute("data-action");
+    const codeBlock = button.closest(".code-block");
+    const codeElement = codeBlock && codeBlock.querySelector("code");
 
-    vscode.postMessage({
-      type: "runCode",
-      code: code,
-      language: language,
-    });
-  };
+    if (!codeElement) return;
+
+    if (action === "copy") {
+      vscode.postMessage({ type: "copyCode", code: codeElement.textContent || "" });
+      const orig = button.textContent;
+      button.textContent = "✅";
+      setTimeout(() => (button.textContent = orig), 1000);
+    } else if (action === "run") {
+      const language = codeBlock.getAttribute("data-language");
+      vscode.postMessage({
+        type: "runCode",
+        code: codeElement.textContent || "",
+        language: language,
+      });
+    }
+  });
 
   function addMessage(
     role,

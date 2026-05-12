@@ -108,6 +108,7 @@ impl SecurityView {
                         {
                             Ok(r) => r,
                             Err(_) => {
+                                #[cfg(debug_assertions)]
                                 eprintln!("Warning: restart_backend timed out");
                                 Err("timeout".to_string())
                             }

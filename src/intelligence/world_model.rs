@@ -508,7 +508,7 @@ impl WorldModel {
         let before = inner.entities.len();
 
         // Collect IDs of stale entities.
-        let stale_ids: Vec<String> = inner
+        let stale_ids: std::collections::HashSet<String> = inner
             .entities
             .iter()
             .filter(|e| e.last_seen_ms < cutoff)

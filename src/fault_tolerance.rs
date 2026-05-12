@@ -167,6 +167,15 @@ pub struct RecoveryCycleSummary {
 }
 
 // ---------------------------------------------------------------------------
+// Capacity limits to prevent unbounded HashMap growth
+// ---------------------------------------------------------------------------
+
+/// Maximum resolved/recovered faults to retain before evicting oldest entries.
+const MAX_FAULTS: usize = 500;
+/// Maximum completed or failed recovery plans to retain before evicting oldest.
+const MAX_RECOVERY_PLANS: usize = 200;
+
+// ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
 
@@ -350,6 +359,21 @@ impl FaultToleranceEngine {
             recovered: false,
         };
         inner.faults.insert(fault_id.clone(), event);
+
+        // Evict oldest resolved faults when the map grows too large.
+        if inner.faults.len() > MAX_FAULTS {
+            let mut resolved: Vec<(String, u64)> = inner
+                .faults
+                .iter()
+                .filter(|(_, f)| f.recovered)
+                .map(|(id, f)| (id.clone(), f.detected_ms))
+                .collect();
+            resolved.sort_unstable_by_key(|(_, ts)| *ts);
+            let to_remove = inner.faults.len().saturating_sub(MAX_FAULTS);
+            for (id, _) in resolved.into_iter().take(to_remove) {
+                inner.faults.remove(&id);
+            }
+        }
 
         // Mark the node as degraded or offline based on severity
         if let Some(record) = inner.heartbeats.get_mut(&node_id) {
@@ -645,6 +669,27 @@ impl FaultToleranceEngine {
             result: None,
         };
         inner.recovery_plans.insert(plan_id.clone(), plan);
+
+        // Evict oldest completed/failed plans when the map grows too large.
+        if inner.recovery_plans.len() > MAX_RECOVERY_PLANS {
+            let mut done: Vec<(String, u64)> = inner
+                .recovery_plans
+                .iter()
+                .filter(|(_, p)| {
+                    p.state == RecoveryState::Completed || p.state == RecoveryState::Failed
+                })
+                .map(|(id, p)| (id.clone(), p.created_ms))
+                .collect();
+            done.sort_unstable_by_key(|(_, ts)| *ts);
+            let to_remove = inner
+                .recovery_plans
+                .len()
+                .saturating_sub(MAX_RECOVERY_PLANS);
+            for (id, _) in done.into_iter().take(to_remove) {
+                inner.recovery_plans.remove(&id);
+            }
+        }
+
         Ok(plan_id)
     }
 

@@ -149,6 +149,7 @@ impl WorkflowView {
             {
                 Ok(r) => r,
                 Err(_) => {
+                    #[cfg(debug_assertions)]
                     eprintln!("Warning: list_workflow_runs timed out");
                     Err("timeout".to_string())
                 }
@@ -183,6 +184,7 @@ impl WorkflowView {
             {
                 Ok(r) => r,
                 Err(_) => {
+                    #[cfg(debug_assertions)]
                     eprintln!("Warning: get_workflow_run timed out");
                     Err("timeout".to_string())
                 }
@@ -659,6 +661,7 @@ impl WorkflowView {
                                             {
                                                 Ok(r) => r,
                                                 Err(_) => {
+                                                    #[cfg(debug_assertions)]
                                                     eprintln!(
                                                     "Warning: transition_workflow_run timed out"
                                                 );

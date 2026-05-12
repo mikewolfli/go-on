@@ -5,7 +5,7 @@
 //! Used by the router to pick the best next agent in a chain.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// A single capability declaration by an agent
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +64,7 @@ impl CapabilityGraph {
     pub fn agents_with_tag(&self, tag: &str) -> Vec<&str> {
         self.capabilities
             .iter()
-            .filter(|(_, decls)| decls.iter().any(|d| d.tags.contains(&tag.to_string())))
+            .filter(|(_, decls)| decls.iter().any(|d| d.tags.iter().any(|t| t == tag)))
             .map(|(agent, _)| agent.as_str())
             .collect()
     }
@@ -124,41 +124,55 @@ impl CapabilityGraph {
         capability: &str,
         max_hops: usize,
     ) -> Option<Vec<String>> {
-        let mut visited: HashSet<String> = HashSet::new();
-        let mut queue: Vec<Vec<String>> = Vec::new();
-        queue.push(vec![from_agent.to_string()]);
-        visited.insert(from_agent.to_string());
+        let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();
+        for edge in &self.edges {
+            adjacency
+                .entry(edge.from_agent.as_str())
+                .or_default()
+                .push(edge.to_agent.as_str());
+        }
 
-        let mut front = 0;
-        while front < queue.len() {
-            let path = queue[front].clone();
-            front += 1;
+        let mut visited: HashSet<&str> = HashSet::new();
+        let mut parent: HashMap<&str, &str> = HashMap::new();
+        let mut depth: HashMap<&str, usize> = HashMap::new();
+        let mut queue: VecDeque<&str> = VecDeque::new();
 
-            if path.len() > max_hops + 1 {
-                continue;
-            }
+        visited.insert(from_agent);
+        depth.insert(from_agent, 0);
+        queue.push_back(from_agent);
 
-            let current = path.last().unwrap().clone();
+        while let Some(current) = queue.pop_front() {
+            let current_depth = *depth.get(current).unwrap_or(&0);
 
-            // Check if current agent (not the start) has the capability
             if current != from_agent {
-                if let Some(decls) = self.capabilities.get(&current) {
+                if let Some(decls) = self.capabilities.get(current) {
                     if decls
                         .iter()
-                        .any(|d| d.name == capability || d.tags.contains(&capability.to_string()))
+                        .any(|d| d.name == capability || d.tags.iter().any(|t| t == capability))
                     {
+                        let mut path = vec![current.to_string()];
+                        let mut cursor = current;
+                        while let Some(prev) = parent.get(cursor).copied() {
+                            path.push(prev.to_string());
+                            cursor = prev;
+                        }
+                        path.reverse();
                         return Some(path);
                     }
                 }
             }
 
-            // Explore outgoing edges
-            for edge in &self.edges {
-                if edge.from_agent == current && !visited.contains(&edge.to_agent) {
-                    visited.insert(edge.to_agent.clone());
-                    let mut new_path = path.clone();
-                    new_path.push(edge.to_agent.clone());
-                    queue.push(new_path);
+            if current_depth >= max_hops {
+                continue;
+            }
+
+            if let Some(neighbors) = adjacency.get(current) {
+                for &next in neighbors {
+                    if visited.insert(next) {
+                        parent.insert(next, current);
+                        depth.insert(next, current_depth + 1);
+                        queue.push_back(next);
+                    }
                 }
             }
         }
@@ -172,10 +186,17 @@ impl CapabilityGraph {
         let mut visited: HashSet<String> = HashSet::new();
         let mut in_stack: HashSet<String> = HashSet::new();
         let mut path: Vec<String> = Vec::new();
+        let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();
+        for edge in &self.edges {
+            adjacency
+                .entry(edge.from_agent.as_str())
+                .or_default()
+                .push(edge.to_agent.as_str());
+        }
 
         fn dfs(
             node: &str,
-            edges: &[CapabilityEdge],
+            adjacency: &HashMap<&str, Vec<&str>>,
             visited: &mut HashSet<String>,
             in_stack: &mut HashSet<String>,
             path: &mut Vec<String>,
@@ -185,12 +206,14 @@ impl CapabilityGraph {
             in_stack.insert(node.to_string());
             path.push(node.to_string());
 
-            for edge in edges.iter().filter(|e| e.from_agent == node) {
-                if !visited.contains(&edge.to_agent) {
-                    dfs(&edge.to_agent, edges, visited, in_stack, path, cycles);
-                } else if in_stack.contains(&edge.to_agent) {
-                    if let Some(pos) = path.iter().position(|n| n.as_str() == edge.to_agent) {
-                        cycles.push(path[pos..].to_vec());
+            if let Some(neighbors) = adjacency.get(node) {
+                for &next in neighbors {
+                    if !visited.contains(next) {
+                        dfs(next, adjacency, visited, in_stack, path, cycles);
+                    } else if in_stack.contains(next) {
+                        if let Some(pos) = path.iter().position(|n| n.as_str() == next) {
+                            cycles.push(path[pos..].to_vec());
+                        }
                     }
                 }
             }
@@ -204,7 +227,7 @@ impl CapabilityGraph {
             if !visited.contains(node) {
                 dfs(
                     node,
-                    &self.edges,
+                    &adjacency,
                     &mut visited,
                     &mut in_stack,
                     &mut path,
@@ -218,18 +241,27 @@ impl CapabilityGraph {
 
     /// Check if `target` is reachable from `source` through handoff edges.
     pub fn is_reachable(&self, source: &str, target: &str) -> bool {
-        let mut visited: HashSet<String> = HashSet::new();
-        let mut stack: Vec<String> = vec![source.to_string()];
-        visited.insert(source.to_string());
+        let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();
+        for edge in &self.edges {
+            adjacency
+                .entry(edge.from_agent.as_str())
+                .or_default()
+                .push(edge.to_agent.as_str());
+        }
+
+        let mut visited: HashSet<&str> = HashSet::new();
+        let mut stack: Vec<&str> = vec![source];
+        visited.insert(source);
 
         while let Some(current) = stack.pop() {
             if current == target {
                 return true;
             }
-            for edge in &self.edges {
-                if edge.from_agent == current && !visited.contains(&edge.to_agent) {
-                    visited.insert(edge.to_agent.clone());
-                    stack.push(edge.to_agent.clone());
+            if let Some(neighbors) = adjacency.get(current) {
+                for &next in neighbors {
+                    if visited.insert(next) {
+                        stack.push(next);
+                    }
                 }
             }
         }

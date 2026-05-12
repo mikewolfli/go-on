@@ -147,6 +147,7 @@ struct Inner {
     config: ConsciousnessConfig,
     metrics: Vec<AwarenessMetric>,
     reflexions: Vec<ReflexionRecord>,
+    total_reflexions: u64,
     next_reflexion_id: u64,
 }
 
@@ -177,6 +178,7 @@ impl ConsciousnessMetrics {
                 config,
                 metrics: Vec::new(),
                 reflexions: Vec::new(),
+                total_reflexions: 0,
                 next_reflexion_id: 1,
             })),
         }
@@ -288,7 +290,13 @@ impl ConsciousnessMetrics {
         // Replace metrics with boosted versions.
         inner.metrics = boosted_metrics;
 
+        const MAX_REFLEXIONS: usize = 1000;
+        if inner.reflexions.len() >= MAX_REFLEXIONS {
+            inner.reflexions.remove(0);
+        }
+
         inner.reflexions.push(record.clone());
+        inner.total_reflexions = inner.total_reflexions.saturating_add(1);
         Ok(record)
     }
 
@@ -328,7 +336,7 @@ impl ConsciousnessMetrics {
             overall_awareness: overall,
             metric_count: inner.metrics.len(),
             last_reflexion_ms: last_reflexion,
-            reflexion_count: inner.reflexions.len() as u64,
+            reflexion_count: inner.total_reflexions,
         }
     }
 

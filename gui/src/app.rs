@@ -125,10 +125,9 @@ pub struct GoOnApp {
 }
 
 /// Detect system locale from environment variables.
-/// Checks LC_ALL, LC_MESSAGES, LANG on Unix; GetUserDefaultLocaleName on Windows.
+/// Checks LC_ALL, LC_MESSAGES, LANG on Unix; LANGUAGE as additional fallback.
 fn detect_system_language() -> Lang {
-    // Check env vars (cross-platform: Linux, macOS, Windows)
-    for var in &["LC_ALL", "LC_MESSAGES", "LANG"] {
+    for var in &["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"] {
         if let Some(val) = std::env::var_os(var) {
             let s = val.to_string_lossy().to_lowercase();
             if s.contains("zh_cn")
@@ -142,19 +141,13 @@ fn detect_system_language() -> Lang {
                 || s.contains("zh-tw")
                 || s.contains("zh_tw.")
                 || s.contains("taiwan")
+                || s.contains("hant")
+                || s.contains("hk")
             {
                 return Lang::ZhTw;
             }
-        }
-    }
-    // Fallback: try common locale env vars set by desktop environments
-    for var in &["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Some(val) = std::env::var_os(var) {
-            let s = val.to_string_lossy().to_lowercase();
+            // Generic Chinese — prefer Simplified as the wider default
             if s.contains("zh") {
-                if s.contains("hant") || s.contains("tw") || s.contains("hk") {
-                    return Lang::ZhTw;
-                }
                 return Lang::ZhCn;
             }
         }
@@ -250,39 +243,50 @@ impl GoOnApp {
     }
 
     /// Print diagnostic info about key sources for debugging.
+    /// Only active in debug builds to avoid unnecessary keyring calls in production.
     fn diagnostic_key_report(config: &AppConfig) {
-        eprintln!("=== KEY DIAGNOSTIC ===");
-        // Collect all provider names: from config.providers AND the canonical PROVIDER_NAMES list.
-        let mut all_names: Vec<String> = config
-            .providers
-            .iter()
-            .map(|p| p.name.to_lowercase())
-            .collect();
-        for name in crate::views::providers::PROVIDER_NAMES {
-            let lower = name.to_lowercase();
-            if !all_names.contains(&lower) {
-                all_names.push(lower);
+        #[cfg(not(debug_assertions))]
+        let _ = config;
+
+        #[cfg(debug_assertions)]
+        {
+            eprintln!("=== KEY DIAGNOSTIC ===");
+            // Collect all provider names: from config.providers AND the canonical PROVIDER_NAMES list.
+            // Use a HashSet to avoid duplicate keyring lookups.
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut all_names: Vec<String> = Vec::new();
+            for p in &config.providers {
+                let lower = p.name.to_lowercase();
+                if seen.insert(lower.clone()) {
+                    all_names.push(lower);
+                }
             }
+            for name in crate::views::providers::PROVIDER_NAMES {
+                let lower = name.to_lowercase();
+                if seen.insert(lower.clone()) {
+                    all_names.push(lower);
+                }
+            }
+            for name in &all_names {
+                let config_key = config
+                    .providers
+                    .iter()
+                    .find(|p| p.name.to_lowercase() == *name)
+                    .map(|p| {
+                        if p.api_key.is_empty() {
+                            "(empty)".to_string()
+                        } else {
+                            format!("{}...", &p.api_key[..4.min(p.api_key.len())])
+                        }
+                    })
+                    .unwrap_or_else(|| "(not in config)".to_string());
+                let keyring_key = crate::keyring_util::get_api_key(name)
+                    .map(|k| format!("{}...", &k[..4.min(k.len())]))
+                    .unwrap_or_else(|| "(not in keyring)".to_string());
+                eprintln!("  {}: config={}, keyring={}", name, config_key, keyring_key);
+            }
+            eprintln!("=== END DIAGNOSTIC ===");
         }
-        for name in &all_names {
-            let config_key = config
-                .providers
-                .iter()
-                .find(|p| p.name.to_lowercase() == *name)
-                .map(|p| {
-                    if p.api_key.is_empty() {
-                        "(empty)".to_string()
-                    } else {
-                        format!("{}...", &p.api_key[..4.min(p.api_key.len())])
-                    }
-                })
-                .unwrap_or_else(|| "(not in config)".to_string());
-            let keyring_key = crate::keyring_util::get_api_key(name)
-                .map(|k| format!("{}...", &k[..4.min(k.len())]))
-                .unwrap_or_else(|| "(not in keyring)".to_string());
-            eprintln!("  {}: config={}, keyring={}", name, config_key, keyring_key);
-        }
-        eprintln!("=== END DIAGNOSTIC ===");
     }
 
     /// Start or restart the backend child process with fresh env vars from keyring.
@@ -321,6 +325,7 @@ impl GoOnApp {
 
                     // Log when keyring fails (useful for debugging macOS keychain issues)
                     if key.is_none() {
+                        #[cfg(debug_assertions)]
                         eprintln!(
                             "backend: keyring returned no key for '{}', falling back to config",
                             provider_lower
@@ -341,14 +346,15 @@ impl GoOnApp {
                     }
 
                     if let Some(k) = key {
-                        let preview = if k.len() > 4 {
+                        let _preview = if k.len() > 4 {
                             format!("{}...", &k[..4])
                         } else {
                             "[short]".to_string()
                         };
-                        eprintln!("backend: set {}={}", env_var, preview);
+                        eprintln!("backend: set {}={}", env_var, _preview);
                         cmd.env(env_var, k);
                     } else {
+                        #[cfg(debug_assertions)]
                         eprintln!("backend: no key found for '{}'", provider_lower);
                     }
                 }
@@ -400,7 +406,8 @@ impl GoOnApp {
     /// Windows, Keychain on macOS). The backend also falls back to env vars if the
     /// keyring is unavailable — see `load_secret_value()` in the backend code.
     fn generate_backend_config(path: &std::path::Path, config: &AppConfig) {
-        let provider_lines: Vec<String> = config
+        // Single pass: collect both provider TOML blocks and agent names simultaneously.
+        let (provider_lines, agent_names): (Vec<String>, Vec<String>) = config
             .providers
             .iter()
             .filter(|p| {
@@ -423,7 +430,7 @@ impl GoOnApp {
                     &p.model
                 };
                 let keyring_ref = format!("keyring://go-on/{}_api_key", name);
-                format!(
+                let toml_block = format!(
                     r#"[agents.{}]
 type = "{}"
 api_key_env = "{}"
@@ -431,24 +438,15 @@ model = "{}"
 supports_system = true
 "#,
                     name, name, keyring_ref, model
-                )
+                );
+                (toml_block, name)
             })
-            .collect();
+            .unzip();
 
         let agent_section = if provider_lines.is_empty() {
             String::new()
         } else {
             let agents_toml = provider_lines.join("\n");
-            let agent_names: Vec<String> = config
-                .providers
-                .iter()
-                .filter(|p| {
-                    // Priority: keyring first, then config as fallback
-                    crate::keyring_util::has_api_key(&p.name.to_lowercase())
-                        || (!p.api_key.is_empty() && p.api_key != "********")
-                })
-                .map(|p| p.name.to_lowercase())
-                .collect();
             let agents_list = if agent_names.is_empty() {
                 "[]".to_string()
             } else {
@@ -1174,13 +1172,11 @@ impl eframe::App for GoOnApp {
                         config_safe_mode_enabled,
                     );
                     // Config changes may affect backend connectivity — reset chat cache only on apply
+                    // Note: We do NOT update backend_url_original here; the Settings tab owns that
+                    // tracker so it can correctly show a restart button when the URL changed.
                     if self.config_editor_view.applied {
                         self.config_editor_view.applied = false;
                         self.chat_view.reset_loaded_state();
-                        // Track original URL so Settings tab can detect and show restart button
-                        if self.config.backend_url != self.backend_url_original {
-                            self.backend_url_original = self.config.backend_url.clone();
-                        }
                     }
                 }
                 "providers" => {

@@ -84,6 +84,17 @@ impl AboutView {
                         ui.label(format!("{}. {}", idx + 1, item));
                     }
                 });
+
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new(i18n.t("about.projectTitle")).strong());
+                ui.add_space(4.0);
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.label(i18n.t("about.projectDescription"));
+                    ui.hyperlink_to(
+                        "GitHub: https://github.com/mikewolfli/go-on",
+                        "https://github.com/mikewolfli/go-on",
+                    );
+                });
             });
     }
 }

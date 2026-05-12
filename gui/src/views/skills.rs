@@ -132,6 +132,7 @@ impl SkillsView {
             {
                 Ok(r) => r,
                 Err(_) => {
+                    #[cfg(debug_assertions)]
                     eprintln!("Warning: list_skills timed out");
                     let _ = tx.send(SkillsUpdate::List(
                         Vec::new(),
@@ -433,6 +434,7 @@ impl SkillsView {
                             {
                                 Ok(r) => r,
                                 Err(_) => {
+                                    #[cfg(debug_assertions)]
                                     eprintln!("Warning: create_skill timed out");
                                     Err("timeout".to_string())
                                 }
@@ -694,6 +696,7 @@ impl SkillsView {
                                 ).await {
                                     Ok(r) => r,
                                     Err(_) => {
+                                        #[cfg(debug_assertions)]
                                         eprintln!("Warning: create-a-skill creation timed out");
                                         Err("timeout".to_string())
                                     }
@@ -805,6 +808,7 @@ impl SkillsView {
                                     {
                                         Ok(r) => r,
                                         Err(_) => {
+                                            #[cfg(debug_assertions)]
                                             eprintln!("Warning: disable_skill timed out");
                                             Err("timeout".to_string())
                                         }
@@ -818,6 +822,7 @@ impl SkillsView {
                                     {
                                         Ok(r) => r,
                                         Err(_) => {
+                                            #[cfg(debug_assertions)]
                                             eprintln!("Warning: enable_skill timed out");
                                             Err("timeout".to_string())
                                         }
@@ -863,6 +868,7 @@ impl SkillsView {
                                 {
                                     Ok(r) => r,
                                     Err(_) => {
+                                        #[cfg(debug_assertions)]
                                         eprintln!("Warning: remove_skill timed out");
                                         Err("timeout".to_string())
                                     }
@@ -900,6 +906,7 @@ impl SkillsView {
                                 {
                                     Ok(r) => r,
                                     Err(_) => {
+                                        #[cfg(debug_assertions)]
                                         eprintln!("Warning: list_skill_versions timed out");
                                         Err("timeout".to_string())
                                     }
@@ -1037,6 +1044,7 @@ impl SkillsView {
                             {
                                 Ok(r) => r,
                                 Err(_) => {
+                                    #[cfg(debug_assertions)]
                                     eprintln!("Warning: update_skill timed out");
                                     Err("timeout".to_string())
                                 }
@@ -1091,6 +1099,7 @@ impl SkillsView {
                         {
                             Ok(r) => r,
                             Err(_) => {
+                                #[cfg(debug_assertions)]
                                 eprintln!("Warning: test_skill timed out");
                                 Err("timeout".to_string())
                             }
@@ -1140,6 +1149,7 @@ impl SkillsView {
                             {
                                 Ok(r) => r,
                                 Err(_) => {
+                                    #[cfg(debug_assertions)]
                                     eprintln!("Warning: rollback_skill_version timed out");
                                     Err("timeout".to_string())
                                 }

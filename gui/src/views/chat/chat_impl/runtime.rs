@@ -106,6 +106,7 @@ impl ChatView {
             && !self.selected_phase.is_empty()
             && !self.phases.contains(&self.selected_phase)
         {
+            #[cfg(debug_assertions)]
             eprintln!(
                 "chat: phase '{}' not in known phases {:?}, resetting to empty",
                 self.selected_phase, self.phases
@@ -190,6 +191,7 @@ impl ChatView {
             let generation_id = self.next_generation_id();
             let input_tokens = self.input_token_estimate;
 
+            #[cfg(debug_assertions)]
             eprintln!(
                 "[Gen] Started generation {} for model '{}' (active: {}/{})",
                 generation_id, model_name, current_gen_count, MAX_CONCURRENT_GENERATIONS

@@ -298,56 +298,51 @@ pub(super) fn metrics_errors_summary_payload(server: &AcpServer, params: &Value)
         .min(200);
 
     let snapshot = server.observability.metrics.snapshot();
-    let trace_events = trace_events()
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
-
-    let failed_events = trace_events
-        .iter()
-        .filter(|event| event.status.eq_ignore_ascii_case("error"))
-        .collect::<Vec<_>>();
-
     let mut error_groups: HashMap<String, usize> = HashMap::new();
-    for event in &failed_events {
-        let key = classify_error_group(event);
-        *error_groups.entry(key).or_insert(0) += 1;
+    let mut failed_events_count = 0usize;
+    let mut sample_failures_ring = std::collections::VecDeque::with_capacity(limit);
+
+    if let Ok(guard) = trace_events().lock() {
+        for event in guard.iter() {
+            if !event.status.eq_ignore_ascii_case("error") {
+                continue;
+            }
+            failed_events_count += 1;
+            let key = classify_error_group(event);
+            *error_groups.entry(key.clone()).or_insert(0) += 1;
+
+            if limit > 0 {
+                sample_failures_ring.push_back(json!({
+                    "timestamp": event.timestamp,
+                    "event_type": event.event_type,
+                    "task_id": event.task_id,
+                    "phase": event.phase,
+                    "status": event.status,
+                    "duration_ms": event.duration_ms,
+                    "error_code": key,
+                    "error": event.error,
+                }));
+                if sample_failures_ring.len() > limit {
+                    sample_failures_ring.pop_front();
+                }
+            }
+        }
     }
 
-    let mut grouped = error_groups
+    let mut grouped = error_groups.into_iter().collect::<Vec<_>>();
+    grouped.sort_by(|left, right| right.1.cmp(&left.1));
+    let grouped = grouped
         .into_iter()
         .map(|(error_type, count)| json!({"error_type": error_type, "count": count}))
         .collect::<Vec<_>>();
-    grouped.sort_by(|left, right| {
-        right
-            .get("count")
-            .and_then(Value::as_u64)
-            .cmp(&left.get("count").and_then(Value::as_u64))
-    });
 
-    let sample_failures = failed_events
-        .iter()
-        .rev()
-        .take(limit)
-        .map(|event| {
-            json!({
-                "timestamp": event.timestamp,
-                "event_type": event.event_type,
-                "task_id": event.task_id,
-                "phase": event.phase,
-                "status": event.status,
-                "duration_ms": event.duration_ms,
-                "error_code": classify_error_group(event),
-                "error": event.error,
-            })
-        })
-        .collect::<Vec<_>>();
+    let sample_failures = sample_failures_ring.into_iter().rev().collect::<Vec<_>>();
 
     json!({
         "ok": true,
         "window": params.get("window").and_then(Value::as_str).unwrap_or("5m"),
         "summary": {
-            "failed_events": failed_events.len(),
+            "failed_events": failed_events_count,
             "error_groups": grouped.len(),
         },
         "series": {
@@ -409,7 +404,7 @@ pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
     let conversation_count = state
         .checkpoints
         .iter()
-        .map(|cp| cp.conversation_id.clone())
+        .map(|cp| cp.conversation_id.as_str())
         .collect::<std::collections::HashSet<_>>()
         .len();
     let checkpoint_count = state.checkpoints.len();
@@ -443,16 +438,14 @@ pub(super) async fn handle_trace_get(
 pub(super) fn build_trace_payload(params: &Value) -> Value {
     let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
 
-    let trace_events = trace_events()
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
-    let trace_events_len = trace_events.len();
-
-    let limited_trace_events = if trace_events.len() > limit {
-        trace_events[trace_events.len() - limit..].to_vec()
-    } else {
-        trace_events
+    let (trace_events_len, limited_trace_events) = match trace_events().lock() {
+        Ok(guard) => {
+            let total = guard.len();
+            let start = total.saturating_sub(limit);
+            let events = guard.iter().skip(start).cloned().collect::<Vec<_>>();
+            (total, events)
+        }
+        Err(_) => (0, Vec::new()),
     };
 
     json!({
@@ -4320,51 +4313,47 @@ pub(super) async fn handle_governance_plan_update(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let mut plan = server
-        .pua_enforcement_plan
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
-
-    if let Some(level) = params.get("escalation_level").and_then(Value::as_str) {
-        plan.escalation_level = level.to_string();
-    }
-    if let Some(items) = params.get("red_lines").and_then(Value::as_array) {
-        plan.red_lines = items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(ToString::to_string)
-            .collect();
-    }
-    if let Some(items) = params.get("quality_compass").and_then(Value::as_array) {
-        plan.quality_compass = items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(ToString::to_string)
-            .collect();
-    }
-    if let Some(items) = params.get("mandatory_safeguards").and_then(Value::as_array) {
-        plan.mandatory_safeguards = items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(ToString::to_string)
-            .collect();
-    }
-    if let Some(items) = params.get("mandatory_evidence").and_then(Value::as_array) {
-        plan.mandatory_evidence = items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(ToString::to_string)
-            .collect();
-    }
-    if let Some(stage_requirements) = params.get("stage_requirements") {
-        plan.stage_requirements =
-            serde_json::from_value::<Vec<PuaStageRequirement>>(stage_requirements.clone())?;
-    }
-
-    if let Ok(mut guard) = server.pua_enforcement_plan.lock() {
-        *guard = plan.clone();
-    }
+    let plan = match server.pua_enforcement_plan.lock() {
+        Ok(mut guard) => {
+            if let Some(level) = params.get("escalation_level").and_then(Value::as_str) {
+                guard.escalation_level = level.to_string();
+            }
+            if let Some(items) = params.get("red_lines").and_then(Value::as_array) {
+                guard.red_lines = items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect();
+            }
+            if let Some(items) = params.get("quality_compass").and_then(Value::as_array) {
+                guard.quality_compass = items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect();
+            }
+            if let Some(items) = params.get("mandatory_safeguards").and_then(Value::as_array) {
+                guard.mandatory_safeguards = items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect();
+            }
+            if let Some(items) = params.get("mandatory_evidence").and_then(Value::as_array) {
+                guard.mandatory_evidence = items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect();
+            }
+            if let Some(stage_requirements) = params.get("stage_requirements") {
+                guard.stage_requirements =
+                    serde_json::from_value::<Vec<PuaStageRequirement>>(stage_requirements.clone())?;
+            }
+            guard.clone()
+        }
+        Err(_) => PuaEnforcementPlan::default(),
+    };
 
     let event = GovernanceAuditEvent {
         timestamp: crate::acp::prelude::now_ts().max(0) as u64,

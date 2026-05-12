@@ -221,13 +221,13 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
       let messagesPayload: Array<{
         role: string;
         content:
-          | string
-          | Array<{
-              type: string;
-              text?: string;
-              image_url?: { url: string; detail: string };
-              file_data?: { data: string; filename: string; mime_type: string };
-            }>;
+        | string
+        | Array<{
+          type: string;
+          text?: string;
+          image_url?: { url: string; detail: string };
+          file_data?: { data: string; filename: string; mime_type: string };
+        }>;
       }>;
       if (!attachments || attachments.length === 0) {
         // Backward compatible: plain text
@@ -238,9 +238,9 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           | { type: "text"; text: string }
           | { type: "image_url"; image_url: { url: string; detail: string } }
           | {
-              type: "file";
-              file_data: { data: string; filename: string; mime_type: string };
-            }
+            type: "file";
+            file_data: { data: string; filename: string; mime_type: string };
+          }
         )[] = [{ type: "text", text }];
         for (const a of attachments) {
           if (a.type && a.type.startsWith("image/")) {
@@ -749,23 +749,61 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                         font-size: 0.9em;
                     }
                     .code-block {
-                        position: relative;
                         background: var(--vscode-textCodeBlock-background);
                         border: 1px solid var(--vscode-textCodeBlock-border);
                         border-radius: 3px;
-                        padding: 8px;
                         margin: 4px 0;
+                        overflow: hidden;
+                    }
+                    .code-block summary {
+                        cursor: pointer;
+                        padding: 8px 12px;
+                        background: var(--vscode-editor-background);
+                        user-select: none;
+                        list-style: none;
+                    }
+                    .code-block summary::-webkit-details-marker {
+                        display: none;
+                    }
+                    .code-block summary::before {
+                        content: "▸ ";
+                        margin-right: 4px;
+                    }
+                    .code-block[open] summary::before {
+                        content: "▾ ";
+                    }
+                    .code-header {
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        width: 100%;
+                    }
+                    .code-lang {
+                        color: var(--vscode-textCodeBlock-foreground);
+                        font-family: var(--vscode-editor-font-family);
+                        font-size: 0.85em;
+                    }
+                    .code-actions {
+                        display: flex;
+                        gap: 6px;
+                    }
+                    .code-content {
+                        margin: 0;
+                        padding: 12px;
+                        background: var(--vscode-textCodeBlock-background);
+                        color: var(--vscode-editor-foreground);
+                        overflow-x: auto;
                         font-family: var(--vscode-editor-font-family);
                         font-size: 0.9em;
-                        overflow-x: auto;
+                        white-space: pre-wrap;
+                        word-break: break-word;
+                        line-height: 1.5;
                     }
                     .code-block code {
                         font-family: inherit;
+                        color: inherit;
                     }
                     .copy-btn, .run-btn {
-                        position: absolute;
-                        top: 4px;
-                        right: 4px;
                         background: var(--vscode-button-background);
                         color: var(--vscode-button-foreground);
                         border: none;
@@ -774,8 +812,48 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                         cursor: pointer;
                         font-size: 0.8em;
                     }
-                    .run-btn {
-                        right: 32px;
+                    .copy-btn:hover, .run-btn:hover {
+                        background: var(--vscode-button-hoverBackground);
+                    }
+                    .thinking-block {
+                        background: var(--vscode-editor-background);
+                        border: 1px solid var(--vscode-input-border);
+                        border-radius: 3px;
+                        margin: 4px 0;
+                        overflow: hidden;
+                    }
+                    .thinking-block summary {
+                        cursor: pointer;
+                        padding: 8px 12px;
+                        user-select: none;
+                        list-style: none;
+                        color: var(--vscode-textPreformat-foreground);
+                    }
+                    .thinking-block summary::-webkit-details-marker {
+                        display: none;
+                    }
+                    .thinking-block summary::before {
+                        content: "▸ ";
+                        margin-right: 4px;
+                    }
+                    .thinking-block[open] summary::before {
+                        content: "▾ ";
+                    }
+                    .thinking-toggle {
+                        font-weight: 500;
+                        font-style: italic;
+                    }
+                    .thinking-content {
+                        margin: 0;
+                        padding: 12px;
+                        background: var(--vscode-input-background);
+                        border-top: 1px solid var(--vscode-input-border);
+                        color: var(--vscode-editor-foreground);
+                        font-family: var(--vscode-editor-font-family);
+                        font-size: 0.85em;
+                        white-space: pre-wrap;
+                        word-break: break-word;
+                        line-height: 1.5;
                     }
                     .inline-code {
                         background: var(--vscode-textCodeBlock-background);

@@ -1,6 +1,8 @@
 use crate::config::{save_app_config, AppConfig};
 use crate::i18n::I18n;
 
+const MAX_SNAPSHOTS: usize = 20;
+
 pub struct ConfigEditorView {
     draft: String,
     status: String,
@@ -10,6 +12,7 @@ pub struct ConfigEditorView {
     is_valid_json: bool,
     json_parse_error: String,
     pub applied: bool,
+    draft_len_at_validation: usize,
 }
 
 impl ConfigEditorView {
@@ -23,6 +26,7 @@ impl ConfigEditorView {
             is_valid_json: true,
             json_parse_error: String::new(),
             applied: false,
+            draft_len_at_validation: 0,
         }
     }
 
@@ -67,22 +71,24 @@ impl ConfigEditorView {
                     ui.add_space(6.0);
                 }
 
-                ui.add(
+                let edit_response = ui.add(
                     egui::TextEdit::multiline(&mut self.draft)
                         .desired_rows(12)
                         .desired_width(f32::INFINITY),
                 );
 
-                // Live JSON validation
-                let validation_result = serde_json::from_str::<serde_json::Value>(&self.draft);
-                match &validation_result {
-                    Ok(_) => {
-                        self.is_valid_json = true;
-                        self.json_parse_error.clear();
-                    }
-                    Err(e) => {
-                        self.is_valid_json = false;
-                        self.json_parse_error = format!("⚠ {}", e);
+                // Live JSON validation — only re-parse when the draft changes
+                if edit_response.changed() || self.draft.len() != self.draft_len_at_validation {
+                    self.draft_len_at_validation = self.draft.len();
+                    match serde_json::from_str::<serde_json::Value>(&self.draft) {
+                        Ok(_) => {
+                            self.is_valid_json = true;
+                            self.json_parse_error.clear();
+                        }
+                        Err(e) => {
+                            self.is_valid_json = false;
+                            self.json_parse_error = format!("⚠ {}", e);
+                        }
                     }
                 }
 
@@ -107,6 +113,9 @@ impl ConfigEditorView {
                         self.status = i18n.t("config.reloaded").to_string();
                     }
                     if safe_mode_enabled && ui.button(i18n.t("config.createSnapshot")).clicked() {
+                        if self.snapshots.len() >= MAX_SNAPSHOTS {
+                            self.snapshots.remove(0);
+                        }
                         self.snapshots.push(self.draft.clone());
                         self.status = format!(
                             "{} (#{}).",
@@ -118,6 +127,9 @@ impl ConfigEditorView {
                         match serde_json::from_str::<AppConfig>(&self.draft) {
                             Ok(new_cfg) => {
                                 if safe_mode_enabled {
+                                    if self.snapshots.len() >= MAX_SNAPSHOTS {
+                                        self.snapshots.remove(0);
+                                    }
                                     self.snapshots.push(
                                         serde_json::to_string_pretty(config).unwrap_or_default(),
                                     );

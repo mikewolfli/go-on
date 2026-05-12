@@ -112,52 +112,55 @@ pub(super) fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSn
 
 pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
     let slow_top_n = server.runtime_config.trace_slow_top_n.max(1);
-    let events = trace_events()
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
-
-    let mut requests = events
-        .iter()
-        .filter(|event| event.event_type == "request.end")
-        .map(|event| {
-            let method = event
-                .inputs
-                .get("attributes")
-                .and_then(|value| value.get("method"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_string();
-            json!({
-                "request_id": event.task_id,
-                "method": method,
-                "duration_ms": event.duration_ms,
-                "status": event.status,
-                "timestamp": event.timestamp,
-            })
-        })
-        .collect::<Vec<_>>();
-    requests.sort_by(|left, right| {
-        right
-            .get("duration_ms")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            .cmp(&left.get("duration_ms").and_then(Value::as_u64).unwrap_or(0))
-    });
-    requests.truncate(slow_top_n);
-
+    let mut requests: Vec<(u64, Value)> = Vec::new();
     let mut phase_buckets: HashMap<String, Vec<u64>> = HashMap::new();
-    for event in &events {
-        if event.duration_ms == 0 {
-            continue;
-        }
-        if event.event_type.starts_with("phase.") || event.event_type == "request.end" {
-            phase_buckets
-                .entry(event.phase.clone())
-                .or_default()
-                .push(event.duration_ms);
+    let mut by_pua_stage: HashMap<String, u64> = HashMap::new();
+    let mut buffered_events = 0usize;
+
+    if let Ok(events) = trace_events().lock() {
+        buffered_events = events.len();
+        for event in events.iter() {
+            if event.event_type == "request.end" {
+                let method = event
+                    .inputs
+                    .get("attributes")
+                    .and_then(|value| value.get("method"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string();
+                requests.push((
+                    event.duration_ms,
+                    json!({
+                        "request_id": event.task_id,
+                        "method": method,
+                        "duration_ms": event.duration_ms,
+                        "status": event.status,
+                        "timestamp": event.timestamp,
+                    }),
+                ));
+            }
+
+            if event.duration_ms > 0
+                && (event.event_type.starts_with("phase.") || event.event_type == "request.end")
+            {
+                phase_buckets
+                    .entry(event.phase.clone())
+                    .or_default()
+                    .push(event.duration_ms);
+            }
+
+            if let Some(stage) = event.pua_stage.as_ref() {
+                *by_pua_stage.entry(stage.clone()).or_insert(0) += 1;
+            }
         }
     }
+
+    requests.sort_by(|left, right| right.0.cmp(&left.0));
+    requests.truncate(slow_top_n);
+    let requests = requests
+        .into_iter()
+        .map(|(_, payload)| payload)
+        .collect::<Vec<_>>();
 
     let mut by_phase = serde_json::Map::new();
     for (phase, mut samples) in phase_buckets {
@@ -184,13 +187,6 @@ pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
         );
     }
 
-    let mut by_pua_stage: HashMap<String, u64> = HashMap::new();
-    for event in &events {
-        if let Some(stage) = event.pua_stage.as_ref() {
-            *by_pua_stage.entry(stage.clone()).or_insert(0) += 1;
-        }
-    }
-
     let sampling_rate = server
         .observability
         .telemetry_runtime
@@ -200,7 +196,7 @@ pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
     let metrics = server.observability.metrics.snapshot();
     json!({
         "sampling_rate": sampling_rate,
-        "buffered_events": events.len(),
+        "buffered_events": buffered_events,
         "slow_requests_top_n": requests,
         "phase_latency": by_phase,
         "pua_stage_counts": by_pua_stage,

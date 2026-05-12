@@ -269,10 +269,7 @@ impl MonitorView {
                                     .await
                                     {
                                         Ok(r) => r,
-                                        Err(_) => {
-                                            eprintln!("Warning: metrics_window_query timed out");
-                                            Err("timeout".to_string())
-                                        }
+                                        Err(_) => Err("timeout".to_string()),
                                     };
                                     let payload = match result {
                                         Ok(series) => {
@@ -316,10 +313,7 @@ impl MonitorView {
                                     .await
                                     {
                                         Ok(r) => r,
-                                        Err(_) => {
-                                            eprintln!("Warning: metrics_errors_summary timed out");
-                                            Err("timeout".to_string())
-                                        }
+                                        Err(_) => Err("timeout".to_string()),
                                     };
                                     let payload = match result {
                                         Ok((groups, failures)) => {

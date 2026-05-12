@@ -1,5 +1,6 @@
 use super::*;
 use crate::acp::prelude::ConversationCheckpoint;
+use std::collections::HashSet;
 
 pub(super) async fn list_checkpoint_records(
     server: &AcpServer,
@@ -70,24 +71,25 @@ pub(super) async fn prune_checkpoints(
         .cloned()
         .collect::<Vec<_>>();
     checkpoints.sort_by_key(|checkpoint| std::cmp::Reverse(checkpoint.created_at));
-    let retained = checkpoints
+    let retained_ids = checkpoints
         .iter()
         .take(keep)
         .map(|checkpoint| checkpoint.checkpoint_id.clone())
         .collect::<Vec<_>>();
+    let retained_set = retained_ids.iter().cloned().collect::<HashSet<_>>();
     let before = state.checkpoints.len();
     state.checkpoints.retain(|checkpoint| {
         checkpoint.conversation_id != conversation_id
             || checkpoint.branch_id != branch_id
-            || retained.contains(&checkpoint.checkpoint_id)
+            || retained_set.contains(&checkpoint.checkpoint_id)
     });
     let removed = before.saturating_sub(state.checkpoints.len());
 
     let branch_key = format!("{}:{}", conversation_id, branch_id);
     let mut repaired_heads = 0;
     if let Some(head) = state.branch_heads.get(&branch_key).cloned() {
-        if !retained.contains(&head) {
-            if let Some(new_head) = retained.first() {
+        if !retained_set.contains(&head) {
+            if let Some(new_head) = retained_ids.first() {
                 state.branch_heads.insert(branch_key, new_head.clone());
                 repaired_heads = 1;
             }

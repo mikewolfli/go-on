@@ -148,6 +148,9 @@ struct BrainLoopInner {
     reflections: Vec<BrainLoopReflection>,
     config: BrainLoopConfig,
     total_cycles: u64,
+    total_plans_started: u64,
+    completed_plans_total: u64,
+    failed_plans_total: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +176,9 @@ impl BrainLoop {
                 reflections: Vec::new(),
                 config,
                 total_cycles: 0,
+                total_plans_started: 0,
+                completed_plans_total: 0,
+                failed_plans_total: 0,
             })),
             next_plan_id: Arc::new(AtomicU64::new(1)),
         }
@@ -188,18 +194,20 @@ impl BrainLoop {
         let id = format!("plan-{id_num}");
 
         let now = now_epoch_ms();
+        let mut inner = lock_guard(&self.inner);
+        let max_iterations = inner.config.max_iterations;
         let plan = BrainLoopPlan {
             id: id.clone(),
             goal: goal.to_string(),
             steps,
-            max_iterations: lock_guard(&self.inner).config.max_iterations,
+            max_iterations,
             current_iteration: 0,
             created_ms: now,
             phase: BrainLoopPhase::Planning,
             fail_reason: String::new(),
         };
-
-        lock_guard(&self.inner).plans.insert(id.clone(), plan);
+        inner.plans.insert(id.clone(), plan);
+        inner.total_plans_started += 1;
         Ok(id)
     }
 
@@ -273,6 +281,8 @@ impl BrainLoop {
                 plan.phase = BrainLoopPhase::Failed;
                 plan.fail_reason = format!("exceeded maximum iterations ({})", plan.max_iterations);
                 inner.plans.insert(plan_id.to_string(), plan);
+                inner.failed_plans_total += 1;
+                Self::evict_oldest_terminal_plan(&mut inner.plans);
                 return Ok(());
             }
         }
@@ -349,6 +359,10 @@ impl BrainLoop {
             reflection_ms: now,
         };
 
+        const MAX_REFLECTIONS: usize = 1000;
+        if inner.reflections.len() >= MAX_REFLECTIONS {
+            inner.reflections.remove(0);
+        }
         inner.reflections.push(reflection.clone());
         inner.plans.insert(plan_id.to_string(), plan);
 
@@ -396,8 +410,9 @@ impl BrainLoop {
         if plan.phase.is_terminal() {
             anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
         }
-
         plan.phase = BrainLoopPhase::Completed;
+        inner.completed_plans_total += 1;
+        Self::evict_oldest_terminal_plan(&mut inner.plans);
         Ok(())
     }
 
@@ -412,9 +427,10 @@ impl BrainLoop {
         if plan.phase.is_terminal() {
             anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
         }
-
         plan.phase = BrainLoopPhase::Failed;
         plan.fail_reason = reason.to_string();
+        inner.failed_plans_total += 1;
+        Self::evict_oldest_terminal_plan(&mut inner.plans);
         Ok(())
     }
 
@@ -429,8 +445,9 @@ impl BrainLoop {
         if plan.phase.is_terminal() {
             anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
         }
-
         plan.phase = BrainLoopPhase::Cancelled;
+        inner.failed_plans_total += 1;
+        Self::evict_oldest_terminal_plan(&mut inner.plans);
         Ok(())
     }
 
@@ -450,37 +467,40 @@ impl BrainLoop {
     /// Return a snapshot of runtime metrics.
     pub fn profile(&self) -> BrainLoopProfile {
         let inner = lock_guard(&self.inner);
-
-        let total_plans = inner.plans.len() as u64;
+        let total_plans = inner.total_plans_started;
         let active_plans = inner
             .plans
             .values()
             .filter(|p| !p.phase.is_terminal())
             .count() as u64;
-        let completed_plans = inner
-            .plans
-            .values()
-            .filter(|p| p.phase == BrainLoopPhase::Completed)
-            .count() as u64;
-        let failed_plans = inner
-            .plans
-            .values()
-            .filter(|p| p.phase == BrainLoopPhase::Failed)
-            .count() as u64;
-
         let avg = if total_plans > 0 {
             inner.total_cycles as f64 / total_plans as f64
         } else {
             0.0
         };
-
         BrainLoopProfile {
             total_plans,
             active_plans,
-            completed_plans,
-            failed_plans,
+            completed_plans: inner.completed_plans_total,
+            failed_plans: inner.failed_plans_total,
             total_cycles: inner.total_cycles,
             avg_cycles_per_plan: avg,
+        }
+    }
+
+    // Evict the oldest terminal plan when the cap is exceeded.
+    fn evict_oldest_terminal_plan(plans: &mut HashMap<String, BrainLoopPlan>) {
+        const MAX_TERMINAL_PLANS: usize = 200;
+        let terminal_count = plans.values().filter(|p| p.phase.is_terminal()).count();
+        if terminal_count > MAX_TERMINAL_PLANS {
+            if let Some(oldest_id) = plans
+                .iter()
+                .filter(|(_, p)| p.phase.is_terminal())
+                .min_by_key(|(_, p)| p.created_ms)
+                .map(|(id, _)| id.clone())
+            {
+                plans.remove(&oldest_id);
+            }
         }
     }
 }

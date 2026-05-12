@@ -132,26 +132,34 @@ impl WorkflowLearningBus {
 
     /// Historical success rate for a given agent, over the entire window.
     pub fn agent_success_rate(&self, agent: &str) -> Option<f64> {
-        let agent_events: Vec<_> = self.events.iter().filter(|e| e.agent == agent).collect();
-        if agent_events.is_empty() {
-            return None;
+        let (total, successes) = self
+            .events
+            .iter()
+            .filter(|e| e.agent == agent)
+            .fold((0usize, 0usize), |(total, successes), e| {
+                (total + 1, successes + e.success as usize)
+            });
+        if total == 0 {
+            None
+        } else {
+            Some(successes as f64 / total as f64)
         }
-        let successes = agent_events.iter().filter(|e| e.success).count();
-        Some(successes as f64 / agent_events.len() as f64)
     }
 
     /// Historical success rate for a given task type.
     pub fn task_type_success_rate(&self, task_type: &str) -> Option<f64> {
-        let matching: Vec<_> = self
+        let (total, successes) = self
             .events
             .iter()
             .filter(|e| e.task_type == task_type)
-            .collect();
-        if matching.is_empty() {
-            return None;
+            .fold((0usize, 0usize), |(total, successes), e| {
+                (total + 1, successes + e.success as usize)
+            });
+        if total == 0 {
+            None
+        } else {
+            Some(successes as f64 / total as f64)
         }
-        let successes = matching.iter().filter(|e| e.success).count();
-        Some(successes as f64 / matching.len() as f64)
     }
 
     /// All events (for snapshot / endpoint)
@@ -178,6 +186,8 @@ pub struct KnowledgeInsight {
     pub created_ms: u64,
 }
 
+const MAX_KNOWLEDGE_INSIGHTS: usize = 500;
+
 #[derive(Debug, Default)]
 pub struct KnowledgeBus {
     insights: Vec<KnowledgeInsight>,
@@ -185,6 +195,9 @@ pub struct KnowledgeBus {
 
 impl KnowledgeBus {
     pub fn add_insight(&mut self, insight: KnowledgeInsight) {
+        if self.insights.len() >= MAX_KNOWLEDGE_INSIGHTS {
+            self.insights.remove(0);
+        }
         self.insights.push(insight);
     }
 

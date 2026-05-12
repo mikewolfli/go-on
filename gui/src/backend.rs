@@ -132,18 +132,9 @@ impl BackendClient {
         if let Ok(cache) = self.models_cache.lock() {
             let (cached_models, timestamp) = &*cache;
             if let Some(models) = cached_models {
-                let elapsed_secs = timestamp.elapsed().as_secs();
-                if elapsed_secs < MODELS_CACHE_TTL_SECS {
-                    eprintln!(
-                        "[Cache] Model list hit ({}/{}s)",
-                        elapsed_secs, MODELS_CACHE_TTL_SECS
-                    );
+                if timestamp.elapsed().as_secs() < MODELS_CACHE_TTL_SECS {
                     return models.clone();
                 }
-                eprintln!(
-                    "[Cache] Model list expired ({}s old), refreshing",
-                    elapsed_secs
-                );
                 stale_cached = Some(models.clone());
             }
         }

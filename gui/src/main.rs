@@ -183,9 +183,27 @@ fn make_icon() -> egui::IconData {
     }
 }
 
+#[cfg(has_app_icon)]
+fn load_embedded_icon() -> Option<egui::IconData> {
+    let bytes = include_bytes!(env!("GOON_ICON_PATH"));
+    let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Ico).ok()?;
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Some(egui::IconData {
+        rgba: rgba.into_raw(),
+        width,
+        height,
+    })
+}
+
+#[cfg(not(has_app_icon))]
+fn load_embedded_icon() -> Option<egui::IconData> {
+    None
+}
+
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
-    let icon = make_icon();
+    let icon = load_embedded_icon().unwrap_or_else(make_icon);
     // Load config to detect language for localized window title
     let config = crate::config::load_app_config();
     let title = app::GoOnApp::detect_initial_window_title(&config);

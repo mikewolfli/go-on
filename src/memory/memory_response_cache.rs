@@ -19,7 +19,13 @@ impl MemoryResponseCache {
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
         let mut guard = self.inner.lock().ok()?;
-        guard.retain(|_, entry| entry.expires_at > now);
+        // Only evict the requested key if expired; bulk cleanup happens in purge_expired().
+        if let Some(entry) = guard.get(key) {
+            if entry.expires_at <= now {
+                guard.remove(key);
+                return None;
+            }
+        }
         guard.get(key).cloned()
     }
 

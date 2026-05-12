@@ -81,19 +81,7 @@ pub async fn run_background_maintenance_loop(ctx: BackgroundContext) {
     maintenance_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     health_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-    let max_iterations: u64 = 1000;
-    let mut iteration_count: u64 = 0;
-
     loop {
-        if iteration_count >= max_iterations {
-            info!(
-                "background maintenance loop reached max iterations ({})",
-                max_iterations
-            );
-            break;
-        }
-        iteration_count += 1;
-
         tokio::select! {
             _ = ctx.shutdown_notify.notified() => break,
             _ = maintenance_interval.tick() => {

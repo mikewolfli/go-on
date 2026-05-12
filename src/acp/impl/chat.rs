@@ -562,11 +562,15 @@ pub(crate) async fn process_chat_request(
         None
     };
 
+    let has_requested_phase = requested_phase.is_some();
+    let has_controller_phase = controller_phase.is_some();
+    let has_adaptive_phase = adaptive_phase.is_some();
+
     // Compute final phase choice exactly once
     let chosen_phase = requested_phase
         .cloned()
-        .or_else(|| controller_phase.clone())
-        .or_else(|| adaptive_phase.clone());
+        .or(controller_phase)
+        .or(adaptive_phase);
 
     // Defensive fallback: if the requested phase is not recognized by the flow
     // configuration (e.g. an old session cached an obsolete phase name), silently
@@ -595,11 +599,11 @@ pub(crate) async fn process_chat_request(
             "filtered runtime-unavailable agents before chat execution"
         );
     }
-    let phase_origin = if requested_phase.is_some() {
+    let phase_origin = if has_requested_phase {
         "requested"
-    } else if controller_phase.is_some() {
+    } else if has_controller_phase {
         "controller"
-    } else if adaptive_phase.is_some() {
+    } else if has_adaptive_phase {
         "adaptive"
     } else {
         "default"
@@ -743,23 +747,23 @@ pub(crate) async fn process_chat_request(
         .and_then(|value| value.as_str())
         .map(|value| value.to_string());
 
-    if let Some(primary) = configured_primary_agent.clone() {
+    if let Some(primary) = configured_primary_agent.as_ref() {
         if let Ok(mut state) = agent_switch_state().lock() {
             state
                 .primary_agent_by_phase
-                .insert(phase_name.clone(), primary);
+                .insert(phase_name.clone(), primary.clone());
         }
     }
 
     // Priority order rules:
     // 1) If request explicitly chooses preferred_agent, honor it immediately and persist choice.
     // 2) Otherwise, if phase has a stored forced fallback agent, probe primary first and then forced agent.
-    if let Some(preferred) = preferred_agent_from_request.clone() {
-        if reorder_agents_with_priority(&mut resolved.agents, &preferred) {
+    if let Some(preferred) = preferred_agent_from_request.as_deref() {
+        if reorder_agents_with_priority(&mut resolved.agents, preferred) {
             if let Ok(mut state) = agent_switch_state().lock() {
                 state
                     .forced_agent_by_phase
-                    .insert(phase_name.clone(), preferred);
+                    .insert(phase_name.clone(), preferred.to_string());
             }
         }
     } else if let Ok(state) = agent_switch_state().lock() {
@@ -1313,7 +1317,7 @@ pub(crate) async fn process_chat_request(
         server,
         &conversation_id,
         &branch_id,
-        checkpoint_messages.clone(),
+        checkpoint_messages,
         None,
         None,
     )

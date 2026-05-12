@@ -223,6 +223,7 @@ impl ProvidersView {
                 {
                     Ok(m) => m,
                     Err(_) => {
+                        #[cfg(debug_assertions)]
                         eprintln!("Warning: Failed to fetch models from backend (timeout)");
                         std::collections::HashMap::new()
                     }
@@ -672,6 +673,7 @@ impl ProvidersView {
                                                 {
                                                     Ok(r) => r,
                                                     Err(_) => {
+                                                        #[cfg(debug_assertions)]
                                                         eprintln!("Warning: auto-push configure_provider timed out");
                                                         Err("timeout".to_string())
                                                     }
@@ -734,6 +736,7 @@ impl ProvidersView {
                                     {
                                         Ok(r) => r,
                                         Err(_) => {
+                                            #[cfg(debug_assertions)]
                                             eprintln!("Warning: configure_provider timed out");
                                             Err("timeout".to_string())
                                         }
@@ -765,6 +768,7 @@ impl ProvidersView {
                                     {
                                         Ok(r) => r,
                                         Err(_) => {
+                                            #[cfg(debug_assertions)]
                                             eprintln!(
                                                 "Warning: provider_test_connection timed out"
                                             );
@@ -825,6 +829,7 @@ impl ProvidersView {
                                     {
                                         Ok(r) => r,
                                         Err(_) => {
+                                            #[cfg(debug_assertions)]
                                             eprintln!(
                                                 "Warning: provider_test_completion timed out"
                                             );
@@ -882,6 +887,7 @@ impl ProvidersView {
                                     {
                                         Ok(r) => r,
                                         Err(_) => {
+                                            #[cfg(debug_assertions)]
                                             eprintln!("Warning: provider_capabilities timed out");
                                             Err("timeout".to_string())
                                         }

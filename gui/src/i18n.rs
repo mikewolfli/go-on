@@ -283,6 +283,21 @@ impl I18n {
             tr!(en, "release", cn, "正式版", tw, "正式版"),
         );
         m.insert(
+            "about.projectTitle",
+            tr!(
+                en,
+                "Go-On AI Orchestrator",
+                cn,
+                "Go-On AI 编排器",
+                tw,
+                "Go-On AI 編排器"
+            ),
+        );
+        m.insert(
+            "about.projectDescription",
+            tr!(en, "An open-source ACP/MCP intelligent agent orchestration runtime with cross-platform GUI.", cn, "一个开源的 ACP/MCP 智能体编排运行时，附带跨平台图形界面。", tw, "一個開源的 ACP/MCP 智能體編排執行時，附帶跨平台圖形介面。"),
+        );
+        m.insert(
             "about.guiVersion",
             tr!(en, "GUI Version", cn, "GUI 版本", tw, "GUI 版本"),
         );

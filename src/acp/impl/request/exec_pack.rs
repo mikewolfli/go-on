@@ -207,31 +207,52 @@ pub(super) fn workflow_run_list_payload(params: &Value) -> Value {
         .map(|value| value as usize)
         .unwrap_or(0);
 
-    let status_filter = params.get("status");
-    let mut records = workflow_runs()
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
-    records.reverse();
+    enum StatusFilter {
+        Any,
+        One(String),
+        Many(std::collections::HashSet<String>),
+    }
 
-    let filtered = records
-        .into_iter()
-        .filter(|record| match status_filter {
-            Some(Value::String(single)) => record.status == *single,
-            Some(Value::Array(items)) => items
+    let status_filter = match params.get("status") {
+        Some(Value::String(single)) => StatusFilter::One(single.clone()),
+        Some(Value::Array(items)) => {
+            let values = items
                 .iter()
                 .filter_map(Value::as_str)
-                .any(|status| status == record.status),
-            _ => true,
-        })
-        .collect::<Vec<_>>();
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            if values.is_empty() {
+                StatusFilter::Any
+            } else {
+                StatusFilter::Many(values.into_iter().collect())
+            }
+        }
+        _ => StatusFilter::Any,
+    };
 
-    let total = filtered.len();
-    let runs = filtered
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect::<Vec<_>>();
+    let matches_status = |record: &WorkflowRunRecord| match &status_filter {
+        StatusFilter::Any => true,
+        StatusFilter::One(single) => record.status == *single,
+        StatusFilter::Many(items) => items.contains(&record.status),
+    };
+
+    let (total, runs) = match workflow_runs().lock() {
+        Ok(guard) => {
+            let mut total = 0usize;
+            let mut runs = Vec::new();
+            for record in guard.iter().rev() {
+                if !matches_status(record) {
+                    continue;
+                }
+                if total >= offset && runs.len() < limit {
+                    runs.push(record.clone());
+                }
+                total += 1;
+            }
+            (total, runs)
+        }
+        Err(_) => (0usize, Vec::new()),
+    };
 
     json!({
         "ok": true,

@@ -1,294 +1,4 @@
 use super::*;
-use std::collections::{HashMap, VecDeque};
-use std::hash::{Hash, Hasher};
-use std::sync::{Mutex, OnceLock};
-
-const MARKDOWN_CACHE_MAX_ENTRIES: usize = 256;
-
-#[derive(Clone)]
-enum CachedNode {
-    Document(Vec<CachedNode>),
-    Paragraph(Vec<CachedNode>),
-    Heading {
-        level: u8,
-        text: String,
-    },
-    List {
-        ordered: bool,
-        items: Vec<Vec<CachedNode>>,
-    },
-    CodeBlock {
-        lang: String,
-        code: String,
-    },
-    Code(String),
-    Strong(String),
-    Emph(String),
-    Text(String),
-    ThematicBreak,
-    BlockQuote(Vec<CachedNode>),
-    Link {
-        url: String,
-        label: String,
-    },
-    Other(Vec<CachedNode>),
-}
-
-#[derive(Clone)]
-struct CachedMarkdownDoc {
-    source: String,
-    root: CachedNode,
-}
-
-struct MarkdownRenderCache {
-    docs: HashMap<u64, CachedMarkdownDoc>,
-    order: VecDeque<u64>,
-}
-
-impl MarkdownRenderCache {
-    fn new() -> Self {
-        Self {
-            docs: HashMap::new(),
-            order: VecDeque::new(),
-        }
-    }
-
-    fn get_or_parse(&mut self, text: &str) -> CachedNode {
-        let key = markdown_cache_key(text);
-        if let Some(doc) = self.docs.get(&key) {
-            if doc.source == text {
-                let cached = doc.root.clone();
-                self.touch(key);
-                return cached;
-            }
-        }
-
-        let parsed = parse_markdown_cached_node(text);
-        self.docs.insert(
-            key,
-            CachedMarkdownDoc {
-                source: text.to_string(),
-                root: parsed.clone(),
-            },
-        );
-        self.touch(key);
-        while self.order.len() > MARKDOWN_CACHE_MAX_ENTRIES {
-            if let Some(evicted) = self.order.pop_front() {
-                self.docs.remove(&evicted);
-            }
-        }
-        parsed
-    }
-
-    fn touch(&mut self, key: u64) {
-        if let Some(pos) = self.order.iter().position(|k| *k == key) {
-            self.order.remove(pos);
-        }
-        self.order.push_back(key);
-    }
-}
-
-fn markdown_cache() -> &'static Mutex<MarkdownRenderCache> {
-    static CACHE: OnceLock<Mutex<MarkdownRenderCache>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(MarkdownRenderCache::new()))
-}
-
-fn markdown_cache_key(text: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut hasher);
-    hasher.finish()
-}
-
-fn parse_markdown_cached_node(text: &str) -> CachedNode {
-    let mut options = comrak::Options::default();
-    options.extension.strikethrough = true;
-    options.extension.tagfilter = false;
-    options.render.hardbreaks = true;
-    options.render.github_pre_lang = true;
-
-    let arena = comrak::Arena::new();
-    let root = comrak::parse_document(&arena, text, &options);
-    to_cached_node(root)
-}
-
-fn to_cached_node<'a>(node: &'a comrak::nodes::AstNode<'a>) -> CachedNode {
-    let ast = node.data.borrow();
-    match &ast.value {
-        comrak::nodes::NodeValue::Document => {
-            CachedNode::Document(node.children().map(to_cached_node).collect())
-        }
-        comrak::nodes::NodeValue::Paragraph => {
-            CachedNode::Paragraph(node.children().map(to_cached_node).collect())
-        }
-        comrak::nodes::NodeValue::Heading(heading) => CachedNode::Heading {
-            level: heading.level,
-            text: collect_text(node),
-        },
-        comrak::nodes::NodeValue::List(list) => {
-            let ordered = list.list_type == comrak::nodes::ListType::Ordered;
-            let mut items = Vec::new();
-            for child in node.children() {
-                items.push(child.children().map(to_cached_node).collect());
-            }
-            CachedNode::List { ordered, items }
-        }
-        comrak::nodes::NodeValue::CodeBlock(info) => CachedNode::CodeBlock {
-            lang: info.info.trim().to_string(),
-            code: collect_text(node),
-        },
-        comrak::nodes::NodeValue::Code(..) => CachedNode::Code(collect_text(node)),
-        comrak::nodes::NodeValue::Strong => CachedNode::Strong(collect_text(node)),
-        comrak::nodes::NodeValue::Emph => CachedNode::Emph(collect_text(node)),
-        comrak::nodes::NodeValue::Text(ref literal) => CachedNode::Text(literal.to_string()),
-        comrak::nodes::NodeValue::ThematicBreak => CachedNode::ThematicBreak,
-        comrak::nodes::NodeValue::BlockQuote => {
-            CachedNode::BlockQuote(node.children().map(to_cached_node).collect())
-        }
-        comrak::nodes::NodeValue::Link(link) => CachedNode::Link {
-            url: link.url.to_string(),
-            label: collect_text(node),
-        },
-        _ => CachedNode::Other(node.children().map(to_cached_node).collect()),
-    }
-}
-
-fn render_cached_node(
-    ui: &mut egui::Ui,
-    node: &CachedNode,
-    text_color: egui::Color32,
-    copy_code_hint: &str,
-) {
-    match node {
-        CachedNode::Document(children) => {
-            for child in children {
-                render_cached_node(ui, child, text_color, copy_code_hint);
-            }
-        }
-        CachedNode::Paragraph(children) => {
-            ui.vertical(|ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.set_max_width(ui.available_width());
-                    for child in children {
-                        render_cached_node(ui, child, text_color, copy_code_hint);
-                    }
-                });
-            });
-            ui.add_space(4.0);
-        }
-        CachedNode::Heading { level, text } => {
-            let size = match *level {
-                1 => 20.0,
-                2 => 17.0,
-                3 => 15.0,
-                _ => 14.0,
-            };
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(text)
-                        .size(size)
-                        .strong()
-                        .color(text_color),
-                )
-                .wrap(),
-            );
-            ui.add_space(4.0);
-        }
-        CachedNode::List { ordered, items } => {
-            for (i, item_nodes) in items.iter().enumerate() {
-                let prefix = if *ordered {
-                    format!("{}. ", i + 1)
-                } else {
-                    "• ".to_string()
-                };
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(prefix).color(text_color));
-                    for child in item_nodes {
-                        render_cached_node(ui, child, text_color, copy_code_hint);
-                    }
-                });
-            }
-            ui.add_space(4.0);
-        }
-        CachedNode::CodeBlock { lang, code } => {
-            egui::Frame::new()
-                .fill(egui::Color32::from_rgb(40, 44, 52))
-                .corner_radius(6.0)
-                .inner_margin(egui::Margin::symmetric(10i8, 8i8))
-                .show(ui, |ui| {
-                    if !lang.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.colored_label(egui::Color32::from_rgb(150, 152, 160), lang);
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                                if ui.button("📋").on_hover_text(copy_code_hint).clicked() {
-                                    ui.ctx().copy_text(code.clone());
-                                }
-                            });
-                        });
-                    }
-                    egui::ScrollArea::horizontal()
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            ui.add(egui::Label::new(
-                                egui::RichText::new(code)
-                                    .font(egui::FontId::monospace(13.0))
-                                    .color(egui::Color32::from_rgb(200, 204, 212)),
-                            ));
-                        });
-                });
-            ui.add_space(4.0);
-        }
-        CachedNode::Code(code) => {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(code)
-                        .color(egui::Color32::from_rgb(220, 80, 80))
-                        .family(egui::FontFamily::Monospace),
-                )
-                .wrap(),
-            );
-        }
-        CachedNode::Strong(text) => {
-            ui.add(egui::Label::new(egui::RichText::new(text).strong().color(text_color)).wrap());
-        }
-        CachedNode::Emph(text) => {
-            ui.add(egui::Label::new(egui::RichText::new(text).italics().color(text_color)).wrap());
-        }
-        CachedNode::Text(text) => {
-            if !text.trim().is_empty() {
-                ui.add(egui::Label::new(egui::RichText::new(text).color(text_color)).wrap());
-            }
-        }
-        CachedNode::ThematicBreak => {
-            ui.separator();
-            ui.add_space(4.0);
-        }
-        CachedNode::BlockQuote(children) => {
-            egui::Frame::new()
-                .fill(egui::Color32::from_rgba_premultiplied(128, 128, 128, 20))
-                .corner_radius(4.0)
-                .inner_margin(egui::Margin::symmetric(10i8, 4i8))
-                .show(ui, |ui| {
-                    for child in children {
-                        render_cached_node(ui, child, text_color, copy_code_hint);
-                    }
-                });
-            ui.add_space(4.0);
-        }
-        CachedNode::Link { url, label } => {
-            let display = if label.is_empty() {
-                url.clone()
-            } else {
-                label.clone()
-            };
-            let _ = ui.link(display).clicked();
-        }
-        CachedNode::Other(children) => {
-            for child in children {
-                render_cached_node(ui, child, text_color, copy_code_hint);
-            }
-        }
-    }
-}
 
 impl ChatView {
     pub(super) fn render_markdown(
@@ -316,12 +26,279 @@ impl ChatView {
             return;
         }
 
-        let parsed = if let Ok(mut cache) = markdown_cache().lock() {
-            cache.get_or_parse(text)
-        } else {
-            parse_markdown_cached_node(text)
+        render_with_thinking(ui, text, text_color, copy_code_hint);
+    }
+}
+
+/// Split and render text with <thinking>...</thinking> blocks
+fn render_with_thinking(
+    ui: &mut egui::Ui,
+    text: &str,
+    text_color: egui::Color32,
+    copy_code_hint: &str,
+) {
+    const OPEN: &str = "<thinking>";
+    const CLOSE: &str = "</thinking>";
+
+    let lower = text.to_ascii_lowercase();
+    if let Some(start) = lower.find(OPEN) {
+        let before = &text[..start];
+        if !before.trim().is_empty() {
+            render_markdown_content(ui, before, text_color, copy_code_hint);
+        }
+
+        let after_open = start + OPEN.len();
+        let (thinking_content, rest) = match lower[after_open..].find(CLOSE) {
+            Some(rel) => (
+                &text[after_open..after_open + rel],
+                &text[after_open + rel + CLOSE.len()..],
+            ),
+            None => (&text[after_open..], ""),
         };
-        render_cached_node(ui, &parsed, text_color, copy_code_hint);
+
+        // Use a hash-based ID for this thinking block to ensure state persistence
+        let thinking_id = egui::Id::new(format!("thinking_{}", start));
+        egui::CollapsingHeader::new(
+            egui::RichText::new("💭 Thinking...")
+                .color(egui::Color32::from_rgb(140, 140, 170))
+                .italics()
+                .size(12.5),
+        )
+        .id_salt(thinking_id)
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                // Render thinking content with scroll area for long content
+                let line_count = thinking_content.lines().count();
+                let estimated_height = (line_count as f32 * 14.0).min(250.0).max(40.0);
+
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .max_height(estimated_height)
+                    .show(ui, |ui| {
+                        let content_str = thinking_content.trim();
+                        if !content_str.is_empty() {
+                            ui.label(
+                                egui::RichText::new(content_str)
+                                    .color(egui::Color32::from_rgb(155, 155, 180))
+                                    .size(11.0),
+                            );
+                        }
+                    });
+            });
+        });
+        ui.add_space(4.0);
+
+        if !rest.trim().is_empty() {
+            render_with_thinking(ui, rest, text_color, copy_code_hint);
+        }
+    } else {
+        render_markdown_content(ui, text, text_color, copy_code_hint);
+    }
+}
+
+fn render_markdown_content(
+    ui: &mut egui::Ui,
+    text: &str,
+    text_color: egui::Color32,
+    copy_code_hint: &str,
+) {
+    let mut options = comrak::Options::default();
+    options.extension.strikethrough = true;
+    options.extension.tagfilter = false;
+    options.render.hardbreaks = true;
+    options.render.github_pre_lang = true;
+
+    let arena = comrak::Arena::new();
+    let root = comrak::parse_document(&arena, text, &options);
+    render_children(ui, root, text_color, copy_code_hint);
+}
+
+fn render_children<'a>(
+    ui: &mut egui::Ui,
+    node: &'a comrak::nodes::AstNode<'a>,
+    text_color: egui::Color32,
+    copy_code_hint: &str,
+) {
+    for child in node.children() {
+        render_comrak_node(ui, child, text_color, copy_code_hint);
+    }
+}
+
+fn render_comrak_node<'a>(
+    ui: &mut egui::Ui,
+    node: &'a comrak::nodes::AstNode<'a>,
+    text_color: egui::Color32,
+    copy_code_hint: &str,
+) {
+    let ast = node.data.borrow();
+    match &ast.value {
+        comrak::nodes::NodeValue::Document => {
+            render_children(ui, node, text_color, copy_code_hint);
+        }
+        comrak::nodes::NodeValue::Paragraph => {
+            ui.vertical(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.set_max_width(ui.available_width());
+                    render_children(ui, node, text_color, copy_code_hint);
+                });
+            });
+            ui.add_space(4.0);
+        }
+        comrak::nodes::NodeValue::Heading(heading) => {
+            let text = collect_text(node);
+            let size = match heading.level {
+                1 => 20.0,
+                2 => 17.0,
+                3 => 15.0,
+                _ => 14.0,
+            };
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(text)
+                        .size(size)
+                        .strong()
+                        .color(text_color),
+                )
+                .wrap(),
+            );
+            ui.add_space(4.0);
+        }
+        comrak::nodes::NodeValue::List(list) => {
+            let ordered = list.list_type == comrak::nodes::ListType::Ordered;
+            for (i, child) in node.children().enumerate() {
+                let prefix = if ordered {
+                    format!("{}. ", i + 1)
+                } else {
+                    "• ".to_string()
+                };
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(prefix).color(text_color));
+                    render_children(ui, child, text_color, copy_code_hint);
+                });
+            }
+            ui.add_space(4.0);
+        }
+        comrak::nodes::NodeValue::CodeBlock(info) => {
+            let lang = info.info.trim().to_string();
+            let code = collect_text(node);
+
+            // Use collapsible header for code blocks
+            let code_id = egui::Id::new(format!("code_{:p}", node as *const _));
+            egui::CollapsingHeader::new(
+                egui::RichText::new(format!(
+                    "📄 Code{}",
+                    if !lang.is_empty() {
+                        format!(" ({})", lang)
+                    } else {
+                        String::new()
+                    }
+                ))
+                .color(egui::Color32::from_rgb(100, 200, 255))
+                .size(12.0),
+            )
+            .id_salt(code_id)
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    // Copy button in header
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("📋 Copy")
+                            .on_hover_text("Copy to clipboard")
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(code.clone());
+                        }
+                    });
+                    ui.separator();
+
+                    // Code content with scroll area
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgb(30, 30, 35))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 90)))
+                        .corner_radius(4.0)
+                        .inner_margin(egui::Margin::symmetric(8, 6))
+                        .show(ui, |ui| {
+                            let line_count = code.lines().count();
+                            let estimated_height = (line_count as f32 * 15.0).min(400.0).max(80.0);
+
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false; 2])
+                                .max_height(estimated_height)
+                                .show(ui, |ui| {
+                                    egui::ScrollArea::horizontal().auto_shrink([false; 2]).show(
+                                        ui,
+                                        |ui| {
+                                            ui.label(
+                                                egui::RichText::new(&code)
+                                                    .font(egui::FontId::monospace(12.0))
+                                                    .color(egui::Color32::from_rgb(220, 220, 220)),
+                                            );
+                                        },
+                                    );
+                                });
+                        });
+                });
+            });
+            ui.add_space(4.0);
+        }
+        comrak::nodes::NodeValue::Code(..) => {
+            let text = collect_text(node);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(text)
+                        .color(egui::Color32::from_rgb(220, 80, 80))
+                        .family(egui::FontFamily::Monospace),
+                )
+                .wrap(),
+            );
+        }
+        comrak::nodes::NodeValue::Strong => {
+            let text = collect_text(node);
+            ui.add(egui::Label::new(egui::RichText::new(text).strong().color(text_color)).wrap());
+        }
+        comrak::nodes::NodeValue::Emph => {
+            let text = collect_text(node);
+            ui.add(egui::Label::new(egui::RichText::new(text).italics().color(text_color)).wrap());
+        }
+        comrak::nodes::NodeValue::Text(ref literal) => {
+            if !literal.trim().is_empty() {
+                ui.add(
+                    egui::Label::new(egui::RichText::new(literal.as_str()).color(text_color))
+                        .wrap(),
+                );
+            }
+        }
+        comrak::nodes::NodeValue::ThematicBreak => {
+            ui.separator();
+            ui.add_space(4.0);
+        }
+        comrak::nodes::NodeValue::BlockQuote => {
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgba_premultiplied(128, 128, 128, 20))
+                .corner_radius(4.0)
+                .inner_margin(egui::Margin::symmetric(10i8, 4i8))
+                .show(ui, |ui| {
+                    render_children(ui, node, text_color, copy_code_hint);
+                });
+            ui.add_space(4.0);
+        }
+        comrak::nodes::NodeValue::Link(link) => {
+            let label = collect_text(node);
+            let display = if label.is_empty() {
+                link.url.to_string()
+            } else {
+                label
+            };
+            let _ = ui.link(display).clicked();
+        }
+        comrak::nodes::NodeValue::SoftBreak | comrak::nodes::NodeValue::LineBreak => {
+            // handled by text rendering via collect_text, or ignored
+        }
+        _ => {
+            render_children(ui, node, text_color, copy_code_hint);
+        }
     }
 }
 
