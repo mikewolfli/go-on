@@ -393,14 +393,7 @@ impl WorkflowView {
                 self.process_pending(i18n);
 
                 ui.heading(i18n.t("tab.workflow"));
-                let text = i18n.t("workflow.hint").to_string();
-                let resp = ui.label(&text);
-                resp.context_menu(|ui| {
-                    if ui.button(i18n.t("common.copyButton")).clicked() {
-                        ui.ctx().copy_text(text.clone());
-                        ui.close_menu();
-                    }
-                });
+                ui.label(i18n.t("workflow.hint"));
                 ui.separator();
 
                 if !run_center_enabled {
@@ -417,23 +410,9 @@ impl WorkflowView {
                 let confirm_dangerous = self.cached_security.confirm_dangerous_actions;
 
                 ui.horizontal(|ui| {
-                    let text = i18n.t("workflow.step").to_string();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(i18n.t("workflow.step"));
                     ui.text_edit_singleline(&mut self.new_name);
-                    let text = i18n.t("workflow.command").to_string();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(i18n.t("workflow.command"));
                     ui.text_edit_singleline(&mut self.new_command);
                     if ui.button(i18n.t("workflow.add")).clicked() {
                         let name = self.new_name.trim();
@@ -453,14 +432,7 @@ impl WorkflowView {
 
                 ui.add_space(8.0);
                 if self.state.steps.is_empty() {
-                    let text = i18n.t("workflow.noSteps").to_string();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(i18n.t("workflow.noSteps"));
                 }
 
                 let mut changed = false;
@@ -471,23 +443,9 @@ impl WorkflowView {
                             if ui.checkbox(&mut step.enabled, "").changed() {
                                 changed = true;
                             }
-                            let text = step.name.clone();
-                            let resp = ui.label(&text);
-                            resp.context_menu(|ui| {
-                                if ui.button(i18n.t("common.copyButton")).clicked() {
-                                    ui.ctx().copy_text(text.clone());
-                                    ui.close_menu();
-                                }
-                            });
+                            ui.label(&step.name);
                             ui.separator();
-                            let text = step.command.clone();
-                            let resp = ui.label(&text);
-                            resp.context_menu(|ui| {
-                                if ui.button(i18n.t("common.copyButton")).clicked() {
-                                    ui.ctx().copy_text(text.clone());
-                                    ui.close_menu();
-                                }
-                            });
+                            ui.label(&step.command);
                             let delete_label = if self.pending_confirm_delete == Some(idx) {
                                 i18n.t("workflow.confirmDelete")
                             } else {
@@ -820,14 +778,7 @@ impl WorkflowView {
                 }
 
                 if let Some(result) = &self.state.last_result {
-                    let text = result.clone();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(result);
                 }
 
                 if changed {

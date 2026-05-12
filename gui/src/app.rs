@@ -106,6 +106,8 @@ pub struct GoOnApp {
     last_backend_url_hash: u64,
     /// Original backend URL to detect changes for showing restart button
     backend_url_original: String,
+    /// Timestamp of when blocked tab toast was shown; used for auto-dismiss.
+    blocked_tab_toast_shown: Option<Instant>,
     /// Staging buffer for backend health updates; committed in batches to reduce UI jitter.
     staged_health: Option<HealthStatus>,
     /// Staging buffer for provider updates; committed in batches to reduce UI jitter.
@@ -246,17 +248,19 @@ impl GoOnApp {
     /// Print diagnostic info about key sources for debugging.
     fn diagnostic_key_report(config: &AppConfig) {
         eprintln!("=== KEY DIAGNOSTIC ===");
-        let known = [
-            "deepseek",
-            "openai",
-            "anthropic",
-            "qwen",
-            "gemini",
-            "groq",
-            "mistral",
-            "copilot",
-        ];
-        for name in &known {
+        // Collect all provider names: from config.providers AND the canonical PROVIDER_NAMES list.
+        let mut all_names: Vec<String> = config
+            .providers
+            .iter()
+            .map(|p| p.name.to_lowercase())
+            .collect();
+        for name in crate::views::providers::PROVIDER_NAMES {
+            let lower = name.to_lowercase();
+            if !all_names.contains(&lower) {
+                all_names.push(lower);
+            }
+        }
+        for name in &all_names {
             let config_key = config
                 .providers
                 .iter()
@@ -561,8 +565,19 @@ state_path = "acp_autotune_state.json"
         eprintln!("Backend restarted");
     }
 
-    pub fn new() -> Self {
-        let config = crate::config::load_app_config();
+    /// Detect the localized window title based on the saved config language.
+    /// Called once at startup before the I18n instance is created.
+    pub fn detect_initial_window_title(config: &AppConfig) -> String {
+        if config.language == "zh-CN" {
+            "Go-On 图形界面".to_string()
+        } else if config.language == "zh-TW" {
+            "Go-On 圖形界面".to_string()
+        } else {
+            "Go-On GUI".to_string()
+        }
+    }
+
+    pub fn new(config: AppConfig) -> Self {
         let config_shared = Arc::new(config.clone());
         let config_shared_fingerprint = Self::config_fingerprint(&config);
         // Auto-detect: if user hasn't explicitly set a language, try system locale
@@ -624,6 +639,7 @@ state_path = "acp_autotune_state.json"
             staged_refresh_done: false,
             last_backend_ui_commit: Instant::now(),
             health_disconnect_streak: 0,
+            blocked_tab_toast_shown: None,
         }
     }
 
@@ -642,8 +658,8 @@ state_path = "acp_autotune_state.json"
         if was_connected {
             self.health_disconnect_streak = self.health_disconnect_streak.saturating_add(1);
             if self.health_disconnect_streak < self.health_disconnect_debounce_count() {
-                if let Some(prev) = self.monitor_view.health.clone() {
-                    next = prev;
+                if let Some(ref prev) = self.monitor_view.health {
+                    next = prev.clone();
                 }
             }
         }
@@ -815,7 +831,9 @@ impl eframe::App for GoOnApp {
                 // Restart backend so it picks up the new API key from env
                 self.restart_backend();
             }
-            ctx.request_repaint();
+            // Only request repaint if the setup view has something pending.
+            // The setup_view.show() method already calls ctx.request_repaint() on user interaction,
+            // so we don't need a per-frame repaint here.
             return;
         }
 
@@ -875,6 +893,13 @@ impl eframe::App for GoOnApp {
                         .text_style(egui::TextStyle::Name("Title".into()))
                         .strong()
                         .color(title_color),
+                );
+                // Keyboard shortcut hints
+                ui.add_space(16.0);
+                ui.label(
+                    egui::RichText::new(self.i18n.t("app.shortcutHint"))
+                        .size(11.0)
+                        .weak(),
                 );
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -991,7 +1016,14 @@ impl eframe::App for GoOnApp {
         }
 
         // Show toast when a blocked tab is clicked
-        if let Some(_blocked) = &blocked_tab {
+        if blocked_tab.is_some() {
+            self.blocked_tab_toast_shown = Some(Instant::now());
+        }
+        // Auto-dismiss toast after 5 seconds
+        let toast_visible = self
+            .blocked_tab_toast_shown
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(5));
+        if toast_visible {
             egui::Window::new("⚠")
                 .id(egui::Id::new("blocked_tab_toast"))
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, -80.0])
@@ -1010,14 +1042,13 @@ impl eframe::App for GoOnApp {
                     );
                     ui.add_space(4.0);
                     if ui.button(self.i18n.t("common.close")).clicked() {
-                        blocked_tab = None;
+                        self.blocked_tab_toast_shown = None;
                     }
                 });
         }
 
         // Main content
         egui::CentralPanel::default().show(ctx, |ui| {
-            let tab = self.active_tab.clone();
             let has_backend = self.has_providers;
             let monitor_history_alerts_enabled = self.config.features.monitor_history_alerts;
             let skills_lifecycle_enabled = self.config.features.skills_lifecycle;
@@ -1025,7 +1056,7 @@ impl eframe::App for GoOnApp {
             let autotune_chain_enabled = self.config.features.autotune_chain_injection;
             let config_safe_mode_enabled = self.config.features.config_safe_mode;
             let providers_ops_enabled = self.config.features.providers_ops;
-            match tab.as_str() {
+            match self.active_tab.as_str() {
                 "monitor" => self.monitor_view.show(
                     ui,
                     &self.i18n,
@@ -1095,10 +1126,9 @@ impl eframe::App for GoOnApp {
                     if self.config_editor_view.applied {
                         self.config_editor_view.applied = false;
                         self.chat_view.reset_loaded_state();
-                        // Check if backend URL changed
+                        // Track original URL so Settings tab can detect and show restart button
                         if self.config.backend_url != self.backend_url_original {
                             self.backend_url_original = self.config.backend_url.clone();
-                            self.restart_backend();
                         }
                     }
                 }
@@ -1127,7 +1157,7 @@ impl eframe::App for GoOnApp {
                     );
                 }
                 _ => {
-                    ui.heading(&tab);
+                    ui.heading(&self.active_tab);
                     ui.label(self.i18n.t("app.unknownTab"));
                 }
             }

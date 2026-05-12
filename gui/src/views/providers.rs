@@ -30,7 +30,9 @@ pub struct ProvidersView {
 }
 
 /// Provider names for the dropdown (34 total, matching providers.toml)
-const PROVIDER_NAMES: &[&str] = &[
+/// This is the CANONICAL source of provider names used throughout the codebase.
+/// `config.rs` and `app.rs` import this to avoid hardcoded lists.
+pub const PROVIDER_NAMES: &[&str] = &[
     // OpenAI Family (4)
     "openai",
     "openai_compatible",
@@ -77,6 +79,67 @@ fn provider_label(i18n: &I18n, provider: &str) -> String {
         provider.to_string()
     } else {
         label.into_owned()
+    }
+}
+
+fn models_for_provider(provider: &str) -> &'static [&'static str] {
+    match provider.to_lowercase().as_str() {
+        "deepseek" => &["auto", "deepseek-v4-flash", "deepseek-v4-pro"],
+        "openai" => &[
+            "auto",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4-turbo",
+            "gpt-3.5-turbo",
+        ],
+        "openai_compatible" => &["auto"],
+        "anthropic" => &[
+            "auto",
+            "claude-sonnet-4-20250514",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-opus-20240229",
+            "claude-3-haiku-20240307",
+        ],
+        "cohere" => &["auto", "command-r-plus-08-2024", "command-r"],
+        "wenxin" => &["auto", "ERNIE-4.5-8K", "ERNIE-4.0", "ERNIE-3.5"],
+        "qianfan" => &["auto", "ERNIE-Bot", "ERNIE-Bot-turbo"],
+        "qwen" => &["auto", "qwen-max-2025-01-25", "qwen-plus", "qwen-turbo"],
+        "glm" => &["auto", "glm-4-flash", "glm-4-plus"],
+        "yi" => &["auto", "yi-lightning", "yi-large"],
+        "hunyuan" => &["auto", "hunyuan-turbo-latest"],
+        "doubao" => &["auto", "doubao-1.5-pro-32k-250115"],
+        "gemini" => &[
+            "auto",
+            "gemini-2.5-flash-preview-04-17",
+            "gemini-2.0-flash",
+            "gemini-1.5-pro",
+        ],
+        "groq" => &[
+            "auto",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "mixtral-8x7b-32768",
+        ],
+        "mistral" => &[
+            "auto",
+            "mistral-small-latest",
+            "mistral-medium-latest",
+            "mistral-large-latest",
+        ],
+        "copilot" => &["auto", "github-copilot"],
+        "facewall" | "langboat" | "skywork" | "xihu" | "deepquest" | "fireworks" | "loopai"
+        | "titan" => &["auto"],
+        "stepfun" => &["auto", "step-2-16k-2505"],
+        "moonshot" => &["auto", "moonshot-v1-8k"],
+        "minimax" => &["auto", "MiniMax-Text-01"],
+        "ai21" => &["auto", "jamba-1.5-mini"],
+        "aleph" => &["auto", "luminous-base-control"],
+        "llama" => &["auto", "llama3.2", "llama3.1"],
+        "nim" => &["auto", "meta/llama-3.1-70b-instruct"],
+        "perplexity" => &["auto", "sonar-pro", "sonar"],
+        "replicate" => &["auto", "meta/meta-llama-3-70b-instruct"],
+        "together" => &["auto", "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"],
+        _ => &["auto"],
     }
 }
 
@@ -144,6 +207,44 @@ impl ProvidersView {
         }
     }
 
+    /// Fetch models from backend on first load. Spawns a background task.
+    fn ensure_models_loaded(&mut self, backend: &BackendClient, ctx: &egui::Context) {
+        if !self.models_loaded {
+            self.models_loaded = true;
+            let backend_clone = backend.clone();
+            let tx = self.pending_tx.clone();
+            let ctx_clone = ctx.clone();
+            tokio::spawn(async move {
+                let models = match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    backend_clone.fetch_models(),
+                )
+                .await
+                {
+                    Ok(m) => m,
+                    Err(_) => {
+                        eprintln!("Warning: Failed to fetch models from backend (timeout)");
+                        std::collections::HashMap::new()
+                    }
+                };
+                let msg = format!(
+                    "__models__:{}",
+                    serde_json::to_string(&models).unwrap_or_default()
+                );
+                let _ = tx.send(msg);
+                ctx_clone.request_repaint_after(Duration::from_millis(16));
+            });
+        }
+    }
+
+    /// Reload security prefs at most once per 10 seconds.
+    fn refresh_security_cache(&mut self) {
+        if self.security_last_load.elapsed() >= std::time::Duration::from_secs(10) {
+            self.cached_security = security_prefs::load();
+            self.security_last_load = Instant::now();
+        }
+    }
+
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -158,42 +259,9 @@ impl ProvidersView {
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 self.process_pending();
+                self.ensure_models_loaded(backend, ctx);
+                self.refresh_security_cache();
 
-                // Fetch models from backend if not yet loaded
-                if !self.models_loaded {
-                    self.models_loaded = true;
-                    let backend_clone = backend.clone();
-                    let tx = self.pending_tx.clone();
-                    let ctx_clone = ctx.clone();
-                    tokio::spawn(async move {
-                        // Add timeout to prevent hanging
-                        let models = match tokio::time::timeout(
-                            std::time::Duration::from_secs(5),
-                            backend_clone.fetch_models(),
-                        )
-                        .await
-                        {
-                            Ok(m) => m,
-                            Err(_) => {
-                                eprintln!("Warning: Failed to fetch models from backend (timeout)");
-                                std::collections::HashMap::new()
-                            }
-                        };
-                        // Send models back via pending channel
-                        let msg = format!(
-                            "__models__:{}",
-                            serde_json::to_string(&models).unwrap_or_default()
-                        );
-                        let _ = tx.send(msg);
-                        ctx_clone.request_repaint_after(Duration::from_millis(16));
-                    });
-                }
-
-                // Reload security prefs at most once per 10 seconds to avoid per-frame disk reads.
-                if self.security_last_load.elapsed() >= std::time::Duration::from_secs(10) {
-                    self.cached_security = security_prefs::load();
-                    self.security_last_load = Instant::now();
-                }
                 // Copy needed bools to avoid holding a reference to self over closures.
                 let redact_keys = self.cached_security.redact_api_keys_in_ui;
                 let confirm_dangerous = self.cached_security.confirm_dangerous_actions;
@@ -204,23 +272,9 @@ impl ProvidersView {
 
                 // ── Add new provider section ──────────────────────────────────
                 if ops_enabled {
-                    let text = i18n.t("providers.add_new").to_string();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(i18n.t("providers.add_new"));
                     ui.horizontal(|ui| {
-                        let text = i18n.t("providers.provider").to_string();
-                        let resp = ui.label(&text);
-                        resp.context_menu(|ui| {
-                            if ui.button(i18n.t("common.copyButton")).clicked() {
-                                ui.ctx().copy_text(text.clone());
-                                ui.close_menu();
-                            }
-                        });
+                        ui.label(i18n.t("providers.provider"));
                         egui::ComboBox::from_id_salt("add_provider_sel")
                             .selected_text(provider_label(i18n, &self.selected_provider))
                             .show_ui(ui, |ui| {
@@ -237,14 +291,7 @@ impl ProvidersView {
                                     }
                                 }
                             });
-                        let text = i18n.t("providers.api_key").to_string();
-                        let resp = ui.label(&text);
-                        resp.context_menu(|ui| {
-                            if ui.button(i18n.t("common.copyButton")).clicked() {
-                                ui.ctx().copy_text(text.clone());
-                                ui.close_menu();
-                            }
-                        });
+                        ui.label(i18n.t("providers.api_key"));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.new_key)
                                 .password(true)
@@ -258,14 +305,7 @@ impl ProvidersView {
                                 i18n.t("providers.auto_push_hint")
                             );
                         }
-                        let text = i18n.t("providers.model").to_string();
-                        let resp = ui.label(&text);
-                        resp.context_menu(|ui| {
-                            if ui.button(i18n.t("common.copyButton")).clicked() {
-                                ui.ctx().copy_text(text.clone());
-                                ui.close_menu();
-                            }
-                        });
+                        ui.label(i18n.t("providers.model"));
                         egui::ComboBox::from_id_salt("add_model_sel")
                             .selected_text({
                                 if self.new_model == "auto" {
@@ -281,87 +321,9 @@ impl ProvidersView {
                             .show_ui(ui, |ui| {
                                 // Show hint for copilot
                                 if self.selected_provider.to_lowercase() == "copilot" {
-                                    let text = i18n.t("providers.copilot_hint").to_string();
-                                    let resp = ui.label(&text);
-                                    resp.context_menu(|ui| {
-                                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                                            ui.ctx().copy_text(text.clone());
-                                            ui.close_menu();
-                                        }
-                                    });
+                                    ui.label(i18n.t("providers.copilot_hint"));
                                 }
-                                let models: &[&str] = match self
-                                    .selected_provider
-                                    .to_lowercase()
-                                    .as_str()
-                                {
-                                    "deepseek" => &["auto", "deepseek-v4-flash", "deepseek-v4-pro"],
-                                    "openai" => &[
-                                        "auto",
-                                        "gpt-4o",
-                                        "gpt-4o-mini",
-                                        "gpt-4-turbo",
-                                        "gpt-3.5-turbo",
-                                    ],
-                                    "openai_compatible" => &["auto"],
-                                    "anthropic" => &[
-                                        "auto",
-                                        "claude-sonnet-4-20250514",
-                                        "claude-3-5-sonnet-20241022",
-                                        "claude-3-opus-20240229",
-                                        "claude-3-haiku-20240307",
-                                    ],
-                                    "cohere" => &["auto", "command-r-plus-08-2024", "command-r"],
-                                    "wenxin" => &["auto", "ERNIE-4.5-8K", "ERNIE-4.0", "ERNIE-3.5"],
-                                    "qianfan" => &["auto", "ERNIE-Bot", "ERNIE-Bot-turbo"],
-                                    "qwen" => {
-                                        &["auto", "qwen-max-2025-01-25", "qwen-plus", "qwen-turbo"]
-                                    }
-                                    "glm" => &["auto", "glm-4-flash", "glm-4-plus"],
-                                    "yi" => &["auto", "yi-lightning", "yi-large"],
-                                    "hunyuan" => &["auto", "hunyuan-turbo-latest"],
-                                    "doubao" => &["auto", "doubao-1.5-pro-32k-250115"],
-                                    "facewall" => &["auto"],
-                                    "langboat" => &["auto"],
-                                    "skywork" => &["auto"],
-                                    "stepfun" => &["auto", "step-2-16k-2505"],
-                                    "xihu" => &["auto"],
-                                    "moonshot" => &["auto", "moonshot-v1-8k"],
-                                    "minimax" => &["auto", "MiniMax-Text-01"],
-                                    "ai21" => &["auto", "jamba-1.5-mini"],
-                                    "aleph" => &["auto", "luminous-base-control"],
-                                    "copilot" => &["auto", "github-copilot"],
-                                    "deepquest" => &["auto"],
-                                    "fireworks" => &["auto"],
-                                    "gemini" => &[
-                                        "auto",
-                                        "gemini-2.5-flash-preview-04-17",
-                                        "gemini-2.0-flash",
-                                        "gemini-1.5-pro",
-                                    ],
-                                    "groq" => &[
-                                        "auto",
-                                        "llama-3.3-70b-versatile",
-                                        "llama-3.1-8b-instant",
-                                        "mixtral-8x7b-32768",
-                                    ],
-                                    "llama" => &["auto", "llama3.2", "llama3.1"],
-                                    "loopai" => &["auto"],
-                                    "mistral" => &[
-                                        "auto",
-                                        "mistral-small-latest",
-                                        "mistral-medium-latest",
-                                        "mistral-large-latest",
-                                    ],
-                                    "nim" => &["auto", "meta/llama-3.1-70b-instruct"],
-                                    "perplexity" => &["auto", "sonar-pro", "sonar"],
-                                    "replicate" => &["auto", "meta/meta-llama-3-70b-instruct"],
-                                    "titan" => &["auto"],
-                                    "together" => {
-                                        &["auto", "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"]
-                                    }
-                                    _ => &["auto"],
-                                };
+                                let models = models_for_provider(&self.selected_provider);
                                 for m in models {
                                     let display_name = if m == &"auto" {
                                         i18n.t("providers.auto").to_string()
@@ -530,26 +492,12 @@ impl ProvidersView {
                 ui.add_space(8.0);
 
                 // ── Existing providers list ────────────────────────────────────
-                let text = i18n.t("providers.saved").to_string();
-                let resp = ui.label(&text);
-                resp.context_menu(|ui| {
-                    if ui.button(i18n.t("common.copyButton")).clicked() {
-                        ui.ctx().copy_text(text.clone());
-                        ui.close_menu();
-                    }
-                });
+                ui.label(i18n.t("providers.saved"));
                 let mut remove_idx = None;
                 for (idx, provider) in config.providers.iter_mut().enumerate() {
                     egui::Frame::group(ui.style()).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            let text = provider_label(i18n, &provider.name);
-                            let resp = ui.label(&text);
-                            resp.context_menu(|ui| {
-                                if ui.button(i18n.t("common.copyButton")).clicked() {
-                                    ui.ctx().copy_text(text.clone());
-                                    ui.close_menu();
-                                }
-                            });
+                            ui.label(provider_label(i18n, &provider.name));
                             let cached_key = crate::keyring_util::get_api_key_with_fallback(
                                 &provider.name.to_lowercase(),
                                 Some(&provider.api_key),
@@ -564,72 +512,14 @@ impl ProvidersView {
                             } else {
                                 i18n.t("providers.noKey").to_string()
                             };
-                            let text =
-                                format!("{} {}", i18n.t("providers.key_preview"), key_preview_str);
-                            let resp = ui.label(&text);
-                            resp.context_menu(|ui| {
-                                if ui.button(i18n.t("common.copyButton")).clicked() {
-                                    ui.ctx().copy_text(text.clone());
-                                    ui.close_menu();
-                                }
-                            });
-                            let text = i18n.t("providers.model").to_string();
-                            let resp = ui.label(&text);
-                            resp.context_menu(|ui| {
-                                if ui.button(i18n.t("common.copyButton")).clicked() {
-                                    ui.ctx().copy_text(text.clone());
-                                    ui.close_menu();
-                                }
-                            });
+                            ui.label(format!(
+                                "{} {}",
+                                i18n.t("providers.key_preview"),
+                                key_preview_str
+                            ));
+                            ui.label(i18n.t("providers.model"));
                             // Model dropdown for saved providers
-                            let models: &[&str] = match provider.name.to_lowercase().as_str() {
-                                "deepseek" => &["auto", "deepseek-v4-flash", "deepseek-v4-pro"],
-                                "openai" => &[
-                                    "auto",
-                                    "gpt-4o",
-                                    "gpt-4o-mini",
-                                    "gpt-4-turbo",
-                                    "gpt-3.5-turbo",
-                                ],
-                                "openai_compatible" => &["auto"],
-                                "anthropic" => &[
-                                    "auto",
-                                    "claude-sonnet-4-20250514",
-                                    "claude-3-5-sonnet-20241022",
-                                    "claude-3-opus-20240229",
-                                    "claude-3-haiku-20240307",
-                                ],
-                                "cohere" => &["auto", "command-r-plus-08-2024", "command-r"],
-                                "wenxin" => &["auto", "ERNIE-4.5-8K", "ERNIE-4.0", "ERNIE-3.5"],
-                                "qianfan" => &["auto", "ERNIE-Bot", "ERNIE-Bot-turbo"],
-                                "qwen" => {
-                                    &["auto", "qwen-max-2025-01-25", "qwen-plus", "qwen-turbo"]
-                                }
-                                "glm" => &["auto", "glm-4-flash", "glm-4-plus"],
-                                "yi" => &["auto", "yi-lightning", "yi-large"],
-                                "hunyuan" => &["auto", "hunyuan-turbo-latest"],
-                                "doubao" => &["auto", "doubao-1.5-pro-32k-250115"],
-                                "gemini" => &[
-                                    "auto",
-                                    "gemini-2.5-flash-preview-04-17",
-                                    "gemini-2.0-flash",
-                                    "gemini-1.5-pro",
-                                ],
-                                "groq" => &[
-                                    "auto",
-                                    "llama-3.3-70b-versatile",
-                                    "llama-3.1-8b-instant",
-                                    "mixtral-8x7b-32768",
-                                ],
-                                "mistral" => &[
-                                    "auto",
-                                    "mistral-small-latest",
-                                    "mistral-medium-latest",
-                                    "mistral-large-latest",
-                                ],
-                                "copilot" => &["auto", "github-copilot"],
-                                _ => &["auto"],
-                            };
+                            let models = models_for_provider(&provider.name);
                             egui::ComboBox::from_id_salt(format!("model_{}", idx))
                                 .selected_text({
                                     if provider.model == "auto" || provider.model.is_empty() {
@@ -1094,14 +984,7 @@ impl ProvidersView {
                 }
 
                 if !self.status.is_empty() {
-                    let text = self.status.clone();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(&self.status);
                 }
             });
         changed

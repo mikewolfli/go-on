@@ -322,6 +322,7 @@ impl BackendClient {
                     .and_then(Value::as_str)
                     .or_else(|| val.get("version").and_then(Value::as_str))
                     .or_else(|| val.pointer("/meta/version").and_then(Value::as_str))
+                    .or_else(|| val.pointer("/info/version").and_then(Value::as_str))
                     .map(ToString::to_string),
                 backend_build: val
                     .pointer("/lifecycle/build")
@@ -329,6 +330,8 @@ impl BackendClient {
                     .or_else(|| val.pointer("/lifecycle/build_id").and_then(Value::as_str))
                     .or_else(|| val.pointer("/meta/build").and_then(Value::as_str))
                     .or_else(|| val.pointer("/meta/git_commit").and_then(Value::as_str))
+                    .or_else(|| val.pointer("/info/build").and_then(Value::as_str))
+                    .or_else(|| val.pointer("/info/build_id").and_then(Value::as_str))
                     .map(ToString::to_string),
             },
             None => HealthStatus {

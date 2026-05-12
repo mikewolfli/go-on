@@ -38,25 +38,11 @@ impl SetupView {
                 ui.add_space(60.0);
                 ui.heading(i18n.t("setup.title"));
                 ui.add_space(10.0);
-                let text = i18n.t("setup.hint").to_string();
-                let resp = ui.label(&text);
-                resp.context_menu(|ui| {
-                    if ui.button(i18n.t("common.copyButton")).clicked() {
-                        ui.ctx().copy_text(text.clone());
-                        ui.close_menu();
-                    }
-                });
+                ui.label(i18n.t("setup.hint"));
                 ui.add_space(20.0);
 
                 if !self.success_msg.is_empty() {
-                    let text = self.success_msg.clone();
-                    let resp = ui.colored_label(egui::Color32::from_rgb(20, 120, 70), &text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.colored_label(egui::Color32::from_rgb(20, 120, 70), &self.success_msg);
                     ui.add_space(10.0);
                     if ui.button(i18n.t("app.start")).clicked() {
                         done = true;
@@ -65,28 +51,11 @@ impl SetupView {
                 }
 
                 ui.horizontal(|ui| {
-                    let text = i18n.t("setup.provider").to_string();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(i18n.t("setup.provider"));
                     egui::ComboBox::from_id_salt("provider_sel")
                         .selected_text(provider_label(i18n, &self.selected_provider))
                         .show_ui(ui, |ui| {
-                            let providers = [
-                                "openai",
-                                "anthropic",
-                                "deepseek",
-                                "qwen",
-                                "gemini",
-                                "copilot",
-                                "mistral",
-                                "groq",
-                            ];
-                            for p in &providers {
+                            for p in crate::views::providers::PROVIDER_NAMES {
                                 ui.selectable_value(
                                     &mut self.selected_provider,
                                     p.to_string(),
@@ -98,14 +67,7 @@ impl SetupView {
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
-                    let text = i18n.t("setup.apiKey").to_string();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(i18n.t("setup.apiKey"));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.api_key)
                             .password(true)
@@ -116,14 +78,7 @@ impl SetupView {
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
-                    let text = i18n.t("setup.model").to_string();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(i18n.t("setup.model"));
                     egui::ComboBox::from_id_salt("model_sel")
                         .selected_text(&self.selected_model)
                         .show_ui(ui, |ui| {
@@ -143,14 +98,7 @@ impl SetupView {
                 if config.features.setup_enterprise {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        let text = i18n.t("setup.environment").to_string();
-                        let resp = ui.label(&text);
-                        resp.context_menu(|ui| {
-                            if ui.button(i18n.t("common.copyButton")).clicked() {
-                                ui.ctx().copy_text(text.clone());
-                                ui.close_menu();
-                            }
-                        });
+                        ui.label(i18n.t("setup.environment"));
                         egui::ComboBox::from_id_salt("setup_environment")
                             .selected_text(config.enterprise.active_environment.clone())
                             .show_ui(ui, |ui| {
@@ -170,14 +118,7 @@ impl SetupView {
                     });
 
                     ui.horizontal(|ui| {
-                        let text = i18n.t("setup.secretSource").to_string();
-                        let resp = ui.label(&text);
-                        resp.context_menu(|ui| {
-                            if ui.button(i18n.t("common.copyButton")).clicked() {
-                                ui.ctx().copy_text(text.clone());
-                                ui.close_menu();
-                            }
-                        });
+                        ui.label(i18n.t("setup.secretSource"));
                         egui::ComboBox::from_id_salt("setup_secret_source")
                             .selected_text(config.enterprise.secret_source.clone())
                             .show_ui(ui, |ui| {

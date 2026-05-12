@@ -126,6 +126,8 @@ impl E2eHarness {
             .current_dir(&project_root)
             .arg("--config")
             .arg(config_path.to_str().expect("config path is valid UTF-8"))
+            .arg("--protocol-mode")
+            .arg("acp_stdio")
             .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
             .env("GO_ON_LOG", "error")
             .stdin(Stdio::piped())

@@ -75,4 +75,11 @@ impl McpServer {
     pub fn token_cache(&self) -> Option<&Arc<TokenMultiLevelCache>> {
         self.acp_server.as_ref().map(|s| &s.cache.token_cache)
     }
+
+    /// Get the skill registry if connected to an ACP server.
+    pub fn skill_registry(
+        &self,
+    ) -> Option<&Arc<std::sync::Mutex<crate::orchestration::skill::SkillRegistry>>> {
+        self.acp_server.as_ref().map(|s| &s.skill_registry)
+    }
 }

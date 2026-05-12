@@ -76,12 +76,11 @@ impl SkillsView {
     }
 
     fn upsert_skill(&mut self, skill: SkillRecord) {
-        let key = skill.name.clone();
-        if let Some(name) = key {
+        if let Some(ref name) = skill.name {
             if let Some(existing) = self
                 .skills
                 .iter_mut()
-                .find(|s| s.name.as_deref() == Some(name.as_str()))
+                .find(|s| s.name.as_deref() == Some(name))
             {
                 *existing = skill;
                 return;
@@ -280,14 +279,7 @@ impl SkillsView {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.spinner();
-                let text = i18n.t("skills.loading").to_string();
-                let resp = ui.label(&text);
-                resp.context_menu(|ui| {
-                    if ui.button(i18n.t("common.copyButton")).clicked() {
-                        ui.ctx().copy_text(text.clone());
-                        ui.close_menu();
-                    }
-                });
+                ui.label(i18n.t("skills.loading"));
             });
             ui.add_space(4.0);
         }
@@ -364,53 +356,18 @@ impl SkillsView {
         // Create dialog – calls skill.create RPC
         if lifecycle_enabled && self.show_create {
             egui::Frame::group(ui.style()).show(ui, |ui| {
-                let text = i18n.t("skills.create.title").to_string();
-                let resp = ui.label(&text);
-                resp.context_menu(|ui| {
-                    if ui.button(i18n.t("common.copyButton")).clicked() {
-                        ui.ctx().copy_text(text.clone());
-                        ui.close_menu();
-                    }
-                });
+                ui.label(i18n.t("skills.create.title"));
                 ui.horizontal(|ui| {
-                    let text = i18n.t("skills.create.name").to_string();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(i18n.t("skills.create.name"));
                     ui.text_edit_singleline(&mut self.create_name);
                 });
                 ui.horizontal(|ui| {
-                    let text = i18n.t("skills.create.desc").to_string();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(i18n.t("skills.create.desc"));
                     ui.text_edit_singleline(&mut self.create_desc);
                 });
-                let text = i18n.t("skills.create.prompt").to_string();
-                let resp = ui.label(&text);
-                resp.context_menu(|ui| {
-                    if ui.button(i18n.t("common.copyButton")).clicked() {
-                        ui.ctx().copy_text(text.clone());
-                        ui.close_menu();
-                    }
-                });
+                ui.label(i18n.t("skills.create.prompt"));
                 ui.text_edit_multiline(&mut self.create_prompt);
-                let text = i18n.t("skills.create.schema").to_string();
-                let resp = ui.label(&text);
-                resp.context_menu(|ui| {
-                    if ui.button(i18n.t("common.copyButton")).clicked() {
-                        ui.ctx().copy_text(text.clone());
-                        ui.close_menu();
-                    }
-                });
+                ui.label(i18n.t("skills.create.schema"));
                 ui.text_edit_multiline(&mut self.create_input_schema);
                 if self.sending && self.show_create {
                     ui.horizontal(|ui| {
@@ -507,14 +464,7 @@ impl SkillsView {
         // Import dialog – currently stores locally (can be extended for remote import)
         if lifecycle_enabled && self.show_import {
             egui::Frame::group(ui.style()).show(ui, |ui| {
-                let text = i18n.t("skills.import.title").to_string();
-                let resp = ui.label(&text);
-                resp.context_menu(|ui| {
-                    if ui.button(i18n.t("common.copyButton")).clicked() {
-                        ui.ctx().copy_text(text.clone());
-                        ui.close_menu();
-                    }
-                });
+                ui.label(i18n.t("skills.import.title"));
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.import_url)
@@ -692,14 +642,7 @@ impl SkillsView {
         if self.skills.is_empty() && !self.loading {
             ui.add_space(30.0);
             ui.vertical_centered(|ui| {
-                let text_none = i18n.t("skills.none").to_string();
-                let resp = ui.label(egui::RichText::new(&text_none).size(14.0).color(egui::Color32::from_rgb(140, 142, 150)));
-                resp.context_menu(|ui| {
-                    if ui.button(i18n.t("common.copyButton")).clicked() {
-                        ui.ctx().copy_text(text_none.clone());
-                        ui.close_menu();
-                    }
-                });
+                ui.label(egui::RichText::new(i18n.t("skills.none")).size(14.0).color(egui::Color32::from_rgb(140, 142, 150)));
                 ui.add_space(16.0);
                 // Default Skill Creator suggestion
                 egui::Frame::new()
@@ -709,31 +652,17 @@ impl SkillsView {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("\u{1f9e0}");
-                            let text = i18n.t("skills.defaultCreator.title").to_string();
-                            let resp = ui.label(
-                                egui::RichText::new(&text)
+                            ui.label(
+                                egui::RichText::new(i18n.t("skills.defaultCreator.title"))
                                     .color(egui::Color32::from_rgb(0, 106, 255))
                                     .strong(),
                             );
-                            resp.context_menu(|ui| {
-                                if ui.button(i18n.t("common.copyButton")).clicked() {
-                                    ui.ctx().copy_text(text.clone());
-                                    ui.close_menu();
-                                }
-                            });
                         });
-                        let text = i18n.t("skills.defaultCreator.description").to_string();
-                        let resp = ui.label(
-                            egui::RichText::new(&text)
+                        ui.label(
+                            egui::RichText::new(i18n.t("skills.defaultCreator.description"))
                                 .color(egui::Color32::from_rgb(60, 60, 70))
                                 .size(13.0),
                         );
-                        resp.context_menu(|ui| {
-                            if ui.button(i18n.t("common.copyButton")).clicked() {
-                                ui.ctx().copy_text(text.clone());
-                                ui.close_menu();
-                            }
-                        });
                         ui.add_space(8.0);
                         let btn = egui::Button::new(i18n.t("skills.defaultCreator.button"))
                             .fill(egui::Color32::from_rgb(0, 106, 255))
@@ -819,17 +748,9 @@ impl SkillsView {
             };
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let name_text = skill_name_opt
-                        .as_deref()
-                        .unwrap_or(i18n.t("skills.import.unnamed").as_ref())
-                        .to_string();
-                    let resp = ui.colored_label(egui::Color32::from_rgb(100, 150, 255), &name_text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(name_text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    let unnamed = i18n.t("skills.import.unnamed");
+                    let name_text = skill_name_opt.as_deref().unwrap_or(&unnamed);
+                    ui.colored_label(egui::Color32::from_rgb(100, 150, 255), name_text);
                     if let Some(enabled) = skill_enabled {
                         let (color, label) = if enabled {
                             (egui::Color32::from_rgb(20, 120, 70), "●")
@@ -849,14 +770,7 @@ impl SkillsView {
                     }
                 });
                 if let Some(desc) = &skill_description {
-                    let text = desc.clone();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(desc);
                 }
                 if lifecycle_enabled {
                     ui.horizontal(|ui| {

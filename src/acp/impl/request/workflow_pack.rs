@@ -632,7 +632,7 @@ pub(super) async fn handle_workflow_consult(
     .await
 }
 
-pub(super) async fn handle_workflow_generate(
+pub(crate) async fn handle_workflow_generate(
     server: &AcpServer,
     params: Value,
     request_id: Option<Value>,
@@ -911,4 +911,282 @@ pub(super) async fn handle_task_plan(
         }),
     )
     .await
+}
+
+pub(super) async fn handle_workflow_generate_from_chat(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+    _trace: &RequestTraceContext,
+) -> Result<()> {
+    let messages = parse_messages(&params).unwrap_or_default();
+
+    if messages.is_empty() {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "messages are required for workflow.generate_from_chat".to_string(),
+            None,
+        )
+        .await;
+    }
+
+    // 1. Analyze conversation for repeated task patterns
+    let user_messages: Vec<&str> = messages
+        .iter()
+        .filter(|m| m.role == "user")
+        .map(|m| m.content.as_str())
+        .collect();
+
+    // 2. Group similar user requests by keyword analysis
+    let mut pattern_groups: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+
+    // Keyword clusters for known task types
+    let clusters = [
+        (
+            "code_review",
+            &["review", "audit", "inspect", "check code", "quality"] as &[&str],
+        ),
+        (
+            "testing",
+            &["test", "unit test", "integration test", "coverage"],
+        ),
+        (
+            "refactoring",
+            &["refactor", "restructure", "clean up", "improve"],
+        ),
+        ("documentation", &["document", "docs", "readme", "explain"]),
+        ("debugging", &["debug", "fix", "error", "crash", "bug"]),
+        ("deployment", &["deploy", "release", "ci", "cd", "pipeline"]),
+    ];
+
+    for msg in &user_messages {
+        let lower = msg.to_ascii_lowercase();
+        for (cluster_name, keywords) in &clusters {
+            if keywords.iter().any(|kw| lower.contains(kw)) {
+                pattern_groups
+                    .entry(cluster_name.to_string())
+                    .or_default()
+                    .push(msg.to_string());
+            }
+        }
+    }
+
+    // 3. For patterns appearing 3+ times, generate a workflow
+    let mut workflows: Vec<Value> = Vec::new();
+    for (pattern, examples) in &pattern_groups {
+        if examples.len() < 3 {
+            continue;
+        }
+
+        let task_summary = format!(
+            "Automated {} workflow based on {} similar requests",
+            pattern.replace('_', " "),
+            examples.len()
+        );
+
+        // Create a workflow definition
+        let workflow_definition = json!({
+            "name": format!("auto_{}", pattern),
+            "description": task_summary,
+            "phases": ["coding"],
+            "nodes": [
+                {
+                    "id": format!("analyze_{}", pattern),
+                    "type": "task",
+                    "description": format!("Analyze and execute {} request", pattern),
+                }
+            ],
+            "edges": [],
+            "execution_order": [format!("analyze_{}", pattern)],
+            "generated_from": "conversation_analysis",
+            "sample_count": examples.len(),
+            "sample_queries": examples.iter().take(3).cloned().collect::<Vec<_>>(),
+        });
+
+        workflows.push(workflow_definition);
+    }
+
+    // 4. Try to create skills for each detected pattern
+    let mut created_skills: Vec<String> = Vec::new();
+    for wf in &workflows {
+        let skill_name = wf["name"].as_str().unwrap_or("auto_workflow");
+        let description = wf["description"].as_str().unwrap_or("");
+
+        let exists = server
+            .skill_registry
+            .lock()
+            .ok()
+            .map(|registry| registry.get(skill_name).is_some())
+            .unwrap_or(false);
+
+        if !exists {
+            let result = server.skill_registry.lock()
+                .ok()
+                .and_then(|mut registry| {
+                    registry.create_skill_from_prompt(
+                        skill_name,
+                        description,
+                        &format!("You are an AI assistant specialized in: {}\n\nAnalyze the request and execute the appropriate steps based on the following pattern:\n{}", description, description),
+                        std::collections::HashMap::new(),
+                    ).ok()
+                });
+            if result.is_some() {
+                created_skills.push(skill_name.to_string());
+            }
+        }
+    }
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "workflows": workflows,
+            "created_skills": created_skills,
+            "patterns_analyzed": pattern_groups.len(),
+            "summary": format!(
+                "Analyzed {} messages, found {} patterns, created {} workflow(s) and {} skill(s)",
+                user_messages.len(),
+                pattern_groups.len(),
+                workflows.len(),
+                created_skills.len(),
+            ),
+        }),
+    )
+    .await
+}
+
+pub(crate) async fn handle_workflow_ask(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+    trace: &RequestTraceContext,
+) -> Result<()> {
+    let Some(task) = params.get("task").and_then(Value::as_str) else {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "task is required for workflow.ask".to_string(),
+            None,
+        )
+        .await;
+    };
+    if task.trim().is_empty() {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "task is required for workflow.ask".to_string(),
+            None,
+        )
+        .await;
+    }
+
+    let auto_create_skills = params
+        .get("auto_create_skills")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let auto_create_workflow = params
+        .get("auto_create_workflow")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
+    // Step 1: Generate workflow plan from task
+    let ledger = clone_artifact_ledger(server);
+    let plan = build_task_plan(task);
+    let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
+    let workflow = build_workflow_generated_artifact(&plan);
+    let workflow_artifact_path = persist_workflow_generated(&ledger, &workflow)?;
+
+    // Step 2: Auto-create skills if needed
+    let mut created_skills: Vec<String> = Vec::new();
+    if auto_create_skills {
+        for (i, node) in workflow.nodes.iter().enumerate() {
+            let skill_name = format!("workflow_node_{}", i);
+            // Check if skill already exists (lock once, drop before next iteration)
+            let exists = {
+                let registry = server.skill_registry.lock();
+                registry
+                    .ok()
+                    .map(|r| r.get(&skill_name).is_some())
+                    .unwrap_or(false)
+            };
+            if !exists {
+                // Create a prompt-based skill from the node description
+                let result = {
+                    let registry = server.skill_registry.lock();
+                    registry.ok().and_then(|mut reg| {
+                        reg
+                            .create_skill_from_prompt(
+                                &skill_name,
+                                &node.description,
+                                &format!(
+                                    "You are an AI assistant specialized in: {}\n\nTask: {}\n\nExecute the following instructions precisely:\n{}",
+                                    node.description,
+                                    task,
+                                    node.description,
+                                ),
+                                std::collections::HashMap::new(),
+                            )
+                            .ok()
+                    })
+                };
+                if result.is_some() {
+                    created_skills.push(skill_name);
+                }
+            }
+        }
+    }
+
+    // Step 2b: Auto-register workflow if enabled
+    // The workflow is already persisted to the artifact ledger via workflow_artifact_path.
+    // Full WorkflowRegistry registration requires CapabilityBus to expose its
+    // internal workflow_registry field. For now, the persisted artifact serves
+    // as the reusable workflow definition.
+    if auto_create_workflow {
+        let _ = &workflow_artifact_path;
+    }
+
+    // Step 3: Execute workflow
+    let execute_params = json!({
+        "task": task,
+        "phase": params.get("phase").cloned().unwrap_or(json!("coding")),
+    });
+    let execute_result = handle_workflow_execute(server, execute_params, None, trace).await;
+
+    // Step 4: Return comprehensive result
+    let response = json!({
+        "ok": true,
+        "action": "workflow.ask",
+        "task": task,
+        "plan": plan,
+        "workflow": workflow,
+        "created_skills": created_skills,
+        "auto_create_skills": auto_create_skills,
+        "auto_create_workflow": auto_create_workflow,
+        "execution_result": if execute_result.is_ok() { "completed" } else { "failed" },
+        "plan_artifact_path": plan_artifact_path.display().to_string(),
+        "workflow_graph": {
+            "nodes": workflow.nodes.iter().map(|n| json!({
+                "id": n.id,
+                "description": n.description,
+                "role": n.role,
+                "phase_index": n.phase_index,
+                "priority": n.priority,
+                "timeout_seconds": n.timeout_seconds,
+                "retry_limit": n.retry_limit,
+            })).collect::<Vec<_>>(),
+            "edges": workflow.edges.iter().map(|e| json!({
+                "from": e.from,
+                "to": e.to,
+            })).collect::<Vec<_>>(),
+            "execution_order": workflow.execution_order,
+        },
+    });
+
+    send_result(server, request_id, response).await
 }

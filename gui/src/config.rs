@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,17 +198,15 @@ pub fn load_app_config() -> AppConfig {
     }
 
     // Step 2: Sync keys between config and keyring (bidirectional)
-    let known = [
-        "deepseek",
-        "openai",
-        "anthropic",
-        "qwen",
-        "gemini",
-        "groq",
-        "mistral",
-        "copilot",
-    ];
-    for provider_name in &known {
+    // Collect all provider names: from config.providers AND the canonical PROVIDER_NAMES list.
+    let mut all_provider_names: HashSet<String> = HashSet::new();
+    for p in &config.providers {
+        all_provider_names.insert(p.name.clone());
+    }
+    for name in crate::views::providers::PROVIDER_NAMES {
+        all_provider_names.insert(name.to_string());
+    }
+    for provider_name in &all_provider_names {
         // Find matching provider in config (or any, if name matches)
         let config_key = config
             .providers
@@ -298,24 +297,14 @@ fn app_config_path() -> PathBuf {
 
 /// Check if any AI provider has a key available (in config or keyring).
 pub fn has_valid_providers(config: &AppConfig) -> bool {
-    // PRIMARY: check keyring for all configured providers + known providers
+    // PRIMARY: check keyring for all configured providers + the canonical PROVIDER_NAMES list
     for p in &config.providers {
         if crate::keyring_util::has_api_key(&p.name.to_lowercase()) {
             return true;
         }
     }
 
-    let known = [
-        "deepseek",
-        "openai",
-        "anthropic",
-        "qwen",
-        "gemini",
-        "groq",
-        "mistral",
-        "copilot",
-    ];
-    for name in &known {
+    for name in crate::views::providers::PROVIDER_NAMES {
         if crate::keyring_util::has_api_key(name) {
             return true;
         }

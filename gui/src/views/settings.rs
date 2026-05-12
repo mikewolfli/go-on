@@ -236,8 +236,10 @@ impl SettingsView {
                         ui.end_row();
                     });
 
+                // Note: save_app_config is called once at the end of the function
+                // (after the stability section) to batch all changes into a single save.
+                // Do NOT call save_app_config here — it will be called at the bottom.
                 if changed {
-                    save_app_config(config);
                     ui.ctx().request_repaint();
                 }
 
@@ -565,6 +567,19 @@ impl SettingsView {
                     });
 
                 if changed {
+                    save_app_config(config);
+                    ui.ctx().request_repaint();
+                }
+
+                ui.add_space(20.0);
+                ui.separator();
+                ui.add_space(8.0);
+                // Reset to defaults
+                if ui
+                    .button("🔄 ".to_string() + &i18n.t("settings.resetDefaults"))
+                    .clicked()
+                {
+                    *config = AppConfig::default();
                     save_app_config(config);
                     ui.ctx().request_repaint();
                 }

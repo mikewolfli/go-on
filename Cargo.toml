@@ -43,7 +43,7 @@ sub-bus-distributed-memory = []
 
 # Profile definitions (mutually exclusive via compile-time assertions)
 profile-local = ["backend-sqlite"]
-profile-simple-server = ["backend-sqlite", "sub-bus-orchestration"]
+profile-simple-server = ["backend-sqlite", "sub-bus-orchestration", "sub-bus-tool"]
 profile-multi-users-server = ["backend-postgres", "sub-bus-tool", "sub-bus-observability", "sub-bus-optimization", "sub-bus-memory", "sub-bus-protocol", "sub-bus-orchestration", "sub-bus-distributed-memory"]
 
 # Backend implementations

@@ -9,16 +9,6 @@ use serde_json::Value;
 
 const MAX_TRACE_REQUEST_ID_LEN: usize = 128;
 
-fn clamp_request_id(mut request_id: String) -> String {
-    if request_id.is_empty() {
-        return "unknown".to_string();
-    }
-    if request_id.len() > MAX_TRACE_REQUEST_ID_LEN {
-        request_id.truncate(MAX_TRACE_REQUEST_ID_LEN);
-    }
-    request_id
-}
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct JsonRpcRequest {
     pub(crate) jsonrpc: String,
@@ -89,9 +79,6 @@ pub(crate) fn chat_trace_context(id: &Option<Value>, span_id: &str) -> RequestTr
         request_id,
     }
 }
-
-// Use Arc to avoid cloning large strings in child trace context
-use std::sync::Arc;
 
 pub(crate) fn child_trace_context(
     parent: &RequestTraceContext,

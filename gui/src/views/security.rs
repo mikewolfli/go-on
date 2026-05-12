@@ -45,14 +45,7 @@ impl SecurityView {
                 self.process_pending();
 
                 ui.heading(i18n.t("tab.security"));
-                let text = i18n.t("security.hint").to_string();
-                let resp = ui.label(&text);
-                resp.context_menu(|ui| {
-                    if ui.button(i18n.t("common.copyButton")).clicked() {
-                        ui.ctx().copy_text(text.clone());
-                        ui.close_menu();
-                    }
-                });
+                ui.label(i18n.t("security.hint"));
                 ui.separator();
 
                 let mut changed = false;
@@ -129,14 +122,7 @@ impl SecurityView {
                 }
 
                 if !self.status.is_empty() {
-                    let text = self.status.clone();
-                    let resp = ui.label(&text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.label(&self.status);
                 }
             });
     }

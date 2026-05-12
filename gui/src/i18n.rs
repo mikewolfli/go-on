@@ -51,6 +51,17 @@ impl I18n {
             tr!(en, "Stopped", cn, "已停止", tw, "已停止"),
         );
         m.insert(
+            "app.shortcutHint",
+            tr!(
+                en,
+                "⌨ Ctrl+1-9 tabs | Ctrl+N new chat | Ctrl+L clear",
+                cn,
+                "⌨ Ctrl+1-9 切换标签 | Ctrl+N 新建对话 | Ctrl+L 清空输入",
+                tw,
+                "⌨ Ctrl+1-9 切換標籤 | Ctrl+N 新建對話 | Ctrl+L 清空輸入"
+            ),
+        );
+        m.insert(
             "app.connecting",
             tr!(en, "Connecting...", cn, "连接中...", tw, "連接中..."),
         );
@@ -587,6 +598,10 @@ impl I18n {
             "mode.full_auto",
             tr!(en, "🤖 Full Auto", cn, "🤖 全自动", tw, "🤖 全自動"),
         );
+        m.insert(
+            "mode.workflow",
+            tr!(en, "⚙️ Workflow", cn, "⚙️ 工作流", tw, "⚙️ 工作流"),
+        );
 
         m.insert(
             "chat.input",
@@ -745,6 +760,43 @@ impl I18n {
                 "Ctrl+Enter 发送（输入法安全），Enter 换行",
                 tw,
                 "Ctrl+Enter 發送（輸入法安全），Enter 換行"
+            ),
+        );
+        m.insert(
+            "chat.generateWorkflow",
+            tr!(en, "Generate Workflow", cn, "生成工作流", tw, "生成工作流"),
+        );
+        m.insert(
+            "chat.generateWorkflowHint",
+            tr!(
+                en,
+                "Auto-generate a reusable workflow from this conversation",
+                cn,
+                "从此对话自动生成可复用工作流",
+                tw,
+                "從此對話自動生成可復用工作流"
+            ),
+        );
+        m.insert(
+            "chat.noMessagesForWorkflow",
+            tr!(
+                en,
+                "No user messages to analyze for workflow generation",
+                cn,
+                "没有用户消息可用于工作流生成分析",
+                tw,
+                "沒有用戶消息可用於工作流生成分析"
+            ),
+        );
+        m.insert(
+            "chat.workflowGenerationStarted",
+            tr!(
+                en,
+                "Workflow generation triggered! Check the Workflow tab for results.",
+                cn,
+                "工作流生成已触发！请查看工作流标签页获取结果。",
+                tw,
+                "工作流生成已觸發！請查看工作流標籤頁獲取結果。"
             ),
         );
 
@@ -2374,7 +2426,14 @@ impl I18n {
         );
         m.insert(
             "monitor.retryIn",
-            tr!(en, "Retrying in {seconds}s", cn, "{seconds}秒后重试", tw, "{seconds}秒後重試"),
+            tr!(
+                en,
+                "Retrying in {seconds}s",
+                cn,
+                "{seconds}秒后重试",
+                tw,
+                "{seconds}秒後重試"
+            ),
         );
         m.insert(
             "chat.tokenStats",
@@ -2398,39 +2457,65 @@ impl I18n {
         );
         m.insert(
             "chat.showingLatest",
-            tr!(en, "Showing latest {shown} of {total} messages", cn, "显示最新 {shown}/{total} 条消息", tw, "顯示最新 {shown}/{total} 則訊息"),
+            tr!(
+                en,
+                "Showing latest {shown} of {total} messages",
+                cn,
+                "显示最新 {shown}/{total} 条消息",
+                tw,
+                "顯示最新 {shown}/{total} 則訊息"
+            ),
         );
         m.insert(
             "chat.largeMessageTruncated",
-            tr!(en, "⚠️ Large message ({chars} chars) truncated for UI safety", cn, "⚠️ 消息过长（{chars}字符）已截断", tw, "⚠️ 訊息過長（{chars}字元）已截斷"),
+            tr!(
+                en,
+                "⚠️ Large message ({chars} chars) truncated for UI safety",
+                cn,
+                "⚠️ 消息过长（{chars}字符）已截断",
+                tw,
+                "⚠️ 訊息過長（{chars}字元）已截斷"
+            ),
         );
         m.insert(
             "chat.streamError",
-            tr!(en, "Stream error: {error}", cn, "流式错误: {error}", tw, "串流錯誤: {error}"),
+            tr!(
+                en,
+                "Stream error: {error}",
+                cn,
+                "流式错误: {error}",
+                tw,
+                "串流錯誤: {error}"
+            ),
         );
         m.insert(
             "chat.streamFallbackError",
-            tr!(en, "Chat failed: {error}", cn, "聊天失败: {error}", tw, "聊天失敗: {error}"),
+            tr!(
+                en,
+                "Chat failed: {error}",
+                cn,
+                "聊天失败: {error}",
+                tw,
+                "聊天失敗: {error}"
+            ),
         );
         m.insert(
             "chat.editTitle",
             tr!(en, "Edit message", cn, "编辑消息", tw, "編輯訊息"),
         );
-        m.insert(
-            "chat.saveEdit",
-            tr!(en, "Save", cn, "保存", tw, "儲存"),
-        );
-        m.insert(
-            "chat.cancelEdit",
-            tr!(en, "Cancel", cn, "取消", tw, "取消"),
-        );
-        m.insert(
-            "chat.copyMessage",
-            tr!(en, "Copy", cn, "复制", tw, "複製"),
-        );
+        m.insert("chat.saveEdit", tr!(en, "Save", cn, "保存", tw, "儲存"));
+        m.insert("chat.cancelEdit", tr!(en, "Cancel", cn, "取消", tw, "取消"));
+        m.insert("chat.copyMessage", tr!(en, "Copy", cn, "复制", tw, "複製"));
         m.insert(
             "chat.copyPlain",
-            tr!(en, "Copy (plain text)", cn, "复制（纯文本）", tw, "複製（純文字）"),
+            tr!(
+                en,
+                "Copy (plain text)",
+                cn,
+                "复制（纯文本）",
+                tw,
+                "複製（純文字）"
+            ),
         );
         m.insert(
             "chat.copyJson",
@@ -2454,15 +2539,36 @@ impl I18n {
         );
         m.insert(
             "chat.openConfigDir",
-            tr!(en, "Open config folder", cn, "打开配置目录", tw, "開啟設定目錄"),
+            tr!(
+                en,
+                "Open config folder",
+                cn,
+                "打开配置目录",
+                tw,
+                "開啟設定目錄"
+            ),
         );
         m.insert(
             "chat.sendShortcutHint",
-            tr!(en, "Enter to send · Shift+Enter for newline", cn, "Enter 发送 · Shift+Enter 换行", tw, "Enter 傳送 · Shift+Enter 換行"),
+            tr!(
+                en,
+                "Enter to send · Shift+Enter for newline",
+                cn,
+                "Enter 发送 · Shift+Enter 换行",
+                tw,
+                "Enter 傳送 · Shift+Enter 換行"
+            ),
         );
         m.insert(
             "chat.sendShortcutHintLinux",
-            tr!(en, "Ctrl+Enter to send · Enter for newline", cn, "Ctrl+Enter 发送 · Enter 换行", tw, "Ctrl+Enter 傳送 · Enter 換行"),
+            tr!(
+                en,
+                "Ctrl+Enter to send · Enter for newline",
+                cn,
+                "Ctrl+Enter 发送 · Enter 换行",
+                tw,
+                "Ctrl+Enter 傳送 · Enter 換行"
+            ),
         );
         m.insert(
             "chat.stopShortcut",
@@ -2480,18 +2586,8 @@ impl I18n {
             "chat.resend",
             tr!(en, "Resend", cn, "重新发送", tw, "重新發送"),
         );
-        m.insert(
-            "mode.ask",
-            tr!(en, "Ask", cn, "问答", tw, "問答"),
-        );
-        m.insert(
-            "mode.plan",
-            tr!(en, "Plan", cn, "计划", tw, "計劃"),
-        );
-        m.insert(
-            "mode.edit",
-            tr!(en, "Edit", cn, "编辑", tw, "編輯"),
-        );
+        m.insert("mode.plan", tr!(en, "Plan", cn, "计划", tw, "計劃"));
+        m.insert("mode.edit", tr!(en, "Edit", cn, "编辑", tw, "編輯"));
         m.insert(
             "mode.safeguard",
             tr!(en, "Safeguard", cn, "安全审查", tw, "安全審查"),
@@ -2871,14 +2967,11 @@ impl I18n {
                 "輸入訊息..."
             ),
         );
-        m.insert("chat.send", tr!(en, "Send", cn, "发送", tw, "發送"));
-        m.insert("chat.stop", tr!(en, "Stop", cn, "停止", tw, "停止"));
-        m.insert("chat.retry", tr!(en, "Retry", cn, "重试", tw, "重試"));
+
         m.insert(
             "chat.attach",
             tr!(en, "Attach file", cn, "附件", tw, "附件"),
         );
-        m.insert("chat.export", tr!(en, "Export", cn, "导出", tw, "導出"));
         m.insert(
             "chat.exportTitle",
             tr!(en, "Chat Export", cn, "对话导出", tw, "對話導出"),
@@ -2894,7 +2987,6 @@ impl I18n {
                 "導出時間 {time}"
             ),
         );
-        m.insert("chat.exportRoleYou", tr!(en, "You", cn, "你", tw, "你"));
         m.insert(
             "chat.exportRoleAssistant",
             tr!(en, "Assistant", cn, "助手", tw, "助手"),
@@ -3114,7 +3206,6 @@ impl I18n {
                 "指令已存在。"
             ),
         );
-        m.insert("chat.close", tr!(en, "Close", cn, "关闭", tw, "關閉"));
 
         // ── Autotune keys ────────────────────────────────
         m.insert(
@@ -3132,7 +3223,6 @@ impl I18n {
             "autotune.temperature",
             tr!(en, "Temperature", cn, "温度", tw, "溫度"),
         );
-        m.insert("autotune.topP", tr!(en, "Top-p", cn, "Top-p", tw, "Top-p"));
         m.insert(
             "autotune.maxTokens",
             tr!(en, "Max tokens", cn, "最大 tokens", tw, "最大 tokens"),
@@ -3323,7 +3413,6 @@ impl I18n {
                 "篩選供應商…"
             ),
         );
-        m.insert("monitor.ready", tr!(en, "Ready", cn, "就绪", tw, "就緒"));
         m.insert(
             "monitor.notReady",
             tr!(en, "Not Ready", cn, "未就绪", tw, "未就緒"),
@@ -3355,8 +3444,6 @@ impl I18n {
             "monitor.trendSummary",
             tr!(en, "Trend Summary", cn, "趋势摘要", tw, "趨勢摘要"),
         );
-        m.insert("monitor.qps", tr!(en, "QPS", cn, "QPS", tw, "QPS"));
-        m.insert("monitor.p95", tr!(en, "P95", cn, "P95", tw, "P95"));
         m.insert(
             "monitor.errorRate",
             tr!(en, "Error Rate", cn, "错误率", tw, "錯誤率"),
@@ -3623,6 +3710,17 @@ impl I18n {
             ),
         );
         m.insert(
+            "settings.resetDefaults",
+            tr!(
+                en,
+                "Reset to Defaults",
+                cn,
+                "恢复默认设置",
+                tw,
+                "恢復預設設置"
+            ),
+        );
+        m.insert(
             "settings.section.core",
             tr!(en, "Core Features", cn, "核心功能", tw, "核心功能"),
         );
@@ -3777,23 +3875,6 @@ impl I18n {
             tr!(en, "Secret Source", cn, "密钥来源", tw, "密鑰來源"),
         );
 
-        // ── Theme keys ───────────────────────────────────
-        m.insert("theme.minimal", tr!(en, "Minimal", cn, "简约", tw, "簡約"));
-        m.insert("theme.guofeng", tr!(en, "GuoFeng", cn, "国风", tw, "國風"));
-        m.insert("theme.wuxia", tr!(en, "Wuxia", cn, "武侠", tw, "武俠"));
-        m.insert(
-            "theme.shanshui",
-            tr!(en, "ShanShui", cn, "山水", tw, "山水"),
-        );
-        m.insert(
-            "theme.hellokitty",
-            tr!(en, "Hello Kitty", cn, "Hello Kitty", tw, "Hello Kitty"),
-        );
-        m.insert(
-            "theme.serveThePeople",
-            tr!(en, "Serve The People", cn, "为人民服务", tw, "為人民服務"),
-        );
-
         // ── Workflow keys ────────────────────────────────
         m.insert(
             "workflow.hint",
@@ -3818,10 +3899,7 @@ impl I18n {
             "workflow.confirmRun",
             tr!(en, "Confirm Run", cn, "确认运行", tw, "確認運行"),
         );
-        m.insert(
-            "workflow.status",
-            tr!(en, "Status", cn, "状态", tw, "狀態"),
-        );
+        m.insert("workflow.status", tr!(en, "Status", cn, "状态", tw, "狀態"));
         m.insert(
             "workflow.runConfirmAgain",
             tr!(
@@ -3986,7 +4064,14 @@ impl I18n {
         );
         m.insert(
             "workflow.activeSummary",
-            tr!(en, "Active Run Summary", cn, "活动运行摘要", tw, "活動運行摘要"),
+            tr!(
+                en,
+                "Active Run Summary",
+                cn,
+                "活动运行摘要",
+                tw,
+                "活動運行摘要"
+            ),
         );
         m.insert(
             "workflow.estimatedRemaining",

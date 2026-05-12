@@ -65,8 +65,10 @@ fn is_acp_request(method: &str) -> bool {
             | "workflow.confirm"
             | "workflow.clarify"
             | "workflow.research"
+            | "workflow.ask"
             | "workflow.consult"
             | "workflow.generate"
+            | "workflow.generate_from_chat"
             | "workflow.execute"
             | "workflow.run.list"
             | "workflow.run.get"
@@ -216,7 +218,7 @@ use crate::rpc_protocol::{value_to_id, JsonRpcRequest, RequestTraceContext};
 mod chat_pack;
 mod checkpoint_pack;
 mod config_pack;
-mod exec_pack;
+pub(crate) mod exec_pack;
 mod governance_pack;
 mod hardness_pack;
 mod learning_pack;
@@ -226,9 +228,9 @@ mod protocol_pack;
 mod pua_pack;
 mod repro_pack;
 mod runtime_pack;
-mod tools_pack;
+pub(crate) mod tools_pack;
 mod trace_pack;
-mod workflow_pack;
+pub(crate) mod workflow_pack;
 use self::chat_pack::{parse_messages, send_error, send_result};
 pub(crate) use self::checkpoint_pack::create_checkpoint_record;
 pub(crate) use self::checkpoint_pack::persist_checkpoint_metacognitive_loop;
@@ -718,6 +720,24 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                 }
                 "workflow.consult" => {
                     workflow_pack::handle_workflow_consult(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        &trace,
+                    )
+                    .await
+                }
+                "workflow.ask" => {
+                    workflow_pack::handle_workflow_ask(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        &trace,
+                    )
+                    .await
+                }
+                "workflow.generate_from_chat" => {
+                    workflow_pack::handle_workflow_generate_from_chat(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,

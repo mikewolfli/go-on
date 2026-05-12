@@ -34,6 +34,7 @@ use crate::i18n::runtime::tf;
 use crate::intelligence::token_cache::ContextLengthClass;
 use crate::orchestration::planner_executor::Planner;
 use crate::orchestration::prompt_layers::PromptAssembler;
+use crate::orchestration::skill::SkillDescriptor;
 use crate::orchestration::task_router::{TaskRouter, TaskType};
 use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
 use crate::orchestration::workflow_optimizer::OptimizationContext;
@@ -46,9 +47,10 @@ use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryStore};
 use crate::orchestration::roles::{AgentRole, RoleRegistry};
 use crate::orchestration::task_graph::{TaskGraph, TaskNode};
 use crate::reinforcement::{
-    persist_knowledge_insight_event, persist_workflow_learning_event, ExecutionDecisionCandidate,
-    KnowledgeBusArtifact, KnowledgeInsightArtifact, RequirementContractArtifact, TaskPlanArtifact,
-    WorkflowLearningEvent,
+    build_task_plan, build_workflow_generated_artifact, persist_knowledge_insight_event,
+    persist_workflow_generated, persist_workflow_learning_event, ArtifactLedger,
+    ExecutionDecisionCandidate, KnowledgeBusArtifact, KnowledgeInsightArtifact,
+    RequirementContractArtifact, TaskPlanArtifact, WorkflowLearningEvent,
 };
 use crate::rpc_protocol::{chat_trace_context, child_trace_context, RequestTraceContext};
 
@@ -888,6 +890,29 @@ pub(crate) async fn process_chat_request(
         }
     };
 
+    // ── P3: System prompt enhancement for skill creation capability ───────
+    // After all context has been merged into messages, inject instructions
+    // about the skill creation system so the AI knows it can autonomously
+    // propose and create reusable skills.
+    let agent_messages = {
+        if let Ok(registry) = server.skill_registry.lock() {
+            let skill_count = registry.list().len();
+            let skill_instruction = format!(
+                "\n\n## Skill Creation Capability\n\
+                You have access to a skill system. There are currently {} registered skill(s).\n\
+                When you notice the user repeatedly asking for similar tasks, you can propose creating a reusable skill.\n\
+                To create a skill, call the `skill-creator` tool with: name, description, prompt_template, and input_schema.\n\
+                Skills you create will be available in future conversations.\n\
+                When proposing a new skill, explain what it does and ask for user confirmation before creating it.",
+                skill_count
+            );
+            // Merge into the system message (first message with role "system")
+            merge_context_into_messages(&agent_messages, Some(skill_instruction))
+        } else {
+            agent_messages
+        }
+    };
+
     let mut selected_agent = String::new();
     let mut response_text = String::new();
     let mut reasoning_text = String::new();
@@ -1031,6 +1056,33 @@ pub(crate) async fn process_chat_request(
                 }
             } else {
                 base_agent_options.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    // ── Inject registered skills as LLM-callable tools ──────────────────
+    // When skills are registered in the skill_registry, expose them as
+    // function-calling tools to the LLM provider so the AI can invoke them
+    // during chat conversations (P0 requirement).
+    {
+        if let Ok(registry) = server.skill_registry.lock() {
+            let skill_tools: Vec<Value> = registry
+                .list()
+                .iter()
+                .map(|skill: &SkillDescriptor| {
+                    json!({
+                        "type": "function",
+                        "function": {
+                            "name": skill.name,
+                            "description": skill.description,
+                            "parameters": skill.input_schema,
+                        }
+                    })
+                })
+                .collect();
+            if !skill_tools.is_empty() {
+                base_agent_options.insert("tools".to_string(), json!(skill_tools));
+                base_agent_options.insert("tool_choice".to_string(), json!("auto"));
             }
         }
     }
@@ -2023,6 +2075,16 @@ pub(crate) async fn process_chat_request(
         }
     }
 
+    // P3: Auto-create skills from conversation patterns
+    // After a successful chat completion, analyze the conversation to
+    // determine if a new reusable skill should be automatically created.
+    let _ = auto_create_skills_from_conversation(server, params, &response_text).await;
+
+    // P4: Auto-generate workflow from conversation patterns
+    // After a successful chat completion, analyze the conversation to
+    // determine if a reusable workflow should be generated.
+    let _ = auto_generate_workflow_from_conversation(server, params, &response_text).await;
+
     Ok(result)
 }
 
@@ -2035,6 +2097,7 @@ async fn run_agent_collecting(
     options: Option<std::collections::HashMap<String, Value>>,
     timeout_duration: Option<Duration>,
 ) -> Result<(String, String)> {
+    use crate::acp::r#impl::request::tools_pack::execute_mcp_tool_call;
     let (sender, mut receiver) = mpsc::channel::<String>(2048);
     let sender = crate::agent::StreamingSender::from(sender);
     let task = tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
@@ -2043,9 +2106,21 @@ async fn run_agent_collecting(
         let stream_started = Instant::now();
         let mut response = String::new();
         let mut reasoning_buffer = String::new();
+        let mut tool_calls: Vec<(String, String)> = Vec::new();
         let mut chunk_index = 0usize;
         let mut total_chars = 0usize;
         while let Some(token) = receiver.recv().await {
+            // Check for tool call tokens (prefixed with __tool_call__)
+            if let Some(tool_call_data) = token.strip_prefix("__tool_call__:") {
+                // Format: __tool_call__:<tool_name>:<json_arguments>
+                if let Some(colon_pos) = tool_call_data.find(':') {
+                    let tool_name = &tool_call_data[..colon_pos];
+                    let tool_args = &tool_call_data[colon_pos + 1..];
+                    tool_calls.push((tool_name.to_string(), tool_args.to_string()));
+                }
+                continue;
+            }
+
             let next_chars = token.chars().count();
             if stream_would_exceed_limits(chunk_index, total_chars, next_chars) {
                 anyhow::bail!("stream output exceeded configured safety limits");
@@ -2096,6 +2171,52 @@ async fn run_agent_collecting(
                     stream_started.elapsed().as_millis() as u64,
                 )
                 .await?;
+                // ── Execute tool calls ────────────────────────────────
+                // If the LLM responded with tool calls, execute each
+                // registered skill and append the results to the response.
+                let mut tool_results: Vec<String> = Vec::new();
+                for (tool_name, tool_args_str) in &tool_calls {
+                    let parsed_args: Value =
+                        serde_json::from_str(tool_args_str).unwrap_or(json!({}));
+                    match execute_mcp_tool_call(server, tool_name, &parsed_args).await {
+                        Ok(result) => {
+                            let result_text =
+                                serde_json::to_string_pretty(&result).unwrap_or_default();
+                            let tool_block = format!(
+                                "[Tool result: {}]\n{}\n[/Tool result]",
+                                tool_name, result_text
+                            );
+                            tool_results.push(tool_block);
+                        }
+                        Err(err) => {
+                            let err_block =
+                                format!("[Tool error: {}]\n{}\n[/Tool error]", tool_name, err);
+                            tool_results.push(err_block);
+                        }
+                    }
+                }
+                if !tool_results.is_empty() {
+                    let combined = tool_results.join("\n");
+                    response.push_str("\n\n");
+                    response.push_str(&combined);
+                    // Emit the tool result block via stream if an observer is attached.
+                    if let Some(ref observer) = stream_ctx.stream_observer {
+                        let meta = StreamEventMeta {
+                            agent_name: stream_ctx.agent_name,
+                            phase_name: stream_ctx.phase_name,
+                            trace_id: stream_ctx.trace_id,
+                        };
+                        emit_stream_chunk(
+                            server,
+                            Some(observer),
+                            meta,
+                            &combined,
+                            chunk_index,
+                            total_chars,
+                        )
+                        .await?;
+                    }
+                }
                 Ok::<(String, String), anyhow::Error>((response, reasoning_buffer))
             }
             Ok(Err(err)) => Err(err.into()),
@@ -3720,6 +3841,383 @@ fn execute_tool_calls(
             )
         })
         .collect()
+}
+
+/// A detected repeated task pattern in a conversation.
+/// Used by P3 to proactively propose skill creation.
+#[allow(dead_code)]
+struct DetectedTaskPattern {
+    /// Suggested skill name
+    name: String,
+    /// Suggested skill description
+    description: String,
+    /// How many times the pattern was observed
+    occurrence_count: usize,
+    /// The keyword cluster that identifies this pattern
+    keywords: Vec<String>,
+}
+
+/// Detect repeated task patterns across user messages.
+///
+/// Analyzes all user messages for common keyword clusters that indicate
+/// the same type of task is being requested multiple times.
+/// Returns `Some(DetectedTaskPattern)` when a pattern appears 3+ times.
+fn detect_repeated_task_pattern(messages: &[&str]) -> Option<DetectedTaskPattern> {
+    if messages.len() < 3 {
+        return None;
+    }
+
+    // Define keyword clusters for common task types as owned strings
+    let task_clusters: Vec<(Vec<&str>, &str, &str)> =
+        vec![
+        (
+            vec!["refactor", "restructure", "reorganize", "clean up", "cleanup", "technical debt"],
+            "code-refactoring",
+            "Refactors and restructures code to improve maintainability and reduce technical debt",
+        ),
+        (
+            vec!["test", "unit test", "integration test", "e2e", "test coverage", "assert"],
+            "testing",
+            "Creates and runs tests including unit, integration, and end-to-end tests",
+        ),
+        (
+            vec!["document", "readme", "docstring", "comment", "documentation", "docs"],
+            "documentation",
+            "Generates and updates documentation including README, docstrings, and technical docs",
+        ),
+        (
+            vec!["debug", "fix", "bug", "issue", "error", "crash", "failing", "broken"],
+            "bug-fixing",
+            "Diagnoses and fixes bugs, errors, and crashes in the codebase",
+        ),
+        (
+            vec!["optimize", "performance", "slow", "bottleneck", "speed up", "faster"],
+            "performance-optimization",
+            "Optimizes code performance by identifying and fixing bottlenecks",
+        ),
+        (
+            vec!["api", "endpoint", "route", "rest", "graphql", "grpc"],
+            "api-development",
+            "Designs, implements, and documents API endpoints and integrations",
+        ),
+        (
+            vec!["review", "code review", "audit", "inspect", "check quality"],
+            "code-review",
+            "Reviews code for quality, security, and adherence to best practices",
+        ),
+        (
+            vec!["deploy", "ci/cd", "pipeline", "release", "rollout", "rollback"],
+            "deployment",
+            "Manages deployment, CI/CD pipelines, and release processes",
+        ),
+        (
+            vec!["migrate", "migration", "upgrade", "port", "convert", "transpile"],
+            "migration",
+            "Migrates code between frameworks, languages, or versions",
+        ),
+        (
+            vec!["config", "configure", "setup", "install", "initialize", "bootstrap"],
+            "configuration",
+            "Handles configuration, setup, and initialization of projects and tools",
+        ),
+    ];
+
+    // Count how many messages match each cluster
+    let mut cluster_hits: Vec<(usize, Vec<&str>, &str, &str)> = task_clusters
+        .into_iter()
+        .map(|(keywords, name, description)| {
+            let count = messages
+                .iter()
+                .filter(|msg| {
+                    let lower = msg.to_lowercase();
+                    keywords.iter().any(|kw| lower.contains(kw))
+                })
+                .count();
+            (count, keywords, name, description)
+        })
+        .collect();
+
+    // Sort by hit count descending
+    cluster_hits.sort_by(|a, b| b.0.cmp(&a.0));
+
+    // Return the best match if it appears 3+ times
+    if !cluster_hits.is_empty() {
+        let (count, keywords, name, description) = cluster_hits.swap_remove(0);
+        if count >= 3 {
+            return Some(DetectedTaskPattern {
+                name: name.to_string(),
+                description: description.to_string(),
+                occurrence_count: count,
+                keywords: keywords.into_iter().map(|s| s.to_string()).collect(),
+            });
+        }
+    }
+
+    None
+}
+
+/// Analyze a completed chat conversation and auto-create skills for
+/// repetitive task patterns that would benefit from being a reusable skill.
+async fn auto_create_skills_from_conversation(
+    server: &AcpServer,
+    chat_params: &ChatParams,
+    response_text: &str,
+) -> Result<Vec<String>> {
+    let mut created_skills = Vec::new();
+
+    // Only attempt skill creation if the skill-creator skill is registered
+    let has_skill_creator = server
+        .skill_registry
+        .lock()
+        .ok()
+        .map(|registry| registry.get("skill-creator").is_some())
+        .unwrap_or(false);
+
+    if !has_skill_creator {
+        return Ok(created_skills);
+    }
+
+    // Analyze the last user message for skill creation patterns
+    let last_user_msg = chat_params
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.as_str())
+        .unwrap_or("");
+
+    // Analyze all user messages for repeated task patterns
+    let all_user_msgs: Vec<&str> = chat_params
+        .messages
+        .iter()
+        .filter(|m| m.role == "user")
+        .map(|m| m.content.as_str())
+        .collect();
+
+    // Check if the user's message contains a skill creation request
+    // or if the AI response suggests creating a skill
+    let user_lower = last_user_msg.to_lowercase();
+    let response_lower = response_text.to_lowercase();
+
+    let has_creation_intent = user_lower.contains("create a skill")
+        || user_lower.contains("make a skill")
+        || user_lower.contains("new skill")
+        || user_lower.contains("save as skill")
+        || user_lower.contains("create skill")
+        || user_lower.contains("automate this")
+        || user_lower.contains("turn this into")
+        || user_lower.contains("skill for");
+
+    let has_response_hint = response_lower.contains("i'll create a skill")
+        || response_lower.contains("i have created a skill")
+        || response_lower.contains("skill has been created")
+        || response_lower.contains("created the skill");
+
+    // P3: Detect repeated task patterns across conversation history.
+    // If the same type of task (based on keyword overlap) appears 3+ times,
+    // proactively propose creating a skill for it.
+    let repeated_pattern = detect_repeated_task_pattern(&all_user_msgs);
+
+    if has_creation_intent || has_response_hint || repeated_pattern.is_some() {
+        // When a repeated pattern is detected, use its extracted info;
+        // otherwise fall back to extracting from the last user message.
+        let (skill_name, skill_description) = if let Some(ref pattern) = repeated_pattern {
+            (pattern.name.clone(), pattern.description.clone())
+        } else {
+            let name = generate_skill_name_from_conversation(last_user_msg, response_text);
+            let desc = generate_skill_description(last_user_msg, response_text);
+            (name, desc)
+        };
+
+        if !skill_name.is_empty() && !skill_description.is_empty() {
+            // Check if skill already exists
+            let exists = server
+                .skill_registry
+                .lock()
+                .ok()
+                .map(|registry| registry.get(&skill_name).is_some())
+                .unwrap_or(false);
+
+            if !exists {
+                let prompt = format!(
+                    "You are an AI assistant specialized in: {}\n\nBased on the user's request, execute the following task:\n{}",
+                    skill_description, last_user_msg
+                );
+
+                let result = server.skill_registry.lock().ok().and_then(|mut registry| {
+                    registry
+                        .create_skill_from_prompt(
+                            &skill_name,
+                            &skill_description,
+                            &prompt,
+                            std::collections::HashMap::new(),
+                        )
+                        .ok()
+                });
+
+                if result.is_some() {
+                    info!("Auto-created skill '{}' from conversation", skill_name);
+                    created_skills.push(skill_name);
+                }
+            }
+        }
+    }
+
+    Ok(created_skills)
+}
+
+/// Analyze a conversation and auto-generate a reusable workflow definition
+/// when the system detects a multi-step task pattern that could be
+/// standardized as a workflow.
+async fn auto_generate_workflow_from_conversation(
+    server: &AcpServer,
+    chat_params: &ChatParams,
+    response_text: &str,
+) -> Result<Option<Value>> {
+    // Only proceed if there are enough messages to detect a pattern
+    let user_messages: Vec<&str> = chat_params
+        .messages
+        .iter()
+        .filter(|m| m.role == "user")
+        .map(|m| m.content.as_str())
+        .collect();
+
+    if user_messages.len() < 2 {
+        return Ok(None);
+    }
+
+    let last_msg = user_messages.last().unwrap_or(&"").to_lowercase();
+    let response_lower = response_text.to_lowercase();
+
+    // Check for workflow generation intent
+    let has_workflow_intent = last_msg.contains("create a workflow")
+        || last_msg.contains("make a workflow")
+        || last_msg.contains("new workflow")
+        || last_msg.contains("save as workflow")
+        || last_msg.contains("workflow for")
+        || last_msg.contains("automate this process")
+        || last_msg.contains("multi-step")
+        || last_msg.contains("create workflow")
+        || response_lower.contains("i'll create a workflow")
+        || response_lower.contains("workflow has been created");
+
+    if !has_workflow_intent {
+        return Ok(None);
+    }
+
+    // Build a workflow from the conversation
+    let task = user_messages.join(" | ");
+    let workflow_name = generate_workflow_name(&last_msg, &task);
+
+    // Create a simple workflow plan using the existing task plan builder
+    let plan = build_task_plan(&task);
+    let workflow = build_workflow_generated_artifact(&plan);
+
+    // Persist the workflow artifact for traceability
+    let ledger = server
+        .artifact_ledger
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|_| ArtifactLedger::new(server.config_path.as_deref().map(Path::new)));
+    let _ = persist_workflow_generated(&ledger, &workflow);
+
+    info!(
+        "Auto-generated workflow '{}' from conversation ({} nodes, {} edges)",
+        workflow_name,
+        workflow.nodes.len(),
+        workflow.edges.len()
+    );
+
+    Ok(Some(json!({
+        "name": workflow_name,
+        "workflow": workflow,
+        "plan": plan,
+    })))
+}
+
+/// Generate a workflow name from conversation content
+fn generate_workflow_name(last_msg: &str, _full_task: &str) -> String {
+    // Try to extract a name from the message
+    let lower = last_msg.to_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+
+    // Look for patterns like "workflow for X" or "X workflow"
+    for (i, w) in words.iter().enumerate() {
+        if *w == "for" && i + 1 < words.len() {
+            let name_candidate = words[i + 1];
+            let sanitized: String = name_candidate
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+            if !sanitized.is_empty() {
+                return format!("{}-workflow", sanitized);
+            }
+        }
+    }
+
+    // Fall back to timestamp-based name
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("auto-workflow-{}", ts)
+}
+
+/// Generate a skill name from conversation content
+fn generate_skill_name_from_conversation(user_msg: &str, ai_response: &str) -> String {
+    // Try to extract a name from the AI response (it might mention the skill name)
+    for line in ai_response.lines() {
+        let lower = line.to_lowercase();
+        if lower.contains("skill")
+            && (lower.contains("called") || lower.contains("named") || lower.contains("`"))
+        {
+            if let Some(name_start) = lower.find('`') {
+                if let Some(name_end) = lower[name_start + 1..].find('`') {
+                    let name = &lower[name_start + 1..name_start + 1 + name_end];
+                    if !name.is_empty() && name.len() <= 64 {
+                        return name.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to using the first few words of the user message
+    let words: Vec<&str> = user_msg.split_whitespace().collect();
+    let base = if words.len() >= 3 {
+        words[..3].join("-")
+    } else {
+        words.join("-")
+    };
+
+    let sanitized: String = base
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+        .collect();
+
+    if sanitized.len() > 50 {
+        format!("{}-skill", &sanitized[..50])
+    } else if sanitized.is_empty() {
+        format!(
+            "skill-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        )
+    } else {
+        format!("{}-skill", sanitized)
+    }
+}
+
+/// Generate a skill description from conversation content
+fn generate_skill_description(user_msg: &str, _ai_response: &str) -> String {
+    let truncated: String = user_msg.chars().take(120).collect();
+    if truncated.len() < user_msg.len() {
+        format!("{}...", truncated)
+    } else {
+        truncated.to_string()
+    }
 }
 
 #[cfg(test)]

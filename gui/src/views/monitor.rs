@@ -57,12 +57,15 @@ impl MonitorView {
 
     fn process_pending(&mut self) {
         const MAX_EVENTS_PER_FRAME: usize = 10;
+        const MAX_METRICS_LINES: usize = 500;
         for _ in 0..MAX_EVENTS_PER_FRAME {
             let Ok(msg) = self.pending_rx.try_recv() else {
                 break;
             };
             if let Some(payload) = msg.strip_prefix("__metrics__:") {
-                self.metrics_lines = payload.lines().map(ToString::to_string).collect();
+                let mut lines: Vec<String> = payload.lines().map(ToString::to_string).collect();
+                lines.truncate(MAX_METRICS_LINES);
+                self.metrics_lines = lines;
                 self.error.clear();
                 self.consecutive_metrics_failures = 0;
             } else if let Some(payload) = msg.strip_prefix("__trends__:") {
@@ -178,14 +181,7 @@ impl MonitorView {
                             // No health info yet – backend may not be running
                             ui.horizontal(|ui| {
                                 ui.colored_label(egui::Color32::GRAY, "◌");
-                                let text = i18n.t("app.connecting").to_string();
-                                let resp = ui.label(&text);
-                                resp.context_menu(|ui| {
-                                    if ui.button(i18n.t("common.copyButton")).clicked() {
-                                        ui.ctx().copy_text(text.clone());
-                                        ui.close_menu();
-                                    }
-                                });
+                                ui.label(i18n.t("app.connecting"));
                             });
                         }
                         Some(health) => {
@@ -201,52 +197,24 @@ impl MonitorView {
                                 } else {
                                     ("◉", egui::Color32::YELLOW, i18n.t("monitor.unhealthy"))
                                 };
-                                let text = text.to_string();
-                                let resp = ui.colored_label(color, &text);
-                                resp.context_menu(|ui| {
-                                    if ui.button(i18n.t("common.copyButton")).clicked() {
-                                        ui.ctx().copy_text(text.clone());
-                                        ui.close_menu();
-                                    }
-                                });
+                                ui.colored_label(color, &text.to_string());
                             });
-                            let text = format!(
+                            ui.label(format!(
                                 "{}: {} ms",
                                 i18n.t("monitor.latency"),
                                 health.avg_latency_ms
-                            );
-                            let resp = ui.label(&text);
-                            resp.context_menu(|ui| {
-                                if ui.button(i18n.t("common.copyButton")).clicked() {
-                                    ui.ctx().copy_text(text.clone());
-                                    ui.close_menu();
-                                }
-                            });
-                            let text = format!(
+                            ));
+                            ui.label(format!(
                                 "{}: {}% (uptime: {}s)",
                                 i18n.t("monitor.success"),
                                 health.success_rate,
                                 health.uptime
-                            );
-                            let resp = ui.label(&text);
-                            resp.context_menu(|ui| {
-                                if ui.button(i18n.t("common.copyButton")).clicked() {
-                                    ui.ctx().copy_text(text.clone());
-                                    ui.close_menu();
-                                }
-                            });
-                            let text = format!(
+                            ));
+                            ui.label(format!(
                                 "{}: {:.1}",
                                 i18n.t("monitor.rpm"),
                                 health.requests_per_minute
-                            );
-                            let resp = ui.label(&text);
-                            resp.context_menu(|ui| {
-                                if ui.button(i18n.t("common.copyButton")).clicked() {
-                                    ui.ctx().copy_text(text.clone());
-                                    ui.close_menu();
-                                }
-                            });
+                            ));
                         }
                     }
                 });
@@ -455,14 +423,7 @@ impl MonitorView {
                     // Show a more descriptive message when health is known but no providers
                     match &self.health {
                         Some(h) if h.connected => {
-                            let text = i18n.t("monitor.notReady").to_string();
-                            let resp = ui.label(&text);
-                            resp.context_menu(|ui| {
-                                if ui.button(i18n.t("common.copyButton")).clicked() {
-                                    ui.ctx().copy_text(text.clone());
-                                    ui.close_menu();
-                                }
-                            });
+                            ui.label(i18n.t("monitor.notReady"));
                         }
                         _ => {
                             // Either no health data or backend offline – no point showing
@@ -486,23 +447,9 @@ impl MonitorView {
                                         ("○", egui::Color32::RED)
                                     };
                                     ui.colored_label(color, icon);
-                                    let text = p.name.clone();
-                                    let resp = ui.label(&text);
-                                    resp.context_menu(|ui| {
-                                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                                            ui.ctx().copy_text(text.clone());
-                                            ui.close_menu();
-                                        }
-                                    });
+                                    ui.label(&p.name);
                                     if !p.model.is_empty() {
-                                        let text = format!("({})", p.model);
-                                        let resp = ui.label(&text);
-                                        resp.context_menu(|ui| {
-                                            if ui.button(i18n.t("common.copyButton")).clicked() {
-                                                ui.ctx().copy_text(text.clone());
-                                                ui.close_menu();
-                                            }
-                                        });
+                                        ui.label(format!("({})", p.model));
                                     }
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),

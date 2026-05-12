@@ -66,6 +66,62 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
             description: Some("Inspect git diff".to_string()),
             input_schema: Some(json!({"type": "object"})),
         },
+        "workflow_execute" => McpTool {
+            name: name.to_string(),
+            description: Some("Execute a workflow with the given task description".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Task description for the workflow"},
+                    "phase": {"type": "string", "description": "Optional phase name (default: coding)"}
+                },
+                "required": ["task"]
+            })),
+        },
+        "workflow_ask" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Ask the AI to analyze a task, create necessary skills, and execute a workflow"
+                    .to_string(),
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Natural language task description"},
+                    "auto_create_skills": {"type": "boolean", "description": "Auto-create skills for workflow nodes"},
+                },
+                "required": ["task"]
+            })),
+        },
+        "workflow_generate" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Generate a workflow plan from a task description without executing it".to_string(),
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Task description to plan"},
+                },
+                "required": ["task"]
+            })),
+        },
+        "skill_creator" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Create a new reusable skill from a prompt template (SKILL-CREATOR)".to_string(),
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Skill name"},
+                    "description": {"type": "string", "description": "Skill description"},
+                    "prompt_template": {"type": "string", "description": "Prompt template for the skill"},
+                    "input_schema": {"type": "object", "description": "JSON schema for skill input"}
+                },
+                "required": ["name", "description", "prompt_template"]
+            })),
+        },
         other => McpTool {
             name: other.to_string(),
             description: Some("Registered MCP tool".to_string()),
@@ -117,6 +173,9 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
                 .get("pattern")
                 .and_then(|value| value.as_str())
                 .ok_or_else(|| anyhow::anyhow!("search_files requires arguments.pattern"))?;
+        }
+        "workflow_execute" | "workflow_ask" | "workflow_generate" | "skill_creator" => {
+            // These have required fields validated by the handler itself
         }
         _ => {
             tracing::warn!("unknown tool name passed to validation: {}", tool_name);

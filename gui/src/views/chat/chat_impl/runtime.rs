@@ -124,15 +124,11 @@ impl ChatView {
         self.error.clear();
         self.stop_requested = false;
 
-        self.selected_models = selected_models.clone();
         self.sync_model_selection();
 
         let comparison_id = now;
         let stream_chunk_flush_interval = self.stream_chunk_flush_interval;
-        let stream_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(180))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        let stream_client = self.stream_client.clone();
         for model_name in selected_models {
             let generation_id = self.next_generation_id();
             let input_tokens = self.input_token_estimate;
@@ -158,7 +154,7 @@ impl ChatView {
             let outbound_clone = outbound_msg.clone();
             let model_clone = model_name.clone();
             let base_url_clone = base_url.clone();
-            let stream_client_clone = stream_client.clone();
+            let stream_client = stream_client.clone();
             let conv_id_clone = self.sessions[self.active_session].conversation_id.clone();
             let branch_id_clone = self.sessions[self.active_session].branch_id.clone();
             let fallback_options = Self::merge_options_with_tracking(
@@ -166,7 +162,6 @@ impl ChatView {
                 conv_id_clone.as_deref(),
                 branch_id_clone.as_deref(),
             );
-            let fallback_options_for_stream = fallback_options.clone();
             let handle = tokio::spawn(async move {
                 let phase_val = if phase_clone.is_empty() {
                     serde_json::Value::Null
@@ -174,45 +169,95 @@ impl ChatView {
                     serde_json::Value::String(phase_clone.clone())
                 };
 
-                let mut body = serde_json::json!({
-                    "messages": [{"role": "user", "content": outbound_clone}],
-                    "mode": mode_clone,
-                    "phase": phase_val,
-                });
+                let use_workflow_rpc = mode_clone == "workflow";
 
-                if !model_clone.trim().is_empty() && model_clone != "auto" {
-                    body["options"] = serde_json::json!({
-                        "model": model_clone,
-                    });
-                }
+                let mut body = if use_workflow_rpc {
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "workflow.ask",
+                        "params": {
+                            "task": outbound_clone.clone(),
+                            "auto_create_skills": true,
+                            "auto_create_workflow": true,
+                        }
+                    })
+                } else {
+                    serde_json::json!({
+                        "messages": [{"role": "user", "content": outbound_clone}],
+                        "mode": mode_clone,
+                        "phase": phase_val,
+                    })
+                };
 
-                if let Some(extra) = fallback_options_for_stream.clone() {
-                    if body.get("options").is_none() {
-                        body["options"] = serde_json::json!({});
+                if !use_workflow_rpc {
+                    if !model_clone.trim().is_empty() && model_clone != "auto" {
+                        body["options"] = serde_json::json!({
+                            "model": model_clone,
+                        });
                     }
-                    // Flatten extra values into options, NOT under "extra" key
-                    if let Some(obj) = extra.as_object() {
-                        for (k, v) in obj {
-                            body["options"][k] = v.clone();
+
+                    if let Some(extra) = fallback_options.clone() {
+                        if body.get("options").is_none() {
+                            body["options"] = serde_json::json!({});
+                        }
+                        // Flatten extra values into options, NOT under "extra" key
+                        if let Some(obj) = extra.as_object() {
+                            for (k, v) in obj {
+                                body["options"][k] = v.clone();
+                            }
                         }
                     }
+
+                    if let Some(conv_id) = conv_id_clone.clone() {
+                        body["conversation_id"] = serde_json::json!(conv_id);
+                    }
+                    if let Some(b_id) = branch_id_clone.clone() {
+                        body["branch_id"] = serde_json::json!(b_id);
+                    }
                 }
 
-                if let Some(conv_id) = conv_id_clone.clone() {
-                    body["conversation_id"] = serde_json::json!(conv_id);
-                }
-                if let Some(b_id) = branch_id_clone.clone() {
-                    body["branch_id"] = serde_json::json!(b_id);
+                // Handle workflow mode via RPC (non-streaming) — return early
+                if use_workflow_rpc {
+                    let workflow_client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(300))
+                        .build()
+                        .unwrap_or_else(|_| reqwest::Client::new());
+                    match workflow_client
+                        .post(format!("{}/rpc", base_url_clone.trim_end_matches('/')))
+                        .json(&body)
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => {
+                            if let Ok(value) = resp.json::<serde_json::Value>().await {
+                                let result_text = serde_json::to_string_pretty(
+                                    value.get("result").unwrap_or(&value),
+                                )
+                                .unwrap_or_default();
+                                let _ = tx.send(PendingResponse::ChatCompleted {
+                                    generation_id,
+                                    content: result_text,
+                                    thinking: String::new(),
+                                    agent: "workflow".to_string(),
+                                    conversation_id: None,
+                                    branch_id: None,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(PendingResponse::Error {
+                                generation_id: Some(generation_id),
+                                message: format!("workflow.ask error: {e}"),
+                            });
+                        }
+                    }
+                    ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
+                    return; // Skip the normal chat/stream flow
                 }
 
-                let stream_resp = stream_client_clone
-                    .post(format!(
-                        "{}/chat/stream",
-                        base_url_clone.trim_end_matches('/')
-                    ))
-                    .json(&body)
-                    .send()
-                    .await;
+                let endpoint = format!("{}/chat/stream", base_url_clone.trim_end_matches('/'));
+                let stream_resp = stream_client.post(&endpoint).json(&body).send().await;
 
                 match stream_resp {
                     Ok(resp) => {
@@ -618,15 +663,7 @@ impl ChatView {
                         );
                     }
 
-                    if let Some(record) = self
-                        .session()
-                        .phase_records
-                        .iter_mut()
-                        .rev()
-                        .find(|r| r.status == "running")
-                    {
-                        record.status = "completed".to_string();
-                    }
+                    self.set_phase_record_status("completed");
 
                     // Auto-name the session from first user message if still default
                     let first_user_content = self
@@ -634,12 +671,11 @@ impl ChatView {
                         .messages
                         .iter()
                         .find(|m| m.role == "user")
-                        .map(|m| m.content.clone());
+                        .map(|m| m.content.chars().take(25).collect::<String>());
                     if let Some(content) = first_user_content {
                         let is_default = Self::is_default_session_name(&self.session().name, i18n);
                         if is_default {
-                            let truncated: String = content.chars().take(25).collect();
-                            self.session().name = truncated;
+                            self.session().name = content;
                         }
                     }
 
@@ -658,15 +694,7 @@ impl ChatView {
                             stats.error_count = stats.error_count.saturating_add(1);
                         }
                     }
-                    if let Some(record) = self
-                        .session()
-                        .phase_records
-                        .iter_mut()
-                        .rev()
-                        .find(|r| r.status == "running")
-                    {
-                        record.status = "error".to_string();
-                    }
+                    self.set_phase_record_status("error");
 
                     // Drop empty placeholder assistant message on failure.
                     if let Some(idx) = generation_id.and_then(|id| self.generation_msg_idx(id)) {

@@ -321,6 +321,59 @@ pub async fn stream_sse_to_sender(
 }
 
 fn extract_token(value: &Value) -> Option<String> {
+    // ── Tool call detection ──────────────────────────────────────────
+    // When the LLM responds with tool_calls (function calling), encode
+    // them as structured text tokens so the chat handler can detect and
+    // execute the corresponding skills.  The format is:
+    //   __tool_call__:<tool_name>:<json_arguments>
+    //
+    // Check both delta (streaming) and message (non-streaming) locations.
+    if let Some(tool_calls) = value
+        .get("choices")
+        .and_then(|v| v.get(0))
+        .and_then(|v| v.get("delta"))
+        .and_then(|v| v.get("tool_calls"))
+        .and_then(|v| v.as_array())
+    {
+        for tc in tool_calls {
+            if let (Some(name), Some(args)) = (
+                tc.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|v| v.as_str()),
+                tc.get("function")
+                    .and_then(|f| f.get("arguments"))
+                    .and_then(|v| v.as_str()),
+            ) {
+                let token = format!("__tool_call__:{}:{}", name, args);
+                return Some(token);
+            }
+        }
+    }
+
+    // Also check the final message (non-streaming) for tool_calls
+    if let Some(tool_calls) = value
+        .get("choices")
+        .and_then(|v| v.get(0))
+        .and_then(|v| v.get("message"))
+        .and_then(|v| v.get("tool_calls"))
+        .and_then(|v| v.as_array())
+    {
+        for tc in tool_calls {
+            if let (Some(name), Some(args)) = (
+                tc.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|v| v.as_str()),
+                tc.get("function")
+                    .and_then(|f| f.get("arguments"))
+                    .and_then(|v| v.as_str()),
+            ) {
+                let token = format!("__tool_call__:{}:{}", name, args);
+                return Some(token);
+            }
+        }
+    }
+
+    // ── Standard content extraction ───────────────────────────────────
     if let Some(token) = value
         .get("choices")
         .and_then(|v| v.get(0))

@@ -995,7 +995,7 @@ async fn execute_runtime_subtasks_with_repair_loop(
     report
 }
 
-pub(super) async fn handle_workflow_execute(
+pub(crate) async fn handle_workflow_execute(
     server: &AcpServer,
     params: Value,
     request_id: Option<Value>,
@@ -1014,6 +1014,12 @@ pub(super) async fn handle_workflow_execute(
             .reason
             .clone()
             .unwrap_or_else(|| "requirement confirmation required".to_string());
+        let blocked_payload = gate.blocked_payload();
+        let kind = blocked_payload["kind"]
+            .as_str()
+            .unwrap_or("requirement_contract")
+            .to_string();
+        let next_step = blocked_payload["next_step"].clone();
         complete_workflow_run(&run_id, "failed", Some(reason.clone()), Vec::new());
         return send_error(
             server,
@@ -1023,7 +1029,9 @@ pub(super) async fn handle_workflow_execute(
             Some(json!({
                 "run_id": run_id,
                 "run_status": "failed",
-                "requirement_gate": gate.blocked_payload(),
+                "kind": kind,
+                "next_step": next_step,
+                "requirement_gate": blocked_payload,
             })),
         )
         .await;
@@ -1523,6 +1531,12 @@ pub(super) async fn handle_task_execute(
             .reason
             .clone()
             .unwrap_or_else(|| "requirement confirmation required".to_string());
+        let blocked_payload = gate.blocked_payload();
+        let kind = blocked_payload["kind"]
+            .as_str()
+            .unwrap_or("requirement_contract")
+            .to_string();
+        let next_step = blocked_payload["next_step"].clone();
         complete_workflow_run(&run_id, "failed", Some(reason.clone()), Vec::new());
         return send_error(
             server,
@@ -1532,7 +1546,9 @@ pub(super) async fn handle_task_execute(
             Some(json!({
                 "run_id": run_id,
                 "run_status": "failed",
-                "requirement_gate": gate.blocked_payload(),
+                "kind": kind,
+                "next_step": next_step,
+                "requirement_gate": blocked_payload,
             })),
         )
         .await;

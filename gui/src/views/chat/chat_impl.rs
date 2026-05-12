@@ -95,6 +95,7 @@ pub struct ChatView {
     stream_chunk_flush_interval: std::time::Duration,
     stream_repaint_interval: std::time::Duration,
     max_pending_events_per_frame: usize,
+    stream_client: reqwest::Client,
 }
 
 impl ChatView {
@@ -241,11 +242,6 @@ impl ChatView {
             result
         });
 
-        if !pasted.is_empty() {
-            // We can't call ctx.request_repaint() here because we don't have ctx.
-            // The caller will handle this.
-        }
-
         pasted
     }
 
@@ -381,6 +377,10 @@ impl ChatView {
             enable_markdown: true,
             show_token_details: true,
             model_stats: std::collections::HashMap::new(),
+            stream_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(180))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 
@@ -644,13 +644,7 @@ impl ChatView {
         self.models_loaded = false;
     }
 
-    pub fn stop_sending(&mut self) {
-        self.stop_requested = true;
-        for state in self.generation_states.drain(..) {
-            state.handle.abort();
-        }
-        self.sending = false;
-        self.ai_status = AiStatus::Idle;
+    fn set_phase_record_status(&mut self, status: &str) {
         if let Some(record) = self
             .session()
             .phase_records
@@ -658,8 +652,18 @@ impl ChatView {
             .rev()
             .find(|r| r.status == "running")
         {
-            record.status = "stopped".to_string();
+            record.status = status.to_string();
         }
+    }
+
+    pub fn stop_sending(&mut self) {
+        self.stop_requested = true;
+        for state in self.generation_states.drain(..) {
+            state.handle.abort();
+        }
+        self.sending = false;
+        self.ai_status = AiStatus::Idle;
+        self.set_phase_record_status("stopped");
     }
 }
 
@@ -746,6 +750,7 @@ mod tests {
             enable_markdown: true,
             show_token_details: true,
             model_stats: std::collections::HashMap::new(),
+            stream_client: reqwest::Client::new(),
         }
     }
 

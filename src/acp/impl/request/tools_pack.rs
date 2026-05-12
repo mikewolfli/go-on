@@ -156,7 +156,7 @@ pub(super) fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
     tools
 }
 
-pub(super) async fn execute_mcp_tool_call(
+pub(crate) async fn execute_mcp_tool_call(
     server: &AcpServer,
     name: &str,
     arguments: &Value,
@@ -305,7 +305,7 @@ pub(super) async fn execute_mcp_tool_call(
                             "note": "Imported skill manifest is unavailable; returned metadata passthrough response."
                         }));
                     }
-                    anyhow::bail!("unknown mcp tool: {name}")
+                    anyhow::bail!("unknown tool or skill: {name}")
                 }
             }
         }

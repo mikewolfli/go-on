@@ -357,7 +357,7 @@ impl MultiChannelTransport {
                 .stats
                 .entry(channel.clone())
                 .or_insert_with(|| Self::new_stats(channel.clone()));
-            stats.messages_received += msgs.len();
+            stats.messages_received += msgs.len() as u64;
             stats.queue_depth = queue_len;
         }
 

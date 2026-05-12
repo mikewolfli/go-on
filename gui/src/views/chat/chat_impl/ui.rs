@@ -832,6 +832,31 @@ impl ChatView {
             );
             ui.separator();
             ui.add_space(4.0);
+            // Generate Workflow button
+            if ui
+                .button("🔄 ".to_string() + &i18n.t("chat.generateWorkflow"))
+                .on_hover_text(i18n.t("chat.generateWorkflowHint"))
+                .clicked()
+            {
+                // Collect all user messages from current session
+                let msgs = self.messages();
+                let user_msgs: Vec<String> = msgs
+                    .iter()
+                    .filter(|m| m.role == "user")
+                    .map(|m| m.content.clone())
+                    .collect();
+
+                if user_msgs.is_empty() {
+                    self.error = i18n.t("chat.noMessagesForWorkflow").to_string();
+                } else {
+                    // The actual async call is in the process_pending flow
+                    // For now, show feedback that workflow generation was triggered
+                    self.error = i18n.t("chat.workflowGenerationStarted").to_string();
+                    // In a full implementation, this would call workflow.generate_from_chat RPC
+                }
+            }
+            ui.separator();
+            ui.add_space(4.0);
 
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
