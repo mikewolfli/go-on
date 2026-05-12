@@ -941,7 +941,7 @@ async fn execute_runtime_subtasks_with_repair_loop(
         return report;
     }
 
-    let repair_start_time_ms = crate::acp::prelude::now_ts_ms() as u64;
+    let repair_start_time_ms = crate::acp::prelude::now_ts_ms().max(0) as u64;
     loop {
         let failed_records = records
             .iter()

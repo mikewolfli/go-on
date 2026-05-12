@@ -27,10 +27,7 @@ pub fn state_path() -> PathBuf {
 }
 
 pub fn load() -> SecurityPrefs {
-    match std::fs::read_to_string(state_path()) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => SecurityPrefs::default(),
-    }
+    crate::fs_util::load_json_with_backup(&state_path(), "security state")
 }
 
 pub fn save(state: &SecurityPrefs) {
@@ -43,7 +40,7 @@ pub fn save(state: &SecurityPrefs) {
     }
     match serde_json::to_string_pretty(state) {
         Ok(content) => {
-            if let Err(e) = std::fs::write(&path, content) {
+            if let Err(e) = crate::fs_util::atomic_write(&path, &content) {
                 eprintln!("Failed to write security state {}: {e}", path.display());
             }
         }

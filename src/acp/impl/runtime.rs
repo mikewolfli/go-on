@@ -1273,14 +1273,32 @@ fn degraded_openai_message(err: &anyhow::Error) -> String {
     )
 }
 
+/// Write data to a TcpStream with a 30-second timeout.
+/// Returns an error if the write times out or the connection is broken.
+async fn tcp_write_timeout(socket: &mut TcpStream, data: &[u8]) -> Result<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(30), socket.write_all(data))
+        .await
+        .map_err(|_| anyhow::anyhow!("timeout writing to socket"))?
+        .map_err(|e| anyhow::anyhow!("socket write error: {e}"))
+}
+
 async fn write_openai_sse_data(socket: &mut TcpStream, payload: &serde_json::Value) -> Result<()> {
     let frame = format!("data: {}\n\n", serde_json::to_string(payload)?);
-    socket.write_all(frame.as_bytes()).await?;
+    tcp_write_timeout(socket, frame.as_bytes()).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(30), socket.flush())
+        .await
+        .map_err(|_| anyhow::anyhow!("timeout flushing socket"))?
+        .map_err(|e| anyhow::anyhow!("socket flush error: {e}"))?;
     Ok(())
 }
 
 async fn write_openai_sse_done(socket: &mut TcpStream) -> Result<()> {
-    socket.write_all(b"data: [DONE]\n\n").await?;
+    tcp_write_timeout(socket, b"data: [DONE]\n\n").await?;
+    tokio::time::timeout(std::time::Duration::from_secs(30), socket.flush())
+        .await
+        .map_err(|_| anyhow::anyhow!("timeout flushing socket"))?
+        .map_err(|e| anyhow::anyhow!("socket flush error: {e}"))?;
+    let _ = socket.shutdown().await;
     Ok(())
 }
 
@@ -1362,7 +1380,7 @@ async fn handle_openai_chat_completions(
 
     write_sse_headers(socket).await?;
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let trace = http_trace_context("openai.chat.completions.stream");
     let server_ref = Arc::clone(&server);
     let task = tokio::spawn(async move {
@@ -1389,7 +1407,12 @@ async fn handle_openai_chat_completions(
             continue;
         }
         let payload = build_openai_chunk(&request_id, &model, token, None);
-        write_openai_sse_data(socket, &payload).await?;
+        if let Err(err) = write_openai_sse_data(socket, &payload).await {
+            // Client disconnected while backend task is still producing tokens.
+            // Abort task to avoid orphan compute and channel buildup.
+            task.abort();
+            return Err(err.into());
+        }
     }
 
     match task.await {
@@ -2093,9 +2116,39 @@ async fn handle_response_stream(
     )
     .await?;
 
-    let result =
-        crate::acp::r#impl::chat::process_chat_request(server.as_ref(), &params, None, trace, None)
-            .await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::acp::r#impl::chat::StreamFrame>(256);
+    let observer = crate::acp::r#impl::chat::StreamObserver::sse(tx);
+    let server_ref = Arc::clone(&server);
+    let trace_for_task = trace.clone();
+    let params_for_task = params.clone();
+    let task = tokio::spawn(async move {
+        crate::acp::r#impl::chat::process_chat_request(
+            server_ref.as_ref(),
+            &params_for_task,
+            Some(observer),
+            &trace_for_task,
+            None,
+        )
+        .await
+    });
+
+    // Forward SSE frames from the channel to the socket
+    // (process_chat_request now streams tokens through the observer in real time)
+    while let Some(frame) = rx.recv().await {
+        if let Err(err) = write_sse_event(socket, &frame.event, &frame.payload).await {
+            task.abort();
+            return Err(err.into());
+        }
+    }
+
+    let result = match task.await {
+        Ok(r) => r,
+        Err(err) => {
+            let payload = serde_json::json!({"message": format!("chat task panicked: {err}")});
+            write_sse_event(socket, "error", &payload).await?;
+            return Ok(());
+        }
+    };
 
     match result {
         Ok(r) => {
@@ -2337,7 +2390,13 @@ async fn route_http_get(socket: &mut TcpStream, server: &AcpServer, path: &str) 
             .await?;
         }
         _ if extract_response_id_from_path(path).is_some() => {
-            let response_id = extract_response_id_from_path(path).expect("checked response id");
+            let response_id = match extract_response_id_from_path(path) {
+                Some(id) => id,
+                None => {
+                    warn!("Failed to extract response ID from path: {}", path);
+                    return Ok(());
+                }
+            };
             handle_response_get(socket, server, response_id).await?;
         }
         _ => {
@@ -2398,10 +2457,27 @@ async fn route_http_post(
     let mut body_bytes = body_initial_part.as_bytes().to_vec();
     if body_bytes.len() < content_length {
         let mut remaining = vec![0u8; content_length - body_bytes.len()];
-        socket.read_exact(&mut remaining).await?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            socket.read_exact(&mut remaining),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("timeout reading HTTP body"))?
+        .map_err(|e| anyhow::anyhow!("HTTP body read error: {e}"))?;
         body_bytes.extend_from_slice(&remaining);
     }
     body_bytes.truncate(content_length);
+
+    // Enforce max body size (10MB)
+    const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
+    if body_bytes.len() > MAX_BODY_SIZE {
+        anyhow::bail!(
+            "HTTP body too large: {} bytes (max {})",
+            body_bytes.len(),
+            MAX_BODY_SIZE
+        );
+    }
+
     let body: serde_json::Value = match serde_json::from_slice(&body_bytes) {
         Ok(value) => value,
         Err(err) => {
@@ -2477,7 +2553,7 @@ async fn route_http_post(
                         };
                     write_sse_headers(socket).await?;
 
-                    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
                     let trace = http_trace_context("chat.stream");
                     let server_ref = Arc::clone(&server);
                     let task = tokio::spawn(async move {
@@ -2492,7 +2568,12 @@ async fn route_http_post(
                     });
 
                     while let Some(frame) = rx.recv().await {
-                        write_sse_event(socket, &frame.event, &frame.payload).await?;
+                        if let Err(err) = write_sse_event(socket, &frame.event, &frame.payload).await {
+                            // Client disconnected while backend task is still active.
+                            // Abort task to avoid orphan compute and channel buildup.
+                            task.abort();
+                            return Err(err.into());
+                        }
                     }
 
                     match task.await {
@@ -2579,7 +2660,12 @@ async fn route_http_post(
 
                     // Read the captured RPC response from the pipe
                     let mut response_bytes = Vec::new();
-                    pipe_reader.read_to_end(&mut response_bytes).await?;
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(60),
+                        pipe_reader.read_to_end(&mut response_bytes),
+                    ).await
+                    .map_err(|_| anyhow::anyhow!("timeout reading RPC pipe response"))?
+                    .map_err(|e| anyhow::anyhow!("RPC pipe read error: {e}"))?;
 
                     let response_str = String::from_utf8_lossy(&response_bytes);
                     let response_value: serde_json::Value =
@@ -2640,7 +2726,10 @@ async fn handle_http_connection(
     peer_addr: SocketAddr,
 ) -> Result<()> {
     let mut buffer = vec![0u8; 64 * 1024];
-    let bytes_read = socket.read(&mut buffer).await?;
+    let bytes_read =
+        tokio::time::timeout(std::time::Duration::from_secs(30), socket.read(&mut buffer))
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout reading HTTP request"))??;
     if bytes_read == 0 {
         return Ok(());
     }
@@ -2930,17 +3019,18 @@ async fn write_http_json_response(
         status_text,
         body.len()
     );
-    socket.write_all(headers.as_bytes()).await?;
-    socket.write_all(&body).await?;
+    tcp_write_timeout(socket, headers.as_bytes()).await?;
+    tcp_write_timeout(socket, &body).await?;
+    let _ = socket.shutdown().await;
     Ok(())
 }
 
 async fn write_sse_headers(socket: &mut TcpStream) -> Result<()> {
-    socket
-        .write_all(
-            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nX-Accel-Buffering: no\r\n\r\n",
-        )
-        .await?;
+    tcp_write_timeout(
+        socket,
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nX-Accel-Buffering: no\r\n\r\n",
+    )
+    .await?;
     Ok(())
 }
 
@@ -2955,7 +3045,11 @@ async fn write_sse_event(
         serde_json::to_string(payload)?
     );
     debug!("ACP SSE event: {}", event);
-    socket.write_all(frame.as_bytes()).await?;
+    tcp_write_timeout(socket, frame.as_bytes()).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(30), socket.flush())
+        .await
+        .map_err(|_| anyhow::anyhow!("timeout flushing socket"))?
+        .map_err(|e| anyhow::anyhow!("socket flush error: {e}"))?;
     Ok(())
 }
 

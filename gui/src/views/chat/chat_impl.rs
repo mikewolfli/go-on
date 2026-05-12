@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const CHAT_DISABLE_MARKDOWN_RENDER: bool = false;
 const CHAT_STAGE6_ENABLE_MODE_ROW: bool = true;
 const CHAT_STAGE6_ENABLE_EXTRA_BUTTONS: bool = true;
+const MAX_CONCURRENT_GENERATIONS: usize = 4;
 
 #[derive(Clone, Copy)]
 pub struct ChatUiRuntimeConfig {
@@ -58,6 +59,8 @@ pub struct ChatView {
     stop_requested: bool,
     generation_states: Vec<GenerationState>,
     next_generation_id: u64,
+    /// Track concurrent generations to prevent resource exhaustion
+    active_generations: Arc<AtomicU64>,
     // Feature 5: token display with improved accuracy
     last_token_estimate: usize,
     input_token_estimate: usize,
@@ -343,6 +346,7 @@ impl ChatView {
             stop_requested: false,
             generation_states: Vec::new(),
             next_generation_id: 1,
+            active_generations: Arc::new(AtomicU64::new(0)),
             // Feature 5
             last_token_estimate: 0,
             input_token_estimate: 0,
@@ -378,9 +382,16 @@ impl ChatView {
             show_token_details: true,
             model_stats: std::collections::HashMap::new(),
             stream_client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(180))
+                .timeout(std::time::Duration::from_secs(300))
+                .read_timeout(std::time::Duration::from_secs(60))
                 .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
+                .unwrap_or_else(|_| {
+                    reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(300))
+                        .read_timeout(std::time::Duration::from_secs(60))
+                        .build()
+                        .unwrap_or_else(|_| reqwest::Client::new())
+                }),
         }
     }
 
@@ -541,8 +552,17 @@ impl ChatView {
     }
 
     fn remove_generation(&mut self, generation_id: u64) {
-        self.generation_states
-            .retain(|state| state.id != generation_id);
+        // Abort the task before removing to prevent zombie tasks
+        if let Some(idx) = self
+            .generation_states
+            .iter()
+            .position(|state| state.id == generation_id)
+        {
+            self.generation_states[idx].handle.abort();
+            self.generation_states.remove(idx);
+        }
+        // Note: active_generations counter is managed by ActiveGenerationGuard in runtime.rs
+        // which automatically decrements when the tokio task exits. Do not double-decrement here.
         self.sending = !self.generation_states.is_empty();
         self.ai_status = if self.sending {
             AiStatus::Thinking

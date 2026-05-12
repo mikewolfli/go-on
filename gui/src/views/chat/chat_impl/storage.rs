@@ -63,8 +63,17 @@ impl ChatView {
                     return;
                 }
             }
-            if let Err(e) = tokio::fs::write(&path, &json_payload).await {
-                eprintln!("Failed to write {} to {}: {e}", label, path.display());
+            // Atomic write: .tmp then rename to prevent corruption
+            let tmp_path = path.with_extension("tmp");
+            if let Err(e) = tokio::fs::write(&tmp_path, &json_payload).await {
+                eprintln!("Failed to write {} tmp: {e}", label);
+                in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+            if let Err(e) = tokio::fs::rename(&tmp_path, &path).await {
+                eprintln!("Failed to rename {} tmp: {e}", label);
+                in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
+                return;
             }
             in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
         });
@@ -80,12 +89,7 @@ impl ChatView {
 
     pub(super) fn load_templates_from_disk() -> Vec<PromptTemplate> {
         let path = Self::templates_path();
-        match std::fs::read_to_string(&path) {
-            Ok(content) => {
-                serde_json::from_str::<Vec<PromptTemplate>>(&content).unwrap_or_default()
-            }
-            Err(_) => Vec::new(),
-        }
+        crate::fs_util::load_json_with_backup(&path, "chat templates")
     }
 
     pub(super) fn save_templates_to_disk(&self) {
@@ -94,7 +98,13 @@ impl ChatView {
         let this_epoch = epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
         let templates = self.prompt_templates.clone();
         let path = Self::templates_path();
-        let json_payload = serde_json::to_string_pretty(&templates).unwrap_or_default();
+        let json_payload = match serde_json::to_string_pretty(&templates) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Failed to serialize templates: {e}; save skipped");
+                return;
+            }
+        };
         Self::save_to_disk(
             in_flight,
             epoch,
@@ -115,10 +125,7 @@ impl ChatView {
 
     pub(super) fn load_sessions_from_disk() -> Vec<Session> {
         let path = Self::sessions_path();
-        match std::fs::read_to_string(&path) {
-            Ok(content) => serde_json::from_str::<Vec<Session>>(&content).unwrap_or_default(),
-            Err(_) => Vec::new(),
-        }
+        crate::fs_util::load_json_with_backup(&path, "chat sessions")
     }
 
     pub(super) fn save_sessions_to_disk(&self) {
@@ -127,7 +134,13 @@ impl ChatView {
         let this_epoch = epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
         let sessions = self.sessions.clone();
         let path = Self::sessions_path();
-        let json_payload = serde_json::to_string_pretty(&sessions).unwrap_or_default();
+        let json_payload = match serde_json::to_string_pretty(&sessions) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Failed to serialize sessions: {e}; save skipped");
+                return;
+            }
+        };
         Self::save_to_disk(
             in_flight,
             epoch,

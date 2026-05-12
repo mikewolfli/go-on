@@ -158,8 +158,29 @@ impl Default for AppConfig {
 pub fn load_app_config() -> AppConfig {
     let path = app_config_path();
     let content = std::fs::read_to_string(&path).unwrap_or_default();
+
+    // Detect corrupted config — if file exists but parse fails, warn user
+    let file_exists = path.exists();
+    if file_exists && content.trim().is_empty() {
+        eprintln!(
+            "WARNING: Config file exists at {} but is empty, using defaults",
+            path.display()
+        );
+    }
+
     let raw: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
     let mut config: AppConfig = serde_json::from_str(&content).unwrap_or_default();
+
+    if file_exists
+        && !content.trim().is_empty()
+        && config.providers.is_empty()
+        && raw.get("providers").is_none()
+    {
+        eprintln!(
+            "WARNING: Failed to parse config file at {}, using defaults",
+            path.display()
+        );
+    }
 
     let mut changed = false;
 
@@ -197,6 +218,17 @@ pub fn load_app_config() -> AppConfig {
         }
     }
 
+    // Step 1b: Deduplicate providers — keep last entry for each name
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped = Vec::new();
+    for provider in config.providers.drain(..).rev() {
+        if seen.insert(provider.name.clone()) {
+            deduped.push(provider);
+        }
+    }
+    deduped.reverse();
+    config.providers = deduped;
+
     // Step 2: Sync keys between config and keyring (bidirectional)
     // Collect all provider names: from config.providers AND the canonical PROVIDER_NAMES list.
     let mut all_provider_names: HashSet<String> = HashSet::new();
@@ -222,7 +254,12 @@ pub fn load_app_config() -> AppConfig {
                 "load_config: keyring missing '{}', copying from config",
                 provider_name
             );
-            let _ = crate::keyring_util::store_api_key(provider_name, &config_key);
+            if let Err(e) = crate::keyring_util::store_api_key(provider_name, &config_key) {
+                eprintln!(
+                    "keyring: failed to store key for '{}': {}",
+                    provider_name, e
+                );
+            }
         }
 
         // If keyring has key but config doesn't → write to config
@@ -263,8 +300,8 @@ pub fn load_app_config() -> AppConfig {
     config
 }
 
-/// Save GUI app config to JSON file
-pub fn save_app_config(config: &AppConfig) {
+/// Save GUI app config to JSON file. Returns true on success, false on failure.
+pub fn save_app_config(config: &AppConfig) -> bool {
     let path = app_config_path();
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
@@ -272,17 +309,20 @@ pub fn save_app_config(config: &AppConfig) {
                 "Failed to create config directory {}: {e}",
                 parent.display()
             );
-            return;
+            return false;
         }
     }
     match serde_json::to_string_pretty(config) {
-        Ok(content) => {
-            if let Err(e) = std::fs::write(&path, content) {
+        Ok(content) => match crate::fs_util::save_with_backup(&path, &content) {
+            Ok(_) => true,
+            Err(e) => {
                 eprintln!("Failed to write config to {}: {e}", path.display());
+                false
             }
-        }
+        },
         Err(e) => {
             eprintln!("Failed to serialize config: {e}");
+            false
         }
     }
 }
@@ -295,28 +335,59 @@ fn app_config_path() -> PathBuf {
     }
 }
 
+/// Cached result of has_valid_providers, refreshed at most once per second.
+static PROVIDERS_CACHE: std::sync::Mutex<Option<(std::time::Instant, bool)>> =
+    std::sync::Mutex::new(None);
+
 /// Check if any AI provider has a key available (in config or keyring).
+/// Results are cached for 1 second to avoid per-frame keyring access.
 pub fn has_valid_providers(config: &AppConfig) -> bool {
-    // PRIMARY: check keyring for all configured providers + the canonical PROVIDER_NAMES list
-    for p in &config.providers {
-        if crate::keyring_util::has_api_key(&p.name.to_lowercase()) {
-            return true;
+    // Check cache first (1 second TTL)
+    if let Ok(cache) = PROVIDERS_CACHE.lock() {
+        if let Some((timestamp, result)) = *cache {
+            if timestamp.elapsed() < std::time::Duration::from_secs(1) {
+                return result;
+            }
         }
     }
 
-    for name in crate::views::providers::PROVIDER_NAMES {
-        if crate::keyring_util::has_api_key(name) {
-            return true;
+    // Compute the actual result
+    let result = {
+        // PRIMARY: check keyring for all configured providers + the canonical PROVIDER_NAMES list
+        for p in &config.providers {
+            if crate::keyring_util::has_api_key(&p.name.to_lowercase()) {
+                return set_and_return(true);
+            }
         }
-    }
 
-    // FALLBACK: if keyring didn't yield any keys (e.g. macOS blocked),
-    // check config.api_key as a fallback
-    for p in &config.providers {
-        if !p.api_key.is_empty() && p.api_key != "********" {
-            return true;
+        for name in crate::views::providers::PROVIDER_NAMES {
+            if crate::keyring_util::has_api_key(name) {
+                return set_and_return(true);
+            }
         }
-    }
 
-    false
+        // FALLBACK: if keyring didn't yield any keys (e.g. macOS blocked),
+        // check config.api_key as a fallback
+        for p in &config.providers {
+            if !p.api_key.is_empty() && p.api_key != "********" {
+                return set_and_return(true);
+            }
+        }
+
+        false
+    };
+
+    // Update cache before returning
+    if let Ok(mut cache) = PROVIDERS_CACHE.lock() {
+        *cache = Some((std::time::Instant::now(), result));
+    }
+    result
+}
+
+/// Helper to update the cache and return a value from has_valid_providers.
+fn set_and_return(val: bool) -> bool {
+    if let Ok(mut cache) = PROVIDERS_CACHE.lock() {
+        *cache = Some((std::time::Instant::now(), val));
+    }
+    val
 }

@@ -3325,7 +3325,7 @@ pub(super) async fn handle_governance_status(
     let (fork_active_count, fork_reaped_count, fork_rejected_count) = server
         .fork_registry
         .lock()
-        .map(|r| (r.active_count() as u32, 0u64, 0u64))
+        .map(|r| (r.active_count().unwrap_or(0) as u32, 0u64, 0u64))
         .unwrap_or((0, 0, 0));
 
     // REAL DATA: reputation top/bottom agents from CapabilityBus

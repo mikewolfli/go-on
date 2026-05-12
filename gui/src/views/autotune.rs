@@ -46,10 +46,7 @@ impl AutoTuneView {
     }
 
     fn load_state() -> AutoTuneState {
-        match std::fs::read_to_string(Self::state_path()) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-            Err(_) => AutoTuneState::default(),
-        }
+        crate::fs_util::load_json_with_backup(&Self::state_path(), "autotune state")
     }
 
     pub fn load_runtime_options() -> Value {
@@ -72,7 +69,7 @@ impl AutoTuneView {
         }
         match serde_json::to_string_pretty(&self.state) {
             Ok(content) => {
-                if let Err(e) = std::fs::write(&path, content) {
+                if let Err(e) = crate::fs_util::atomic_write(&path, &content) {
                     eprintln!("Failed to write autotune state {}: {e}", path.display());
                 }
             }

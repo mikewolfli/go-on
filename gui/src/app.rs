@@ -118,6 +118,10 @@ pub struct GoOnApp {
     last_backend_ui_commit: Instant,
     /// Consecutive backend disconnect samples; used to debounce transient failures.
     health_disconnect_streak: u8,
+    /// Count of consecutive backend crashes for rate limiting
+    backend_crash_count: u8,
+    /// Consecutive backend health poll failures for progressive backoff
+    consecutive_poll_failures: u8,
 }
 
 /// Detect system locale from environment variables.
@@ -291,8 +295,7 @@ impl GoOnApp {
                 cmd.current_dir(config_dir)
                     .arg("--protocol-mode")
                     .arg("acp_http")
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::piped());
+                    .stdout(std::process::Stdio::null());
 
                 // Inject API keys for ALL configured providers into backend process environment.
                 // Priority: keyring > config file > inherited env.
@@ -352,28 +355,19 @@ impl GoOnApp {
                 Self::generate_backend_config(&backend_cfg_path, config);
 
                 let log_path = config_dir.join("backend.log");
-                let log_file_for_reader = std::fs::File::create(&log_path).ok();
+                // Redirect stderr directly to file instead of spawning a reader thread
+                match std::fs::File::create(&log_path) {
+                    Ok(log_file) => {
+                        cmd.stderr(log_file);
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to create backend.log: {e}; stderr will go to parent");
+                        cmd.stderr(std::process::Stdio::inherit());
+                    }
+                }
                 match cmd.spawn() {
-                    Ok(mut child) => {
+                    Ok(child) => {
                         eprintln!("go-on backend started (PID: {})", child.id());
-                        // Spawn a thread to capture backend stderr to log file
-                        if let Some(stderr) = child.stderr.take() {
-                            if let Some(mut log) = log_file_for_reader {
-                                use std::io::Write;
-                                std::thread::spawn(move || {
-                                    use std::io::Read;
-                                    let mut buf = [0u8; 4096];
-                                    let mut reader = std::io::BufReader::new(stderr);
-                                    while let Ok(n) = reader.read(&mut buf) {
-                                        if n == 0 {
-                                            break;
-                                        }
-                                        let _ = log.write_all(&buf[..n]);
-                                        let _ = log.flush();
-                                    }
-                                });
-                            }
-                        }
                         (BackendClient::new(&config.backend_url), Some(child))
                     }
                     Err(e) => {
@@ -538,11 +532,18 @@ state_path = "acp_autotune_state.json"
     /// Kill the current backend child and start a new one with fresh env vars.
     /// Called after adding/updating API keys so the new keys take effect immediately.
     fn restart_backend(&mut self) {
+        self.backend_crash_count = self.backend_crash_count.saturating_add(1);
         // Kill old process
         if let Some(mut child) = self.backend_child.take() {
             eprintln!("Restarting backend (old PID: {})...", child.id());
             let _ = child.kill();
-            let _ = child.wait();
+            // Don't block UI thread waiting for backend to exit.
+            // Spawn a background thread to reap the zombie.
+            let pid = child.id();
+            std::thread::spawn(move || {
+                let _ = child.wait();
+                eprintln!("go-on backend (PID: {}) fully stopped", pid);
+            });
         }
         // Start new
         let (backend, child) = Self::spawn_backend(self.config_shared.as_ref());
@@ -639,6 +640,8 @@ state_path = "acp_autotune_state.json"
             staged_refresh_done: false,
             last_backend_ui_commit: Instant::now(),
             health_disconnect_streak: 0,
+            backend_crash_count: 0,
+            consecutive_poll_failures: 0,
             blocked_tab_toast_shown: None,
         }
     }
@@ -688,8 +691,19 @@ state_path = "acp_autotune_state.json"
 
     fn poll_backend_updates(&mut self, ctx: &egui::Context) {
         let mut received_any = false;
+        let mut processed = 0;
         while let Ok(update) = self.backend_updates.try_recv() {
             received_any = true;
+            processed += 1;
+            if processed > 128 {
+                eprintln!(
+                    "poll_backend_updates: discarding {} queued updates (processing limit)",
+                    processed
+                );
+                // Drain remaining to prevent channel growth
+                while self.backend_updates.try_recv().is_ok() {}
+                break;
+            }
             match update {
                 BackendUpdate::Health(h) => self.staged_health = Some(h),
                 BackendUpdate::Providers(p) => self.staged_providers = Some(p),
@@ -711,9 +725,16 @@ state_path = "acp_autotune_state.json"
 
         if let Some(next_health) = self.staged_health.take() {
             let debounced = self.apply_health_debounce(next_health);
+            let is_connected = debounced.connected;
             if self.monitor_view.health.as_ref() != Some(&debounced) {
                 self.monitor_view.health = Some(debounced);
                 changed = true;
+            }
+            // Track consecutive poll failures for backoff
+            if !is_connected {
+                self.consecutive_poll_failures = self.consecutive_poll_failures.saturating_add(1);
+            } else {
+                self.consecutive_poll_failures = 0;
             }
         }
 
@@ -740,6 +761,17 @@ state_path = "acp_autotune_state.json"
     }
 
     fn maybe_refresh_backend(&mut self) {
+        // Progressive backoff: skip polls after consecutive failures
+        if self.consecutive_poll_failures > 0 {
+            let backoff_secs =
+                (2u64).pow(self.consecutive_poll_failures.min(5).saturating_sub(1) as u32); // 1, 2, 4, 8, 16
+            let max_backoff = 60u64;
+            let effective_backoff = backoff_secs.min(max_backoff);
+            if self.last_refresh.elapsed() < std::time::Duration::from_secs(effective_backoff) {
+                return;
+            }
+        }
+
         if self.last_refresh.elapsed() >= self.backend_refresh_interval() && !self.pending_refresh {
             self.pending_refresh = true;
             let tx = self.backend_tx.clone();
@@ -842,11 +874,22 @@ impl eframe::App for GoOnApp {
         // Auto-restart backend if it crashed and enough time has passed
         if self.backend_child.is_none() && !self.show_setup {
             if let Some(crash_time) = self.backend_crash_time {
-                // Wait 3 seconds before auto-restart to avoid rapid restart loops
-                if crash_time.elapsed() >= Duration::from_secs(3) {
-                    self.backend_crash_time = None;
-                    eprintln!("Auto-restarting backend after crash...");
-                    self.restart_backend();
+                let backoff_secs = 3u64 * (1u64 << self.backend_crash_count.min(5)); // 3, 6, 12, 24, 48, 96
+                if crash_time.elapsed() >= Duration::from_secs(backoff_secs) {
+                    if self.backend_crash_count >= 10 {
+                        eprintln!(
+                            "Backend crashed {} times; giving up auto-restart",
+                            self.backend_crash_count
+                        );
+                        self.backend_crash_time = None;
+                    } else {
+                        self.backend_crash_time = None;
+                        eprintln!(
+                            "Auto-restarting backend after crash (count={})...",
+                            self.backend_crash_count
+                        );
+                        self.restart_backend();
+                    }
                 }
             }
         }
@@ -1177,12 +1220,18 @@ impl eframe::App for GoOnApp {
 
 impl Drop for GoOnApp {
     fn drop(&mut self) {
+        // Abort any in-flight chat generation tasks
+        self.chat_view.stop_sending();
+
         if let Some(mut child) = self.backend_child.take() {
             eprintln!("Shutting down go-on backend (PID: {})...", child.id());
             let _ = child.kill();
-            let _ = child.wait();
-            eprintln!("go-on backend stopped");
+            // Don't block shutdown on backend process exit
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
         }
+        self.backend_crash_count = 0;
     }
 }
 

@@ -6,6 +6,7 @@
 mod app;
 mod backend;
 mod config;
+mod fs_util;
 mod i18n;
 mod keyring_util;
 mod theme;

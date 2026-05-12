@@ -233,10 +233,7 @@ impl WorkflowView {
 
     fn load_state() -> WorkflowState {
         let path = Self::state_path();
-        match std::fs::read_to_string(path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-            Err(_) => WorkflowState::default(),
-        }
+        crate::fs_util::load_json_with_backup(&path, "workflow state")
     }
 
     fn save_state(&self) {
@@ -249,7 +246,7 @@ impl WorkflowView {
         }
         match serde_json::to_string_pretty(&self.state) {
             Ok(content) => {
-                if let Err(e) = std::fs::write(&path, content) {
+                if let Err(e) = crate::fs_util::atomic_write(&path, &content) {
                     eprintln!("Failed to write workflow state {}: {e}", path.display());
                 }
             }

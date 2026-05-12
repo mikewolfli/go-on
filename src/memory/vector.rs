@@ -476,12 +476,34 @@ impl VectorStore {
     }
 }
 
+/// Wrapper around the `extern "C"` sqlite3_vec_init symbol that matches
+/// the signature expected by sqlite3_auto_extension.
+///
+/// This avoids undefined behaviour from transmuting a function pointer
+/// with one ABI signature to another (Rust ABI vs C ABI).
+/// SAFETY: `db`, `pz_err_msg`, and `p_err_msg` are valid pointers
+/// provided by the SQLite runtime.
+#[cfg(not(feature = "backend-postgres"))]
+unsafe extern "C" fn sqlite3_vec_init_auto_extension(
+    _db: *mut rusqlite::ffi::sqlite3,
+    _pz_err_msg: *mut *mut std::os::raw::c_char,
+    _p_err_msg: *const rusqlite::ffi::sqlite3_api_routines,
+) -> std::ffi::c_int {
+    // The underlying C symbol (declared at the top of sqlite_vec::lib.rs
+    // as `extern "C" fn sqlite3_vec_init()`) takes no arguments and
+    // returns void.  SQLite calls the auto-extension entry point and
+    // ignores the wrapper's return; any non-zero value returned by this
+    // wrapper would cause SQLite to skip the extension entirely, so we
+    // return 0 (SQLITE_OK) to indicate success.
+    sqlite3_vec_init();
+    0
+}
+
 #[cfg(not(feature = "backend-postgres"))]
 fn register_sqlite_vec_auto_extension() {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| unsafe {
-        #[allow(clippy::missing_transmute_annotations)]
-        sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
+        sqlite3_auto_extension(Some(sqlite3_vec_init_auto_extension));
     });
 }
 

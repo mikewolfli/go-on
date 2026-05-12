@@ -4,6 +4,24 @@ const MAX_INLINE_ATTACHMENT_B64_CHARS: usize = 8_192;
 const MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024; // 1 MB max SSE frame buffer
 const MAX_BUFFERED_TOKENS_BYTES: usize = 256 * 1024; // 256 KB accumulated token buffer
 
+/// RAII guard to decrement active_generations counter on drop.
+/// Ensures counter is decremented even if async task exits early or panics.
+struct ActiveGenerationGuard(Arc<std::sync::atomic::AtomicU64>);
+
+impl Drop for ActiveGenerationGuard {
+    fn drop(&mut self) {
+        // Relaxed ordering is sufficient: this is a counter decrement,
+        // not a memory barrier. The saturating_sub handles the 0 case.
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl ActiveGenerationGuard {
+    fn new(counter: Arc<std::sync::atomic::AtomicU64>) -> Self {
+        Self(counter)
+    }
+}
+
 impl ChatView {
     fn build_attachment_summary(attachments: &[Attachment]) -> String {
         if attachments.is_empty() {
@@ -67,6 +85,19 @@ impl ChatView {
         if msg.is_empty() || self.sending {
             return;
         }
+
+        // Check concurrent generation limit to prevent resource exhaustion
+        let current_generations = self
+            .active_generations
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if current_generations >= MAX_CONCURRENT_GENERATIONS as u64 {
+            self.error = format!(
+                "Too many concurrent generations ({}). Please wait for some to complete.",
+                current_generations
+            );
+            return;
+        }
+
         let expanded_msg = self.expand_prompt_command(&msg);
         let mode = self.selected_mode.clone();
         // Validate phase before sending — if the phase is not in the known list
@@ -142,9 +173,27 @@ impl ChatView {
         let comparison_id = now;
         let stream_chunk_flush_interval = self.stream_chunk_flush_interval;
         let stream_client = self.stream_client.clone();
+        let active_gen_count = self.active_generations.clone();
+        let existing_generations = self.generation_states.len();
+        let mut skipped_models: Vec<String> = Vec::new();
+
         for model_name in selected_models {
+            // Reserve one generation slot atomically for this model.
+            let previous = active_gen_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let current_gen_count = previous + 1;
+            if current_gen_count > MAX_CONCURRENT_GENERATIONS as u64 {
+                active_gen_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                skipped_models.push(model_name.clone());
+                continue;
+            }
+
             let generation_id = self.next_generation_id();
             let input_tokens = self.input_token_estimate;
+
+            eprintln!(
+                "[Gen] Started generation {} for model '{}' (active: {}/{})",
+                generation_id, model_name, current_gen_count, MAX_CONCURRENT_GENERATIONS
+            );
             self.session().messages.push(Message {
                 role: "assistant".to_string(),
                 content: String::new(),
@@ -167,7 +216,6 @@ impl ChatView {
             let outbound_clone = outbound_msg.clone();
             let model_clone = model_name.clone();
             let base_url_clone = base_url.clone();
-            let stream_client = stream_client.clone();
             let conv_id_clone = self.sessions[self.active_session].conversation_id.clone();
             let branch_id_clone = self.sessions[self.active_session].branch_id.clone();
             let fallback_options = Self::merge_options_with_tracking(
@@ -175,7 +223,12 @@ impl ChatView {
                 conv_id_clone.as_deref(),
                 branch_id_clone.as_deref(),
             );
+            let active_gen_guard = ActiveGenerationGuard::new(active_gen_count.clone());
+            let sc = stream_client.clone();
             let handle = tokio::spawn(async move {
+                // Guard ensures active_generations is decremented when this task exits
+                let _guard = active_gen_guard;
+
                 let phase_val = if phase_clone.is_empty() {
                     serde_json::Value::Null
                 } else {
@@ -234,8 +287,15 @@ impl ChatView {
                 if use_workflow_rpc {
                     let workflow_client = reqwest::Client::builder()
                         .timeout(std::time::Duration::from_secs(300))
+                        .read_timeout(std::time::Duration::from_secs(60))
                         .build()
-                        .unwrap_or_else(|_| reqwest::Client::new());
+                        .unwrap_or_else(|_| {
+                            reqwest::Client::builder()
+                                .timeout(std::time::Duration::from_secs(300))
+                                .read_timeout(std::time::Duration::from_secs(60))
+                                .build()
+                                .unwrap_or_else(|_| reqwest::Client::new())
+                        });
                     match workflow_client
                         .post(format!("{}/rpc", base_url_clone.trim_end_matches('/')))
                         .json(&body)
@@ -244,21 +304,51 @@ impl ChatView {
                     {
                         Ok(resp) => {
                             if let Ok(value) = resp.json::<serde_json::Value>().await {
-                                let result_text = serde_json::to_string_pretty(
-                                    value.get("result").unwrap_or(&value),
-                                )
-                                .unwrap_or_default();
-                                let _ = tx.send(PendingResponse::ChatCompleted {
-                                    generation_id,
-                                    content: result_text,
-                                    thinking: String::new(),
-                                    agent: "workflow".to_string(),
-                                    conversation_id: None,
-                                    branch_id: None,
+                                // Check for JSON-RPC error response
+                                if value.get("error").is_some() {
+                                    let error_msg = value["error"]
+                                        .get("message")
+                                        .and_then(|m| m.as_str())
+                                        .unwrap_or("unknown workflow error");
+                                    eprintln!(
+                                        "[Gen] Workflow generation {} returned error: {}",
+                                        generation_id, error_msg
+                                    );
+                                    let _ = tx.send(PendingResponse::Error {
+                                        generation_id: Some(generation_id),
+                                        message: format!("workflow.ask failed: {error_msg}"),
+                                    });
+                                } else {
+                                    let result_text = serde_json::to_string_pretty(
+                                        value.get("result").unwrap_or(&value),
+                                    )
+                                    .unwrap_or_default();
+                                    eprintln!(
+                                        "[Gen] Workflow generation {} completed",
+                                        generation_id
+                                    );
+                                    let _ = tx.send(PendingResponse::ChatCompleted {
+                                        generation_id,
+                                        content: result_text,
+                                        thinking: String::new(),
+                                        agent: "workflow".to_string(),
+                                        conversation_id: None,
+                                        branch_id: None,
+                                    });
+                                }
+                            } else {
+                                eprintln!(
+                                    "[Gen] Workflow generation {} - JSON parse failed",
+                                    generation_id
+                                );
+                                let _ = tx.send(PendingResponse::Error {
+                                    generation_id: Some(generation_id),
+                                    message: "workflow response parse error".to_string(),
                                 });
                             }
                         }
                         Err(e) => {
+                            eprintln!("[Gen] Workflow generation {} failed: {}", generation_id, e);
                             let _ = tx.send(PendingResponse::Error {
                                 generation_id: Some(generation_id),
                                 message: format!("workflow.ask error: {e}"),
@@ -270,7 +360,7 @@ impl ChatView {
                 }
 
                 let endpoint = format!("{}/chat/stream", base_url_clone.trim_end_matches('/'));
-                let stream_resp = stream_client.post(&endpoint).json(&body).send().await;
+                let stream_resp = sc.post(&endpoint).json(&body).send().await;
 
                 match stream_resp {
                     Ok(resp) => {
@@ -305,16 +395,16 @@ impl ChatView {
                             resp
                         };
 
-                        let mut sse_buffer = String::new();
+                        let mut sse_buffer = String::with_capacity(16384);
                         let mut final_content: Option<String> = None;
                         let mut final_thinking: Option<String> = None;
                         let mut final_agent: Option<String> = None;
                         let mut final_conv_id: Option<String> = None;
                         let mut final_branch_id: Option<String> = None;
-                        let mut buffered_token = String::new();
-                        let mut buffered_reasoning = String::new();
+                        let mut buffered_token = String::with_capacity(4096);
+                        let mut buffered_reasoning = String::with_capacity(2048);
                         let mut last_stream_flush = std::time::Instant::now();
-                        let mut total_buffer_bytes = 0usize; // Track total buffered content for overflow protection
+                        let mut total_buffer_bytes = 0usize;
 
                         loop {
                             let chunk = match resp.chunk().await {
@@ -331,24 +421,43 @@ impl ChatView {
                                     return;
                                 }
                             };
-                            let part = String::from_utf8_lossy(&chunk);
-                            sse_buffer.push_str(&part);
 
-                            // Overflow protection: SSE buffer must not exceed max size
-                            if sse_buffer.len() > MAX_SSE_BUFFER_BYTES {
+                            // Safely append chunk to buffer with overflow protection
+                            let chunk_len = chunk.len();
+                            if sse_buffer.len() + chunk_len > MAX_SSE_BUFFER_BYTES {
                                 let _ = tx.send(PendingResponse::Error {
                                     generation_id: Some(generation_id),
-                                    message: "stream frame too large (>1MB)".to_string(),
+                                    message: format!(
+                                        "stream frame overflow ({}+{} > {}MB)",
+                                        sse_buffer.len(),
+                                        chunk_len,
+                                        MAX_SSE_BUFFER_BYTES / (1024 * 1024)
+                                    ),
                                 });
                                 ctx_clone
                                     .request_repaint_after(std::time::Duration::from_millis(16));
                                 return;
                             }
 
+                            // Normalize CRLF to LF so frame splitting is consistent across
+                            // backends and platforms that may emit different line endings.
+                            let part = String::from_utf8_lossy(&chunk);
+                            if part.contains('\r') {
+                                for ch in part.chars() {
+                                    if ch != '\r' {
+                                        sse_buffer.push(ch);
+                                    }
+                                }
+                            } else {
+                                sse_buffer.push_str(&part);
+                            }
+
+                            // Process complete frames only (delimited by \n\n)
                             while let Some(split_at) = sse_buffer.find("\n\n") {
                                 let frame = sse_buffer[..split_at].to_string();
                                 sse_buffer.drain(..split_at + 2);
 
+                                // Parse event and data from frame
                                 let mut event_name = String::new();
                                 let mut data_payload = String::new();
                                 for line in frame.lines() {
@@ -366,9 +475,16 @@ impl ChatView {
                                     continue;
                                 }
 
+                                // Parse JSON data safely
                                 let data: Value = match serde_json::from_str(&data_payload) {
                                     Ok(v) => v,
-                                    Err(_) => continue,
+                                    Err(e) => {
+                                        eprintln!(
+                                            "[SSE] JSON parse error in {}: {}",
+                                            event_name, e
+                                        );
+                                        continue;
+                                    }
                                 };
 
                                 match event_name.as_str() {
@@ -383,9 +499,12 @@ impl ChatView {
                                             .and_then(|v| v.as_str())
                                             .unwrap_or_default()
                                             .to_string();
+
                                         if !token.is_empty() || !reasoning.is_empty() {
-                                            // Update total buffer bytes for overflow detection
-                                            total_buffer_bytes += token.len() + reasoning.len();
+                                            // Track buffer usage and flush if needed
+                                            let token_bytes = token.len();
+                                            let reasoning_bytes = reasoning.len();
+                                            total_buffer_bytes += token_bytes + reasoning_bytes;
 
                                             buffered_token.push_str(&token);
                                             buffered_reasoning.push_str(&reasoning);
@@ -480,9 +599,12 @@ impl ChatView {
                                         );
                                         return;
                                     }
-                                    _ => {}
+                                    _ => {
+                                        eprintln!("[SSE] Unknown event type: {}", event_name);
+                                    }
                                 }
 
+                                // Time-based flush to maintain responsive UI
                                 if (!buffered_token.is_empty() || !buffered_reasoning.is_empty())
                                     && last_stream_flush.elapsed() >= stream_chunk_flush_interval
                                 {
@@ -497,6 +619,7 @@ impl ChatView {
                             }
                         }
 
+                        // Flush any remaining buffered content
                         if !buffered_token.is_empty() || !buffered_reasoning.is_empty() {
                             let _ = tx.send(PendingResponse::StreamChunk {
                                 generation_id,
@@ -504,6 +627,23 @@ impl ChatView {
                                 reasoning: buffered_reasoning,
                             });
                         }
+
+                        let status_log = format!(
+                            "tokens:{}, thinking:{}, agent:{}",
+                            final_content.as_ref().map(|c| c.len()).unwrap_or(0),
+                            !final_thinking
+                                .as_ref()
+                                .map(|t| t.is_empty())
+                                .unwrap_or(true),
+                            final_agent
+                                .as_ref()
+                                .map(|a| a.as_str())
+                                .unwrap_or("unknown")
+                        );
+                        eprintln!(
+                            "[Gen] Generation {} completed ({})",
+                            generation_id, status_log
+                        );
 
                         let _ = tx.send(PendingResponse::ChatCompleted {
                             generation_id,
@@ -515,6 +655,10 @@ impl ChatView {
                         });
                     }
                     Err(err) => {
+                        eprintln!(
+                            "[Gen] Generation {} stream request failed (attempting fallback): {}",
+                            generation_id, err
+                        );
                         let fallback = backend_clone
                             .chat_with_options(
                                 &outbound_clone,
@@ -552,6 +696,23 @@ impl ChatView {
                 handle,
             });
         }
+
+        if !skipped_models.is_empty() {
+            self.error = format!(
+                "Skipped {} model(s) due to concurrency limit ({}): {}",
+                skipped_models.len(),
+                MAX_CONCURRENT_GENERATIONS,
+                skipped_models.join(", ")
+            );
+        }
+
+        if self.generation_states.len() == existing_generations {
+            // Nothing started (for example all selected models were skipped).
+            self.sending = false;
+            self.ai_status = AiStatus::Error;
+            self.set_phase_record_status("error");
+        }
+
         self.save_sessions_to_disk();
     }
 

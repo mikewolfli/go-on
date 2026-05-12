@@ -11,6 +11,7 @@
 //! - Thread-safe via `Arc<Mutex<...>>`
 //! - Integration-ready for `AgentWorkerScheduler` fan-out (L2 scheduling)
 
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::cmp;
 use std::collections::HashMap;
@@ -292,7 +293,7 @@ impl ForkRegistry {
     /// if the registry is at capacity.
     ///
     /// The default quota from `ForkConfig` is used.
-    pub fn register(&self, parent_task_id: &str) -> Option<String> {
+    pub fn register(&self, parent_task_id: &str) -> Result<Option<String>> {
         self.register_with_quota(parent_task_id, self.config.default_quota)
     }
 
@@ -302,81 +303,109 @@ impl ForkRegistry {
         &self,
         parent_task_id: &str,
         quota: ForkResourceQuota,
-    ) -> Option<String> {
+    ) -> Result<Option<String>> {
         let fork_id = self.generate_id();
-        let mut inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         if inner.forks.len() >= self.config.max_forks {
-            return None;
+            return Ok(None);
         }
         let entry = ForkEntry::new(fork_id.clone(), parent_task_id.to_string(), quota);
         inner.forks.insert(fork_id.clone(), entry);
-        Some(fork_id)
+        Ok(Some(fork_id))
     }
 
     // ── Lookup ──────────────────────────────────────────────────
 
     /// Find a fork by its ID.
-    pub fn find(&self, id: &str) -> Option<ForkEntry> {
-        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
-        inner.forks.get(id).cloned()
+    pub fn find(&self, id: &str) -> Result<Option<ForkEntry>> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
+        Ok(inner.forks.get(id).cloned())
     }
 
     /// List all currently tracked forks.
-    pub fn list(&self) -> Vec<ForkEntry> {
-        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
-        inner.forks.values().cloned().collect()
+    pub fn list(&self) -> Result<Vec<ForkEntry>> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
+        Ok(inner.forks.values().cloned().collect())
     }
 
     // ── Removal ─────────────────────────────────────────────────
 
     /// Remove a fork by its ID. Returns `true` if the fork existed and
     /// was removed.
-    pub fn remove(&self, id: &str) -> bool {
-        let mut inner = self.inner.lock().expect("ForkRegistry lock poisoned");
-        inner.forks.remove(id).is_some()
+    pub fn remove(&self, id: &str) -> Result<bool> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
+        Ok(inner.forks.remove(id).is_some())
     }
 
     /// Remove all forks from the registry.
-    pub fn clear(&self) {
-        let mut inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+    pub fn clear(&self) -> Result<()> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         inner.forks.clear();
+        Ok(())
     }
 
     // ── Size queries ────────────────────────────────────────────
 
     /// Number of forks currently tracked (both active and completed).
-    pub fn len(&self) -> usize {
-        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
-        inner.forks.len()
+    pub fn len(&self) -> Result<usize> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
+        Ok(inner.forks.len())
     }
 
     /// Returns `true` if no forks are tracked.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+    pub fn is_empty(&self) -> Result<bool> {
+        self.len().map(|l| l == 0)
     }
 
     /// Number of forks that have not yet been marked completed.
-    pub fn active_count(&self) -> usize {
-        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
-        inner.forks.values().filter(|e| !e.completed).count()
+    pub fn active_count(&self) -> Result<usize> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
+        Ok(inner.forks.values().filter(|e| !e.completed).count())
     }
 
     /// Number of forks that have been marked completed.
-    pub fn completed_count(&self) -> usize {
-        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
-        inner.forks.values().filter(|e| e.completed).count()
+    pub fn completed_count(&self) -> Result<usize> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
+        Ok(inner.forks.values().filter(|e| e.completed).count())
     }
 
     // ── Status transitions ──────────────────────────────────────
 
     /// Mark a fork as completed.
-    pub fn complete(&self, fork_id: &str) -> bool {
-        let mut inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+    pub fn complete(&self, fork_id: &str) -> Result<bool> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         if let Some(entry) = inner.forks.get_mut(fork_id) {
             entry.completed = true;
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -384,26 +413,35 @@ impl ForkRegistry {
 
     /// Attach a snapshot to an existing fork. Returns `true` if the fork
     /// was found.
-    pub fn attach_snapshot(&self, fork_id: &str, snapshot: ForkSnapshot) -> bool {
-        let mut inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+    pub fn attach_snapshot(&self, fork_id: &str, snapshot: ForkSnapshot) -> Result<bool> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         if let Some(entry) = inner.forks.get_mut(fork_id) {
             entry.snapshot = Some(snapshot);
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
     /// Retrieve a clone of the snapshot attached to a fork, if any.
-    pub fn get_snapshot(&self, fork_id: &str) -> Option<ForkSnapshot> {
-        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
-        inner.forks.get(fork_id).and_then(|e| e.snapshot.clone())
+    pub fn get_snapshot(&self, fork_id: &str) -> Result<Option<ForkSnapshot>> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
+        Ok(inner.forks.get(fork_id).and_then(|e| e.snapshot.clone()))
     }
 
     /// Collect all snapshots from completed forks, grouped by parent task ID.
     /// Useful for fan-out merge logic.
-    pub fn collect_completed_snapshots(&self) -> HashMap<String, Vec<ForkSnapshot>> {
-        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+    pub fn collect_completed_snapshots(&self) -> Result<HashMap<String, Vec<ForkSnapshot>>> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         let mut map: HashMap<String, Vec<ForkSnapshot>> = HashMap::new();
         for entry in inner.forks.values() {
             if entry.completed {
@@ -414,15 +452,18 @@ impl ForkRegistry {
                 }
             }
         }
-        map
+        Ok(map)
     }
 
     /// Merge all snapshots for a given parent task ID into a single
     /// `ForkJoinResult`. The merge concatenates the data payloads of all
     /// snapshots in creation order. Conflicts are reported when more than
     /// one snapshot has overlapping label keys with differing values.
-    pub fn merge_snapshots(&self, parent_task_id: &str) -> ForkJoinResult {
-        let inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+    pub fn merge_snapshots(&self, parent_task_id: &str) -> Result<ForkJoinResult> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         let mut snapshots: Vec<ForkSnapshot> = inner
             .forks
             .values()
@@ -431,7 +472,7 @@ impl ForkRegistry {
             .collect();
 
         if snapshots.is_empty() {
-            return ForkJoinResult::success(Vec::new());
+            return Ok(ForkJoinResult::success(Vec::new()));
         }
 
         // Sort by timestamp so the merge order is deterministic.
@@ -470,22 +511,25 @@ impl ForkRegistry {
             }
         }
 
-        ForkJoinResult {
+        Ok(ForkJoinResult {
             success: conflicts.is_empty(),
             merged_data,
             conflicts,
-        }
+        })
     }
 
     // ── Cleanup ─────────────────────────────────────────────────
 
     /// Remove all completed forks from the registry. Returns the number
     /// of entries removed.
-    pub fn reap_completed(&self) -> usize {
-        let mut inner = self.inner.lock().expect("ForkRegistry lock poisoned");
+    pub fn reap_completed(&self) -> Result<usize> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         let before = inner.forks.len();
         inner.forks.retain(|_, e| !e.completed);
-        before - inner.forks.len()
+        Ok(before - inner.forks.len())
     }
 }
 
@@ -501,7 +545,10 @@ impl IntoIterator for ForkRegistry {
         let inner = Arc::into_inner(self.inner)
             .expect("ForkRegistry has multiple references")
             .into_inner()
-            .expect("ForkRegistry lock poisoned");
+            .unwrap_or_else(|e| {
+                eprintln!("ForkRegistry lock poisoned in into_iter, recovering");
+                e.into_inner()
+            });
         inner.forks.into_iter()
     }
 }
@@ -525,11 +572,17 @@ mod tests {
     #[test]
     fn test_register_and_find() {
         let reg = ForkRegistry::new(test_config());
-        let fid = reg.register("parent-1").expect("should register");
+        let fid = reg
+            .register("parent-1")
+            .expect("should register")
+            .expect("should have fork id");
         assert!(!fid.is_empty());
         assert!(fid.starts_with("fork-"));
 
-        let entry = reg.find(&fid).expect("should find");
+        let entry = reg
+            .find(&fid)
+            .expect("should find")
+            .expect("should have entry");
         assert_eq!(entry.parent_task_id, "parent-1");
         assert!(!entry.completed);
     }
@@ -544,8 +597,12 @@ mod tests {
         };
         let fid = reg
             .register_with_quota("parent-1", quota)
-            .expect("should register");
-        let entry = reg.find(&fid).expect("should find");
+            .expect("should register")
+            .expect("should have fork id");
+        let entry = reg
+            .find(&fid)
+            .expect("should find")
+            .expect("should have entry");
         assert_eq!(entry.quota, quota);
     }
 
@@ -557,86 +614,101 @@ mod tests {
         };
         let reg = ForkRegistry::new(config);
 
-        assert!(reg.register("p1").is_some());
-        assert!(reg.register("p2").is_some());
-        assert!(reg.register("p3").is_none());
+        assert!(reg.register("p1").expect("lock").is_some());
+        assert!(reg.register("p2").expect("lock").is_some());
+        assert!(reg.register("p3").expect("lock").is_none());
     }
 
     #[test]
     fn test_list_and_len() {
         let reg = ForkRegistry::new(test_config());
-        assert!(reg.is_empty());
-        assert_eq!(reg.len(), 0);
+        assert!(reg.is_empty().expect("lock"));
+        assert_eq!(reg.len().expect("lock"), 0);
 
-        reg.register("p1");
-        reg.register("p2");
-        reg.register("p3");
+        reg.register("p1").expect("lock");
+        reg.register("p2").expect("lock");
+        reg.register("p3").expect("lock");
 
-        assert!(!reg.is_empty());
-        assert_eq!(reg.len(), 3);
-        assert_eq!(reg.list().len(), 3);
+        assert!(!reg.is_empty().expect("lock"));
+        assert_eq!(reg.len().expect("lock"), 3);
+        assert_eq!(reg.list().expect("lock").len(), 3);
     }
 
     #[test]
     fn test_remove() {
         let reg = ForkRegistry::new(test_config());
-        let fid = reg.register("p1").expect("should register");
-        assert_eq!(reg.len(), 1);
+        let fid = reg
+            .register("p1")
+            .expect("should register")
+            .expect("should have fork id");
+        assert_eq!(reg.len().expect("lock"), 1);
 
-        assert!(reg.remove(&fid));
-        assert_eq!(reg.len(), 0);
+        assert!(reg.remove(&fid).expect("lock"));
+        assert_eq!(reg.len().expect("lock"), 0);
 
         // Removing again returns false.
-        assert!(!reg.remove(&fid));
+        assert!(!reg.remove(&fid).expect("lock"));
     }
 
     #[test]
     fn test_clear() {
         let reg = ForkRegistry::new(test_config());
-        reg.register("p1");
-        reg.register("p2");
-        assert_eq!(reg.len(), 2);
+        reg.register("p1").expect("lock");
+        reg.register("p2").expect("lock");
+        assert_eq!(reg.len().expect("lock"), 2);
 
-        reg.clear();
-        assert_eq!(reg.len(), 0);
-        assert!(reg.is_empty());
+        reg.clear().expect("lock");
+        assert_eq!(reg.len().expect("lock"), 0);
+        assert!(reg.is_empty().expect("lock"));
     }
 
     #[test]
     fn test_complete_and_reap() {
         let reg = ForkRegistry::new(test_config());
-        let fid1 = reg.register("p1").expect("reg");
-        let fid2 = reg.register("p2").expect("reg");
+        let fid1 = reg
+            .register("p1")
+            .expect("reg")
+            .expect("should have fork id");
+        let fid2 = reg
+            .register("p2")
+            .expect("reg")
+            .expect("should have fork id");
 
-        assert_eq!(reg.active_count(), 2);
-        assert_eq!(reg.completed_count(), 0);
+        assert_eq!(reg.active_count().expect("lock"), 2);
+        assert_eq!(reg.completed_count().expect("lock"), 0);
 
-        assert!(reg.complete(&fid1));
-        assert_eq!(reg.active_count(), 1);
-        assert_eq!(reg.completed_count(), 1);
+        assert!(reg.complete(&fid1).expect("lock"));
+        assert_eq!(reg.active_count().expect("lock"), 1);
+        assert_eq!(reg.completed_count().expect("lock"), 1);
 
-        assert!(reg.complete(&fid2));
-        assert_eq!(reg.active_count(), 0);
-        assert_eq!(reg.completed_count(), 2);
+        assert!(reg.complete(&fid2).expect("lock"));
+        assert_eq!(reg.active_count().expect("lock"), 0);
+        assert_eq!(reg.completed_count().expect("lock"), 2);
 
         // Reap removes completed forks.
-        assert_eq!(reg.reap_completed(), 2);
-        assert_eq!(reg.len(), 0);
+        assert_eq!(reg.reap_completed().expect("lock"), 2);
+        assert_eq!(reg.len().expect("lock"), 0);
     }
 
     #[test]
     fn test_attach_and_get_snapshot() {
         let reg = ForkRegistry::new(test_config());
-        let fid = reg.register("p1").expect("reg");
+        let fid = reg
+            .register("p1")
+            .expect("reg")
+            .expect("should have fork id");
 
         let mut labels = HashMap::new();
         labels.insert("agent".to_string(), "worker-A".to_string());
         labels.insert("iteration".to_string(), "3".to_string());
 
         let snapshot = ForkSnapshot::new(vec![1, 2, 3, 4], labels.clone());
-        assert!(reg.attach_snapshot(&fid, snapshot));
+        assert!(reg.attach_snapshot(&fid, snapshot).expect("lock"));
 
-        let retrieved = reg.get_snapshot(&fid).expect("should have snapshot");
+        let retrieved = reg
+            .get_snapshot(&fid)
+            .expect("lock")
+            .expect("should have snapshot");
         assert_eq!(retrieved.data, vec![1, 2, 3, 4]);
         assert_eq!(retrieved.labels.get("agent").unwrap(), "worker-A");
         assert!(retrieved.timestamp > 0.0);
@@ -649,19 +721,27 @@ mod tests {
             ..ForkConfig::default()
         });
 
-        let fid1 = reg.register("parent-x").expect("reg");
-        let fid2 = reg.register("parent-x").expect("reg");
+        let fid1 = reg
+            .register("parent-x")
+            .expect("reg")
+            .expect("should have fork id");
+        let fid2 = reg
+            .register("parent-x")
+            .expect("reg")
+            .expect("should have fork id");
 
-        reg.attach_snapshot(&fid1, ForkSnapshot::new(vec![1], HashMap::new()));
-        reg.attach_snapshot(&fid2, ForkSnapshot::new(vec![2], HashMap::new()));
+        reg.attach_snapshot(&fid1, ForkSnapshot::new(vec![1], HashMap::new()))
+            .expect("lock");
+        reg.attach_snapshot(&fid2, ForkSnapshot::new(vec![2], HashMap::new()))
+            .expect("lock");
 
         // Not yet completed — should not appear.
-        assert!(reg.collect_completed_snapshots().is_empty());
+        assert!(reg.collect_completed_snapshots().expect("lock").is_empty());
 
-        reg.complete(&fid1);
-        reg.complete(&fid2);
+        reg.complete(&fid1).expect("lock");
+        reg.complete(&fid2).expect("lock");
 
-        let map = reg.collect_completed_snapshots();
+        let map = reg.collect_completed_snapshots().expect("lock");
         assert_eq!(map.len(), 1);
         assert_eq!(map["parent-x"].len(), 2);
     }
@@ -673,19 +753,27 @@ mod tests {
             ..ForkConfig::default()
         });
 
-        let fid1 = reg.register("parent-m").expect("reg");
-        let fid2 = reg.register("parent-m").expect("reg");
+        let fid1 = reg
+            .register("parent-m")
+            .expect("reg")
+            .expect("should have fork id");
+        let fid2 = reg
+            .register("parent-m")
+            .expect("reg")
+            .expect("should have fork id");
 
         let mut labels = HashMap::new();
         labels.insert("phase".to_string(), "test".to_string());
 
-        reg.attach_snapshot(&fid1, ForkSnapshot::new(vec![1, 2], labels.clone()));
-        reg.attach_snapshot(&fid2, ForkSnapshot::new(vec![3, 4], labels));
+        reg.attach_snapshot(&fid1, ForkSnapshot::new(vec![1, 2], labels.clone()))
+            .expect("lock");
+        reg.attach_snapshot(&fid2, ForkSnapshot::new(vec![3, 4], labels))
+            .expect("lock");
 
-        reg.complete(&fid1);
-        reg.complete(&fid2);
+        reg.complete(&fid1).expect("lock");
+        reg.complete(&fid2).expect("lock");
 
-        let result = reg.merge_snapshots("parent-m");
+        let result = reg.merge_snapshots("parent-m").expect("lock");
         assert!(result.success);
         assert!(result.conflicts.is_empty());
         // Merge order is by timestamp (not fork ID), so use a set comparison.
@@ -701,8 +789,14 @@ mod tests {
             ..ForkConfig::default()
         });
 
-        let fid1 = reg.register("parent-c").expect("reg");
-        let fid2 = reg.register("parent-c").expect("reg");
+        let fid1 = reg
+            .register("parent-c")
+            .expect("reg")
+            .expect("should have fork id");
+        let fid2 = reg
+            .register("parent-c")
+            .expect("reg")
+            .expect("should have fork id");
 
         let mut labels1 = HashMap::new();
         labels1.insert("result".to_string(), "ok".to_string());
@@ -710,13 +804,15 @@ mod tests {
         let mut labels2 = HashMap::new();
         labels2.insert("result".to_string(), "fail".to_string());
 
-        reg.attach_snapshot(&fid1, ForkSnapshot::new(vec![1], labels1));
-        reg.attach_snapshot(&fid2, ForkSnapshot::new(vec![2], labels2));
+        reg.attach_snapshot(&fid1, ForkSnapshot::new(vec![1], labels1))
+            .expect("lock");
+        reg.attach_snapshot(&fid2, ForkSnapshot::new(vec![2], labels2))
+            .expect("lock");
 
-        reg.complete(&fid1);
-        reg.complete(&fid2);
+        reg.complete(&fid1).expect("lock");
+        reg.complete(&fid2).expect("lock");
 
-        let result = reg.merge_snapshots("parent-c");
+        let result = reg.merge_snapshots("parent-c").expect("lock");
         assert!(!result.success);
         assert!(result.has_conflicts());
         assert_eq!(result.conflicts.len(), 1);
@@ -726,7 +822,7 @@ mod tests {
     #[test]
     fn test_merge_empty() {
         let reg = ForkRegistry::new(test_config());
-        let result = reg.merge_snapshots("nonexistent");
+        let result = reg.merge_snapshots("nonexistent").expect("lock");
         assert!(result.success);
         assert!(result.merged_data.is_empty());
     }
@@ -745,8 +841,9 @@ mod tests {
                 for j in 0..10 {
                     let fid = r
                         .register(&format!("thread-{}-{}", i, j))
+                        .expect("lock")
                         .expect("should register");
-                    assert!(r.find(&fid).is_some());
+                    assert!(r.find(&fid).expect("lock").is_some());
                 }
             }));
         }
@@ -755,7 +852,7 @@ mod tests {
             h.join().expect("thread panicked");
         }
 
-        assert_eq!(reg.len(), 100);
+        assert_eq!(reg.len().expect("lock"), 100);
     }
 
     #[test]
@@ -827,8 +924,8 @@ mod tests {
             max_forks: 10,
             ..ForkConfig::default()
         });
-        reg.register("a");
-        reg.register("b");
+        reg.register("a").expect("lock");
+        reg.register("b").expect("lock");
 
         let collected: Vec<_> = reg.into_iter().collect();
         assert_eq!(collected.len(), 2);
@@ -837,12 +934,14 @@ mod tests {
     #[test]
     fn test_complete_nonexistent() {
         let reg = ForkRegistry::new(test_config());
-        assert!(!reg.complete("nonexistent"));
+        assert!(!reg.complete("nonexistent").expect("lock"));
     }
 
     #[test]
     fn test_attach_snapshot_nonexistent() {
         let reg = ForkRegistry::new(test_config());
-        assert!(!reg.attach_snapshot("nope", ForkSnapshot::new(vec![], HashMap::new())));
+        assert!(!reg
+            .attach_snapshot("nope", ForkSnapshot::new(vec![], HashMap::new()))
+            .expect("lock"));
     }
 }

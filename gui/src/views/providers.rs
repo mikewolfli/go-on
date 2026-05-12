@@ -271,7 +271,9 @@ impl ProvidersView {
                 ui.add_space(8.0);
 
                 // ── Add new provider section ──────────────────────────────────
-                if ops_enabled {
+                // Basic key CRUD is always available (not gated by ops_enabled).
+                // ops_enabled only controls advanced operations like test/capabilities.
+                {
                     ui.label(i18n.t("providers.add_new"));
                     ui.horizontal(|ui| {
                         ui.label(i18n.t("providers.provider"));
@@ -350,7 +352,12 @@ impl ProvidersView {
                             .clicked()
                         {
                             let name = self.selected_provider.clone();
-                            let key = self.new_key.trim().to_string();
+                            let key: String = self.new_key
+                                .chars()
+                                .filter(|c| !c.is_control() || *c == '\t')
+                                .collect::<String>()
+                                .trim()
+                                .to_string();
                             let model = self.new_model.trim().to_string();
                             let provider_lower = name.to_lowercase();
 
@@ -483,8 +490,6 @@ impl ProvidersView {
                             changed = true;
                         }
                     });
-                } else {
-                    ui.label(i18n.t("providers.ops.hidden"));
                 }
 
                 ui.add_space(16.0);
@@ -592,9 +597,15 @@ impl ProvidersView {
                             }
 
                             // Update button - opens inline edit for this provider
-                            if ops_enabled && self.update_target == idx as isize {
+                            // Key update is a basic operation (not gated by ops_enabled).
+                            if self.update_target == idx as isize {
                                 if ui.button(i18n.t("providers.save_key")).clicked() {
-                                    let new_key = self.new_key.trim().to_string();
+                                    let new_key: String = self.new_key
+                                        .chars()
+                                        .filter(|c| !c.is_control() || *c == '\t')
+                                        .collect::<String>()
+                                        .trim()
+                                        .to_string();
                                     if !new_key.is_empty() {
                                         let provider_lower = provider.name.to_lowercase();
                                         let provider_name = provider.name.clone();
@@ -679,8 +690,7 @@ impl ProvidersView {
                                     self.update_target = -1;
                                     self.new_key.clear();
                                 }
-                            } else if ops_enabled
-                                && ui.button(i18n.t("providers.update_key")).clicked()
+                            } else if ui.button(i18n.t("providers.update_key")).clicked()
                             {
                                 self.update_target = idx as isize;
                                 self.new_key.clear();
@@ -692,8 +702,7 @@ impl ProvidersView {
                                 );
                             }
 
-                            if ops_enabled
-                                && ui.button(i18n.t("providers.push")).clicked()
+                            if ops_enabled && ui.button(i18n.t("providers.push")).clicked()
                                 && !self.sending
                             {
                                 self.sending = true;
@@ -737,7 +746,8 @@ impl ProvidersView {
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
-                            if ops_enabled && ui.button(i18n.t("providers.ops.testConn")).clicked()
+                            if ops_enabled
+                                && ui.button(i18n.t("providers.ops.testConn")).clicked()
                             {
                                 let name = provider.name.clone();
                                 let tx = self.pending_tx.clone();
@@ -907,7 +917,8 @@ impl ProvidersView {
                             } else {
                                 i18n.t("providers.delete")
                             };
-                            if ops_enabled && ui.button(delete_label).clicked() {
+                            // Delete is a basic operation (not gated by ops_enabled).
+                            if ui.button(delete_label).clicked() {
                                 if confirm_dangerous
                                     && self.pending_delete_confirmation != Some(idx)
                                 {

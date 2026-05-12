@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify, Semaphore};
 use tracing::{debug, info, warn};
 
 use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
@@ -132,6 +132,8 @@ impl McpStdioServer {
 pub struct McpHttpServer {
     mcp_server: Arc<McpServer>,
     bind_addr: String,
+    shutdown_notify: Arc<Notify>,
+    connection_semaphore: Arc<Semaphore>,
 }
 
 impl McpHttpServer {
@@ -147,6 +149,8 @@ impl McpHttpServer {
         Self {
             mcp_server: Arc::new(mcp_server),
             bind_addr,
+            shutdown_notify: Arc::new(Notify::new()),
+            connection_semaphore: Arc::new(Semaphore::new(256)),
         }
     }
 
@@ -169,6 +173,8 @@ impl McpHttpServer {
         Self {
             mcp_server: Arc::new(mcp_server),
             bind_addr,
+            shutdown_notify: Arc::new(Notify::new()),
+            connection_semaphore: Arc::new(Semaphore::new(256)),
         }
     }
 
@@ -190,24 +196,46 @@ impl McpHttpServer {
         );
 
         loop {
-            let (mut socket, peer_addr) = listener.accept().await?;
-            let mcp_server = Arc::clone(&self.mcp_server);
-
-            tokio::spawn(async move {
-                if let Err(err) = handle_http_connection(&mut socket, mcp_server).await {
-                    warn!(
-                        "{}",
-                        tf(
-                            "error.http_connection",
-                            &[
-                                ("address", &peer_addr.to_string()),
-                                ("error", &format!("{}", err))
-                            ]
-                        )
-                    );
+            tokio::select! {
+                _ = self.shutdown_notify.notified() => {
+                    info!("MCP HTTP server shutting down");
+                    break;
                 }
-            });
+                result = listener.accept() => {
+                    let permit = Arc::clone(&self.connection_semaphore)
+                        .acquire_owned()
+                        .await;
+                    let _permit = match permit {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    };
+                    let (mut socket, peer_addr) = result?;
+                    let mcp_server = Arc::clone(&self.mcp_server);
+
+                    tokio::spawn(async move {
+                        // _permit held until handler exits (RAII)
+                        if let Err(err) = handle_http_connection(&mut socket, mcp_server).await {
+                            warn!(
+                                "{}",
+                                tf(
+                                    "error.http_connection",
+                                    &[
+                                        ("address", &peer_addr.to_string()),
+                                        ("error", &format!("{}", err))
+                                    ]
+                                )
+                            );
+                        }
+                    });
+                }
+            }
         }
+        Ok(())
+    }
+
+    /// Request a graceful shutdown of the HTTP server.
+    pub fn shutdown(&self) {
+        self.shutdown_notify.notify_waiters();
     }
 }
 
@@ -216,7 +244,10 @@ async fn handle_http_connection(
     mcp_server: Arc<McpServer>,
 ) -> Result<()> {
     let mut buffer = vec![0u8; 64 * 1024];
-    let bytes_read = socket.read(&mut buffer).await?;
+    let bytes_read =
+        tokio::time::timeout(std::time::Duration::from_secs(30), socket.read(&mut buffer))
+            .await
+            .map_err(|_| anyhow::anyhow!("timeout reading HTTP request"))??;
     if bytes_read == 0 {
         return Ok(());
     }
@@ -271,7 +302,15 @@ async fn handle_http_connection(
         return Ok(());
     }
 
+    const MAX_BODY_SIZE: usize = 10 * 1024 * 1024; // 10MB
     let content_length = extract_content_length(header_part).unwrap_or(0);
+    if content_length > MAX_BODY_SIZE {
+        anyhow::bail!(
+            "request body too large: {} bytes (max {})",
+            content_length,
+            MAX_BODY_SIZE
+        );
+    }
     let mut body_bytes = body_initial_part.as_bytes().to_vec();
     if body_bytes.len() < content_length {
         let mut remaining = vec![0u8; content_length - body_bytes.len()];

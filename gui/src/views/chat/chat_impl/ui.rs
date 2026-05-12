@@ -582,7 +582,10 @@ impl ChatView {
                         .clicked()
                     {
                         let p = std::env::temp_dir().join("go_on_chat_input.txt");
-                        let _ = std::fs::write(&p, &self.input);
+                        if let Err(e) = std::fs::write(&p, &self.input) {
+                            self.error =
+                                format!("Failed to write temp file for external editor: {e}");
+                        }
                         #[cfg(target_os = "windows")]
                         let editors = &["notepad", "code", "zed"];
                         #[cfg(target_os = "macos")]
@@ -785,23 +788,34 @@ impl ChatView {
                     if let Some(dirs) = directories::ProjectDirs::from("com", "goon", "go-on-gui") {
                         let config_dir = dirs.config_dir();
                         #[cfg(target_os = "windows")]
-                        let _ = std::process::Command::new("cmd")
+                        if let Err(e) = std::process::Command::new("cmd")
                             .args(["/c", "start", "", &config_dir.display().to_string()])
-                            .spawn();
+                            .spawn()
+                        {
+                            eprintln!("Failed to open config directory: {e}");
+                        }
                         #[cfg(target_os = "macos")]
-                        let _ = std::process::Command::new("open").arg(config_dir).spawn();
+                        if let Err(e) = std::process::Command::new("open").arg(config_dir).spawn() {
+                            eprintln!("Failed to open config directory: {e}");
+                        }
                         #[cfg(target_os = "linux")]
-                        let _ = std::process::Command::new("xdg-open")
+                        if let Err(e) = std::process::Command::new("xdg-open")
                             .arg(config_dir)
-                            .spawn();
+                            .spawn()
+                        {
+                            eprintln!("Failed to open config directory: {e}");
+                        }
                         #[cfg(not(any(
                             target_os = "windows",
                             target_os = "macos",
                             target_os = "linux"
                         )))]
-                        let _ = std::process::Command::new("xdg-open")
+                        if let Err(e) = std::process::Command::new("xdg-open")
                             .arg(config_dir)
-                            .spawn();
+                            .spawn()
+                        {
+                            eprintln!("Failed to open config directory: {e}");
+                        }
                     }
                 }
                 if ui
@@ -1202,8 +1216,11 @@ impl ChatView {
                                     thinking_preview
                                 };
 
+                                // Add visual indicator + thinking label to make it obvious it's clickable
+                                let thinking_label = format!("▸ {}", i18n.t("chat.thinkingLabel"));
+
                                 egui::CollapsingHeader::new(
-                                    egui::RichText::new(i18n.t("chat.thinkingLabel"))
+                                    egui::RichText::new(thinking_label)
                                         .size(11.0)
                                         .color(egui::Color32::from_rgb(120, 122, 135)),
                                 )

@@ -1217,6 +1217,10 @@ pub(crate) async fn process_chat_request(
     }
 
     if !cache_hit && response_text.is_empty() && last_err.is_none() {
+        // Record budget usage before early return to prevent budget leak.
+        if let Ok(mut budget) = server.tenant_budget.lock() {
+            budget.record_usage(tenant_id, 0, 0);
+        }
         anyhow::bail!(
             "no healthy agent produced a response for phase '{}'",
             phase_name
@@ -1242,6 +1246,10 @@ pub(crate) async fn process_chat_request(
         }
 
         if all_attempts_quota_limited {
+            // Record budget usage before early return to prevent budget leak.
+            if let Ok(mut budget) = server.tenant_budget.lock() {
+                budget.record_usage(tenant_id, 0, 0);
+            }
             let switch_prompt = format!(
                 "All available agents hit token/quota limits in phase '{}'. Choose another agent via options.preferred_agent and retry.",
                 phase_name
@@ -1264,6 +1272,11 @@ pub(crate) async fn process_chat_request(
                     }
                 }
             }));
+        }
+
+        // Record budget usage before early return to prevent budget leak.
+        if let Ok(mut budget) = server.tenant_budget.lock() {
+            budget.record_usage(tenant_id, 0, 0);
         }
 
         return Err(err);
@@ -2020,11 +2033,17 @@ pub(crate) async fn process_chat_request(
     // so the registry stays within its capacity.
     let fork_id = {
         if let Ok(fr) = server.fork_registry.lock() {
-            let id = fr.register(&conversation_id);
-            if let Some(ref fid) = id {
-                fr.complete(fid);
+            match fr.register(&conversation_id) {
+                Ok(Some(fid)) => {
+                    let _ = fr.complete(&fid);
+                    Some(fid)
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    eprintln!("ForkRegistry lock poisoned: {e}");
+                    None
+                }
             }
-            id
         } else {
             None
         }
@@ -2310,10 +2329,12 @@ async fn emit_stream_chunk(
         if !reasoning_token.is_empty() {
             payload["reasoning"] = json!(reasoning_token);
         }
-        let _ = sender.send(StreamFrame {
-            event: STREAM_EVENT_CHUNK.to_string(),
-            payload,
-        });
+        let _ = sender
+            .send(StreamFrame {
+                event: STREAM_EVENT_CHUNK.to_string(),
+                payload,
+            })
+            .await;
     }
 
     Ok(())
@@ -2352,18 +2373,20 @@ async fn emit_stream_done(
 
     if let Some(sender) = &observer.sse_sender {
         // NOTE: This SSE frame structure should match helpers/metrics::stream_done_notification
-        let _ = sender.send(StreamFrame {
-            event: STREAM_EVENT_DONE.to_string(),
-            payload: json!({
-                "agent": meta.agent_name,
-                "chunks": chunk_index,
-                "done": true,
-                "duration_ms": duration_ms,
-                "phase": meta.phase_name,
-                "total_chars": total_chars,
-                "trace_id": meta.trace_id,
-            }),
-        });
+        let _ = sender
+            .send(StreamFrame {
+                event: STREAM_EVENT_DONE.to_string(),
+                payload: json!({
+                    "agent": meta.agent_name,
+                    "chunks": chunk_index,
+                    "done": true,
+                    "duration_ms": duration_ms,
+                    "phase": meta.phase_name,
+                    "total_chars": total_chars,
+                    "trace_id": meta.trace_id,
+                }),
+            })
+            .await;
     }
 
     Ok(())
@@ -2397,15 +2420,17 @@ async fn emit_stream_token_economy(
     }
 
     if let Some(sender) = &observer.sse_sender {
-        let _ = sender.send(StreamFrame {
-            event: STREAM_EVENT_TELEMETRY.to_string(),
-            payload: json!({
-                "agent": meta.agent_name,
-                "phase": meta.phase_name,
-                "trace_id": meta.trace_id,
-                "token_economy": token_economy,
-            }),
-        });
+        let _ = sender
+            .send(StreamFrame {
+                event: STREAM_EVENT_TELEMETRY.to_string(),
+                payload: json!({
+                    "agent": meta.agent_name,
+                    "phase": meta.phase_name,
+                    "trace_id": meta.trace_id,
+                    "token_economy": token_economy,
+                }),
+            })
+            .await;
     }
 
     Ok(())
@@ -2562,7 +2587,7 @@ pub(crate) struct StreamFrame {
 #[derive(Debug, Clone)]
 pub(crate) struct StreamObserver {
     jsonrpc_response_id: Option<Value>,
-    sse_sender: Option<mpsc::UnboundedSender<StreamFrame>>,
+    sse_sender: Option<mpsc::Sender<StreamFrame>>,
 }
 
 impl StreamObserver {
@@ -2573,7 +2598,7 @@ impl StreamObserver {
         }
     }
 
-    pub(crate) fn sse(sender: mpsc::UnboundedSender<StreamFrame>) -> Self {
+    pub(crate) fn sse(sender: mpsc::Sender<StreamFrame>) -> Self {
         Self {
             jsonrpc_response_id: None,
             sse_sender: Some(sender),
@@ -4282,7 +4307,12 @@ mod tests {
             _options: Option<HashMap<String, Value>>,
             sender: StreamingSender,
         ) -> crate::core::error::Result<()> {
-            *self.seen_messages.lock().expect("messages lock") = messages;
+            if let Ok(mut guard) = self.seen_messages.lock() {
+                *guard = messages;
+            } else {
+                tracing::error!("seen_messages lock poisoned, recovering");
+                *self.seen_messages.lock().unwrap_or_else(|e| e.into_inner()) = messages;
+            }
             sender
                 .send(self.output.clone())
                 .map_err(|err| anyhow::anyhow!(err.to_string()))?;

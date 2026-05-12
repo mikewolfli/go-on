@@ -91,17 +91,31 @@ impl BackendClient {
     pub fn new(base_url: &str) -> Self {
         let quick_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
+            .tcp_keepalive(Some(Duration::from_secs(30)))
             .build()
             .unwrap_or_else(|e| {
-                eprintln!("Failed to build quick HTTP client: {e}");
-                reqwest::Client::new()
+                eprintln!("Failed to build quick HTTP client: {e}; retrying with builder");
+                reqwest::Client::builder()
+                    .timeout(Duration::from_secs(5))
+                    .build()
+                    .unwrap_or_else(|e| {
+                        eprintln!("Failed to build HTTP client on retry: {e}; using default");
+                        reqwest::Client::new()
+                    })
             });
         let long_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(180))
+            .tcp_keepalive(Some(Duration::from_secs(45)))
             .build()
             .unwrap_or_else(|e| {
-                eprintln!("Failed to build long HTTP client: {e}");
-                reqwest::Client::new()
+                eprintln!("Failed to build long HTTP client: {e}; retrying with builder");
+                reqwest::Client::builder()
+                    .timeout(Duration::from_secs(180))
+                    .build()
+                    .unwrap_or_else(|e| {
+                        eprintln!("Failed to build HTTP client on retry: {e}; using default");
+                        reqwest::Client::new()
+                    })
             });
         Self {
             quick_client,
@@ -118,9 +132,18 @@ impl BackendClient {
         if let Ok(cache) = self.models_cache.lock() {
             let (cached_models, timestamp) = &*cache;
             if let Some(models) = cached_models {
-                if timestamp.elapsed() < Duration::from_secs(MODELS_CACHE_TTL_SECS) {
+                let elapsed_secs = timestamp.elapsed().as_secs();
+                if elapsed_secs < MODELS_CACHE_TTL_SECS {
+                    eprintln!(
+                        "[Cache] Model list hit ({}/{}s)",
+                        elapsed_secs, MODELS_CACHE_TTL_SECS
+                    );
                     return models.clone();
                 }
+                eprintln!(
+                    "[Cache] Model list expired ({}s old), refreshing",
+                    elapsed_secs
+                );
                 stale_cached = Some(models.clone());
             }
         }
@@ -177,21 +200,46 @@ impl BackendClient {
     }
 
     fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-        matches!(status.as_u16(), 429 | 502 | 503 | 504)
+        matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504)
+    }
+
+    fn is_retryable_rpc_error_code(code: i64) -> bool {
+        code == -32603 || (-32099..=-32000).contains(&code)
     }
 
     fn is_retryable_transport_error(err: &reqwest::Error) -> bool {
-        err.is_timeout()
-            || err.is_connect()
-            || err.status().map(Self::is_retryable_status).unwrap_or(false)
+        // Timeouts are always retryable
+        if err.is_timeout() {
+            return true;
+        }
+        // Connection errors
+        if err.is_connect() {
+            return true;
+        }
+        // Body I/O errors (connection interrupted mid-response)
+        if err.is_body() {
+            return true;
+        }
+        // Status errors: check both server errors (5xx) and client errors (408 Request Timeout, 429 Too Many Requests)
+        if let Some(status) = err.status() {
+            return status.is_server_error() || status.as_u16() == 429 || status.as_u16() == 408;
+        }
+        false
     }
 
     fn retry_backoff(attempt: usize) -> Duration {
-        match attempt {
-            1 => Duration::from_millis(120),
-            2 => Duration::from_millis(300),
-            _ => Duration::from_millis(600),
-        }
+        // Exponential backoff with jitter to prevent thundering herd:
+        // Attempt 1: [100,200), Attempt 2: [200,400), Attempt 3+: [400,800)
+        let (base_ms, span_ms): (u64, u64) = match attempt {
+            1 => (100, 100),
+            2 => (200, 200),
+            _ => (400, 400),
+        };
+        let jitter = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.as_nanos() as u64) % span_ms)
+            .unwrap_or(0);
+        Duration::from_millis(base_ms + jitter)
     }
 
     fn parse_rpc_error(err: &Value) -> String {
@@ -237,8 +285,18 @@ impl BackendClient {
                 Ok(resp) => resp,
                 Err(err) => {
                     last_err = format!("HTTP error: {err}");
-                    if attempt < attempts && Self::is_retryable_transport_error(&err) {
-                        tokio::time::sleep(Self::retry_backoff(attempt)).await;
+                    let retryable = Self::is_retryable_transport_error(&err);
+                    if attempt < attempts && retryable {
+                        let backoff = Self::retry_backoff(attempt);
+                        eprintln!(
+                            "[RPC] Attempt {}/{} transport error (retryable={}): {}, backing off {:?}",
+                            attempt,
+                            attempts,
+                            retryable,
+                            err,
+                            backoff
+                        );
+                        tokio::time::sleep(backoff).await;
                         continue;
                     }
                     return Err(last_err);
@@ -250,8 +308,11 @@ impl BackendClient {
                 Ok(text) => text,
                 Err(err) => {
                     last_err = format!("HTTP body read error: {err}");
-                    if attempt < attempts && Self::is_retryable_status(status) {
-                        tokio::time::sleep(Self::retry_backoff(attempt)).await;
+                    // Retry on ANY body read error regardless of status code
+                    if attempt < attempts {
+                        let backoff = Self::retry_backoff(attempt);
+                        eprintln!("[RPC] Attempt {}: Body read error, retrying", attempt);
+                        tokio::time::sleep(backoff).await;
                         continue;
                     }
                     return Err(last_err);
@@ -266,23 +327,59 @@ impl BackendClient {
                     .unwrap_or_else(|| Self::summarize_http_body(&response_text));
                 last_err = format!("HTTP status error {}: {}", status.as_u16(), detail);
                 if attempt < attempts && Self::is_retryable_status(status) {
-                    tokio::time::sleep(Self::retry_backoff(attempt)).await;
+                    let backoff = Self::retry_backoff(attempt);
+                    eprintln!(
+                        "[RPC] Attempt {}: Status {} (retryable), backing off {:?}",
+                        attempt,
+                        status.as_u16(),
+                        backoff
+                    );
+                    tokio::time::sleep(backoff).await;
                     continue;
                 }
                 return Err(last_err);
             }
 
+            // Parse JSON with better error context
             let result: Value = match serde_json::from_str(&response_text) {
                 Ok(json) => json,
-                Err(err) => {
+                Err(parse_err) => {
                     let detail = Self::summarize_http_body(&response_text);
-                    return Err(format!("JSON error: {err}; body={detail}"));
+                    let err_msg = format!(
+                        "JSON parse error: {} (attempt {}/{}); body={}",
+                        parse_err, attempt, attempts, detail
+                    );
+                    // Retry on JSON parse errors as they might be transient
+                    if attempt < attempts {
+                        let backoff = Self::retry_backoff(attempt);
+                        eprintln!("[RPC] Attempt {}: JSON parse failed, retrying", attempt);
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+                    return Err(err_msg);
                 }
             };
 
-            if let Some(err) = result.get("error") {
-                return Err(Self::parse_rpc_error(err));
+            // Check for RPC error in response - might be retryable
+            if let Some(rpc_err) = result.get("error") {
+                let err_msg = Self::parse_rpc_error(rpc_err);
+                // RPC error codes that might be transient:
+                // -32603: Internal error (could be backend temporarily overwhelmed)
+                // -32000 to -32099: Reserved for implementation-defined server errors
+                let code = rpc_err.get("code").and_then(|v| v.as_i64());
+                if attempt < attempts && code.is_some_and(Self::is_retryable_rpc_error_code) {
+                    let backoff = Self::retry_backoff(attempt);
+                    eprintln!(
+                        "[RPC] Attempt {}: RPC error code {:?} (retryable), backing off {:?}",
+                        attempt, code, backoff
+                    );
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
+                return Err(err_msg);
             }
+
+            // Extract result field, fallback to entire response if no "result" key
             return Ok(result.get("result").cloned().unwrap_or(result));
         }
 
@@ -481,13 +578,31 @@ impl BackendClient {
             }
         }
 
-        let resp = self
-            .long_client
-            .post(format!("{}/chat", self.base_url))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("HTTP error: {}", e))?;
+        let mut last_err = String::new();
+        let mut response = None;
+        for attempt in 1..=3 {
+            match self
+                .long_client
+                .post(format!("{}/chat", self.base_url))
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    response = Some(resp);
+                    break;
+                }
+                Err(e) => {
+                    last_err = format!("HTTP error: {}", e);
+                    if attempt < 3 {
+                        tokio::time::sleep(std::time::Duration::from_millis(200 * attempt as u64))
+                            .await;
+                        continue;
+                    }
+                }
+            }
+        }
+        let resp = response.ok_or_else(|| last_err.clone())?;
 
         let resp = resp
             .error_for_status()

@@ -158,11 +158,24 @@ impl SetupView {
                         )
                         .clicked()
                     {
-                        let api_key = self.api_key.trim().to_string();
+                        let api_key: String = self
+                            .api_key
+                            .chars()
+                            .filter(|c| !c.is_control() || *c == '\t')
+                            .collect::<String>()
+                            .trim()
+                            .to_string();
                         let provider_lower = self.selected_provider.to_lowercase();
 
                         // Store to system keyring (best-effort, may fail on some platforms)
-                        let _ = crate::keyring_util::store_api_key(&provider_lower, &api_key);
+                        if let Err(e) =
+                            crate::keyring_util::store_api_key(&provider_lower, &api_key)
+                        {
+                            eprintln!(
+                                "keyring: failed to store key for '{}': {}",
+                                provider_lower, e
+                            );
+                        }
 
                         // Persist to config (always works)
                         if let Some(existing) = config
