@@ -827,7 +827,7 @@ impl ChatView {
                     self.refresh_default_session_names(i18n);
                 }
                 if ui
-                    .button("🗑️")
+                    .button("🗑")
                     .on_hover_text(i18n.t("chat.clearSession"))
                     .clicked()
                 {
@@ -1307,7 +1307,7 @@ impl ChatView {
                             }
                             ui.close_menu();
                         }
-                        if ui.button(format!("🗑️ {delete_lbl}")).clicked() {
+                        if ui.button(format!("🗑 {delete_lbl}")).clicked() {
                             if let Some(real_idx) =
                                 find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
                             {

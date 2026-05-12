@@ -1921,7 +1921,16 @@ async fn start_server(
             );
             server.run().await
         }
-        _ => unreachable!(),
+        _ => {
+            error!(
+                "Unknown protocol mode: {}",
+                access_selection.configured_mode
+            );
+            anyhow::bail!(
+                "unsupported protocol mode: {}",
+                access_selection.configured_mode
+            );
+        }
     }
 }
 

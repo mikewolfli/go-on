@@ -511,7 +511,6 @@ impl ConfigValidator {
 
     /// Validate agent configurations
     fn validate_agents(&self, result: &mut ValidationResult) {
-        #[allow(clippy::for_kv_map)]
         for (name, agent) in &self.config.agents {
             self.validate_agent(name, agent, result);
         }
