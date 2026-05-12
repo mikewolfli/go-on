@@ -568,7 +568,19 @@ pub(crate) async fn process_chat_request(
         .or_else(|| controller_phase.clone())
         .or_else(|| adaptive_phase.clone());
 
-    let mut resolved = flow.resolve(chosen_phase.clone(), registry.as_ref())?;
+    // Defensive fallback: if the requested phase is not recognized by the flow
+    // configuration (e.g. an old session cached an obsolete phase name), silently
+    // fall back to the default phase instead of returning an error.
+    let mut resolved = match flow.resolve(chosen_phase.clone(), registry.as_ref()) {
+        Ok(r) => r,
+        Err(_) => {
+            warn!(
+                "chat: phase '{:?}' not found in flow config, falling back to default",
+                chosen_phase
+            );
+            flow.resolve(None, registry.as_ref())?
+        }
+    };
     let original_count = resolved.agents.len();
     let unavailable_agents =
         filter_runtime_ready_agents(server, app_config.as_ref(), &mut resolved.agents).await;

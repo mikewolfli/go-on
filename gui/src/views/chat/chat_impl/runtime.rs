@@ -69,7 +69,20 @@ impl ChatView {
         }
         let expanded_msg = self.expand_prompt_command(&msg);
         let mode = self.selected_mode.clone();
-        let phase = self.selected_phase.clone();
+        // Validate phase before sending — if the phase is not in the known list
+        // fetched from backend, default to empty (backend will use its default phase).
+        let phase = if self.phases_loaded
+            && !self.selected_phase.is_empty()
+            && !self.phases.contains(&self.selected_phase)
+        {
+            eprintln!(
+                "chat: phase '{}' not in known phases {:?}, resetting to empty",
+                self.selected_phase, self.phases
+            );
+            String::new()
+        } else {
+            self.selected_phase.clone()
+        };
         let base_url = backend.base_url().to_string();
         let selected_models = Self::normalize_models(&self.selected_models);
         let autotune_extra = if autotune_chain_enabled {
