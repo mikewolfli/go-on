@@ -20,6 +20,20 @@ struct WorkflowState {
     last_result: Option<String>,
 }
 
+enum WorkflowEvent {
+    RunsResult {
+        request_id: u64,
+        result: Result<Vec<WorkflowRunRecord>, String>,
+    },
+    RunDetailResult {
+        request_id: u64,
+        run_id: String,
+        result: Result<WorkflowRunRecord, String>,
+    },
+    WorkflowExecuteDone(String),
+    UiMessage(String),
+}
+
 pub struct WorkflowView {
     state: WorkflowState,
     new_name: String,
@@ -27,13 +41,17 @@ pub struct WorkflowView {
     running: bool,
     pending_confirm_run: bool,
     pending_confirm_delete: Option<usize>,
-    pending_rx: mpsc::Receiver<String>,
-    pending_tx: mpsc::Sender<String>,
+    pending_rx: mpsc::Receiver<WorkflowEvent>,
+    pending_tx: mpsc::Sender<WorkflowEvent>,
     runs: Vec<WorkflowRunRecord>,
     selected_run_id: String,
     selected_run_detail: Option<WorkflowRunRecord>,
     run_status_filter: String,
     runs_loading: bool,
+    runs_request_seq: u64,
+    run_detail_in_flight: bool,
+    run_detail_request_seq: u64,
+    last_requested_run_detail_id: String,
     run_center_msg: String,
     last_run_center_poll: Instant,
     /// Cached security prefs — reloaded at most once per 10s to avoid per-frame disk reads.
@@ -109,6 +127,8 @@ impl WorkflowView {
     }
 
     fn request_runs(&mut self, backend: &BackendClient, ctx: &egui::Context) {
+        self.runs_request_seq = self.runs_request_seq.wrapping_add(1);
+        let request_id = self.runs_request_seq;
         self.runs_loading = true;
         self.run_center_msg.clear();
         let backend_clone = backend.clone();
@@ -121,9 +141,9 @@ impl WorkflowView {
             } else {
                 Some(filter.as_str())
             };
-            let result = match tokio::time::timeout(
+            let result: Result<Vec<WorkflowRunRecord>, String> = match tokio::time::timeout(
                 std::time::Duration::from_secs(10),
-                backend_clone.list_workflow_runs(50, 0, status),
+                backend_clone.list_workflow_runs_typed(50, 0, status),
             )
             .await
             {
@@ -133,24 +153,31 @@ impl WorkflowView {
                     Err("timeout".to_string())
                 }
             };
-            let msg = match result {
-                Ok(v) => format!("__runs__:{v}"),
-                Err(e) => format!("__runs_error__:{e}"),
-            };
-            let _ = tx.send(msg);
+            let _ = tx.send(WorkflowEvent::RunsResult { request_id, result });
             ctx_clone.request_repaint();
         });
     }
 
-    fn request_run_detail(&self, run_id: &str, backend: &BackendClient, ctx: &egui::Context) {
+    fn request_run_detail(&mut self, run_id: &str, backend: &BackendClient, ctx: &egui::Context) {
+        if run_id.is_empty() {
+            return;
+        }
+        if self.run_detail_in_flight && self.last_requested_run_detail_id == run_id {
+            return;
+        }
+        self.run_detail_request_seq = self.run_detail_request_seq.wrapping_add(1);
+        let request_id = self.run_detail_request_seq;
+        self.run_detail_in_flight = true;
+        self.last_requested_run_detail_id = run_id.to_string();
+
         let run_id = run_id.to_string();
         let backend_clone = backend.clone();
         let tx = self.pending_tx.clone();
         let ctx_clone = ctx.clone();
         tokio::spawn(async move {
-            let result = match tokio::time::timeout(
+            let result: Result<WorkflowRunRecord, String> = match tokio::time::timeout(
                 std::time::Duration::from_secs(10),
-                backend_clone.get_workflow_run(&run_id),
+                backend_clone.get_workflow_run_typed(&run_id),
             )
             .await
             {
@@ -160,11 +187,11 @@ impl WorkflowView {
                     Err("timeout".to_string())
                 }
             };
-            let msg = match result {
-                Ok(v) => format!("__run_detail__:{v}"),
-                Err(e) => format!("__run_detail_error__:{e}"),
-            };
-            let _ = tx.send(msg);
+            let _ = tx.send(WorkflowEvent::RunDetailResult {
+                request_id,
+                run_id,
+                result,
+            });
             ctx_clone.request_repaint();
         });
     }
@@ -185,6 +212,10 @@ impl WorkflowView {
             selected_run_detail: None,
             run_status_filter: "all".to_string(),
             runs_loading: false,
+            runs_request_seq: 0,
+            run_detail_in_flight: false,
+            run_detail_request_seq: 0,
+            last_requested_run_detail_id: String::new(),
             run_center_msg: String::new(),
             last_run_center_poll: Instant::now(),
             cached_security: crate::views::security_prefs::load(),
@@ -226,86 +257,85 @@ impl WorkflowView {
         }
     }
 
-    fn process_pending(&mut self, i18n: &I18n) {
+    fn process_pending(&mut self, _i18n: &I18n) {
         // Limit event processing per frame to prevent UI freeze
         const MAX_EVENTS_PER_FRAME: usize = 8;
         for _ in 0..MAX_EVENTS_PER_FRAME {
             let Ok(result) = self.pending_rx.try_recv() else {
                 break;
             };
-            if let Some(payload) = result.strip_prefix("__runs__:") {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
-                    let runs = v
-                        .get("runs")
-                        .and_then(serde_json::Value::as_array)
-                        .cloned()
-                        .unwrap_or_default();
-                    self.runs = runs
-                        .into_iter()
-                        .filter_map(|x| serde_json::from_value::<WorkflowRunRecord>(x).ok())
-                        .collect();
+            match result {
+                WorkflowEvent::RunsResult { request_id, result } => {
+                    if request_id != self.runs_request_seq {
+                        continue;
+                    }
                     self.runs_loading = false;
-                    self.run_center_msg.clear();
-                    if self.selected_run_id.is_empty() {
-                        if let Some(first) = self.runs.first() {
-                            self.selected_run_id = first.run_id.clone();
+                    match result {
+                        Ok(runs) => {
+                            self.runs = runs;
+                            self.run_center_msg.clear();
+                            if self.selected_run_id.is_empty() {
+                                if let Some(first) = self.runs.first() {
+                                    self.selected_run_id = first.run_id.clone();
+                                }
+                            } else if !self.runs.iter().any(|r| r.run_id == self.selected_run_id) {
+                                self.selected_run_id.clear();
+                                self.selected_run_detail = None;
+                            }
                         }
-                    } else if !self.runs.iter().any(|r| r.run_id == self.selected_run_id) {
-                        self.selected_run_id.clear();
-                        self.selected_run_detail = None;
+                        Err(err) => {
+                            self.run_center_msg = err;
+                        }
                     }
                 }
-                continue;
-            }
-            if let Some(err) = result.strip_prefix("__runs_error__:") {
-                self.runs_loading = false;
-                self.run_center_msg = err.to_string();
-                continue;
-            }
-            if let Some(payload) = result.strip_prefix("__run_detail__:") {
-                match serde_json::from_str::<serde_json::Value>(payload)
-                    .ok()
-                    .and_then(|v| v.get("run").cloned().or(Some(v)))
-                    .and_then(|v| serde_json::from_value::<WorkflowRunRecord>(v).ok())
-                {
-                    Some(run) => {
-                        self.selected_run_detail = Some(run);
-                        self.run_center_msg.clear();
+                WorkflowEvent::RunDetailResult {
+                    request_id,
+                    run_id,
+                    result,
+                } => {
+                    if request_id != self.run_detail_request_seq {
+                        continue;
                     }
-                    None => {
-                        self.run_center_msg = i18n.t("workflow.runCenter.decodeFailed").to_string();
+                    if self.last_requested_run_detail_id == run_id {
+                        self.run_detail_in_flight = false;
+                    }
+                    if run_id != self.selected_run_id {
+                        continue;
+                    }
+                    match result {
+                        Ok(run) => {
+                            self.selected_run_detail = Some(run);
+                            self.run_center_msg.clear();
+                        }
+                        Err(err) => {
+                            self.run_center_msg = err;
+                        }
                     }
                 }
-                continue;
+                WorkflowEvent::WorkflowExecuteDone(payload) => {
+                    self.state.last_result = Some(payload);
+                    self.state.last_run_at = Some(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    );
+                    self.running = false;
+                    self.pending_confirm_run = false;
+                    self.save_state();
+                }
+                WorkflowEvent::UiMessage(msg) => {
+                    self.state.last_run_at = Some(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    );
+                    self.state.last_result = Some(msg);
+                    self.running = false;
+                    self.save_state();
+                }
             }
-            if let Some(err) = result.strip_prefix("__run_detail_error__:") {
-                self.run_center_msg = err.to_string();
-                continue;
-            }
-
-            if let Some(payload) = result.strip_prefix("__workflow_execute__:") {
-                self.state.last_result = Some(payload.to_string());
-                self.state.last_run_at = Some(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                );
-                self.running = false;
-                self.pending_confirm_run = false;
-                self.save_state();
-                continue;
-            }
-
-            self.state.last_run_at = Some(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-            );
-            self.state.last_result = Some(result);
-            self.running = false;
-            self.save_state();
         }
     }
 
@@ -344,7 +374,7 @@ impl WorkflowView {
                 Ok(Err(err)) => format!("workflow.execute failed: {err}"),
                 Err(_) => "workflow.execute timed out".to_string(),
             };
-            let _ = tx.send(format!("__workflow_execute__:{payload}"));
+            let _ = tx.send(WorkflowEvent::WorkflowExecuteDone(payload));
             ctx_clone.request_repaint();
         });
     }
@@ -528,7 +558,26 @@ impl WorkflowView {
                     {
                         self.request_runs(backend, ctx);
                         if !self.selected_run_id.is_empty() {
-                            self.request_run_detail(&self.selected_run_id.clone(), backend, ctx);
+                            let run_id = self.selected_run_id.clone();
+                            self.request_run_detail(&run_id, backend, ctx);
+                        }
+                        self.last_run_center_poll = Instant::now();
+                    }
+
+                    // Cross-platform: Ctrl+R (Win/Linux) or Command+R (macOS) to refresh run center.
+                    let mut quick_refresh = false;
+                    ui.input_mut(|i| {
+                        if i.consume_key(egui::Modifiers::CTRL, egui::Key::R)
+                            || i.consume_key(egui::Modifiers::COMMAND, egui::Key::R)
+                        {
+                            quick_refresh = true;
+                        }
+                    });
+                    if quick_refresh && !self.runs_loading {
+                        self.request_runs(backend, ctx);
+                        if !self.selected_run_id.is_empty() {
+                            let run_id = self.selected_run_id.clone();
+                            self.request_run_detail(&run_id, backend, ctx);
                         }
                         self.last_run_center_poll = Instant::now();
                     }
@@ -632,6 +681,11 @@ impl WorkflowView {
                                 for (label, action) in available_actions {
                                     if ui.button(label).clicked() {
                                         let run_id = self.selected_run_id.clone();
+                                        self.run_detail_request_seq =
+                                            self.run_detail_request_seq.wrapping_add(1);
+                                        let detail_request_id = self.run_detail_request_seq;
+                                        self.run_detail_in_flight = true;
+                                        self.last_requested_run_detail_id = run_id.clone();
                                         let backend_clone = backend.clone();
                                         let tx = self.pending_tx.clone();
                                         let ctx_clone = ctx.clone();
@@ -665,16 +719,20 @@ impl WorkflowView {
                                                     .replace("{action}", action)
                                                     .replace("{error}", &e.to_string()),
                                             };
-                                            let _ = tx.send(msg);
+                                            let _ = tx.send(WorkflowEvent::UiMessage(msg));
 
                                             // Pull latest run detail after action so UI reflects new state quickly.
                                             if let Ok(Ok(detail)) = tokio::time::timeout(
                                                 std::time::Duration::from_secs(10),
-                                                backend_clone.get_workflow_run(&run_id),
+                                                backend_clone.get_workflow_run_typed(&run_id),
                                             )
                                             .await
                                             {
-                                                let _ = tx.send(format!("__run_detail__:{detail}"));
+                                                let _ = tx.send(WorkflowEvent::RunDetailResult {
+                                                    request_id: detail_request_id,
+                                                    run_id: run_id.clone(),
+                                                    result: Ok(detail),
+                                                });
                                             }
                                             ctx_clone.request_repaint();
                                         });

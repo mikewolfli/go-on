@@ -1,6 +1,61 @@
 use super::*;
 
+const MAX_INLINE_ATTACHMENT_B64_CHARS: usize = 8_192;
+const MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024; // 1 MB max SSE frame buffer
+const MAX_BUFFERED_TOKENS_BYTES: usize = 256 * 1024; // 256 KB accumulated token buffer
+
 impl ChatView {
+    fn build_attachment_summary(attachments: &[Attachment]) -> String {
+        if attachments.is_empty() {
+            return String::new();
+        }
+
+        let details = attachments
+            .iter()
+            .map(|a| {
+                if a.data.len() <= MAX_INLINE_ATTACHMENT_B64_CHARS {
+                    format!("- {} ({}) [base64:{} chars]", a.name, a.mime, a.data.len())
+                } else {
+                    format!(
+                        "- {} ({}) [base64:{} chars, truncated]",
+                        a.name,
+                        a.mime,
+                        a.data.len()
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        format!("\n\n[Attachments]\n{details}")
+    }
+
+    fn merge_options_with_tracking(
+        options_extra: Option<Value>,
+        conversation_id: Option<&str>,
+        branch_id: Option<&str>,
+    ) -> Option<Value> {
+        let mut merged = options_extra
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+
+        if let Some(conv_id) = conversation_id {
+            merged.insert(
+                "conversation_id".to_string(),
+                Value::String(conv_id.to_string()),
+            );
+        }
+        if let Some(b_id) = branch_id {
+            merged.insert("branch_id".to_string(), Value::String(b_id.to_string()));
+        }
+
+        if merged.is_empty() {
+            None
+        } else {
+            Some(Value::Object(merged))
+        }
+    }
+
     /// Send a message asynchronously via the backend.
     pub fn send_message(
         &mut self,
@@ -29,16 +84,7 @@ impl ChatView {
             .unwrap_or_default()
             .as_secs();
         let atts = std::mem::take(&mut self.attachments);
-        let attachment_summary = if atts.is_empty() {
-            String::new()
-        } else {
-            let details = atts
-                .iter()
-                .map(|a| format!("- {} ({}) {}", a.name, a.mime, a.data))
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!("\n\n[Attachments]\n{details}")
-        };
+        let attachment_summary = Self::build_attachment_summary(&atts);
         let outbound_msg = format!("{expanded_msg}{attachment_summary}");
 
         // Add user message immediately
@@ -83,6 +129,10 @@ impl ChatView {
 
         let comparison_id = now;
         let stream_chunk_flush_interval = self.stream_chunk_flush_interval;
+        let stream_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(180))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         for model_name in selected_models {
             let generation_id = self.next_generation_id();
             let input_tokens = self.input_token_estimate;
@@ -105,13 +155,18 @@ impl ChatView {
             let ctx_clone = ctx.clone();
             let mode_clone = mode.clone();
             let phase_clone = phase.clone();
-            let msg_clone = expanded_msg.clone();
             let outbound_clone = outbound_msg.clone();
             let model_clone = model_name.clone();
             let base_url_clone = base_url.clone();
-            let autotune_extra_clone = autotune_extra.clone();
+            let stream_client_clone = stream_client.clone();
             let conv_id_clone = self.sessions[self.active_session].conversation_id.clone();
             let branch_id_clone = self.sessions[self.active_session].branch_id.clone();
+            let fallback_options = Self::merge_options_with_tracking(
+                autotune_extra.clone(),
+                conv_id_clone.as_deref(),
+                branch_id_clone.as_deref(),
+            );
+            let fallback_options_for_stream = fallback_options.clone();
             let handle = tokio::spawn(async move {
                 let phase_val = if phase_clone.is_empty() {
                     serde_json::Value::Null
@@ -131,7 +186,7 @@ impl ChatView {
                     });
                 }
 
-                if let Some(extra) = autotune_extra_clone.clone() {
+                if let Some(extra) = fallback_options_for_stream.clone() {
                     if body.get("options").is_none() {
                         body["options"] = serde_json::json!({});
                     }
@@ -143,7 +198,6 @@ impl ChatView {
                     }
                 }
 
-                // NEW: pass conversation tracking IDs
                 if let Some(conv_id) = conv_id_clone.clone() {
                     body["conversation_id"] = serde_json::json!(conv_id);
                 }
@@ -151,12 +205,7 @@ impl ChatView {
                     body["branch_id"] = serde_json::json!(b_id);
                 }
 
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(180))
-                    .build()
-                    .unwrap_or_else(|_| reqwest::Client::new());
-
-                let stream_resp = client
+                let stream_resp = stream_client_clone
                     .post(format!(
                         "{}/chat/stream",
                         base_url_clone.trim_end_matches('/')
@@ -174,7 +223,7 @@ impl ChatView {
                                     &mode_clone,
                                     &phase_clone,
                                     Some(&model_clone),
-                                    autotune_extra_clone.clone(),
+                                    fallback_options.clone(),
                                 )
                                 .await
                                 .map(
@@ -207,6 +256,7 @@ impl ChatView {
                         let mut buffered_token = String::new();
                         let mut buffered_reasoning = String::new();
                         let mut last_stream_flush = std::time::Instant::now();
+                        let mut total_buffer_bytes = 0usize; // Track total buffered content for overflow protection
 
                         loop {
                             let chunk = match resp.chunk().await {
@@ -226,9 +276,20 @@ impl ChatView {
                             let part = String::from_utf8_lossy(&chunk);
                             sse_buffer.push_str(&part);
 
+                            // Overflow protection: SSE buffer must not exceed max size
+                            if sse_buffer.len() > MAX_SSE_BUFFER_BYTES {
+                                let _ = tx.send(PendingResponse::Error {
+                                    generation_id: Some(generation_id),
+                                    message: "stream frame too large (>1MB)".to_string(),
+                                });
+                                ctx_clone
+                                    .request_repaint_after(std::time::Duration::from_millis(16));
+                                return;
+                            }
+
                             while let Some(split_at) = sse_buffer.find("\n\n") {
                                 let frame = sse_buffer[..split_at].to_string();
-                                sse_buffer = sse_buffer[split_at + 2..].to_string();
+                                sse_buffer.drain(..split_at + 2);
 
                                 let mut event_name = String::new();
                                 let mut data_payload = String::new();
@@ -265,8 +326,25 @@ impl ChatView {
                                             .unwrap_or_default()
                                             .to_string();
                                         if !token.is_empty() || !reasoning.is_empty() {
+                                            // Update total buffer bytes for overflow detection
+                                            total_buffer_bytes += token.len() + reasoning.len();
+
                                             buffered_token.push_str(&token);
                                             buffered_reasoning.push_str(&reasoning);
+
+                                            // Force flush if buffer exceeds max accumulated size
+                                            if total_buffer_bytes > MAX_BUFFERED_TOKENS_BYTES {
+                                                let _ = tx.send(PendingResponse::StreamChunk {
+                                                    generation_id,
+                                                    token: std::mem::take(&mut buffered_token),
+                                                    reasoning: std::mem::take(
+                                                        &mut buffered_reasoning,
+                                                    ),
+                                                });
+                                                total_buffer_bytes = 0;
+                                                ctx_clone.request_repaint();
+                                                last_stream_flush = std::time::Instant::now();
+                                            }
                                         }
                                     }
                                     "telemetry" => {
@@ -380,7 +458,13 @@ impl ChatView {
                     }
                     Err(err) => {
                         let fallback = backend_clone
-                            .chat(&msg_clone, &mode_clone, &phase_clone, Some(&model_clone))
+                            .chat_with_options(
+                                &outbound_clone,
+                                &mode_clone,
+                                &phase_clone,
+                                Some(&model_clone),
+                                fallback_options.clone(),
+                            )
                             .await
                             .map(
                                 |(content, thinking, agent)| PendingResponse::ChatCompleted {
@@ -608,5 +692,40 @@ impl ChatView {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_attachment_summary_omits_raw_payload() {
+        let attachments = vec![Attachment {
+            name: "image.png".to_string(),
+            mime: "image/png".to_string(),
+            data: "abcd".repeat(16),
+        }];
+
+        let summary = ChatView::build_attachment_summary(&attachments);
+
+        assert!(summary.contains("[Attachments]"));
+        assert!(summary.contains("image.png"));
+        assert!(summary.contains("base64:"));
+        assert!(!summary.contains("abcdabcdabcd"));
+    }
+
+    #[test]
+    fn merge_options_with_tracking_keeps_existing_and_adds_ids() {
+        let merged = ChatView::merge_options_with_tracking(
+            Some(serde_json::json!({"temperature": 0.2})),
+            Some("conv-1"),
+            Some("main"),
+        )
+        .expect("merged options expected");
+
+        assert_eq!(merged["temperature"], serde_json::json!(0.2));
+        assert_eq!(merged["conversation_id"], serde_json::json!("conv-1"));
+        assert_eq!(merged["branch_id"], serde_json::json!("main"));
     }
 }

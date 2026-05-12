@@ -5,6 +5,11 @@ use std::time::Duration;
 
 const QUICK_RPC_ATTEMPTS: usize = 2;
 const FULL_RPC_ATTEMPTS: usize = 3;
+const MODELS_CACHE_TTL_SECS: u64 = 300;
+
+type ProviderModels = std::collections::HashMap<String, Vec<String>>;
+type ModelsCacheState = (Option<ProviderModels>, std::time::Instant);
+type ModelsCache = Arc<std::sync::Mutex<ModelsCacheState>>;
 
 #[derive(Clone)]
 pub struct BackendClient {
@@ -14,12 +19,7 @@ pub struct BackendClient {
     long_client: reqwest::Client,
     base_url: String,
     /// Model list cache with timestamp
-    models_cache: Arc<
-        std::sync::Mutex<(
-            Option<std::collections::HashMap<String, Vec<String>>>,
-            std::time::Instant,
-        )>,
-    >,
+    models_cache: ModelsCache,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +52,11 @@ pub struct WorkflowRunRecord {
     pub phase: String,
     pub error: Option<String>,
     pub artifacts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorkflowRunsResult {
+    pub runs: Vec<WorkflowRunRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -106,41 +111,51 @@ impl BackendClient {
         }
     }
 
-    pub async fn fetch_models(&self) -> std::collections::HashMap<String, Vec<String>> {
+    pub async fn fetch_models(&self) -> ProviderModels {
+        let mut stale_cached: Option<ProviderModels> = None;
+
         // Check cache (valid for 5 minutes)
         if let Ok(cache) = self.models_cache.lock() {
             let (cached_models, timestamp) = &*cache;
             if let Some(models) = cached_models {
-                if timestamp.elapsed() < Duration::from_secs(300) {
+                if timestamp.elapsed() < Duration::from_secs(MODELS_CACHE_TTL_SECS) {
                     return models.clone();
                 }
+                stale_cached = Some(models.clone());
             }
         }
 
         let resp = self.rpc_call("models.list", None).await;
         let result = match resp {
             Ok(val) => {
-                let mut result: std::collections::HashMap<String, Vec<String>> =
-                    std::collections::HashMap::new();
+                let mut result: ProviderModels = std::collections::HashMap::new();
                 if let Some(models) = val.get("models").and_then(|m| m.as_array()) {
-                    for m in models {
-                        if let (Some(provider), Some(model_id)) = (
-                            m.get("provider").and_then(|p| p.as_str()),
-                            m.get("id").and_then(|id| id.as_str()),
-                        ) {
+                    for entry_val in models.iter() {
+                        let provider = entry_val.get("provider").and_then(Value::as_str);
+                        let id = entry_val.get("id").and_then(Value::as_str);
+                        if let (Some(provider), Some(id)) = (provider, id) {
                             result
                                 .entry(provider.to_string())
                                 .or_default()
-                                .push(model_id.to_string());
+                                .push(id.to_string());
                         }
                     }
                 }
+
+                for models in result.values_mut() {
+                    models.sort();
+                    models.dedup();
+                }
+
                 result
             }
-            Err(_) => std::collections::HashMap::new(),
+            Err(_) => {
+                // If refresh fails, keep showing stale data instead of blanking the model list.
+                return stale_cached.unwrap_or_default();
+            }
         };
 
-        // Update cache
+        // Update cache only on successful refresh.
         if let Ok(mut cache) = self.models_cache.lock() {
             cache.0 = Some(result.clone());
             cache.1 = std::time::Instant::now();
@@ -151,6 +166,10 @@ impl BackendClient {
 
     pub fn set_base_url(&mut self, url: &str) {
         self.base_url = url.trim_end_matches('/').to_string();
+        if let Ok(mut cache) = self.models_cache.lock() {
+            cache.0 = None;
+            cache.1 = std::time::Instant::now();
+        }
     }
 
     pub fn base_url(&self) -> &str {
@@ -414,20 +433,6 @@ impl BackendClient {
         }
     }
 
-    /// Send a chat message via /chat endpoint. Works on all platforms.
-    /// Backend returns JSON with "response" and optionally "thinking" fields.
-    /// Uses the long timeout client (180s) for AI provider response time.
-    pub async fn chat(
-        &self,
-        message: &str,
-        mode: &str,
-        phase: &str,
-        model: Option<&str>,
-    ) -> Result<(String, String, String), String> {
-        self.chat_with_options(message, mode, phase, model, None)
-            .await
-    }
-
     pub async fn chat_with_options(
         &self,
         message: &str,
@@ -639,12 +644,72 @@ impl BackendClient {
         self.rpc_call("workflow.run.list", Some(params)).await
     }
 
+    pub async fn list_workflow_runs_typed(
+        &self,
+        limit: usize,
+        offset: usize,
+        status: Option<&str>,
+    ) -> Result<Vec<WorkflowRunRecord>, String> {
+        let value = self.list_workflow_runs(limit, offset, status).await?;
+        Self::decode_workflow_runs(value)
+    }
+
     pub async fn get_workflow_run(&self, run_id: &str) -> Result<Value, String> {
         self.rpc_call(
             "workflow.run.get",
             Some(serde_json::json!({"run_id": run_id})),
         )
         .await
+    }
+
+    pub async fn get_workflow_run_typed(&self, run_id: &str) -> Result<WorkflowRunRecord, String> {
+        let value = self.get_workflow_run(run_id).await?;
+        let candidate = value
+            .get("run")
+            .cloned()
+            .or_else(|| value.get("result").and_then(|r| r.get("run")).cloned())
+            .unwrap_or(value);
+        serde_json::from_value::<WorkflowRunRecord>(candidate)
+            .map_err(|e| format!("workflow.run.get decode error: {e}"))
+    }
+
+    fn decode_workflow_runs(value: Value) -> Result<Vec<WorkflowRunRecord>, String> {
+        if let Ok(parsed) = serde_json::from_value::<WorkflowRunsResult>(value.clone()) {
+            return Ok(parsed.runs);
+        }
+
+        if let Some(runs) = value.get("runs").and_then(Value::as_array) {
+            return runs
+                .iter()
+                .cloned()
+                .map(serde_json::from_value::<WorkflowRunRecord>)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("workflow.run.list decode error: {e}"));
+        }
+
+        if let Some(runs) = value
+            .get("result")
+            .and_then(|r| r.get("runs"))
+            .and_then(Value::as_array)
+        {
+            return runs
+                .iter()
+                .cloned()
+                .map(serde_json::from_value::<WorkflowRunRecord>)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("workflow.run.list decode error: {e}"));
+        }
+
+        if let Some(runs) = value.as_array() {
+            return runs
+                .iter()
+                .cloned()
+                .map(serde_json::from_value::<WorkflowRunRecord>)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("workflow.run.list decode error: {e}"));
+        }
+
+        Err("workflow.run.list decode error: unsupported payload shape".to_string())
     }
 
     pub async fn transition_workflow_run(

@@ -470,16 +470,12 @@ impl MonitorView {
                         }
                     }
                 } else {
-                    let filtered_providers: Vec<_> = if self.provider_filter.is_empty() {
-                        self.providers.iter().collect()
-                    } else {
-                        let q = self.provider_filter.to_lowercase();
-                        self.providers
-                            .iter()
-                            .filter(|p| p.name.to_lowercase().contains(&q))
-                            .collect()
-                    };
-                    for p in filtered_providers {
+                    let q = self.provider_filter.to_lowercase();
+                    let filter_enabled = !q.is_empty();
+                    for p in &self.providers {
+                        if filter_enabled && !p.name.to_lowercase().contains(&q) {
+                            continue;
+                        }
                         egui::Frame::group(ui.style())
                             .inner_margin(egui::Margin::same(8))
                             .show(ui, |ui| {

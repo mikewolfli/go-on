@@ -7,6 +7,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+const MAX_TRACE_REQUEST_ID_LEN: usize = 128;
+
+fn clamp_request_id(mut request_id: String) -> String {
+    if request_id.is_empty() {
+        return "unknown".to_string();
+    }
+    if request_id.len() > MAX_TRACE_REQUEST_ID_LEN {
+        request_id.truncate(MAX_TRACE_REQUEST_ID_LEN);
+    }
+    request_id
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct JsonRpcRequest {
     pub(crate) jsonrpc: String,
@@ -41,11 +53,27 @@ pub(crate) struct JsonRpcError {
     pub(crate) data: Option<Value>,
 }
 
+// Optimized: return borrowed string for value_to_id when possible, clamp in place
 pub(crate) fn value_to_id(value: &Value) -> String {
     match value {
-        Value::String(v) => v.clone(),
-        Value::Number(v) => v.to_string(),
-        _ => value.to_string(),
+        Value::String(v) if v.len() <= MAX_TRACE_REQUEST_ID_LEN => v.clone(),
+        Value::String(v) => v[..MAX_TRACE_REQUEST_ID_LEN].to_string(),
+        Value::Number(n) => {
+            let s = n.to_string();
+            if s.len() > MAX_TRACE_REQUEST_ID_LEN {
+                s[..MAX_TRACE_REQUEST_ID_LEN].to_string()
+            } else {
+                s
+            }
+        }
+        _ => {
+            let s = value.to_string();
+            if s.len() > MAX_TRACE_REQUEST_ID_LEN {
+                s[..MAX_TRACE_REQUEST_ID_LEN].to_string()
+            } else {
+                s
+            }
+        }
     }
 }
 
@@ -61,6 +89,9 @@ pub(crate) fn chat_trace_context(id: &Option<Value>, span_id: &str) -> RequestTr
         request_id,
     }
 }
+
+// Use Arc to avoid cloning large strings in child trace context
+use std::sync::Arc;
 
 pub(crate) fn child_trace_context(
     parent: &RequestTraceContext,

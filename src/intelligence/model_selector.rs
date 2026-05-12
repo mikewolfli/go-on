@@ -147,20 +147,13 @@ impl ModelSelector {
             return None;
         }
 
-        // Filter models that meet minimum requirements
-        let qualified: Vec<_> = available_models
+        // Filter models that meet minimum requirements (no cloning of references)
+        let qualified: Vec<&ModelCharacteristics> = available_models
             .iter()
             .filter(|m| {
-                if criteria.requires_vision && !m.supports_vision {
-                    return false;
-                }
-                if criteria.requires_function_calling && !m.supports_function_calling {
-                    return false;
-                }
-                if criteria.requires_code && !m.excels_at_code {
-                    return false;
-                }
-                true
+                !(criteria.requires_vision && !m.supports_vision
+                    || criteria.requires_function_calling && !m.supports_function_calling
+                    || criteria.requires_code && !m.excels_at_code)
             })
             .collect();
 
@@ -182,24 +175,19 @@ impl ModelSelector {
                 .min_by_key(|m| m.cost_per_request_cents)
                 .map(|m| m.id.clone()),
             ModelSelectionStrategy::Balanced => {
-                // Balanced: compute score = capability + (10 - cost/100) for simple tasks
-                // = capability + latency_penalty for complex tasks
-                let best = qualified.iter().max_by(|a, b| {
-                    let a_score = if criteria.complexity_level >= 4 {
-                        (a.capability_tier as i32) * 100 - (a.latency_ms as i32)
-                    } else {
-                        (a.capability_tier as i32) * 100 - (a.cost_per_request_cents as i32 / 2)
-                    };
-
-                    let b_score = if criteria.complexity_level >= 4 {
-                        (b.capability_tier as i32) * 100 - (b.latency_ms as i32)
-                    } else {
-                        (b.capability_tier as i32) * 100 - (b.cost_per_request_cents as i32 / 2)
-                    };
-
-                    a_score.cmp(&b_score)
-                })?;
-                Some(best.id.clone())
+                // Pre-compute complexity threshold once to avoid redundant calculations
+                let is_complex = criteria.complexity_level >= 4;
+                qualified
+                    .iter()
+                    .max_by_key(|m| {
+                        // Balanced score computation using pre-computed threshold
+                        if is_complex {
+                            (m.capability_tier as i32) * 100 - (m.latency_ms as i32)
+                        } else {
+                            (m.capability_tier as i32) * 100 - (m.cost_per_request_cents as i32 / 2)
+                        }
+                    })
+                    .map(|m| m.id.clone())
             }
             ModelSelectionStrategy::Explicit => None, // User must select explicitly
         }

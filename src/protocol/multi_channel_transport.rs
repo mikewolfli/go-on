@@ -241,46 +241,45 @@ impl MultiChannelTransport {
         let now = Self::now_ms();
         let mut inner = lock_guard(&self.inner);
 
-        // TTL check
+        let ch = &msg.channel;
+
+        // TTL check (early exit)
         if msg.created_ms + msg.ttl_ms < now {
             inner.total_failed += 1;
             inner.last_activity_ms = now;
-            let ch = msg.channel;
             let stats = inner
                 .stats
                 .entry(ch.clone())
-                .or_insert_with(|| Self::new_stats(ch));
+                .or_insert_with(|| Self::new_stats(ch.clone()));
             stats.messages_expired += 1;
             return Ok(());
         }
 
-        // Dedup check
+        // Dedup check with borrowed reference (early exit)
         if inner.config.enable_dedup && inner.sent_ids.contains(&msg.id) {
             return Ok(());
         }
 
-        // Queue depth check
-        let ch_key = msg.channel.clone();
-        let queue_depth = inner.queues.len();
-        if queue_depth >= inner.config.max_queue_depth {
-            bail!("queue depth exceeded for channel {}", ch_key);
+        // Queue depth check (early exit)
+        if inner.queues.len() >= inner.config.max_queue_depth {
+            bail!("queue depth exceeded for channel {}", ch);
         }
 
-        // Track sent ID
+        // Track sent ID (only if dedup enabled)
         if inner.config.enable_dedup {
             inner.sent_ids.insert(msg.id.clone());
         }
 
-        // Build the queued message (with pending status) — clone to keep `msg` alive for stats
-        let mut message = msg.clone();
-        message.delivery_status = DeliveryStatus::Pending;
-
         inner.total_sent += 1;
         inner.last_activity_ms = now;
 
-        // Read config before borrowing queue
+        // Prepare message with pending status
+        let mut message = msg.clone();
+        message.delivery_status = DeliveryStatus::Pending;
+
+        // Queue operation with borrowed channel key
         let enable_ordering = inner.config.enable_ordering;
-        let queue = inner.queues.entry(ch_key.clone()).or_default();
+        let queue = inner.queues.entry(ch.clone()).or_default();
         if enable_ordering {
             let pos = queue
                 .iter()
@@ -291,13 +290,13 @@ impl MultiChannelTransport {
             queue.push_back(message);
         }
 
-        // Update channel stats after inserting into queue
+        // Update channel stats (single entry lookup)
         let queue_len = queue.len();
-        let _ = queue;
+        let _ = queue; // drop queue borrow
         let stats = inner
             .stats
-            .entry(ch_key)
-            .or_insert_with(|| Self::new_stats(msg.channel));
+            .entry(ch.clone())
+            .or_insert_with(|| Self::new_stats(ch.clone()));
         stats.messages_sent += 1;
         stats.queue_depth = queue_len;
 
@@ -332,14 +331,36 @@ impl MultiChannelTransport {
     }
 
     /// Dequeue multiple messages (up to `max`) from the given channel.
+    /// Optimized: Acquire lock once and drain multiple messages to reduce lock contention.
     pub fn receive_batch(&self, channel: &TransportChannel, max: usize) -> Vec<ChannelMessage> {
+        let mut inner = lock_guard(&self.inner);
         let mut msgs = Vec::with_capacity(max);
-        for _ in 0..max {
-            match self.receive(channel) {
-                Some(m) => msgs.push(m),
-                None => break,
+
+        // Drain up to `max` messages without re-acquiring lock each time
+        if let Some(queue) = inner.queues.get_mut(channel) {
+            for _ in 0..max {
+                if let Some(msg) = queue.pop_front() {
+                    msgs.push(msg);
+                } else {
+                    break;
+                }
             }
         }
+
+        if !msgs.is_empty() {
+            inner.total_received += msgs.len() as u64;
+            inner.last_activity_ms = Self::now_ms();
+
+            // Update stats with final queue depth
+            let queue_len = inner.queues.get(channel).map(|q| q.len()).unwrap_or(0);
+            let stats = inner
+                .stats
+                .entry(channel.clone())
+                .or_insert_with(|| Self::new_stats(channel.clone()));
+            stats.messages_received += msgs.len();
+            stats.queue_depth = queue_len;
+        }
+
         msgs
     }
 

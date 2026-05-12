@@ -19,13 +19,14 @@ pub fn log_msg(msg: &str) {
 }
 
 use crate::i18n::{I18n, Lang};
+use crate::views::chat::ChatUiRuntimeConfig;
 use crate::views::{
     about::AboutView, autotune::AutoTuneView, chat::ChatView, config_editor::ConfigEditorView,
     monitor::MonitorView, providers::ProvidersView, security::SecurityView, settings::SettingsView,
     setup::SetupView, skills::SkillsView, workflow::WorkflowView,
 };
 use std::hash::{Hash, Hasher};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -62,7 +63,7 @@ fn find_backend_binary() -> Option<std::path::PathBuf> {
     }
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).find_map(|dir| {
-            let candidate = dir.join("go-on");
+            let candidate = dir.join(exe_name);
             if candidate.exists() {
                 Some(candidate)
             } else {
@@ -74,6 +75,8 @@ fn find_backend_binary() -> Option<std::path::PathBuf> {
 
 pub struct GoOnApp {
     pub config: AppConfig,
+    config_shared: Arc<AppConfig>,
+    config_shared_fingerprint: u64,
     pub i18n: I18n,
     pub backend: BackendClient,
     pub setup_view: SetupView,
@@ -154,9 +157,70 @@ fn detect_system_language() -> Lang {
 }
 
 impl GoOnApp {
+    fn config_fingerprint(config: &AppConfig) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        config.backend_url.hash(&mut hasher);
+        config.language.hash(&mut hasher);
+        config.theme.hash(&mut hasher);
+        config
+            .ui_stability
+            .backend_refresh_interval_secs
+            .hash(&mut hasher);
+        config
+            .ui_stability
+            .backend_ui_commit_debounce_ms
+            .hash(&mut hasher);
+        config
+            .ui_stability
+            .health_disconnect_debounce_count
+            .hash(&mut hasher);
+        config
+            .ui_stability
+            .chat_stream_chunk_flush_ms
+            .hash(&mut hasher);
+        config
+            .ui_stability
+            .chat_repaint_interval_ms
+            .hash(&mut hasher);
+        config
+            .ui_stability
+            .chat_max_pending_events_per_frame
+            .hash(&mut hasher);
+        config.features.monitor.hash(&mut hasher);
+        config.features.chat.hash(&mut hasher);
+        config.features.skills.hash(&mut hasher);
+        config.features.workflow.hash(&mut hasher);
+        config.features.autotune.hash(&mut hasher);
+        config.features.security.hash(&mut hasher);
+        config.features.config.hash(&mut hasher);
+        config.features.providers.hash(&mut hasher);
+        config.features.workflow_run_center.hash(&mut hasher);
+        config.features.autotune_chain_injection.hash(&mut hasher);
+        config.features.skills_lifecycle.hash(&mut hasher);
+        config.features.providers_ops.hash(&mut hasher);
+        config.features.monitor_history_alerts.hash(&mut hasher);
+        config.features.config_safe_mode.hash(&mut hasher);
+        config.features.setup_enterprise.hash(&mut hasher);
+        for provider in &config.providers {
+            provider.name.hash(&mut hasher);
+            provider.model.hash(&mut hasher);
+            provider.validated.hash(&mut hasher);
+            provider.api_key.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    fn sync_shared_config_if_needed(&mut self) {
+        let fingerprint = Self::config_fingerprint(&self.config);
+        if fingerprint != self.config_shared_fingerprint {
+            self.config_shared = Arc::new(self.config.clone());
+            self.config_shared_fingerprint = fingerprint;
+        }
+    }
+
     fn backend_refresh_interval(&self) -> Duration {
         Duration::from_secs(
-            self.config
+            self.config_shared
                 .ui_stability
                 .backend_refresh_interval_secs
                 .clamp(1, 60),
@@ -165,7 +229,7 @@ impl GoOnApp {
 
     fn backend_ui_commit_debounce(&self) -> Duration {
         Duration::from_millis(
-            self.config
+            self.config_shared
                 .ui_stability
                 .backend_ui_commit_debounce_ms
                 .clamp(16, 1000),
@@ -173,7 +237,7 @@ impl GoOnApp {
     }
 
     fn health_disconnect_debounce_count(&self) -> u8 {
-        self.config
+        self.config_shared
             .ui_stability
             .health_disconnect_debounce_count
             .clamp(1, 8)
@@ -248,12 +312,12 @@ impl GoOnApp {
                         );
                     }
 
-                    // Fallback: config file api_key
-                    if key.is_none() {
-                        let k = provider.api_key.clone();
-                        if !k.is_empty() && k != "********" {
-                            key = Some(k);
-                        }
+                    // Fallback: config file api_key (only clone if needed)
+                    if key.is_none()
+                        && !provider.api_key.is_empty()
+                        && provider.api_key != "********"
+                    {
+                        key = Some(provider.api_key.clone());
                     }
 
                     // Fallback: inherited env var
@@ -382,7 +446,8 @@ supports_system = true
             let agents_list = if agent_names.is_empty() {
                 "[]".to_string()
             } else {
-                let quoted: Vec<String> = agent_names.iter().map(|n| format!("\"{}\"", n)).collect();
+                let quoted: Vec<String> =
+                    agent_names.iter().map(|n| format!("\"{}\"", n)).collect();
                 format!("[{}]", quoted.join(", "))
             };
             format!(
@@ -476,7 +541,7 @@ state_path = "acp_autotune_state.json"
             let _ = child.wait();
         }
         // Start new
-        let (backend, child) = Self::spawn_backend(&self.config);
+        let (backend, child) = Self::spawn_backend(self.config_shared.as_ref());
         self.backend = backend;
         self.backend_child = child;
         // Force immediate refresh on next update() cycle
@@ -498,6 +563,8 @@ state_path = "acp_autotune_state.json"
 
     pub fn new() -> Self {
         let config = crate::config::load_app_config();
+        let config_shared = Arc::new(config.clone());
+        let config_shared_fingerprint = Self::config_fingerprint(&config);
         // Auto-detect: if user hasn't explicitly set a language, try system locale
         let lang = if config.language.is_empty() || config.language == "en" {
             detect_system_language()
@@ -525,6 +592,8 @@ state_path = "acp_autotune_state.json"
 
         Self {
             backend,
+            config_shared,
+            config_shared_fingerprint,
             i18n: I18n::new(lang),
             setup_view: SetupView::new(),
             monitor_view: MonitorView::new(),
@@ -583,7 +652,7 @@ state_path = "acp_autotune_state.json"
     }
 
     fn current_lang(&self) -> Lang {
-        match self.config.language.as_str() {
+        match self.config_shared.language.as_str() {
             "zh-CN" => Lang::ZhCn,
             "zh-TW" => Lang::ZhTw,
             _ => Lang::En,
@@ -591,7 +660,11 @@ state_path = "acp_autotune_state.json"
     }
 
     fn sync_backend_url(&mut self) {
-        let config_url = self.config.backend_url.trim_end_matches('/').to_string();
+        let config_url = self
+            .config_shared
+            .backend_url
+            .trim_end_matches('/')
+            .to_string();
         if self.backend.base_url() != config_url {
             self.backend.set_base_url(&config_url);
         }
@@ -702,12 +775,14 @@ impl eframe::App for GoOnApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let _frame_start = std::time::Instant::now();
 
+        self.sync_shared_config_if_needed();
+
         self.i18n.switch(self.current_lang());
         // Only apply theme when it actually changes — calling ctx.set_style() every
         // frame invalidates egui's text cache and forces a full re-layout each frame.
-        if self.last_applied_theme != self.config.theme {
-            self.last_applied_theme = self.config.theme.clone();
-            let theme = crate::theme::Theme::from_name(&self.config.theme);
+        if self.last_applied_theme != self.config_shared.theme {
+            self.last_applied_theme = self.config_shared.theme.clone();
+            let theme = crate::theme::Theme::from_name(&self.config_shared.theme);
             theme.apply(ctx);
         }
         // No periodic repaint — egui redraws on user interaction automatically.
@@ -761,7 +836,7 @@ impl eframe::App for GoOnApp {
         // Detect backend URL changes and reset chat cache
         let current_hash = {
             let mut hasher = DefaultHasher::new();
-            self.config.backend_url.hash(&mut hasher);
+            self.config_shared.backend_url.hash(&mut hasher);
             hasher.finish()
         };
         if current_hash != self.last_backend_url_hash {
@@ -771,11 +846,11 @@ impl eframe::App for GoOnApp {
 
         self.poll_backend_updates(ctx);
         self.maybe_refresh_backend();
-        self.has_providers = has_valid_providers(&self.config);
+        self.has_providers = has_valid_providers(self.config_shared.as_ref());
 
         let tabs = self.active_tabs_precomputed();
         if !tabs.contains(&self.active_tab) {
-            self.active_tab = if tabs.contains(&"monitor".to_string()) {
+            self.active_tab = if tabs.iter().any(|t| t == "monitor") {
                 "monitor".to_string()
             } else {
                 "settings".to_string()
@@ -852,7 +927,7 @@ impl eframe::App for GoOnApp {
         // Global keyboard shortcuts for tab switching
         let mut tab_shortcut: Option<String> = None;
         ctx.input_mut(|i| {
-            // Ctrl+1 through Ctrl+9 -> tabs[0..8], Ctrl+0 -> tabs[9]
+            // Command (macOS) / Ctrl (Windows, Linux) + number for tab switching.
             let tab_keys: [(egui::Key, usize); 10] = [
                 (egui::Key::Num1, 0),
                 (egui::Key::Num2, 1),
@@ -866,13 +941,16 @@ impl eframe::App for GoOnApp {
                 (egui::Key::Num0, 9),
             ];
             for (key, idx) in tab_keys {
-                if i.consume_key(egui::Modifiers::CTRL, key) && idx < tabs.len() {
+                let triggered = i.consume_key(egui::Modifiers::CTRL, key)
+                    || i.consume_key(egui::Modifiers::COMMAND, key);
+                if triggered && idx < tabs.len() {
                     tab_shortcut = Some(tabs[idx].clone());
                 }
             }
-            // Ctrl+, for settings
-            if i.consume_key(egui::Modifiers::CTRL, egui::Key::Comma)
-                && tabs.contains(&"settings".to_string())
+            // Command+, (macOS) / Ctrl+, (Windows, Linux) for settings
+            if (i.consume_key(egui::Modifiers::CTRL, egui::Key::Comma)
+                || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma))
+                && tabs.iter().any(|t| t == "settings")
             {
                 tab_shortcut = Some("settings".to_string());
             }
@@ -963,9 +1041,12 @@ impl eframe::App for GoOnApp {
                         &self.backend,
                         ctx,
                         autotune_chain_enabled,
-                        stability.chat_repaint_interval_ms,
-                        stability.chat_stream_chunk_flush_ms,
-                        stability.chat_max_pending_events_per_frame,
+                        ChatUiRuntimeConfig {
+                            repaint_interval_ms: stability.chat_repaint_interval_ms,
+                            stream_chunk_flush_ms: stability.chat_stream_chunk_flush_ms,
+                            max_pending_events_per_frame: stability
+                                .chat_max_pending_events_per_frame,
+                        },
                     );
                 }
                 "skills" => self.skills_view.show(
@@ -1078,28 +1159,28 @@ impl Drop for GoOnApp {
 impl GoOnApp {
     fn active_tabs_precomputed(&self) -> Vec<String> {
         let mut tabs = Vec::new();
-        if self.config.features.monitor {
+        if self.config_shared.features.monitor {
             tabs.push("monitor".into());
         }
-        if self.config.features.chat {
+        if self.config_shared.features.chat {
             tabs.push("chat".into());
         }
-        if self.config.features.skills {
+        if self.config_shared.features.skills {
             tabs.push("skills".into());
         }
-        if self.config.features.workflow {
+        if self.config_shared.features.workflow {
             tabs.push("workflow".into());
         }
-        if self.config.features.autotune {
+        if self.config_shared.features.autotune {
             tabs.push("autotune".into());
         }
-        if self.config.features.security {
+        if self.config_shared.features.security {
             tabs.push("security".into());
         }
-        if self.config.features.config {
+        if self.config_shared.features.config {
             tabs.push("config".into());
         }
-        if self.config.features.providers {
+        if self.config_shared.features.providers {
             tabs.push("providers".into());
         }
         tabs.push("about".into());

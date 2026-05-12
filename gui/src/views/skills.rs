@@ -806,12 +806,20 @@ impl SkillsView {
             return;
         }
 
-        let skills = self.skills.clone();
-        for skill in &skills {
+        let mut open_editor_for: Option<usize> = None;
+        for idx in 0..self.skills.len() {
+            let (skill_name_opt, skill_enabled, skill_version, skill_description) = {
+                let skill = &self.skills[idx];
+                (
+                    skill.name.clone(),
+                    skill.enabled,
+                    skill.version.clone(),
+                    skill.description.clone(),
+                )
+            };
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let name_text = skill
-                        .name
+                    let name_text = skill_name_opt
                         .as_deref()
                         .unwrap_or(i18n.t("skills.import.unnamed").as_ref())
                         .to_string();
@@ -822,7 +830,7 @@ impl SkillsView {
                             ui.close_menu();
                         }
                     });
-                    if let Some(enabled) = skill.enabled {
+                    if let Some(enabled) = skill_enabled {
                         let (color, label) = if enabled {
                             (egui::Color32::from_rgb(20, 120, 70), "●")
                         } else {
@@ -830,7 +838,7 @@ impl SkillsView {
                         };
                         ui.colored_label(color, label);
                     }
-                    if let Some(ver) = &skill.version {
+                    if let Some(ver) = &skill_version {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(format!("v{ver}"))
@@ -840,7 +848,7 @@ impl SkillsView {
                         });
                     }
                 });
-                if let Some(desc) = &skill.description {
+                if let Some(desc) = &skill_description {
                     let text = desc.clone();
                     let resp = ui.label(&text);
                     resp.context_menu(|ui| {
@@ -852,8 +860,8 @@ impl SkillsView {
                 }
                 if lifecycle_enabled {
                     ui.horizontal(|ui| {
-                        let name = skill.name.clone().unwrap_or_default();
-                        let is_enabled = skill.enabled.unwrap_or(true);
+                        let name = skill_name_opt.clone().unwrap_or_default();
+                        let is_enabled = skill_enabled.unwrap_or(true);
                         let toggle_label = if is_enabled {
                             i18n.t("skills.lifecycle.disable")
                         } else {
@@ -861,7 +869,7 @@ impl SkillsView {
                         };
                         if ui.button(i18n.t("skills.lifecycle.edit")).clicked() && !name.is_empty()
                         {
-                            self.load_skill_editor(skill);
+                            open_editor_for = Some(idx);
                         }
                         if ui.button(toggle_label).clicked() && !name.is_empty() {
                             self.sending = true;
@@ -1039,6 +1047,12 @@ impl SkillsView {
                 }
             });
             ui.add_space(4.0);
+        }
+
+        if let Some(idx) = open_editor_for {
+            if let Some(skill) = self.skills.get(idx).cloned() {
+                self.load_skill_editor(&skill);
+            }
         }
 
         if lifecycle_enabled && !self.selected_skill_name.is_empty() {

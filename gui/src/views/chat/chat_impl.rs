@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -13,6 +13,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const CHAT_DISABLE_MARKDOWN_RENDER: bool = false;
 const CHAT_STAGE6_ENABLE_MODE_ROW: bool = true;
 const CHAT_STAGE6_ENABLE_EXTRA_BUTTONS: bool = true;
+
+#[derive(Clone, Copy)]
+pub struct ChatUiRuntimeConfig {
+    pub repaint_interval_ms: u64,
+    pub stream_chunk_flush_ms: u64,
+    pub max_pending_events_per_frame: usize,
+}
 
 use super::types::{
     AiStatus, Attachment, GenerationState, Message, ModelPerfStats, PendingResponse, PhaseRecord,
@@ -76,6 +83,9 @@ pub struct ChatView {
     // Save serialization guards (AtomicBool ensures no concurrent file writes)
     session_save_in_flight: Arc<AtomicBool>,
     template_save_in_flight: Arc<AtomicBool>,
+    // Monotonic save epochs for coalescing frequent save requests.
+    session_save_epoch: Arc<AtomicU64>,
+    template_save_epoch: Arc<AtomicU64>,
     // Feature 6: multi-model
     selected_model: String,
     selected_models: Vec<String>,
@@ -356,6 +366,8 @@ impl ChatView {
             // Save guards
             session_save_in_flight: Arc::new(AtomicBool::new(false)),
             template_save_in_flight: Arc::new(AtomicBool::new(false)),
+            session_save_epoch: Arc::new(AtomicU64::new(0)),
+            template_save_epoch: Arc::new(AtomicU64::new(0)),
             // Feature 6
             selected_model: initial_model,
             selected_models: initial_models,
@@ -683,6 +695,8 @@ mod tests {
                 model: "auto".to_string(),
                 models: vec!["auto".to_string()],
                 phase_records: Vec::new(),
+                conversation_id: None,
+                branch_id: None,
             }],
             active_session: 0,
             input: String::new(),
@@ -719,11 +733,19 @@ mod tests {
             session_search_query: String::new(),
             session_save_in_flight: Arc::new(AtomicBool::new(false)),
             template_save_in_flight: Arc::new(AtomicBool::new(false)),
+            session_save_epoch: Arc::new(AtomicU64::new(0)),
+            template_save_epoch: Arc::new(AtomicU64::new(0)),
             selected_model: "auto".to_string(),
             selected_models: vec!["auto".to_string()],
             available_models: vec!["auto".to_string()],
             models_loaded: false,
             last_selected_agent: String::new(),
+            stream_chunk_flush_interval: std::time::Duration::from_millis(33),
+            stream_repaint_interval: std::time::Duration::from_millis(33),
+            max_pending_events_per_frame: 256,
+            enable_markdown: true,
+            show_token_details: true,
+            model_stats: std::collections::HashMap::new(),
         }
     }
 
@@ -785,6 +807,8 @@ mod tests {
             model: "auto".to_string(),
             models: vec!["auto".to_string()],
             phase_records: Vec::new(),
+            conversation_id: None,
+            branch_id: None,
         });
         let i18n = I18n::new(Lang::ZhCn);
 

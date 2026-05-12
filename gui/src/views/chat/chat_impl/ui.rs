@@ -38,8 +38,7 @@ impl ChatView {
             return;
         }
 
-        let current_model = self.selected_model.clone();
-        let Some(stats) = self.model_stats.get(&current_model) else {
+        let Some(stats) = self.model_stats.get(&self.selected_model) else {
             return;
         };
 
@@ -116,14 +115,12 @@ impl ChatView {
         backend: &BackendClient,
         ctx: &egui::Context,
         autotune_chain_enabled: bool,
-        chat_repaint_interval_ms: u64,
-        chat_stream_chunk_flush_ms: u64,
-        chat_max_pending_events_per_frame: usize,
+        runtime_config: ChatUiRuntimeConfig,
     ) {
         self.apply_stability_settings(
-            chat_repaint_interval_ms,
-            chat_stream_chunk_flush_ms,
-            chat_max_pending_events_per_frame,
+            runtime_config.repaint_interval_ms,
+            runtime_config.stream_chunk_flush_ms,
+            runtime_config.max_pending_events_per_frame,
         );
 
         // Process any pending async responses (non-blocking)
@@ -687,11 +684,15 @@ impl ChatView {
 
             // ── Global keyboard shortcuts ─────────
             ui.input_mut(|i| {
-                if i.consume_key(egui::Modifiers::CTRL, egui::Key::N) {
+                if i.consume_key(egui::Modifiers::CTRL, egui::Key::N)
+                    || i.consume_key(egui::Modifiers::COMMAND, egui::Key::N)
+                {
                     self.new_session();
                     self.refresh_default_session_names(i18n);
                 }
-                if i.consume_key(egui::Modifiers::CTRL, egui::Key::L) {
+                if i.consume_key(egui::Modifiers::CTRL, egui::Key::L)
+                    || i.consume_key(egui::Modifiers::COMMAND, egui::Key::L)
+                {
                     self.input.clear();
                 }
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
@@ -788,10 +789,10 @@ impl ChatView {
                             .args(["/c", "start", "", &config_dir.display().to_string()])
                             .spawn();
                         #[cfg(target_os = "macos")]
-                        let _ = std::process::Command::new("open").arg(&config_dir).spawn();
+                        let _ = std::process::Command::new("open").arg(config_dir).spawn();
                         #[cfg(target_os = "linux")]
                         let _ = std::process::Command::new("xdg-open")
-                            .arg(&config_dir)
+                            .arg(config_dir)
                             .spawn();
                         #[cfg(not(any(
                             target_os = "windows",
@@ -799,7 +800,7 @@ impl ChatView {
                             target_os = "linux"
                         )))]
                         let _ = std::process::Command::new("xdg-open")
-                            .arg(&config_dir)
+                            .arg(config_dir)
                             .spawn();
                     }
                 }
@@ -1144,31 +1145,58 @@ impl ChatView {
                             ui.set_max_width(max_bubble_width - 20.0);
                             let trunc_hint = i18n.t("chat.largeMessageTruncated").to_string();
                             Self::render_markdown(
-                                    ui,
-                                    &display_text,
-                                    &i18n.t("chat.copyCode"),
-                                    self.enable_markdown,
-                                    text_color,
-                                    &trunc_hint,
-                                );
+                                ui,
+                                &display_text,
+                                &i18n.t("chat.copyCode"),
+                                self.enable_markdown,
+                                text_color,
+                                &trunc_hint,
+                            );
 
-                                // ── Collapsible thinking content (AI only) ──
+                            // ── Collapsible thinking content (AI only) ──
                             if !msg.thinking.is_empty() && !is_user {
                                 ui.add_space(6.0);
-                                let thinking_id = egui::Id::new((msg.timestamp, "thinking"));
-                                let state = egui::collapsing_header::CollapsingState::load_with_default_open(
-                                    ui.ctx(),
-                                    thinking_id,
-                                    false,
-                                );
-                                let header_resp = state.show_header(ui, |ui| {
-                                    ui.label(
-                                        egui::RichText::new(i18n.t("chat.thinkingLabel"))
-                                            .size(11.0)
-                                            .color(egui::Color32::from_rgb(120, 122, 135)),
-                                    );
-                                });
-                                header_resp.body(|ui| {
+
+                                // Use a stable and unique id to avoid collisions across messages/models.
+                                let thinking_id = egui::Id::new((
+                                    "thinking",
+                                    self.active_session,
+                                    msg_idx,
+                                    msg.timestamp,
+                                    &msg.model,
+                                ));
+
+                                let preview_len = 64usize;
+                                let mut thinking_chars = msg.thinking.chars();
+                                let thinking_preview: String =
+                                    thinking_chars.by_ref().take(preview_len).collect();
+                                let has_more = thinking_chars.next().is_some();
+                                let thinking_preview = if has_more {
+                                    format!("{}…", thinking_preview)
+                                } else {
+                                    thinking_preview
+                                };
+
+                                egui::CollapsingHeader::new(
+                                    egui::RichText::new(i18n.t("chat.thinkingLabel"))
+                                        .size(11.0)
+                                        .color(egui::Color32::from_rgb(120, 122, 135)),
+                                )
+                                .id_salt(thinking_id)
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(&thinking_preview)
+                                                .size(10.0)
+                                                .color(egui::Color32::from_rgb(130, 132, 145)),
+                                        );
+                                        if ui.button(i18n.t("common.copyButton")).clicked() {
+                                            ui.ctx().copy_text(msg.thinking.clone());
+                                        }
+                                    });
+                                    ui.add_space(4.0);
+
                                     egui::Frame::new()
                                         .fill(egui::Color32::from_rgba_premultiplied(
                                             128, 128, 128, 20,
@@ -1176,14 +1204,19 @@ impl ChatView {
                                         .corner_radius(4.0)
                                         .inner_margin(egui::Margin::symmetric(8i8, 6i8))
                                         .show(ui, |ui| {
-                                            Self::render_markdown(
-                                                    ui,
-                                                    &msg.thinking,
-                                                    &i18n.t("chat.copyCode"),
-                                                    self.enable_markdown,
-                                                    egui::Color32::from_rgb(140, 142, 155),
-                                                    &trunc_hint,
-                                                );
+                                            egui::ScrollArea::vertical()
+                                                .max_height(180.0)
+                                                .auto_shrink([false, true])
+                                                .show(ui, |ui| {
+                                                    Self::render_markdown(
+                                                        ui,
+                                                        &msg.thinking,
+                                                        &i18n.t("chat.copyCode"),
+                                                        self.enable_markdown,
+                                                        egui::Color32::from_rgb(140, 142, 155),
+                                                        &trunc_hint,
+                                                    );
+                                                });
                                         });
                                 });
                             }

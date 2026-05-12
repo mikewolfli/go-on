@@ -547,7 +547,8 @@ pub(crate) async fn process_chat_request(
     let mut schema_warnings: Vec<String> = Vec::new();
     let mut schema_error: Option<String> = None;
     let app_config = flow.config();
-    let requested_phase = params.phase.clone();
+    // Avoid cloning by computing phase choice once
+    let requested_phase = params.phase.as_ref();
     let adaptive_phase = if requested_phase.is_none() {
         infer_adaptive_phase(app_config.as_ref(), &params.mode, &params.messages)
     } else {
@@ -559,24 +560,18 @@ pub(crate) async fn process_chat_request(
         None
     };
 
-    let mut resolved = flow.resolve(
-        requested_phase
-            .clone()
-            .or_else(|| controller_phase.clone())
-            .or_else(|| adaptive_phase.clone()),
-        registry.as_ref(),
-    )?;
+    // Compute final phase choice exactly once
+    let chosen_phase = requested_phase
+        .cloned()
+        .or_else(|| controller_phase.clone())
+        .or_else(|| adaptive_phase.clone());
+
+    let mut resolved = flow.resolve(chosen_phase.clone(), registry.as_ref())?;
     let original_count = resolved.agents.len();
     let unavailable_agents =
         filter_runtime_ready_agents(server, app_config.as_ref(), &mut resolved.agents).await;
     if resolved.agents.is_empty() {
-        resolved = flow.resolve(
-            requested_phase
-                .clone()
-                .or_else(|| controller_phase.clone())
-                .or_else(|| adaptive_phase.clone()),
-            registry.as_ref(),
-        )?;
+        resolved = flow.resolve(chosen_phase.clone(), registry.as_ref())?;
     } else if resolved.agents.len() < original_count {
         warn!(
             phase = %resolved.phase.phase_name,
@@ -2122,6 +2117,11 @@ async fn run_agent_collecting(
     })
 }
 
+// Stream event type constants to avoid repeated allocations
+const STREAM_EVENT_CHUNK: &str = "chunk";
+const STREAM_EVENT_DONE: &str = "done";
+const STREAM_EVENT_TELEMETRY: &str = "telemetry";
+
 async fn emit_stream_chunk(
     server: &AcpServer,
     observer: Option<&StreamObserver>,
@@ -2141,13 +2141,13 @@ async fn emit_stream_chunk(
         (token, "")
     };
 
-    if let Some(response_id) = observer.jsonrpc_response_id.clone() {
-        let response_id = Some(response_id);
+    // Use as_ref() to avoid cloning response_id
+    if let Some(response_id) = observer.jsonrpc_response_id.as_ref() {
         crate::acp::r#impl::io::send_notification(
             server,
             "chat.stream.chunk",
             stream_chunk_notification(
-                &response_id,
+                &Some(response_id.clone()),
                 meta.agent_name,
                 display_token,
                 chunk_index,
@@ -2178,7 +2178,7 @@ async fn emit_stream_chunk(
             payload["reasoning"] = json!(reasoning_token);
         }
         let _ = sender.send(StreamFrame {
-            event: "chunk".to_string(),
+            event: STREAM_EVENT_CHUNK.to_string(),
             payload,
         });
     }
@@ -2198,13 +2198,13 @@ async fn emit_stream_done(
         return Ok(());
     };
 
-    if let Some(response_id) = observer.jsonrpc_response_id.clone() {
-        let response_id = Some(response_id);
+    // Use as_ref() to avoid cloning response_id
+    if let Some(response_id) = observer.jsonrpc_response_id.as_ref() {
         crate::acp::r#impl::io::send_notification(
             server,
             "chat.stream.done",
             stream_done_notification(
-                &response_id,
+                &Some(response_id.clone()),
                 meta.agent_name,
                 chunk_index,
                 total_chars,
@@ -2220,7 +2220,7 @@ async fn emit_stream_done(
     if let Some(sender) = &observer.sse_sender {
         // NOTE: This SSE frame structure should match helpers/metrics::stream_done_notification
         let _ = sender.send(StreamFrame {
-            event: "done".to_string(),
+            event: STREAM_EVENT_DONE.to_string(),
             payload: json!({
                 "agent": meta.agent_name,
                 "chunks": chunk_index,
@@ -2246,8 +2246,9 @@ async fn emit_stream_token_economy(
         return Ok(());
     };
 
-    if let Some(response_id) = observer.jsonrpc_response_id.clone() {
-        let response_id = Some(response_id);
+    // Use as_ref() to avoid cloning response_id
+    if let Some(response_id) = observer.jsonrpc_response_id.as_ref() {
+        let response_id = Some(response_id.clone());
         crate::acp::r#impl::io::send_notification(
             server,
             "chat.stream.telemetry",
@@ -2264,7 +2265,7 @@ async fn emit_stream_token_economy(
 
     if let Some(sender) = &observer.sse_sender {
         let _ = sender.send(StreamFrame {
-            event: "telemetry".to_string(),
+            event: STREAM_EVENT_TELEMETRY.to_string(),
             payload: json!({
                 "agent": meta.agent_name,
                 "phase": meta.phase_name,
