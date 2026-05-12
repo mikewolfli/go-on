@@ -1129,7 +1129,7 @@ impl ChatView {
 
             // Clone content once — used for display_text AND context menu (avoids borrowing msg in closures)
             let ctx_content = msg.content.clone();
-            let ctx_plain = Self::markdown_to_plain_text(&ctx_content);
+            let _ctx_plain = Self::markdown_to_plain_text(&ctx_content);
 
             // Single clone: compute display_text once, keep content reference for context menu
             let display_text = if CHAT_DISABLE_MARKDOWN_RENDER {
@@ -1162,7 +1162,7 @@ impl ChatView {
             let msg_timestamp = msg.timestamp;
 
             // Helper to find real message index in session messages
-            let find_in_messages =
+            let _find_in_messages =
                 |msgs_slice: &[Message], ts: u64, content: &str| -> Option<usize> {
                     msgs_slice
                         .iter()
@@ -1173,22 +1173,73 @@ impl ChatView {
             // with mutable self access in context_menu (nested closure).
             let msg_thinking = msg.thinking.clone();
             let msg_has_thinking = !msg_thinking.is_empty() && !is_user;
-            let msg_timestamp_val = msg_timestamp;
-            let msg_model_val = msg.model.clone();
+            let _msg_timestamp_val = msg_timestamp;
+            let _msg_model_val = msg.model.clone();
             let enable_markdown_val = self.enable_markdown;
-            let active_session_val = self.active_session;
+            let _active_session_val = self.active_session;
             // All messages left-aligned — color differentiates user vs AI.
             ui.horizontal_top(|ui| {
                 Self::draw_role_avatar(ui, is_user);
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
                     ui.set_max_width(max_bubble_width);
-                    let bubble_resp = egui::Frame::new()
+                    egui::Frame::new()
                         .fill(bubble_color)
                         .corner_radius(8.0)
                         .inner_margin(egui::Margin::symmetric(10i8, 8i8))
                         .show(ui, |ui| {
                             ui.set_max_width(max_bubble_width - 20.0);
+
+                            // Inline action bar (no context_menu overlay that blocks clicks)
+                            let ctx_session_msgs = self.messages().to_vec();
+                            let _ctx_content = msg.content.clone();
+                            let _ctx_plain = Self::markdown_to_plain_text(&msg.content);
+                            let _copy = |s: &str| i18n.t(s).to_string();
+                            ui.horizontal(|ui| {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::TOP),
+                                    |ui| {
+                                        if ui
+                                            .button("📋")
+                                            .on_hover_text(i18n.t("chat.copyMessage"))
+                                            .clicked()
+                                        {
+                                            ui.ctx().copy_text(msg.content.clone());
+                                        }
+                                        if ui
+                                            .button("✏️")
+                                            .on_hover_text(i18n.t("chat.edit"))
+                                            .clicked()
+                                        {
+                                            if let Some(idx) =
+                                                ctx_session_msgs.iter().position(|m| {
+                                                    m.timestamp == msg_timestamp
+                                                        && m.content == msg.content
+                                                })
+                                            {
+                                                self.edit_msg_idx = Some(idx);
+                                                self.edit_msg_buf = msg.content.clone();
+                                            }
+                                        }
+                                        if ui
+                                            .button("🗑")
+                                            .on_hover_text(i18n.t("chat.delete"))
+                                            .clicked()
+                                        {
+                                            if let Some(idx) =
+                                                ctx_session_msgs.iter().position(|m| {
+                                                    m.timestamp == msg_timestamp
+                                                        && m.content == msg.content
+                                                })
+                                            {
+                                                self.remove_message_at(idx);
+                                                self.save_sessions_to_disk();
+                                            }
+                                        }
+                                    },
+                                );
+                            });
+
                             let trunc_hint = i18n.t("chat.largeMessageTruncated").to_string();
                             Self::render_markdown(
                                 ui,
@@ -1199,37 +1250,44 @@ impl ChatView {
                                 &trunc_hint,
                             );
 
-                            // ── Collapsible thinking content (AI only) ──
+                            // ── Thinking section: Button toggle instead of CollapsingHeader ──
+                            // (CollapsingHeader inside Frame may not receive clicks due to
+                            // bubble context_menu overlay, so we use a manual toggle.)
                             if msg_has_thinking {
                                 ui.add_space(6.0);
 
-                                // Use a stable and unique id to avoid collisions across messages/models.
-                                let thinking_id = egui::Id::new((
-                                    "thinking",
-                                    active_session_val,
-                                    msg_idx,
-                                    msg_timestamp_val,
-                                    &msg_model_val,
-                                ));
-
-                                // Clickable header with distinct visual
-                                let thinking_icon = "💭";
+                                let is_expanded = self.show_thinking_idx == Some(msg_idx);
+                                let toggle_icon = if is_expanded { "▼" } else { "▶" };
                                 let thinking_label = format!(
-                                    "{}  {}  ({})",
-                                    thinking_icon,
+                                    "{} {}  {}  ({})",
+                                    toggle_icon,
+                                    "💭",
                                     i18n.t("chat.thinkingLabel"),
                                     msg_thinking.chars().count()
                                 );
 
-                                egui::CollapsingHeader::new(
-                                    egui::RichText::new(thinking_label)
-                                        .size(11.0)
-                                        .color(egui::Color32::from_rgb(180, 140, 60)),
-                                )
-                                .id_salt(thinking_id)
-                                .default_open(false)
-                                .show(ui, |ui| {
-                                    // Show full thinking content when expanded
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            egui::RichText::new(&thinking_label)
+                                                .size(11.0)
+                                                .color(egui::Color32::from_rgb(180, 140, 60)),
+                                        )
+                                        .fill(egui::Color32::TRANSPARENT)
+                                        .corner_radius(4.0)
+                                        .min_size(egui::vec2(ui.available_width(), 18.0)),
+                                    )
+                                    .clicked()
+                                {
+                                    if is_expanded {
+                                        self.show_thinking_idx = None;
+                                    } else {
+                                        self.show_thinking_idx = Some(msg_idx);
+                                    }
+                                }
+
+                                if is_expanded {
+                                    ui.add_space(4.0);
                                     egui::Frame::new()
                                         .fill(egui::Color32::from_rgba_premultiplied(
                                             60, 50, 20, 30,
@@ -1262,62 +1320,9 @@ impl ChatView {
                                                 );
                                             });
                                         });
-                                });
-                            }
-                        })
-                        .response;
-
-                    // ── Context menu for message bubble ────────
-                    let ctx_msg_ts = msg_timestamp;
-                    let ctx_session_msgs = self.messages().to_vec();
-                    let copy_lbl = i18n.t("chat.copyMessage").to_string();
-                    let copy_plain_lbl = i18n.t("chat.copyPlain").to_string();
-                    let edit_lbl = i18n.t("chat.edit").to_string();
-                    let delete_lbl = i18n.t("chat.delete").to_string();
-                    let copy_json_lbl = i18n.t("chat.copyJson").to_string();
-                    bubble_resp.context_menu(|ui| {
-                        if ui.button(format!("📋 {copy_lbl}")).clicked() {
-                            ui.ctx().copy_text(ctx_content.clone());
-                            ui.close_menu();
-                        }
-                        if ui.button(format!("📝 {copy_plain_lbl}")).clicked() {
-                            ui.ctx().copy_text(ctx_plain.clone());
-                            ui.close_menu();
-                        }
-                        if ui.button(format!("✏️ {edit_lbl}")).clicked() {
-                            if let Some(real_idx) =
-                                find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
-                            {
-                                self.edit_msg_idx = Some(real_idx);
-                                self.edit_msg_buf = ctx_content.clone();
-                            }
-                            ui.close_menu();
-                        }
-                        if ui.button(format!("🗑 {delete_lbl}")).clicked() {
-                            if let Some(real_idx) =
-                                find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
-                            {
-                                if real_idx < ctx_session_msgs.len() {
-                                    self.remove_message_at(real_idx);
-                                    self.save_sessions_to_disk();
                                 }
                             }
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button(format!("📋 {copy_json_lbl}")).clicked() {
-                            if let Some(real_idx) =
-                                find_in_messages(&ctx_session_msgs, ctx_msg_ts, &ctx_content)
-                            {
-                                if let Some(target) = ctx_session_msgs.get(real_idx) {
-                                    if let Ok(json) = serde_json::to_string_pretty(target) {
-                                        ui.ctx().copy_text(json);
-                                    }
-                                }
-                            }
-                            ui.close_menu();
-                        }
-                    });
+                        });
                 });
             });
             ui.add_space(6.0);

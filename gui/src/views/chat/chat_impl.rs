@@ -52,6 +52,8 @@ pub struct ChatView {
     // Session rename (double-click on session name)
     rename_session_idx: Option<usize>,
     rename_session_buf: String,
+    // Track which message's thinking content is expanded
+    show_thinking_idx: Option<usize>,
     // Message edit
     edit_msg_idx: Option<usize>,
     edit_msg_buf: String,
@@ -340,6 +342,7 @@ impl ChatView {
             pending_tx,
             rename_session_idx: None,
             rename_session_buf: String::new(),
+            show_thinking_idx: None,
             edit_msg_idx: None,
             edit_msg_buf: String::new(),
             // Feature 4
@@ -648,6 +651,7 @@ impl ChatView {
         self.attachments.clear();
         self.edit_msg_idx = None;
         self.edit_msg_buf.clear();
+        self.show_thinking_idx = None;
         self.rename_session_idx = None;
         self.rename_session_buf.clear();
         self.selected_models = vec![self.selected_model.clone()];
@@ -737,6 +741,7 @@ mod tests {
             pending_tx,
             rename_session_idx: None,
             rename_session_buf: String::new(),
+            show_thinking_idx: None,
             edit_msg_idx: None,
             edit_msg_buf: String::new(),
             stop_requested: false,
