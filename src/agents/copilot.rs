@@ -175,8 +175,15 @@ impl CopilotAgent {
     ) -> Value {
         let model = option_string(&options, "model").unwrap_or_else(|| "copilot".to_string());
 
+        // Copilot API doesn't accept "auto" or "copilot" as valid model names.
+        // Map them to a concrete model that GitHub Copilot supports.
+        let mapped_model = match model.as_str() {
+            "auto" | "copilot" | "github-copilot" => "gpt-4o",
+            other => other,
+        };
+
         let mut payload = json!({
-            "model": model,
+            "model": mapped_model,
             "messages": messages,
             "stream": true
         });
@@ -198,8 +205,8 @@ impl CopilotAgent {
     }
 
     fn should_try_free_model(options: &Option<HashMap<String, Value>>) -> bool {
-        match option_string(options, "model") {
-            None => true,
+        match option_string(options, "model").as_deref() {
+            None | Some("") => true,
             Some(model) => {
                 let model = model.to_ascii_lowercase();
                 model == "auto" || model == "copilot"

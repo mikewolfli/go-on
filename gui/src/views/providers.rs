@@ -178,7 +178,7 @@ fn models_for_provider(provider: &str) -> &'static [&'static str] {
             "mistral-medium-latest",
             "mistral-large-latest",
         ],
-        "copilot" => &["auto", "github-copilot"],
+        "copilot" => &["auto", "gpt-4o", "gpt-4o-mini"],
         "facewall" | "langboat" | "skywork" | "xihu" | "deepquest" | "fireworks" | "loopai"
         | "titan" => &["auto"],
         "stepfun" => &["auto", "step-2-16k", "step-1-32k"],

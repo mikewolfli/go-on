@@ -1214,6 +1214,17 @@ impl ChatView {
                             let _ctx_content = msg.content.clone();
                             let _ctx_plain = Self::markdown_to_plain_text(&msg.content);
                             let _copy = |s: &str| i18n.t(s).to_string();
+                            // Show agent/model name above assistant messages
+                            if !is_user && !_msg_model_val.is_empty() {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(2.0);
+                                    ui.colored_label(
+                                        egui::Color32::from_rgb(130, 140, 160),
+                                        &_msg_model_val,
+                                    );
+                                });
+                            }
+
                             ui.horizontal(|ui| {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::TOP),

@@ -1116,10 +1116,34 @@ pub(crate) async fn process_chat_request(
         }
     }
 
+    // ── Model-based agent routing ────────────────────────────────────
+    // When user picks a specific model (e.g. "deepseek-v4-flash"), replace
+    // resolved.agents with only the matching agent(s) so we don't waste time
+    // on unrelated providers.  When model is "auto" or empty, keep phase list.
+    let model_is_specific = base_agent_options
+        .get("model")
+        .and_then(|v| v.as_str())
+        .is_some_and(|m| !m.is_empty() && m != "auto");
+
+    if model_is_specific {
+        let model = base_agent_options
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let model_lower = model.to_ascii_lowercase();
+        // Keep only agents whose name is a prefix of or contained in the model string.
+        // e.g. "deepseek" matches "deepseek-v4-flash", "openai" matches "gpt-4o".
+        resolved.agents.retain(|(name, _)| {
+            let name_lower = name.to_ascii_lowercase();
+            model_lower.starts_with(&name_lower) || name_lower.starts_with(&model_lower)
+        });
+    }
+
     if !cache_hit {
         for (agent_name, agent) in resolved.agents {
             let attempt_started = std::time::Instant::now();
 
+            // Skip unhealthy agents
             if let Some(ref cb) = server.capability_bus {
                 if !cb.is_agent_healthy(&agent_name) {
                     agent_attempts.push(json!({
@@ -1133,12 +1157,7 @@ pub(crate) async fn process_chat_request(
                 }
             }
 
-            let mut per_attempt_options = base_agent_options.clone();
-            if agent_name.eq_ignore_ascii_case("copilot")
-                && !per_attempt_options.contains_key("model")
-            {
-                per_attempt_options.insert("model".to_string(), json!("auto"));
-            }
+            let per_attempt_options = base_agent_options.clone();
 
             let model_name = per_attempt_options
                 .get("model")
@@ -1227,7 +1246,10 @@ pub(crate) async fn process_chat_request(
                             attempt_started.elapsed().as_millis() as u64,
                         );
                     }
-                    last_err = Some(err);
+                    // Wrap the error with agent name so GUI can display which agent failed.
+                    let agent_label = agent_name.clone();
+                    let enriched_err = anyhow::anyhow!("{}: {}", agent_label, err);
+                    last_err = Some(enriched_err);
                 }
             }
         }
