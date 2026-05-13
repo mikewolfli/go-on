@@ -389,6 +389,35 @@ fn extract_token(value: &Value) -> Option<String> {
         }
     }
 
+    // ── Reasoning / thinking content extraction ──────────────────────
+    // DeepSeek and some other OpenAI-compatible APIs return thinking/
+    // reasoning tokens in delta.reasoning_content (streaming) or
+    // message.reasoning_content (non-streaming). We prefix these with
+    // __thinking__ so the chat handler can separate them from the main
+    // response and stream them as "reasoning" SSE events.
+    if let Some(thinking) = value
+        .get("choices")
+        .and_then(|v| v.get(0))
+        .and_then(|v| v.get("delta"))
+        .and_then(|v| v.get("reasoning_content"))
+        .and_then(|v| v.as_str())
+    {
+        if !thinking.is_empty() {
+            return Some(format!("__thinking__{}", thinking));
+        }
+    }
+    if let Some(thinking) = value
+        .get("choices")
+        .and_then(|v| v.get(0))
+        .and_then(|v| v.get("message"))
+        .and_then(|v| v.get("reasoning_content"))
+        .and_then(|v| v.as_str())
+    {
+        if !thinking.is_empty() {
+            return Some(format!("__thinking__{}", thinking));
+        }
+    }
+
     // ── Standard content extraction ───────────────────────────────────
     if let Some(token) = value
         .get("choices")

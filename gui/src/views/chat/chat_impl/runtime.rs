@@ -730,6 +730,10 @@ impl ChatView {
                                     m.content.push_str(&token);
                                 }
                                 if !reasoning.is_empty() {
+                                    // First reasoning token -> auto-expand thinking panel
+                                    if m.thinking.is_empty() {
+                                        self.show_thinking_idx = Some(idx);
+                                    }
                                     m.thinking.push_str(&reasoning);
                                 }
                             }
@@ -870,6 +874,9 @@ impl ChatView {
                     self.sending = !self.generation_states.is_empty();
                     self.ai_status = AiStatus::Error;
                     self.stop_requested = false;
+                }
+                PendingResponse::UiMessage(msg) => {
+                    self.error = msg;
                 }
             }
         }

@@ -1523,6 +1523,9 @@ impl ProvidersView {
                             eprintln!("[poll] device_code={}, HTTPS_PROXY={}", &device_code[..8.min(device_code.len())], proxy_url);
                         }
                         tokio::spawn(async move {
+                            // Build a reqwest client with proxy support.
+                            // If proxy fails, fall back to a client with SSL verification
+                            // disabled (some corporate/VPN environments have cert issues).
                             fn try_proxy_client() -> reqwest::Client {
                                 let proxy_urls = [
                                     "http://127.0.0.1:15732",
@@ -1549,6 +1552,14 @@ impl ProvidersView {
                                             return client;
                                         }
                                     }
+                                }
+                                // Fallback: try with SSL verification disabled
+                                // (some environments have corporate cert issues)
+                                if let Ok(client) = reqwest::Client::builder()
+                                    .danger_accept_invalid_certs(true)
+                                    .build()
+                                {
+                                    return client;
                                 }
                                 reqwest::Client::new()
                             }

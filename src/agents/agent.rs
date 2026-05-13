@@ -36,26 +36,48 @@ use crate::core::error::Result as AppResult;
 use crate::config::{AgentConfig, AppConfig};
 use crate::pua::PuaExecutionReport;
 
-/// Return an i18n'd error message for a failed provider chat request.
-/// All provider files use this instead of hardcoding their own error string.
+/// Return an error message for a failed provider chat request.
+/// Tries i18n first, falls back to hardcoded English template so errors
+/// are always readable even when the i18n system is not yet initialized.
 pub fn chat_request_failed_msg(provider: &str, status: &str, body: &str) -> String {
-    crate::i18n::runtime::tf(
+    let msg = crate::i18n::runtime::tf(
         "error.agent_chat_failed",
         &[("provider", provider), ("status", status), ("body", body)],
-    )
+    );
+    // If tf() returned the raw key, i18n is not available — use hardcoded fallback
+    if msg == "error.agent_chat_failed" {
+        format!("{} chat request failed with {}: {}", provider, status, body)
+    } else {
+        msg
+    }
 }
 
-/// Return an i18n'd error message for a failed provider request (fallback, no status).
+/// Return an error message for a failed provider request (fallback, no status).
+/// Tries i18n first, falls back to hardcoded English.
 pub fn request_failed_msg(provider: &str) -> String {
-    crate::i18n::runtime::tf("error.request_failed", &[("provider", provider)])
+    let msg = crate::i18n::runtime::tf("error.request_failed", &[("provider", provider)]);
+    if msg == "error.request_failed" {
+        format!("{} request failed", provider)
+    } else {
+        msg
+    }
 }
 
-/// Return an i18n'd error message for a token request failure.
+/// Return an error message for a token request failure.
+/// Tries i18n first, falls back to hardcoded English.
 pub fn token_request_failed_msg(provider: &str, status: &str, body: &str) -> String {
-    crate::i18n::runtime::tf(
+    let msg = crate::i18n::runtime::tf(
         "error.agent_token_failed",
         &[("provider", provider), ("status", status), ("body", body)],
-    )
+    );
+    if msg == "error.agent_token_failed" {
+        format!(
+            "{} token request failed with {}: {}",
+            provider, status, body
+        )
+    } else {
+        msg
+    }
 }
 
 /// Agent task envelope (Phase 0/1 discipline)

@@ -116,6 +116,7 @@ pub enum PendingResponse {
     },
     Phases(Vec<String>),
     Models(Vec<String>),
+    UiMessage(String),
 }
 
 /// Model performance statistics for caching and analysis

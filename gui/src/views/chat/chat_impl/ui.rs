@@ -175,9 +175,17 @@ impl ChatView {
                     ui.label(egui::RichText::new(title).strong().size(11.0));
                     ui.label(format!("{}: {}", i18n.t("chat.riskDecisionState"), label));
                     ui.label(format!("{}: {}", strategy_label, strategy));
-                    ui.label(format!("{}: {}", i18n.t("chat.riskDecisionReview"), review_label));
+                    ui.label(format!(
+                        "{}: {}",
+                        i18n.t("chat.riskDecisionReview"),
+                        review_label
+                    ));
                     if !reasons.is_empty() {
-                        ui.label(format!("{}: {}", i18n.t("chat.riskDecisionReasons"), reasons));
+                        ui.label(format!(
+                            "{}: {}",
+                            i18n.t("chat.riskDecisionReasons"),
+                            reasons
+                        ));
                     }
                 });
             });
@@ -482,7 +490,7 @@ impl ChatView {
             .min_width(140.0)
             .max_width(400.0)
             .show_inside(ui, |ui| {
-                self.show_sidebar(ui, i18n);
+                self.show_sidebar(ui, i18n, backend, ctx);
             });
 
         // Right side: use the remaining space with a manual vertical layout.
@@ -806,7 +814,13 @@ impl ChatView {
     }
 
     // ── Sidebar: session list ───────────────────────────────────
-    fn show_sidebar(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
+    fn show_sidebar(
+        &mut self,
+        ui: &mut egui::Ui,
+        i18n: &I18n,
+        backend: &BackendClient,
+        ctx: &egui::Context,
+    ) {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.label(i18n.t("chat.title"));
@@ -957,10 +971,41 @@ impl ChatView {
                 if user_msgs.is_empty() {
                     self.error = i18n.t("chat.noMessagesForWorkflow").to_string();
                 } else {
-                    // The actual async call is in the process_pending flow
-                    // For now, show feedback that workflow generation was triggered
-                    self.error = i18n.t("chat.workflowGenerationStarted").to_string();
-                    // In a full implementation, this would call workflow.generate_from_chat RPC
+                    // Build the task from conversation history
+                    let task = user_msgs.join("\n---\n");
+                    let backend_clone = backend.clone();
+                    let tx = self.pending_tx.clone();
+                    let ctx_clone = ctx.clone();
+                    let success_tpl = i18n.t("chat.workflowGenerated").to_string();
+                    let failed_tpl = i18n.t("chat.workflowGenError").to_string();
+                    tokio::spawn(async move {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(60),
+                            backend_clone.execute_workflow(&task, None, None),
+                        )
+                        .await
+                        {
+                            Ok(Ok(value)) => {
+                                let msg = if let Some(id) =
+                                    value.get("run_id").and_then(|v| v.as_str())
+                                {
+                                    success_tpl.replace("{workflow}", id)
+                                } else {
+                                    success_tpl.replace("{workflow}", "OK")
+                                };
+                                let _ = tx.send(PendingResponse::UiMessage(msg));
+                            }
+                            Ok(Err(e)) => {
+                                let msg = failed_tpl.replace("{error}", &e);
+                                let _ = tx.send(PendingResponse::UiMessage(msg));
+                            }
+                            Err(_) => {
+                                let msg = failed_tpl.replace("{error}", "timeout");
+                                let _ = tx.send(PendingResponse::UiMessage(msg));
+                            }
+                        }
+                        ctx_clone.request_repaint();
+                    });
                 }
             }
             ui.separator();
@@ -1366,41 +1411,98 @@ impl ChatView {
                                 Self::render_risk_decision_summary(ui, i18n, risk_decision);
                             }
 
-                            // ── Thinking section: Button toggle instead of CollapsingHeader ──
-                            // (CollapsingHeader inside Frame may not receive clicks due to
-                            // bubble context_menu overlay, so we use a manual toggle.)
+                            // ── Thinking section (Cherry Studio style) ──
+                            // Uses a styled header bar with toggle icon, label, and stats.
+                            // Click anywhere on the bar to expand/collapse the thinking content.
                             if msg_has_thinking {
                                 ui.add_space(6.0);
 
                                 let is_expanded = self.show_thinking_idx == Some(msg_idx);
                                 let toggle_icon = if is_expanded { "▼" } else { "▶" };
-                                let thinking_label = format!(
-                                    "{} {}  {}  ({})",
-                                    toggle_icon,
-                                    "💭",
-                                    i18n.t("chat.thinkingLabel"),
-                                    msg_thinking.chars().count()
-                                );
+                                let char_count = msg_thinking.chars().count();
 
-                                let thinking_color = if dark {
-                                    egui::Color32::from_rgb(180, 140, 60)
+                                // Theme-aware colors for the thinking header
+                                let (bar_bg, bar_border, bar_text, accent) = if dark {
+                                    (
+                                        egui::Color32::from_rgba_premultiplied(80, 60, 20, 50),
+                                        egui::Color32::from_rgba_premultiplied(180, 140, 60, 80),
+                                        egui::Color32::from_rgb(200, 170, 80),
+                                        egui::Color32::from_rgb(220, 180, 70),
+                                    )
                                 } else {
-                                    egui::Color32::from_rgb(140, 100, 40)
+                                    (
+                                        egui::Color32::from_rgba_premultiplied(255, 245, 220, 120),
+                                        egui::Color32::from_rgba_premultiplied(200, 170, 100, 100),
+                                        egui::Color32::from_rgb(140, 100, 40),
+                                        egui::Color32::from_rgb(180, 140, 50),
+                                    )
                                 };
 
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            egui::RichText::new(&thinking_label)
-                                                .size(11.0)
-                                                .color(thinking_color),
-                                        )
-                                        .fill(egui::Color32::TRANSPARENT)
-                                        .corner_radius(4.0)
-                                        .min_size(egui::vec2(ui.available_width(), 18.0)),
+                                // Header bar: clickable frame with toggle icon, emoji, label, stats
+                                let header_id = ui.next_auto_id();
+                                let header_rect = {
+                                    let mut header_frame = egui::Frame::new()
+                                        .fill(bar_bg)
+                                        .stroke(egui::Stroke::new(1.0, bar_border))
+                                        .corner_radius(6.0);
+                                    if is_expanded {
+                                        // Flat bottom when expanded so content blends
+                                        header_frame =
+                                            header_frame.corner_radius(egui::CornerRadius {
+                                                nw: 6,
+                                                ne: 6,
+                                                sw: 0,
+                                                se: 0,
+                                            });
+                                    }
+                                    header_frame
+                                        .inner_margin(egui::Margin::symmetric(10i8, 6i8))
+                                        .show(ui, |ui| {
+                                            ui.set_min_width(ui.available_width());
+                                            ui.horizontal(|ui| {
+                                                // Toggle icon + emoji + label
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "{} 💭  {}",
+                                                        toggle_icon,
+                                                        i18n.t("chat.thinkingLabel")
+                                                    ))
+                                                    .size(12.0)
+                                                    .color(bar_text)
+                                                    .strong(),
+                                                );
+                                                // Spacer to push stats to the right
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(
+                                                        egui::Align::Center,
+                                                    ),
+                                                    |ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "{} chars",
+                                                                char_count
+                                                            ))
+                                                            .size(10.0)
+                                                            .color(accent),
+                                                        );
+                                                    },
+                                                );
+                                            });
+                                        })
+                                        .response
+                                        .rect
+                                };
+
+                                // Click detection on the header area
+                                let header_clicked = ui
+                                    .interact(
+                                        header_rect,
+                                        header_id.with("think_toggle"),
+                                        egui::Sense::click(),
                                     )
-                                    .clicked()
-                                {
+                                    .clicked();
+
+                                if header_clicked {
                                     if is_expanded {
                                         self.show_thinking_idx = None;
                                     } else {
@@ -1408,17 +1510,28 @@ impl ChatView {
                                     }
                                 }
 
+                                // Expanded thinking content area
                                 if is_expanded {
-                                    ui.add_space(4.0);
-                                    let think_bg = if dark {
-                                        egui::Color32::from_rgba_premultiplied(60, 50, 20, 30)
+                                    let content_bg = if dark {
+                                        egui::Color32::from_rgba_premultiplied(50, 40, 15, 40)
                                     } else {
-                                        egui::Color32::from_rgba_premultiplied(255, 240, 200, 40)
+                                        egui::Color32::from_rgba_premultiplied(255, 248, 230, 180)
+                                    };
+                                    let content_border = if dark {
+                                        egui::Color32::from_rgba_premultiplied(180, 140, 60, 40)
+                                    } else {
+                                        egui::Color32::from_rgba_premultiplied(200, 170, 100, 60)
                                     };
                                     egui::Frame::new()
-                                        .fill(think_bg)
-                                        .corner_radius(6.0)
-                                        .inner_margin(egui::Margin::symmetric(8i8, 6i8))
+                                        .fill(content_bg)
+                                        .stroke(egui::Stroke::new(1.0, content_border))
+                                        .corner_radius(egui::CornerRadius {
+                                            nw: 0,
+                                            ne: 0,
+                                            sw: 6,
+                                            se: 6,
+                                        })
+                                        .inner_margin(egui::Margin::symmetric(12i8, 10i8))
                                         .show(ui, |ui| {
                                             Self::render_markdown(
                                                 ui,
@@ -1435,7 +1548,12 @@ impl ChatView {
                                                     ),
                                                     |ui| {
                                                         if ui
-                                                            .button(i18n.t("common.copyButton"))
+                                                            .button(
+                                                                egui::RichText::new(
+                                                                    i18n.t("common.copyButton"),
+                                                                )
+                                                                .size(11.0),
+                                                            )
                                                             .clicked()
                                                         {
                                                             ui.ctx()
