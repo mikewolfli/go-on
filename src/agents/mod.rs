@@ -178,6 +178,24 @@ pub fn apply_openai_common_options(payload: &mut Value, options: &Option<HashMap
             payload[*key] = value.clone();
         }
     }
+
+    // ── Universal tools schema patch ─────────────────────────────────
+    // Some APIs (e.g. GitHub Copilot) strictly validate that every
+    // function's `parameters` object has a `properties` field.
+    // Agent-generated tool definitions may omit it, so we ensure it exists.
+    if let Some(tools) = payload.get_mut("tools").and_then(|t| t.as_array_mut()) {
+        for tool in tools.iter_mut() {
+            if let Some(params) = tool
+                .get_mut("function")
+                .and_then(|f| f.get_mut("parameters"))
+                .and_then(|p| p.as_object_mut())
+            {
+                if !params.contains_key("properties") {
+                    params.insert("properties".to_string(), Value::Object(Default::default()));
+                }
+            }
+        }
+    }
 }
 
 /// SSE event action
