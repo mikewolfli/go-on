@@ -1,5 +1,5 @@
 ﻿use super::*;
-use crate::config::RuntimeConfig;
+// RuntimeConfig import removed after unsafe code removal in handle_config_reload
 use crate::protocol::access_mode::{normalize_protocol_mode, resolve_access_selection};
 
 pub(super) fn governance_rule_fingerprint(config_path: Option<&str>) -> Value {
@@ -329,17 +329,12 @@ pub(super) async fn handle_config_reload(
     let config_path = std::path::PathBuf::from(&path);
     let config = AppConfig::load(&config_path)?;
 
-    // Actually apply the new config to runtime state
-    // SAFETY: handle_config_reload is the only writer of runtime_config.
-    // All readers access it through the &AcpServer reference immutably,
-    // and this is the only mutation which occurs during config reload.
-    #[allow(invalid_reference_casting)]
-    if let Some(ref runtime_cfg) = config.runtime {
-        unsafe {
-            let ptr = &server.runtime_config as *const RuntimeConfig as *mut RuntimeConfig;
-            (*ptr) = runtime_cfg.clone();
-        }
-    }
+    // Runtime config update from reload is not yet implemented.
+    // Currently, handle_config_reload validates and returns the new config
+    // but does not update server.runtime_config. To implement:
+    //   1. Wrap server.runtime_config in Mutex<RuntimeConfig>
+    //   2. Update it here
+    //   3. Notify relevant subsystems of the change
 
     let report = validate_runtime_readiness(&config_path, &config)?;
     let warnings = report.warning_messages();

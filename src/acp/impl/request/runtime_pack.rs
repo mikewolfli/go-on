@@ -4273,11 +4273,11 @@ pub(super) fn load_governance_audit_events(limit: usize) -> Result<Vec<Governanc
     }
 
     let path = Path::new(GOVERNANCE_AUDIT_DIR).join(GOVERNANCE_AUDIT_FILE);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let content = fs::read_to_string(path)?;
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
     let mut events = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();

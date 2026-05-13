@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! BLUE38 F-GAP-24: Continuous Learning Center
 //!
 //! A thread-safe continuous learning center that prevents catastrophic forgetting
@@ -16,12 +18,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Configuration for the learning center.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // F-GAP-08 — planned wiring
 pub struct LearningCenterConfig {
     /// Maximum number of experiences stored before oldest are evicted.
     pub max_experiences: usize,
     /// Interval in milliseconds between automatic consolidation runs.
-    #[allow(dead_code)] // F-GAP-08 — planned wiring
     pub consolidation_interval_ms: u64,
     /// Number of experiences sampled in each replay batch.
     pub replay_batch_size: usize,
@@ -64,14 +64,12 @@ pub struct LearningExperience {
 
 /// Extra annotations attached to a recorded experience.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[allow(dead_code)] // F-GAP-08 — planned wiring
 pub struct ExperienceContext {
     pub tags: Vec<String>,
     pub metadata: HashMap<String, String>,
 }
 
 impl ExperienceContext {
-    #[allow(dead_code)] // F-GAP-08 — planned wiring
     pub fn new(tags: Vec<String>, metadata: HashMap<String, String>) -> Self {
         Self { tags, metadata }
     }
@@ -118,14 +116,12 @@ pub struct LearningCenterProfile {
     pub catastrophic_forgetting_events: u64,
 }
 
-#[allow(dead_code)] // F-GAP-08 — planned wiring
 type ConsolidationGroupEntry = (String, f64, bool, Vec<String>);
 
 // ---------------------------------------------------------------------------
 // Inner state
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)] // F-GAP-08 — planned wiring
 struct LearningCenterInner {
     config: LearningCenterConfig,
     experiences: VecDeque<LearningExperience>,
@@ -139,7 +135,6 @@ struct LearningCenterInner {
 }
 
 impl LearningCenterInner {
-    #[allow(dead_code)] // F-GAP-08 — planned wiring
     fn importance(reward: f64, now_ms: u64, timestamp_ms: u64) -> f64 {
         let reward_magnitude = reward.abs();
         let age_ms = now_ms.saturating_sub(timestamp_ms);
@@ -151,7 +146,6 @@ impl LearningCenterInner {
         (reward_magnitude * 0.6 + recency_factor * 0.4).clamp(0.0, 1.0)
     }
 
-    #[allow(dead_code)] // F-GAP-08 — planned wiring
     fn compute_trend(recent_rewards: &[f64]) -> String {
         let len = recent_rewards.len();
         if len < 20 {
@@ -171,7 +165,6 @@ impl LearningCenterInner {
         }
     }
 
-    #[allow(dead_code)] // F-GAP-08 — planned wiring
     fn linear_regression_slope(values: &[f64]) -> f64 {
         let n = values.len() as f64;
         if n < 2.0 {
@@ -206,12 +199,10 @@ fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// Thread-safe continuous learning center.
-#[allow(dead_code)] // F-GAP-08 — planned wiring
 pub struct ContinuousLearningCenter {
     inner: Arc<Mutex<LearningCenterInner>>,
 }
 
-#[allow(dead_code)] // F-GAP-08 — planned wiring
 impl ContinuousLearningCenter {
     /// Creates a new learning center with the given configuration.
     pub fn new(config: LearningCenterConfig) -> Self {
@@ -540,7 +531,6 @@ impl ContinuousLearningCenter {
     }
 
     /// Returns a copy of the current configuration.
-    #[allow(dead_code)] // F-GAP-08 — planned wiring
     pub fn config(&self) -> LearningCenterConfig {
         let inner = lock_guard(&self.inner);
         inner.config.clone()
@@ -552,7 +542,6 @@ impl ContinuousLearningCenter {
 // ---------------------------------------------------------------------------
 
 /// Returns the current timestamp in milliseconds since the Unix epoch.
-#[allow(dead_code)] // F-GAP-08 — planned wiring
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -561,7 +550,6 @@ fn now_ms() -> u64 {
 }
 
 /// Generates a monotonic unique ID with the given prefix.
-#[allow(dead_code)] // F-GAP-08 — planned wiring
 fn generate_id(prefix: &str, counter: &mut u64) -> String {
     let id = *counter;
     *counter += 1;

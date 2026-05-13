@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 // ──────────────────────────────────────────────
 // ForkSnapshot — serializable state snapshot
@@ -546,7 +547,7 @@ impl IntoIterator for ForkRegistry {
             .expect("ForkRegistry has multiple references")
             .into_inner()
             .unwrap_or_else(|e| {
-                eprintln!("ForkRegistry lock poisoned in into_iter, recovering");
+                warn!("ForkRegistry lock poisoned in into_iter, recovering");
                 e.into_inner()
             });
         inner.forks.into_iter()

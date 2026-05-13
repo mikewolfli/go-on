@@ -124,6 +124,10 @@ impl Default for FeatureToggles {
 ///   - System keyring is tried FIRST (no macOS prompt issue on modern keyring crate).
 ///   - api_key is ALSO stored in config as fallback (so key is never lost on any platform).
 ///   - At backend startup, keyring is checked first; if empty, config's api_key is used.
+///
+/// Multiple entries with the same `name` are allowed when they have different `label` values.
+/// The agent is identified as `{name}_{label}` in the backend config, allowing the same
+/// provider (e.g. "openai") to serve multiple models through distinct agent entries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub name: String,
@@ -132,6 +136,11 @@ pub struct ProviderConfig {
     pub api_key: String,
     pub model: String,
     pub validated: bool,
+    /// Optional unique label to distinguish multiple entries of the same provider.
+    /// When set, the backend agent name becomes `{name}_{label}`.
+    /// When empty, falls back to just `{name}` (legacy behavior).
+    #[serde(default)]
+    pub label: String,
 }
 
 impl Default for AppConfig {
@@ -235,11 +244,17 @@ pub fn load_app_config() -> AppConfig {
                     .get("validated")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true);
+                let label = old_p
+                    .get("label")
+                    .and_then(|l| l.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 config.providers.push(ProviderConfig {
                     name,
                     api_key,
                     model,
                     validated,
+                    label,
                 });
                 changed = true;
             }
@@ -310,6 +325,7 @@ pub fn load_app_config() -> AppConfig {
                         api_key: kk.clone(),
                         model: "auto".to_string(),
                         validated: true,
+                        label: String::new(),
                     });
                     changed = true;
                     eprintln!(

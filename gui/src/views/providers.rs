@@ -2,15 +2,16 @@ use crate::backend::{BackendClient, ProviderCapabilityModel};
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;
 use crate::views::security_prefs;
-use serde_json;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 pub struct ProvidersView {
     /// Selected provider name from a predefined list (for Add)
-    selected_provider: String,
+    pub selected_provider: String,
     new_key: String,
-    new_model: String,
+    pub new_model: String,
+    /// Label distinguishing multiple instances of the same provider
+    pub new_label: String,
     /// Index of provider being updated in existing list (-1 = none)
     update_target: isize,
     status: String,
@@ -150,6 +151,7 @@ impl ProvidersView {
             selected_provider: PROVIDER_NAMES[0].to_string(),
             new_key: String::new(),
             new_model: "auto".to_string(),
+            new_label: String::new(),
             update_target: -1,
             status: String::new(),
             sending: false,
@@ -308,6 +310,20 @@ impl ProvidersView {
                                 i18n.t("providers.auto_push_hint")
                             );
                         }
+                        // Label field: required when adding a second instance of the same provider
+                        ui.label(i18n.t("providers.label"));
+                        let existing_same = config.providers.iter().filter(|p| p.name == self.selected_provider).count();
+                        if existing_same > 0 {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(220, 160, 50),
+                                i18n.t("providers.labelRequiredHint"),
+                            );
+                        }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.new_label)
+                                .hint_text(if existing_same > 0 { i18n.t("providers.labelPlaceholderRequired") } else { i18n.t("providers.labelPlaceholder") })
+                                .desired_width(120.0),
+                        );
                         ui.label(i18n.t("providers.model"));
                         egui::ComboBox::from_id_salt("add_model_sel")
                             .selected_text({
@@ -372,11 +388,17 @@ impl ProvidersView {
                                 );
                             }
 
-                            let provider_exists = config.providers.iter().any(|p| p.name == name);
-                            if provider_exists {
-                                // Provider already exists — update key and model if a new key was provided
+                            // Check if adding a duplicate provider name.
+                            // If the user provides a label, it becomes a separate agent entry.
+                            // If no label, update the existing matching provider (or the first unlabeled one).
+                            let existing_count = config.providers.iter().filter(|p| p.name == name).count();
+                            let label = self.new_label.trim().to_string();
+
+                            if existing_count > 0 && label.is_empty() {
+                                // No label provided, but multiple instances exist or would exist —
+                                // update the first matching entry instead.
                                 if !key.is_empty() {
-                                    if let Some(existing) = config.providers.iter_mut().find(|p| p.name == name) {
+                                    if let Some(existing) = config.providers.iter_mut().find(|p| p.name == name && p.label.is_empty()) {
                                         existing.api_key = key.clone();
                                         existing.validated = true;
                                         if !model.is_empty() && model != "auto" {
@@ -438,11 +460,14 @@ impl ProvidersView {
                                     );
                                 }
                             } else {
+                                // New provider entry (possibly a labeled duplicate for multi-model)
+                                let label_clean = label.replace(' ', "_");
                                 config.providers.push(ProviderConfig {
                                     name: name.clone(),
                                     api_key: key.clone(),
                                     model: model.clone(),
                                     validated: true,
+                                    label: label_clean.clone(),
                                 });
                                 save_app_config(config);
                                 self.status = format!(
@@ -503,7 +528,12 @@ impl ProvidersView {
                 for (idx, provider) in config.providers.iter_mut().enumerate() {
                     egui::Frame::group(ui.style()).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(provider_label(i18n, &provider.name));
+                            let display_name = if provider.label.is_empty() {
+                                provider_label(i18n, &provider.name).to_string()
+                            } else {
+                                format!("{} ({})", provider_label(i18n, &provider.name), provider.label)
+                            };
+                            ui.label(&display_name);
                             let cached_key = crate::keyring_util::get_api_key_with_fallback(
                                 &provider.name.to_lowercase(),
                                 Some(&provider.api_key),

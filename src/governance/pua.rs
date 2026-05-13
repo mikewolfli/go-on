@@ -162,11 +162,11 @@ pub fn load_learning_records(
     }
 
     let file_path = storage_dir.join(LEARNING_RECORDS_FILE);
-    if !file_path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let content = fs::read_to_string(file_path)?;
+    let content = match fs::read_to_string(&file_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
     let mut records = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();

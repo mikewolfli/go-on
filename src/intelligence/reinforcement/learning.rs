@@ -103,22 +103,14 @@ pub fn persist_workflow_learning_event(
     ledger.ensure_ready()?;
 
     let latest_path = ledger.latest_path("spec", "latest-learning.json");
-    let mut existing = if latest_path.exists() {
-        std::fs::read_to_string(&latest_path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<WorkflowLearningBusArtifact>(&raw).ok())
-            .unwrap_or(WorkflowLearningBusArtifact {
-                generated_at: now_ts(),
-                total_events: 0,
-                events: Vec::new(),
-            })
-    } else {
-        WorkflowLearningBusArtifact {
+    let mut existing = std::fs::read_to_string(&latest_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<WorkflowLearningBusArtifact>(&raw).ok())
+        .unwrap_or(WorkflowLearningBusArtifact {
             generated_at: now_ts(),
             total_events: 0,
             events: Vec::new(),
-        }
-    };
+        });
 
     existing.events.push(event);
     if existing.events.len() > max_events {
@@ -141,22 +133,14 @@ pub fn persist_knowledge_insight_event(
 
     let max_events = max_events.max(1);
     let latest_path = ledger.latest_path("spec", "latest-knowledge.json");
-    let mut existing = if latest_path.exists() {
-        std::fs::read_to_string(&latest_path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<KnowledgeBusArtifact>(&raw).ok())
-            .unwrap_or(KnowledgeBusArtifact {
-                generated_at: now_ts(),
-                total_events: 0,
-                events: Vec::new(),
-            })
-    } else {
-        KnowledgeBusArtifact {
+    let mut existing = std::fs::read_to_string(&latest_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<KnowledgeBusArtifact>(&raw).ok())
+        .unwrap_or(KnowledgeBusArtifact {
             generated_at: now_ts(),
             total_events: 0,
             events: Vec::new(),
-        }
-    };
+        });
 
     // Dedup + confidence arbitration:
     // For events sharing (task, phase, agent), keep whichever has the higher confidence.
@@ -329,10 +313,11 @@ fn load_learning_records(
 ) -> Result<Vec<LearningRecord>> {
     use std::io::BufRead;
     let file_path = storage_path.join(crate::pua::LEARNING_RECORDS_FILE);
-    if !file_path.exists() {
-        return Ok(Vec::new());
-    }
-    let file = std::fs::File::open(&file_path)?;
+    let file = match std::fs::File::open(&file_path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
     let reader = std::io::BufReader::new(file);
     let mut records = Vec::new();
     for line in reader.lines().take(limit) {

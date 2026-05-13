@@ -21,6 +21,7 @@ pub mod capability_bus;
 pub mod capability_graph;
 pub mod consciousness;
 pub mod evaluation;
+#[cfg(feature = "profile-multi-users-server")]
 pub mod learning_center;
 pub mod model_selector;
 pub mod quality_models;

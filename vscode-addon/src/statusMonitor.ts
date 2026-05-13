@@ -137,7 +137,7 @@ export class StatusMonitor {
             )
             .then((action) => {
               if (action === "Open Settings") {
-                vscode.commands.executeCommand("go-on.openSettings");
+                return vscode.commands.executeCommand("go-on.openSettings");
               }
             });
         }

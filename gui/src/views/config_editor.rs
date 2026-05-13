@@ -4,11 +4,11 @@ use crate::i18n::I18n;
 const MAX_SNAPSHOTS: usize = 20;
 
 pub struct ConfigEditorView {
-    draft: String,
+    pub draft: String,
     status: String,
     initialized: bool,
-    snapshots: Vec<String>,
-    search_query: String,
+    pub snapshots: Vec<String>,
+    pub search_query: String,
     is_valid_json: bool,
     json_parse_error: String,
     pub applied: bool,

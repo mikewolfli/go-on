@@ -311,6 +311,7 @@ impl McpServer {
                     "text": serde_json::to_string(&result)?
                 }],
                 "structuredContent": result,
+                "isError": false,
             }));
         }
 
@@ -353,6 +354,7 @@ impl McpServer {
                 let mut response = json!({
                     "content": [{"type": "text", "text": serde_json::to_string_pretty(&result)?}],
                     "structuredContent": result,
+                    "isError": false,
                 });
                 if resolved_name != tool_name {
                     response["x_resolved_skill"] = json!(resolved_name);

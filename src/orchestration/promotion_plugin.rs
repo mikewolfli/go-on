@@ -5,8 +5,11 @@
 //! other heuristic criteria.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+#[cfg(test)]
+use std::collections::HashMap;
+#[cfg(test)]
 use std::time::SystemTime;
 
 /// Outcome of a promotion check
@@ -82,14 +85,6 @@ impl PromotionResult {
             reason: reason.into(),
         }
     }
-}
-
-/// A single promotion criterion
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PromotionCriterion {
-    pub name: String,
-    pub weight: f64,
-    pub threshold: f64,
 }
 
 /// Plugin trait: each promotion strategy implements this
@@ -193,13 +188,13 @@ impl PromotionPlugin for ThresholdPromotion {
     }
 }
 
+#[cfg(test)]
 /// Evidence-weighted promotion plugin.
 /// Promotes agents based on the quality of evidence they produce.
 ///
 /// When `evidence_quality` exceeds a configurable threshold, the promotion
 /// multiplier is scaled linearly up to a configurable maximum.  All promotion
 /// events are tracked in an internal history map.
-#[allow(dead_code)] // F-GAP-12 — reserved for future agent factory / skill wiring
 pub struct EvidenceWeightedPromotion {
     /// Minimum evidence quality required to trigger promotion (0.0–1.0).
     pub threshold: f64,
@@ -209,6 +204,7 @@ pub struct EvidenceWeightedPromotion {
     history: Mutex<HashMap<String, Vec<PromotionHistoryEntry>>>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PromotionHistoryEntry {
     timestamp: String,
@@ -217,7 +213,7 @@ pub(crate) struct PromotionHistoryEntry {
     reason: String,
 }
 
-#[allow(dead_code)] // F-GAP-12 — reserved for future agent factory / skill wiring
+#[cfg(test)]
 impl EvidenceWeightedPromotion {
     pub fn new(threshold: f64, max_multiplier: f64) -> Self {
         Self {
@@ -228,6 +224,7 @@ impl EvidenceWeightedPromotion {
     }
 }
 
+#[cfg(test)]
 impl Default for EvidenceWeightedPromotion {
     fn default() -> Self {
         Self {
@@ -238,6 +235,7 @@ impl Default for EvidenceWeightedPromotion {
     }
 }
 
+#[cfg(test)]
 impl PromotionPlugin for EvidenceWeightedPromotion {
     fn name(&self) -> &'static str {
         "evidence_weighted_promotion"
@@ -300,7 +298,7 @@ impl PromotionPlugin for EvidenceWeightedPromotion {
     }
 }
 
-#[allow(dead_code)] // F-GAP-12 — reserved for future agent factory / skill wiring
+#[cfg(test)]
 impl EvidenceWeightedPromotion {
     /// Return a snapshot of the promotion history for a given agent.
     pub fn history_for(&self, agent: &str) -> Vec<PromotionHistoryEntry> {
@@ -312,6 +310,7 @@ impl EvidenceWeightedPromotion {
     }
 
     /// Return a snapshot of the full promotion history.
+    #[allow(dead_code)]
     pub fn all_history(&self) -> HashMap<String, Vec<PromotionHistoryEntry>> {
         self.history
             .lock()
@@ -327,8 +326,6 @@ impl EvidenceWeightedPromotion {
 /// threads (e.g. with `CapabilityBus`).
 pub struct PluginRegistry {
     plugins: Vec<Box<dyn PromotionPlugin>>,
-    /// Named criteria used to configure threshold-based plugins.
-    pub criteria: Vec<PromotionCriterion>,
 }
 
 impl Default for PluginRegistry {
@@ -339,26 +336,8 @@ impl Default for PluginRegistry {
 
 impl PluginRegistry {
     pub fn new() -> Self {
-        let criteria = vec![
-            PromotionCriterion {
-                name: "success_rate".to_string(),
-                weight: 1.0,
-                threshold: 0.8,
-            },
-            PromotionCriterion {
-                name: "latency_ms".to_string(),
-                weight: 0.5,
-                threshold: 5000.0,
-            },
-            PromotionCriterion {
-                name: "cost_score".to_string(),
-                weight: 0.5,
-                threshold: 0.7,
-            },
-        ];
         let mut reg = Self {
             plugins: Vec::new(),
-            criteria,
         };
         reg.register(Box::new(ThresholdPromotion::new(0.8, 5000.0, 0.7)));
         reg

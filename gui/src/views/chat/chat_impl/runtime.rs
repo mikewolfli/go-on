@@ -10,8 +10,9 @@ struct ActiveGenerationGuard(Arc<std::sync::atomic::AtomicU64>);
 
 impl Drop for ActiveGenerationGuard {
     fn drop(&mut self) {
-        // Relaxed ordering is sufficient: this is a counter decrement,
-        // not a memory barrier. The saturating_sub handles the 0 case.
+        // NOTE: fetch_sub(1) wraps on 0 (unsigned overflow in release, panic in debug).
+        // This is deliberate — the guard should never be dropped more times than created.
+        // If it does, the wrap prevents MAX_CONCURRENT_GENERATIONS from being stuck at 0.
         self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -124,10 +125,7 @@ impl ChatView {
         };
 
         self.input.clear();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = crate::fs_util::epoch_secs();
         let atts = std::mem::take(&mut self.attachments);
         let attachment_summary = Self::build_attachment_summary(&atts);
         let outbound_msg = format!("{expanded_msg}{attachment_summary}");
@@ -152,10 +150,7 @@ impl ChatView {
         self.output_token_estimate = 0;
 
         // Add a "running" phase record
-        let now_ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now_ts = crate::fs_util::epoch_secs();
         let running_phase = if phase.is_empty() { "think" } else { &phase };
         self.session().phase_records.push(PhaseRecord {
             phase: running_phase.to_string(),

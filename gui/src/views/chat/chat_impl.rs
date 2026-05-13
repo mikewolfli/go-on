@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const CHAT_DISABLE_MARKDOWN_RENDER: bool = false;
 const CHAT_STAGE6_ENABLE_MODE_ROW: bool = true;
@@ -30,6 +29,7 @@ mod render;
 mod runtime;
 mod storage;
 mod ui;
+use crate::views::ui_state::GlobalUiState;
 
 pub struct ChatView {
     pub sessions: Vec<Session>,
@@ -81,10 +81,10 @@ pub struct ChatView {
     template_name_buf: String,
     template_command_buf: String,
     template_content_buf: String,
-    template_search_query: String,
+    pub template_search_query: String,
     templates_bootstrapped: bool,
     // Feature 9: search (sessions + messages)
-    session_search_query: String,
+    pub session_search_query: String,
     // Save serialization guards (AtomicBool ensures no concurrent file writes)
     session_save_in_flight: Arc<AtomicBool>,
     template_save_in_flight: Arc<AtomicBool>,
@@ -270,10 +270,7 @@ impl ChatView {
     }
 
     fn default_session(index: usize, phase: String, mode: String) -> Session {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = crate::fs_util::epoch_secs();
         Session {
             id: format!("session_{}", index + 1),
             name: if index == 0 {
@@ -325,6 +322,23 @@ impl ChatView {
 
         let (pending_tx, pending_rx) = mpsc::channel();
 
+        // Load persistent UI state before constructing ChatView
+        let ui_state = GlobalUiState::load();
+
+        // Use saved mode if non-empty (overrides session default)
+        let saved_mode = if !ui_state.selected_mode.is_empty() {
+            ui_state.selected_mode.clone()
+        } else {
+            initial_mode
+        };
+
+        // Deserialize model_stats from saved JSON if present
+        let model_stats: std::collections::HashMap<String, ModelPerfStats> = ui_state
+            .model_stats_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default();
+
         Self {
             sessions,
             active_session: 0,
@@ -333,7 +347,7 @@ impl ChatView {
             error: String::new(),
             ai_status: AiStatus::Idle,
             selected_phase: initial_phase,
-            selected_mode: initial_mode,
+            selected_mode: saved_mode,
             attachments: Vec::new(),
             phases: Vec::new(),
             phases_loaded: false,
@@ -355,8 +369,8 @@ impl ChatView {
             input_token_estimate: 0,
             output_token_estimate: 0,
             // Feature 7
-            show_prompts: false,
-            show_model_picker: false,
+            show_prompts: ui_state.show_prompts,
+            show_model_picker: ui_state.show_model_picker,
             prompt_templates: templates,
             selected_template_idx: None,
             template_name_buf: String::new(),
@@ -381,9 +395,17 @@ impl ChatView {
             stream_repaint_interval: std::time::Duration::from_millis(33),
             max_pending_events_per_frame: 256,
             // Enhanced features (Phase 2)
-            enable_markdown: true,
-            show_token_details: true,
-            model_stats: std::collections::HashMap::new(),
+            enable_markdown: if ui_state.enable_markdown {
+                true
+            } else {
+                false
+            },
+            show_token_details: if ui_state.show_token_details {
+                true
+            } else {
+                false
+            },
+            model_stats,
             stream_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
                 .read_timeout(std::time::Duration::from_secs(60))
@@ -668,6 +690,22 @@ impl ChatView {
         self.models_loaded = false;
     }
 
+    /// Save chat-specific fields into the global UI state for persistence.
+    pub fn save_ui_state(&self, ui_state: &mut crate::views::ui_state::GlobalUiState) {
+        ui_state.selected_mode = self.selected_mode.clone();
+        ui_state.show_token_details = self.show_token_details;
+        ui_state.enable_markdown = self.enable_markdown;
+        ui_state.show_model_picker = self.show_model_picker;
+        ui_state.show_prompts = self.show_prompts;
+        if let Ok(stats_json) = serde_json::to_string(&self.model_stats) {
+            ui_state.model_stats_json = Some(stats_json);
+        }
+        ui_state.active_session = self.active_session;
+        ui_state.input_draft = self.input.clone();
+        ui_state.session_search_query = self.session_search_query.clone();
+        ui_state.template_search_query = self.template_search_query.clone();
+    }
+
     fn set_phase_record_status(&mut self, status: &str) {
         if let Some(record) = self
             .session()
@@ -746,6 +784,7 @@ mod tests {
             edit_msg_buf: String::new(),
             stop_requested: false,
             generation_states: Vec::new(),
+            active_generations: Arc::new(AtomicU64::new(0)),
             next_generation_id: 1,
             last_token_estimate: 0,
             input_token_estimate: 0,

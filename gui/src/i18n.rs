@@ -1063,6 +1063,33 @@ impl I18n {
             tr!(en, "API Key", cn, "API 密钥", tw, "API 密鑰"),
         );
         m.insert("providers.model", tr!(en, "Model", cn, "模型", tw, "模型"));
+        m.insert("providers.label", tr!(en, "Label", cn, "标签", tw, "標籤"));
+        m.insert(
+            "providers.labelPlaceholder",
+            tr!(en, "(optional)", cn, "(可选)", tw, "(可選)"),
+        );
+        m.insert(
+            "providers.labelPlaceholderRequired",
+            tr!(
+                en,
+                "Required for duplicate",
+                cn,
+                "重复时需要",
+                tw,
+                "重複時需要"
+            ),
+        );
+        m.insert(
+            "providers.labelRequiredHint",
+            tr!(
+                en,
+                "⚠ Label required when adding same provider twice",
+                cn,
+                "⚠ 添加相同提供商时需要标签区分",
+                tw,
+                "⚠ 添加相同提供商時需要標籤區分"
+            ),
+        );
         m.insert("providers.add", tr!(en, "Add", cn, "添加", tw, "添加"));
         m.insert(
             "providers.update_key",

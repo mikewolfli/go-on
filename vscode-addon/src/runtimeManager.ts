@@ -282,6 +282,9 @@ export class GoOnManager {
   stop(): void {
     this._shutdownInProgress = true;
     this._reconnectAttempts = 0;
+    // Save startupConfig before clearing, so we can restore it
+    // if a concurrent start() call spawned a new process during our await
+    const savedConfig = this._startupConfig;
     this._startupConfig = undefined;
 
     // Clean up timers first
@@ -321,6 +324,11 @@ export class GoOnManager {
         proc.off("close", closeHandler);
         this._closeListener = null;
       };
+    }
+
+    // If start() already created a new process during our await, restore startupConfig
+    if (this.process && !this._startupConfig) {
+      this._startupConfig = savedConfig;
     }
 
     this.updateStatus();

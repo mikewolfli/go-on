@@ -775,7 +775,9 @@ impl CapabilityBus {
                     ],
                 };
             }
-            _ => {}
+            _ => {
+                warn!("unknown PolicyVerdict variant in decide(): {:?}", verdict);
+            }
         }
 
         // Step B: pick best agent from capability graph + reputation

@@ -4,7 +4,7 @@ use crate::views::autotune::AutoTuneView;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkflowStep {
@@ -36,17 +36,17 @@ enum WorkflowEvent {
 
 pub struct WorkflowView {
     state: WorkflowState,
-    new_name: String,
-    new_command: String,
+    pub new_name: String,
+    pub new_command: String,
     running: bool,
     pending_confirm_run: bool,
     pending_confirm_delete: Option<usize>,
     pending_rx: mpsc::Receiver<WorkflowEvent>,
     pending_tx: mpsc::Sender<WorkflowEvent>,
     runs: Vec<WorkflowRunRecord>,
-    selected_run_id: String,
-    selected_run_detail: Option<WorkflowRunRecord>,
-    run_status_filter: String,
+    pub selected_run_id: String,
+    pub selected_run_detail: Option<WorkflowRunRecord>,
+    pub run_status_filter: String,
     runs_loading: bool,
     runs_request_seq: u64,
     run_detail_in_flight: bool,
@@ -92,12 +92,9 @@ impl WorkflowView {
 
     fn run_duration_secs(run: &WorkflowRunRecord) -> Option<i64> {
         let started = run.started_at?;
-        let end = run.ended_at.unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64
-        });
+        let end = run
+            .ended_at
+            .unwrap_or_else(|| crate::fs_util::epoch_secs() as i64);
         Some((end - started).max(0))
     }
 
@@ -313,23 +310,13 @@ impl WorkflowView {
                 }
                 WorkflowEvent::WorkflowExecuteDone(payload) => {
                     self.state.last_result = Some(payload);
-                    self.state.last_run_at = Some(
-                        SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                    );
+                    self.state.last_run_at = Some(crate::fs_util::epoch_secs());
                     self.running = false;
                     self.pending_confirm_run = false;
                     self.save_state();
                 }
                 WorkflowEvent::UiMessage(msg) => {
-                    self.state.last_run_at = Some(
-                        SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                    );
+                    self.state.last_run_at = Some(crate::fs_util::epoch_secs());
                     self.state.last_result = Some(msg);
                     self.running = false;
                     self.save_state();

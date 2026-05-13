@@ -223,17 +223,17 @@ fn check_json_artifact(
     expected_fields: &[&str],
 ) -> ActionCheckItem {
     let path = ledger.latest_path(category, latest_name);
-    if !path.exists() {
-        return ActionCheckItem {
-            name: label.to_string(),
-            status: CheckStatus::Error,
-            message: format!("{category}/{latest_name} not found"),
-            artifact_path: None,
-        };
-    }
 
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ActionCheckItem {
+                name: label.to_string(),
+                status: CheckStatus::Error,
+                message: format!("{category}/{latest_name} not found"),
+                artifact_path: None,
+            };
+        }
         Err(e) => {
             return ActionCheckItem {
                 name: label.to_string(),

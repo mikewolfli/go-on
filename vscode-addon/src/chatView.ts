@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { spawn } from "child_process";
+import * as crypto from "crypto";
 
 import { RuntimeManagerLike } from "./managerTypes";
 import { t, MessageKeys } from "./i18n";
@@ -221,13 +222,13 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
       let messagesPayload: Array<{
         role: string;
         content:
-        | string
-        | Array<{
-          type: string;
-          text?: string;
-          image_url?: { url: string; detail: string };
-          file_data?: { data: string; filename: string; mime_type: string };
-        }>;
+          | string
+          | Array<{
+              type: string;
+              text?: string;
+              image_url?: { url: string; detail: string };
+              file_data?: { data: string; filename: string; mime_type: string };
+            }>;
       }>;
       if (!attachments || attachments.length === 0) {
         // Backward compatible: plain text
@@ -238,9 +239,9 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           | { type: "text"; text: string }
           | { type: "image_url"; image_url: { url: string; detail: string } }
           | {
-            type: "file";
-            file_data: { data: string; filename: string; mime_type: string };
-          }
+              type: "file";
+              file_data: { data: string; filename: string; mime_type: string };
+            }
         )[] = [{ type: "text", text }];
         for (const a of attachments) {
           if (a.type && a.type.startsWith("image/")) {
@@ -488,10 +489,15 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     return {
       pythonPath: config.get<string>("pythonPath", "python"),
       executionTimeout: config.get<number>("execution.timeout", 30000),
-      allowedShellPaths: config.get<string[]>(
-        "execution.allowedShellPaths",
-        [],
-      ),
+      allowedShellPaths: config.get<string[]>("execution.allowedShellPaths", [
+        "/bin/bash",
+        "/bin/sh",
+        "/usr/bin/bash",
+        "/bin/zsh",
+        "/usr/bin/zsh",
+        "cmd.exe",
+        "C:\\Windows\\System32\\cmd.exe",
+      ]),
     };
   }
 
@@ -1046,12 +1052,6 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
   }
 }
 
-function getNonce() {
-  let text = "";
-  const possible =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
+function getNonce(): string {
+  return crypto.randomBytes(32).toString("base64url");
 }

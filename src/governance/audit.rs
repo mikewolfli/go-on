@@ -7,6 +7,7 @@
 //! to be integrated into all agent execution points.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::VecDeque;
 
 /// Audit log entry for all agent/tool/phase decisions
@@ -45,6 +46,9 @@ impl AuditLog {
     }
 
     pub fn record(&mut self, entry: AuditLogEntry) {
+        let mut entry = entry;
+        entry.inputs = redact_sensitive(&entry.inputs);
+        entry.outputs = entry.outputs.map(|o| redact_sensitive(&o));
         self.entries.push_back(entry);
         while self.entries.len() > self.max_entries {
             self.entries.pop_front();
@@ -57,5 +61,37 @@ impl AuditLog {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+    }
+}
+
+fn redact_sensitive(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        Value::Object(map) => {
+            let mut redacted = serde_json::Map::new();
+            for (k, v) in map {
+                let lower = k.to_lowercase();
+                if lower.contains("api_key")
+                    || lower.contains("secret")
+                    || lower.contains("password")
+                    || lower.contains("token")
+                {
+                    redacted.insert(k.clone(), Value::String("**REDACTED**".to_string()));
+                } else {
+                    redacted.insert(k.clone(), redact_sensitive(v));
+                }
+            }
+            Value::Object(redacted)
+        }
+        Value::String(s) => {
+            // Redact common API key patterns in string values
+            if s.len() > 20
+                && (s.starts_with("sk-") || s.starts_with("pk-") || s.starts_with("AKIA"))
+            {
+                Value::String(format!("{}...{}", &s[..4], &s[s.len() - 4..]))
+            } else {
+                Value::String(s.clone())
+            }
+        }
+        other => other.clone(),
     }
 }

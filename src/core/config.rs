@@ -240,7 +240,7 @@ fn load_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "openai_compatible".to_string(),
             agent_type: "openai_compatible".to_string(),
-            url: Some("http://127.0.0.1:8080/v1".to_string()),
+            url: Some("http://127.0.0.1:8080/v1".to_string()), // Default is HTTP for localhost — user should override for remote
             chat_path: None,
             model: Some("compatible-model".to_string()),
             api_key_env: Some("OPENAI_COMPATIBLE_API_KEY".to_string()),
@@ -1754,6 +1754,7 @@ fn default_summary_max_chars() -> usize {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct AgentConfig {
     #[serde(rename = "type")]
     pub agent_type: String,
@@ -2615,10 +2616,6 @@ fn phase_rule_paths(config_dir: &Path, phase_name: &str) -> Vec<std::path::PathB
 }
 
 fn load_optional_rule_items(path: &Path) -> Vec<String> {
-    if !path.exists() {
-        return Vec::new();
-    }
-
     match fs::read_to_string(path) {
         Ok(content) => parse_rule_items(&content),
         Err(err) => {

@@ -130,10 +130,25 @@ fn render_node<'a>(
                 });
             });
 
-            // Code display: dark frame + monospace + scroll
+            // Code display: theme-aware frame + monospace + scroll
+            let code_bg = if ui.visuals().dark_mode {
+                egui::Color32::from_rgb(30, 30, 35)
+            } else {
+                egui::Color32::from_rgb(245, 245, 250)
+            };
+            let code_border = if ui.visuals().dark_mode {
+                egui::Color32::from_rgb(60, 60, 70)
+            } else {
+                egui::Color32::from_rgb(200, 200, 210)
+            };
+            let code_fg = if ui.visuals().dark_mode {
+                egui::Color32::from_rgb(200, 204, 212)
+            } else {
+                egui::Color32::from_rgb(40, 44, 50)
+            };
             egui::Frame::new()
-                .fill(egui::Color32::from_rgb(30, 30, 35))
-                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 70)))
+                .fill(code_bg)
+                .stroke(egui::Stroke::new(1.0, code_border))
                 .corner_radius(4.0)
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
@@ -149,7 +164,7 @@ fn render_node<'a>(
                                     ui.label(
                                         egui::RichText::new(&code)
                                             .font(egui::FontId::monospace(13.0))
-                                            .color(egui::Color32::from_rgb(200, 204, 212)),
+                                            .color(code_fg),
                                     );
                                 });
                         });

@@ -1003,12 +1003,16 @@ impl AiOnboardingState {
 }
 
 fn detect_ai_onboarding_state(config_path: &std::path::Path) -> Result<Option<AiOnboardingState>> {
-    if !config_path.exists() {
-        return Ok(Some(AiOnboardingState::MissingConfig));
-    }
-
-    let content = fs::read_to_string(config_path)
-        .with_context(|| format!("failed to read config file: {}", config_path.display()))?;
+    let content = match fs::read_to_string(config_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Some(AiOnboardingState::MissingConfig));
+        }
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("failed to read config file: {}", config_path.display()))
+        }
+    };
     if content.trim().is_empty() {
         return Ok(Some(AiOnboardingState::BlankConfig));
     }
@@ -1387,10 +1391,10 @@ async fn run() -> Result<()> {
             println!("  {}", tf("setup.onboarding_option_1", &[]));
             println!("  {}", tf("setup.onboarding_option_3", &[]));
             print!("{} ", tf("setup.onboarding_select", &[]));
-            std::io::Write::flush(&mut std::io::stdout()).ok();
+            let _ = std::io::Write::flush(&mut std::io::stdout());
 
             let mut input = String::new();
-            std::io::stdin().read_line(&mut input).ok();
+            let _ = std::io::stdin().read_line(&mut input);
             let selection = input.trim();
 
             if selection == "1" || selection.is_empty() {
@@ -1427,9 +1431,9 @@ async fn run() -> Result<()> {
             );
             println!("  Run `go-on --init` to configure credentials, or continue without them.");
             print!("Press Enter to continue (or type 's' to run setup): ");
-            std::io::Write::flush(&mut std::io::stdout()).ok();
+            let _ = std::io::Write::flush(&mut std::io::stdout());
             let mut input = String::new();
-            std::io::stdin().read_line(&mut input).ok();
+            let _ = std::io::stdin().read_line(&mut input);
             if input.trim().eq_ignore_ascii_case("s") {
                 crate::setup::run_setup_with_options(
                     &config_path,
@@ -1885,9 +1889,11 @@ async fn start_server(
                 tool_registry,
                 "go-on".to_string(),
                 env!("CARGO_PKG_VERSION").to_string(),
-                Some(acp_server),
+                Some(acp_server.clone()),
             );
-            server.run().await
+            server.run().await?;
+            acp_server.shutdown_notify.notify_waiters();
+            Ok(())
         }
         "mcp_http" => {
             let bind_addr = acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string());
@@ -1917,9 +1923,11 @@ async fn start_server(
                 "go-on".to_string(),
                 env!("CARGO_PKG_VERSION").to_string(),
                 bind_addr,
-                Some(acp_server),
+                Some(acp_server.clone()),
             );
-            server.run().await
+            server.run().await?;
+            acp_server.shutdown_notify.notify_waiters();
+            Ok(())
         }
         _ => {
             error!(

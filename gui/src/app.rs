@@ -1,5 +1,6 @@
 use crate::backend::BackendClient;
 use crate::config::{has_valid_providers, save_app_config, AppConfig};
+use crate::views::ui_state::GlobalUiState;
 
 /// Write a line to go-on-gui.log in the temp directory.
 /// Only active in debug builds to avoid blocking the UI thread.
@@ -118,6 +119,8 @@ pub struct GoOnApp {
     last_backend_ui_commit: Instant,
     /// Consecutive backend disconnect samples; used to debounce transient failures.
     health_disconnect_streak: u8,
+    /// Persistent UI state shared across all views
+    pub ui_state: GlobalUiState,
     /// Count of consecutive backend crashes for rate limiting
     backend_crash_count: u8,
     /// Consecutive backend health poll failures for progressive backoff
@@ -294,17 +297,17 @@ impl GoOnApp {
         Self::diagnostic_key_report(config);
         match find_backend_binary() {
             Some(path) => {
-                let config_dir = path.parent().unwrap_or_else(|| {
-                    // When backend binary has no parent path (e.g. "/go-on"),
-                    // use the user's home directory as a writable fallback.
-                    let home = std::env::var("HOME")
-                        .or_else(|_| std::env::var("USERPROFILE"))
-                        .unwrap_or_else(|_| ".".to_string());
-                    // Leak the PathBuf to get a &'static Path (this is a spawned process)
-                    Box::leak(Box::new(std::path::PathBuf::from(home))).as_path()
-                });
+                let config_dir: std::borrow::Cow<'_, std::path::Path> = match path.parent() {
+                    Some(parent) => std::borrow::Cow::Borrowed(parent),
+                    None => {
+                        let home = std::env::var("HOME")
+                            .or_else(|_| std::env::var("USERPROFILE"))
+                            .unwrap_or_else(|_| ".".to_string());
+                        std::borrow::Cow::Owned(std::path::PathBuf::from(home))
+                    }
+                };
                 let mut cmd = std::process::Command::new(&path);
-                cmd.current_dir(config_dir)
+                cmd.current_dir(&config_dir)
                     .arg("--protocol-mode")
                     .arg("acp_http")
                     .stdout(std::process::Stdio::null());
@@ -417,6 +420,13 @@ impl GoOnApp {
             })
             .map(|p| {
                 let name = p.name.to_lowercase();
+                // When a label is set, use it to disambiguate multiple entries of the same provider.
+                // The agent name becomes `{name}_{label}` so backend can differentiate them.
+                let agent_name = if p.label.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}_{}", name, p.label.to_lowercase().replace(' ', "_"))
+                };
                 let model = if p.model.is_empty() || p.model == "auto" {
                     match name.as_str() {
                         "deepseek" => "deepseek-chat",
@@ -437,9 +447,9 @@ api_key_env = "{}"
 model = "{}"
 supports_system = true
 "#,
-                    name, name, keyring_ref, model
+                    agent_name, name, keyring_ref, model
                 );
-                (toml_block, name)
+                (toml_block, agent_name)
             })
             .unzip();
 
@@ -611,6 +621,7 @@ state_path = "acp_autotune_state.json"
             hasher.finish()
         };
         let initial_url = config.backend_url.clone();
+        let ui_state = GlobalUiState::load();
 
         Self {
             backend,
@@ -649,6 +660,7 @@ state_path = "acp_autotune_state.json"
             backend_crash_count: 0,
             consecutive_poll_failures: 0,
             blocked_tab_toast_shown: None,
+            ui_state,
         }
     }
 
@@ -1054,13 +1066,21 @@ impl eframe::App for GoOnApp {
                 }
             });
         });
+        // Save old tab's UI state before switching tabs
+        let previous_tab = self.active_tab.clone();
         if let Some(t) = new_tab {
+            self.save_tab_ui_state(&previous_tab);
             self.active_tab = t;
+            let tab = self.active_tab.clone();
+            self.restore_tab_ui_state(&tab);
         }
         if let Some(t) = tab_shortcut {
+            self.save_tab_ui_state(&previous_tab);
             // Apply offline guard for keyboard shortcuts too
             if is_connected || allowed_when_offline.contains(&t.as_str()) {
                 self.active_tab = t;
+                let tab = self.active_tab.clone();
+                self.restore_tab_ui_state(&tab);
             }
         }
 
@@ -1129,13 +1149,38 @@ impl eframe::App for GoOnApp {
                         },
                     );
                 }
-                "skills" => self.skills_view.show(
-                    ui,
-                    &self.i18n,
-                    &self.backend,
-                    ctx,
-                    skills_lifecycle_enabled,
-                ),
+                "skills" => {
+                    // Restore persisted UI state for skills view
+                    self.skills_view.show_create = self.ui_state.skills_show_create;
+                    self.skills_view.show_import = self.ui_state.skills_show_import;
+                    if !self.ui_state.skills_selected_skill_name.is_empty() {
+                        self.skills_view
+                            .load_skill_editor_by_name(&self.ui_state.skills_selected_skill_name);
+                    }
+                    self.skills_view.edit_desc = self.ui_state.skills_edit_desc.clone();
+                    self.skills_view.edit_prompt = self.ui_state.skills_edit_prompt.clone();
+                    self.skills_view.edit_schema = self.ui_state.skills_edit_schema.clone();
+                    self.skills_view.test_input = self.ui_state.skills_test_input.clone();
+                    self.skills_view.rollback_version =
+                        self.ui_state.skills_rollback_version.clone();
+
+                    self.skills_view.show(
+                        ui,
+                        &self.i18n,
+                        &self.backend,
+                        ctx,
+                        skills_lifecycle_enabled,
+                    );
+
+                    // Persist UI state after view renders
+                    if self.ui_state.skills_show_create != self.skills_view.show_create
+                        || self.ui_state.skills_show_import != self.skills_view.show_import
+                    {
+                        self.ui_state.skills_show_create = self.skills_view.show_create;
+                        self.ui_state.skills_show_import = self.skills_view.show_import;
+                        self.ui_state.save();
+                    }
+                }
                 "settings" => {
                     SettingsView::show(ui, &self.i18n, &mut self.config);
                     // Show restart button if backend URL changed
@@ -1155,13 +1200,34 @@ impl eframe::App for GoOnApp {
                         );
                     }
                 }
-                "workflow" => self.workflow_view.show(
-                    ui,
-                    &self.i18n,
-                    ctx,
-                    &self.backend,
-                    workflow_run_center_enabled,
-                ),
+                "workflow" => {
+                    // Restore persisted filter and selection state
+                    self.workflow_view.run_status_filter =
+                        self.ui_state.workflow_run_status_filter.clone();
+                    self.workflow_view.selected_run_id =
+                        self.ui_state.workflow_selected_run_id.clone();
+
+                    self.workflow_view.show(
+                        ui,
+                        &self.i18n,
+                        ctx,
+                        &self.backend,
+                        workflow_run_center_enabled,
+                    );
+
+                    // Persist UI state after view renders
+                    if self.ui_state.workflow_run_status_filter
+                        != self.workflow_view.run_status_filter
+                        || self.ui_state.workflow_selected_run_id
+                            != self.workflow_view.selected_run_id
+                    {
+                        self.ui_state.workflow_run_status_filter =
+                            self.workflow_view.run_status_filter.clone();
+                        self.ui_state.workflow_selected_run_id =
+                            self.workflow_view.selected_run_id.clone();
+                        self.ui_state.save();
+                    }
+                }
                 "autotune" => self.autotune_view.show(ui, &self.i18n),
                 "security" => self.security_view.show(ui, &self.i18n, &self.backend, ctx),
                 "config" => {
@@ -1210,14 +1276,137 @@ impl eframe::App for GoOnApp {
             }
         });
 
-        // Frame timing diagnostics — write to log file
+        // Frame timing diagnostics — rate limited to at most once per second
         let frame_elapsed = _frame_start.elapsed();
         if frame_elapsed.as_millis() > 50 {
-            log_msg(&format!(
-                "FRAME_DIAG: [{}] took {}ms",
-                self.active_tab,
-                frame_elapsed.as_millis()
-            ));
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static LAST_FRAME_LOG: AtomicU64 = AtomicU64::new(0);
+            let last = LAST_FRAME_LOG.load(Ordering::Relaxed);
+            let current = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if current != last {
+                LAST_FRAME_LOG.store(current, Ordering::Relaxed);
+                log_msg(&format!(
+                    "FRAME_DIAG: [{}] took {}ms",
+                    self.active_tab,
+                    frame_elapsed.as_millis()
+                ));
+            }
+        }
+    }
+}
+
+impl GoOnApp {
+    /// Save the given tab's transient UI state into `self.ui_state`.
+    fn save_tab_ui_state(&mut self, tab: &str) {
+        match tab {
+            "chat" => {
+                self.chat_view.save_ui_state(&mut self.ui_state);
+            }
+            "monitor" => {
+                self.ui_state.monitor_metrics_window = self.monitor_view.metrics_window.clone();
+                self.ui_state.monitor_auto_refresh_interval =
+                    self.monitor_view.auto_refresh_interval;
+                self.ui_state.monitor_provider_filter = self.monitor_view.provider_filter.clone();
+            }
+            "providers" => {
+                self.ui_state.providers_selected_provider =
+                    self.providers_view.selected_provider.clone();
+                self.ui_state.providers_new_model = self.providers_view.new_model.clone();
+                self.ui_state.providers_new_label = self.providers_view.new_label.clone();
+            }
+            "skills" => {
+                self.ui_state.skills_show_create = self.skills_view.show_create;
+                self.ui_state.skills_show_import = self.skills_view.show_import;
+                self.ui_state.skills_selected_skill_name =
+                    self.skills_view.selected_skill_name.clone();
+                self.ui_state.skills_edit_desc = self.skills_view.edit_desc.clone();
+                self.ui_state.skills_edit_prompt = self.skills_view.edit_prompt.clone();
+                self.ui_state.skills_edit_schema = self.skills_view.edit_schema.clone();
+                self.ui_state.skills_test_input = self.skills_view.test_input.clone();
+                self.ui_state.skills_rollback_version = self.skills_view.rollback_version.clone();
+                self.ui_state.skills_create_name = self.skills_view.create_name.clone();
+                self.ui_state.skills_create_desc = self.skills_view.create_desc.clone();
+                self.ui_state.skills_create_prompt = self.skills_view.create_prompt.clone();
+                self.ui_state.skills_create_schema = self.skills_view.create_input_schema.clone();
+                self.ui_state.skills_import_url = self.skills_view.import_url.clone();
+            }
+            "workflow" => {
+                self.ui_state.workflow_run_status_filter =
+                    self.workflow_view.run_status_filter.clone();
+                self.ui_state.workflow_selected_run_id = self.workflow_view.selected_run_id.clone();
+                self.ui_state.workflow_new_name = self.workflow_view.new_name.clone();
+                self.ui_state.workflow_new_command = self.workflow_view.new_command.clone();
+            }
+            "config" => {
+                self.ui_state.config_editor_draft = self.config_editor_view.draft.clone();
+                self.ui_state.config_editor_search = self.config_editor_view.search_query.clone();
+                self.ui_state.config_editor_snapshots = self.config_editor_view.snapshots.clone();
+            }
+            _ => {}
+        }
+    }
+
+    /// Restore the given tab's transient UI state from `self.ui_state`.
+    fn restore_tab_ui_state(&mut self, tab_name: &str) {
+        match tab_name {
+            "chat" => {
+                if self.ui_state.active_session < self.chat_view.sessions.len() {
+                    self.chat_view.active_session = self.ui_state.active_session;
+                }
+                self.chat_view.input = self.ui_state.input_draft.clone();
+                self.chat_view.session_search_query = self.ui_state.session_search_query.clone();
+                self.chat_view.template_search_query = self.ui_state.template_search_query.clone();
+            }
+            "monitor" => {
+                self.monitor_view.metrics_window = self.ui_state.monitor_metrics_window.clone();
+                if self.ui_state.monitor_auto_refresh_interval > 0 {
+                    self.monitor_view.auto_refresh_interval =
+                        self.ui_state.monitor_auto_refresh_interval;
+                }
+                self.monitor_view.provider_filter = self.ui_state.monitor_provider_filter.clone();
+            }
+            "providers" => {
+                self.providers_view.selected_provider =
+                    self.ui_state.providers_selected_provider.clone();
+                if !self.ui_state.providers_new_model.is_empty() {
+                    self.providers_view.new_model = self.ui_state.providers_new_model.clone();
+                }
+                self.providers_view.new_label = self.ui_state.providers_new_label.clone();
+            }
+            "skills" => {
+                self.skills_view.show_create = self.ui_state.skills_show_create;
+                self.skills_view.show_import = self.ui_state.skills_show_import;
+                if !self.ui_state.skills_selected_skill_name.is_empty() {
+                    self.skills_view
+                        .load_skill_editor_by_name(&self.ui_state.skills_selected_skill_name);
+                }
+                self.skills_view.edit_desc = self.ui_state.skills_edit_desc.clone();
+                self.skills_view.edit_prompt = self.ui_state.skills_edit_prompt.clone();
+                self.skills_view.edit_schema = self.ui_state.skills_edit_schema.clone();
+                self.skills_view.test_input = self.ui_state.skills_test_input.clone();
+                self.skills_view.rollback_version = self.ui_state.skills_rollback_version.clone();
+                self.skills_view.create_name = self.ui_state.skills_create_name.clone();
+                self.skills_view.create_desc = self.ui_state.skills_create_desc.clone();
+                self.skills_view.create_prompt = self.ui_state.skills_create_prompt.clone();
+                self.skills_view.create_input_schema = self.ui_state.skills_create_schema.clone();
+                self.skills_view.import_url = self.ui_state.skills_import_url.clone();
+            }
+            "workflow" => {
+                self.workflow_view.run_status_filter =
+                    self.ui_state.workflow_run_status_filter.clone();
+                self.workflow_view.selected_run_id = self.ui_state.workflow_selected_run_id.clone();
+                self.workflow_view.new_name = self.ui_state.workflow_new_name.clone();
+                self.workflow_view.new_command = self.ui_state.workflow_new_command.clone();
+            }
+            "config" => {
+                self.config_editor_view.draft = self.ui_state.config_editor_draft.clone();
+                self.config_editor_view.search_query = self.ui_state.config_editor_search.clone();
+                self.config_editor_view.snapshots = self.ui_state.config_editor_snapshots.clone();
+            }
+            _ => {}
         }
     }
 }

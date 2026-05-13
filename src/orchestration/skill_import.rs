@@ -343,15 +343,7 @@ fn resolve_local_manifest_path(path: &str) -> Result<PathBuf> {
     let canonical = candidate
         .canonicalize()
         .with_context(|| format!("failed to resolve {}", candidate.display()))?;
-    if !canonical.exists() {
-        anyhow::bail!(
-            "{}",
-            tf(
-                "error.missing_field",
-                &[("field", &format!("manifest path {}", canonical.display()))]
-            )
-        );
-    }
+    // canonicalize() already guarantees existence, so no redundant .exists() check.
     Ok(canonical)
 }
 

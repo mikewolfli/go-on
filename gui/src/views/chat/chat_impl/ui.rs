@@ -240,7 +240,7 @@ impl ChatView {
                 .resizable(true)
                 .default_width(360.0)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .show(ui.ctx(), |ui| {
+                .show(ctx, |ui| {
                     ui.label(i18n.t("chat.multiModelHint"));
                     ui.separator();
                     let available = self.available_models.clone();
@@ -276,7 +276,7 @@ impl ChatView {
                 .resizable(true)
                 .default_width(520.0)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .show(ui.ctx(), |ui| {
+                .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.template_search_query)
@@ -437,6 +437,7 @@ impl ChatView {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(i18n.t("chat.mode")).color(fg).strong());
                             ui.add_space(6.0);
+                            let prev_mode = self.selected_mode.clone();
                             egui::ComboBox::from_id_salt("mode_sel")
                                 .selected_text(i18n.t(&format!("mode.{}", self.selected_mode)))
                                 .show_ui(ui, |ui| {
@@ -448,6 +449,7 @@ impl ChatView {
                                         );
                                     }
                                 });
+                            if self.selected_mode != prev_mode {}
                             ui.add_space(8.0);
                             ui.label(egui::RichText::new(i18n.t("chat.model")).color(fg));
                             if ui
@@ -475,10 +477,11 @@ impl ChatView {
                                 );
                             }
                             ui.add_space(12.0);
-                            ui.checkbox(
+                            let tok_resp = ui.checkbox(
                                 &mut self.show_token_details,
                                 i18n.t("chat.showTokenDetails"),
                             );
+                            if tok_resp.changed() {}
                         });
                     });
                 ui.separator();
@@ -700,8 +703,10 @@ impl ChatView {
                     self.input.clear();
                 }
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                    let was_open = self.show_prompts || self.show_model_picker;
                     self.show_prompts = false;
                     self.show_model_picker = false;
+                    if was_open {}
                 }
             });
         });
@@ -721,12 +726,7 @@ impl ChatView {
                     let msgs = self.messages();
                     let mut md = String::new();
                     md.push_str(&format!("# {}\n\n", i18n.t("chat.exportTitle")));
-                    let exported_at = format_absolute_time(
-                        SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                    );
+                    let exported_at = format_absolute_time(crate::fs_util::epoch_secs());
                     md.push_str(&format!(
                         "_{}_\n\n",
                         i18n.t("chat.exportedAt").replace("{time}", &exported_at)
@@ -923,7 +923,10 @@ impl ChatView {
                             });
                         } else {
                             ui.horizontal(|ui| {
-                                let resp = ui.selectable_label(selected, &self.sessions[idx].name);
+                                let resp = ui.selectable_label(
+                                    selected,
+                                    format!("\u{200B}{}\u{200B}{}", idx, &self.sessions[idx].name),
+                                );
                                 if resp.double_clicked() {
                                     self.rename_session_idx = Some(idx);
                                     self.rename_session_buf = self.sessions[idx].name.clone();
@@ -966,9 +969,9 @@ impl ChatView {
                         if self.sessions.len() > 1 {
                             self.sessions.remove(idx);
                             if idx < self.active_session {
-                                self.active_session -= 1;
+                                self.active_session = self.active_session.saturating_sub(1);
                             } else if self.active_session >= self.sessions.len() {
-                                self.active_session = self.sessions.len() - 1;
+                                self.active_session = self.sessions.len().saturating_sub(1);
                             }
                             if self.active_session < self.sessions.len() {
                                 self.selected_mode =

@@ -192,6 +192,7 @@ impl SetupView {
                                 api_key: api_key.clone(),
                                 model: self.selected_model.clone(),
                                 validated: true,
+                                label: String::new(),
                             });
                         }
                         if !save_app_config(config) {

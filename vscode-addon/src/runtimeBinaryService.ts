@@ -16,7 +16,8 @@ export interface RuntimeResolution {
   runtimeDir: string;
 }
 
-const DOWNLOAD_TIMEOUT_MS = 15000;
+const DOWNLOAD_TIMEOUT_MS = 60000;
+const MAX_DOWNLOAD_RETRIES = 3;
 
 function isSupportedExecutablePath(filePath: string): boolean {
   if (os.platform() === "win32") {
@@ -170,6 +171,7 @@ async function downloadFile(
   url: string,
   destinationPath: string,
   maxRedirects: number = 5,
+  attempt: number = 1,
 ): Promise<void> {
   if (maxRedirects <= 0) {
     throw new Error("Too many redirects while downloading file");
@@ -177,46 +179,60 @@ async function downloadFile(
 
   await fsPromises.mkdir(path.dirname(destinationPath), { recursive: true });
 
-  await new Promise<void>((resolve, reject) => {
-    const rejectWithCleanup = (error: unknown) => {
-      void fsPromises.unlink(destinationPath).catch(() => undefined);
-      reject(error);
-    };
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const rejectWithCleanup = (error: unknown) => {
+        void fsPromises.unlink(destinationPath).catch(() => undefined);
+        reject(error);
+      };
 
-    const request = https.get(url, (response) => {
-      const statusCode = response.statusCode ?? 0;
+      const request = https.get(url, (response) => {
+        const statusCode = response.statusCode ?? 0;
 
-      if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
-        response.resume();
-        downloadFile(
-          response.headers.location,
-          destinationPath,
-          maxRedirects - 1,
-        )
-          .then(resolve)
-          .catch(reject);
-        return;
-      }
+        if (
+          statusCode >= 300 &&
+          statusCode < 400 &&
+          response.headers.location
+        ) {
+          response.resume();
+          downloadFile(
+            response.headers.location,
+            destinationPath,
+            maxRedirects - 1,
+            attempt,
+          )
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
 
-      if (statusCode < 200 || statusCode >= 300) {
-        response.resume();
-        reject(new Error(`Download failed with HTTP ${statusCode}`));
-        return;
-      }
+        if (statusCode < 200 || statusCode >= 300) {
+          response.resume();
+          reject(new Error(`Download failed with HTTP ${statusCode}`));
+          return;
+        }
 
-      const fileStream = fs.createWriteStream(destinationPath);
-      response.pipe(fileStream);
-      fileStream.on("finish", () => {
-        fileStream.close();
-        resolve();
+        const fileStream = fs.createWriteStream(destinationPath);
+        response.pipe(fileStream);
+        fileStream.on("finish", () => {
+          fileStream.close();
+          resolve();
+        });
+        fileStream.on("error", rejectWithCleanup);
+        response.on("error", rejectWithCleanup);
       });
-      fileStream.on("error", rejectWithCleanup);
-      response.on("error", rejectWithCleanup);
-    });
 
-    attachDownloadTimeout(request, url);
-    request.on("error", rejectWithCleanup);
-  });
+      attachDownloadTimeout(request, url);
+      request.on("error", rejectWithCleanup);
+    });
+  } catch (err) {
+    if (attempt < MAX_DOWNLOAD_RETRIES) {
+      const delay = Math.pow(2, attempt) * 1000;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      return downloadFile(url, destinationPath, maxRedirects, attempt + 1);
+    }
+    throw err;
+  }
 }
 
 async function extractArchive(

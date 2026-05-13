@@ -121,7 +121,7 @@ pub enum PendingResponse {
 }
 
 /// Model performance statistics for caching and analysis
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelPerfStats {
     pub response_time_ms: u64,
     pub token_count: usize,

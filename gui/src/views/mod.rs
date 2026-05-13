@@ -9,4 +9,5 @@ pub mod security_prefs;
 pub mod settings;
 pub mod setup;
 pub mod skills;
+pub mod ui_state;
 pub mod workflow;

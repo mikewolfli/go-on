@@ -1,5 +1,14 @@
 use std::path::Path;
 
+/// Get current Unix timestamp in seconds since epoch.
+/// Returns 0 if the system clock is before 1970 (extremely unlikely).
+pub fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 /// Atomically write content to a file: write to `.tmp` then rename.
 /// On crash mid-write, the original file (if any) remains intact.
 pub fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {

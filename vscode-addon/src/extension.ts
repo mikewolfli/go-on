@@ -54,6 +54,20 @@ async function runGoOnSecretCommand(
 
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      proc.kill("SIGTERM");
+      // Give it a moment to terminate, then force kill
+      setTimeout(() => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          // process already terminated
+        }
+      }, 1000);
+    }, 10000);
 
     proc.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -63,8 +77,17 @@ async function runGoOnSecretCommand(
       stderr += chunk.toString();
     });
 
-    proc.on("error", reject);
+    proc.on("error", (err) => {
+      clearTimeout(timeoutHandle);
+      reject(err);
+    });
     proc.on("close", (code) => {
+      clearTimeout(timeoutHandle);
+      if (timedOut) {
+        const details = (stderr || stdout || "process timed out").trim();
+        reject(new Error(`go-on secret command timed out: ${details}`));
+        return;
+      }
       if (code === 0) {
         resolve(stdout.trim());
         return;
@@ -740,7 +763,7 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     // Delayed check for provider readiness (warn user if API key is missing)
-    setTimeout(async () => {
+    const providerReadyTimer = setTimeout(async () => {
       try {
         if (goOnManager) {
           const backendRunning = goOnManager.isRunning();
@@ -762,6 +785,9 @@ export function activate(context: vscode.ExtensionContext) {
         // backend may not be running yet, ignore
       }
     }, 3000);
+    context.subscriptions.push(
+      new vscode.Disposable(() => clearTimeout(providerReadyTimer)),
+    );
 
     // Open chat automatically only once (controlled by go-on.autoOpenChat config).
     const autoOpenChat = vscode.workspace
@@ -772,7 +798,7 @@ export function activate(context: vscode.ExtensionContext) {
       false,
     );
     if (autoOpenChat && !hasOpenedChat) {
-      setTimeout(async () => {
+      const autoOpenTimer = setTimeout(async () => {
         try {
           await vscode.commands.executeCommand("go-on.openChat");
           await context.globalState.update("go-on.hasOpenedChatOnce", true);
@@ -780,6 +806,9 @@ export function activate(context: vscode.ExtensionContext) {
           // Auto-open failed (e.g., binary not found) — don't mark as opened so it retries next time
         }
       }, 300);
+      context.subscriptions.push(
+        new vscode.Disposable(() => clearTimeout(autoOpenTimer)),
+      );
     }
   })();
 }

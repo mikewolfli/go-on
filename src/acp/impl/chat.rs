@@ -486,7 +486,9 @@ pub(crate) async fn process_chat_request(
             crate::governance::harness_bus::PolicyVerdict::Review(r) => {
                 info!("harness policy flagged for review: {}", r.reason);
             }
-            _ => {}
+            _ => {
+                warn!("unexpected PolicyVerdict variant in gate evaluation");
+            }
         }
     }
 
@@ -799,9 +801,20 @@ pub(crate) async fn process_chat_request(
                 .phase_rate_limiter
                 .lock()
                 .map(|guard| guard.allow(phase_name, rpm_limit, burst))
-                .unwrap_or(true);
+                .unwrap_or_else(|e| {
+                    warn!("rate limiter lock failed: {e}");
+                    true
+                });
             if !allowed {
-                anyhow::bail!("rate limited");
+                let burst_str = burst
+                    .map(|b| b.to_string())
+                    .unwrap_or_else(|| "none".to_string());
+                anyhow::bail!(
+                    "rate limited for phase '{}' (rpm={}, burst={})",
+                    phase_name,
+                    rpm_limit,
+                    burst_str
+                );
             }
         }
     }
@@ -2044,7 +2057,7 @@ pub(crate) async fn process_chat_request(
                 }
                 Ok(None) => None,
                 Err(e) => {
-                    eprintln!("ForkRegistry lock poisoned: {e}");
+                    warn!("ForkRegistry lock poisoned: {e}");
                     None
                 }
             }

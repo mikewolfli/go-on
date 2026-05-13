@@ -398,30 +398,38 @@ impl BackendClient {
     /// Check backend health (5s timeout, silent on failure)
     pub async fn health(&self) -> HealthStatus {
         match self.rpc_call_quick("runtime.health", None).await {
-            Some(val) => HealthStatus {
-                connected: true,
-                healthy: val["lifecycle"]["is_healthy"].as_bool().unwrap_or(false),
-                uptime: val["lifecycle"]["uptime_seconds"].as_u64().unwrap_or(0),
-                requests_per_minute: val["stats"]["requests_per_minute"].as_f64().unwrap_or(0.0),
-                success_rate: val["stats"]["success_rate"].as_f64().unwrap_or(0.0),
-                avg_latency_ms: val["stats"]["avg_latency_ms"].as_f64().unwrap_or(0.0),
-                backend_version: val
-                    .pointer("/lifecycle/version")
-                    .and_then(Value::as_str)
-                    .or_else(|| val.get("version").and_then(Value::as_str))
-                    .or_else(|| val.pointer("/meta/version").and_then(Value::as_str))
-                    .or_else(|| val.pointer("/info/version").and_then(Value::as_str))
-                    .map(ToString::to_string),
-                backend_build: val
-                    .pointer("/lifecycle/build")
-                    .and_then(Value::as_str)
-                    .or_else(|| val.pointer("/lifecycle/build_id").and_then(Value::as_str))
-                    .or_else(|| val.pointer("/meta/build").and_then(Value::as_str))
-                    .or_else(|| val.pointer("/meta/git_commit").and_then(Value::as_str))
-                    .or_else(|| val.pointer("/info/build").and_then(Value::as_str))
-                    .or_else(|| val.pointer("/info/build_id").and_then(Value::as_str))
-                    .map(ToString::to_string),
-            },
+            Some(val) => {
+                #[cfg(debug_assertions)]
+                if !val.is_object() {
+                    eprintln!("health: unexpected response type: {:?}", val);
+                }
+                HealthStatus {
+                    connected: true,
+                    healthy: val["lifecycle"]["is_healthy"].as_bool().unwrap_or(false),
+                    uptime: val["lifecycle"]["uptime_seconds"].as_u64().unwrap_or(0),
+                    requests_per_minute: val["stats"]["requests_per_minute"]
+                        .as_f64()
+                        .unwrap_or(0.0),
+                    success_rate: val["stats"]["success_rate"].as_f64().unwrap_or(0.0),
+                    avg_latency_ms: val["stats"]["avg_latency_ms"].as_f64().unwrap_or(0.0),
+                    backend_version: val
+                        .pointer("/lifecycle/version")
+                        .and_then(Value::as_str)
+                        .or_else(|| val.get("version").and_then(Value::as_str))
+                        .or_else(|| val.pointer("/meta/version").and_then(Value::as_str))
+                        .or_else(|| val.pointer("/info/version").and_then(Value::as_str))
+                        .map(ToString::to_string),
+                    backend_build: val
+                        .pointer("/lifecycle/build")
+                        .and_then(Value::as_str)
+                        .or_else(|| val.pointer("/lifecycle/build_id").and_then(Value::as_str))
+                        .or_else(|| val.pointer("/meta/build").and_then(Value::as_str))
+                        .or_else(|| val.pointer("/meta/git_commit").and_then(Value::as_str))
+                        .or_else(|| val.pointer("/info/build").and_then(Value::as_str))
+                        .or_else(|| val.pointer("/info/build_id").and_then(Value::as_str))
+                        .map(ToString::to_string),
+                }
+            }
             None => HealthStatus {
                 connected: false,
                 healthy: false,

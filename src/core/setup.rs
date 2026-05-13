@@ -480,13 +480,13 @@ pub fn apply_recommended_to_config(config_path: &Path) -> Result<()> {
         ),
     );
 
-    let cache = ensure_table(table, "cache");
+    let cache = ensure_table(table, "cache")?;
     cache.insert(
         "enabled".to_string(),
         toml::Value::Boolean(recommendations.cache_enabled),
     );
 
-    let vector = ensure_table(table, "vector");
+    let vector = ensure_table(table, "vector")?;
     vector.insert(
         "enabled".to_string(),
         toml::Value::Boolean(recommendations.vector_enabled),
@@ -497,7 +497,7 @@ pub fn apply_recommended_to_config(config_path: &Path) -> Result<()> {
         .and_then(|value| value.as_table())
         .map(|agents| agents.keys().cloned().collect::<Vec<String>>())
         .unwrap_or_default();
-    let phases = ensure_table(table, "phases");
+    let phases = ensure_table(table, "phases")?;
     let mut created_phases = Vec::new();
 
     for (phase_name, timeout) in [
@@ -524,7 +524,7 @@ pub fn apply_recommended_to_config(config_path: &Path) -> Result<()> {
         else {
             continue;
         };
-        let options = ensure_table(phase, "options");
+        let options = ensure_table(phase, "options")?;
         options.insert(
             "request_timeout_seconds".to_string(),
             toml::Value::Integer(timeout as i64),
@@ -535,7 +535,7 @@ pub fn apply_recommended_to_config(config_path: &Path) -> Result<()> {
         .get_mut("coding")
         .and_then(|value| value.as_table_mut())
     {
-        let options = ensure_table(coding_phase, "options");
+        let options = ensure_table(coding_phase, "options")?;
         options.insert(
             "review_timeout_seconds".to_string(),
             toml::Value::Integer(recommendations.coding_review_timeout_seconds as i64),
@@ -891,7 +891,7 @@ pub fn run_secret_command(
                     tf("error.keyring_read", &[("error", &format!("{}", err))])
                 )
             })?;
-            println!("{}", secret);
+            println!("{}", mask_secret_pool_entry(&secret));
             Ok(())
         }
         SecretAction::Delete => {
@@ -2215,7 +2215,7 @@ pub fn add_local_model(config_path: &Path, mut options: LocalModelOptions) -> Re
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("root toml is not table"))?;
 
-    let agents = ensure_table(table, "agents");
+    let agents = ensure_table(table, "agents")?;
     let mut agent_table = toml::map::Map::new();
     agent_table.insert(
         "type".to_string(),
@@ -2251,7 +2251,7 @@ pub fn add_local_model(config_path: &Path, mut options: LocalModelOptions) -> Re
     agents.insert(name.clone(), toml::Value::Table(agent_table));
 
     if options.apply_to_phases {
-        let phases = ensure_table(table, "phases");
+        let phases = ensure_table(table, "phases")?;
         for phase_name in ["planning", "coding", "review", "delivery"] {
             let Some(phase) = phases
                 .get_mut(phase_name)
@@ -2259,11 +2259,11 @@ pub fn add_local_model(config_path: &Path, mut options: LocalModelOptions) -> Re
             else {
                 continue;
             };
-            ensure_string_array_contains(phase, "agents", &name);
+            ensure_string_array_contains(phase, "agents", &name)?;
 
             if phase_name == "coding" {
-                let options = ensure_table(phase, "options");
-                ensure_string_array_contains(options, "full_auto_review_agents", &name);
+                let options = ensure_table(phase, "options")?;
+                ensure_string_array_contains(options, "full_auto_review_agents", &name)?;
             }
         }
     }
@@ -2282,7 +2282,7 @@ pub fn add_local_model(config_path: &Path, mut options: LocalModelOptions) -> Re
 fn ensure_table<'a>(
     parent: &'a mut toml::map::Map<String, toml::Value>,
     key: &str,
-) -> &'a mut toml::map::Map<String, toml::Value> {
+) -> Result<&'a mut toml::map::Map<String, toml::Value>> {
     let value = parent
         .entry(key.to_string())
         .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
@@ -2291,14 +2291,14 @@ fn ensure_table<'a>(
     }
     value
         .as_table_mut()
-        .expect("table must be available after normalization")
+        .ok_or_else(|| anyhow::anyhow!("expected table after normalization"))
 }
 
 fn ensure_string_array_contains(
     parent: &mut toml::map::Map<String, toml::Value>,
     key: &str,
     item: &str,
-) {
+) -> Result<()> {
     let value = parent
         .entry(key.to_string())
         .or_insert_with(|| toml::Value::Array(Vec::new()));
@@ -2307,13 +2307,14 @@ fn ensure_string_array_contains(
     }
     let array = value
         .as_array_mut()
-        .expect("array must be available after normalization");
+        .ok_or_else(|| anyhow::anyhow!("expected array after normalization"))?;
     let exists = array
         .iter()
         .any(|entry| entry.as_str().map(|v| v == item).unwrap_or(false));
     if !exists {
         array.push(toml::Value::String(item.to_string()));
     }
+    Ok(())
 }
 
 #[cfg(test)]

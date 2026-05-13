@@ -32,12 +32,12 @@ pub struct SkillsView {
     pub import_url: String,
     pub show_import: bool,
     pub sending: bool,
-    selected_skill_name: String,
-    edit_desc: String,
-    edit_prompt: String,
-    edit_schema: String,
-    test_input: String,
-    rollback_version: String,
+    pub selected_skill_name: String,
+    pub edit_desc: String,
+    pub edit_prompt: String,
+    pub edit_schema: String,
+    pub test_input: String,
+    pub rollback_version: String,
     versions_for_skill: String,
     versions: Vec<String>,
     initialized: bool,
@@ -102,7 +102,7 @@ impl SkillsView {
         self.success.clear();
     }
 
-    fn load_skill_editor_by_name(&mut self, name: &str) -> bool {
+    pub fn load_skill_editor_by_name(&mut self, name: &str) -> bool {
         if let Some(skill) = self
             .skills
             .iter()
@@ -950,8 +950,9 @@ impl SkillsView {
                                         });
                                     } else {
                                         versions.sort_by(|a, b| {
-                                            let a_num = a.parse::<i64>().unwrap_or(-1);
-                                            let b_num = b.parse::<i64>().unwrap_or(-1);
+                                            // Parse version numbers for sort; unparseable versions sort to the beginning
+                                            let a_num = a.parse::<i64>().unwrap_or(0);
+                                            let b_num = b.parse::<i64>().unwrap_or(0);
                                             b_num.cmp(&a_num).then_with(|| b.cmp(a))
                                         });
                                         let _ = tx.send(SkillsUpdate::Versions {
@@ -1180,8 +1181,9 @@ impl SkillsView {
                                             }
                                         }
                                         versions.sort_by(|a, b| {
-                                            let a_num = a.parse::<i64>().unwrap_or(-1);
-                                            let b_num = b.parse::<i64>().unwrap_or(-1);
+                                            // Parse version numbers for sort; unparseable versions sort to the beginning
+                                            let a_num = a.parse::<i64>().unwrap_or(0);
+                                            let b_num = b.parse::<i64>().unwrap_or(0);
                                             b_num.cmp(&a_num).then_with(|| b.cmp(a))
                                         });
                                         let _ = tx.send(SkillsUpdate::Versions {

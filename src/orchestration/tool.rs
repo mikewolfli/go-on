@@ -5,16 +5,15 @@
 //! once orchestration logic integrates them.
 
 use crate::i18n::runtime::{t, tf};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use glob::Pattern;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use tempfile::NamedTempFile;
 use tracing::{debug, info, warn};
 
 use crate::pua::{tool_execution_report, PuaExecutionReport};
@@ -419,23 +418,19 @@ impl Tool for ApplyPatchTool {
             .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_patch")))?;
         let check_only = input.payload["check"].as_bool().unwrap_or(false);
         let current_dir = input.payload["directory"].as_str().unwrap_or(".");
-        let patch_file = env::temp_dir().join(format!(
-            "go_on_patch_{}.diff",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0)
-        ));
-
-        fs::write(&patch_file, patch)?;
+        let mut patch_file =
+            NamedTempFile::new().context("failed to create temp file for patch")?;
+        let patch_path = patch_file.path().to_path_buf();
+        patch_file
+            .write_all(patch.as_bytes())
+            .context("failed to write patch to temp file")?;
         let mut command = Command::new("git");
         command.arg("apply");
         if check_only {
             command.arg("--check");
         }
         debug!(directory = %current_dir, check_only = %check_only, "tool: running git apply");
-        let output = command.arg(&patch_file).current_dir(current_dir).output()?;
-        let _ = fs::remove_file(&patch_file);
+        let output = command.arg(&patch_path).current_dir(current_dir).output()?;
         let success = output.status.success();
         if !success {
             warn!(
@@ -503,6 +498,21 @@ impl Tool for RunTestsTool {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_else(|| vec!["test".to_string()]);
+        // Validate arguments: only allow alphanumeric, `-`, `_`, `.`, `/`, `=`, and `--` prefixes
+        for arg in &args {
+            if !arg.chars().all(|c| {
+                c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '/' || c == '='
+            }) {
+                anyhow::bail!("Invalid test argument: '{}' — only alphanumeric, dashes, underscores, dots, slashes, and equals signs allowed", arg);
+            }
+            if arg.starts_with("--")
+                && !arg[2..]
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '=')
+            {
+                anyhow::bail!("Invalid flag argument: '{}'", arg);
+            }
+        }
         let current_dir = input.payload["directory"].as_str().unwrap_or(".");
         debug!(command = %command_name, args = ?args, directory = %current_dir, "tool: running shell command");
         let output = Command::new(command_name)

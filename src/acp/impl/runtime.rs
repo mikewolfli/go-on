@@ -240,7 +240,7 @@ pub fn new_acp_server(
                 failure_prevention_state.register_service(&name);
             }
 
-            let fallback_server = AcpServer {
+            let mut fallback_server = AcpServer {
                 flow_manager: Some(flow.clone()),
                 agent_registry: Some(registry.clone()),
                 cache: CacheLayer {
@@ -332,6 +332,60 @@ pub fn new_acp_server(
                 scheduler: None,
             };
 
+            // Wire dual-level task scheduler (ARCH-02): create the scheduler and
+            // register one worker per known agent so the priority queue has real routing
+            // targets.  The scheduler tracks queue depth and active-worker counts that
+            // are surfaced in governance.status.
+            let task_scheduler = {
+                let config = crate::orchestration::scheduler::SchedulerConfig::default();
+                let s = Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(
+                    config,
+                ));
+                for agent_name in registry.names() {
+                    if let Err(e) = s.register_worker(&agent_name, &agent_name) {
+                        warn!(
+                            "failed to register worker for agent '{}': {}",
+                            agent_name, e
+                        );
+                    }
+                }
+                s
+            };
+            fallback_server.scheduler = Some(task_scheduler);
+
+            if fallback_server.runtime_config.skills_enabled {
+                fallback_server.register_skill(Arc::new(crate::orchestration::skill::EchoSkill));
+                fallback_server.register_skill(Arc::new(
+                    crate::orchestration::skill::SkillCreatorSkill::new(
+                        fallback_server.skill_registry.clone(),
+                    ),
+                ));
+            }
+
+            // Wire the new modules' state from CapabilityBus into the fallback server's
+            // standalone fields so process_chat_request can access them directly.
+            fallback_server.schema_registry = Arc::clone(
+                &fallback_server
+                    .capability_bus
+                    .as_ref()
+                    .map(|cb| Arc::clone(&cb.schema_registry))
+                    .unwrap_or_default(),
+            );
+            fallback_server.tenant_budget = Arc::clone(
+                &fallback_server
+                    .capability_bus
+                    .as_ref()
+                    .map(|cb| Arc::clone(&cb.tenant_budget))
+                    .unwrap_or_default(),
+            );
+            fallback_server.optimizer_registry = Arc::clone(
+                &fallback_server
+                    .capability_bus
+                    .as_ref()
+                    .map(|cb| Arc::clone(&cb.optimizer_registry))
+                    .unwrap_or_default(),
+            );
+
             // Wire the token cache into the agent registry for the fallback path too.
             registry.set_token_cache(Some(Arc::clone(&fallback_server.cache.token_cache)));
 
@@ -363,9 +417,15 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
     let mut sigterm = std::pin::pin!(async {
         #[cfg(unix)]
         {
-            let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
-                .expect("failed to register SIGTERM handler");
-            stream.recv().await;
+            match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+                Ok(mut stream) => {
+                    stream.recv().await;
+                }
+                Err(e) => {
+                    warn!("failed to register SIGTERM handler: {e}; graceful shutdown via SIGTERM disabled");
+                    std::future::pending::<()>().await;
+                }
+            }
         }
         #[cfg(not(unix))]
         std::future::pending::<()>().await;
@@ -471,9 +531,15 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
     let mut sigterm = std::pin::pin!(async {
         #[cfg(unix)]
         {
-            let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
-                .expect("failed to register SIGTERM handler");
-            stream.recv().await;
+            match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+                Ok(mut stream) => {
+                    stream.recv().await;
+                }
+                Err(e) => {
+                    warn!("failed to register SIGTERM handler: {e}; graceful shutdown via SIGTERM disabled");
+                    std::future::pending::<()>().await;
+                }
+            }
         }
         #[cfg(not(unix))]
         std::future::pending::<()>().await;
@@ -2870,14 +2936,22 @@ fn infer_adaptive_signal(method: &str, path: &str, headers: &str) -> &'static st
 }
 
 fn extract_content_length(headers: &str) -> Option<usize> {
-    headers.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        if name.trim().eq_ignore_ascii_case("content-length") {
-            value.trim().parse::<usize>().ok()
-        } else {
-            None
+    let mut found: Option<usize> = None;
+    for line in headers.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("content-length") {
+            continue;
         }
-    })
+        let val: usize = value.trim().parse().ok()?;
+        match found {
+            None => found = Some(val),
+            Some(prev) if prev == val => {} // duplicate with same value — OK
+            Some(_) => return None,         // different values — reject per RFC 7230
+        }
+    }
+    found
 }
 
 fn extract_header_value(headers: &str, header_name: &str) -> Option<String> {

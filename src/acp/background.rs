@@ -312,7 +312,10 @@ pub async fn perform_health_check_cycle(
         |guard| guard.clone(),
     )
     .map(|cache| cache.entry_count().is_ok())
-    .unwrap_or(true);
+    .unwrap_or_else(|| {
+        warn!("sqlite health: lock returned None, assuming healthy");
+        true
+    });
 
     let vector_health = with_acp_lock(
         lock_monitor.as_ref(),
@@ -321,7 +324,10 @@ pub async fn perform_health_check_cycle(
         |guard| guard.clone(),
     )
     .map(|store| store.memory_entry_count().is_ok() && store.summary_entry_count().is_ok())
-    .unwrap_or(true);
+    .unwrap_or_else(|| {
+        warn!("vector health: lock returned None, assuming healthy");
+        true
+    });
 
     // Check circuit breakers
     let circuit_breaker_health = with_acp_lock(

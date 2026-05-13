@@ -162,13 +162,16 @@ impl I18nManager {
     pub fn load_language(&self, language: Language) -> Result<()> {
         let file_path = self.languages_dir.join(format!("{}.json", language.code()));
 
-        if !file_path.exists() {
-            debug!("Language file not found: {:?}", file_path);
-            return Ok(());
-        }
-
-        let content = fs::read_to_string(&file_path)
-            .context(format!("Failed to read language file: {:?}", file_path))?;
+        let content = match fs::read_to_string(&file_path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                debug!("Language file not found: {:?}", file_path);
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(e).context(format!("Failed to read language file: {:?}", file_path))
+            }
+        };
 
         let translations_data: Translations = serde_json::from_str(&content)
             .context(format!("Failed to parse language file: {:?}", file_path))?;

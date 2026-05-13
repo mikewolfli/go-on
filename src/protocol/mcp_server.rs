@@ -357,14 +357,22 @@ async fn handle_http_connection(
 }
 
 fn extract_content_length(headers: &str) -> Option<usize> {
-    headers.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        if name.trim().eq_ignore_ascii_case("content-length") {
-            value.trim().parse::<usize>().ok()
-        } else {
-            None
+    let mut found: Option<usize> = None;
+    for line in headers.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("content-length") {
+            continue;
         }
-    })
+        let val: usize = value.trim().parse().ok()?;
+        match found {
+            None => found = Some(val),
+            Some(prev) if prev == val => {} // duplicate with same value — OK
+            Some(_) => return None,         // different values — reject per RFC 7230
+        }
+    }
+    found
 }
 
 async fn write_http_json_response(
