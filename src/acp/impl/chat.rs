@@ -3999,7 +3999,7 @@ fn detect_repeated_task_pattern(messages: &[&str]) -> Option<DetectedTaskPattern
         .collect();
 
     // Sort by hit count descending
-    cluster_hits.sort_by(|a, b| b.0.cmp(&a.0));
+    cluster_hits.sort_by_key(|b| std::cmp::Reverse(b.0));
 
     // Return the best match if it appears 3+ times
     if !cluster_hits.is_empty() {

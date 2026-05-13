@@ -330,7 +330,7 @@ pub(super) fn metrics_errors_summary_payload(server: &AcpServer, params: &Value)
     }
 
     let mut grouped = error_groups.into_iter().collect::<Vec<_>>();
-    grouped.sort_by(|left, right| right.1.cmp(&left.1));
+    grouped.sort_by_key(|right| std::cmp::Reverse(right.1));
     let grouped = grouped
         .into_iter()
         .map(|(error_type, count)| json!({"error_type": error_type, "count": count}))

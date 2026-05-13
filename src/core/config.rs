@@ -21,6 +21,7 @@ use crate::orchestration::roles::{install_role_registry, RoleDefinition};
 /// Application configuration structure
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct AppConfig {
     /// Default phase to use when none is specified
     pub default_phase: String,
@@ -58,26 +59,6 @@ pub struct AppConfig {
     pub role_registry: HashMap<String, RoleDefinition>,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            default_phase: String::new(),
-            agents: HashMap::new(),
-            flow: FlowConfig::default(),
-            phases: HashMap::new(),
-            runtime: None,
-            cache: None,
-            vector: None,
-            autotune: None,
-            model_selection_mode: String::new(),
-            compliance: None,
-            startup_context: None,
-            scheduler: None,
-            reputation: None,
-            role_registry: HashMap::new(),
-        }
-    }
-}
 
 /// Simplified adaptive configuration for AI-driven setup
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1755,6 +1736,7 @@ fn default_summary_max_chars() -> usize {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct AgentConfig {
     #[serde(rename = "type")]
     pub agent_type: String,
@@ -1768,24 +1750,10 @@ pub struct AgentConfig {
     pub supports_system: Option<bool>,
 }
 
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            agent_type: String::new(),
-            url: None,
-            chat_path: None,
-            api_key_env: None,
-            secret_key_env: None,
-            anthropic_version: None,
-            model: None,
-            max_tokens: None,
-            supports_system: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct FlowConfig {
     pub name: String,
     pub phases: Vec<String>,
@@ -1793,15 +1761,6 @@ pub struct FlowConfig {
     pub workflow_type: WorkflowType,
 }
 
-impl Default for FlowConfig {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            phases: Vec::new(),
-            workflow_type: WorkflowType::default(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1940,6 +1899,7 @@ impl Default for ReputationConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct PhaseConfig {
     pub description: String,
     pub agents: Vec<String>,
@@ -1948,17 +1908,6 @@ pub struct PhaseConfig {
     pub options: Option<PhaseOptions>,
 }
 
-impl Default for PhaseConfig {
-    fn default() -> Self {
-        Self {
-            description: String::new(),
-            agents: Vec::new(),
-            fallback: None,
-            principles: None,
-            options: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct PhaseOptions {

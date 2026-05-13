@@ -114,7 +114,7 @@ impl McpServer {
             .tool_registry
             .names()
             .into_iter()
-            .map(|name| crate::mcp::tools::tool_descriptor(name))
+            .map(crate::mcp::tools::tool_descriptor)
             .collect::<Vec<_>>();
 
         // Inject registered skills from ACP server (if available)
@@ -198,7 +198,7 @@ impl McpServer {
                         method: tool_name.clone(),
                         request_id: "mcp-tool-call".to_string(),
                     };
-                    let _ = crate::acp::r#impl::request::exec_pack::handle_workflow_execute(
+                    crate::acp::r#impl::request::exec_pack::handle_workflow_execute(
                         acp, params, None, &trace,
                     )
                     .await?;

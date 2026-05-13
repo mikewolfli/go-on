@@ -155,7 +155,7 @@ pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
         }
     }
 
-    requests.sort_by(|left, right| right.0.cmp(&left.0));
+    requests.sort_by_key(|right| std::cmp::Reverse(right.0));
     requests.truncate(slow_top_n);
     let requests = requests
         .into_iter()

@@ -1526,7 +1526,7 @@ async fn handle_openai_chat_completions(
             // Client disconnected while backend task is still producing tokens.
             // Abort task to avoid orphan compute and channel buildup.
             task.abort();
-            return Err(err.into());
+            return Err(err);
         }
     }
 
@@ -2252,7 +2252,7 @@ async fn handle_response_stream(
     while let Some(frame) = rx.recv().await {
         if let Err(err) = write_sse_event(socket, &frame.event, &frame.payload).await {
             task.abort();
-            return Err(err.into());
+            return Err(err);
         }
     }
 
@@ -2687,7 +2687,7 @@ async fn route_http_post(
                             // Client disconnected while backend task is still active.
                             // Abort task to avoid orphan compute and channel buildup.
                             task.abort();
-                            return Err(err.into());
+                            return Err(err);
                         }
                     }
 

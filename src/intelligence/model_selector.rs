@@ -151,9 +151,9 @@ impl ModelSelector {
         let qualified: Vec<&ModelCharacteristics> = available_models
             .iter()
             .filter(|m| {
-                !(criteria.requires_vision && !m.supports_vision
-                    || criteria.requires_function_calling && !m.supports_function_calling
-                    || criteria.requires_code && !m.excels_at_code)
+                (m.excels_at_code || !criteria.requires_code)
+                    && (m.supports_function_calling || !criteria.requires_function_calling)
+                    && (m.supports_vision || !criteria.requires_vision)
             })
             .collect();
 
