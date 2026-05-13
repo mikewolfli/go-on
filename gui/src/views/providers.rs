@@ -1517,9 +1517,11 @@ impl ProvidersView {
                         let tx = self.pending_tx.clone();
                         let device_code = self.copilot_device_code.clone();
                         let ctx_clone = ctx.clone();
-                        let proxy_url = std::env::var("HTTPS_PROXY").unwrap_or_default();
                         #[cfg(debug_assertions)]
-                        eprintln!("[poll] device_code={}, HTTPS_PROXY={}", &device_code[..8.min(device_code.len())], proxy_url);
+                        {
+                            let proxy_url = std::env::var("HTTPS_PROXY").unwrap_or_default();
+                            eprintln!("[poll] device_code={}, HTTPS_PROXY={}", &device_code[..8.min(device_code.len())], proxy_url);
+                        }
                         tokio::spawn(async move {
                             fn try_proxy_client() -> reqwest::Client {
                                 let proxy_urls = [
