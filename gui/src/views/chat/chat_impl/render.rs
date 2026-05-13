@@ -20,8 +20,13 @@ impl ChatView {
         const MAX_MARKDOWN_CHARS: usize = 10_000;
         if text.len() > MAX_MARKDOWN_CHARS {
             let preview: String = text.chars().take(MAX_MARKDOWN_CHARS).collect();
+            let trunc_color = if ui.visuals().dark_mode {
+                egui::Color32::from_rgb(220, 170, 80)
+            } else {
+                egui::Color32::from_rgb(180, 130, 40)
+            };
             ui.colored_label(
-                egui::Color32::from_rgb(220, 170, 80),
+                trunc_color,
                 truncation_hint.replace("{chars}", &text.len().to_string()),
             );
             ui.add_space(4.0);
@@ -214,8 +219,13 @@ fn render_node<'a>(
         }
 
         comrak::nodes::NodeValue::BlockQuote => {
+            let quote_bg = if ui.visuals().dark_mode {
+                egui::Color32::from_rgba_premultiplied(128, 128, 128, 25)
+            } else {
+                egui::Color32::from_rgba_premultiplied(128, 128, 128, 15)
+            };
             egui::Frame::new()
-                .fill(egui::Color32::from_rgba_premultiplied(128, 128, 128, 20))
+                .fill(quote_bg)
                 .corner_radius(4.0)
                 .inner_margin(egui::Margin::symmetric(10, 4))
                 .show(ui, |ui| {

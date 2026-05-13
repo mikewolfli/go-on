@@ -1000,26 +1000,39 @@ impl ChatView {
 
     // ── Messages area ─────────────────────
     fn show_messages(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
+        let dark = ui.visuals().dark_mode;
         let total_msgs = self.messages().len();
         let start_idx = total_msgs.saturating_sub(Self::MAX_RENDERED_MESSAGES);
+
+        // Theme-aware muted/weak text colors — used throughout for contrast in all themes
+        let muted_text = if dark {
+            egui::Color32::from_rgb(140, 142, 150)
+        } else {
+            egui::Color32::from_rgb(110, 112, 120)
+        };
+        let weak_text = if dark {
+            egui::Color32::from_rgb(160, 162, 170)
+        } else {
+            egui::Color32::from_rgb(130, 132, 140)
+        };
 
         if total_msgs == 0 {
             ui.add_space(80.0);
             ui.vertical_centered(|ui| {
                 ui.label(
                     egui::RichText::new(i18n.t("chat.noMessages"))
-                        .color(egui::Color32::from_rgb(140, 142, 150))
+                        .color(muted_text)
                         .size(16.0),
                 );
                 ui.add_space(6.0);
-                ui.colored_label(egui::Color32::from_rgb(180, 182, 188), i18n.t("chat.hint"));
+                ui.colored_label(weak_text, i18n.t("chat.hint"));
             });
             return;
         }
 
         if start_idx > 0 {
             ui.colored_label(
-                egui::Color32::from_rgb(140, 142, 150),
+                muted_text,
                 i18n.t("chat.showingLatest")
                     .replace("{shown}", &(total_msgs - start_idx).to_string())
                     .replace("{total}", &total_msgs.to_string()),
@@ -1041,8 +1054,13 @@ impl ChatView {
             // ── Edit mode: show TextEdit instead of bubble ────────
             if self.edit_msg_idx == Some(msg_idx) {
                 ui.add_space(4.0);
+                let edit_bg = if dark {
+                    egui::Color32::from_rgba_premultiplied(80, 60, 10, 50)
+                } else {
+                    egui::Color32::from_rgba_premultiplied(255, 220, 100, 30)
+                };
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgba_premultiplied(255, 220, 100, 30))
+                    .fill(edit_bg)
                     .corner_radius(6.0)
                     .inner_margin(egui::Margin::symmetric(8i8, 6i8))
                     .show(ui, |ui| {
@@ -1143,15 +1161,11 @@ impl ChatView {
 
             // Timestamp row
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(time_str)
-                        .color(egui::Color32::from_rgb(160, 162, 170))
-                        .size(11.0),
-                );
+                ui.label(egui::RichText::new(time_str).color(weak_text).size(11.0));
                 if !model_name.is_empty() {
                     ui.label(
                         egui::RichText::new(&model_name)
-                            .color(egui::Color32::from_rgb(140, 142, 150))
+                            .color(muted_text)
                             .size(10.0),
                     );
                 }
@@ -1269,12 +1283,18 @@ impl ChatView {
                                     msg_thinking.chars().count()
                                 );
 
+                                let thinking_color = if dark {
+                                    egui::Color32::from_rgb(180, 140, 60)
+                                } else {
+                                    egui::Color32::from_rgb(140, 100, 40)
+                                };
+
                                 if ui
                                     .add(
                                         egui::Button::new(
                                             egui::RichText::new(&thinking_label)
                                                 .size(11.0)
-                                                .color(egui::Color32::from_rgb(180, 140, 60)),
+                                                .color(thinking_color),
                                         )
                                         .fill(egui::Color32::TRANSPARENT)
                                         .corner_radius(4.0)
@@ -1291,10 +1311,13 @@ impl ChatView {
 
                                 if is_expanded {
                                     ui.add_space(4.0);
+                                    let think_bg = if dark {
+                                        egui::Color32::from_rgba_premultiplied(60, 50, 20, 30)
+                                    } else {
+                                        egui::Color32::from_rgba_premultiplied(255, 240, 200, 40)
+                                    };
                                     egui::Frame::new()
-                                        .fill(egui::Color32::from_rgba_premultiplied(
-                                            60, 50, 20, 30,
-                                        ))
+                                        .fill(think_bg)
                                         .corner_radius(6.0)
                                         .inner_margin(egui::Margin::symmetric(8i8, 6i8))
                                         .show(ui, |ui| {
@@ -1303,7 +1326,7 @@ impl ChatView {
                                                 &msg_thinking,
                                                 &i18n.t("chat.copyCode"),
                                                 enable_markdown_val,
-                                                egui::Color32::from_rgb(160, 162, 170),
+                                                weak_text,
                                                 &trunc_hint,
                                             );
                                             ui.horizontal(|ui| {
@@ -1345,10 +1368,7 @@ impl ChatView {
                             Self::draw_role_avatar(ui, false);
                             ui.add_space(6.0);
                             ui.add(egui::Spinner::new());
-                            ui.colored_label(
-                                egui::Color32::from_rgb(160, 162, 170),
-                                i18n.t("chat.thinking"),
-                            );
+                            ui.colored_label(weak_text, i18n.t("chat.thinking"));
                         });
                         ui.add_space(6.0);
                     }
@@ -1364,7 +1384,7 @@ impl ChatView {
                     ui.horizontal(|ui| {
                         ui.add_space(36.0);
                         ui.colored_label(
-                            egui::Color32::from_rgb(140, 142, 150),
+                            muted_text,
                             format!(
                                 "⚡ {}",
                                 i18n.t("chat.tokenSummary")

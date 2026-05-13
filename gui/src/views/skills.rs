@@ -642,13 +642,34 @@ impl SkillsView {
 
         // Skills list / empty state with default skill suggestion
         if self.skills.is_empty() && !self.loading {
+            let dark = ui.visuals().dark_mode;
+            let muted_text = if dark {
+                egui::Color32::from_rgb(140, 142, 150)
+            } else {
+                egui::Color32::from_rgb(110, 112, 120)
+            };
+            let link_color = if dark {
+                egui::Color32::from_rgb(100, 170, 255)
+            } else {
+                egui::Color32::from_rgb(0, 106, 255)
+            };
             ui.add_space(30.0);
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new(i18n.t("skills.none")).size(14.0).color(egui::Color32::from_rgb(140, 142, 150)));
+                ui.label(egui::RichText::new(i18n.t("skills.none")).size(14.0).color(muted_text));
                 ui.add_space(16.0);
                 // Default Skill Creator suggestion
+                let suggest_bg = if dark {
+                    egui::Color32::from_rgb(30, 40, 60)
+                } else {
+                    egui::Color32::from_rgb(235, 243, 255)
+                };
+                let desc_color = if dark {
+                    egui::Color32::from_rgb(200, 200, 210)
+                } else {
+                    egui::Color32::from_rgb(60, 60, 70)
+                };
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(235, 243, 255))
+                    .fill(suggest_bg)
                     .corner_radius(8.0)
                     .inner_margin(egui::Margin::symmetric(16i8, 12i8))
                     .show(ui, |ui| {
@@ -656,18 +677,18 @@ impl SkillsView {
                             ui.label("\u{1f9e0}");
                             ui.label(
                                 egui::RichText::new(i18n.t("skills.defaultCreator.title"))
-                                    .color(egui::Color32::from_rgb(0, 106, 255))
+                                    .color(link_color)
                                     .strong(),
                             );
                         });
                         ui.label(
                             egui::RichText::new(i18n.t("skills.defaultCreator.description"))
-                                .color(egui::Color32::from_rgb(60, 60, 70))
+                                .color(desc_color)
                                 .size(13.0),
                         );
                         ui.add_space(8.0);
                         let btn = egui::Button::new(i18n.t("skills.defaultCreator.button"))
-                            .fill(egui::Color32::from_rgb(0, 106, 255))
+                            .fill(link_color)
                             .min_size(egui::vec2(180.0, 32.0));
                         if ui.add(btn).clicked()
                         {
@@ -750,10 +771,21 @@ impl SkillsView {
                 )
             };
             egui::Frame::group(ui.style()).show(ui, |ui| {
+                let dark = ui.visuals().dark_mode;
+                let skill_color = if dark {
+                    egui::Color32::from_rgb(100, 150, 255)
+                } else {
+                    egui::Color32::from_rgb(40, 80, 180)
+                };
+                let muted_text = if dark {
+                    egui::Color32::from_rgb(140, 142, 150)
+                } else {
+                    egui::Color32::from_rgb(110, 112, 120)
+                };
                 ui.horizontal(|ui| {
                     let unnamed = i18n.t("skills.import.unnamed");
                     let name_text = skill_name_opt.as_deref().unwrap_or(&unnamed);
-                    ui.colored_label(egui::Color32::from_rgb(100, 150, 255), name_text);
+                    ui.colored_label(skill_color, name_text);
                     if let Some(enabled) = skill_enabled {
                         let (color, label) = if enabled {
                             (egui::Color32::from_rgb(20, 120, 70), "●")
@@ -767,7 +799,7 @@ impl SkillsView {
                             ui.label(
                                 egui::RichText::new(format!("v{ver}"))
                                     .small()
-                                    .color(egui::Color32::from_rgb(140, 142, 150)),
+                                    .color(muted_text),
                             );
                         });
                     }

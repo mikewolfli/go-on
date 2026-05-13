@@ -1,4 +1,4 @@
-name: Release Backend and GUI
+name: Release (build + upload)
 
 on:
   workflow_dispatch:
@@ -6,17 +6,17 @@ on:
     tags:
       - "v*"
       - "0.*"
-  release:
-    types: [published]
 
 permissions:
   contents: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  CARGO_TERM_COLOR: always
 
 jobs:
-  build-and-package:
+  build-and-upload:
+    name: Build + upload
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -28,86 +28,53 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Rust cache
+      - name: Rust cache (backend)
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: "go-on-backend-release"
 
-      - name: Create required SQLite databases for release build
+      - name: Rust cache (GUI)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "gui -> gui/target"
+          shared-key: "go-on-gui-release"
+
+      - name: Create SQLite databases
         shell: bash
         run: |
           mkdir -p config
           touch config/acp_cache.sqlite3
           touch config/acp_vector.sqlite3
 
-      # ── Backend: build release binary ─────────────────────────────────
-      - name: Build backend (release, profile-local)
-        run: cargo build --release --locked
+      # ── Build ────────────────────────────────────────────────
+      - name: Build backend (release)
+        run: cargo build --release --locked 2>&1
 
-      # ── EGUI GUI ──────────────────────────────────────────────────────
       - name: Build EGUI GUI
-        run: cargo build --release --locked --manifest-path gui/Cargo.toml
+        run: cargo build --release --locked --manifest-path gui/Cargo.toml 2>&1
 
-      # ── VS Code addon ──────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: |
-            vscode-addon/package-lock.json
+          cache-dependency-path: vscode-addon/package-lock.json
 
-      - name: Build VS Code addon and package vsix
+      - name: Build VS Code addon
         working-directory: ./vscode-addon
         run: |
           npm ci
           npm run compile
           npx @vscode/vsce package --no-dependencies --out go-on-vscode.vsix
 
-      # ── Package ────────────────────────────────────────────────────────
-      - name: Prepare release package
-        shell: bash
-        run: |
-          PKG="go-on-release-${{ matrix.os }}"
-          mkdir -p "$PKG"
-
-          # EGUI GUI binary
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp gui/target/release/go-on-gui-egui.exe "$PKG/go-on-gui.exe" 2>/dev/null || true
-          else
-            cp gui/target/release/go-on-gui-egui "$PKG/go-on-gui" 2>/dev/null || true
-            chmod +x "$PKG/go-on-gui" 2>/dev/null || true
-          fi
-
-          # VS Code extension
-          cp vscode-addon/go-on-vscode.vsix "$PKG/" 2>/dev/null || true
-
-          # Standalone backend runtime
-          BACKEND_DIR="$PKG/backend"
-          mkdir -p "$BACKEND_DIR"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp target/release/go-on.exe "$BACKEND_DIR/" 2>/dev/null || true
-          else
-            cp target/release/go-on "$BACKEND_DIR/" 2>/dev/null || true
-          fi
-          cp -r RULES                               "$BACKEND_DIR/"  || true
-          cp -r languages                           "$BACKEND_DIR/"  || true
-          cp config/config.toml                     "$BACKEND_DIR/"  || true
-          cp config/config.coding.toml              "$BACKEND_DIR/"  || true
-          cp config/config.simple-server.toml       "$BACKEND_DIR/"  || true
-          cp config/config.multi-users-server.toml  "$BACKEND_DIR/"  || true
-          cp config/providers.toml                  "$BACKEND_DIR/"  || true
-          cp README.md                              "$BACKEND_DIR/"  || true
-          cp README.zh-CN.md                        "$BACKEND_DIR/"  || true
-          cp scripts/start-go-on.sh                 "$BACKEND_DIR/"  || true
-          cp scripts/stop-go-on.sh                  "$BACKEND_DIR/"  || true
-          cp scripts/run-quality-gate.sh            "$BACKEND_DIR/"  || true
-          cp scripts/run-release-readiness-gate.sh  "$BACKEND_DIR/"  || true
-
-          # Archive
-          tar -czf "${PKG}.tar.gz" "$PKG"
-
-      - name: Upload to GitHub Release
+      # ── Upload ───────────────────────────────────────────────
+      - name: Upload all assets
         uses: softprops/action-gh-release@v3
         with:
-          files: go-on-release-*.tar.gz
+          files: |
+            target/release/go-on${{ runner.os == 'Windows' && '.exe' || '' }}
+            gui/target/release/go-on-gui-egui${{ runner.os == 'Windows' && '.exe' || '' }}
+            vscode-addon/go-on-vscode.vsix
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
