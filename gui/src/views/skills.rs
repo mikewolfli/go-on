@@ -945,17 +945,25 @@ impl SkillsView {
                                 };
                                 let is_error = result.is_err();
                                 if is_error {
-                                    let msg = failed_tpl
-                                        .replace("{name}", &skill_name)
-                                        .replace(
-                                            "{error}",
-                                            &result.err().unwrap_or_else(|| "unknown".to_string()),
-                                        );
-                                    let _ = tx.send(SkillsUpdate::Versions {
-                                        skill_name,
-                                        versions: Vec::new(),
-                                        err: Some(msg),
-                                    });
+                                    let err_text = result.err().unwrap_or_else(|| "unknown".to_string());
+                                    // If the skill simply hasn't been imported yet, show a friendly info instead of error.
+                                    let err_lower = err_text.to_lowercase();
+                                    if err_lower.contains("not found") || err_lower.contains("未找到") || err_lower.contains("not_found") {
+                                        let _ = tx.send(SkillsUpdate::Versions {
+                                            skill_name,
+                                            versions: Vec::new(),
+                                            err: None,
+                                        });
+                                    } else {
+                                        let msg = failed_tpl
+                                            .replace("{name}", &skill_name)
+                                            .replace("{error}", &err_text);
+                                        let _ = tx.send(SkillsUpdate::Versions {
+                                            skill_name,
+                                            versions: Vec::new(),
+                                            err: Some(msg),
+                                        });
+                                    }
                                 } else {
                                     let mut versions = Vec::new();
                                     if let Ok(v) = result {

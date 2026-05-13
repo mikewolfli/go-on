@@ -2,6 +2,7 @@ use crate::backend::{BackendClient, ProviderCapabilityModel};
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;
 use crate::views::security_prefs;
+use serde_json::Value;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -44,10 +45,20 @@ pub struct ProvidersView {
     copilot_poll_interval: u64,
     /// Timestamp of last poll attempt
     copilot_last_poll: Instant,
+    /// Number of poll attempts for current device flow
+    copilot_poll_attempts: u64,
+    /// Number of times GitHub requested slower polling
+    copilot_slow_down_count: u64,
+    /// Last poll result summary for debugging
+    copilot_last_poll_result: String,
     /// Access token obtained after authorization
     copilot_access_token: String,
     /// Status message for the copilot auth section
     copilot_status: String,
+    /// GitHub OAuth client_id for Copilot Device Code flow
+    copilot_client_id: String,
+    /// Flag to trigger config reload after copilot auth completes
+    copilot_needs_reload: bool,
 }
 
 /// Provider names for the dropdown (34 total, matching providers.toml)
@@ -193,8 +204,13 @@ impl ProvidersView {
             copilot_verification_uri: String::new(),
             copilot_poll_interval: 5,
             copilot_last_poll: Instant::now(),
+            copilot_poll_attempts: 0,
+            copilot_slow_down_count: 0,
+            copilot_last_poll_result: String::new(),
             copilot_access_token: String::new(),
             copilot_status: String::new(),
+            copilot_client_id: String::new(),
+            copilot_needs_reload: false,
         }
     }
 
@@ -244,8 +260,19 @@ impl ProvidersView {
                         .unwrap_or("https://github.com/login/device")
                         .to_string();
                     self.copilot_poll_interval = resp["interval"].as_u64().unwrap_or(5);
+                    self.copilot_status = String::new();
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[device] user_code={}, uri={}, interval={}",
+                        self.copilot_user_code,
+                        self.copilot_verification_uri,
+                        self.copilot_poll_interval
+                    );
                     self.copilot_device_state = Some("polling".to_string());
                     self.copilot_last_poll = Instant::now();
+                    self.copilot_poll_attempts = 0;
+                    self.copilot_slow_down_count = 0;
+                    self.copilot_last_poll_result.clear();
                     self.copilot_status = String::new();
                 } else {
                     self.copilot_device_state = Some("error".to_string());
@@ -255,46 +282,63 @@ impl ProvidersView {
                 self.copilot_device_state = Some("error".to_string());
                 self.copilot_status = err_msg.to_string();
             } else if let Some(rest) = msg.strip_prefix("__copilot_poll__:") {
-                // Poll response
+                // Poll response — GitHub returns access_token on success, or error field on failure.
                 if let Ok(resp) = serde_json::from_str::<serde_json::Value>(rest) {
-                    let status = resp["status"].as_str().unwrap_or("");
-                    match status {
-                        "pending" | "slow_down" => {
-                            // Still waiting — keep polling
-                            self.copilot_status = i18n.t("providers.copilot_waiting").to_string();
-                        }
-                        "authorized" => {
-                            // Got the token!
-                            self.copilot_access_token =
-                                resp["access_token"].as_str().unwrap_or("").to_string();
+                    // Check for access_token first (success case)
+                    if let Some(token) = resp.get("access_token").and_then(Value::as_str) {
+                        if !token.is_empty() {
+                            self.copilot_last_poll_result =
+                                "authorized(access_token received)".to_string();
+                            self.copilot_access_token = token.to_string();
                             self.copilot_device_state = Some("done".to_string());
                             self.copilot_status =
                                 i18n.t("providers.copilot_authorized").to_string();
-                            // Auto-fill the api_key field with the token
                             self.new_key = self.copilot_access_token.clone();
+                            // Request config reload to refresh monitoring status
+                            self.copilot_needs_reload = true;
                         }
-                        "expired" => {
-                            self.copilot_device_state = Some("error".to_string());
-                            self.copilot_status = i18n.t("providers.copilot_expired").to_string();
-                        }
-                        "denied" => {
-                            self.copilot_device_state = Some("error".to_string());
-                            self.copilot_status = i18n.t("providers.copilot_denied").to_string();
-                        }
-                        "error" => {
-                            self.copilot_device_state = Some("error".to_string());
-                            self.copilot_status =
-                                format!("Error: {}", resp["error"].as_str().unwrap_or("unknown"));
-                        }
-                        _ => {
-                            self.copilot_status = format!("Status: {}", status);
+                    } else if let Some(error) = resp.get("error").and_then(Value::as_str) {
+                        self.copilot_last_poll_result = format!("oauth_error={}", error);
+                        match error {
+                            "authorization_pending" => {
+                                self.copilot_status =
+                                    i18n.t("providers.copilot_waiting").to_string();
+                            }
+                            "slow_down" => {
+                                self.copilot_slow_down_count =
+                                    self.copilot_slow_down_count.saturating_add(1);
+                                // RFC 8628: increase polling interval by at least 5s on slow_down.
+                                self.copilot_poll_interval =
+                                    self.copilot_poll_interval.saturating_add(5).min(60);
+                                self.copilot_status = format!(
+                                    "{} (backoff to {}s)",
+                                    i18n.t("providers.copilot_waiting"),
+                                    self.copilot_poll_interval
+                                );
+                            }
+                            "expired_token" => {
+                                self.copilot_device_state = Some("error".to_string());
+                                self.copilot_status =
+                                    i18n.t("providers.copilot_expired").to_string();
+                            }
+                            "access_denied" => {
+                                self.copilot_device_state = Some("error".to_string());
+                                self.copilot_status =
+                                    i18n.t("providers.copilot_denied").to_string();
+                            }
+                            _ => {
+                                self.copilot_device_state = Some("error".to_string());
+                                self.copilot_status = format!("Error: {}", error);
+                            }
                         }
                     }
                 } else {
+                    self.copilot_last_poll_result = "parse_error(response json)".to_string();
                     self.copilot_device_state = Some("error".to_string());
                     self.copilot_status = "Failed to parse poll response".to_string();
                 }
             } else if let Some(err_msg) = msg.strip_prefix("__copilot_poll_err__:") {
+                self.copilot_last_poll_result = format!("request_error={}", err_msg);
                 self.copilot_device_state = Some("error".to_string());
                 self.copilot_status = err_msg.to_string();
             } else {
@@ -465,118 +509,196 @@ impl ProvidersView {
                                     );
                                 }
                             });
-                        // ── Copilot OAuth Device Code section ──
+                        // ── Copilot Device Code authorization ──
                         if self.selected_provider.to_lowercase() == "copilot" {
                             ui.add_space(4.0);
                             ui.separator();
                             ui.add_space(2.0);
 
-                            match self.copilot_device_state.as_deref() {
-                                None | Some("idle")
-                                    if ui.button("Authorize via GitHub").clicked() =>
-                                {
-                                    self.copilot_device_state = Some("requesting".to_string());
-                                    self.copilot_status = i18n.t("providers.copilot_requesting").to_string();
-                                    let tx = self.pending_tx.clone();
-                                    let backend_clone = backend.clone();
-                                    let ctx_clone = ctx.clone();
-                                    tokio::spawn(async move {
-                                        match backend_clone.copilot_device_code_request().await {
-                                            Ok(resp) => {
-                                                let msg = format!("__copilot_device__:{}", serde_json::to_string(&resp).unwrap_or_default());
-                                                let _ = tx.send(msg);
-                                            }
-                                            Err(e) => {
-                                                let msg = format!("__copilot_device_err__:{}", e);
-                                                let _ = tx.send(msg);
+                            if self.copilot_device_state.is_none()
+                                && ui.button(i18n.t("providers.copilot_authorize")).clicked()
+                            {
+                                self.copilot_device_state = Some("requesting".to_string());
+                                self.copilot_status = i18n.t("providers.copilot_requesting").to_string();
+                                let tx = self.pending_tx.clone();
+                                let ctx_clone = ctx.clone();
+                                tokio::spawn(async move {
+                                    // Try common proxy ports, no env var dependency
+                                    let proxy_urls = [
+                                        "http://127.0.0.1:15732",
+                                        "http://127.0.0.1:7890",
+                                        "http://127.0.0.1:10809",
+                                        "http://127.0.0.1:10808",
+                                        "http://127.0.0.1:1080",
+                                        "http://127.0.0.1:33210",
+                                    ];
+                                    let env_url = std::env::var("HTTPS_PROXY")
+                                        .or_else(|_| std::env::var("https_proxy"))
+                                        .ok();
+                                    let mut client = reqwest::Client::new();
+                                    for url in env_url
+                                        .as_deref()
+                                        .into_iter()
+                                        .chain(proxy_urls.iter().copied())
+                                    {
+                                        if let Ok(p) = reqwest::Proxy::https(url) {
+                                            if let Ok(c) = reqwest::Client::builder()
+                                                .proxy(p)
+                                                .build()
+                                            {
+                                                client = c;
+                                                break;
                                             }
                                         }
-                                        ctx_clone.request_repaint_after(Duration::from_millis(16));
-                                    });
-                                }
-                                Some("requesting") => {
-                                    ui.spinner();
-                                    ui.label(i18n.t("providers.copilot_requesting"));
-                                }
-                                Some("polling") => {
-                                    // Display the device code info
-                                    ui.horizontal(|ui| {
-                                        ui.label(i18n.t("providers.copilot_open_url"));
-                                        if ui.link(&self.copilot_verification_uri).clicked() {
-                                            let _ = webbrowser::open(&self.copilot_verification_uri);
-                                        }
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(format!(
-                                            "{}: {}",
-                                            i18n.t("providers.copilot_enter_code"),
-                                            self.copilot_user_code
-                                        ));
-                                    });
-                                    ui.add_space(4.0);
-                                    ui.spinner();
-                                    ui.label(&self.copilot_status);
-
-                                    // Auto-poll every `interval` seconds
-                                    let elapsed = self.copilot_last_poll.elapsed();
-                                    if elapsed >= Duration::from_secs(self.copilot_poll_interval) {
-                                        self.copilot_last_poll = Instant::now();
-                                        let tx = self.pending_tx.clone();
-                                        let backend_clone = backend.clone();
-                                        let device_code = self.copilot_device_code.clone();
-                                        let ctx_clone = ctx.clone();
-                                        tokio::spawn(async move {
-                                            match backend_clone.copilot_device_code_poll(&device_code).await {
-                                                Ok(resp) => {
-                                                    let msg = format!("__copilot_poll__:{}", serde_json::to_string(&resp).unwrap_or_default());
+                                    }
+                                    let params = [
+                                        ("client_id", "01ab8ac9400c4e429b23"),
+                                        ("scope", "read:user"),
+                                    ];
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_secs(15),
+                                        client
+                                            .post("https://github.com/login/device/code")
+                                            .header("Accept", "application/json")
+                                            .form(&params)
+                                            .send(),
+                                    )
+                                    .await
+                                    {
+                                        Ok(Ok(resp)) if resp.status().is_success() => {
+                                            match resp.json::<serde_json::Value>().await {
+                                                Ok(body) => {
+                                                    let msg = format!("__copilot_device__:{}", serde_json::to_string(&body).unwrap_or_default());
                                                     let _ = tx.send(msg);
                                                 }
                                                 Err(e) => {
-                                                    let msg = format!("__copilot_poll_err__:{}", e);
+                                                    let msg = format!("__copilot_device_err__:Parse error: {}", e);
                                                     let _ = tx.send(msg);
                                                 }
                                             }
-                                            ctx_clone.request_repaint_after(Duration::from_millis(16));
-                                        });
+                                        }
+                                        Ok(Ok(resp)) => {
+                                            let status = resp.status();
+                                            let text = resp.text().await.unwrap_or_default();
+                                            let msg = format!("__copilot_device_err__:GitHub {status}: {text}");
+                                            let _ = tx.send(msg);
+                                        }
+                                        Ok(Err(e)) => {
+                                            let msg = format!("__copilot_device_err__:{}", e);
+                                            let _ = tx.send(msg);
+                                        }
+                                        Err(_) => {
+                                            let msg = "__copilot_device_err__:Request timed out.".to_string();
+                                            let _ = tx.send(msg);
+                                        }
                                     }
-
-                                    // Cancel button
-                                    if ui.button(i18n.t("providers.copilot_cancel")).clicked() {
-                                        self.copilot_device_state = None;
-                                        self.copilot_status.clear();
-                                    }
-                                }
-                                Some("done") => {
-                                    ui.colored_label(
-                                        egui::Color32::from_rgb(60, 180, 100),
-                                        i18n.t("providers.copilot_authorized"),
-                                    );
-                                    if !self.copilot_access_token.is_empty() {
-                                        let preview = if self.copilot_access_token.len() > 8 {
-                                            format!("{}...{}", &self.copilot_access_token[..4], &self.copilot_access_token[self.copilot_access_token.len()-4..])
-                                        } else {
-                                            "********".to_string()
-                                        };
-                                        ui.label(format!("Token: {}", preview));
-                                    }
-                                    if ui.button(i18n.t("providers.copilot_clear")).clicked() {
-                                        self.copilot_device_state = None;
-                                        self.copilot_access_token.clear();
-                                        self.copilot_status.clear();
-                                    }
-                                }
-                                Some("error") => {
-                                    ui.colored_label(
-                                        egui::Color32::from_rgb(220, 80, 80),
-                                        &self.copilot_status,
-                                    );
-                                    if ui.button(i18n.t("providers.copilot_retry")).clicked() {
-                                        self.copilot_device_state = None;
-                                        self.copilot_status.clear();
-                                    }
-                                }
-                                _ => {}
+                                    ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                });
                             }
+
+                            if let Some(state) = self.copilot_device_state.clone() {
+                                let mut open = true;
+                                egui::Window::new(i18n.t("providers.copilot_authorize"))
+                                    .id(egui::Id::new("copilot_device_auth"))
+                                    .open(&mut open)
+                                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                                    .resizable(false)
+                                    .collapsible(false)
+                                    .show(ui.ctx(), |ui| {
+                                        match state.as_str() {
+                                            "requesting" => {
+                                                ui.horizontal(|ui| {
+                                                    ui.spinner();
+                                                    ui.label(i18n.t("providers.copilot_requesting"));
+                                                });
+                                            }
+                                            "polling" => {
+                                                ui.vertical(|ui| {
+                                                    ui.heading("GitHub Copilot Authorization");
+                                                    ui.add_space(8.0);
+                                                    ui.label("1. Open this URL in your browser:");
+                                                    if ui.link(&self.copilot_verification_uri).clicked() {
+                                                        let _ = webbrowser::open(&self.copilot_verification_uri);
+                                                    }
+                                                    ui.add_space(4.0);
+                                                    ui.horizontal(|ui| {
+                                                        ui.label("2. Enter the code:");
+                                                        ui.add(
+                                                            egui::Label::new(
+                                                                egui::RichText::new(&self.copilot_user_code)
+                                                                    .size(28.0)
+                                                                    .color(egui::Color32::from_rgb(60, 180, 100))
+                                                                    .monospace()
+                                                            )
+                                                        );
+                                                    });
+                                                    ui.add_space(8.0);
+                                                    ui.horizontal(|ui| {
+                                                        ui.spinner();
+                                                        ui.label(&self.copilot_status);
+                                                    });
+                                                    ui.add_space(6.0);
+                                                    let last_poll_age = self.copilot_last_poll.elapsed().as_secs();
+                                                    ui.small(format!(
+                                                        "Debug: polls={}, interval={}s, slow_downs={}, last_poll={}s ago",
+                                                        self.copilot_poll_attempts,
+                                                        self.copilot_poll_interval,
+                                                        self.copilot_slow_down_count,
+                                                        last_poll_age
+                                                    ));
+                                                    if !self.copilot_last_poll_result.is_empty() {
+                                                        ui.small(format!(
+                                                            "Debug: last_result={}"
+                                                            , self.copilot_last_poll_result
+                                                        ));
+                                                    }
+                                                });
+                                            }
+                                            "done" => {
+                                                ui.vertical(|ui| {
+                                                    ui.colored_label(
+                                                        egui::Color32::from_rgb(60, 180, 100),
+                                                        i18n.t("providers.copilot_authorized"),
+                                                    );
+                                                    ui.add_space(4.0);
+                                                    if !self.copilot_access_token.is_empty() {
+                                                        let preview = if self.copilot_access_token.len() > 8 {
+                                                            format!("{}...{}", &self.copilot_access_token[..4], &self.copilot_access_token[self.copilot_access_token.len()-4..])
+                                                        } else {
+                                                            "********".to_string()
+                                                        };
+                                                        ui.label(format!("Token: {}", preview));
+                                                    }
+                                                    ui.add_space(8.0);
+                                                    if ui.button(i18n.t("common.close")).clicked() {
+                                                        self.copilot_device_state = None;
+                                                    }
+                                                });
+                                            }
+                                            "error" => {
+                                                ui.vertical(|ui| {
+                                                    ui.colored_label(
+                                                        egui::Color32::from_rgb(220, 80, 80),
+                                                        &self.copilot_status,
+                                                    );
+                                                    ui.add_space(8.0);
+                                                    if ui.button(i18n.t("providers.copilot_retry")).clicked() {
+                                                        self.copilot_device_state = None;
+                                                        self.copilot_status.clear();
+                                                    }
+                                                    if ui.button(i18n.t("common.close")).clicked() {
+                                                        self.copilot_device_state = None;
+                                                    }
+                                                });
+                                            }
+                                            _ => {}
+                                        }
+                                    });
+                                if !open {
+                                    self.copilot_device_state = None;
+                                }
+                            }
+
                             ui.add_space(4.0);
                             ui.separator();
                             ui.add_space(2.0);
@@ -877,6 +999,12 @@ impl ProvidersView {
                             // Update button - opens inline edit for this provider
                             // Key update is a basic operation (not gated by ops_enabled).
                             if self.update_target == idx as isize {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.new_key)
+                                        .password(true)
+                                        .hint_text(i18n.t("common.apiKeyPlaceholder"))
+                                        .desired_width(260.0),
+                                );
                                 if ui.button(i18n.t("providers.save_key")).clicked() {
                                     let new_key: String = self.new_key
                                         .chars()
@@ -1280,7 +1408,107 @@ impl ProvidersView {
                 if !self.status.is_empty() {
                     ui.label(&self.status);
                 }
+
+                // ── Trigger config reload after copilot auth ──
+                if self.copilot_needs_reload {
+                    self.copilot_needs_reload = false;
+                    let tx = self.pending_tx.clone();
+                    let backend_clone = backend.clone();
+                    let ctx_clone = ctx.clone();
+                    tokio::spawn(async move {
+                        let _ = backend_clone.reload_config().await;
+                        let _ = tx.send("Config reloaded for copilot.".to_string());
+                        ctx_clone.request_repaint_after(Duration::from_millis(16));
+                    });
+                }
+
+                // ── Copilot Device Code auto-poll (uses system proxy) ──
+                if self.copilot_device_state.as_deref() == Some("polling") {
+                    // Keep UI frames ticking so polling continues even when the user is idle.
+                    ctx.request_repaint_after(Duration::from_millis(250));
+                    let elapsed = self.copilot_last_poll.elapsed();
+                    if elapsed >= Duration::from_secs(self.copilot_poll_interval) {
+                        self.copilot_last_poll = Instant::now();
+                        self.copilot_poll_attempts = self.copilot_poll_attempts.saturating_add(1);
+                        let tx = self.pending_tx.clone();
+                        let device_code = self.copilot_device_code.clone();
+                        let ctx_clone = ctx.clone();
+                        let proxy_url = std::env::var("HTTPS_PROXY").unwrap_or_default();
+                        #[cfg(debug_assertions)]
+                        eprintln!("[poll] device_code={}, HTTPS_PROXY={}", &device_code[..8.min(device_code.len())], proxy_url);
+                        tokio::spawn(async move {
+                            fn try_proxy_client() -> reqwest::Client {
+                                let proxy_urls = [
+                                    "http://127.0.0.1:15732",
+                                    "http://127.0.0.1:7890",
+                                    "socks5://127.0.0.1:7890",
+                                    "http://127.0.0.1:10809",
+                                    "http://127.0.0.1:10808",
+                                    "http://127.0.0.1:1080",
+                                    "http://127.0.0.1:33210",
+                                ];
+                                let env_url = std::env::var("HTTPS_PROXY")
+                                    .or_else(|_| std::env::var("https_proxy"))
+                                    .ok();
+                                for url in env_url
+                                    .as_deref()
+                                    .into_iter()
+                                    .chain(proxy_urls.iter().copied())
+                                {
+                                    if let Ok(p) = reqwest::Proxy::https(url) {
+                                        if let Ok(client) = reqwest::Client::builder()
+                                            .proxy(p)
+                                            .build()
+                                        {
+                                            return client;
+                                        }
+                                    }
+                                }
+                                reqwest::Client::new()
+                            }
+                            let poll_client = try_proxy_client();
+                            let poll_params = [
+                                ("client_id", "01ab8ac9400c4e429b23"),
+                                ("device_code", &device_code),
+                                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                            ];
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(15),
+                                        poll_client
+                                            .post("https://github.com/login/oauth/access_token")
+                                            .header("Accept", "application/json")
+                                            .form(&poll_params)
+                                            .send(),
+                                    )
+                                    .await
+                                    {
+                                Ok(Ok(resp)) => {
+                                    match resp.json::<serde_json::Value>().await {
+                                        Ok(body) => {
+                                            let msg = format!("__copilot_poll__:{}", serde_json::to_string(&body).unwrap_or_default());
+                                            let _ = tx.send(msg);
+                                        }
+                                        Err(e) => {
+                                            let msg = format!("__copilot_poll_err__:Parse error: {}", e);
+                                            let _ = tx.send(msg);
+                                        }
+                                    }
+                                }
+                                Ok(Err(e)) => {
+                                    let msg = format!("__copilot_poll_err__:{}", e);
+                                    let _ = tx.send(msg);
+                                }
+                                Err(_) => {
+                                    let msg = "__copilot_poll_err__:Poll timed out.".to_string();
+                                    let _ = tx.send(msg);
+                                }
+                            }
+                            ctx_clone.request_repaint_after(Duration::from_millis(16));
+                        });
+                    }
+                }
             });
+
         changed
     }
 }

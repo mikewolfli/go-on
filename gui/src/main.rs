@@ -147,6 +147,87 @@ fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
     cjk_found
 }
 
+/// Auto-detect common VPN proxy ports and set HTTPS_PROXY if found.
+/// Works on Linux, macOS, and Windows — covers ClashX, v2ray/Xray, SS/SSR, Surge, Quantumult, etc.
+/// This allows the app to access GitHub through the user's VPN without manual config.
+fn auto_detect_proxy() {
+    if std::env::var("HTTPS_PROXY").is_ok() || std::env::var("https_proxy").is_ok() {
+        return; // User already configured a proxy
+    }
+
+    // Cross-platform common proxy ports (Linux, macOS, Windows)
+    let common_proxies: &[&str] = &[
+        // ── ViewTurbo (all platforms) ──
+        "http://127.0.0.1:15732",
+        // ── Clash / Clash Meta (all platforms) ──
+        "http://127.0.0.1:7890",
+        "socks5://127.0.0.1:7890",
+        // ── ClashX / ClashX Pro (macOS) ──
+        "http://127.0.0.1:25519",
+        // ── clash-verge / Clash Nyanpasu (all platforms) ──
+        "http://127.0.0.1:33210",
+        // ── v2ray / Xray (all platforms) ──
+        "http://127.0.0.1:10809",
+        "socks5://127.0.0.1:10808",
+        "http://127.0.0.1:10808",
+        // ── V2RayU (macOS) ──
+        "http://127.0.0.1:2080",
+        // ── Qv2ray (all platforms) ──
+        "http://127.0.0.1:11223",
+        // ── SS / SSR (all platforms) ──
+        "http://127.0.0.1:1087",
+        "socks5://127.0.0.1:1086",
+        // ── Standard HTTP/SOCKS proxy ──
+        "http://127.0.0.1:1080",
+        "socks5://127.0.0.1:1080",
+        // ── Surge (macOS) ──
+        "http://127.0.0.1:6152",
+        // ── Quantumult X (macOS) ──
+        "http://127.0.0.1:1082",
+        // ── Stash (macOS) ──
+        "http://127.0.0.1:9090",
+        // ── Sing-box (all platforms) ──
+        "http://127.0.0.1:11451",
+        // ── Hiddify (all platforms) ──
+        "http://127.0.0.1:9876",
+        // ── Nekoray / Nekobox (all platforms) ──
+        "http://127.0.0.1:10811",
+        // ── Trojan (all platforms) ──
+        "http://127.0.0.1:1081",
+        // ── Windows VPN apps ──
+        "http://127.0.0.1:51080", // SSTap
+        "http://127.0.0.1:11280", // Netch
+        "http://127.0.0.1:28080", // WinXray
+        "http://127.0.0.1:38443", // Proxifier
+        "http://127.0.0.1:8222",  // ProxyCap
+    ];
+
+    for proxy_url in common_proxies {
+        // Extract host:port from URL
+        let addr = proxy_url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .trim_start_matches("socks5://")
+            .trim_start_matches("socks4://");
+        if let Some(port_str) = addr.split(':').nth(1) {
+            if let Ok(port) = port_str.parse::<u16>() {
+                // Quick TCP connect to see if anything is listening
+                if std::net::TcpStream::connect_timeout(
+                    &format!("127.0.0.1:{port}").parse().unwrap(),
+                    std::time::Duration::from_millis(100),
+                )
+                .is_ok()
+                {
+                    std::env::set_var("HTTPS_PROXY", proxy_url);
+                    std::env::set_var("https_proxy", proxy_url);
+                    eprintln!("auto_detect_proxy: found proxy at {proxy_url}, set HTTPS_PROXY.");
+                    return;
+                }
+            }
+        }
+    }
+}
+
 /// Generate a simple 64×64 RGBA icon programmatically:
 /// blue circle with "GO" letters in the center
 fn make_icon() -> egui::IconData {
@@ -203,6 +284,9 @@ fn load_embedded_icon() -> Option<egui::IconData> {
 
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
+    // Auto-detect VPN proxy so reqwest can reach GitHub for Copilot auth
+    auto_detect_proxy();
+
     let icon = load_embedded_icon().unwrap_or_else(make_icon);
     // Load config to detect language for localized window title
     let config = crate::config::load_app_config();

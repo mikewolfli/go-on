@@ -5169,13 +5169,47 @@ pub(super) fn provider_test_connection_payload(
 
     let models = provider_models_for(server, provider);
     let account = format!("{}_api_key", provider);
-    let key_configured = keyring::Entry::new("go-on", &account)
+    let keyring_has_key = keyring::Entry::new("go-on", &account)
         .ok()
         .and_then(|entry| entry.get_password().ok())
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
 
-    let ok = !models.is_empty() && key_configured;
+    let mut secret_ref_has_key = false;
+    if let Some(cfg) = server
+        .config_path
+        .as_deref()
+        .map(std::path::Path::new)
+        .and_then(|path| AppConfig::load(path).ok())
+    {
+        for agent in cfg.agents.values() {
+            if agent.agent_type.eq_ignore_ascii_case(provider) {
+                if let Some(secret_ref) = agent.api_key_env.as_deref() {
+                    if crate::agents::agent::inspect_secret_pool(secret_ref, secret_ref).is_ok() {
+                        secret_ref_has_key = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let default_env_name = if provider.eq_ignore_ascii_case("copilot") {
+        "GITHUB_COPILOT_TOKEN".to_string()
+    } else if provider.eq_ignore_ascii_case("replicate") {
+        "REPLICATE_API_TOKEN".to_string()
+    } else {
+        format!("{}_API_KEY", provider.to_ascii_uppercase())
+    };
+    let env_has_key = std::env::var(&default_env_name)
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+
+    let key_configured = keyring_has_key || secret_ref_has_key || env_has_key;
+    // For Copilot: if the key is present but models list is empty (e.g. first
+    // restart before registry rebuild), treat provider as ready anyway.
+    let ok = key_configured && (!models.is_empty() || provider.eq_ignore_ascii_case("copilot"));
     let message = if ok {
         "provider configuration is ready"
     } else if models.is_empty() {
@@ -5190,6 +5224,10 @@ pub(super) fn provider_test_connection_payload(
         "latency_ms": started.elapsed().as_millis() as u64,
         "model_count": models.len(),
         "key_configured": key_configured,
+        "keyring_has_key": keyring_has_key,
+        "secret_ref_has_key": secret_ref_has_key,
+        "env_has_key": env_has_key,
+        "checked_env": default_env_name,
         "message": message,
         "error_code": if ok { Value::Null } else { json!("provider_not_ready") },
         "error_message": if ok { Value::Null } else { json!(message) },
@@ -5417,16 +5455,22 @@ pub(super) async fn handle_provider_configure(
 /// `provider.copilot_device_code_poll` with the returned `device_code`.
 pub(super) async fn handle_copilot_device_code_request(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
     info!("GitHub Copilot Device Code flow requested");
 
-    // GitHub Copilot's OAuth device-code endpoint uses the `github.com` client.
-    // We use the same client_id that VS Code uses for Copilot.
-    let client_id = "Iv1.b507a08cfeec0f77";
+    let client_id = params
+        .get("client_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("01ab8ac9400c4e429b23");
     let device_code_url = "https://github.com/login/device/code";
-    let scope = "read:user,repo,workflow,copilot";
+    let scope = params
+        .get("scope")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("read:user");
 
     // Build reqwest client (reuse existing if possible, but we need it here)
     let client = reqwest::Client::new();
@@ -5521,7 +5565,11 @@ pub(super) async fn handle_copilot_device_code_poll(
         &device_code[..8.min(device_code.len())]
     );
 
-    let client_id = "Iv1.b507a08cfeec0f77";
+    let client_id = params
+        .get("client_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("01ab8ac9400c4e429b23");
     let token_url = "https://github.com/login/oauth/access_token";
 
     let client = reqwest::Client::new();

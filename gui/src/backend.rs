@@ -677,20 +677,34 @@ impl BackendClient {
         self.rpc_call("runtime.restart", None).await
     }
 
+    pub async fn reload_config(&self) -> Result<Value, String> {
+        self.rpc_call("config.reload", None).await
+    }
+
     /// Initiate GitHub Copilot OAuth Device Code flow.
     /// Returns `device_code`, `user_code`, `verification_uri`, and `interval`.
-    pub async fn copilot_device_code_request(&self) -> Result<Value, String> {
-        self.rpc_call("provider.copilot_device_code", Some(serde_json::json!({})))
-            .await
+    /// `client_id` is your GitHub OAuth App client_id (optional, falls back to a built-in default).
+    pub async fn copilot_device_code_request(&self, client_id: &str) -> Result<Value, String> {
+        self.rpc_call(
+            "provider.copilot_device_code",
+            Some(serde_json::json!({"client_id": client_id})),
+        )
+        .await
     }
 
     /// Poll GitHub for access token after user authorizes via device code.
     /// Pass the `device_code` from the initial request.
-    /// Returns `status: "pending"` while waiting, `status: "authorized"` on success.
-    pub async fn copilot_device_code_poll(&self, device_code: &str) -> Result<Value, String> {
+    pub async fn copilot_device_code_poll(
+        &self,
+        device_code: &str,
+        client_id: &str,
+    ) -> Result<Value, String> {
         self.rpc_call(
             "provider.copilot_device_code_poll",
-            Some(serde_json::json!({"device_code": device_code})),
+            Some(serde_json::json!({
+                "device_code": device_code,
+                "client_id": client_id,
+            })),
         )
         .await
     }

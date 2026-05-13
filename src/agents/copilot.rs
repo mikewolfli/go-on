@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 use tracing::warn;
 
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{
     option_f64, option_string, option_u64, principles_to_text, stream_sse_to_sender,
@@ -79,8 +79,19 @@ impl CopilotAgent {
         }
 
         // Slow path: fetch a new token.
-        let github_token = std::env::var(&self.token_env)
-            .with_context(|| tf("error.copilot_env_not_set", &[("name", &self.token_env)]))?;
+        // Support keyring:// references (e.g. "keyring://go-on/copilot_api_key")
+        let github_token = if let Some(rest) = self.token_env.strip_prefix("keyring://") {
+            // rest = "service/account"
+            let mut parts = rest.splitn(2, '/');
+            let service = parts.next().unwrap_or("go-on");
+            let account = parts.next().unwrap_or("copilot_api_key");
+            keyring::Entry::new(service, account)
+                .and_then(|e| e.get_password())
+                .with_context(|| format!("keyring lookup failed for {}", self.token_env))?
+        } else {
+            std::env::var(&self.token_env)
+                .with_context(|| tf("error.copilot_env_not_set", &[("name", &self.token_env)]))?
+        };
         let response = self
             .client
             .get(COPILOT_TOKEN_URL)
@@ -299,6 +310,50 @@ impl Agent for CopilotAgent {
         Err(last_error
             .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("copilot")))
             .into())
+    }
+
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "copilot-chat".to_string(),
+                name: "GitHub Copilot Chat".to_string(),
+                description: "GitHub Copilot Chat model".to_string(),
+                is_default: true,
+                context_window: Some(16_384),
+                capabilities: vec![
+                    "chat".to_string(),
+                    "code".to_string(),
+                    "streaming".to_string(),
+                ],
+            },
+            ModelInfo {
+                id: "gpt-4o".to_string(),
+                name: "GPT-4o via Copilot".to_string(),
+                description: "GPT-4o accessed through GitHub Copilot".to_string(),
+                is_default: false,
+                context_window: Some(128_000),
+                capabilities: vec![
+                    "chat".to_string(),
+                    "code".to_string(),
+                    "streaming".to_string(),
+                ],
+            },
+        ]
+    }
+
+    fn default_model(&self) -> Option<ModelInfo> {
+        Some(ModelInfo {
+            id: "copilot-chat".to_string(),
+            name: "GitHub Copilot Chat".to_string(),
+            description: "GitHub Copilot Chat model".to_string(),
+            is_default: true,
+            context_window: Some(16_384),
+            capabilities: vec![
+                "chat".to_string(),
+                "code".to_string(),
+                "streaming".to_string(),
+            ],
+        })
     }
 }
 
