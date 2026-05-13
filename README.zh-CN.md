@@ -40,6 +40,7 @@ cargo run --manifest-path gui/Cargo.toml
 - **对话界面**：多会话管理、阶段选择（coding/review/debug/test/deploy）、模式切换（Ask/Plan/Edit/Safeguard/Full Auto）、文件附件、动态发送按钮（依据 AI 状态变化）
 - **技能管理**：创建和导入 AI 技能；内置 `skill-creator` 让 AI 自主定义新技能
 - **设置**：功能开关、语言切换（en/zh-CN/zh-TW）、5 种视觉主题
+- **风险决策与安全审查模式 (Safeguard)**：AI 驱动的风险内容评估。当后端检测到高风险话题（医疗、法律、金融、安全等）时，在对话界面中显示**风险决策面板**，展示风险评分、应对策略（多模型投票、多智能体投票、升级处理）、审查要求及具体原因，实现对敏感 AI 交互的人工知情监督。
 - **后端连接**：ACP+HTTP JSON-RPC，自动健康轮询
 
 ## 构建配置文件

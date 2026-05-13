@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::time::Instant;
 use tokio::task::JoinHandle;
 
@@ -20,6 +21,8 @@ pub struct Message {
     pub total_tokens: usize,
     #[serde(default)]
     pub thinking: String,
+    #[serde(default)]
+    pub risk_decision: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,8 +54,6 @@ pub struct Session {
     pub mode: String,
     #[serde(default = "default_model")]
     pub model: String,
-    #[serde(default = "default_models")]
-    pub models: Vec<String>,
     #[serde(default)]
     pub phase_records: Vec<PhaseRecord>,
     #[serde(default)]
@@ -63,10 +64,6 @@ pub struct Session {
 
 fn default_model() -> String {
     "auto".to_string()
-}
-
-fn default_models() -> Vec<String> {
-    vec!["auto".to_string()]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +97,7 @@ pub enum PendingResponse {
         agent: String,
         conversation_id: Option<String>,
         branch_id: Option<String>,
+        risk_decision: Option<Value>,
     },
     StreamChunk {
         generation_id: u64,

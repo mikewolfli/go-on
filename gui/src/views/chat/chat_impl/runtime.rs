@@ -117,7 +117,6 @@ impl ChatView {
             self.selected_phase.clone()
         };
         let base_url = backend.base_url().to_string();
-        let selected_models = Self::normalize_models(&self.selected_models);
         let autotune_extra = if autotune_chain_enabled {
             Some(AutoTuneView::load_runtime_options())
         } else {
@@ -142,6 +141,7 @@ impl ChatView {
             output_tokens: 0,
             total_tokens: 0,
             thinking: String::new(),
+            risk_decision: None,
         });
         self.save_sessions_to_disk();
 
@@ -171,16 +171,16 @@ impl ChatView {
         let stream_client = self.stream_client.clone();
         let active_gen_count = self.active_generations.clone();
         let existing_generations = self.generation_states.len();
-        let mut skipped_models: Vec<String> = Vec::new();
 
-        for model_name in selected_models {
+        let model_name = self.selected_model.clone();
+        {
             // Reserve one generation slot atomically for this model.
             let previous = active_gen_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let current_gen_count = previous + 1;
             if current_gen_count > MAX_CONCURRENT_GENERATIONS as u64 {
                 active_gen_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                skipped_models.push(model_name.clone());
-                continue;
+                self.error = format!("Too many concurrent generations ({})", current_gen_count);
+                return;
             }
 
             let generation_id = self.next_generation_id();
@@ -202,6 +202,7 @@ impl ChatView {
                 output_tokens: 0,
                 total_tokens: 0,
                 thinking: String::new(),
+                risk_decision: None,
             });
             let msg_idx = self.session().messages.len().saturating_sub(1);
 
@@ -330,6 +331,7 @@ impl ChatView {
                                         agent: "workflow".to_string(),
                                         conversation_id: None,
                                         branch_id: None,
+                                        risk_decision: value.get("risk_decision").cloned(),
                                     });
                                 }
                             } else {
@@ -369,16 +371,17 @@ impl ChatView {
                                     fallback_options.clone(),
                                 )
                                 .await
-                                .map(
-                                    |(content, thinking, agent)| PendingResponse::ChatCompleted {
+                                .map(|(content, thinking, agent, risk_decision)| {
+                                    PendingResponse::ChatCompleted {
                                         generation_id,
                                         content,
                                         thinking,
                                         agent,
                                         conversation_id: None,
                                         branch_id: None,
-                                    },
-                                )
+                                        risk_decision,
+                                    }
+                                })
                                 .unwrap_or_else(|e| PendingResponse::Error {
                                     generation_id: Some(generation_id),
                                     message: format!("stream error: {err}; fallback: {e}"),
@@ -395,6 +398,7 @@ impl ChatView {
                         let mut final_agent: Option<String> = None;
                         let mut final_conv_id: Option<String> = None;
                         let mut final_branch_id: Option<String> = None;
+                        let mut final_risk_decision: Option<Value> = None;
                         let mut buffered_token = String::with_capacity(4096);
                         let mut buffered_reasoning = String::with_capacity(2048);
                         let mut last_stream_flush = std::time::Instant::now();
@@ -562,6 +566,7 @@ impl ChatView {
                                             .get("branch_id")
                                             .and_then(|v| v.as_str())
                                             .map(String::from);
+                                        final_risk_decision = data.get("risk_decision").cloned();
                                     }
                                     "error" => {
                                         if !buffered_token.is_empty()
@@ -633,6 +638,7 @@ impl ChatView {
                             agent: final_agent.unwrap_or_default(),
                             conversation_id: final_conv_id,
                             branch_id: final_branch_id,
+                            risk_decision: final_risk_decision,
                         });
                     }
                     Err(err) => {
@@ -649,16 +655,17 @@ impl ChatView {
                                 fallback_options.clone(),
                             )
                             .await
-                            .map(
-                                |(content, thinking, agent)| PendingResponse::ChatCompleted {
+                            .map(|(content, thinking, agent, risk_decision)| {
+                                PendingResponse::ChatCompleted {
                                     generation_id,
                                     content,
                                     thinking,
                                     agent,
                                     conversation_id: None,
                                     branch_id: None,
-                                },
-                            )
+                                    risk_decision,
+                                }
+                            })
                             .unwrap_or_else(|e| PendingResponse::Error {
                                 generation_id: Some(generation_id),
                                 message: format!("request error: {err}; fallback: {e}"),
@@ -676,17 +683,8 @@ impl ChatView {
             });
         }
 
-        if !skipped_models.is_empty() {
-            self.error = format!(
-                "Skipped {} model(s) due to concurrency limit ({}): {}",
-                skipped_models.len(),
-                MAX_CONCURRENT_GENERATIONS,
-                skipped_models.join(", ")
-            );
-        }
-
         if self.generation_states.len() == existing_generations {
-            // Nothing started (for example all selected models were skipped).
+            // Nothing started.
             self.sending = false;
             self.ai_status = AiStatus::Error;
             self.set_phase_record_status("error");
@@ -764,6 +762,7 @@ impl ChatView {
                     agent,
                     conversation_id,
                     branch_id,
+                    risk_decision,
                 } => {
                     // Store conversation tracking IDs on the session
                     if let Some(conv_id) = conversation_id {
@@ -801,6 +800,7 @@ impl ChatView {
                                 }
                                 m.output_tokens = self.output_token_estimate.max(m.output_tokens);
                                 m.total_tokens = self.last_token_estimate.max(m.total_tokens);
+                                m.risk_decision = risk_decision.clone();
                                 output_tokens_to_record = m.output_tokens;
                                 model_name = Some(m.model.clone());
                             }

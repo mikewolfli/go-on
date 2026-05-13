@@ -43,6 +43,7 @@ cargo run --manifest-path gui/Cargo.toml
 - **Backend Connection**: ACP+HTTP JSON-RPC, automatic health polling
 - **Keyring**: Dual storage (system keyring + config file)
 - **Auto-restart**: Backend auto-restarts on crash with 3-second cool-down
+- **Risk Decision & Safeguard Mode**: AI-powered content risk assessment. When the backend detects high-risk topics (medical, legal, financial, security, etc.), it displays a **Risk Decision panel** in the Chat view showing the risk score, strategy (multi-model vote, multi-agent vote, escalation), review requirements, and specific reasons. This enables informed human oversight of sensitive AI interactions.
 
 ## Build Profiles
 

@@ -108,6 +108,81 @@ impl ChatView {
             });
     }
 
+    fn render_risk_decision_summary(
+        ui: &mut egui::Ui,
+        i18n: &I18n,
+        risk_decision: &serde_json::Value,
+    ) {
+        let is_high_risk = risk_decision
+            .get("is_high_risk")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let review_required = risk_decision
+            .get("review_required")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let strategy = risk_decision
+            .get("vote_report")
+            .and_then(|v| v.get("strategy"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("auto");
+
+        let label = if is_high_risk {
+            i18n.t("chat.riskDecisionHigh")
+        } else {
+            i18n.t("chat.riskDecisionNormal")
+        };
+
+        let review_label = if review_required {
+            i18n.t("chat.riskDecisionReviewRequired")
+        } else {
+            i18n.t("chat.riskDecisionNoReview")
+        };
+
+        let title = i18n.t("chat.riskDecisionTitle");
+        let strategy_label = i18n.t("chat.riskDecisionStrategy");
+        let reasons = risk_decision
+            .get("reasons")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .take(4)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+
+        let bg = if is_high_risk {
+            if ui.visuals().dark_mode {
+                egui::Color32::from_rgba_premultiplied(120, 60, 30, 45)
+            } else {
+                egui::Color32::from_rgba_premultiplied(255, 220, 190, 70)
+            }
+        } else if ui.visuals().dark_mode {
+            egui::Color32::from_rgba_premultiplied(50, 70, 50, 35)
+        } else {
+            egui::Color32::from_rgba_premultiplied(210, 240, 210, 60)
+        };
+
+        egui::Frame::new()
+            .fill(bg)
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::symmetric(8i8, 5i8))
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(title).strong().size(11.0));
+                    ui.label(format!("{}: {}", i18n.t("chat.riskDecisionState"), label));
+                    ui.label(format!("{}: {}", strategy_label, strategy));
+                    ui.label(format!("{}: {}", i18n.t("chat.riskDecisionReview"), review_label));
+                    if !reasons.is_empty() {
+                        ui.label(format!("{}: {}", i18n.t("chat.riskDecisionReasons"), reasons));
+                    }
+                });
+            });
+    }
+
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -241,28 +316,31 @@ impl ChatView {
                 .default_width(360.0)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ctx, |ui| {
-                    ui.label(i18n.t("chat.multiModelHint"));
+                    ui.label("Select a model (AUTO lets phase decide):");
                     ui.separator();
-                    let available = self.available_models.clone();
-                    for model in &available {
-                        let mut checked = self.selected_models.iter().any(|m| m == model);
-                        if ui.checkbox(&mut checked, model).changed() {
-                            if checked {
-                                self.selected_models.push(model.clone());
-                            } else {
-                                self.selected_models.retain(|m| m != model);
-                            }
-                            self.sync_model_selection();
-                        }
+
+                    let mut models_list = self.available_models.clone();
+                    if models_list.is_empty() {
+                        models_list.push("auto".to_string());
                     }
+
+                    egui::ComboBox::from_label("Model")
+                        .selected_text(&self.selected_model)
+                        .show_ui(ui, |ui| {
+                            for model in &models_list {
+                                ui.selectable_value(
+                                    &mut self.selected_model,
+                                    model.clone(),
+                                    model.clone(),
+                                );
+                            }
+                        });
+
                     ui.separator();
                     ui.horizontal(|ui| {
-                        if ui.button(i18n.t("chat.modelAutoOnly")).clicked() {
-                            self.selected_models = vec!["auto".to_string()];
-                            self.sync_model_selection();
-                        }
                         if ui.button(i18n.t("chat.close")).clicked() {
                             self.show_model_picker = false;
+                            self.sync_model_selection();
                         }
                     });
                 });
@@ -454,19 +532,32 @@ impl ChatView {
                             }
                             ui.add_space(8.0);
                             ui.label(egui::RichText::new(i18n.t("chat.model")).color(fg));
-                            if ui
-                                .button(i18n.t("chat.chooseModels"))
-                                .on_hover_text(i18n.t("chat.multiModelHint"))
-                                .clicked()
-                            {
-                                self.show_model_picker = true;
+                            ui.add_space(6.0);
+                            let prev_model = self.selected_model.clone();
+                            let model_options: Vec<String> = if self.available_models.is_empty() {
+                                vec!["auto".to_string()]
+                            } else {
+                                self.available_models.clone()
+                            };
+                            egui::ComboBox::from_id_salt("model_sel")
+                                .selected_text(if self.selected_model == "auto" {
+                                    "AUTO".to_string()
+                                } else {
+                                    self.selected_model.clone()
+                                })
+                                .show_ui(ui, |ui| {
+                                    for m in &model_options {
+                                        let label = if m == "auto" { "AUTO" } else { m.as_str() };
+                                        ui.selectable_value(
+                                            &mut self.selected_model,
+                                            m.to_string(),
+                                            label,
+                                        );
+                                    }
+                                });
+                            if self.selected_model != prev_model {
+                                self.sync_model_selection();
                             }
-                            ui.add_space(12.0);
-                            ui.label(
-                                egui::RichText::new(self.selected_models_summary(i18n))
-                                    .color(fg)
-                                    .size(12.0),
-                            );
                             if !self.last_selected_agent.is_empty() {
                                 ui.add_space(8.0);
                                 ui.label(
@@ -936,11 +1027,7 @@ impl ChatView {
                                     self.active_session = idx;
                                     self.selected_mode = self.sessions[idx].mode.clone();
                                     self.selected_phase = self.sessions[idx].phase.clone();
-                                    self.selected_models = if self.sessions[idx].models.is_empty() {
-                                        vec!["auto".to_string()]
-                                    } else {
-                                        self.sessions[idx].models.clone()
-                                    };
+                                    self.selected_model = self.sessions[idx].model.clone();
                                     self.sync_model_selection();
                                     self.ai_status = AiStatus::Idle;
                                     self.edit_msg_idx = None;
@@ -982,12 +1069,6 @@ impl ChatView {
                                     self.sessions[self.active_session].phase.clone();
                                 self.selected_model =
                                     self.sessions[self.active_session].model.clone();
-                                self.selected_models =
-                                    if self.sessions[self.active_session].models.is_empty() {
-                                        vec![self.selected_model.clone()]
-                                    } else {
-                                        self.sessions[self.active_session].models.clone()
-                                    };
                                 self.sync_model_selection();
                             }
                             self.save_sessions_to_disk();
@@ -1279,6 +1360,11 @@ impl ChatView {
                                 text_color,
                                 &trunc_hint,
                             );
+
+                            if let Some(risk_decision) = msg.risk_decision.as_ref() {
+                                ui.add_space(6.0);
+                                Self::render_risk_decision_summary(ui, i18n, risk_decision);
+                            }
 
                             // ── Thinking section: Button toggle instead of CollapsingHeader ──
                             // (CollapsingHeader inside Frame may not receive clicks due to

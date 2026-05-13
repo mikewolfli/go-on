@@ -2,7 +2,6 @@ use crate::backend::BackendClient;
 use crate::i18n::I18n;
 use crate::views::autotune::AutoTuneView;
 use serde_json::Value;
-use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -91,9 +90,8 @@ pub struct ChatView {
     // Monotonic save epochs for coalescing frequent save requests.
     session_save_epoch: Arc<AtomicU64>,
     template_save_epoch: Arc<AtomicU64>,
-    // Feature 6: multi-model
+    // Feature 6: model selection
     selected_model: String,
-    selected_models: Vec<String>,
     available_models: Vec<String>,
     models_loaded: bool,
     last_selected_agent: String,
@@ -284,7 +282,6 @@ impl ChatView {
             phase,
             mode,
             model: "auto".to_string(),
-            models: vec!["auto".to_string()],
             phase_records: Vec::new(),
             conversation_id: None,
             branch_id: None,
@@ -309,16 +306,6 @@ impl ChatView {
             .first()
             .map(|s| s.model.clone())
             .unwrap_or_else(|| "auto".to_string());
-        let initial_models = sessions
-            .first()
-            .map(|s| {
-                if s.models.is_empty() {
-                    vec![s.model.clone()]
-                } else {
-                    s.models.clone()
-                }
-            })
-            .unwrap_or_else(|| vec!["auto".to_string()]);
 
         let (pending_tx, pending_rx) = mpsc::channel();
 
@@ -387,7 +374,6 @@ impl ChatView {
             template_save_epoch: Arc::new(AtomicU64::new(0)),
             // Feature 6
             selected_model: initial_model,
-            selected_models: initial_models,
             available_models: vec!["auto".to_string()],
             models_loaded: false,
             last_selected_agent: String::new(),
@@ -503,48 +489,32 @@ impl ChatView {
         self.save_templates_to_disk();
     }
 
-    fn normalize_models(models: &[String]) -> Vec<String> {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
-        for model in models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-            if seen.insert(model.to_string()) {
-                result.push(model.to_string());
-            }
-        }
-        if result.len() > 1 {
-            result.retain(|m| m != "auto");
-        }
-        if result.is_empty() {
-            result.push("auto".to_string());
-        }
-        result
-    }
-
     fn sync_model_selection(&mut self) {
-        // Avoid allocating a new Vec every frame when nothing needs normalizing.
-        let normalized = Self::normalize_models(&self.selected_models);
-        if normalized != self.selected_models {
-            self.selected_models = normalized;
+        // Ensure model name is trimmed
+        self.selected_model = self.selected_model.trim().to_string();
+        if self.selected_model.is_empty() {
+            self.selected_model = "auto".to_string();
         }
-        let first = self
-            .selected_models
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "auto".to_string());
+        // Sync to active session
+        if let Some(session) = self.sessions.get_mut(self.active_session) {
+            session.model = self.selected_model.clone();
+        }
+        // Validate current model is in available list or is "auto"
+        let first = if self.selected_model == "auto"
+            || self
+                .available_models
+                .iter()
+                .any(|m| m == &self.selected_model)
+        {
+            self.selected_model.clone()
+        } else {
+            self.available_models
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "auto".to_string())
+        };
         if first != self.selected_model {
             self.selected_model = first;
-        }
-    }
-
-    fn selected_models_summary(&self, i18n: &I18n) -> String {
-        match self.selected_models.len() {
-            0 => "auto".to_string(),
-            1 => self.selected_models[0].clone(),
-            count => format!(
-                "{} ({count}): {}",
-                i18n.t("chat.multiModelEnabled"),
-                self.selected_models.join(", ")
-            ),
         }
     }
 
@@ -668,7 +638,6 @@ impl ChatView {
         self.show_thinking_idx = None;
         self.rename_session_idx = None;
         self.rename_session_buf.clear();
-        self.selected_models = vec![self.selected_model.clone()];
         self.last_selected_agent.clear();
         self.save_sessions_to_disk();
     }
@@ -751,7 +720,6 @@ mod tests {
                 phase: String::new(),
                 mode: "ask".to_string(),
                 model: "auto".to_string(),
-                models: vec!["auto".to_string()],
                 phase_records: Vec::new(),
                 conversation_id: None,
                 branch_id: None,
@@ -796,7 +764,6 @@ mod tests {
             session_save_epoch: Arc::new(AtomicU64::new(0)),
             template_save_epoch: Arc::new(AtomicU64::new(0)),
             selected_model: "auto".to_string(),
-            selected_models: vec!["auto".to_string()],
             available_models: vec!["auto".to_string()],
             models_loaded: false,
             last_selected_agent: String::new(),
@@ -810,17 +777,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn normalize_models_dedupes_and_drops_auto_for_multi_select() {
-        let normalized = ChatView::normalize_models(&[
-            "auto".to_string(),
-            "gpt-4.1".to_string(),
-            "gpt-4.1".to_string(),
-            "claude-sonnet".to_string(),
-        ]);
 
-        assert_eq!(normalized, vec!["gpt-4.1", "claude-sonnet"]);
-    }
 
     #[test]
     fn expand_prompt_command_replaces_input_placeholder() {
@@ -866,7 +823,6 @@ mod tests {
             phase: String::new(),
             mode: "ask".to_string(),
             model: "auto".to_string(),
-            models: vec!["auto".to_string()],
             phase_records: Vec::new(),
             conversation_id: None,
             branch_id: None,

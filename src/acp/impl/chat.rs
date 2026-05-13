@@ -154,6 +154,238 @@ fn is_quota_or_token_limit_error(error_text: &str) -> bool {
         || text.contains("credit") && text.contains("insufficient")
 }
 
+#[derive(Debug, Clone)]
+struct RiskVotePolicy {
+    enabled: bool,
+    threshold: usize,
+    domain_keywords: Vec<String>,
+    decision_keywords: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct RiskAssessment {
+    score: usize,
+    is_high_risk: bool,
+    reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AgentStrongVoteOutcome {
+    agent: String,
+    model: Option<String>,
+    response: String,
+    reasoning: String,
+}
+
+type AgentVoteSource = (String, Arc<dyn crate::agent::Agent>, HashMap<String, Value>);
+
+fn option_bool(options: &HashMap<String, Value>, key: &str, default: bool) -> bool {
+    options.get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+fn option_usize(options: &HashMap<String, Value>, key: &str, default: usize) -> usize {
+    options
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(default)
+}
+
+fn option_keywords(options: &HashMap<String, Value>, key: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(value) = options.get(key) {
+        if let Some(items) = value.as_array() {
+            for item in items {
+                if let Some(text) = item.as_str() {
+                    let trimmed = text.trim().to_ascii_lowercase();
+                    if !trimmed.is_empty() {
+                        out.push(trimmed);
+                    }
+                }
+            }
+        } else if let Some(text) = value.as_str() {
+            for token in text.split(',') {
+                let trimmed = token.trim().to_ascii_lowercase();
+                if !trimmed.is_empty() {
+                    out.push(trimmed);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn build_risk_vote_policy(options: &HashMap<String, Value>) -> RiskVotePolicy {
+    const DEFAULT_DOMAIN_KEYWORDS: &[&str] = &[
+        "medical",
+        "diagnosis",
+        "clinical",
+        "prescription",
+        "treatment",
+        "surgery",
+        "healthcare",
+        "legal",
+        "contract",
+        "compliance",
+        "regulation",
+        "litigation",
+        "finance",
+        "financial",
+        "investment",
+        "portfolio",
+        "credit",
+        "loan",
+        "underwriting",
+        "fraud",
+        "aml",
+        "tax",
+        "audit",
+        "insurance",
+        "privacy",
+        "security incident",
+        "safety-critical",
+    ];
+    const DEFAULT_DECISION_KEYWORDS: &[&str] = &[
+        "approve",
+        "reject",
+        "deny",
+        "diagnose",
+        "prescribe",
+        "recommendation",
+        "risk control",
+        "decision",
+        "compliance decision",
+        "legal advice",
+        "medical advice",
+        "financial advice",
+    ];
+
+    let mut domain_keywords = DEFAULT_DOMAIN_KEYWORDS
+        .iter()
+        .map(|item| (*item).to_string())
+        .collect::<Vec<_>>();
+    domain_keywords.extend(option_keywords(options, "high_risk_domain_keywords"));
+    domain_keywords.sort();
+    domain_keywords.dedup();
+
+    let mut decision_keywords = DEFAULT_DECISION_KEYWORDS
+        .iter()
+        .map(|item| (*item).to_string())
+        .collect::<Vec<_>>();
+    decision_keywords.extend(option_keywords(options, "high_risk_decision_keywords"));
+    decision_keywords.sort();
+    decision_keywords.dedup();
+
+    RiskVotePolicy {
+        enabled: option_bool(options, "high_risk_vote_enabled", true),
+        threshold: option_usize(options, "high_risk_vote_threshold", 2).clamp(1, 10),
+        domain_keywords,
+        decision_keywords,
+    }
+}
+
+fn assess_high_risk(messages: &[Message], mode: &str, policy: &RiskVotePolicy) -> RiskAssessment {
+    let corpus = messages
+        .iter()
+        .filter(|message| message.role.eq_ignore_ascii_case("user"))
+        .map(|message| message.content.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut score = 0usize;
+    let mut reasons = Vec::new();
+
+    for keyword in &policy.domain_keywords {
+        if corpus.contains(keyword) {
+            score += 2;
+            reasons.push(format!("domain:{keyword}"));
+        }
+    }
+    for keyword in &policy.decision_keywords {
+        if corpus.contains(keyword) {
+            score += 1;
+            reasons.push(format!("decision:{keyword}"));
+        }
+    }
+    if matches!(mode, "safeguard" | "full_auto") {
+        score += 1;
+        reasons.push(format!("mode:{mode}"));
+    }
+
+    reasons.sort();
+    reasons.dedup();
+
+    RiskAssessment {
+        score,
+        is_high_risk: score >= policy.threshold,
+        reasons,
+    }
+}
+
+fn normalize_vote_key(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn select_strong_model_id(agent: &dyn crate::agent::Agent) -> Option<String> {
+    let mut models = agent
+        .available_models()
+        .into_iter()
+        .filter(|model| !model.id.trim().is_empty())
+        .collect::<Vec<_>>();
+
+    if models.is_empty() {
+        return agent.default_model().map(|model| model.id);
+    }
+
+    models.sort_by(|left, right| {
+        right
+            .context_window
+            .unwrap_or(0)
+            .cmp(&left.context_window.unwrap_or(0))
+            .then_with(|| right.capabilities.len().cmp(&left.capabilities.len()))
+            .then_with(|| right.is_default.cmp(&left.is_default))
+    });
+
+    models.first().map(|model| model.id.clone())
+}
+
+fn select_top_models(agent: &dyn crate::agent::Agent, max_models: usize) -> Vec<String> {
+    let mut models = agent
+        .available_models()
+        .into_iter()
+        .filter(|model| !model.id.trim().is_empty())
+        .collect::<Vec<_>>();
+
+    if models.is_empty() {
+        return agent
+            .default_model()
+            .map(|model| vec![model.id])
+            .unwrap_or_default();
+    }
+
+    models.sort_by(|left, right| {
+        right
+            .context_window
+            .unwrap_or(0)
+            .cmp(&left.context_window.unwrap_or(0))
+            .then_with(|| right.capabilities.len().cmp(&left.capabilities.len()))
+            .then_with(|| right.is_default.cmp(&left.is_default))
+    });
+
+    let ordered = models.into_iter().map(|model| model.id).collect::<Vec<_>>();
+    let mut selected = Vec::new();
+    for model_id in ordered {
+        if !selected.iter().any(|existing| existing == &model_id) {
+            selected.push(model_id);
+        }
+    }
+    selected.truncate(max_models.max(1));
+    selected
+}
+
 fn reorder_agents_with_priority(
     agents: &mut Vec<(String, Arc<dyn crate::agent::Agent>)>,
     preferred: &str,
@@ -679,6 +911,9 @@ pub(crate) async fn process_chat_request(
     #[cfg(not(feature = "sub-bus-optimization"))]
     let capability_optimization_hint: Option<Value> = None;
 
+    let capability_risk_policy = build_risk_vote_policy(&HashMap::new());
+    let capability_risk = assess_high_risk(&params.messages, &params.mode, &capability_risk_policy);
+
     // ── CapabilityBus agent selection ──────────────────────────────────
     // If a CapabilityBus is present, use its sense/decide pipeline to
     // refine or override the agent list before falling through to the
@@ -687,7 +922,7 @@ pub(crate) async fn process_chat_request(
         let task_ctx = crate::governance::pua::TaskContext {
             task_type: crate::governance::pua::TaskType::Other,
             file_count: params.messages.len(),
-            risk_score: 0.3,
+            risk_score: (capability_risk.score as f64 / 4.0).clamp(0.1, 1.0),
         };
         let sensing = cb.sense(&task_ctx);
         let decision = cb.decide(&task_ctx, &sensing);
@@ -730,6 +965,8 @@ pub(crate) async fn process_chat_request(
                 "confidence": decision.confidence,
                 "duration_ms": decision.duration_ms,
                 "recommended_mode": decision.recommended_mode,
+                "high_risk": capability_risk.is_high_risk,
+                "risk_reasons": capability_risk.reasons,
                 "optimization": capability_optimization_hint,
             }),
         );
@@ -1139,6 +1376,48 @@ pub(crate) async fn process_chat_request(
         });
     }
 
+    let risk_policy = build_risk_vote_policy(&base_agent_options);
+    let risk_assessment = assess_high_risk(&params.messages, &params.mode, &risk_policy);
+    let enable_high_risk_vote =
+        risk_policy.enabled && risk_assessment.is_high_risk && !model_is_specific;
+    let enable_high_risk_multi_agent_vote = enable_high_risk_vote
+        && option_bool(
+            &base_agent_options,
+            "high_risk_multi_agent_vote_enabled",
+            true,
+        );
+    let min_vote_agents =
+        option_usize(&base_agent_options, "high_risk_vote_min_agents", 2).clamp(1, 6);
+    let max_vote_agents = option_usize(&base_agent_options, "high_risk_vote_max_agents", 3)
+        .max(min_vote_agents)
+        .clamp(min_vote_agents, 8);
+    let escalation_enabled = option_bool(
+        &base_agent_options,
+        "high_risk_escalate_multi_model_enabled",
+        true,
+    );
+    let escalation_models_per_agent = option_usize(
+        &base_agent_options,
+        "high_risk_escalate_models_per_agent",
+        2,
+    )
+    .clamp(2, 6);
+    let escalation_max_agents = option_usize(
+        &base_agent_options,
+        "high_risk_escalate_max_agents",
+        max_vote_agents,
+    )
+    .clamp(1, max_vote_agents);
+
+    let mut used_multi_model_vote = false;
+    let mut used_multi_agent_vote = false;
+    let mut review_required = false;
+    let mut vote_report: Option<Value> = None;
+    let mut agent_vote_candidates: Vec<AgentStrongVoteOutcome> = Vec::new();
+    let mut agent_vote_failures: Vec<Value> = Vec::new();
+    let mut agent_vote_sources: Vec<AgentVoteSource> = Vec::new();
+    let mut emit_final_vote_response = false;
+
     if !cache_hit {
         for (agent_name, agent) in resolved.agents {
             let attempt_started = std::time::Instant::now();
@@ -1163,6 +1442,104 @@ pub(crate) async fn process_chat_request(
                 .get("model")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+
+            if enable_high_risk_multi_agent_vote {
+                if agent_vote_candidates.len() >= max_vote_agents {
+                    continue;
+                }
+
+                let strong_model = if agent.supports_model_override() {
+                    select_strong_model_id(agent.as_ref())
+                } else {
+                    None
+                };
+
+                let mut vote_options = per_attempt_options.clone();
+                if let Some(model_id) = strong_model.clone() {
+                    vote_options.insert("model".to_string(), Value::String(model_id));
+                }
+
+                match run_agent_collecting(
+                    server,
+                    StreamNotificationContext {
+                        stream_observer: None,
+                        agent_name: &agent_name,
+                        phase_name,
+                        trace_id: &trace.trace_id,
+                    },
+                    Arc::clone(&agent),
+                    agent_messages.clone(),
+                    phase.principles.clone(),
+                    Some(vote_options),
+                    request_timeout(phase.options.as_ref()),
+                )
+                .await
+                {
+                    Ok((output_text, reasoning_output)) if !output_text.trim().is_empty() => {
+                        if let Ok(mut ctrl) = server.online_controller.lock() {
+                            ctrl.record_agent_outcome(
+                                phase_name,
+                                &agent_name,
+                                true,
+                                attempt_started.elapsed().as_millis() as u64,
+                            );
+                        }
+                        agent_attempts.push(json!({
+                            "agent": agent_name,
+                            "ok": true,
+                            "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                            "risk_vote_mode": "strong_model",
+                            "model": strong_model,
+                        }));
+                        agent_vote_candidates.push(AgentStrongVoteOutcome {
+                            agent: agent_name.clone(),
+                            model: strong_model,
+                            response: output_text,
+                            reasoning: reasoning_output,
+                        });
+                        agent_vote_sources.push((
+                            agent_name.clone(),
+                            Arc::clone(&agent),
+                            per_attempt_options.clone(),
+                        ));
+                        continue;
+                    }
+                    Ok(_) => {
+                        let failure = json!({
+                            "agent": agent_name,
+                            "reason": "empty_response",
+                        });
+                        agent_vote_failures.push(failure.clone());
+                        agent_attempts.push(json!({
+                            "agent": agent_name,
+                            "ok": false,
+                            "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                            "risk_vote_mode": "strong_model",
+                            "error": "empty_response",
+                        }));
+                        continue;
+                    }
+                    Err(err) => {
+                        let err_text = err.to_string();
+                        let failure = json!({
+                            "agent": agent_name,
+                            "reason": err_text,
+                        });
+                        agent_vote_failures.push(failure.clone());
+                        agent_attempts.push(json!({
+                            "agent": agent_name,
+                            "ok": false,
+                            "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                            "risk_vote_mode": "strong_model",
+                            "error": err.to_string(),
+                        }));
+                        if last_err.is_none() {
+                            last_err = Some(anyhow::anyhow!("{}: {}", agent_name, err));
+                        }
+                        continue;
+                    }
+                }
+            }
 
             match run_agent_collecting(
                 server,
@@ -1255,6 +1632,210 @@ pub(crate) async fn process_chat_request(
         }
     }
 
+    if !cache_hit
+        && enable_high_risk_multi_agent_vote
+        && agent_vote_candidates.len() >= min_vote_agents
+        && response_text.is_empty()
+    {
+        let mut vote_counts: HashMap<String, usize> = HashMap::new();
+        for candidate in &agent_vote_candidates {
+            let key = normalize_vote_key(&candidate.response);
+            let entry = vote_counts.entry(key).or_insert(0);
+            *entry += 1;
+        }
+
+        let mut winner_index = 0usize;
+        let mut winner_votes = 0usize;
+        let mut winner_len = 0usize;
+        for (idx, candidate) in agent_vote_candidates.iter().enumerate() {
+            let key = normalize_vote_key(&candidate.response);
+            let votes = vote_counts.get(&key).copied().unwrap_or(0);
+            let length = candidate.response.chars().count();
+            if votes > winner_votes || (votes == winner_votes && length > winner_len) {
+                winner_index = idx;
+                winner_votes = votes;
+                winner_len = length;
+            }
+        }
+
+        let winner = agent_vote_candidates[winner_index].clone();
+        selected_agent = winner.agent.clone();
+        response_text = winner.response.clone();
+        reasoning_text = winner.reasoning.clone();
+        used_multi_agent_vote = true;
+        used_multi_model_vote = false;
+        review_required = winner_votes * 2 <= agent_vote_candidates.len();
+        last_err = None;
+        emit_final_vote_response = true;
+
+        let strong_vote_report = json!({
+            "strategy": "multi_agent_strong_model_vote",
+            "candidate_agents": agent_vote_candidates
+                .iter()
+                .map(|candidate| candidate.agent.clone())
+                .collect::<Vec<_>>(),
+            "candidate_details": agent_vote_candidates
+                .iter()
+                .map(|candidate| json!({
+                    "agent": candidate.agent.clone(),
+                    "model": candidate.model.clone(),
+                }))
+                .collect::<Vec<_>>(),
+            "winner_agent": selected_agent.clone(),
+            "winner_votes": winner_votes,
+            "total_successes": agent_vote_candidates.len(),
+            "min_vote_agents": min_vote_agents,
+            "max_vote_agents": max_vote_agents,
+            "failed_agents": agent_vote_failures,
+            "review_required": review_required,
+        });
+
+        vote_report = Some(strong_vote_report.clone());
+
+        if review_required && escalation_enabled {
+            let mut escalation_ballots: Vec<AgentStrongVoteOutcome> = Vec::new();
+            let mut escalation_failures: Vec<Value> = Vec::new();
+
+            for (agent_name, agent, base_options) in
+                agent_vote_sources.iter().take(escalation_max_agents)
+            {
+                if !agent.supports_model_override() {
+                    continue;
+                }
+
+                let candidate_models =
+                    select_top_models(agent.as_ref(), escalation_models_per_agent);
+                for model_id in candidate_models {
+                    let mut model_options = base_options.clone();
+                    model_options.insert("model".to_string(), Value::String(model_id.clone()));
+
+                    match run_agent_collecting(
+                        server,
+                        StreamNotificationContext {
+                            stream_observer: None,
+                            agent_name,
+                            phase_name,
+                            trace_id: &trace.trace_id,
+                        },
+                        Arc::clone(agent),
+                        agent_messages.clone(),
+                        phase.principles.clone(),
+                        Some(model_options),
+                        request_timeout(phase.options.as_ref()),
+                    )
+                    .await
+                    {
+                        Ok((output_text, reasoning_output)) if !output_text.trim().is_empty() => {
+                            escalation_ballots.push(AgentStrongVoteOutcome {
+                                agent: agent_name.clone(),
+                                model: Some(model_id.clone()),
+                                response: output_text,
+                                reasoning: reasoning_output,
+                            });
+                        }
+                        Ok(_) => {
+                            escalation_failures.push(json!({
+                                "agent": agent_name,
+                                "model": model_id,
+                                "reason": "empty_response",
+                            }));
+                        }
+                        Err(err) => {
+                            escalation_failures.push(json!({
+                                "agent": agent_name,
+                                "model": model_id,
+                                "reason": err.to_string(),
+                            }));
+                        }
+                    }
+                }
+            }
+
+            if !escalation_ballots.is_empty() {
+                let mut escalation_counts: HashMap<String, usize> = HashMap::new();
+                for ballot in &escalation_ballots {
+                    let key = normalize_vote_key(&ballot.response);
+                    let entry = escalation_counts.entry(key).or_insert(0);
+                    *entry += 1;
+                }
+
+                let mut escalation_winner_index = 0usize;
+                let mut escalation_winner_votes = 0usize;
+                let mut escalation_winner_len = 0usize;
+                for (idx, ballot) in escalation_ballots.iter().enumerate() {
+                    let key = normalize_vote_key(&ballot.response);
+                    let votes = escalation_counts.get(&key).copied().unwrap_or(0);
+                    let length = ballot.response.chars().count();
+                    if votes > escalation_winner_votes
+                        || (votes == escalation_winner_votes && length > escalation_winner_len)
+                    {
+                        escalation_winner_index = idx;
+                        escalation_winner_votes = votes;
+                        escalation_winner_len = length;
+                    }
+                }
+
+                let escalation_winner = escalation_ballots[escalation_winner_index].clone();
+                selected_agent = escalation_winner.agent.clone();
+                response_text = escalation_winner.response.clone();
+                reasoning_text = escalation_winner.reasoning.clone();
+                used_multi_model_vote = true;
+                review_required = escalation_winner_votes * 2 <= escalation_ballots.len();
+                last_err = None;
+                emit_final_vote_response = true;
+
+                vote_report = Some(json!({
+                    "strategy": "multi_agent_multi_model_escalation",
+                    "strong_round": strong_vote_report,
+                    "candidate_details": escalation_ballots
+                        .iter()
+                        .map(|ballot| json!({
+                            "agent": ballot.agent.clone(),
+                            "model": ballot.model.clone(),
+                        }))
+                        .collect::<Vec<_>>(),
+                    "winner_agent": selected_agent.clone(),
+                    "winner_model": escalation_winner.model,
+                    "winner_votes": escalation_winner_votes,
+                    "total_successes": escalation_ballots.len(),
+                    "max_agents": escalation_max_agents,
+                    "models_per_agent": escalation_models_per_agent,
+                    "failed_ballots": escalation_failures,
+                    "review_required": review_required,
+                }));
+            }
+        }
+    }
+
+    if emit_final_vote_response {
+        if let Some(ref observer) = stream_observer {
+            let meta = StreamEventMeta {
+                agent_name: &selected_agent,
+                phase_name,
+                trace_id: &trace.trace_id,
+            };
+            let total_chars = response_text.chars().count();
+            emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars).await?;
+            emit_stream_done(server, Some(observer), meta, 1, total_chars, 0u64).await?;
+        }
+    }
+
+    let risk_decision = json!({
+        "policy_enabled": risk_policy.enabled,
+        "score": risk_assessment.score,
+        "is_high_risk": risk_assessment.is_high_risk,
+        "reasons": risk_assessment.reasons,
+        "multi_model_vote_enabled": enable_high_risk_vote,
+        "multi_model_vote_used": used_multi_model_vote,
+        "multi_agent_vote_enabled": enable_high_risk_multi_agent_vote,
+        "multi_agent_vote_used": used_multi_agent_vote,
+        "escalation_enabled": escalation_enabled,
+        "escalation_models_per_agent": escalation_models_per_agent,
+        "escalation_max_agents": escalation_max_agents,
+        "review_required": review_required,
+        "vote_report": vote_report,
+    });
+
     if !cache_hit && response_text.is_empty() && last_err.is_none() {
         // Record budget usage before early return to prevent budget leak.
         if let Ok(mut budget) = server.tenant_budget.lock() {
@@ -1304,6 +1885,7 @@ pub(crate) async fn process_chat_request(
                 "available_agents": candidate_agents,
                 "quota_failed_agents": quota_failed_agents,
                 "agent_attempts": agent_attempts,
+                "risk_decision": risk_decision,
                 "hint": {
                     "options_field": "options.extra.preferred_agent",
                     "example": {
@@ -1901,6 +2483,7 @@ pub(crate) async fn process_chat_request(
         "distillation": distillation,
         "reviews": reviews,
         "agent_attempts": agent_attempts,
+        "risk_decision": risk_decision,
         "agent_switch_notice": agent_switch_notice,
         "tool_execution": tool_execution_results,
         "memory_policy": memory_promotion_result,

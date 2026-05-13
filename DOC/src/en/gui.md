@@ -31,11 +31,31 @@ The backend process is started from the configured working directory. The GUI ex
 - Mode switching: Ask / Plan / Edit / Safeguard / Full Auto
 - File attachments: upload files as chat context
 - Dynamic send button: changes based on AI status (loading / ready / error)
+- **Risk Decision panel**: displays risk assessment, mitigation strategy, and review requirements for high-risk AI responses (see dedicated section below)
 
 ### Skills Tab
 - Create and import AI skills
 - Built-in `skill-creator`: lets AI define new skills autonomously
 - Skill list management: enable, disable, delete
+
+### Chat Tab — Risk Decision & Safeguard Mode
+
+The GUI displays a **Risk Decision panel** on AI responses when the backend's governance layer detects potentially high-risk content. This feature is part of the Safeguard mode and multi-model voting system.
+
+**What triggers it:** The backend analyzes user messages against domain keywords (medical, legal, financial, security, etc.) and decision-related keywords. When the risk score exceeds the threshold, the backend activates one or more mitigation strategies:
+
+- **Multi-model vote**: Sends the request to multiple models concurrently and compares outputs
+- **Multi-agent vote**: Routes the request to different AI agents and aggregates results
+- **Escalation**: Uses more capable (and expensive) models for final judgment
+- **Review required**: Flags the response for human review
+
+**What the GUI shows:**
+- Risk state: **High Risk** or **Normal**
+- Strategy used: e.g. "multi_model_vote", "multi_agent_vote", "escalation"
+- Review requirement indication
+- Specific risk reasons (up to 4 reasons displayed inline)
+
+The panel adapts theme-wise: high-risk topics get a warm orange/red background, normal risk gets a subtle green tint — both respecting dark/light mode correctly.
 
 ### Settings Tab
 - **Provider Management**: dynamic environment variable injection (all 34+ providers), no longer hardcoded to 8
