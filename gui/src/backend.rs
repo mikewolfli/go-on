@@ -656,8 +656,43 @@ impl BackendClient {
         self.rpc_call("provider.configure", Some(params)).await
     }
 
+    /// Configure a provider with both api_key and secret_key (e.g. wenxin).
+    pub async fn configure_provider_with_secret(
+        &self,
+        name: &str,
+        api_key: &str,
+        secret_key: &str,
+        model: &str,
+    ) -> Result<Value, String> {
+        let params = serde_json::json!({
+            "name": name,
+            "api_key": api_key,
+            "secret_key": secret_key,
+            "model": model,
+        });
+        self.rpc_call("provider.configure", Some(params)).await
+    }
+
     pub async fn restart_backend(&self) -> Result<Value, String> {
         self.rpc_call("runtime.restart", None).await
+    }
+
+    /// Initiate GitHub Copilot OAuth Device Code flow.
+    /// Returns `device_code`, `user_code`, `verification_uri`, and `interval`.
+    pub async fn copilot_device_code_request(&self) -> Result<Value, String> {
+        self.rpc_call("provider.copilot_device_code", Some(serde_json::json!({})))
+            .await
+    }
+
+    /// Poll GitHub for access token after user authorizes via device code.
+    /// Pass the `device_code` from the initial request.
+    /// Returns `status: "pending"` while waiting, `status: "authorized"` on success.
+    pub async fn copilot_device_code_poll(&self, device_code: &str) -> Result<Value, String> {
+        self.rpc_call(
+            "provider.copilot_device_code_poll",
+            Some(serde_json::json!({"device_code": device_code})),
+        )
+        .await
     }
 
     pub async fn create_skill(

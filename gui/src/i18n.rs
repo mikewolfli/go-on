@@ -1258,6 +1258,112 @@ impl I18n {
             ),
         );
 
+        // ── Copilot OAuth Device Code ──
+        m.insert(
+            "providers.copilot_requesting",
+            tr!(
+                en,
+                "Requesting device code from GitHub…",
+                cn,
+                "正在请求 GitHub 设备代码…",
+                tw,
+                "正在請求 GitHub 設備代碼…"
+            ),
+        );
+        m.insert(
+            "providers.copilot_open_url",
+            tr!(
+                en,
+                "1. Open this URL in your browser:",
+                cn,
+                "1. 在浏览器中打开此链接:",
+                tw,
+                "1. 在瀏覽器中打開此連結:"
+            ),
+        );
+        m.insert(
+            "providers.copilot_enter_code",
+            tr!(
+                en,
+                "2. Enter this code",
+                cn,
+                "2. 输入此代码",
+                tw,
+                "2. 輸入此代碼"
+            ),
+        );
+        m.insert(
+            "providers.copilot_waiting",
+            tr!(
+                en,
+                "Waiting for authorization…",
+                cn,
+                "等待授权中…",
+                tw,
+                "等待授權中…"
+            ),
+        );
+        m.insert(
+            "providers.copilot_authorized",
+            tr!(
+                en,
+                "✓ Authorized successfully!",
+                cn,
+                "✓ 授权成功！",
+                tw,
+                "✓ 授權成功！"
+            ),
+        );
+        m.insert(
+            "providers.copilot_expired",
+            tr!(
+                en,
+                "✗ Device code expired. Please try again.",
+                cn,
+                "✗ 设备码已过期，请重试。",
+                tw,
+                "✗ 設備碼已過期，請重試。"
+            ),
+        );
+        m.insert(
+            "providers.copilot_denied",
+            tr!(
+                en,
+                "✗ Authorization denied.",
+                cn,
+                "✗ 授权已拒绝。",
+                tw,
+                "✗ 授權已拒絕。"
+            ),
+        );
+        m.insert(
+            "providers.copilot_cancel",
+            tr!(en, "Cancel", cn, "取消", tw, "取消"),
+        );
+        m.insert(
+            "providers.copilot_clear",
+            tr!(en, "Clear", cn, "清除", tw, "清除"),
+        );
+        m.insert(
+            "providers.copilot_retry",
+            tr!(en, "Retry", cn, "重试", tw, "重試"),
+        );
+        m.insert(
+            "providers.secret_key",
+            tr!(en, "Secret Key", cn, "Secret Key", tw, "Secret Key"),
+        );
+        m.insert(
+            "providers.secret_key_placeholder",
+            tr!(
+                en,
+                "(wenxin secret key)",
+                cn,
+                "(文心一言 Secret Key)",
+                tw,
+                "(文心一言 Secret Key)"
+            ),
+        );
+
         // Theme
         m.insert("theme.title", tr!(en, "Theme", cn, "主题", tw, "主題"));
         m.insert("theme.minimal", tr!(en, "Minimal", cn, "简约", tw, "簡約"));

@@ -9,6 +9,8 @@ pub struct ProvidersView {
     /// Selected provider name from a predefined list (for Add)
     pub selected_provider: String,
     new_key: String,
+    /// Additional secret key for providers like wenxin that need dual-auth
+    new_secret_key: String,
     pub new_model: String,
     /// Label distinguishing multiple instances of the same provider
     pub new_label: String,
@@ -28,6 +30,24 @@ pub struct ProvidersView {
     /// Cached security prefs — reloaded at most once per 10s to avoid per-frame disk reads.
     cached_security: security_prefs::SecurityPrefs,
     security_last_load: Instant,
+
+    // ── GitHub Copilot OAuth Device Code state ──
+    /// Current step: None = idle, "requesting", "polling", "done", "error"
+    copilot_device_state: Option<String>,
+    /// The device_code returned by GitHub (for polling)
+    copilot_device_code: String,
+    /// The user_code displayed to the user
+    copilot_user_code: String,
+    /// The verification URI (e.g. https://github.com/login/device)
+    copilot_verification_uri: String,
+    /// Polling interval in seconds (from server)
+    copilot_poll_interval: u64,
+    /// Timestamp of last poll attempt
+    copilot_last_poll: Instant,
+    /// Access token obtained after authorization
+    copilot_access_token: String,
+    /// Status message for the copilot auth section
+    copilot_status: String,
 }
 
 /// Provider names for the dropdown (34 total, matching providers.toml)
@@ -150,6 +170,7 @@ impl ProvidersView {
         Self {
             selected_provider: PROVIDER_NAMES[0].to_string(),
             new_key: String::new(),
+            new_secret_key: String::new(),
             new_model: "auto".to_string(),
             new_label: String::new(),
             update_target: -1,
@@ -164,6 +185,16 @@ impl ProvidersView {
             provider_capabilities: std::collections::HashMap::new(),
             cached_security: security_prefs::load(),
             security_last_load: Instant::now(),
+
+            // Copilot Device Code state
+            copilot_device_state: None,
+            copilot_device_code: String::new(),
+            copilot_user_code: String::new(),
+            copilot_verification_uri: String::new(),
+            copilot_poll_interval: 5,
+            copilot_last_poll: Instant::now(),
+            copilot_access_token: String::new(),
+            copilot_status: String::new(),
         }
     }
 
@@ -174,7 +205,7 @@ impl ProvidersView {
         self.provider_ops_status.clear();
     }
 
-    fn process_pending(&mut self) {
+    fn process_pending(&mut self, i18n: &I18n) {
         // Limit event processing per frame to prevent UI freeze
         const MAX_EVENTS_PER_FRAME: usize = 12;
         for _ in 0..MAX_EVENTS_PER_FRAME {
@@ -202,6 +233,70 @@ impl ProvidersView {
                             .insert(provider.to_string(), models);
                     }
                 }
+            } else if let Some(rest) = msg.strip_prefix("__copilot_device__:") {
+                // Initial device code response
+                if let Ok(resp) = serde_json::from_str::<serde_json::Value>(rest) {
+                    self.copilot_device_code =
+                        resp["device_code"].as_str().unwrap_or("").to_string();
+                    self.copilot_user_code = resp["user_code"].as_str().unwrap_or("").to_string();
+                    self.copilot_verification_uri = resp["verification_uri"]
+                        .as_str()
+                        .unwrap_or("https://github.com/login/device")
+                        .to_string();
+                    self.copilot_poll_interval = resp["interval"].as_u64().unwrap_or(5);
+                    self.copilot_device_state = Some("polling".to_string());
+                    self.copilot_last_poll = Instant::now();
+                    self.copilot_status = String::new();
+                } else {
+                    self.copilot_device_state = Some("error".to_string());
+                    self.copilot_status = "Failed to parse device code response".to_string();
+                }
+            } else if let Some(err_msg) = msg.strip_prefix("__copilot_device_err__:") {
+                self.copilot_device_state = Some("error".to_string());
+                self.copilot_status = err_msg.to_string();
+            } else if let Some(rest) = msg.strip_prefix("__copilot_poll__:") {
+                // Poll response
+                if let Ok(resp) = serde_json::from_str::<serde_json::Value>(rest) {
+                    let status = resp["status"].as_str().unwrap_or("");
+                    match status {
+                        "pending" | "slow_down" => {
+                            // Still waiting — keep polling
+                            self.copilot_status = i18n.t("providers.copilot_waiting").to_string();
+                        }
+                        "authorized" => {
+                            // Got the token!
+                            self.copilot_access_token =
+                                resp["access_token"].as_str().unwrap_or("").to_string();
+                            self.copilot_device_state = Some("done".to_string());
+                            self.copilot_status =
+                                i18n.t("providers.copilot_authorized").to_string();
+                            // Auto-fill the api_key field with the token
+                            self.new_key = self.copilot_access_token.clone();
+                        }
+                        "expired" => {
+                            self.copilot_device_state = Some("error".to_string());
+                            self.copilot_status = i18n.t("providers.copilot_expired").to_string();
+                        }
+                        "denied" => {
+                            self.copilot_device_state = Some("error".to_string());
+                            self.copilot_status = i18n.t("providers.copilot_denied").to_string();
+                        }
+                        "error" => {
+                            self.copilot_device_state = Some("error".to_string());
+                            self.copilot_status =
+                                format!("Error: {}", resp["error"].as_str().unwrap_or("unknown"));
+                        }
+                        _ => {
+                            self.copilot_status = format!("Status: {}", status);
+                        }
+                    }
+                } else {
+                    self.copilot_device_state = Some("error".to_string());
+                    self.copilot_status = "Failed to parse poll response".to_string();
+                }
+            } else if let Some(err_msg) = msg.strip_prefix("__copilot_poll_err__:") {
+                self.copilot_device_state = Some("error".to_string());
+                self.copilot_status = err_msg.to_string();
             } else {
                 self.sending = false;
                 self.status = msg;
@@ -261,7 +356,7 @@ impl ProvidersView {
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                self.process_pending();
+                self.process_pending(i18n);
                 self.ensure_models_loaded(backend, ctx);
                 self.refresh_security_cache();
 
@@ -303,6 +398,16 @@ impl ProvidersView {
                                 .hint_text(i18n.t("common.apiKeyPlaceholder"))
                                 .desired_width(260.0),
                         );
+                        // ── Secret key field (wenxin dual-auth) ──
+                        if self.selected_provider.to_lowercase() == "wenxin" {
+                            ui.label(i18n.t("providers.secret_key"));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.new_secret_key)
+                                    .password(true)
+                                    .hint_text(i18n.t("providers.secret_key_placeholder"))
+                                    .desired_width(260.0),
+                            );
+                        }
                         // Show auto-push hint when updating an existing provider
                         if self.update_target >= 0 {
                             ui.colored_label(
@@ -360,6 +465,123 @@ impl ProvidersView {
                                     );
                                 }
                             });
+                        // ── Copilot OAuth Device Code section ──
+                        if self.selected_provider.to_lowercase() == "copilot" {
+                            ui.add_space(4.0);
+                            ui.separator();
+                            ui.add_space(2.0);
+
+                            match self.copilot_device_state.as_deref() {
+                                None | Some("idle")
+                                    if ui.button("Authorize via GitHub").clicked() =>
+                                {
+                                    self.copilot_device_state = Some("requesting".to_string());
+                                    self.copilot_status = i18n.t("providers.copilot_requesting").to_string();
+                                    let tx = self.pending_tx.clone();
+                                    let backend_clone = backend.clone();
+                                    let ctx_clone = ctx.clone();
+                                    tokio::spawn(async move {
+                                        match backend_clone.copilot_device_code_request().await {
+                                            Ok(resp) => {
+                                                let msg = format!("__copilot_device__:{}", serde_json::to_string(&resp).unwrap_or_default());
+                                                let _ = tx.send(msg);
+                                            }
+                                            Err(e) => {
+                                                let msg = format!("__copilot_device_err__:{}", e);
+                                                let _ = tx.send(msg);
+                                            }
+                                        }
+                                        ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                    });
+                                }
+                                Some("requesting") => {
+                                    ui.spinner();
+                                    ui.label(i18n.t("providers.copilot_requesting"));
+                                }
+                                Some("polling") => {
+                                    // Display the device code info
+                                    ui.horizontal(|ui| {
+                                        ui.label(i18n.t("providers.copilot_open_url"));
+                                        if ui.link(&self.copilot_verification_uri).clicked() {
+                                            let _ = webbrowser::open(&self.copilot_verification_uri);
+                                        }
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label(format!(
+                                            "{}: {}",
+                                            i18n.t("providers.copilot_enter_code"),
+                                            self.copilot_user_code
+                                        ));
+                                    });
+                                    ui.add_space(4.0);
+                                    ui.spinner();
+                                    ui.label(&self.copilot_status);
+
+                                    // Auto-poll every `interval` seconds
+                                    let elapsed = self.copilot_last_poll.elapsed();
+                                    if elapsed >= Duration::from_secs(self.copilot_poll_interval) {
+                                        self.copilot_last_poll = Instant::now();
+                                        let tx = self.pending_tx.clone();
+                                        let backend_clone = backend.clone();
+                                        let device_code = self.copilot_device_code.clone();
+                                        let ctx_clone = ctx.clone();
+                                        tokio::spawn(async move {
+                                            match backend_clone.copilot_device_code_poll(&device_code).await {
+                                                Ok(resp) => {
+                                                    let msg = format!("__copilot_poll__:{}", serde_json::to_string(&resp).unwrap_or_default());
+                                                    let _ = tx.send(msg);
+                                                }
+                                                Err(e) => {
+                                                    let msg = format!("__copilot_poll_err__:{}", e);
+                                                    let _ = tx.send(msg);
+                                                }
+                                            }
+                                            ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                        });
+                                    }
+
+                                    // Cancel button
+                                    if ui.button(i18n.t("providers.copilot_cancel")).clicked() {
+                                        self.copilot_device_state = None;
+                                        self.copilot_status.clear();
+                                    }
+                                }
+                                Some("done") => {
+                                    ui.colored_label(
+                                        egui::Color32::from_rgb(60, 180, 100),
+                                        i18n.t("providers.copilot_authorized"),
+                                    );
+                                    if !self.copilot_access_token.is_empty() {
+                                        let preview = if self.copilot_access_token.len() > 8 {
+                                            format!("{}...{}", &self.copilot_access_token[..4], &self.copilot_access_token[self.copilot_access_token.len()-4..])
+                                        } else {
+                                            "********".to_string()
+                                        };
+                                        ui.label(format!("Token: {}", preview));
+                                    }
+                                    if ui.button(i18n.t("providers.copilot_clear")).clicked() {
+                                        self.copilot_device_state = None;
+                                        self.copilot_access_token.clear();
+                                        self.copilot_status.clear();
+                                    }
+                                }
+                                Some("error") => {
+                                    ui.colored_label(
+                                        egui::Color32::from_rgb(220, 80, 80),
+                                        &self.copilot_status,
+                                    );
+                                    if ui.button(i18n.t("providers.copilot_retry")).clicked() {
+                                        self.copilot_device_state = None;
+                                        self.copilot_status.clear();
+                                    }
+                                }
+                                _ => {}
+                            }
+                            ui.add_space(4.0);
+                            ui.separator();
+                            ui.add_space(2.0);
+                        }
+
                         if ui
                             .add_enabled(
                                 !self.new_key.is_empty()
@@ -370,6 +592,12 @@ impl ProvidersView {
                         {
                             let name = self.selected_provider.clone();
                             let key: String = self.new_key
+                                .chars()
+                                .filter(|c| !c.is_control() || *c == '\t')
+                                .collect::<String>()
+                                .trim()
+                                .to_string();
+                            let secret_key: String = self.new_secret_key
                                 .chars()
                                 .filter(|c| !c.is_control() || *c == '\t')
                                 .collect::<String>()
@@ -419,6 +647,7 @@ impl ProvidersView {
                                         let backend_clone = backend.clone();
                                         let push_name = name.clone();
                                         let push_key = key.clone();
+                                        let push_secret_key = secret_key.clone();
                                         let push_model = model.clone();
                                         if push_model.is_empty() || push_model == "auto" {
                                             // Get the model from config if exists
@@ -436,12 +665,20 @@ impl ProvidersView {
                                             i18n.t("providers.push_failed"),
                                             provider_label(i18n, &name)
                                         );
+                                        let has_secret = !push_secret_key.is_empty();
                                         tokio::spawn(async move {
                                             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                                            let result = tokio::time::timeout(
-                                                std::time::Duration::from_secs(10),
-                                                backend_clone.configure_provider(&push_name, &push_key, &push_model),
-                                            ).await;
+                                            let result = if has_secret {
+                                                tokio::time::timeout(
+                                                    std::time::Duration::from_secs(10),
+                                                    backend_clone.configure_provider_with_secret(&push_name, &push_key, &push_secret_key, &push_model),
+                                                ).await
+                                            } else {
+                                                tokio::time::timeout(
+                                                    std::time::Duration::from_secs(10),
+                                                    backend_clone.configure_provider(&push_name, &push_key, &push_model),
+                                                ).await
+                                            };
                                             let msg = match result {
                                                 Ok(Ok(_)) => ok_fmt,
                                                 Ok(Err(e)) => err_fmt.replace("%s", &e),
@@ -483,6 +720,7 @@ impl ProvidersView {
                                     let backend_clone = backend.clone();
                                     let push_name = name.clone();
                                     let push_key = key.clone();
+                                    let push_secret_key = secret_key.clone();
                                     let push_model = model.clone();
                                     let ctx_clone = ctx.clone();
                                     let ok_fmt = format!(
@@ -496,12 +734,20 @@ impl ProvidersView {
                                         i18n.t("providers.push_failed"),
                                         provider_label(i18n, &name)
                                     );
+                                    let has_secret = !push_secret_key.is_empty();
                                     tokio::spawn(async move {
                                         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                                        let result = tokio::time::timeout(
-                                            std::time::Duration::from_secs(10),
-                                            backend_clone.configure_provider(&push_name, &push_key, &push_model),
-                                        ).await;
+                                        let result = if has_secret {
+                                            tokio::time::timeout(
+                                                std::time::Duration::from_secs(10),
+                                                backend_clone.configure_provider_with_secret(&push_name, &push_key, &push_secret_key, &push_model),
+                                            ).await
+                                        } else {
+                                            tokio::time::timeout(
+                                                std::time::Duration::from_secs(10),
+                                                backend_clone.configure_provider(&push_name, &push_key, &push_model),
+                                            ).await
+                                        };
                                         let msg = match result {
                                             Ok(Ok(_)) => ok_fmt,
                                             Ok(Err(e)) => err_fmt.replace("%s", &e),
@@ -513,6 +759,7 @@ impl ProvidersView {
                                 }
                             }
                             self.new_key.clear();
+                            self.new_secret_key.clear();
                             changed = true;
                         }
                     });

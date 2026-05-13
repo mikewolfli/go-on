@@ -5338,7 +5338,7 @@ pub(super) async fn handle_provider_capabilities(
 }
 
 /// Handle provider configuration request from GUI or other clients.
-/// Stores the provider config in memory and applies it to the agent registry.
+/// Stores the provider config to system keyring.
 pub(super) async fn handle_provider_configure(
     server: &AcpServer,
     params: Value,
@@ -5353,30 +5353,49 @@ pub(super) async fn handle_provider_configure(
         .get("model")
         .and_then(Value::as_str)
         .unwrap_or("auto");
+    let secret_key = params
+        .get("secret_key")
+        .and_then(Value::as_str)
+        .unwrap_or("");
 
     info!(
         "{}",
         tf(
-            "Provider configured: name={}, model={}",
-            &[("name", name), ("model", model)]
+            "Provider configured: name={}, model={}, has_secret_key={}",
+            &[
+                ("name", name),
+                ("model", model),
+                (
+                    "has_secret_key",
+                    if secret_key.is_empty() { "no" } else { "yes" }
+                )
+            ]
         )
     );
 
     // ── Persist API key to system keyring ──────────────────────────
-    // The agent config references keyring://go-on/{provider}_api_key
-    // which the backend reads via keyring::Entry::get_password().
-    if api_key.is_empty() {
-        tracing::warn!("empty API key for '{}', skipping persistence", name);
-    } else {
+    if !api_key.is_empty() {
         let account = format!("{}_api_key", name);
         match keyring::Entry::new("go-on", &account) {
-            Ok(entry) => match entry.set_password(api_key) {
-                Ok(_) => info!("API key for '{}' saved to system keyring", name),
-                Err(e) => tracing::warn!("failed to save API key for '{}' to keyring: {}", name, e),
-            },
-            Err(e) => {
-                tracing::warn!("failed to open keyring entry for '{}': {}", name, e);
+            Ok(entry) => {
+                if let Err(e) = entry.set_password(api_key) {
+                    tracing::warn!("failed to save API key for '{}' to keyring: {}", name, e);
+                }
             }
+            Err(e) => tracing::warn!("failed to open keyring entry for '{}': {}", name, e),
+        }
+    }
+
+    // ── Persist secret_key to system keyring (wenxin dual-auth) ────
+    if !secret_key.is_empty() {
+        let account = format!("{}_secret_key", name);
+        match keyring::Entry::new("go-on", &account) {
+            Ok(entry) => {
+                if let Err(e) = entry.set_password(secret_key) {
+                    tracing::warn!("failed to save secret key for '{}' to keyring: {}", name, e);
+                }
+            }
+            Err(e) => tracing::warn!("failed to open keyring entry for '{}': {}", name, e),
         }
     }
 
@@ -5390,6 +5409,271 @@ pub(super) async fn handle_provider_configure(
         }),
     )
     .await
+}
+
+/// Handle GitHub Copilot OAuth Device Code flow initiation.
+/// Returns a `device_code`, `user_code`, and `verification_uri` (like GitHub's API).
+/// The caller (GUI) should display the URI + user_code and then poll
+/// `provider.copilot_device_code_poll` with the returned `device_code`.
+pub(super) async fn handle_copilot_device_code_request(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    info!("GitHub Copilot Device Code flow requested");
+
+    // GitHub Copilot's OAuth device-code endpoint uses the `github.com` client.
+    // We use the same client_id that VS Code uses for Copilot.
+    let client_id = "Iv1.b507a08cfeec0f77";
+    let device_code_url = "https://github.com/login/device/code";
+    let scope = "read:user,repo,workflow,copilot";
+
+    // Build reqwest client (reuse existing if possible, but we need it here)
+    let client = reqwest::Client::new();
+
+    let device_params = [("client_id", client_id), ("scope", scope)];
+
+    match client
+        .post(device_code_url)
+        .header("Accept", "application/json")
+        .form(&device_params)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                let err_msg = format!("GitHub device code request failed ({status}): {body}");
+                tracing::error!("{}", err_msg);
+                return send_error(server, request_id, -32000, err_msg, None).await;
+            }
+            match resp.json::<Value>().await {
+                Ok(body) => {
+                    let device_code = body["device_code"].as_str().unwrap_or("").to_string();
+                    let user_code = body["user_code"].as_str().unwrap_or("").to_string();
+                    let verification_uri = body["verification_uri"]
+                        .as_str()
+                        .unwrap_or("https://github.com/login/device")
+                        .to_string();
+                    let interval = body["interval"].as_u64().unwrap_or(5);
+
+                    info!(
+                        "Copilot Device Code issued: user_code={}, uri={}",
+                        user_code, verification_uri
+                    );
+
+                    send_result(
+                        server,
+                        request_id,
+                        json!({
+                            "ok": true,
+                            "device_code": device_code,
+                            "user_code": user_code,
+                            "verification_uri": verification_uri,
+                            "interval": interval,
+                        }),
+                    )
+                    .await
+                }
+                Err(e) => {
+                    let err_msg = format!("Failed to parse GitHub device code response: {}", e);
+                    tracing::error!("{}", err_msg);
+                    send_error(server, request_id, -32000, err_msg, None).await
+                }
+            }
+        }
+        Err(e) => {
+            let err_msg = format!("Failed to connect to GitHub device code endpoint: {}", e);
+            tracing::error!("{}", err_msg);
+            send_error(server, request_id, -32000, err_msg, None).await
+        }
+    }
+}
+
+/// Poll GitHub for the access token after device code authorization.
+/// The GUI should call this repeatedly (every `interval` seconds) until
+/// either a token is returned or the device_code expires.
+pub(super) async fn handle_copilot_device_code_poll(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let device_code = params
+        .get("device_code")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    if device_code.is_empty() {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "Missing 'device_code' parameter".to_string(),
+            None,
+        )
+        .await;
+    }
+
+    info!(
+        "Copilot Device Code poll: device_code={}",
+        &device_code[..8.min(device_code.len())]
+    );
+
+    let client_id = "Iv1.b507a08cfeec0f77";
+    let token_url = "https://github.com/login/oauth/access_token";
+
+    let client = reqwest::Client::new();
+
+    let poll_params = [
+        ("client_id", client_id),
+        ("device_code", &device_code),
+        ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+    ];
+
+    match client
+        .post(token_url)
+        .header("Accept", "application/json")
+        .form(&poll_params)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            match resp.json::<Value>().await {
+                Ok(body) => {
+                    // Check for error responses
+                    if let Some(error) = body.get("error").and_then(Value::as_str) {
+                        match error {
+                            "authorization_pending" => {
+                                // User hasn't authorized yet — keep polling
+                                return send_result(
+                                    server,
+                                    request_id,
+                                    json!({
+                                        "ok": true,
+                                        "status": "pending",
+                                        "error": error,
+                                    }),
+                                )
+                                .await;
+                            }
+                            "slow_down" => {
+                                // Poll too fast — slow down
+                                return send_result(
+                                    server,
+                                    request_id,
+                                    json!({
+                                        "ok": true,
+                                        "status": "slow_down",
+                                        "error": error,
+                                    }),
+                                )
+                                .await;
+                            }
+                            "expired_token" => {
+                                // Device code expired
+                                return send_result(
+                                    server,
+                                    request_id,
+                                    json!({
+                                        "ok": true,
+                                        "status": "expired",
+                                        "error": error,
+                                    }),
+                                )
+                                .await;
+                            }
+                            "access_denied" => {
+                                return send_result(
+                                    server,
+                                    request_id,
+                                    json!({
+                                        "ok": true,
+                                        "status": "denied",
+                                        "error": error,
+                                    }),
+                                )
+                                .await;
+                            }
+                            _ => {
+                                return send_result(
+                                    server,
+                                    request_id,
+                                    json!({
+                                        "ok": true,
+                                        "status": "error",
+                                        "error": error,
+                                    }),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+
+                    // Success! We got an access_token
+                    let access_token = body
+                        .get("access_token")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let token_type = body
+                        .get("token_type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("bearer");
+                    let scope = body.get("scope").and_then(Value::as_str).unwrap_or("");
+
+                    info!(
+                        "Copilot Device Code flow completed — access_token obtained ({} chars)",
+                        access_token.len()
+                    );
+
+                    // Set the GITHUB_TOKEN environment variable so CopilotAgent uses it
+                    std::env::set_var("GITHUB_TOKEN", access_token);
+
+                    // Also persist to provider api_key under name "copilot" so it survives restarts
+                    if !access_token.is_empty() {
+                        let account = "copilot_api_key";
+                        match keyring::Entry::new("go-on", account) {
+                            Ok(entry) => {
+                                if let Err(e) = entry.set_password(access_token) {
+                                    tracing::warn!(
+                                        "failed to save Copilot token to keyring: {}",
+                                        e
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("failed to open keyring for Copilot: {}", e);
+                            }
+                        }
+                    }
+
+                    send_result(
+                        server,
+                        request_id,
+                        json!({
+                            "ok": true,
+                            "status": "authorized",
+                            "access_token": access_token,
+                            "token_type": token_type,
+                            "scope": scope,
+                        }),
+                    )
+                    .await
+                }
+                Err(e) => {
+                    let err_msg = format!("Failed to parse GitHub token response: {}", e);
+                    tracing::error!("{}", err_msg);
+                    send_error(server, request_id, -32000, err_msg, None).await
+                }
+            }
+        }
+        Err(e) => {
+            let err_msg = format!("Failed to connect to GitHub token endpoint: {}", e);
+            tracing::error!("{}", err_msg);
+            send_error(server, request_id, -32000, err_msg, None).await
+        }
+    }
 }
 
 /// Handle runtime restart request from GUI or other clients.

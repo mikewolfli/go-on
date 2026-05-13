@@ -98,6 +98,8 @@ fn is_acp_request(method: &str) -> bool {
                 | "provider.test_connection"
                 | "provider.test_completion"
                 | "provider.capabilities"
+                | "provider.copilot_device_code"
+                | "provider.copilot_device_code_poll"
             | "phase.policy.replay"
             | "primary_secondary.summary"
             | "summary/primary_secondary"
@@ -942,6 +944,22 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                 }
                 "provider.test_completion" => {
                     runtime_pack::handle_provider_test_completion(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "provider.copilot_device_code" => {
+                    runtime_pack::handle_copilot_device_code_request(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "provider.copilot_device_code_poll" => {
+                    runtime_pack::handle_copilot_device_code_poll(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,

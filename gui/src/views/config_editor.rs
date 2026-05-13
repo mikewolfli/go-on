@@ -1,5 +1,6 @@
 use crate::config::{save_app_config, AppConfig};
 use crate::i18n::I18n;
+use serde_json::Value;
 
 const MAX_SNAPSHOTS: usize = 20;
 
@@ -30,6 +31,82 @@ impl ConfigEditorView {
         }
     }
 
+    /// Redact all `api_key` fields in a JSON string (recursive, handles any nesting).
+    fn redact_api_keys_in_json(json: &str) -> String {
+        fn redact_value(v: &mut Value) {
+            match v {
+                Value::Object(map) => {
+                    if let Some(api_key) = map.get_mut("api_key") {
+                        if let Some(key) = api_key.as_str() {
+                            if !key.is_empty() {
+                                *api_key = Value::String(if key.len() > 8 {
+                                    format!("{}...{}", &key[..4], &key[key.len() - 4..])
+                                } else {
+                                    "********".to_string()
+                                });
+                            }
+                        }
+                    }
+                    // Also redact nested api_key fields (tools, agents, etc.)
+                    for (_, val) in map.iter_mut() {
+                        redact_value(val);
+                    }
+                }
+                Value::Array(arr) => {
+                    for item in arr.iter_mut() {
+                        redact_value(item);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        match serde_json::from_str::<Value>(json) {
+            Ok(mut root) => {
+                redact_value(&mut root);
+                serde_json::to_string_pretty(&root).unwrap_or_default()
+            }
+            _ => json.to_string(),
+        }
+    }
+
+    /// Before applying redacted JSON, restore real api_key values from the live config.
+    /// This prevents the redacted "sk-bc12...ef56" strings from overwriting real keys.
+    fn restore_api_keys_in_draft(draft: &str, config: &AppConfig) -> String {
+        match serde_json::from_str::<Value>(draft) {
+            Ok(Value::Object(mut root)) => {
+                // Restore api_key in providers array
+                if let Some(providers) = root.get_mut("providers").and_then(|p| p.as_array_mut()) {
+                    for p in providers.iter_mut() {
+                        if let Some(obj) = p.as_object_mut() {
+                            if let Some(redacted) = obj.get("api_key").and_then(|v| v.as_str()) {
+                                if redacted.contains("...") || redacted == "********" {
+                                    // Find matching provider in real config by name (and label, if present)
+                                    let name =
+                                        obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                                    let label =
+                                        obj.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                                    if let Some(real) = config
+                                        .providers
+                                        .iter()
+                                        .find(|p| p.name == name && p.label.as_str() == label)
+                                    {
+                                        if !real.api_key.is_empty() {
+                                            obj["api_key"] = Value::String(real.api_key.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                serde_json::to_string_pretty(&Value::Object(root))
+                    .unwrap_or_else(|_| draft.to_string())
+            }
+            _ => draft.to_string(),
+        }
+    }
+
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -41,7 +118,8 @@ impl ConfigEditorView {
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 if !self.initialized {
-                    self.draft = serde_json::to_string_pretty(config).unwrap_or_default();
+                    let raw = serde_json::to_string_pretty(config).unwrap_or_default();
+                    self.draft = Self::redact_api_keys_in_json(&raw);
                     self.initialized = true;
                 }
 
@@ -109,7 +187,8 @@ impl ConfigEditorView {
 
                 ui.horizontal(|ui| {
                     if ui.button(i18n.t("config.reloadCurrent")).clicked() {
-                        self.draft = serde_json::to_string_pretty(config).unwrap_or_default();
+                        let raw = serde_json::to_string_pretty(config).unwrap_or_default();
+                        self.draft = Self::redact_api_keys_in_json(&raw);
                         self.status = i18n.t("config.reloaded").to_string();
                     }
                     if safe_mode_enabled && ui.button(i18n.t("config.createSnapshot")).clicked() {
@@ -124,7 +203,10 @@ impl ConfigEditorView {
                         );
                     }
                     if ui.button(i18n.t("config.applyJson")).clicked() {
-                        match serde_json::from_str::<AppConfig>(&self.draft) {
+                        // Restore real api_key values before parsing — the draft shows
+                        // redacted "sk-bc12...ef56" strings that must not overwrite real keys.
+                        let restored = Self::restore_api_keys_in_draft(&self.draft, config);
+                        match serde_json::from_str::<AppConfig>(&restored) {
                             Ok(new_cfg) => {
                                 if safe_mode_enabled {
                                     if self.snapshots.len() >= MAX_SNAPSHOTS {
@@ -136,6 +218,10 @@ impl ConfigEditorView {
                                 }
                                 *config = new_cfg;
                                 save_app_config(config);
+                                // Re-redact the draft so the editor continues to show redacted keys
+                                self.draft = Self::redact_api_keys_in_json(
+                                    &serde_json::to_string_pretty(config).unwrap_or_default(),
+                                );
                                 self.status = i18n.t("config.applied").to_string();
                                 self.applied = true;
                             }
