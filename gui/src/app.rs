@@ -430,24 +430,40 @@ impl GoOnApp {
                 let model = if p.model.is_empty() || p.model == "auto" {
                     match name.as_str() {
                         "deepseek" => "deepseek-chat",
-                        "openai" => "gpt-4o",
+                        "openai" => "gpt-4o-mini",
                         "anthropic" => "claude-sonnet-4-20250514",
-                        "gemini" => "gemini-2.5-flash-preview-04-17",
-                        "qwen" => "qwen-max-2025-01-25",
+                        "gemini" => "gemini-2.5-flash",
+                        "qwen" => "qwen-max",
                         _ => "auto",
                     }
                 } else {
                     &p.model
                 };
-                let keyring_ref = format!("keyring://go-on/{}_api_key", name);
+                // Copilot uses GITHUB_TOKEN env var (read by CopilotAgent), not keyring ref.
+                // The built-in provider spec in setup.rs also uses api_key_env="GITHUB_COPILOT_TOKEN",
+                // so we must avoid keyring://go-on/copilot_api_key which would cause a keyring lookup failure.
+                let api_key_env = if name == "copilot" {
+                    "GITHUB_COPILOT_TOKEN".to_string()
+                } else {
+                    format!("keyring://go-on/{}_api_key", name)
+                };
+                let secret_key_env = match name.as_str() {
+                    "wenxin" | "qianfan" => Some(format!("keyring://go-on/{}_secret_key", name)),
+                    _ => None,
+                };
+                let secret_key_line = secret_key_env
+                    .as_ref()
+                    .map(|v| format!("secret_key_env = \"{}\"\n", v))
+                    .unwrap_or_default();
                 let toml_block = format!(
                     r#"[agents.{}]
 type = "{}"
 api_key_env = "{}"
+{}
 model = "{}"
 supports_system = true
 "#,
-                    agent_name, name, keyring_ref, model
+                    agent_name, name, api_key_env, secret_key_line, model
                 );
                 (toml_block, agent_name)
             })

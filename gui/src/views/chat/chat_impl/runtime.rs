@@ -619,10 +619,7 @@ impl ChatView {
                                 .as_ref()
                                 .map(|t| t.is_empty())
                                 .unwrap_or(true),
-                            final_agent
-                                .as_ref()
-                                .map(|a| a.as_str())
-                                .unwrap_or("unknown")
+                            final_agent.as_deref().unwrap_or("unknown")
                         );
                         eprintln!(
                             "[Gen] Generation {} completed ({})",

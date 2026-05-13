@@ -56,6 +56,7 @@ pub struct ProvidersView {
     /// Status message for the copilot auth section
     copilot_status: String,
     /// GitHub OAuth client_id for Copilot Device Code flow
+    #[allow(dead_code)]
     copilot_client_id: String,
     /// Flag to trigger config reload after copilot auth completes
     copilot_needs_reload: bool,
@@ -119,6 +120,11 @@ fn models_for_provider(provider: &str) -> &'static [&'static str] {
         "deepseek" => &["auto", "deepseek-v4-flash", "deepseek-v4-pro"],
         "openai" => &[
             "auto",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "o1",
+            "o3-mini",
             "gpt-4o",
             "gpt-4o-mini",
             "gpt-4-turbo",
@@ -128,23 +134,37 @@ fn models_for_provider(provider: &str) -> &'static [&'static str] {
         "anthropic" => &[
             "auto",
             "claude-sonnet-4-20250514",
+            "claude-3-7-sonnet-latest",
+            "claude-3-5-haiku-latest",
             "claude-3-5-sonnet-20241022",
             "claude-3-opus-20240229",
             "claude-3-haiku-20240307",
         ],
-        "cohere" => &["auto", "command-r-plus-08-2024", "command-r"],
+        "cohere" => &["auto", "command-r-plus", "command-r", "command-r7b"],
         "wenxin" => &["auto", "ERNIE-4.5-8K", "ERNIE-4.0", "ERNIE-3.5"],
-        "qianfan" => &["auto", "ERNIE-Bot", "ERNIE-Bot-turbo"],
-        "qwen" => &["auto", "qwen-max-2025-01-25", "qwen-plus", "qwen-turbo"],
+        "qianfan" => &[
+            "auto",
+            "ERNIE-4.5-8K",
+            "ERNIE-4.0-8K",
+            "ERNIE-3.5-8K",
+            "ERNIE-Speed-8K",
+        ],
+        "qwen" => &[
+            "auto",
+            "qwen-max",
+            "qwen-plus",
+            "qwen-turbo",
+            "qwen2.5-72b-instruct",
+        ],
         "glm" => &["auto", "glm-4-flash", "glm-4-plus"],
         "yi" => &["auto", "yi-lightning", "yi-large"],
         "hunyuan" => &["auto", "hunyuan-turbo-latest"],
         "doubao" => &["auto", "doubao-1.5-pro-32k-250115"],
         "gemini" => &[
             "auto",
-            "gemini-2.5-flash-preview-04-17",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
             "gemini-2.0-flash",
-            "gemini-1.5-pro",
         ],
         "groq" => &[
             "auto",
@@ -161,11 +181,11 @@ fn models_for_provider(provider: &str) -> &'static [&'static str] {
         "copilot" => &["auto", "github-copilot"],
         "facewall" | "langboat" | "skywork" | "xihu" | "deepquest" | "fireworks" | "loopai"
         | "titan" => &["auto"],
-        "stepfun" => &["auto", "step-2-16k-2505"],
-        "moonshot" => &["auto", "moonshot-v1-8k"],
+        "stepfun" => &["auto", "step-2-16k", "step-1-32k"],
+        "moonshot" => &["auto", "moonshot-v1-8k", "moonshot-v1-32k"],
         "minimax" => &["auto", "MiniMax-Text-01"],
         "ai21" => &["auto", "jamba-1.5-mini"],
-        "aleph" => &["auto", "luminous-base-control"],
+        "aleph" => &["auto", "luminous-base"],
         "llama" => &["auto", "llama3.2", "llama3.1"],
         "nim" => &["auto", "meta/llama-3.1-70b-instruct"],
         "perplexity" => &["auto", "sonar-pro", "sonar"],
@@ -173,6 +193,10 @@ fn models_for_provider(provider: &str) -> &'static [&'static str] {
         "together" => &["auto", "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"],
         _ => &["auto"],
     }
+}
+
+fn provider_requires_secret(provider: &str) -> bool {
+    matches!(provider.to_lowercase().as_str(), "wenxin" | "qianfan")
 }
 
 impl ProvidersView {
@@ -442,8 +466,8 @@ impl ProvidersView {
                                 .hint_text(i18n.t("common.apiKeyPlaceholder"))
                                 .desired_width(260.0),
                         );
-                        // ── Secret key field (wenxin dual-auth) ──
-                        if self.selected_provider.to_lowercase() == "wenxin" {
+                        // ── Secret key field (dual-auth providers) ──
+                        if provider_requires_secret(&self.selected_provider) {
                             ui.label(i18n.t("providers.secret_key"));
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.new_secret_key)
@@ -553,7 +577,7 @@ impl ProvidersView {
                                     }
                                     let params = [
                                         ("client_id", "01ab8ac9400c4e429b23"),
-                                        ("scope", "read:user"),
+                                        ("scope", "read:user,copilot"),
                                     ];
                                     match tokio::time::timeout(
                                         std::time::Duration::from_secs(15),
@@ -704,12 +728,18 @@ impl ProvidersView {
                             ui.add_space(2.0);
                         }
 
+                        let selected_is_copilot = self.selected_provider.to_lowercase() == "copilot";
+                        let selected_requires_secret = provider_requires_secret(&self.selected_provider);
+                        let can_add = if selected_is_copilot {
+                            true
+                        } else if selected_requires_secret {
+                            !self.new_key.trim().is_empty() && !self.new_secret_key.trim().is_empty()
+                        } else {
+                            !self.new_key.trim().is_empty()
+                        };
+
                         if ui
-                            .add_enabled(
-                                !self.new_key.is_empty()
-                                    || self.selected_provider.to_lowercase() == "copilot",
-                                egui::Button::new(i18n.t("providers.add")),
-                            )
+                            .add_enabled(can_add, egui::Button::new(i18n.t("providers.add")))
                             .clicked()
                         {
                             let name = self.selected_provider.clone();
@@ -728,6 +758,11 @@ impl ProvidersView {
                             let model = self.new_model.trim().to_string();
                             let provider_lower = name.to_lowercase();
 
+                            if provider_requires_secret(&provider_lower) && secret_key.is_empty() {
+                                self.status = i18n.t("providers.secret_key_placeholder").to_string();
+                                return;
+                            }
+
                             // Try keyring, but don't block the save if it fails
                             if let Err(e) =
                                 crate::keyring_util::store_api_key(&provider_lower, &key)
@@ -736,6 +771,17 @@ impl ProvidersView {
                                     "Warning: failed to store API key in system keyring: {}",
                                     e
                                 );
+                            }
+
+                            if !secret_key.is_empty() {
+                                if let Err(e) =
+                                    crate::keyring_util::store_secret_key(&provider_lower, &secret_key)
+                                {
+                                    eprintln!(
+                                        "Warning: failed to store secret key in system keyring: {}",
+                                        e
+                                    );
+                                }
                             }
 
                             // Check if adding a duplicate provider name.
@@ -1070,17 +1116,36 @@ impl ProvidersView {
                                                 // Small delay to ensure keyring write completes
                                                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-                                                let result = match tokio::time::timeout(
-                                                    std::time::Duration::from_secs(10),
-                                                    backend_clone.configure_provider(&name, &key, &model),
-                                                )
-                                                .await
-                                                {
-                                                    Ok(r) => r,
-                                                    Err(_) => {
-                                                        #[cfg(debug_assertions)]
-                                                        eprintln!("Warning: auto-push configure_provider timed out");
-                                                        Err("timeout".to_string())
+                                                let secret = crate::keyring_util::get_secret_key(&name.to_lowercase())
+                                                    .unwrap_or_default();
+                                                let has_secret = !secret.is_empty();
+                                                let result = if has_secret {
+                                                    match tokio::time::timeout(
+                                                        std::time::Duration::from_secs(10),
+                                                        backend_clone.configure_provider_with_secret(&name, &key, &secret, &model),
+                                                    )
+                                                    .await
+                                                    {
+                                                        Ok(r) => r,
+                                                        Err(_) => {
+                                                            #[cfg(debug_assertions)]
+                                                            eprintln!("Warning: auto-push configure_provider timed out");
+                                                            Err("timeout".to_string())
+                                                        }
+                                                    }
+                                                } else {
+                                                    match tokio::time::timeout(
+                                                        std::time::Duration::from_secs(10),
+                                                        backend_clone.configure_provider(&name, &key, &model),
+                                                    )
+                                                    .await
+                                                    {
+                                                        Ok(r) => r,
+                                                        Err(_) => {
+                                                            #[cfg(debug_assertions)]
+                                                            eprintln!("Warning: auto-push configure_provider timed out");
+                                                            Err("timeout".to_string())
+                                                        }
                                                     }
                                                 };
                                                 let msg = match result {
@@ -1123,6 +1188,8 @@ impl ProvidersView {
                                     Some(&provider.api_key),
                                 )
                                 .unwrap_or_default();
+                                let secret = crate::keyring_util::get_secret_key(&name.to_lowercase())
+                                    .unwrap_or_default();
                                 let model = provider.model.clone();
                                 let ctx_clone = ctx.clone();
                                 let ok_fmt = format!(
@@ -1133,17 +1200,34 @@ impl ProvidersView {
                                 let err_fmt = format!("{} %s", i18n.t("providers.push_failed"));
                                 tokio::spawn(async move {
                                     // Add timeout to prevent hanging
-                                    let result = match tokio::time::timeout(
-                                        std::time::Duration::from_secs(10),
-                                        backend_clone.configure_provider(&name, &key, &model),
-                                    )
-                                    .await
-                                    {
-                                        Ok(r) => r,
-                                        Err(_) => {
-                                            #[cfg(debug_assertions)]
-                                            eprintln!("Warning: configure_provider timed out");
-                                            Err("timeout".to_string())
+                                    let has_secret = !secret.is_empty();
+                                    let result = if has_secret {
+                                        match tokio::time::timeout(
+                                            std::time::Duration::from_secs(10),
+                                            backend_clone.configure_provider_with_secret(&name, &key, &secret, &model),
+                                        )
+                                        .await
+                                        {
+                                            Ok(r) => r,
+                                            Err(_) => {
+                                                #[cfg(debug_assertions)]
+                                                eprintln!("Warning: configure_provider timed out");
+                                                Err("timeout".to_string())
+                                            }
+                                        }
+                                    } else {
+                                        match tokio::time::timeout(
+                                            std::time::Duration::from_secs(10),
+                                            backend_clone.configure_provider(&name, &key, &model),
+                                        )
+                                        .await
+                                        {
+                                            Ok(r) => r,
+                                            Err(_) => {
+                                                #[cfg(debug_assertions)]
+                                                eprintln!("Warning: configure_provider timed out");
+                                                Err("timeout".to_string())
+                                            }
                                         }
                                     };
                                     let msg = match result {

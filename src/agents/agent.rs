@@ -28,7 +28,7 @@ use crate::agents::{
     Ai21Agent, AlephAgent, AnthropicAgent, CohereAgent, CopilotAgent, DeepQuestAgent,
     DeepSeekAgent, FaceWallAgent, FireworksAgent, GeminiAgent, GlmAgent, GroqAgent, HunyuanAgent,
     LangboatAgent, LlamaAgent, LoopAiAgent, MiniMaxAgent, MistralAgent, MoonshotAgent, NimAgent,
-    OpenAiAgent, OpenAiCompatibleAgent, PerplexityAgent, QianfanAgent, QwenAgent, ReplicateAgent,
+    OpenAiAgent, OpenAiCompatibleAgent, PerplexityAgent, QianfanAgent, ReplicateAgent,
     SkyworkAgent, StepFunAgent, TitanAgent, TogetherAgent, WenxinAgent, XihuAgent, YiAgent,
 };
 use crate::core::error::Result as AppResult;
@@ -165,6 +165,12 @@ fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> 
         candidates.push("OPENAI_API_KEY".to_string());
     }
 
+    if service == "go-on" && (account == "copilot_api_key" || account == "github_copilot_token") {
+        // Copilot supports both historical and current names.
+        candidates.push("GITHUB_COPILOT_TOKEN".to_string());
+        candidates.push("GITHUB_TOKEN".to_string());
+    }
+
     candidates.push(account.replace('-', "_").to_ascii_uppercase());
     candidates.push(
         format!("{}_{}", service, account)
@@ -175,6 +181,21 @@ fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> 
     candidates.sort();
     candidates.dedup();
     candidates
+}
+
+fn keyring_lookup_accounts(service: &str, account: &str) -> Vec<(String, String)> {
+    let mut targets = vec![(service.to_string(), account.to_string())];
+
+    // Backward/forward compatibility for Copilot key naming.
+    if service == "go-on" {
+        if account == "copilot_api_key" {
+            targets.push((service.to_string(), "github_copilot_token".to_string()));
+        } else if account == "github_copilot_token" {
+            targets.push((service.to_string(), "copilot_api_key".to_string()));
+        }
+    }
+
+    targets
 }
 
 fn load_secret_value(secret_ref: &str, field_name: &str) -> Result<String> {
@@ -199,18 +220,32 @@ fn load_secret_value(secret_ref: &str, field_name: &str) -> Result<String> {
             );
         }
 
-        let keyring_error = match keyring::Entry::new(service, account) {
-            Ok(entry) => match entry.get_password() {
-                Ok(value) if !value.trim().is_empty() => return Ok(value),
-                Ok(_) => "resolved to empty value".to_string(),
+        let mut keyring_error = "secret not found".to_string();
+        for (service_name, account_name) in keyring_lookup_accounts(service, account) {
+            match keyring::Entry::new(&service_name, &account_name) {
+                Ok(entry) => match entry.get_password() {
+                    Ok(value) if !value.trim().is_empty() => return Ok(value),
+                    Ok(_) => {
+                        keyring_error = format!(
+                            "entry {}/{} resolved to empty value",
+                            service_name, account_name
+                        );
+                    }
+                    Err(err) => {
+                        keyring_error = format!(
+                            "failed to read keyring entry {}/{}: {}",
+                            service_name, account_name, err
+                        );
+                    }
+                },
                 Err(err) => {
-                    format!("failed to read keyring entry: {}", err)
+                    keyring_error = format!(
+                        "failed to open keyring entry {}/{}: {}",
+                        service_name, account_name, err
+                    );
                 }
-            },
-            Err(err) => {
-                format!("failed to open keyring entry: {}", err)
             }
-        };
+        }
 
         let fallback_candidates = keyring_env_fallback_candidates(service, account);
         for env_name in &fallback_candidates {
@@ -983,26 +1018,27 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
         }
         "qwen" => {
             let api_key_env = required_field("qwen", &config.api_key_env, "api_key_env")?;
-            let secret_key_env = required_field("qwen", &config.secret_key_env, "secret_key_env")?;
-            Ok(Arc::new(QwenAgent::new(
+            let url = required_field("qwen", &config.url, "url")?;
+            let chat_path = config
+                .chat_path
+                .clone()
+                .unwrap_or_else(|| "/chat/completions".to_string());
+            let model = required_field("qwen", &config.model, "model")?;
+            let supports_system = config.supports_system.unwrap_or(true);
+            Ok(Arc::new(OpenAiCompatibleAgent::new(
+                url,
+                chat_path,
                 api_key_env,
-                secret_key_env,
+                model,
+                supports_system,
                 client,
             )))
         }
         "hunyuan" => {
             let api_key_env = required_field("hunyuan", &config.api_key_env, "api_key_env")?;
-            let secret_key_env =
-                required_field("hunyuan", &config.secret_key_env, "secret_key_env")?;
             let url = required_field("hunyuan", &config.url, "url")?;
             let model = required_field("hunyuan", &config.model, "model")?;
-            Ok(Arc::new(HunyuanAgent::new(
-                api_key_env,
-                secret_key_env,
-                url,
-                model,
-                client,
-            )))
+            Ok(Arc::new(HunyuanAgent::new(api_key_env, url, model, client)))
         }
         other => anyhow::bail!(
             "{}",
@@ -1162,12 +1198,7 @@ mod tests {
     fn build_agent_registry_includes_known_agents() {
         let mut agents = HashMap::new();
         agents.insert("openai".to_string(), build_agent_config("openai"));
-        agents.insert("qwen".to_string(), {
-            let mut cfg = build_agent_config("qwen");
-            cfg.url = None;
-            cfg.model = None;
-            cfg
-        });
+        agents.insert("qwen".to_string(), build_agent_config("qwen"));
         agents.insert("qianfan".to_string(), build_agent_config("qianfan"));
         agents.insert("hunyuan".to_string(), build_agent_config("hunyuan"));
 

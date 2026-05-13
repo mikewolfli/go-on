@@ -1,3 +1,4 @@
+/* global acquireVsCodeApi */
 // Settings functionality
 (function () {
   const vscode = acquireVsCodeApi();
@@ -19,7 +20,8 @@
     } else if (message.type === "settingsData") {
       loadSettingsData(message.data || {});
     } else if (message.type === "providerModelsData") {
-      providerState.copilotAuth = message.copilotAuth || providerState.copilotAuth;
+      providerState.copilotAuth =
+        message.copilotAuth || providerState.copilotAuth;
       updateProviderModels(
         message.provider,
         Array.isArray(message.modelOptions) ? message.modelOptions : [],
@@ -142,7 +144,9 @@
 
     const clientIdInput = document.getElementById("copilotOauthClientId");
     if (clientIdInput) {
-      clientIdInput.value = String(providerState.copilotAuth.oauthClientId || "");
+      clientIdInput.value = String(
+        providerState.copilotAuth.oauthClientId || "",
+      );
     }
 
     toggleCopilotPanel(providerSettings.selectedProvider || "");
@@ -166,7 +170,10 @@
       select.appendChild(option);
     });
 
-    if (previousValue && secretTargets.some((item) => item.name === previousValue)) {
+    if (
+      previousValue &&
+      secretTargets.some((item) => item.name === previousValue)
+    ) {
       select.value = previousValue;
     } else if (secretTargets.length > 0) {
       select.value = String(secretTargets[0].name || "");
@@ -585,7 +592,10 @@
   );
   if (refreshCopilotModelsButton) {
     refreshCopilotModelsButton.addEventListener("click", () => {
-      vscode.postMessage({ type: "requestProviderModels", provider: "copilot" });
+      vscode.postMessage({
+        type: "requestProviderModels",
+        provider: "copilot",
+      });
     });
   }
 

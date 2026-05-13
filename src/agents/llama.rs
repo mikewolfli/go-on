@@ -1,6 +1,13 @@
-//! Llama (Meta) agent implementation
+//! Llama (self-hosted) agent implementation
 //!
-//! This module provides an implementation for the Meta Llama API.
+//! This module provides an implementation for self-hosted Llama models
+//! served via llama.cpp, Ollama, vLLM, or any OpenAI-compatible server.
+//!
+//! Default endpoint: http://localhost:8080/v1 (compatible with llama.cpp server,
+//! Ollama, and vLLM).
+//!
+//! The API key is optional for local deployments. Set `LLAMA_API_KEY` if your
+//! server requires authentication.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -12,7 +19,7 @@ use tokio::time::sleep;
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
-use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
+use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
 pub struct LlamaAgent {
     api_key_env: String,
@@ -66,12 +73,7 @@ impl LlamaAgent {
             "stream": true
         });
 
-        if let Some(value) = option_f64(options, "temperature") {
-            payload["temperature"] = Value::from(value);
-        }
-        if let Some(value) = option_f64(options, "top_p") {
-            payload["top_p"] = Value::from(value);
-        }
+        apply_openai_common_options(&mut payload, options);
 
         payload
     }
@@ -83,18 +85,21 @@ impl LlamaAgent {
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
-        let api_key = resolve_secret(&self.api_key_env, "llama.api_key_env")?;
         let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+
         let payload = self.build_payload(messages, principles, &options);
 
-        let response = self
+        let mut request = self
             .client
-            .post(endpoint)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-            .await?;
+            .post(&endpoint)
+            .header("Content-Type", "application/json");
+
+        // API key is optional for local self-hosted deployments
+        if let Ok(api_key) = resolve_secret(&self.api_key_env, "llama.api_key_env") {
+            request = request.header("Authorization", format!("Bearer {}", api_key));
+        }
+
+        let response = request.json(&payload).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();

@@ -162,7 +162,7 @@ async function verifyArchiveChecksum(
     });
     throw new Error(
       `Integrity check failed: expected SHA-256 ${expectedHash}, got ${actualHash}. ` +
-        "The downloaded archive may be corrupted or tampered with.",
+      "The downloaded archive may be corrupted or tampered with.",
     );
   }
 }
@@ -257,37 +257,6 @@ async function extractArchive(
   throw new Error(`Unsupported archive format: ${archivePath}`);
 }
 
-export async function ensureProvidersTomlForConfig(
-  workspaceRoot: string,
-  runtimeDir: string,
-  configPath: string,
-): Promise<void> {
-  const targetDir = path.dirname(configPath);
-  const targetProvidersPath = path.join(targetDir, "providers.toml");
-  if (await pathExists(targetProvidersPath)) {
-    return;
-  }
-
-  const sourceCandidates = [
-    path.join(workspaceRoot, "providers.toml"),
-    path.join(runtimeDir, "providers.toml"),
-  ];
-
-  for (const candidate of sourceCandidates) {
-    if (!(await pathExists(candidate))) {
-      continue;
-    }
-    await fsPromises.mkdir(targetDir, { recursive: true });
-    await fsPromises.copyFile(candidate, targetProvidersPath);
-    vscode.window.showInformationMessage(
-      i18n.getMessage(MessageKeys.providersCatalogSynced, [
-        targetProvidersPath,
-      ]),
-    );
-    return;
-  }
-}
-
 export async function resolveConfigPath(
   workspaceRoot: string,
   configuredConfigPath: string,
@@ -295,11 +264,6 @@ export async function resolveConfigPath(
 ): Promise<string> {
   const workspaceConfigPath = path.resolve(workspaceRoot, configuredConfigPath);
   if (await pathExists(workspaceConfigPath)) {
-    await ensureProvidersTomlForConfig(
-      workspaceRoot,
-      runtimeDir,
-      workspaceConfigPath,
-    );
     return workspaceConfigPath;
   }
 
@@ -317,11 +281,6 @@ export async function resolveConfigPath(
       recursive: true,
     });
     await fsPromises.copyFile(workspaceConfigTemplatePath, workspaceConfigPath);
-    await ensureProvidersTomlForConfig(
-      workspaceRoot,
-      runtimeDir,
-      workspaceConfigPath,
-    );
     vscode.window.showInformationMessage(
       i18n.getMessage(MessageKeys.configFromWorkspaceTemplate, [
         workspaceConfigPath,
@@ -339,11 +298,6 @@ export async function resolveConfigPath(
       recursive: true,
     });
     await fsPromises.copyFile(bundledConfigTemplatePath, workspaceConfigPath);
-    await ensureProvidersTomlForConfig(
-      workspaceRoot,
-      runtimeDir,
-      workspaceConfigPath,
-    );
     vscode.window.showInformationMessage(
       i18n.getMessage(MessageKeys.configFromRuntimeTemplate, [
         workspaceConfigPath,

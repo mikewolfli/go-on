@@ -12,7 +12,7 @@ name = "openai"
 type = "openai"
 group = "openai"
 url = "https://api.openai.com/v1"
-model = "gpt-4o"
+model = "gpt-4o-mini"
 api_key_env = "OPENAI_API_KEY"
 supports_system = true
 supports_vision = true
@@ -43,11 +43,14 @@ name = "cohere"
 type = "cohere"
 group = "openai"
 url = "https://api.cohere.ai/v1"
-model = "command-r-plus-08-2024"
+model = "command-r-plus"
 api_key_env = "COHERE_API_KEY"
 supports_system = true
 
 # ── Chinese Vendors (15) ───────────────────────────────────────
+# Auth policy (official-aligned):
+# - Dual-key only: wenxin, qianfan (api_key_env + secret_key_env)
+# - Single-key: all others in this group, including qwen and hunyuan
 
 [[providers]]
 name = "deepseek"
@@ -70,7 +73,7 @@ secret_key_env = "WENXIN_SECRET_KEY"
 name = "qianfan"
 type = "qianfan"
 group = "chinese"
-model = "ERNIE-Bot"
+model = "ERNIE-4.5-8K"
 api_key_env = "QIANFAN_API_KEY"
 secret_key_env = "QIANFAN_SECRET_KEY"
 
@@ -79,7 +82,7 @@ name = "qwen"
 type = "qwen"
 group = "chinese"
 url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-model = "qwen-max-2025-01-25"
+model = "qwen-max"
 api_key_env = "QWEN_API_KEY"
 supports_system = true
 supports_vision = true
@@ -107,7 +110,6 @@ group = "chinese"
 url = "https://api.hunyuan.cloud.tencent.com/v1"
 model = "hunyuan-turbo-latest"
 api_key_env = "HUNYUAN_API_KEY"
-secret_key_env = "HUNYUAN_SECRET_KEY"
 
 [[providers]]
 name = "doubao"
@@ -148,7 +150,7 @@ name = "stepfun"
 type = "stepfun"
 group = "chinese"
 url = "https://api.stepfun.com/v1"
-model = "step-2-16k-2505"
+model = "step-2-16k"
 api_key_env = "STEPFUN_API_KEY"
 
 [[providers]]
@@ -190,7 +192,7 @@ name = "aleph"
 type = "aleph"
 group = "other"
 url = "https://api.aleph-alpha.com"
-model = "luminous-base-control"
+model = "luminous-base"
 api_key_env = "ALEPH_API_KEY"
 
 [[providers]]
@@ -221,7 +223,7 @@ name = "gemini"
 type = "gemini"
 group = "other"
 url = "https://generativelanguage.googleapis.com/v1beta"
-model = "gemini-2.5-flash-preview-04-17"
+model = "gemini-2.5-flash"
 api_key_env = "GEMINI_API_KEY"
 supports_vision = true
 

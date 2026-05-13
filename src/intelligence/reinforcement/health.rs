@@ -221,6 +221,7 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
 
     for agent_config in config.agents.values() {
         let env_var = agent_config.api_key_env.as_deref().unwrap_or("");
+        let secret_env_var = agent_config.secret_key_env.as_deref();
         let agent_name = &agent_config.agent_type;
 
         if env_var.is_empty() {
@@ -230,32 +231,12 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
         total_count += 1;
 
         // Try keyring first, fall back to env var (same chain as load_secret_value)
-        let is_ready = if env_var.starts_with("keyring://") {
-            let locator = env_var.trim_start_matches("keyring://");
-            if let Some((service, account)) = locator.split_once('/') {
-                // Try keyring
-                if keyring::Entry::new(service, account)
-                    .and_then(|e| e.get_password())
-                    .is_ok()
-                {
-                    true
-                } else {
-                    // Keyring unavailable — try env var fallbacks
-                    let candidates = [
-                        account.replace('-', "_").to_ascii_uppercase(),
-                        format!("{}_{}", service, account)
-                            .replace('-', "_")
-                            .to_ascii_uppercase(),
-                    ];
-                    candidates.iter().any(|var| std::env::var(var).is_ok_and(|v| !v.is_empty()))
-                }
-            } else {
-                false
-            }
-        } else {
-            // Direct env var name
-            std::env::var(env_var).is_ok_and(|v| !v.is_empty())
+        let api_ready = secret_ref_ready(env_var);
+        let secret_ready = match secret_env_var {
+            Some(secret_ref) => secret_ref_ready(secret_ref),
+            None => true,
         };
+        let is_ready = api_ready && secret_ready;
 
         if is_ready {
             ready_count += 1;
@@ -267,6 +248,9 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
         agents.push(json!({
             "name": agent_name,
             "env_var": env_var,
+            "secret_env_var": secret_env_var,
+            "api_ready": api_ready,
+            "secret_ready": secret_ready,
             "ready": is_ready,
         }));
     }
@@ -296,6 +280,65 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
             "agents": agents,
         }),
     }
+}
+
+fn secret_ref_ready(secret_ref: &str) -> bool {
+    if secret_ref.starts_with("keyring://") {
+        let locator = secret_ref.trim_start_matches("keyring://");
+        if let Some((service, account)) = locator.split_once('/') {
+            if keyring_lookup_accounts(service, account).into_iter().any(
+                |(service_name, account_name)| {
+                    keyring::Entry::new(&service_name, &account_name)
+                        .and_then(|e| e.get_password())
+                        .is_ok_and(|v| !v.trim().is_empty())
+                },
+            ) {
+                return true;
+            }
+
+            return keyring_env_fallback_candidates(service, account)
+                .into_iter()
+                .any(|var| std::env::var(var).is_ok_and(|v| !v.is_empty()));
+        }
+
+        return false;
+    }
+
+    std::env::var(secret_ref).is_ok_and(|v| !v.is_empty())
+}
+
+fn keyring_lookup_accounts(service: &str, account: &str) -> Vec<(String, String)> {
+    let mut targets = vec![(service.to_string(), account.to_string())];
+
+    if service == "go-on" {
+        if account == "copilot_api_key" {
+            targets.push((service.to_string(), "github_copilot_token".to_string()));
+        } else if account == "github_copilot_token" {
+            targets.push((service.to_string(), "copilot_api_key".to_string()));
+        }
+    }
+
+    targets
+}
+
+fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    if service == "go-on" && (account == "copilot_api_key" || account == "github_copilot_token") {
+        candidates.push("GITHUB_COPILOT_TOKEN".to_string());
+        candidates.push("GITHUB_TOKEN".to_string());
+    }
+
+    candidates.push(account.replace('-', "_").to_ascii_uppercase());
+    candidates.push(
+        format!("{}_{}", service, account)
+            .replace('-', "_")
+            .to_ascii_uppercase(),
+    );
+
+    candidates.sort();
+    candidates.dedup();
+    candidates
 }
 
 #[allow(dead_code)]

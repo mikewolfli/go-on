@@ -5175,7 +5175,9 @@ pub(super) fn provider_test_connection_payload(
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
 
+    let mut api_ref_has_key = false;
     let mut secret_ref_has_key = false;
+    let mut secret_ref_required = false;
     if let Some(cfg) = server
         .config_path
         .as_deref()
@@ -5186,10 +5188,16 @@ pub(super) fn provider_test_connection_payload(
             if agent.agent_type.eq_ignore_ascii_case(provider) {
                 if let Some(secret_ref) = agent.api_key_env.as_deref() {
                     if crate::agents::agent::inspect_secret_pool(secret_ref, secret_ref).is_ok() {
-                        secret_ref_has_key = true;
-                        break;
+                        api_ref_has_key = true;
                     }
                 }
+                if let Some(secret_ref) = agent.secret_key_env.as_deref() {
+                    secret_ref_required = true;
+                    if crate::agents::agent::inspect_secret_pool(secret_ref, secret_ref).is_ok() {
+                        secret_ref_has_key = true;
+                    }
+                }
+                break;
             }
         }
     }
@@ -5206,12 +5214,19 @@ pub(super) fn provider_test_connection_payload(
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
 
-    let key_configured = keyring_has_key || secret_ref_has_key || env_has_key;
+    let api_configured = keyring_has_key || api_ref_has_key || env_has_key;
+    let key_configured = if secret_ref_required {
+        api_configured && secret_ref_has_key
+    } else {
+        api_configured
+    };
     // For Copilot: if the key is present but models list is empty (e.g. first
     // restart before registry rebuild), treat provider as ready anyway.
     let ok = key_configured && (!models.is_empty() || provider.eq_ignore_ascii_case("copilot"));
     let message = if ok {
         "provider configuration is ready"
+    } else if secret_ref_required && !secret_ref_has_key {
+        "provider secret key is not configured"
     } else if models.is_empty() {
         "provider has no available models"
     } else {
@@ -5224,7 +5239,9 @@ pub(super) fn provider_test_connection_payload(
         "latency_ms": started.elapsed().as_millis() as u64,
         "model_count": models.len(),
         "key_configured": key_configured,
+        "secret_key_required": secret_ref_required,
         "keyring_has_key": keyring_has_key,
+        "api_ref_has_key": api_ref_has_key,
         "secret_ref_has_key": secret_ref_has_key,
         "env_has_key": env_has_key,
         "checked_env": default_env_name,
@@ -5414,13 +5431,20 @@ pub(super) async fn handle_provider_configure(
     // ── Persist API key to system keyring ──────────────────────────
     if !api_key.is_empty() {
         let account = format!("{}_api_key", name);
-        match keyring::Entry::new("go-on", &account) {
-            Ok(entry) => {
-                if let Err(e) = entry.set_password(api_key) {
-                    tracing::warn!("failed to save API key for '{}' to keyring: {}", name, e);
-                }
-            }
-            Err(e) => tracing::warn!("failed to open keyring entry for '{}': {}", name, e),
+        let _ =
+            keyring::Entry::new("go-on", &account).and_then(|entry| entry.set_password(api_key));
+
+        // ── Copilot needs additional env vars + keyring entries ──
+        if name == "copilot" {
+            // Set env vars that CopilotAgent reads
+            std::env::set_var("GITHUB_TOKEN", api_key);
+            std::env::set_var("GITHUB_COPILOT_TOKEN", api_key);
+            tracing::info!("Set GITHUB_TOKEN and GITHUB_COPILOT_TOKEN env vars for copilot");
+            // The built-in provider spec uses api_key_env="GITHUB_COPILOT_TOKEN",
+            // which setup.rs maps to keyring://go-on/github_copilot_token.
+            // Without this entry, CopilotAgent fails with "keyring lookup failed".
+            let _ = keyring::Entry::new("go-on", "github_copilot_token")
+                .and_then(|entry| entry.set_password(api_key));
         }
     }
 
@@ -5675,23 +5699,43 @@ pub(super) async fn handle_copilot_device_code_poll(
                         access_token.len()
                     );
 
-                    // Set the GITHUB_TOKEN environment variable so CopilotAgent uses it
+                    // Set both env vars so CopilotAgent works regardless of configured token_env.
                     std::env::set_var("GITHUB_TOKEN", access_token);
+                    std::env::set_var("GITHUB_COPILOT_TOKEN", access_token);
 
-                    // Also persist to provider api_key under name "copilot" so it survives restarts
+                    // Persist both Copilot keyring aliases for backward/forward compatibility.
                     if !access_token.is_empty() {
-                        let account = "copilot_api_key";
-                        match keyring::Entry::new("go-on", account) {
+                        match keyring::Entry::new("go-on", "copilot_api_key") {
                             Ok(entry) => {
                                 if let Err(e) = entry.set_password(access_token) {
                                     tracing::warn!(
-                                        "failed to save Copilot token to keyring: {}",
+                                        "failed to save Copilot token to keyring account copilot_api_key: {}",
                                         e
                                     );
                                 }
                             }
                             Err(e) => {
-                                tracing::warn!("failed to open keyring for Copilot: {}", e);
+                                tracing::warn!(
+                                    "failed to open keyring for Copilot account copilot_api_key: {}",
+                                    e
+                                );
+                            }
+                        }
+
+                        match keyring::Entry::new("go-on", "github_copilot_token") {
+                            Ok(entry) => {
+                                if let Err(e) = entry.set_password(access_token) {
+                                    tracing::warn!(
+                                        "failed to save Copilot token to keyring account github_copilot_token: {}",
+                                        e
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "failed to open keyring for Copilot account github_copilot_token: {}",
+                                    e
+                                );
                             }
                         }
                     }

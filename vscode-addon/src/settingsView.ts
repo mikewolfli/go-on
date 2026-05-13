@@ -76,6 +76,290 @@ interface ProviderModelResolution {
   copilotAuth?: CopilotAuthState;
 }
 
+const BUILTIN_PROVIDER_CATALOG: ProviderCatalogSpec[] = [
+  {
+    name: "openai",
+    type: "openai",
+    group: "openai",
+    url: "https://api.openai.com/v1",
+    model: "gpt-4o",
+    api_key_env: "OPENAI_API_KEY",
+    supports_system: true,
+  },
+  {
+    name: "openai_compatible",
+    type: "openai_compatible",
+    group: "openai",
+    url: "http://127.0.0.1:8080/v1",
+    model: "compatible-model",
+    api_key_env: "OPENAI_COMPATIBLE_API_KEY",
+    supports_system: true,
+  },
+  {
+    name: "anthropic",
+    type: "claude",
+    group: "openai",
+    url: "https://api.anthropic.com",
+    model: "claude-sonnet-4-20250514",
+    api_key_env: "ANTHROPIC_API_KEY",
+    anthropic_version: "2023-06-01",
+    max_tokens: 8192,
+    supports_system: true,
+  },
+  {
+    name: "cohere",
+    type: "cohere",
+    group: "openai",
+    url: "https://api.cohere.ai/v1",
+    model: "command-r-plus-08-2024",
+    api_key_env: "COHERE_API_KEY",
+    supports_system: true,
+  },
+  {
+    name: "deepseek",
+    type: "deepseek",
+    group: "chinese",
+    url: "https://api.deepseek.com/v1",
+    model: "deepseek-chat",
+    api_key_env: "DEEPSEEK_API_KEY",
+    supports_system: true,
+  },
+  {
+    name: "wenxin",
+    type: "wenxin",
+    group: "chinese",
+    model: "ERNIE-4.5-8K",
+    api_key_env: "WENXIN_API_KEY",
+    secret_key_env: "WENXIN_SECRET_KEY",
+  },
+  {
+    name: "qianfan",
+    type: "qianfan",
+    group: "chinese",
+    model: "ERNIE-Bot",
+    api_key_env: "QIANFAN_API_KEY",
+    secret_key_env: "QIANFAN_SECRET_KEY",
+  },
+  {
+    name: "qwen",
+    type: "qwen",
+    group: "chinese",
+    url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model: "qwen-max-2025-01-25",
+    api_key_env: "QWEN_API_KEY",
+    supports_system: true,
+  },
+  {
+    name: "glm",
+    type: "glm",
+    group: "chinese",
+    url: "https://open.bigmodel.cn/api/paas/v4",
+    model: "glm-4-flash",
+    api_key_env: "GLM_API_KEY",
+  },
+  {
+    name: "yi",
+    type: "yi",
+    group: "chinese",
+    url: "https://api.lingyiwanwu.com/v1",
+    model: "yi-lightning",
+    api_key_env: "YI_API_KEY",
+  },
+  {
+    name: "hunyuan",
+    type: "hunyuan",
+    group: "chinese",
+    url: "https://api.hunyuan.cloud.tencent.com/v1",
+    model: "hunyuan-turbo-latest",
+    api_key_env: "HUNYUAN_API_KEY",
+  },
+  {
+    name: "doubao",
+    type: "doubao",
+    group: "chinese",
+    url: "https://ark.cn-beijing.volces.com/api/v3",
+    chat_path: "/chat/completions",
+    model: "doubao-1.5-pro-32k-250115",
+    api_key_env: "DOUBAO_API_KEY",
+    supports_system: true,
+  },
+  {
+    name: "facewall",
+    type: "facewall",
+    group: "chinese",
+    url: "https://api.facewall.ai/v1",
+    model: "facewall-chat",
+    api_key_env: "FACEWALL_API_KEY",
+  },
+  {
+    name: "langboat",
+    type: "langboat",
+    group: "chinese",
+    url: "https://api.langboat.com/v1",
+    model: "langboat-chat",
+    api_key_env: "LANGBOAT_API_KEY",
+  },
+  {
+    name: "skywork",
+    type: "skywork",
+    group: "chinese",
+    url: "https://api.skywork.ai/v1",
+    model: "skywork-chat",
+    api_key_env: "SKYWORK_API_KEY",
+  },
+  {
+    name: "stepfun",
+    type: "stepfun",
+    group: "chinese",
+    url: "https://api.stepfun.com/v1",
+    model: "step-2-16k-2505",
+    api_key_env: "STEPFUN_API_KEY",
+  },
+  {
+    name: "xihu",
+    type: "xihu",
+    group: "chinese",
+    url: "https://api.xihu.ai/v1",
+    model: "xihu-chat",
+    api_key_env: "XIHU_API_KEY",
+  },
+  {
+    name: "moonshot",
+    type: "moonshot",
+    group: "chinese",
+    url: "https://api.moonshot.cn/v1",
+    model: "moonshot-v1-8k",
+    api_key_env: "MOONSHOT_API_KEY",
+  },
+  {
+    name: "minimax",
+    type: "minimax",
+    group: "chinese",
+    url: "https://api.minimax.chat/v1",
+    model: "MiniMax-Text-01",
+    api_key_env: "MINIMAX_API_KEY",
+  },
+  {
+    name: "ai21",
+    type: "ai21",
+    group: "other",
+    url: "https://api.ai21.com/studio/v1",
+    model: "jamba-1.5-mini",
+    api_key_env: "AI21_API_KEY",
+  },
+  {
+    name: "aleph",
+    type: "aleph",
+    group: "other",
+    url: "https://api.aleph-alpha.com",
+    model: "luminous-base-control",
+    api_key_env: "ALEPH_API_KEY",
+  },
+  {
+    name: "copilot",
+    type: "copilot",
+    group: "other",
+    url: "http://127.0.0.1:8080",
+    api_key_env: "GITHUB_COPILOT_TOKEN",
+  },
+  {
+    name: "deepquest",
+    type: "deepquest",
+    group: "other",
+    url: "https://api.deepquest.ai/v1",
+    model: "deepquest-chat",
+    api_key_env: "DEEPQUEST_API_KEY",
+  },
+  {
+    name: "fireworks",
+    type: "fireworks",
+    group: "other",
+    url: "https://api.fireworks.ai/inference/v1",
+    model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
+    api_key_env: "FIREWORKS_API_KEY",
+  },
+  {
+    name: "gemini",
+    type: "gemini",
+    group: "other",
+    url: "https://generativelanguage.googleapis.com/v1beta",
+    model: "gemini-2.5-flash-preview-04-17",
+    api_key_env: "GEMINI_API_KEY",
+  },
+  {
+    name: "groq",
+    type: "groq",
+    group: "other",
+    url: "https://api.groq.com/openai/v1",
+    model: "llama-3.3-70b-versatile",
+    api_key_env: "GROQ_API_KEY",
+  },
+  {
+    name: "llama",
+    type: "llama",
+    group: "other",
+    url: "http://127.0.0.1:11434/v1",
+    model: "llama3.2",
+    supports_system: true,
+  },
+  {
+    name: "loopai",
+    type: "loopai",
+    group: "other",
+    url: "https://api.loopai.com/v1",
+    model: "loopai-chat",
+    api_key_env: "LOOPAI_API_KEY",
+  },
+  {
+    name: "mistral",
+    type: "mistral",
+    group: "other",
+    url: "https://api.mistral.ai/v1",
+    model: "mistral-small-latest",
+    api_key_env: "MISTRAL_API_KEY",
+  },
+  {
+    name: "nim",
+    type: "nim",
+    group: "other",
+    url: "https://integrate.api.nvidia.com/v1",
+    model: "meta/llama-3.1-70b-instruct",
+    api_key_env: "NIM_API_KEY",
+  },
+  {
+    name: "perplexity",
+    type: "perplexity",
+    group: "other",
+    url: "https://api.perplexity.ai",
+    model: "sonar-pro",
+    api_key_env: "PERPLEXITY_API_KEY",
+  },
+  {
+    name: "replicate",
+    type: "replicate",
+    group: "other",
+    url: "https://api.replicate.com/v1",
+    model: "meta/meta-llama-3-70b-instruct",
+    api_key_env: "REPLICATE_API_TOKEN",
+  },
+  {
+    name: "titan",
+    type: "titan",
+    group: "other",
+    url: "https://api.titanml.co/v1",
+    model: "titan-chat",
+    api_key_env: "TITAN_API_KEY",
+  },
+  {
+    name: "together",
+    type: "together",
+    group: "other",
+    url: "https://api.together.xyz/v1",
+    model: "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+    api_key_env: "TOGETHER_API_KEY",
+  },
+];
+
 interface CopilotTokenExchange {
   token: string;
   expiresAt: number;
@@ -237,65 +521,49 @@ function collectProviderSecretTargets(
   );
 }
 
-function parseSimpleTomlValue(raw: string): unknown {
-  const value = raw.trim();
-  if (value.startsWith('"') && value.endsWith('"')) {
-    return value.slice(1, -1);
+function asCatalogSpec(value: unknown): ProviderCatalogSpec | null {
+  const record = asRecord(value);
+  const name = String(record.name || "").trim();
+  const type = String(record.type || record.agent_type || "").trim();
+  if (!name || !type) {
+    return null;
   }
-  if (value === "true") {
-    return true;
-  }
-  if (value === "false") {
-    return false;
-  }
-  const maybeNumber = Number(value);
-  if (!Number.isNaN(maybeNumber)) {
-    return maybeNumber;
-  }
-  return value;
+  const parseString = (raw: unknown): string | undefined => {
+    const normalized = String(raw || "").trim();
+    return normalized ? normalized : undefined;
+  };
+  const parseBool = (raw: unknown): boolean | undefined =>
+    typeof raw === "boolean" ? raw : undefined;
+  const parseNumber = (raw: unknown): number | undefined =>
+    typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+
+  return {
+    name,
+    type,
+    group: parseString(record.group),
+    model: parseString(record.model),
+    api_key_env: parseString(record.api_key_env),
+    secret_key_env: parseString(record.secret_key_env),
+    url: parseString(record.url),
+    chat_path: parseString(record.chat_path),
+    anthropic_version: parseString(record.anthropic_version),
+    max_tokens: parseNumber(record.max_tokens),
+    supports_system: parseBool(record.supports_system),
+  };
 }
 
-function parseProviderCatalog(content: string): ProviderCatalogSpec[] {
-  const providers: ProviderCatalogSpec[] = [];
-  let current: Record<string, unknown> | null = null;
-
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) {
+function dedupeCatalog(specs: ProviderCatalogSpec[]): ProviderCatalogSpec[] {
+  const byName = new Map<string, ProviderCatalogSpec>();
+  for (const spec of specs) {
+    const key = spec.name.trim();
+    if (!key || byName.has(key)) {
       continue;
     }
-
-    if (trimmed === "[[providers]]") {
-      if (current) {
-        const candidate = current as Partial<ProviderCatalogSpec>;
-        if (candidate.name && candidate.type) {
-          providers.push(candidate as ProviderCatalogSpec);
-        }
-      }
-      current = {};
-      continue;
-    }
-
-    if (!current) {
-      continue;
-    }
-
-    const match = trimmed.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
-    if (!match) {
-      continue;
-    }
-    const key = match[1];
-    current[key] = parseSimpleTomlValue(match[2]);
+    byName.set(key, spec);
   }
-
-  if (current) {
-    const candidate = current as Partial<ProviderCatalogSpec>;
-    if (candidate.name && candidate.type) {
-      providers.push(candidate as ProviderCatalogSpec);
-    }
-  }
-
-  return providers;
+  return Array.from(byName.values()).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
 }
 
 function parseConfiguredAgents(
@@ -1235,26 +1503,68 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async _loadProviderCatalog(): Promise<ProviderCatalogSpec[]> {
-    const root = this._workspaceRoot();
-    const candidates = [
-      path.join(root, "providers.toml"),
-      path.join(root, "config", "providers.toml"),
-      path.resolve(root, "..", "providers.toml"),
-    ];
+    const runtimeCatalog = await this._loadProviderCatalogFromRuntime();
+    const configuredMap = await this._loadConfiguredAgentMap();
+    const configuredCatalog = Array.from(configuredMap.entries()).map(
+      ([name, snapshot]) => ({
+        name,
+        type: name,
+        model: snapshot.model,
+        api_key_env: snapshot.envVar || inferEnvVar(name),
+      }),
+    );
 
-    for (const filePath of candidates) {
-      try {
-        const content = await fs.readFile(filePath, "utf8");
-        const parsed = parseProviderCatalog(content);
-        if (parsed.length > 0) {
-          return parsed;
-        }
-      } catch {
-        // Try next candidate.
-      }
+    const merged = dedupeCatalog([
+      ...runtimeCatalog,
+      ...configuredCatalog,
+      ...BUILTIN_PROVIDER_CATALOG,
+    ]);
+    return merged;
+  }
+
+  private async _loadProviderCatalogFromRuntime(): Promise<ProviderCatalogSpec[]> {
+    if (!this.manager.isRunning()) {
+      return [];
     }
 
-    return [];
+    try {
+      const result = await this.manager.sendRequest("provider.catalog", {});
+      const record = asRecord(result);
+      const providers = Array.isArray(record.providers) ? record.providers : [];
+      const parsed = providers
+        .map((item) => asCatalogSpec(item))
+        .filter((item): item is ProviderCatalogSpec => Boolean(item));
+      if (parsed.length > 0) {
+        return parsed;
+      }
+    } catch {
+      // Fallback to models/list and built-in catalog when provider.catalog is unavailable.
+    }
+
+    try {
+      const result = await this.manager.sendRequest("models/list", {});
+      const payload = asRecord(result);
+      const groups = Array.isArray(payload.models) ? payload.models : [];
+      const parsed = groups
+        .map((group) => {
+          const item = asRecord(group);
+          const name = String(item.agent || "").trim();
+          if (!name) {
+            return null;
+          }
+          const defaultModel = this._modelIdFromRuntime(item.default_model);
+          return {
+            name,
+            type: name,
+            model: defaultModel,
+            api_key_env: inferEnvVar(name),
+          } as ProviderCatalogSpec;
+        })
+        .filter((item): item is ProviderCatalogSpec => Boolean(item));
+      return parsed;
+    } catch {
+      return [];
+    }
   }
 
   private async _loadConfiguredAgentMap(): Promise<

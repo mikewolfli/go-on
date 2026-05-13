@@ -28,9 +28,9 @@ pub fn save_with_backup(path: &Path, content: &str) -> std::io::Result<()> {
 }
 
 /// Load JSON with automatic corruption recovery from backup.
-pub fn load_json_with_backup<T: serde::de::DeserializeOwned>(path: &Path, label: &str) -> T
+pub fn load_json_with_backup<T>(path: &Path, label: &str) -> T
 where
-    T: Default,
+    T: serde::de::DeserializeOwned + Default,
 {
     match std::fs::read_to_string(path) {
         Ok(content) => {

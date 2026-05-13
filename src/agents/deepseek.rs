@@ -12,7 +12,7 @@ use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{
-    option_f64, option_string, option_u64, principles_to_text, stream_sse_to_sender,
+    apply_openai_common_options, option_string, principles_to_text, stream_sse_to_sender,
 };
 
 pub struct DeepSeekAgent {
@@ -49,9 +49,6 @@ impl DeepSeekAgent {
         final_messages.extend(messages);
 
         let model = option_string(&options, "model").unwrap_or_else(|| self.model.clone());
-        let temperature = option_f64(&options, "temperature");
-        let max_tokens = option_u64(&options, "max_tokens");
-        let top_p = option_f64(&options, "top_p");
 
         let mut payload = json!({
             "model": model,
@@ -59,14 +56,13 @@ impl DeepSeekAgent {
             "stream": true
         });
 
-        if let Some(value) = temperature {
-            payload["temperature"] = Value::from(value);
-        }
-        if let Some(value) = max_tokens {
-            payload["max_tokens"] = Value::from(value);
-        }
-        if let Some(value) = top_p {
-            payload["top_p"] = Value::from(value);
+        // Apply common OpenAI options (temperature, top_p, max_tokens, stop,
+        // tools, tool_choice, response_format, seed, etc.)
+        apply_openai_common_options(&mut payload, &options);
+
+        // DeepSeek-specific: thinking mode control (enabled/disabled + reasoning_effort)
+        if let Some(thinking) = options.as_ref().and_then(|o| o.get("thinking")) {
+            payload["thinking"] = thinking.clone();
         }
 
         payload

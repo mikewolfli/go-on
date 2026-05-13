@@ -47,7 +47,31 @@ mod platform {
         Ok(())
     }
 
-    fn set_item_accessible(item: &security_framework::os::macos::keychain::SecKeychainItem) -> Result<()> {
+    pub fn store_secret_key(provider: &str, secret_key: &str) -> Result<()> {
+        let account = format!("{}_secret_key", provider);
+        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User)
+            .map_err(|e| anyhow::anyhow!("failed to open login keychain: {}", e))?;
+
+        if let Ok((_pass, item)) = keychain.find_generic_password(SERVICE, &account) {
+            item.set_password(secret_key.as_bytes())
+                .map_err(|e| anyhow::anyhow!("failed to set password: {}", e))?;
+            set_item_accessible(&item)?;
+            return Ok(());
+        }
+
+        keychain
+            .set_generic_password(SERVICE, &account, secret_key.as_bytes())
+            .map_err(|e| anyhow::anyhow!("failed to create keychain entry: {}", e))?;
+
+        if let Ok((_, item)) = keychain.find_generic_password(SERVICE, &account) {
+            let _ = set_item_accessible(&item);
+        }
+        Ok(())
+    }
+
+    fn set_item_accessible(
+        item: &security_framework::os::macos::keychain::SecKeychainItem,
+    ) -> Result<()> {
         // Create an access object with no specific trusted apps, but with the
         // standard system groups ("apple-tool:", "apple:") that macOS UI tools
         // and the current process are automatically members of.
@@ -55,7 +79,7 @@ mod platform {
         // This prevents the "X wants to use your confidential information" dialog.
         let access = security_framework::os::macos::access::SecAccess::create_with_label(
             "go-on",
-            &[],                       // no per-app restriction
+            &[],                        // no per-app restriction
             &["apple-tool:", "apple:"], // system partition groups
         )
         .map_err(|e| anyhow::anyhow!("failed to create SecAccess: {}", e))?;
@@ -72,12 +96,29 @@ mod platform {
         String::from_utf8(password.to_vec()).ok()
     }
 
+    pub fn get_secret_key(provider: &str) -> Option<String> {
+        let account = format!("{}_secret_key", provider);
+        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User).ok()?;
+        let (password, _item) = keychain.find_generic_password(SERVICE, &account).ok()?;
+        String::from_utf8(password.to_vec()).ok()
+    }
+
     pub fn has_api_key(provider: &str) -> bool {
         get_api_key(provider).is_some()
     }
 
     pub fn delete_api_key(provider: &str) -> Result<()> {
         let account = format!("{}_api_key", provider);
+        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User)?;
+        if let Ok((_, item)) = keychain.find_generic_password(SERVICE, &account) {
+            item.delete()?;
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn delete_secret_key(provider: &str) -> Result<()> {
+        let account = format!("{}_secret_key", provider);
         let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User)?;
         if let Ok((_, item)) = keychain.find_generic_password(SERVICE, &account) {
             item.delete()?;
@@ -101,8 +142,24 @@ mod platform {
         Ok(())
     }
 
+    pub fn store_secret_key(provider: &str, secret_key: &str) -> Result<()> {
+        let account = format!("{}_secret_key", provider);
+        let entry = keyring::Entry::new("go-on", &account)
+            .map_err(|e| anyhow::anyhow!("failed to create keyring entry: {}", e))?;
+        entry
+            .set_password(secret_key)
+            .map_err(|e| anyhow::anyhow!("failed to save secret key to system keyring: {}", e))?;
+        Ok(())
+    }
+
     pub fn get_api_key(provider: &str) -> Option<String> {
         let account = format!("{}_api_key", provider);
+        let entry = keyring::Entry::new("go-on", &account).ok()?;
+        entry.get_password().ok()
+    }
+
+    pub fn get_secret_key(provider: &str) -> Option<String> {
+        let account = format!("{}_secret_key", provider);
         let entry = keyring::Entry::new("go-on", &account).ok()?;
         entry.get_password().ok()
     }
@@ -117,6 +174,14 @@ mod platform {
         entry.delete_credential()?;
         Ok(())
     }
+
+    #[allow(dead_code)]
+    pub fn delete_secret_key(provider: &str) -> Result<()> {
+        let account = format!("{}_secret_key", provider);
+        let entry = keyring::Entry::new("go-on", &account)?;
+        entry.delete_credential()?;
+        Ok(())
+    }
 }
 
 // ── Public API — delegates to the active platform module ──────────────────
@@ -126,9 +191,19 @@ pub fn store_api_key(provider: &str, api_key: &str) -> Result<()> {
     platform::store_api_key(provider, api_key)
 }
 
+/// Store a provider secret key in the system keyring.
+pub fn store_secret_key(provider: &str, secret_key: &str) -> Result<()> {
+    platform::store_secret_key(provider, secret_key)
+}
+
 /// Retrieve an API key from the system keyring.
 pub fn get_api_key(provider: &str) -> Option<String> {
     platform::get_api_key(provider)
+}
+
+/// Retrieve a provider secret key from the system keyring.
+pub fn get_secret_key(provider: &str) -> Option<String> {
+    platform::get_secret_key(provider)
 }
 
 /// Check whether a key exists in the system keyring for the given provider.
@@ -139,6 +214,12 @@ pub fn has_api_key(provider: &str) -> bool {
 /// Delete an API key from the system keyring (silent if missing).
 pub fn delete_api_key(provider: &str) -> Result<()> {
     platform::delete_api_key(provider)
+}
+
+/// Delete a provider secret key from the system keyring (silent if missing).
+#[allow(dead_code)]
+pub fn delete_secret_key(provider: &str) -> Result<()> {
+    platform::delete_secret_key(provider)
 }
 
 /// Retrieve an API key, falling back to a config-provided key if the system

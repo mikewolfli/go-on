@@ -197,7 +197,7 @@ impl MonitorView {
                                 } else {
                                     ("◉", egui::Color32::YELLOW, i18n.t("monitor.unhealthy"))
                                 };
-                                ui.colored_label(color, &text.to_string());
+                                ui.colored_label(color, text.as_ref());
                             });
                             ui.label(format!(
                                 "{}: {} ms",

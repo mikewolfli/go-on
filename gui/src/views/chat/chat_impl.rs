@@ -395,16 +395,8 @@ impl ChatView {
             stream_repaint_interval: std::time::Duration::from_millis(33),
             max_pending_events_per_frame: 256,
             // Enhanced features (Phase 2)
-            enable_markdown: if ui_state.enable_markdown {
-                true
-            } else {
-                false
-            },
-            show_token_details: if ui_state.show_token_details {
-                true
-            } else {
-                false
-            },
+            enable_markdown: ui_state.enable_markdown,
+            show_token_details: ui_state.show_token_details,
             model_stats,
             stream_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))

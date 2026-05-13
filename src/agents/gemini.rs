@@ -43,32 +43,53 @@ impl GeminiAgent {
         options: &Option<HashMap<String, Value>>,
     ) -> Value {
         let mut contents: Vec<Value> = Vec::new();
+        let mut system_instruction: Option<String> = None;
 
         if let Some(items) = principles {
             if !items.is_empty() {
                 let system_text = principles_to_text(&items);
+                system_instruction = Some(system_text);
+            }
+        }
+
+        for message in &messages {
+            if message.role == "system" {
+                system_instruction = Some(message.content.clone());
+            } else {
                 contents.push(json!({
-                    "role": "user",
-                    "parts": [{"text": system_text}]
+                    "role": message.role,
+                    "parts": [{"text": message.content}]
                 }));
             }
         }
 
-        for message in messages {
-            contents.push(json!({
-                "role": message.role,
-                "parts": [{"text": message.content}]
-            }));
-        }
-
         let mut payload = json!({
-            "model": self.model,
-            "contents": contents,
-            "stream": true
+            "contents": contents
         });
 
+        if let Some(system_text) = system_instruction {
+            payload["system_instruction"] = json!({
+                "parts": [{"text": system_text}]
+            });
+        }
+
+        let mut generation_config = json!({});
         if let Some(value) = option_f64(options, "temperature") {
-            payload["temperature"] = Value::from(value);
+            generation_config["temperature"] = Value::from(value);
+        }
+        if let Some(value) = option_f64(options, "top_p") {
+            generation_config["top_p"] = Value::from(value);
+        }
+        if let Some(value) = option_f64(options, "max_output_tokens") {
+            generation_config["max_output_tokens"] = Value::from(value);
+        }
+        if let Some(value) = options.as_ref().and_then(|o| o.get("max_tokens")) {
+            if let Some(n) = value.as_u64() {
+                generation_config["max_output_tokens"] = Value::from(n);
+            }
+        }
+        if generation_config.as_object().is_some_and(|o| !o.is_empty()) {
+            payload["generationConfig"] = generation_config;
         }
 
         payload
@@ -83,7 +104,7 @@ impl GeminiAgent {
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "gemini.api_key_env")?;
         let endpoint = format!(
-            "{}/models/{}/generateContent?key={}",
+            "{}/models/{}:streamGenerateContent?alt=sse&key={}",
             self.base_url.trim_end_matches('/'),
             self.model,
             api_key

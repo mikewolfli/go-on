@@ -12,11 +12,10 @@ use tokio::time::sleep;
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
-use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
+use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
 pub struct HunyuanAgent {
     api_key_env: String,
-    secret_key_env: String,
     base_url: String,
     model: String,
     client: reqwest::Client,
@@ -25,14 +24,12 @@ pub struct HunyuanAgent {
 impl HunyuanAgent {
     pub fn new(
         api_key_env: String,
-        secret_key_env: String,
         base_url: String,
         model: String,
         client: reqwest::Client,
     ) -> Self {
         Self {
             api_key_env,
-            secret_key_env,
             base_url,
             model,
             client,
@@ -69,12 +66,7 @@ impl HunyuanAgent {
             "stream": true
         });
 
-        if let Some(value) = option_f64(options, "temperature") {
-            payload["temperature"] = Value::from(value);
-        }
-        if let Some(value) = option_f64(options, "top_p") {
-            payload["top_p"] = Value::from(value);
-        }
+        apply_openai_common_options(&mut payload, options);
 
         payload
     }
@@ -87,7 +79,6 @@ impl HunyuanAgent {
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "hunyuan.api_key_env")?;
-        let secret_key = resolve_secret(&self.secret_key_env, "hunyuan.secret_key_env")?;
         let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let payload = self.build_payload(messages, principles, &options);
 
@@ -95,7 +86,6 @@ impl HunyuanAgent {
             .client
             .post(endpoint)
             .header("Authorization", format!("Bearer {}", api_key))
-            .header("X-Secret-Key", secret_key)
             .header("Content-Type", "application/json")
             .json(&payload)
             .send()

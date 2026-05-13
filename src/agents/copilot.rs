@@ -19,7 +19,7 @@ use tracing::warn;
 use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{
-    option_f64, option_string, option_u64, principles_to_text, stream_sse_to_sender,
+    apply_openai_common_options, option_string, principles_to_text, stream_sse_to_sender,
 };
 use crate::i18n::runtime::tf;
 
@@ -174,9 +174,6 @@ impl CopilotAgent {
         options: Option<HashMap<String, Value>>,
     ) -> Value {
         let model = option_string(&options, "model").unwrap_or_else(|| "copilot".to_string());
-        let temperature = option_f64(&options, "temperature");
-        let max_tokens = option_u64(&options, "max_tokens");
-        let top_p = option_f64(&options, "top_p");
 
         let mut payload = json!({
             "model": model,
@@ -184,15 +181,7 @@ impl CopilotAgent {
             "stream": true
         });
 
-        if let Some(value) = temperature {
-            payload["temperature"] = Value::from(value);
-        }
-        if let Some(value) = max_tokens {
-            payload["max_tokens"] = Value::from(value);
-        }
-        if let Some(value) = top_p {
-            payload["top_p"] = Value::from(value);
-        }
+        apply_openai_common_options(&mut payload, &options);
 
         payload
     }

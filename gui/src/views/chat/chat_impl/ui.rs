@@ -449,7 +449,9 @@ impl ChatView {
                                         );
                                     }
                                 });
-                            if self.selected_mode != prev_mode {}
+                            if self.selected_mode != prev_mode {
+                                // mode changed
+                            }
                             ui.add_space(8.0);
                             ui.label(egui::RichText::new(i18n.t("chat.model")).color(fg));
                             if ui

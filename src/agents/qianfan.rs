@@ -154,12 +154,16 @@ impl QianfanAgent {
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let token = self.get_access_token().await?;
-        let endpoint = format!(
-            "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/qianfan/chat/completions?access_token={token}"
-        );
+        let endpoint = "https://qianfan.baidubce.com/v2/chat/completions";
         let payload = self.build_payload(messages, principles, &options);
 
-        let response = self.client.post(endpoint).json(&payload).send().await?;
+        let response = self
+            .client
+            .post(endpoint)
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&payload)
+            .send()
+            .await?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();

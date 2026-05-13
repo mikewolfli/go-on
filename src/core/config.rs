@@ -59,7 +59,6 @@ pub struct AppConfig {
     pub role_registry: HashMap<String, RoleDefinition>,
 }
 
-
 /// Simplified adaptive configuration for AI-driven setup
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdaptiveConfig {
@@ -343,7 +342,7 @@ fn load_provider_specs() -> Vec<ProviderSpec> {
             chat_path: None,
             model: Some("hunyuan-turbo-latest".to_string()),
             api_key_env: Some("HUNYUAN_API_KEY".to_string()),
-            secret_key_env: Some("HUNYUAN_SECRET_KEY".to_string()),
+            secret_key_env: None,
             anthropic_version: None,
             max_tokens: None,
             supports_system: None,
@@ -1750,7 +1749,6 @@ pub struct AgentConfig {
     pub supports_system: Option<bool>,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
@@ -1760,7 +1758,6 @@ pub struct FlowConfig {
     #[serde(default)]
     pub workflow_type: WorkflowType,
 }
-
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1907,7 +1904,6 @@ pub struct PhaseConfig {
     pub principles: Option<Vec<String>>,
     pub options: Option<PhaseOptions>,
 }
-
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct PhaseOptions {
@@ -3509,6 +3505,12 @@ fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> 
         candidates.push("OPENAI_API_KEY".to_string());
     }
 
+    if service == "go-on" && (account == "copilot_api_key" || account == "github_copilot_token") {
+        // Copilot supports both historical and current names.
+        candidates.push("GITHUB_COPILOT_TOKEN".to_string());
+        candidates.push("GITHUB_TOKEN".to_string());
+    }
+
     candidates.push(account.replace('-', "_").to_ascii_uppercase());
     candidates.push(
         format!("{}_{}", service, account)
@@ -3519,6 +3521,21 @@ fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> 
     candidates.sort();
     candidates.dedup();
     candidates
+}
+
+fn keyring_lookup_accounts(service: &str, account: &str) -> Vec<(String, String)> {
+    let mut targets = vec![(service.to_string(), account.to_string())];
+
+    // Backward/forward compatibility for Copilot key naming.
+    if service == "go-on" {
+        if account == "copilot_api_key" {
+            targets.push((service.to_string(), "github_copilot_token".to_string()));
+        } else if account == "github_copilot_token" {
+            targets.push((service.to_string(), "copilot_api_key".to_string()));
+        }
+    }
+
+    targets
 }
 
 fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
@@ -3537,26 +3554,29 @@ fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
         )
     })?;
     let mut secret = String::new();
-    match keyring::Entry::new(service, account) {
-        Ok(entry) => match entry.get_password() {
-            Ok(value) if !value.trim().is_empty() => {
-                secret = value;
-            }
-            Ok(_) => {
-                // resolved to empty value — fallback to env
-            }
+    for (service_name, account_name) in keyring_lookup_accounts(service, account) {
+        match keyring::Entry::new(&service_name, &account_name) {
+            Ok(entry) => match entry.get_password() {
+                Ok(value) if !value.trim().is_empty() => {
+                    secret = value;
+                    break;
+                }
+                Ok(_) => {
+                    // resolved to empty value — fallback to env
+                }
+                Err(err) => {
+                    warn!(
+                        "keyring entry for {}/{} cannot be read: {}",
+                        service_name, account_name, err
+                    );
+                }
+            },
             Err(err) => {
                 warn!(
-                    "keyring entry for {}/{} cannot be read: {}",
-                    service, account, err
+                    "failed to open keyring entry for {}/{}: {}",
+                    service_name, account_name, err
                 );
             }
-        },
-        Err(err) => {
-            warn!(
-                "failed to open keyring entry for {}/{}: {}",
-                service, account, err
-            );
         }
     }
 

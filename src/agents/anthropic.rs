@@ -68,6 +68,28 @@ impl AnthropicAgent {
         }
     }
 
+    /// Build the content value for a message, supporting both plain text and content blocks.
+    ///
+    /// If `content` starts with `[`, it is treated as a JSON array of content blocks
+    /// (e.g. image + text). Otherwise, it is used as a plain text string.
+    ///
+    /// # Arguments
+    /// * `content` - The message content string
+    ///
+    /// # Returns
+    /// * `Value` - The content value (either a string or an array of content blocks)
+    fn build_message_content(content: &str) -> Value {
+        let trimmed = content.trim();
+        if trimmed.starts_with('[') {
+            match serde_json::from_str::<Value>(trimmed) {
+                Ok(Value::Array(arr)) => Value::Array(arr),
+                _ => Value::String(content.to_string()),
+            }
+        } else {
+            Value::String(content.to_string())
+        }
+    }
+
     /// Convert messages and options to Anthropic API payload
     ///
     /// # Arguments
@@ -103,9 +125,11 @@ impl AnthropicAgent {
                 "user"
             };
 
+            let content = Self::build_message_content(&m.content);
+
             out_messages.push(json!({
                 "role": role,
-                "content": m.content
+                "content": content
             }));
         }
 
@@ -134,6 +158,25 @@ impl AnthropicAgent {
 
         if let Some(value) = top_p {
             payload["top_p"] = Value::from(value);
+        }
+
+        // Forward tools parameter if present
+        if let Some(tools) = options
+            .as_ref()
+            .and_then(|map| map.get("tools"))
+            .and_then(|v| v.as_array())
+        {
+            payload["tools"] = Value::Array(tools.clone());
+        }
+
+        // Forward tool_choice parameter if present
+        if let Some(tool_choice) = option_string(&options, "tool_choice") {
+            payload["tool_choice"] = Value::String(tool_choice);
+        } else if let Some(tool_choice) = options.as_ref().and_then(|map| map.get("tool_choice")) {
+            // Also support object-style tool_choice (e.g. {"type": "auto"})
+            if tool_choice.is_object() {
+                payload["tool_choice"] = tool_choice.clone();
+            }
         }
 
         payload

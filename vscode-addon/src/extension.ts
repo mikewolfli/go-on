@@ -17,7 +17,6 @@ import { registerCoreCommands } from "./coreCommandRegistry";
 import { GoOnManager, GoOnStatusProvider } from "./runtimeManager";
 import {
   ensureGoOnBinary,
-  ensureProvidersTomlForConfig,
   pathExists,
   resolveConfigPath,
 } from "./runtimeBinaryService";
@@ -312,7 +311,6 @@ async function applyDefaultConfigTemplate(
   }
 
   await fsPromises.copyFile(sourcePath, configPath);
-  await ensureProvidersTomlForConfig(workspaceRoot, runtimeDir, configPath);
   return configPath;
 }
 
@@ -772,7 +770,7 @@ export function activate(context: vscode.ExtensionContext) {
           if (!ready) {
             const action = await vscode.window.showWarningMessage(
               "AI provider is configured but no API key is set. " +
-                "Go-On needs an API key to function.",
+              "Go-On needs an API key to function.",
               "Open Settings",
               "Later",
             );

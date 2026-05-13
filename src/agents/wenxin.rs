@@ -106,8 +106,24 @@ impl WenxinAgent {
         }
     }
 
-    fn stage_instruction(_options: &Option<HashMap<String, Value>>) -> &'static str {
-        STRICT_STAGE_NOTE
+    fn stage_instruction(
+        has_principles: bool,
+        options: &Option<HashMap<String, Value>>,
+    ) -> &'static str {
+        let stage = options
+            .as_ref()
+            .and_then(|o| o.get("stage"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let is_strict_phase = matches!(
+            stage,
+            "strict" | "review" | "audit" | "final_review" | "verification"
+        );
+        if has_principles && is_strict_phase {
+            STRICT_STAGE_NOTE
+        } else {
+            ""
+        }
     }
 
     fn build_payload(
@@ -119,14 +135,19 @@ impl WenxinAgent {
         let mut final_messages: Vec<Message> = Vec::new();
         let mut system_text = String::new();
 
-        if let Some(items) = principles {
+        let has_principles = principles.as_ref().is_some_and(|p| !p.is_empty());
+
+        if let Some(ref items) = principles {
             if !items.is_empty() {
-                system_text.push_str(&principles_to_text(&items));
+                system_text.push_str(&principles_to_text(items));
                 system_text.push('\n');
             }
         }
 
-        system_text.push_str(Self::stage_instruction(options));
+        let stage_note = Self::stage_instruction(has_principles, options);
+        if !stage_note.is_empty() {
+            system_text.push_str(stage_note);
+        }
 
         final_messages.push(Message {
             role: "system".to_string(),
@@ -266,14 +287,43 @@ mod tests {
     }
 
     #[test]
-    fn stage_instruction_enforces_strict_mode() {
-        assert_eq!(WenxinAgent::stage_instruction(&None), STRICT_STAGE_NOTE);
+    fn stage_instruction_empty_when_no_principles() {
+        assert_eq!(WenxinAgent::stage_instruction(false, &None), "");
         assert_eq!(
-            WenxinAgent::stage_instruction(&Some(HashMap::from([(
-                "stage".to_string(),
-                json!("early"),
-            )]))),
+            WenxinAgent::stage_instruction(
+                false,
+                &Some(HashMap::from([("stage".to_string(), json!("early")),]))
+            ),
+            ""
+        );
+    }
+
+    #[test]
+    fn stage_instruction_returns_note_when_principles_and_strict_phase() {
+        assert_eq!(
+            WenxinAgent::stage_instruction(
+                true,
+                &Some(HashMap::from([("stage".to_string(), json!("review")),]))
+            ),
             STRICT_STAGE_NOTE
+        );
+        assert_eq!(
+            WenxinAgent::stage_instruction(
+                true,
+                &Some(HashMap::from([("stage".to_string(), json!("strict")),]))
+            ),
+            STRICT_STAGE_NOTE
+        );
+    }
+
+    #[test]
+    fn stage_instruction_empty_when_not_strict_phase() {
+        assert_eq!(
+            WenxinAgent::stage_instruction(
+                true,
+                &Some(HashMap::from([("stage".to_string(), json!("early")),]))
+            ),
+            ""
         );
     }
 
@@ -283,7 +333,7 @@ mod tests {
             vec![message("user", "review this")],
             Some(vec!["Check safety".to_string()]),
             &Some(HashMap::from([
-                ("stage".to_string(), json!("early")),
+                ("stage".to_string(), json!("review")),
                 ("temperature".to_string(), json!(0.3)),
                 ("top_p".to_string(), json!(0.8)),
             ])),
@@ -297,6 +347,22 @@ mod tests {
         assert_eq!(payload["temperature"], 0.3);
         assert_eq!(payload["top_p"], 0.8);
         assert_eq!(payload["model"], "ernie-3.5-turbo");
+    }
+
+    #[test]
+    fn build_payload_omits_strict_note_when_not_strict_phase() {
+        let payload = agent().build_payload(
+            vec![message("user", "review this")],
+            Some(vec!["Check safety".to_string()]),
+            &Some(HashMap::from([
+                ("stage".to_string(), json!("early")),
+                ("temperature".to_string(), json!(0.3)),
+            ])),
+        );
+
+        let system = payload["messages"][0]["content"].as_str().unwrap();
+        assert!(system.contains("Check safety"));
+        assert!(!system.contains(STRICT_STAGE_NOTE));
     }
 
     #[test]

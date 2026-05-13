@@ -684,6 +684,7 @@ impl BackendClient {
     /// Initiate GitHub Copilot OAuth Device Code flow.
     /// Returns `device_code`, `user_code`, `verification_uri`, and `interval`.
     /// `client_id` is your GitHub OAuth App client_id (optional, falls back to a built-in default).
+    #[allow(dead_code)]
     pub async fn copilot_device_code_request(&self, client_id: &str) -> Result<Value, String> {
         self.rpc_call(
             "provider.copilot_device_code",
@@ -694,6 +695,7 @@ impl BackendClient {
 
     /// Poll GitHub for access token after user authorizes via device code.
     /// Pass the `device_code` from the initial request.
+    #[allow(dead_code)]
     pub async fn copilot_device_code_poll(
         &self,
         device_code: &str,
