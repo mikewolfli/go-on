@@ -216,6 +216,55 @@ fn provider_requires_secret(provider: &str) -> bool {
     matches!(provider.to_lowercase().as_str(), "wenxin" | "qianfan")
 }
 
+fn build_copilot_http_client() -> reqwest::Client {
+    let proxy_urls = [
+        "http://127.0.0.1:15732",
+        "http://127.0.0.1:7890",
+        "socks5://127.0.0.1:7890",
+        "http://127.0.0.1:10809",
+        "http://127.0.0.1:10808",
+        "http://127.0.0.1:1080",
+        "http://127.0.0.1:33210",
+    ];
+    let env_url = std::env::var("HTTPS_PROXY")
+        .or_else(|_| std::env::var("https_proxy"))
+        .or_else(|_| std::env::var("ALL_PROXY"))
+        .or_else(|_| std::env::var("all_proxy"))
+        .ok();
+
+    for url in env_url
+        .as_deref()
+        .into_iter()
+        .chain(proxy_urls.iter().copied())
+    {
+        let proxy_result = if url.starts_with("socks5://") || url.starts_with("socks4://") {
+            reqwest::Proxy::all(url)
+        } else {
+            reqwest::Proxy::https(url)
+        };
+        if let Ok(proxy) = proxy_result {
+            if let Ok(client) = reqwest::Client::builder().proxy(proxy).build() {
+                return client;
+            }
+        }
+    }
+
+    // Fallback: keep legacy behavior for environments with broken trust stores.
+    if let Ok(client) = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+    {
+        eprintln!(
+            "WARNING: copilot auth falling back to dangerous SSL (no certificate verification)"
+        );
+        return client;
+    }
+
+    reqwest::Client::new()
+}
+
+static COPILOT_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
 impl ProvidersView {
     pub fn new() -> Self {
         let (pending_tx, pending_rx) = mpsc::sync_channel(256);
@@ -603,34 +652,8 @@ impl ProvidersView {
                                 let tx = self.pending_tx.clone();
                                 let ctx_clone = ctx.clone();
                                 tokio::spawn(async move {
-                                    // Try common proxy ports, no env var dependency
-                                    let proxy_urls = [
-                                        "http://127.0.0.1:15732",
-                                        "http://127.0.0.1:7890",
-                                        "http://127.0.0.1:10809",
-                                        "http://127.0.0.1:10808",
-                                        "http://127.0.0.1:1080",
-                                        "http://127.0.0.1:33210",
-                                    ];
-                                    let env_url = std::env::var("HTTPS_PROXY")
-                                        .or_else(|_| std::env::var("https_proxy"))
-                                        .ok();
-                                    let mut client = reqwest::Client::new();
-                                    for url in env_url
-                                        .as_deref()
-                                        .into_iter()
-                                        .chain(proxy_urls.iter().copied())
-                                    {
-                                        if let Ok(p) = reqwest::Proxy::https(url) {
-                                            if let Ok(c) = reqwest::Client::builder()
-                                                .proxy(p)
-                                                .build()
-                                            {
-                                                client = c;
-                                                break;
-                                            }
-                                        }
-                                    }
+                                    let client = COPILOT_HTTP_CLIENT
+                                        .get_or_init(build_copilot_http_client);
                                     let params = [
                                         ("client_id", "01ab8ac9400c4e429b23"),
                                         ("scope", "read:user,copilot"),
@@ -640,6 +663,7 @@ impl ProvidersView {
                                         client
                                             .post("https://github.com/login/device/code")
                                             .header("Accept", "application/json")
+                                            .header("User-Agent", "go-on-gui")
                                             .form(&params)
                                             .send(),
                                     )
@@ -1615,48 +1639,8 @@ impl ProvidersView {
                             eprintln!("[poll] device_code={}, HTTPS_PROXY={}", &device_code[..8.min(device_code.len())], proxy_url);
                         }
                         tokio::spawn(async move {
-                            fn build_proxy_client() -> reqwest::Client {
-                                let proxy_urls = [
-                                    "http://127.0.0.1:15732",
-                                    "http://127.0.0.1:7890",
-                                    "socks5://127.0.0.1:7890",
-                                    "http://127.0.0.1:10809",
-                                    "http://127.0.0.1:10808",
-                                    "http://127.0.0.1:1080",
-                                    "http://127.0.0.1:33210",
-                                ];
-                                let env_url = std::env::var("HTTPS_PROXY")
-                                    .or_else(|_| std::env::var("https_proxy"))
-                                    .ok();
-                                for url in env_url
-                                    .as_deref()
-                                    .into_iter()
-                                    .chain(proxy_urls.iter().copied())
-                                {
-                                    if let Ok(p) = reqwest::Proxy::https(url) {
-                                        if let Ok(client) = reqwest::Client::builder()
-                                            .proxy(p)
-                                            .build()
-                                        {
-                                            return client;
-                                        }
-                                    }
-                                }
-                                // Fallback: try with SSL verification disabled
-                                // (some environments have corporate cert issues)
-                                if let Ok(client) = reqwest::Client::builder()
-                                    .danger_accept_invalid_certs(true)
-                                    .build()
-                                {
-                                    eprintln!(
-                                        "WARNING: copilot poll falling back to dangerous SSL (no certificate verification)"
-                                    );
-                                    return client;
-                                }
-                                reqwest::Client::new()
-                            }
-                            static COPILOT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-                            let poll_client = COPILOT_CLIENT.get_or_init(build_proxy_client);
+                            let poll_client = COPILOT_HTTP_CLIENT
+                                .get_or_init(build_copilot_http_client);
                             let poll_params = [
                                 ("client_id", "01ab8ac9400c4e429b23"),
                                 ("device_code", &device_code),
@@ -1667,6 +1651,7 @@ impl ProvidersView {
                                         poll_client
                                             .post("https://github.com/login/oauth/access_token")
                                             .header("Accept", "application/json")
+                                            .header("User-Agent", "go-on-gui")
                                             .form(&poll_params)
                                             .send(),
                                     )
