@@ -13,11 +13,6 @@ use anyhow::{Context, Result};
 
 // Filename for the adaptive config template.
 const ADAPTIVE_TEMPLATE: &str = "config.toml.autopilot-adaptive";
-const PROVIDER_CAPABILITY_FILE: &str = "providers.toml";
-
-/// Compile-time embedded providers.toml — ensures full provider list is always
-/// available even when the binary is run from a directory without providers.toml.
-const EMBEDDED_PROVIDERS_TOML: &str = include_str!("../../config/providers.toml");
 
 #[derive(Clone, Debug, serde::Deserialize)]
 struct ProviderSpec {
@@ -195,18 +190,11 @@ fn provider_specs() -> &'static [ProviderSpec] {
 }
 
 fn load_provider_specs() -> Vec<ProviderSpec> {
-    if let Some(path) = find_template(PROVIDER_CAPABILITY_FILE) {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(catalog) = toml::from_str::<ProviderCapabilityCatalog>(&content) {
-                if !catalog.providers.is_empty() {
-                    return catalog.providers;
-                }
-            }
-        }
-    }
-    // Fallback: use compile-time embedded providers.toml so the full list is
-    // always available regardless of the binary's working directory.
-    if let Ok(catalog) = toml::from_str::<ProviderCapabilityCatalog>(EMBEDDED_PROVIDERS_TOML) {
+    // Use compile-time embedded providers.toml — always available,
+    // no runtime file dependency needed.
+    if let Ok(catalog) =
+        toml::from_str::<ProviderCapabilityCatalog>(crate::core::EMBEDDED_PROVIDERS_TOML)
+    {
         if !catalog.providers.is_empty() {
             return catalog.providers;
         }
@@ -269,11 +257,11 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             agent_type: "claude".to_string(),
             url: Some("https://api.anthropic.com".to_string()),
             chat_path: None,
-            model: Some("claude-3-7-sonnet-latest".to_string()),
+            model: Some("claude-sonnet-4-20250514".to_string()),
             api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: Some("2023-06-01".to_string()),
-            max_tokens: Some(4096),
+            max_tokens: Some(8192),
             supports_system: None,
             region: Some("Global".to_string()),
             recommended_default_phase: Some("coding".to_string()),
@@ -291,9 +279,9 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "deepseek".to_string(),
             agent_type: "deepseek".to_string(),
-            url: None,
+            url: Some("https://api.deepseek.com/v1".to_string()),
             chat_path: None,
-            model: Some("deepseek-chat".to_string()),
+            model: Some("deepseek-v4-flash".to_string()),
             api_key_env: Some("DEEPSEEK_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
@@ -313,9 +301,33 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             recommended_delivery_request_timeout_seconds: Some(90),
         },
         ProviderSpec {
+            name: "doubao".to_string(),
+            agent_type: "doubao".to_string(),
+            url: Some("https://ark.cn-beijing.volces.com/api/v3".to_string()),
+            chat_path: Some("/chat/completions".to_string()),
+            model: Some("doubao-1.5-pro-32k-250115".to_string()),
+            api_key_env: Some("DOUBAO_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            max_tokens: None,
+            supports_system: Some(true),
+            region: Some("China".to_string()),
+            recommended_default_phase: Some("coding".to_string()),
+            recommended_request_timeout_seconds: Some(180),
+            recommended_review_timeout_seconds: Some(90),
+            recommended_cache_enabled: Some(true),
+            recommended_vector_enabled: Some(true),
+            recommended_phase_max_inflight: Some(24),
+            recommended_global_max_inflight: Some(96),
+            recommended_planning_request_timeout_seconds: Some(160),
+            recommended_coding_request_timeout_seconds: Some(180),
+            recommended_review_request_timeout_seconds: Some(90),
+            recommended_delivery_request_timeout_seconds: Some(120),
+        },
+        ProviderSpec {
             name: "wenxin".to_string(),
             agent_type: "wenxin".to_string(),
-            url: Some("https://qianfan.baidubce.com".to_string()),
+            url: None,
             chat_path: None,
             model: Some("ERNIE-4.5-8K".to_string()),
             api_key_env: Some("WENXIN_API_KEY".to_string()),
@@ -390,7 +402,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             url: Some("https://api.aleph-alpha.com".to_string()),
             chat_path: None,
             model: Some("luminous-base".to_string()),
-            api_key_env: Some("ALEPH_ALPHA_API_KEY".to_string()),
+            api_key_env: Some("ALEPH_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
             max_tokens: None,
@@ -411,14 +423,14 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "cohere".to_string(),
             agent_type: "cohere".to_string(),
-            url: Some("https://api.cohere.com".to_string()),
+            url: Some("https://api.cohere.ai/v1".to_string()),
             chat_path: None,
-            model: Some("command-r-plus".to_string()),
+            model: Some("command-r-plus-08-2024".to_string()),
             api_key_env: Some("COHERE_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
             max_tokens: None,
-            supports_system: None,
+            supports_system: Some(true),
             region: Some("Global".to_string()),
             recommended_default_phase: Some("coding".to_string()),
             recommended_request_timeout_seconds: Some(120),
@@ -435,14 +447,14 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "gemini".to_string(),
             agent_type: "gemini".to_string(),
-            url: Some("https://generativelanguage.googleapis.com".to_string()),
+            url: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
             chat_path: None,
             model: Some("gemini-2.5-flash".to_string()),
             api_key_env: Some("GEMINI_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
             max_tokens: None,
-            supports_system: Some(true),
+            supports_system: None,
             region: Some("Global".to_string()),
             recommended_default_phase: Some("coding".to_string()),
             recommended_request_timeout_seconds: Some(120),
@@ -466,7 +478,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             secret_key_env: None,
             anthropic_version: None,
             max_tokens: None,
-            supports_system: Some(true),
+            supports_system: None,
             region: Some("Global".to_string()),
             recommended_default_phase: Some("coding".to_string()),
             recommended_request_timeout_seconds: Some(120),
@@ -483,14 +495,14 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "mistral".to_string(),
             agent_type: "mistral".to_string(),
-            url: Some("https://api.mistral.ai".to_string()),
+            url: Some("https://api.mistral.ai/v1".to_string()),
             chat_path: None,
             model: Some("mistral-small-latest".to_string()),
             api_key_env: Some("MISTRAL_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
             max_tokens: None,
-            supports_system: Some(true),
+            supports_system: None,
             region: Some("Global".to_string()),
             recommended_default_phase: Some("coding".to_string()),
             recommended_request_timeout_seconds: Some(120),
@@ -634,7 +646,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             secret_key_env: None,
             anthropic_version: None,
             max_tokens: None,
-            supports_system: Some(true),
+            supports_system: None,
             region: Some("China".to_string()),
             recommended_default_phase: Some("coding".to_string()),
             recommended_request_timeout_seconds: Some(180),
@@ -672,6 +684,31 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             recommended_review_request_timeout_seconds: Some(90),
             recommended_delivery_request_timeout_seconds: Some(120),
         },
+        // ── SiliconFlow / 硅基流动 ────────────────────────
+        ProviderSpec {
+            name: "siliconflow".to_string(),
+            agent_type: "openai_compatible".to_string(),
+            url: Some("https://api.siliconflow.cn/v1".to_string()),
+            chat_path: None,
+            model: Some("deepseek-ai/DeepSeek-V3.2".to_string()),
+            api_key_env: Some("SILICONFLOW_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            max_tokens: None,
+            supports_system: Some(true),
+            region: Some("China".to_string()),
+            recommended_default_phase: Some("coding".to_string()),
+            recommended_request_timeout_seconds: Some(120),
+            recommended_review_timeout_seconds: Some(60),
+            recommended_cache_enabled: Some(true),
+            recommended_vector_enabled: Some(true),
+            recommended_phase_max_inflight: Some(32),
+            recommended_global_max_inflight: Some(128),
+            recommended_planning_request_timeout_seconds: Some(100),
+            recommended_coding_request_timeout_seconds: Some(120),
+            recommended_review_request_timeout_seconds: Some(60),
+            recommended_delivery_request_timeout_seconds: Some(90),
+        },
         ProviderSpec {
             name: "stepfun".to_string(),
             agent_type: "stepfun".to_string(),
@@ -706,7 +743,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             secret_key_env: None,
             anthropic_version: None,
             max_tokens: None,
-            supports_system: Some(true),
+            supports_system: None,
             region: Some("Global".to_string()),
             recommended_default_phase: Some("coding".to_string()),
             recommended_request_timeout_seconds: Some(120),
@@ -725,12 +762,12 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             agent_type: "fireworks".to_string(),
             url: Some("https://api.fireworks.ai/inference/v1".to_string()),
             chat_path: None,
-            model: Some("accounts/fireworks/models/llama-v3p3-70b-instruct".to_string()),
+            model: Some("accounts/fireworks/models/llama-v3p1-8b-instruct".to_string()),
             api_key_env: Some("FIREWORKS_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
             max_tokens: None,
-            supports_system: Some(true),
+            supports_system: None,
             region: Some("Global".to_string()),
             recommended_default_phase: Some("coding".to_string()),
             recommended_request_timeout_seconds: Some(120),
@@ -749,7 +786,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             agent_type: "deepquest".to_string(),
             url: Some("https://api.deepquest.ai/v1".to_string()),
             chat_path: None,
-            model: Some("deepquest-llama-3.1-70b".to_string()),
+            model: Some("deepquest-chat".to_string()),
             api_key_env: Some("DEEPQUEST_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
@@ -841,11 +878,35 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             recommended_delivery_request_timeout_seconds: Some(90),
         },
         ProviderSpec {
+            name: "llama".to_string(),
+            agent_type: "llama".to_string(),
+            url: Some("http://127.0.0.1:11434/v1".to_string()),
+            chat_path: None,
+            model: Some("llama3.2".to_string()),
+            api_key_env: None,
+            secret_key_env: None,
+            anthropic_version: None,
+            max_tokens: None,
+            supports_system: Some(true),
+            region: Some("Local".to_string()),
+            recommended_default_phase: Some("coding".to_string()),
+            recommended_request_timeout_seconds: Some(300),
+            recommended_review_timeout_seconds: Some(120),
+            recommended_cache_enabled: Some(true),
+            recommended_vector_enabled: Some(true),
+            recommended_phase_max_inflight: Some(4),
+            recommended_global_max_inflight: Some(16),
+            recommended_planning_request_timeout_seconds: Some(280),
+            recommended_coding_request_timeout_seconds: Some(300),
+            recommended_review_request_timeout_seconds: Some(120),
+            recommended_delivery_request_timeout_seconds: Some(180),
+        },
+        ProviderSpec {
             name: "nim".to_string(),
             agent_type: "nim".to_string(),
-            url: Some("https://api.nim.com/v1".to_string()),
+            url: Some("https://integrate.api.nvidia.com/v1".to_string()),
             chat_path: None,
-            model: Some("nim-chat".to_string()),
+            model: Some("meta/llama-3.1-70b-instruct".to_string()),
             api_key_env: Some("NIM_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
@@ -867,7 +928,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "skywork".to_string(),
             agent_type: "skywork".to_string(),
-            url: Some("https://api.skywork.com/v1".to_string()),
+            url: Some("https://api.skywork.ai/v1".to_string()),
             chat_path: None,
             model: Some("skywork-chat".to_string()),
             api_key_env: Some("SKYWORK_API_KEY".to_string()),
@@ -891,7 +952,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "xihu".to_string(),
             agent_type: "xihu".to_string(),
-            url: Some("https://api.xihu.com/v1".to_string()),
+            url: Some("https://api.xihu.ai/v1".to_string()),
             chat_path: None,
             model: Some("xihu-chat".to_string()),
             api_key_env: Some("XIHU_API_KEY".to_string()),
@@ -942,7 +1003,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             url: Some("https://api.replicate.com/v1".to_string()),
             chat_path: None,
             model: Some("meta/meta-llama-3-70b-instruct".to_string()),
-            api_key_env: Some("REPLICATE_API_KEY".to_string()),
+            api_key_env: Some("REPLICATE_API_TOKEN".to_string()),
             secret_key_env: None,
             anthropic_version: None,
             max_tokens: None,
@@ -965,9 +1026,9 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             agent_type: "qianfan".to_string(),
             url: Some("https://qianfan.baidubce.com".to_string()),
             chat_path: None,
-            model: Some("ERNIE-4.0-8k".to_string()),
+            model: Some("ERNIE-4.5-8K".to_string()),
             api_key_env: Some("QIANFAN_API_KEY".to_string()),
-            secret_key_env: None,
+            secret_key_env: Some("QIANFAN_SECRET_KEY".to_string()),
             anthropic_version: None,
             max_tokens: None,
             supports_system: None,
@@ -1672,6 +1733,7 @@ fn prompt_additional_agents() -> Result<Vec<CustomAgentSpec>> {
         "llama",
         "copilot",
         "openai_compatible",
+        "siliconflow",
     ];
 
     if !prompt_yes_no(

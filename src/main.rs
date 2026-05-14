@@ -54,6 +54,7 @@
 
 mod acp;
 mod agents;
+mod cli;
 mod core;
 mod fault_tolerance;
 mod governance;
@@ -296,6 +297,10 @@ struct Cli {
     /// Access protocol mode override (adaptive|acp_stdio|acp_http|mcp_stdio|mcp_http)
     #[arg(short = 'm', long, visible_alias = "mode", value_name = "MODE")]
     protocol_mode: Option<String>,
+
+    /// Start interactive terminal chat session (like Claude Code / Codex)
+    #[arg(short = 'a', long, default_value_t = false)]
+    chat: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1376,6 +1381,7 @@ async fn run() -> Result<()> {
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
         && !std::env::args().any(|a| a == "--setup" || a == "--init")
+        && !cli.chat
         && std::env::var("GO_ON_ENABLE_LOCAL_TEST_AGENTS").is_err()
     {
         let provider_count = config.agents.len();
@@ -1452,8 +1458,29 @@ async fn run() -> Result<()> {
         }
     }
 
+    // Handle terminal chat mode
+    if cli.chat {
+        return handle_chat_mode(config, &cli, &config_path).await;
+    }
+
     // Start the server
     start_server(config, &cli, &config_path).await
+}
+
+/// Handle terminal chat mode (--chat flag).
+/// If agents are configured, starts interactive chat. Otherwise redirects to setup.
+async fn handle_chat_mode(
+    config: Arc<AppConfig>,
+    _cli: &Cli,
+    config_path: &std::path::Path,
+) -> Result<()> {
+    if config.agents.is_empty() {
+        eprintln!("No AI providers configured.");
+        eprintln!("Run the setup wizard first:");
+        eprintln!("  go-on -c {} --setup", config_path.display());
+        return Ok(());
+    }
+    crate::cli::chat::run_terminal_chat(config, config_path).await
 }
 
 /// Handle secret management commands, local model setup, recommended config, setup wizard, and AI onboarding.

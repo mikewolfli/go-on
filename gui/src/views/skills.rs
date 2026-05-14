@@ -42,12 +42,12 @@ pub struct SkillsView {
     versions: Vec<String>,
     initialized: bool,
     pending_rx: mpsc::Receiver<SkillsUpdate>,
-    pending_tx: mpsc::Sender<SkillsUpdate>,
+    pending_tx: mpsc::SyncSender<SkillsUpdate>,
 }
 
 impl SkillsView {
     pub fn new() -> Self {
-        let (pending_tx, pending_rx) = mpsc::channel();
+        let (pending_tx, pending_rx) = mpsc::sync_channel(256);
         Self {
             skills: Vec::new(),
             loading: false,
@@ -134,7 +134,7 @@ impl SkillsView {
                 Err(_) => {
                     #[cfg(debug_assertions)]
                     eprintln!("Warning: list_skills timed out");
-                    let _ = tx.send(SkillsUpdate::List(
+                    let _ = tx.try_send(SkillsUpdate::List(
                         Vec::new(),
                         Some(format!("{}: timeout", fetch_failed)),
                     ));
@@ -149,10 +149,10 @@ impl SkillsView {
                         .iter()
                         .filter_map(|v| serde_json::from_value(v.clone()).ok())
                         .collect();
-                    let _ = tx.send(SkillsUpdate::List(skills, None));
+                    let _ = tx.try_send(SkillsUpdate::List(skills, None));
                 }
                 Err(e) => {
-                    let _ = tx.send(SkillsUpdate::List(
+                    let _ = tx.try_send(SkillsUpdate::List(
                         Vec::new(),
                         Some(format!("{}: {}", fetch_failed, e)),
                     ));
@@ -439,7 +439,7 @@ impl SkillsView {
                                     Err("timeout".to_string())
                                 }
                             };
-                            let _ = tx.send(match result {
+                            let _ = tx.try_send(match result {
                                 Ok(_) => SkillsUpdate::Create(Ok(SkillRecord {
                                     name: Some(name_clone),
                                     description: Some(desc_clone),
@@ -627,7 +627,7 @@ impl SkillsView {
                                 }
                                 .await;
 
-                                let _ = tx.send(SkillsUpdate::Import(result));
+                                let _ = tx.try_send(SkillsUpdate::Import(result));
                                 ctx_clone.request_repaint_after(Duration::from_millis(16));
                             });
                         }
@@ -724,7 +724,7 @@ impl SkillsView {
                                 };
                                 match result {
                                     Ok(_) => {
-                                        let _ = tx.send(SkillsUpdate::Create(Ok(SkillRecord {
+                                        let _ = tx.try_send(SkillsUpdate::Create(Ok(SkillRecord {
                                             name: Some("create-a-skill".to_string()),
                                             description: Some(seed_description),
                                             version: Some("1".to_string()),
@@ -738,12 +738,12 @@ impl SkillsView {
                                             || e.contains("已注册")
                                             || e.contains("已註冊")
                                         {
-                                            let _ = tx.send(SkillsUpdate::Message {
+                                            let _ = tx.try_send(SkillsUpdate::Message {
                                                 text: default_loaded,
                                                 is_error: false,
                                             });
                                         } else {
-                                            let _ = tx.send(SkillsUpdate::Create(Err(e)));
+                                            let _ = tx.try_send(SkillsUpdate::Create(Err(e)));
                                         }
                                     }
                                 }
@@ -873,7 +873,7 @@ impl SkillsView {
                                         .replace("{name}", &skill_name)
                                         .replace("{error}", &e.to_string()),
                                 };
-                                let _ = tx.send(SkillsUpdate::Message {
+                                let _ = tx.try_send(SkillsUpdate::Message {
                                     text: msg,
                                     is_error,
                                 });
@@ -912,7 +912,7 @@ impl SkillsView {
                                         .replace("{name}", &skill_name)
                                         .replace("{error}", &e.to_string()),
                                 };
-                                let _ = tx.send(SkillsUpdate::Message {
+                                let _ = tx.try_send(SkillsUpdate::Message {
                                     text: msg,
                                     is_error,
                                 });
@@ -949,7 +949,7 @@ impl SkillsView {
                                     // If the skill simply hasn't been imported yet, show a friendly info instead of error.
                                     let err_lower = err_text.to_lowercase();
                                     if err_lower.contains("not found") || err_lower.contains("未找到") || err_lower.contains("not_found") {
-                                        let _ = tx.send(SkillsUpdate::Versions {
+                                        let _ = tx.try_send(SkillsUpdate::Versions {
                                             skill_name,
                                             versions: Vec::new(),
                                             err: None,
@@ -958,7 +958,7 @@ impl SkillsView {
                                         let msg = failed_tpl
                                             .replace("{name}", &skill_name)
                                             .replace("{error}", &err_text);
-                                        let _ = tx.send(SkillsUpdate::Versions {
+                                        let _ = tx.try_send(SkillsUpdate::Versions {
                                             skill_name,
                                             versions: Vec::new(),
                                             err: Some(msg),
@@ -983,7 +983,7 @@ impl SkillsView {
                                         }
                                     }
                                     if versions.is_empty() {
-                                        let _ = tx.send(SkillsUpdate::Versions {
+                                        let _ = tx.try_send(SkillsUpdate::Versions {
                                             skill_name,
                                             versions: Vec::new(),
                                             err: None,
@@ -995,7 +995,7 @@ impl SkillsView {
                                             let b_num = b.parse::<i64>().unwrap_or(0);
                                             b_num.cmp(&a_num).then_with(|| b.cmp(a))
                                         });
-                                        let _ = tx.send(SkillsUpdate::Versions {
+                                        let _ = tx.try_send(SkillsUpdate::Versions {
                                             skill_name,
                                             versions,
                                             err: None,
@@ -1097,7 +1097,7 @@ impl SkillsView {
                                     .replace("{name}", &skill_name)
                                     .replace("{error}", &e.to_string()),
                             };
-                            let _ = tx.send(SkillsUpdate::Message {
+                            let _ = tx.try_send(SkillsUpdate::Message {
                                 text: msg,
                                 is_error,
                             });
@@ -1154,7 +1154,7 @@ impl SkillsView {
                                 .replace("{name}", &skill_name)
                                 .replace("{error}", &e.to_string()),
                         };
-                        let _ = tx.send(SkillsUpdate::Message {
+                        let _ = tx.try_send(SkillsUpdate::Message {
                             text: msg,
                             is_error,
                         });
@@ -1226,13 +1226,13 @@ impl SkillsView {
                                             let b_num = b.parse::<i64>().unwrap_or(0);
                                             b_num.cmp(&a_num).then_with(|| b.cmp(a))
                                         });
-                                        let _ = tx.send(SkillsUpdate::Versions {
+                                        let _ = tx.try_send(SkillsUpdate::Versions {
                                             skill_name: skill_name.clone(),
                                             versions,
                                             err: None,
                                         });
                                     } else {
-                                        let _ = tx.send(SkillsUpdate::Message {
+                                        let _ = tx.try_send(SkillsUpdate::Message {
                                             text: version_count_tpl
                                                 .replace("{name}", &skill_name)
                                                 .replace("{count}", "0")
@@ -1248,7 +1248,7 @@ impl SkillsView {
                                     .replace("{name}", &skill_name)
                                     .replace("{error}", &e.to_string()),
                             };
-                            let _ = tx.send(SkillsUpdate::Message {
+                            let _ = tx.try_send(SkillsUpdate::Message {
                                 text: msg,
                                 is_error,
                             });

@@ -1,5 +1,6 @@
 use crate::config::{save_app_config, AppConfig};
 use crate::i18n::I18n;
+use crate::keyring_util::REDACTED_API_KEY;
 use serde_json::Value;
 
 const MAX_SNAPSHOTS: usize = 20;
@@ -42,7 +43,7 @@ impl ConfigEditorView {
                                 *api_key = Value::String(if key.len() > 8 {
                                     format!("{}...{}", &key[..4], &key[key.len() - 4..])
                                 } else {
-                                    "********".to_string()
+                                    REDACTED_API_KEY.to_string()
                                 });
                             }
                         }
@@ -80,7 +81,7 @@ impl ConfigEditorView {
                     for p in providers.iter_mut() {
                         if let Some(obj) = p.as_object_mut() {
                             if let Some(redacted) = obj.get("api_key").and_then(|v| v.as_str()) {
-                                if redacted.contains("...") || redacted == "********" {
+                                if redacted.contains("...") || redacted == REDACTED_API_KEY {
                                     // Find matching provider in real config by name (and label, if present)
                                     let name =
                                         obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -140,7 +141,7 @@ impl ConfigEditorView {
                         }
                         // Live search count
                         let count = self.draft.matches(&self.search_query).count();
-                        ui.label(format!("{} matches", count));
+                        ui.label(format!("{} {}", count, i18n.t("configEditor.matches")));
                     }
                 });
 

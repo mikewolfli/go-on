@@ -1,6 +1,98 @@
 use super::*;
 use crate::i18n::runtime::{t, tf};
 
+/// Serializes global env-var writes (`std::env::set_var`) to prevent data races
+/// in concurrent requests handled by the ACP server.
+static SET_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Try to build a [`reqwest::Client`] with proxy autodetection.
+///
+/// Checks `HTTPS_PROXY` / `https_proxy` / `ALL_PROXY` / `all_proxy` environment
+/// variables first.  If none are set, probes a list of well-known local proxy ports.
+/// Falls back to a plain (direct) client if nothing works.
+fn build_github_client() -> reqwest::Client {
+    // 1. Check explicitly-configured env vars
+    let proxy_env = std::env::var("HTTPS_PROXY")
+        .or_else(|_| std::env::var("https_proxy"))
+        .or_else(|_| std::env::var("ALL_PROXY"))
+        .or_else(|_| std::env::var("all_proxy"));
+
+    if let Ok(proxy_url) = proxy_env {
+        if !proxy_url.is_empty() {
+            if let Ok(proxy) = reqwest::Proxy::https(&proxy_url) {
+                tracing::debug!("Using HTTPS_PROXY proxy: {proxy_url}");
+                if let Ok(client) = reqwest::Client::builder().proxy(proxy).build() {
+                    return client;
+                }
+            }
+            // If the user set a proxy but it failed to parse, fall through to probing
+            tracing::warn!("Failed to build proxy from env var {proxy_url}, trying auto-detect");
+        }
+    }
+
+    // 2. Common local proxy ports (same list as gui/src/main.rs auto_detect_proxy)
+    let common_proxies: &[&str] = &[
+        "http://127.0.0.1:15732",
+        "http://127.0.0.1:7890",
+        "socks5://127.0.0.1:7890",
+        "http://127.0.0.1:10809",
+        "http://127.0.0.1:10808",
+        "http://127.0.0.1:1080",
+        "http://127.0.0.1:33210",
+    ];
+
+    for proxy_url in common_proxies {
+        // Try a quick TCP connect first to see if anything is listening
+        let addr = proxy_url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .trim_start_matches("socks5://")
+            .trim_start_matches("socks4://");
+        if let Some(port_str) = addr.split(':').nth(1) {
+            if let Ok(port) = port_str.parse::<u16>() {
+                if std::net::TcpStream::connect_timeout(
+                    &format!("127.0.0.1:{port}").parse().unwrap(),
+                    std::time::Duration::from_millis(100),
+                )
+                .is_err()
+                {
+                    continue;
+                }
+                // Port open – try to build a reqwest client with this proxy
+                // Build proxy – `proxy_url` is the `&str` pointer directly
+                let proxy_url_str = *proxy_url;
+                let proxy_result = if proxy_url_str.starts_with("socks5://") {
+                    // For socks proxies, try using Proxy::all (requires "socks" feature)
+                    reqwest::Proxy::all(proxy_url_str)
+                } else {
+                    reqwest::Proxy::https(proxy_url_str)
+                };
+
+                match proxy_result {
+                    Ok(proxy) => match reqwest::Client::builder().proxy(proxy).build() {
+                        Ok(client) => {
+                            tracing::debug!("Using auto-detected proxy: {proxy_url}");
+                            return client;
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                "Proxy {proxy_url} port open but client build failed: {e}"
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        tracing::debug!("Proxy {proxy_url} port open but proxy parse failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Fallback: plain direct client
+    tracing::debug!("No proxy detected, using direct connection");
+    reqwest::Client::new()
+}
+
 pub(super) async fn handle_metrics(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     let status = server.get_status();
     send_result(
@@ -5431,20 +5523,40 @@ pub(super) async fn handle_provider_configure(
     // ── Persist API key to system keyring ──────────────────────────
     if !api_key.is_empty() {
         let account = format!("{}_api_key", name);
-        let _ =
-            keyring::Entry::new("go-on", &account).and_then(|entry| entry.set_password(api_key));
+        match keyring::Entry::new("go-on", &account) {
+            Ok(entry) => {
+                if let Err(e) = entry.set_password(api_key) {
+                    tracing::warn!("failed to save API key for '{}' to keyring: {}", name, e);
+                }
+            }
+            Err(e) => tracing::warn!("failed to open keyring entry for '{}': {}", name, e),
+        }
 
         // ── Copilot needs additional env vars + keyring entries ──
         if name == "copilot" {
             // Set env vars that CopilotAgent reads
-            std::env::set_var("GITHUB_TOKEN", api_key);
-            std::env::set_var("GITHUB_COPILOT_TOKEN", api_key);
+            {
+                let _lock = SET_ENV_LOCK.lock().unwrap();
+                std::env::set_var("GITHUB_TOKEN", api_key);
+                std::env::set_var("GITHUB_COPILOT_TOKEN", api_key);
+            }
             tracing::info!("Set GITHUB_TOKEN and GITHUB_COPILOT_TOKEN env vars for copilot");
             // The built-in provider spec uses api_key_env="GITHUB_COPILOT_TOKEN",
             // which setup.rs maps to keyring://go-on/github_copilot_token.
             // Without this entry, CopilotAgent fails with "keyring lookup failed".
-            let _ = keyring::Entry::new("go-on", "github_copilot_token")
-                .and_then(|entry| entry.set_password(api_key));
+            match keyring::Entry::new("go-on", "github_copilot_token") {
+                Ok(entry) => {
+                    if let Err(e) = entry.set_password(api_key) {
+                        tracing::warn!(
+                            "failed to save Copilot token to keyring account github_copilot_token: {}",
+                            e
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("failed to open keyring entry 'github_copilot_token': {}", e)
+                }
+            }
         }
     }
 
@@ -5496,8 +5608,8 @@ pub(super) async fn handle_copilot_device_code_request(
         .filter(|s| !s.is_empty())
         .unwrap_or("read:user");
 
-    // Build reqwest client (reuse existing if possible, but we need it here)
-    let client = reqwest::Client::new();
+    // Build reqwest client with proxy support
+    let client = build_github_client();
 
     let device_params = [("client_id", client_id), ("scope", scope)];
 
@@ -5596,7 +5708,7 @@ pub(super) async fn handle_copilot_device_code_poll(
         .unwrap_or("01ab8ac9400c4e429b23");
     let token_url = "https://github.com/login/oauth/access_token";
 
-    let client = reqwest::Client::new();
+    let client = build_github_client();
 
     let poll_params = [
         ("client_id", client_id),
@@ -5700,8 +5812,11 @@ pub(super) async fn handle_copilot_device_code_poll(
                     );
 
                     // Set both env vars so CopilotAgent works regardless of configured token_env.
-                    std::env::set_var("GITHUB_TOKEN", access_token);
-                    std::env::set_var("GITHUB_COPILOT_TOKEN", access_token);
+                    {
+                        let _lock = SET_ENV_LOCK.lock().unwrap();
+                        std::env::set_var("GITHUB_TOKEN", access_token);
+                        std::env::set_var("GITHUB_COPILOT_TOKEN", access_token);
+                    }
 
                     // Persist both Copilot keyring aliases for backward/forward compatibility.
                     if !access_token.is_empty() {

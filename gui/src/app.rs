@@ -4,7 +4,6 @@ use crate::views::ui_state::GlobalUiState;
 
 /// Write a line to go-on-gui.log in the temp directory.
 /// Only active in debug builds to avoid blocking the UI thread.
-#[allow(dead_code)]
 pub fn log_msg(msg: &str) {
     #[cfg(debug_assertions)]
     {
@@ -20,6 +19,7 @@ pub fn log_msg(msg: &str) {
 }
 
 use crate::i18n::{I18n, Lang};
+use crate::keyring_util::REDACTED_API_KEY;
 use crate::views::chat::ChatUiRuntimeConfig;
 use crate::views::{
     about::AboutView, autotune::AutoTuneView, chat::ChatView, config_editor::ConfigEditorView,
@@ -94,7 +94,7 @@ pub struct GoOnApp {
     pub active_tab: String,
     pub has_providers: bool,
     backend_updates: mpsc::Receiver<BackendUpdate>,
-    backend_tx: mpsc::Sender<BackendUpdate>,
+    backend_tx: mpsc::SyncSender<BackendUpdate>,
     pending_refresh: bool,
     last_refresh: Instant,
     /// Managed backend child process
@@ -338,7 +338,7 @@ impl GoOnApp {
                     // Fallback: config file api_key (only clone if needed)
                     if key.is_none()
                         && !provider.api_key.is_empty()
-                        && provider.api_key != "********"
+                        && provider.api_key != REDACTED_API_KEY
                     {
                         key = Some(provider.api_key.clone());
                     }
@@ -409,6 +409,199 @@ impl GoOnApp {
     /// Windows, Keychain on macOS). The backend also falls back to env vars if the
     /// keyring is unavailable — see `load_secret_value()` in the backend code.
     fn generate_backend_config(path: &std::path::Path, config: &AppConfig) {
+        // Canonical provider metadata — maps provider name to (agent_type, url, default_model, supports_system).
+        // This matches `src/core/providers_data.toml` and the backend agent factory in `build_agent()`.
+        fn provider_meta(name: &str) -> (&'static str, Option<&'static str>, &'static str, bool) {
+            match name {
+                "openai" => (
+                    "openai",
+                    Some("https://api.openai.com/v1"),
+                    "gpt-4o-mini",
+                    true,
+                ),
+                "openai_compatible" => (
+                    "openai_compatible",
+                    Some("http://127.0.0.1:8080/v1"),
+                    "compatible-model",
+                    true,
+                ),
+                "anthropic" => (
+                    "claude",
+                    Some("https://api.anthropic.com"),
+                    "claude-sonnet-4-20250514",
+                    true,
+                ),
+                "cohere" => (
+                    "cohere",
+                    Some("https://api.cohere.ai/v1"),
+                    "command-r-plus-08-2024",
+                    true,
+                ),
+                "deepseek" => (
+                    "deepseek",
+                    Some("https://api.deepseek.com/v1"),
+                    "deepseek-v4-flash",
+                    true,
+                ),
+                "wenxin" => ("wenxin", None, "ERNIE-4.5-8K", false),
+                "qianfan" => ("qianfan", None, "ERNIE-4.5-8K", false),
+                "qwen" => (
+                    "qwen",
+                    Some("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+                    "qwen-max",
+                    true,
+                ),
+                "glm" => (
+                    "glm",
+                    Some("https://open.bigmodel.cn/api/paas/v4"),
+                    "glm-4-flash",
+                    false,
+                ),
+                "yi" => (
+                    "yi",
+                    Some("https://api.lingyiwanwu.com/v1"),
+                    "yi-lightning",
+                    false,
+                ),
+                "hunyuan" => (
+                    "hunyuan",
+                    Some("https://api.hunyuan.cloud.tencent.com/v1"),
+                    "hunyuan-turbo-latest",
+                    false,
+                ),
+                "doubao" => (
+                    "doubao",
+                    Some("https://ark.cn-beijing.volces.com/api/v3"),
+                    "doubao-1.5-pro-32k-250115",
+                    true,
+                ),
+                "facewall" => (
+                    "facewall",
+                    Some("https://api.facewall.ai/v1"),
+                    "facewall-chat",
+                    false,
+                ),
+                "langboat" => (
+                    "langboat",
+                    Some("https://api.langboat.com/v1"),
+                    "langboat-chat",
+                    false,
+                ),
+                "skywork" => (
+                    "skywork",
+                    Some("https://api.skywork.ai/v1"),
+                    "skywork-chat",
+                    false,
+                ),
+                "stepfun" => (
+                    "stepfun",
+                    Some("https://api.stepfun.com/v1"),
+                    "step-2-16k",
+                    false,
+                ),
+                "xihu" => ("xihu", Some("https://api.xihu.ai/v1"), "xihu-chat", false),
+                "moonshot" => (
+                    "moonshot",
+                    Some("https://api.moonshot.cn/v1"),
+                    "moonshot-v1-8k",
+                    false,
+                ),
+                "minimax" => (
+                    "minimax",
+                    Some("https://api.minimax.chat/v1"),
+                    "MiniMax-Text-01",
+                    false,
+                ),
+                "siliconflow" => (
+                    "openai_compatible",
+                    Some("https://api.siliconflow.cn/v1"),
+                    "deepseek-ai/DeepSeek-V3.2",
+                    true,
+                ),
+                "ai21" => (
+                    "ai21",
+                    Some("https://api.ai21.com/studio/v1"),
+                    "jamba-1.5-mini",
+                    false,
+                ),
+                "aleph" => (
+                    "aleph",
+                    Some("https://api.aleph-alpha.com"),
+                    "luminous-base",
+                    false,
+                ),
+                "copilot" => ("copilot", Some("http://127.0.0.1:8080"), "", false),
+                "deepquest" => (
+                    "deepquest",
+                    Some("https://api.deepquest.ai/v1"),
+                    "deepquest-chat",
+                    false,
+                ),
+                "fireworks" => (
+                    "fireworks",
+                    Some("https://api.fireworks.ai/inference/v1"),
+                    "accounts/fireworks/models/llama-v3p1-8b-instruct",
+                    false,
+                ),
+                "gemini" => (
+                    "gemini",
+                    Some("https://generativelanguage.googleapis.com/v1beta"),
+                    "gemini-2.5-flash",
+                    false,
+                ),
+                "groq" => (
+                    "groq",
+                    Some("https://api.groq.com/openai/v1"),
+                    "llama-3.3-70b-versatile",
+                    false,
+                ),
+                "llama" => ("llama", Some("http://127.0.0.1:11434/v1"), "llama3.2", true),
+                "loopai" => (
+                    "loopai",
+                    Some("https://api.loopai.com/v1"),
+                    "loopai-chat",
+                    false,
+                ),
+                "mistral" => (
+                    "mistral",
+                    Some("https://api.mistral.ai/v1"),
+                    "mistral-small-latest",
+                    false,
+                ),
+                "nim" => (
+                    "nim",
+                    Some("https://integrate.api.nvidia.com/v1"),
+                    "meta/llama-3.1-70b-instruct",
+                    false,
+                ),
+                "perplexity" => (
+                    "perplexity",
+                    Some("https://api.perplexity.ai"),
+                    "sonar-pro",
+                    false,
+                ),
+                "replicate" => (
+                    "replicate",
+                    Some("https://api.replicate.com/v1"),
+                    "meta/meta-llama-3-70b-instruct",
+                    false,
+                ),
+                "titan" => (
+                    "titan",
+                    Some("https://api.titanml.co/v1"),
+                    "titan-chat",
+                    false,
+                ),
+                "together" => (
+                    "together",
+                    Some("https://api.together.xyz/v1"),
+                    "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+                    false,
+                ),
+                _ => ("openai_compatible", None, "auto", false),
+            }
+        }
+
         // Single pass: collect both provider TOML blocks and agent names simultaneously.
         let (provider_lines, agent_names): (Vec<String>, Vec<String>) = config
             .providers
@@ -416,10 +609,13 @@ impl GoOnApp {
             .filter(|p| {
                 // Priority: keyring first, then config as fallback
                 crate::keyring_util::has_api_key(&p.name.to_lowercase())
-                    || (!p.api_key.is_empty() && p.api_key != "********")
+                    || (!p.api_key.is_empty() && p.api_key != REDACTED_API_KEY)
             })
             .map(|p| {
                 let name = p.name.to_lowercase();
+                let (agent_type, default_url, default_model, supports_system) =
+                    provider_meta(&name);
+
                 // When a label is set, use it to disambiguate multiple entries of the same provider.
                 // The agent name becomes `{name}_{label}` so backend can differentiate them.
                 let agent_name = if p.label.is_empty() {
@@ -427,47 +623,89 @@ impl GoOnApp {
                 } else {
                     format!("{}_{}", name, p.label.to_lowercase().replace(' ', "_"))
                 };
+
+                // Model: user-configured, or type default
                 let model = if p.model.is_empty() || p.model == "auto" {
-                    match name.as_str() {
-                        "deepseek" => "deepseek-chat",
-                        "openai" => "gpt-4o-mini",
-                        "anthropic" => "claude-sonnet-4-20250514",
-                        "gemini" => "gemini-2.5-flash",
-                        "qwen" => "qwen-max",
-                        _ => "auto",
-                    }
+                    default_model
                 } else {
                     &p.model
                 };
-                // Copilot uses GITHUB_TOKEN env var (read by CopilotAgent), not keyring ref.
-                // The built-in provider spec in setup.rs also uses api_key_env="GITHUB_COPILOT_TOKEN",
-                // so we must avoid keyring://go-on/copilot_api_key which would cause a keyring lookup failure.
-                let api_key_env = if name == "copilot" {
-                    "GITHUB_COPILOT_TOKEN".to_string()
+
+                // URL: openai_compatible always needs an explicit url; built-in agent types
+                // (wenxin, qianfan, etc.) hardcode their URLs internally.
+                let url_line = if agent_type == "openai_compatible" {
+                    match default_url {
+                        Some(url) => format!("url = \"{}\"\n", url),
+                        None => String::new(),
+                    }
+                } else if matches!(agent_type, "wenxin" | "qianfan") {
+                    String::new()
                 } else {
-                    format!("keyring://go-on/{}_api_key", name)
+                    match default_url {
+                        Some(url) => format!("url = \"{}\"\n", url),
+                        None => String::new(),
+                    }
                 };
-                let secret_key_env = match name.as_str() {
-                    "wenxin" | "qianfan" => Some(format!("keyring://go-on/{}_secret_key", name)),
-                    _ => None,
+
+                // API key env var reference
+                let api_key_env = match name.as_str() {
+                    "copilot" => "GITHUB_COPILOT_TOKEN".to_string(),
+                    _ => format!("keyring://go-on/{}_api_key", name),
                 };
-                let secret_key_line = secret_key_env
-                    .as_ref()
-                    .map(|v| format!("secret_key_env = \"{}\"\n", v))
-                    .unwrap_or_default();
+
+                // Secret key line: wenxin/qianfan dual-auth
+                let secret_key_line = match name.as_str() {
+                    "wenxin" | "qianfan" => {
+                        format!("secret_key_env = \"keyring://go-on/{}_secret_key\"\n", name)
+                    }
+                    _ => String::new(),
+                };
+
+                // Chat path: only doubao needs a non-default path
+                let chat_path_line = if name == "doubao" {
+                    "chat_path = \"/chat/completions\"\n".to_string()
+                } else {
+                    String::new()
+                };
+
+                // Anthropic-specific fields
+                let anthropic_line = if agent_type == "claude" {
+                    "anthropic_version = \"2023-06-01\"\nmax_tokens = 8192\n".to_string()
+                } else {
+                    String::new()
+                };
+
+                let supports_system_line = if supports_system {
+                    "supports_system = true\n".to_string()
+                } else {
+                    String::new()
+                };
+
                 let toml_block = format!(
                     r#"[agents.{}]
 type = "{}"
 api_key_env = "{}"
-{}
-model = "{}"
-supports_system = true
+{}{}{}{}{}model = "{}"
 "#,
-                    agent_name, name, api_key_env, secret_key_line, model
+                    agent_name,
+                    agent_type,
+                    api_key_env,
+                    url_line,
+                    secret_key_line,
+                    chat_path_line,
+                    anthropic_line,
+                    supports_system_line,
+                    model,
                 );
                 (toml_block, agent_name)
             })
             .unzip();
+
+        if provider_lines.is_empty() && !config.providers.is_empty() {
+            eprintln!("WARNING: No providers have valid API keys. Generated config.toml will have no agents.");
+        } else if provider_lines.is_empty() {
+            eprintln!("INFO: No providers configured. Generated config.toml will be minimal.");
+        }
 
         let agent_section = if provider_lines.is_empty() {
             String::new()
@@ -504,11 +742,19 @@ global_max_inflight = 128
         };
 
         // Bind address must match GUI's backend_url
-        let bind_addr = config
-            .backend_url
-            .trim_start_matches("http://")
-            .trim_start_matches("https://")
-            .trim_end_matches('/');
+        let bind_addr = {
+            let without_scheme = config
+                .backend_url
+                .trim_start_matches("http://")
+                .trim_start_matches("https://")
+                .trim_end_matches('/');
+            // Strip any path component — bind address is host:port only
+            match without_scheme.find('/') {
+                Some(pos) => &without_scheme[..pos],
+                None => without_scheme,
+            }
+            .to_string()
+        };
 
         let toml = format!(
             r#"# Auto-generated by go-on-gui — do not edit manually.
@@ -564,9 +810,9 @@ state_path = "acp_autotune_state.json"
     /// Kill the current backend child and start a new one with fresh env vars.
     /// Called after adding/updating API keys so the new keys take effect immediately.
     fn restart_backend(&mut self) {
-        self.backend_crash_count = self.backend_crash_count.saturating_add(1);
         // Kill old process
         if let Some(mut child) = self.backend_child.take() {
+            self.backend_crash_count = self.backend_crash_count.saturating_add(1);
             eprintln!("Restarting backend (old PID: {})...", child.id());
             let _ = child.kill();
             // Don't block UI thread waiting for backend to exit.
@@ -625,7 +871,7 @@ state_path = "acp_autotune_state.json"
         };
         let providers_valid = has_valid_providers(&config);
 
-        let (backend_tx, backend_updates) = mpsc::channel();
+        let (backend_tx, backend_updates) = mpsc::sync_channel(128);
 
         // Start backend with env vars from keyring
         let (backend, backend_child) = Self::spawn_backend(&config);
@@ -769,6 +1015,10 @@ state_path = "acp_autotune_state.json"
                 self.consecutive_poll_failures = self.consecutive_poll_failures.saturating_add(1);
             } else {
                 self.consecutive_poll_failures = 0;
+                // Reset crash count on confirmed healthy connection — a health check
+                // with connected=true means the backend is running fine, so any prior
+                // "crash" was a legitimate restart (provider add, URL change, etc.).
+                self.backend_crash_count = 0;
             }
         }
 
@@ -831,7 +1081,7 @@ state_path = "acp_autotune_state.json"
                             }
                         }
                     };
-                let _ = tx.send(BackendUpdate::Health(health));
+                let _ = tx.try_send(BackendUpdate::Health(health));
 
                 let providers = match tokio::time::timeout(
                     std::time::Duration::from_secs(5),
@@ -845,8 +1095,8 @@ state_path = "acp_autotune_state.json"
                         vec![]
                     }
                 };
-                let _ = tx.send(BackendUpdate::Providers(providers));
-                let _ = tx.send(BackendUpdate::RefreshDone);
+                let _ = tx.try_send(BackendUpdate::Providers(providers));
+                let _ = tx.try_send(BackendUpdate::RefreshDone);
             });
             self.last_refresh = Instant::now();
         }
@@ -960,11 +1210,7 @@ impl eframe::App for GoOnApp {
         // Toolbar
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
-                let title_color = if ui.visuals().dark_mode {
-                    egui::Color32::from_rgb(236, 241, 255)
-                } else {
-                    egui::Color32::from_rgb(19, 53, 110)
-                };
+                let title_color = ui.style().visuals.text_color();
                 ui.label(
                     egui::RichText::new(self.i18n.t("app.title"))
                         .text_style(egui::TextStyle::Name("Title".into()))
@@ -986,9 +1232,9 @@ impl eframe::App for GoOnApp {
                         self.i18n.t("status.disconnected")
                     };
                     let status_color = if is_connected {
-                        egui::Color32::from_rgb(20, 120, 70)
+                        egui::Color32::from_rgb(60, 180, 80)
                     } else {
-                        egui::Color32::from_rgb(198, 60, 60)
+                        egui::Color32::from_rgb(220, 80, 80)
                     };
                     let pid_info = self
                         .backend_child
@@ -1063,23 +1309,26 @@ impl eframe::App for GoOnApp {
         let mut new_tab: Option<String> = None;
         let mut blocked_tab: Option<String> = None;
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.add_space(4.0);
-                for tab in &tabs {
-                    let label = self.tab_label(tab);
-                    let is_active = self.active_tab == *tab;
-                    let blocked = !is_connected && !allowed_when_offline.contains(&tab.as_str());
-                    let resp = ui
-                        .add_enabled_ui(!blocked, |ui| ui.selectable_label(is_active, label))
-                        .inner;
-                    if resp.clicked() {
-                        if blocked {
-                            blocked_tab = Some(tab.clone());
-                        } else {
-                            new_tab = Some(tab.clone());
+            egui::ScrollArea::horizontal().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(4.0);
+                    for tab in &tabs {
+                        let label = self.tab_label(tab);
+                        let is_active = self.active_tab == *tab;
+                        let blocked =
+                            !is_connected && !allowed_when_offline.contains(&tab.as_str());
+                        let resp = ui
+                            .add_enabled_ui(!blocked, |ui| ui.selectable_label(is_active, label))
+                            .inner;
+                        if resp.clicked() {
+                            if blocked {
+                                blocked_tab = Some(tab.clone());
+                            } else {
+                                new_tab = Some(tab.clone());
+                            }
                         }
                     }
-                }
+                });
             });
         });
         // Save old tab's UI state before switching tabs
@@ -1134,162 +1383,166 @@ impl eframe::App for GoOnApp {
 
         // Main content
         egui::CentralPanel::default().show(ctx, |ui| {
-            let has_backend = self.has_providers;
-            let monitor_history_alerts_enabled = self.config.features.monitor_history_alerts;
-            let skills_lifecycle_enabled = self.config.features.skills_lifecycle;
-            let workflow_run_center_enabled = self.config.features.workflow_run_center;
-            let autotune_chain_enabled = self.config.features.autotune_chain_injection;
-            let config_safe_mode_enabled = self.config.features.config_safe_mode;
-            let providers_ops_enabled = self.config.features.providers_ops;
-            match self.active_tab.as_str() {
-                "monitor" => self.monitor_view.show(
-                    ui,
-                    &self.i18n,
-                    has_backend,
-                    &self.backend,
-                    monitor_history_alerts_enabled,
-                ),
-                "chat" => {
-                    let stability = &self.config.ui_stability;
-                    self.chat_view.show(
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                let has_backend = self.has_providers;
+                let monitor_history_alerts_enabled = self.config.features.monitor_history_alerts;
+                let skills_lifecycle_enabled = self.config.features.skills_lifecycle;
+                let workflow_run_center_enabled = self.config.features.workflow_run_center;
+                let autotune_chain_enabled = self.config.features.autotune_chain_injection;
+                let config_safe_mode_enabled = self.config.features.config_safe_mode;
+                let providers_ops_enabled = self.config.features.providers_ops;
+                match self.active_tab.as_str() {
+                    "monitor" => self.monitor_view.show(
                         ui,
                         &self.i18n,
+                        has_backend,
                         &self.backend,
-                        ctx,
-                        autotune_chain_enabled,
-                        ChatUiRuntimeConfig {
-                            repaint_interval_ms: stability.chat_repaint_interval_ms,
-                            stream_chunk_flush_ms: stability.chat_stream_chunk_flush_ms,
-                            max_pending_events_per_frame: stability
-                                .chat_max_pending_events_per_frame,
-                        },
-                    );
-                }
-                "skills" => {
-                    // Restore persisted UI state for skills view
-                    self.skills_view.show_create = self.ui_state.skills_show_create;
-                    self.skills_view.show_import = self.ui_state.skills_show_import;
-                    if !self.ui_state.skills_selected_skill_name.is_empty() {
-                        self.skills_view
-                            .load_skill_editor_by_name(&self.ui_state.skills_selected_skill_name);
-                    }
-                    self.skills_view.edit_desc = self.ui_state.skills_edit_desc.clone();
-                    self.skills_view.edit_prompt = self.ui_state.skills_edit_prompt.clone();
-                    self.skills_view.edit_schema = self.ui_state.skills_edit_schema.clone();
-                    self.skills_view.test_input = self.ui_state.skills_test_input.clone();
-                    self.skills_view.rollback_version =
-                        self.ui_state.skills_rollback_version.clone();
-
-                    self.skills_view.show(
-                        ui,
-                        &self.i18n,
-                        &self.backend,
-                        ctx,
-                        skills_lifecycle_enabled,
-                    );
-
-                    // Persist UI state after view renders
-                    if self.ui_state.skills_show_create != self.skills_view.show_create
-                        || self.ui_state.skills_show_import != self.skills_view.show_import
-                    {
-                        self.ui_state.skills_show_create = self.skills_view.show_create;
-                        self.ui_state.skills_show_import = self.skills_view.show_import;
-                        self.ui_state.save();
-                    }
-                }
-                "settings" => {
-                    SettingsView::show(ui, &self.i18n, &mut self.config);
-                    // Show restart button if backend URL changed
-                    if self.config.backend_url != self.backend_url_original {
-                        ui.add_space(8.0);
-                        ui.separator();
-                        ui.add_space(4.0);
-                        if ui
-                            .button("🔄 ".to_string() + &self.i18n.t("app.restart"))
-                            .clicked()
-                        {
-                            self.backend_url_original = self.config.backend_url.clone();
-                            self.restart_backend();
-                        }
-                        ui.label(
-                            egui::RichText::new(self.i18n.t("settings.backendUrlHint")).weak(),
+                        monitor_history_alerts_enabled,
+                    ),
+                    "chat" => {
+                        let stability = &self.config.ui_stability;
+                        self.chat_view.show(
+                            ui,
+                            &self.i18n,
+                            &self.backend,
+                            ctx,
+                            autotune_chain_enabled,
+                            ChatUiRuntimeConfig {
+                                repaint_interval_ms: stability.chat_repaint_interval_ms,
+                                stream_chunk_flush_ms: stability.chat_stream_chunk_flush_ms,
+                                max_pending_events_per_frame: stability
+                                    .chat_max_pending_events_per_frame,
+                            },
                         );
                     }
-                }
-                "workflow" => {
-                    // Restore persisted filter and selection state
-                    self.workflow_view.run_status_filter =
-                        self.ui_state.workflow_run_status_filter.clone();
-                    self.workflow_view.selected_run_id =
-                        self.ui_state.workflow_selected_run_id.clone();
+                    "skills" => {
+                        // Restore persisted UI state for skills view
+                        self.skills_view.show_create = self.ui_state.skills_show_create;
+                        self.skills_view.show_import = self.ui_state.skills_show_import;
+                        if !self.ui_state.skills_selected_skill_name.is_empty() {
+                            self.skills_view.load_skill_editor_by_name(
+                                &self.ui_state.skills_selected_skill_name,
+                            );
+                        }
+                        self.skills_view.edit_desc = self.ui_state.skills_edit_desc.clone();
+                        self.skills_view.edit_prompt = self.ui_state.skills_edit_prompt.clone();
+                        self.skills_view.edit_schema = self.ui_state.skills_edit_schema.clone();
+                        self.skills_view.test_input = self.ui_state.skills_test_input.clone();
+                        self.skills_view.rollback_version =
+                            self.ui_state.skills_rollback_version.clone();
 
-                    self.workflow_view.show(
-                        ui,
-                        &self.i18n,
-                        ctx,
-                        &self.backend,
-                        workflow_run_center_enabled,
-                    );
+                        self.skills_view.show(
+                            ui,
+                            &self.i18n,
+                            &self.backend,
+                            ctx,
+                            skills_lifecycle_enabled,
+                        );
 
-                    // Persist UI state after view renders
-                    if self.ui_state.workflow_run_status_filter
-                        != self.workflow_view.run_status_filter
-                        || self.ui_state.workflow_selected_run_id
-                            != self.workflow_view.selected_run_id
-                    {
-                        self.ui_state.workflow_run_status_filter =
-                            self.workflow_view.run_status_filter.clone();
-                        self.ui_state.workflow_selected_run_id =
-                            self.workflow_view.selected_run_id.clone();
-                        self.ui_state.save();
+                        // Persist UI state after view renders
+                        if self.ui_state.skills_show_create != self.skills_view.show_create
+                            || self.ui_state.skills_show_import != self.skills_view.show_import
+                        {
+                            self.ui_state.skills_show_create = self.skills_view.show_create;
+                            self.ui_state.skills_show_import = self.skills_view.show_import;
+                            self.ui_state.save();
+                        }
+                    }
+                    "settings" => {
+                        SettingsView::show(ui, &self.i18n, &mut self.config);
+                        // Show restart button if backend URL changed
+                        if self.config.backend_url != self.backend_url_original {
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.add_space(4.0);
+                            if ui
+                                .button("🔄 ".to_string() + &self.i18n.t("app.restart"))
+                                .clicked()
+                            {
+                                self.backend_url_original = self.config.backend_url.clone();
+                                self.restart_backend();
+                            }
+                            ui.label(
+                                egui::RichText::new(self.i18n.t("settings.backendUrlHint")).weak(),
+                            );
+                        }
+                    }
+                    "workflow" => {
+                        // Restore persisted filter and selection state
+                        self.workflow_view.run_status_filter =
+                            self.ui_state.workflow_run_status_filter.clone();
+                        self.workflow_view.selected_run_id =
+                            self.ui_state.workflow_selected_run_id.clone();
+
+                        self.workflow_view.show(
+                            ui,
+                            &self.i18n,
+                            ctx,
+                            &self.backend,
+                            workflow_run_center_enabled,
+                        );
+
+                        // Persist UI state after view renders
+                        if self.ui_state.workflow_run_status_filter
+                            != self.workflow_view.run_status_filter
+                            || self.ui_state.workflow_selected_run_id
+                                != self.workflow_view.selected_run_id
+                        {
+                            self.ui_state.workflow_run_status_filter =
+                                self.workflow_view.run_status_filter.clone();
+                            self.ui_state.workflow_selected_run_id =
+                                self.workflow_view.selected_run_id.clone();
+                            self.ui_state.save();
+                        }
+                    }
+                    "autotune" => self.autotune_view.show(ui, &self.i18n),
+                    "security" => self.security_view.show(ui, &self.i18n, &self.backend, ctx),
+                    "config" => {
+                        self.config_editor_view.show(
+                            ui,
+                            &self.i18n,
+                            &mut self.config,
+                            config_safe_mode_enabled,
+                        );
+                        // Config changes may affect backend connectivity — reset chat cache only on apply
+                        // Note: We do NOT update backend_url_original here; the Settings tab owns that
+                        // tracker so it can correctly show a restart button when the URL changed.
+                        if self.config_editor_view.applied {
+                            self.config_editor_view.applied = false;
+                            self.chat_view.reset_loaded_state();
+                            self.restart_backend();
+                        }
+                    }
+                    "providers" => {
+                        let changed = self.providers_view.show(
+                            ui,
+                            &self.i18n,
+                            &mut self.config,
+                            &self.backend,
+                            ctx,
+                            providers_ops_enabled,
+                        );
+                        if changed {
+                            save_app_config(&self.config);
+                            // Providers page may have added/updated API keys in keyring.
+                            // Restart backend so it picks up the new keys.
+                            self.restart_backend();
+                        }
+                    }
+                    "about" => {
+                        self.about_view.show(
+                            ui,
+                            &self.i18n,
+                            self.monitor_view.health.as_ref(),
+                            self.backend_child.as_ref().map(std::process::Child::id),
+                        );
+                    }
+                    _ => {
+                        ui.heading(&self.active_tab);
+                        ui.label(self.i18n.t("app.unknownTab"));
                     }
                 }
-                "autotune" => self.autotune_view.show(ui, &self.i18n),
-                "security" => self.security_view.show(ui, &self.i18n, &self.backend, ctx),
-                "config" => {
-                    self.config_editor_view.show(
-                        ui,
-                        &self.i18n,
-                        &mut self.config,
-                        config_safe_mode_enabled,
-                    );
-                    // Config changes may affect backend connectivity — reset chat cache only on apply
-                    // Note: We do NOT update backend_url_original here; the Settings tab owns that
-                    // tracker so it can correctly show a restart button when the URL changed.
-                    if self.config_editor_view.applied {
-                        self.config_editor_view.applied = false;
-                        self.chat_view.reset_loaded_state();
-                    }
-                }
-                "providers" => {
-                    let changed = self.providers_view.show(
-                        ui,
-                        &self.i18n,
-                        &mut self.config,
-                        &self.backend,
-                        ctx,
-                        providers_ops_enabled,
-                    );
-                    if changed {
-                        save_app_config(&self.config);
-                        // Providers page may have added/updated API keys in keyring.
-                        // Restart backend so it picks up the new keys.
-                        self.restart_backend();
-                    }
-                }
-                "about" => {
-                    self.about_view.show(
-                        ui,
-                        &self.i18n,
-                        self.monitor_view.health.as_ref(),
-                        self.backend_child.as_ref().map(std::process::Child::id),
-                    );
-                }
-                _ => {
-                    ui.heading(&self.active_tab);
-                    ui.label(self.i18n.t("app.unknownTab"));
-                }
-            }
+            });
         });
 
         // Frame timing diagnostics — rate limited to at most once per second
@@ -1429,8 +1682,11 @@ impl GoOnApp {
 
 impl Drop for GoOnApp {
     fn drop(&mut self) {
-        // Abort any in-flight chat generation tasks
-        self.chat_view.stop_sending();
+        // Abort any in-flight chat generation tasks.
+        // Wrap in catch_unwind so backend child is killed even if stop_sending panics.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.chat_view.stop_sending();
+        }));
 
         if let Some(mut child) = self.backend_child.take() {
             eprintln!("Shutting down go-on backend (PID: {})...", child.id());

@@ -213,7 +213,9 @@ fn auto_detect_proxy() {
             if let Ok(port) = port_str.parse::<u16>() {
                 // Quick TCP connect to see if anything is listening
                 if std::net::TcpStream::connect_timeout(
-                    &format!("127.0.0.1:{port}").parse().unwrap(),
+                    &format!("127.0.0.1:{port}")
+                        .parse()
+                        .expect("BUG: invalid socket address from proxy port"),
                     std::time::Duration::from_millis(100),
                 )
                 .is_ok()
@@ -295,6 +297,7 @@ async fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title(title)
             .with_inner_size([1200.0, 800.0])
+            .with_min_inner_size([640.0, 480.0])
             .with_icon(icon),
         // Explicitly keep vsync on to avoid tearing/jitter on most desktops.
         vsync: true,

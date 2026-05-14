@@ -47,12 +47,14 @@ pub struct ChatView {
     /// Whether phases loading has been scheduled
     phases_load_scheduled: bool,
     pending_rx: mpsc::Receiver<PendingResponse>,
-    pending_tx: mpsc::Sender<PendingResponse>,
+    pending_tx: mpsc::SyncSender<PendingResponse>,
     // Session rename (double-click on session name)
     rename_session_idx: Option<usize>,
     rename_session_buf: String,
     // Track which message's thinking content is expanded
     show_thinking_idx: Option<usize>,
+    // Global "Show/Hide All Thinking" toggle
+    pub show_all_thinking: bool,
     // Message edit
     edit_msg_idx: Option<usize>,
     edit_msg_buf: String,
@@ -181,10 +183,15 @@ impl ChatView {
 
     fn is_default_session_name(name: &str, i18n: &I18n) -> bool {
         let localized = i18n.t("chat.newSession");
-        name == "New Chat"
-            || name.starts_with("Chat ")
-            || name == localized
-            || name.starts_with(&format!("{} ", localized))
+        name == i18n.t("chat.defaultSessionName")
+                || name.starts_with(&*i18n.t("chat.defaultSessionPrefix"))
+                || name == localized
+                || name.starts_with(&format!("{} ", localized))
+                // Fallback: English default names (for tests and backward compat)
+                || name == "New Chat"
+                || name.starts_with("Chat ")
+                || name == "New session"
+                || name.starts_with("New session ")
     }
 
     fn refresh_default_session_names(&mut self, i18n: &I18n) {
@@ -272,6 +279,7 @@ impl ChatView {
         Session {
             id: format!("session_{}", index + 1),
             name: if index == 0 {
+                // English defaults are fine here; refresh_default_session_names will localize later.
                 "New Chat".to_string()
             } else {
                 format!("Chat {}", index + 1)
@@ -307,7 +315,7 @@ impl ChatView {
             .map(|s| s.model.clone())
             .unwrap_or_else(|| "auto".to_string());
 
-        let (pending_tx, pending_rx) = mpsc::channel();
+        let (pending_tx, pending_rx) = mpsc::sync_channel(256);
 
         // Load persistent UI state before constructing ChatView
         let ui_state = GlobalUiState::load();
@@ -344,6 +352,7 @@ impl ChatView {
             rename_session_idx: None,
             rename_session_buf: String::new(),
             show_thinking_idx: None,
+            show_all_thinking: false,
             edit_msg_idx: None,
             edit_msg_buf: String::new(),
             // Feature 4
@@ -709,7 +718,7 @@ mod tests {
     use crate::i18n::Lang;
 
     fn test_chat_view() -> ChatView {
-        let (pending_tx, pending_rx) = mpsc::channel();
+        let (pending_tx, pending_rx) = mpsc::sync_channel(256);
         ChatView {
             sessions: vec![Session {
                 id: "session_1".to_string(),
@@ -740,6 +749,7 @@ mod tests {
             rename_session_idx: None,
             rename_session_buf: String::new(),
             show_thinking_idx: None,
+            show_all_thinking: false,
             edit_msg_idx: None,
             edit_msg_buf: String::new(),
             stop_requested: false,
@@ -776,8 +786,6 @@ mod tests {
             stream_client: reqwest::Client::new(),
         }
     }
-
-
 
     #[test]
     fn expand_prompt_command_replaces_input_placeholder() {

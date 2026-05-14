@@ -125,7 +125,15 @@ impl ChatView {
 
     pub(super) fn load_sessions_from_disk() -> Vec<Session> {
         let path = Self::sessions_path();
-        crate::fs_util::load_json_with_backup(&path, "chat sessions")
+        let mut sessions: Vec<Session> =
+            crate::fs_util::load_json_with_backup(&path, "chat sessions");
+        // Enforce MAX_MESSAGES cap on each session loaded from disk
+        for session in sessions.iter_mut() {
+            while session.messages.len() > crate::views::chat::types::MAX_MESSAGES {
+                session.messages.remove(0);
+            }
+        }
+        sessions
     }
 
     pub(super) fn save_sessions_to_disk(&self) {

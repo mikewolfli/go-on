@@ -688,6 +688,7 @@ impl BackendClient {
         self.rpc_call("config.reload", None).await
     }
 
+    /// Unused — Copilot OAuth is handled via direct HTTP polling in providers.rs
     /// Initiate GitHub Copilot OAuth Device Code flow.
     /// Returns `device_code`, `user_code`, `verification_uri`, and `interval`.
     /// `client_id` is your GitHub OAuth App client_id (optional, falls back to a built-in default).
@@ -700,6 +701,7 @@ impl BackendClient {
         .await
     }
 
+    /// Unused — Copilot OAuth is handled via direct HTTP polling in providers.rs
     /// Poll GitHub for access token after user authorizes via device code.
     /// Pass the `device_code` from the initial request.
     #[allow(dead_code)]

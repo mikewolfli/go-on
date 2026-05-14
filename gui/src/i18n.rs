@@ -302,6 +302,17 @@ impl I18n {
             tr!(en, "GUI Version", cn, "GUI 版本", tw, "GUI 版本"),
         );
         m.insert(
+            "about.githubLink",
+            tr!(
+                en,
+                "GitHub Repository",
+                cn,
+                "GitHub 仓库",
+                tw,
+                "GitHub 倉庫"
+            ),
+        );
+        m.insert(
             "about.improvedTitle",
             tr!(
                 en,
@@ -587,6 +598,28 @@ impl I18n {
             tr!(en, "Write Docs", cn, "编写文档", tw, "撰寫文件"),
         );
         m.insert("chat.template.docs.body", tr!(en, "Write concise developer-facing documentation for the following code or feature. Include purpose, usage, constraints, and examples when helpful.\n\n{{input}}", cn, "请为下面的代码或功能编写简洁的开发者文档，包含用途、用法、约束和必要示例。\n\n{{input}}", tw, "請為下面的程式碼或功能撰寫簡潔的開發者文件，包含用途、用法、限制與必要範例。\n\n{{input}}"));
+        m.insert(
+            "chat.workflowGenerated",
+            tr!(
+                en,
+                "Workflow plan generated",
+                cn,
+                "工作流计划已生成",
+                tw,
+                "工作流計劃已生成"
+            ),
+        );
+        m.insert(
+            "chat.workflowGenError",
+            tr!(
+                en,
+                "Failed to generate workflow plan",
+                cn,
+                "生成工作流计划失败",
+                tw,
+                "生成工作流計劃失敗"
+            ),
+        );
 
         // Phase options
         m.insert("phase.coding", tr!(en, "Coding", cn, "编码", tw, "編碼"));
@@ -757,6 +790,15 @@ impl I18n {
             "chat.newSession",
             tr!(en, "New session", cn, "新对话", tw, "新對話"),
         );
+        m.insert(
+            "chat.defaultSessionName",
+            tr!(en, "New Chat", cn, "新对话", tw, "新對話"),
+        );
+        m.insert(
+            "chat.defaultSessionPrefix",
+            tr!(en, "Chat ", cn, "对话 ", tw, "對話 "),
+        );
+        m.insert("chat.charCount", tr!(en, "chars", cn, "字符", tw, "字符"));
         m.insert(
             "chat.clearAttachments",
             tr!(en, "Clear attachments", cn, "清除附件", tw, "清除附件"),
@@ -1411,6 +1453,17 @@ impl I18n {
                 "(文心一言 Secret Key)",
                 tw,
                 "(文心一言 Secret Key)"
+            ),
+        );
+        m.insert(
+            "providers.urlHint",
+            tr!(
+                en,
+                "Edit the URL in Config Editor tab if you need a custom API endpoint.",
+                cn,
+                "如需自定义 API 端点，请在配置编辑器中修改 URL。",
+                tw,
+                "如需自訂 API 端點，請在配置編輯器中修改 URL。"
             ),
         );
 
@@ -3107,6 +3160,10 @@ impl I18n {
             tr!(en, "Amazon Titan", cn, "Amazon Titan", tw, "Amazon Titan"),
         );
         m.insert(
+            "provider.siliconflow",
+            tr!(en, "SiliconFlow", cn, "硅基流动", tw, "矽基流動"),
+        );
+        m.insert(
             "provider.together",
             tr!(en, "Together", cn, "Together", tw, "Together"),
         );
@@ -3459,6 +3516,8 @@ impl I18n {
             ),
         );
         m.insert("common.close", tr!(en, "Close", cn, "关闭", tw, "關閉"));
+        m.insert("common.error", tr!(en, "Error", cn, "错误", tw, "錯誤"));
+        m.insert("common.seconds", tr!(en, "s", cn, "秒", tw, "秒"));
 
         // ── Config keys ──────────────────────────────────
         m.insert(
@@ -3565,6 +3624,10 @@ impl I18n {
                 tw,
                 "✓ JSON 格式正確"
             ),
+        );
+        m.insert(
+            "configEditor.matches",
+            tr!(en, "matches", cn, "匹配", tw, "匹配"),
         );
 
         // ── Monitor keys ─────────────────────────────────

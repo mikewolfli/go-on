@@ -639,7 +639,7 @@ impl AdvancedRpcHarness {
             // Re-spawn harness for retry
             let _config_path = path
                 .parent()
-                .and_then(|_| Some(std::env::temp_dir().join("config_retry.toml")));
+                .map(|_| std::env::temp_dir().join("config_retry.toml"));
             // Re-create harness by calling spawn again (inner is replaced)
             // Note: this requires that the config file still exists from the test setup
             std::thread::sleep(std::time::Duration::from_millis(300));
@@ -6145,7 +6145,7 @@ fn rpc_workflow_research_persists_artifact_and_plan() {
 #[test]
 fn rpc_confirm_requires_ready_to_confirm_and_respects_clarification_rounds() {
     for attempt in 1..=3 {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rpc_confirm_body()));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(rpc_confirm_body));
         if result.is_ok() {
             return;
         }

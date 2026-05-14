@@ -667,6 +667,7 @@ impl AgentRegistry {
                     || name.contains("xihu")
                     || name.contains("langboat")
                     || name.contains("loopai")
+                    || name.contains("siliconflow")
                     || name.contains("deepquest")
                 {
                     vendors::VendorCategory::ChineseVendors

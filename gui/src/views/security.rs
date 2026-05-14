@@ -9,12 +9,12 @@ pub struct SecurityView {
     sending: bool,
     pending_restart_confirmation: bool,
     pending_rx: mpsc::Receiver<String>,
-    pending_tx: mpsc::Sender<String>,
+    pending_tx: mpsc::SyncSender<String>,
 }
 
 impl SecurityView {
     pub fn new() -> Self {
-        let (pending_tx, pending_rx) = mpsc::channel();
+        let (pending_tx, pending_rx) = mpsc::sync_channel(256);
         Self {
             state: security_prefs::load(),
             status: String::new(),
@@ -117,13 +117,22 @@ impl SecurityView {
                             Ok(_) => restart_requested,
                             Err(e) => format!("{}: {e}", restart_failed),
                         };
-                        let _ = tx.send(msg);
+                        let _ = tx.try_send(msg);
                         ctx_clone.request_repaint();
                     });
                 }
 
                 if !self.status.is_empty() {
-                    ui.label(&self.status);
+                    if self.status.contains("failed")
+                        || self.status.contains("error")
+                        || self.status.contains("fail")
+                    {
+                        ui.colored_label(egui::Color32::from_rgb(220, 80, 80), &self.status);
+                    } else if self.status.contains("success") || self.status.contains("ok") {
+                        ui.colored_label(egui::Color32::from_rgb(60, 180, 80), &self.status);
+                    } else {
+                        ui.colored_label(egui::Color32::from_rgb(200, 160, 60), &self.status);
+                    }
                 }
             });
     }

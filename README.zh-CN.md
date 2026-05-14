@@ -37,9 +37,9 @@ cargo run --manifest-path gui/Cargo.toml
 
 ### 主要功能
 - **监控面板**：后端健康状态、AI 供应商状态、实时指标
-- **对话界面**：多会话管理、阶段选择（coding/review/debug/test/deploy）、模式切换（Ask/Plan/Edit/Safeguard/Full Auto）、文件附件、动态发送按钮（依据 AI 状态变化）
+- **对话界面**：多会话管理、阶段选择（coding/review/debug/test/deploy）、模式切换（Ask/Plan/Edit/Safeguard/Full Auto）、文件附件、动态发送按钮（依据 AI 状态变化）；自动消息修剪（每会话最多 1000 条）
 - **技能管理**：创建和导入 AI 技能；内置 `skill-creator` 让 AI 自主定义新技能
-- **设置**：功能开关、语言切换（en/zh-CN/zh-TW）、5 种视觉主题
+- **设置**：功能开关、语言切换（en/zh-CN/zh-TW）、5 种视觉主题；供应商管理（35 个供应商）
 - **风险决策与安全审查模式 (Safeguard)**：AI 驱动的风险内容评估。当后端检测到高风险话题（医疗、法律、金融、安全等）时，在对话界面中显示**风险决策面板**，展示风险评分、应对策略（多模型投票、多智能体投票、升级处理）、审查要求及具体原因，实现对敏感 AI 交互的人工知情监督。
 - **后端连接**：ACP+HTTP JSON-RPC，自动健康轮询
 
@@ -53,7 +53,7 @@ cargo run --manifest-path gui/Cargo.toml
 | `profile-simple-server` | SQLite + sqlite-vec | 单服务部署 | `cargo build --no-default-features -F profile-simple-server` |
 | `profile-multi-users-server` | PostgreSQL + pgvector | 多用户生产环境 | `cargo build --no-default-features -F profile-multi-users-server` |
 
-## 验证状态（Phase 4+ — 25 轮深度扫描完成）
+## 验证状态（Phase 4+ — 46 轮深度扫描完成）
 
 | 配置文件 | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
@@ -66,10 +66,13 @@ cargo run --manifest-path gui/Cargo.toml
 - 所有 `Mutex::lock().unwrap()` 已替换为中毒恢复的 `lock_guard()`
 - 跨平台环境变量：`HOME`/`USERPROFILE`/`COMPUTERNAME`
 - vscode-addon：已设置 `activationEvents`，默认路径支持 `.exe`/`.bat` 平台感知
-- GUI（EGUI）：7 轮深度扫描（37+ GUI 优化），零 clippy 警告，5/5 测试通过
+- GUI（EGUI）：多轮深度扫描（46+ GUI/后端优化），零 clippy 警告，6/6 测试通过
 - GUI：窗口最小尺寸约束已设置，CSP 允许后端连接
-- 后端：崩溃后自动重启（3 秒冷却）
-- Provider 环境变量注入：动态（支持全部 34+ 供应商）
+- 后端：崩溃后自动重启（指数退避 3→96 秒）；健康检查成功时重置崩溃计数
+- Provider 环境变量注入：动态（支持全部 35 个供应商）
+- 所有内部通道已绑定（`mpsc::sync_channel`）— 无内存无限制增长
+- 对话会话上限 1000 条消息 — 自动淘汰最旧消息
+- 可选规则文件降级为 DEBUG 级别 — 无日志噪音
 
 ## 仓库结构
 
@@ -115,7 +118,8 @@ cargo run --manifest-path gui/Cargo.toml
 - `vscode-addon/` — VS Code 扩展（支持 en_US、zh_CN、zh_TW 多语言）
 
 ### 配置与脚本
-- `config/` — 配置文件（`config.toml`、`config.production.toml`、`providers.toml`）
+- `config/` — 配置文件（`config.toml`、`config.production.toml`）
+  Provider 规格说明编译在二进制中，源文件 `src/core/providers_data.toml`。
 - `scripts/` — 质量门禁、发布门禁脚本与部署工具
   - `scripts/deploy/nginx/` — 入口网关与 TLS 反向代理模板
 
@@ -290,6 +294,33 @@ cargo run -- --check
 
 - Linux/macOS：`./scripts/start-go-on.sh`
 - Windows：`scripts/start-go-on.bat`
+
+或手动指定协议模式：
+
+```bash
+# ACP over HTTP（默认健康检查 http://127.0.0.1:8090）
+cargo run -- --mode acp_http --bind 127.0.0.1:8090
+
+# MCP over stdio（用于 Claude Code / Codex 集成）
+cargo run -- --mode mcp_stdio
+```
+
+### 5）终端聊天模式（类似 Claude Code / Codex）
+
+```bash
+# 启动交互式终端聊天（使用当前目录的 config.toml）
+go-on -a
+# 或
+go-on --chat
+```
+
+如果配置文件在其他路径：
+
+```bash
+go-on -c /path/to/config.toml -a
+```
+
+AI 智能体自动从系统 keyring 读取 API 密钥。如果未配置任何供应商，将提示先运行初始化向导。
 
 默认健康检查地址：
 

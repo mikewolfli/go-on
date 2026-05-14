@@ -183,7 +183,11 @@ fn render_node<'a>(
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(text)
-                        .color(egui::Color32::from_rgb(220, 80, 80))
+                        .color(if ui.visuals().dark_mode {
+                            egui::Color32::from_rgb(255, 120, 120)
+                        } else {
+                            egui::Color32::from_rgb(180, 40, 40)
+                        })
                         .family(egui::FontFamily::Monospace),
                 )
                 .wrap(),

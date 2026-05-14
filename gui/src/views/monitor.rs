@@ -16,7 +16,7 @@ pub struct MonitorView {
     sample_failures_count: usize,
     pub provider_filter: String,
     pending_rx: mpsc::Receiver<String>,
-    pending_tx: mpsc::Sender<String>,
+    pending_tx: mpsc::SyncSender<String>,
     last_metrics_load: Instant,
     pub auto_refresh_interval: u64,
     consecutive_metrics_failures: u32,
@@ -24,7 +24,7 @@ pub struct MonitorView {
 
 impl MonitorView {
     pub fn new() -> Self {
-        let (pending_tx, pending_rx) = mpsc::channel();
+        let (pending_tx, pending_rx) = mpsc::sync_channel(256);
         Self {
             health: None,
             providers: Vec::new(),
@@ -134,14 +134,14 @@ impl MonitorView {
                                 let trends_json = serde_json::to_string(&series)
                                     .unwrap_or_else(|_| "[]".to_string());
                                 let metrics = format!("window={window} points={}", series.len());
-                                let _ = tx.send(format!("__metrics__:{metrics}"));
-                                let _ = tx.send(format!("__trends__:{trends_json}"));
+                                let _ = tx.try_send(format!("__metrics__:{metrics}"));
+                                let _ = tx.try_send(format!("__trends__:{trends_json}"));
                             }
                             Ok(Err(err)) => {
-                                let _ = tx.send(format!("__metrics_error__:{err}"));
+                                let _ = tx.try_send(format!("__metrics_error__:{err}"));
                             }
                             Err(_) => {
-                                let _ = tx.send("__metrics_error__:timeout".to_string());
+                                let _ = tx.try_send("__metrics_error__:timeout".to_string());
                             }
                         }
 
@@ -157,13 +157,13 @@ impl MonitorView {
                                     "groups": groups,
                                     "sample_failures_count": failures.len()
                                 });
-                                let _ = tx.send(format!("__errors_summary__:{summary_json}"));
+                                let _ = tx.try_send(format!("__errors_summary__:{summary_json}"));
                             }
                             Ok(Err(err)) => {
-                                let _ = tx.send(format!("__metrics_error__:{err}"));
+                                let _ = tx.try_send(format!("__metrics_error__:{err}"));
                             }
                             Err(_) => {
-                                let _ = tx.send("__metrics_error__:timeout".to_string());
+                                let _ = tx.try_send("__metrics_error__:timeout".to_string());
                             }
                         }
                         ctx_clone.request_repaint_after(Duration::from_millis(16));
@@ -205,10 +205,11 @@ impl MonitorView {
                                 health.avg_latency_ms
                             ));
                             ui.label(format!(
-                                "{}: {}% (uptime: {}s)",
+                                "{}: {}% (uptime: {} {})",
                                 i18n.t("monitor.success"),
                                 health.success_rate,
-                                health.uptime
+                                health.uptime,
+                                i18n.t("common.seconds")
                             ));
                             ui.label(format!(
                                 "{}: {:.1}",
@@ -254,7 +255,11 @@ impl MonitorView {
                             {
                                 self.auto_refresh_interval = refresh_interval as u64;
                             }
-                            ui.label(format!("{}s", self.auto_refresh_interval));
+                            ui.label(format!(
+                                "{} {}",
+                                self.auto_refresh_interval,
+                                i18n.t("common.seconds")
+                            ));
                             if ui.button(i18n.t("monitor.loadTrends")).clicked() {
                                 let backend_clone = backend.clone();
                                 let window = self.metrics_window.clone();
@@ -284,9 +289,9 @@ impl MonitorView {
                                         }
                                         Err(e) => (format!("__metrics_error__:{e}"), String::new()),
                                     };
-                                    let _ = tx.send(payload.0);
+                                    let _ = tx.try_send(payload.0);
                                     if !payload.1.is_empty() {
-                                        let _ = tx.send(payload.1);
+                                        let _ = tx.try_send(payload.1);
                                     }
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
@@ -332,9 +337,9 @@ impl MonitorView {
                                         }
                                         Err(e) => (format!("__metrics_error__:{e}"), String::new()),
                                     };
-                                    let _ = tx.send(payload.0);
+                                    let _ = tx.try_send(payload.0);
                                     if !payload.1.is_empty() {
-                                        let _ = tx.send(payload.1);
+                                        let _ = tx.try_send(payload.1);
                                     }
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
@@ -471,11 +476,6 @@ impl MonitorView {
                             });
                         ui.add_space(2.0);
                     }
-                }
-
-                // ── Error message ───────────────────────────────────────
-                if !self.error.is_empty() {
-                    ui.colored_label(egui::Color32::RED, &self.error);
                 }
             });
     }

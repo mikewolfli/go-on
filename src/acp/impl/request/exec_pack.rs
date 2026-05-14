@@ -3131,7 +3131,7 @@ mod tests {
         let options = execution_option_overrides(&params);
         assert_eq!(options.get("temperature"), Some(&json!(0.8)));
         assert_eq!(options.get("top_p"), Some(&json!(0.9)));
-        assert!(options.get("ignored").is_none());
+        assert!(!options.contains_key("ignored"));
     }
 
     #[test]

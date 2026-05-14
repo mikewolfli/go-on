@@ -3,6 +3,9 @@ use serde_json::Value;
 use std::time::Instant;
 use tokio::task::JoinHandle;
 
+/// Maximum number of messages to keep per session to prevent unbounded memory growth.
+pub const MAX_MESSAGES: usize = 1000;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
@@ -60,6 +63,18 @@ pub struct Session {
     pub conversation_id: Option<String>,
     #[serde(default)]
     pub branch_id: Option<String>,
+}
+
+impl Session {
+    /// Push a message, enforcing the maximum message limit.
+    /// If the limit is exceeded, the oldest messages are removed.
+    pub fn push_message(&mut self, msg: Message) {
+        self.messages.push(msg);
+        if self.messages.len() > crate::views::chat::types::MAX_MESSAGES {
+            let excess = self.messages.len() - crate::views::chat::types::MAX_MESSAGES;
+            self.messages.drain(0..excess);
+        }
+    }
 }
 
 fn default_model() -> String {

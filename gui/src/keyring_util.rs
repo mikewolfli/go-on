@@ -1,3 +1,7 @@
+/// The placeholder used to redact API keys in config display (e.g. "********").
+/// Shared across config loading, editor redaction, and UI preview logic.
+pub const REDACTED_API_KEY: &str = "********";
+
 /// Utility for storing and retrieving API keys via the system keyring.
 ///
 /// Keyring entries use the format `go-on/{provider}_api_key`.
@@ -116,7 +120,6 @@ mod platform {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn delete_secret_key(provider: &str) -> Result<()> {
         let account = format!("{}_secret_key", provider);
         let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User)?;
@@ -175,7 +178,6 @@ mod platform {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn delete_secret_key(provider: &str) -> Result<()> {
         let account = format!("{}_secret_key", provider);
         let entry = keyring::Entry::new("go-on", &account)?;
@@ -230,7 +232,7 @@ pub fn get_api_key_with_fallback(provider: &str, config_key: Option<&str>) -> Op
         return k;
     }
     if let Some(ck) = config_key {
-        if !ck.is_empty() && ck != "********" {
+        if !ck.is_empty() && ck != REDACTED_API_KEY {
             return Some(ck.to_owned());
         }
     }

@@ -42,7 +42,7 @@ pub struct WorkflowView {
     pending_confirm_run: bool,
     pending_confirm_delete: Option<usize>,
     pending_rx: mpsc::Receiver<WorkflowEvent>,
-    pending_tx: mpsc::Sender<WorkflowEvent>,
+    pending_tx: mpsc::SyncSender<WorkflowEvent>,
     runs: Vec<WorkflowRunRecord>,
     pub selected_run_id: String,
     pub selected_run_detail: Option<WorkflowRunRecord>,
@@ -151,7 +151,7 @@ impl WorkflowView {
                     Err("timeout".to_string())
                 }
             };
-            let _ = tx.send(WorkflowEvent::RunsResult { request_id, result });
+            let _ = tx.try_send(WorkflowEvent::RunsResult { request_id, result });
             ctx_clone.request_repaint();
         });
     }
@@ -186,7 +186,7 @@ impl WorkflowView {
                     Err("timeout".to_string())
                 }
             };
-            let _ = tx.send(WorkflowEvent::RunDetailResult {
+            let _ = tx.try_send(WorkflowEvent::RunDetailResult {
                 request_id,
                 run_id,
                 result,
@@ -196,7 +196,7 @@ impl WorkflowView {
     }
 
     pub fn new() -> Self {
-        let (pending_tx, pending_rx) = mpsc::channel();
+        let (pending_tx, pending_rx) = mpsc::sync_channel(256);
         Self {
             state: Self::load_state(),
             new_name: String::new(),
@@ -360,7 +360,7 @@ impl WorkflowView {
                 Ok(Err(err)) => format!("workflow.execute failed: {err}"),
                 Err(_) => "workflow.execute timed out".to_string(),
             };
-            let _ = tx.send(WorkflowEvent::WorkflowExecuteDone(payload));
+            let _ = tx.try_send(WorkflowEvent::WorkflowExecuteDone(payload));
             ctx_clone.request_repaint();
         });
     }
@@ -583,7 +583,7 @@ impl WorkflowView {
                                 Self::status_label(i18n, &run.status)
                             ));
                             if let Some(duration_secs) = Self::run_duration_secs(run) {
-                                ui.label(format!("{}s", duration_secs));
+                                ui.label(format!("{} {}", duration_secs, i18n.t("common.seconds")));
                             }
                         });
                     }
@@ -664,7 +664,7 @@ impl WorkflowView {
                                                     .replace("{action}", action)
                                                     .replace("{error}", &e.to_string()),
                                             };
-                                            let _ = tx.send(WorkflowEvent::UiMessage(msg));
+                                            let _ = tx.try_send(WorkflowEvent::UiMessage(msg));
 
                                             // Pull latest run detail after action so UI reflects new state quickly.
                                             if let Ok(Ok(detail)) = tokio::time::timeout(
@@ -673,11 +673,12 @@ impl WorkflowView {
                                             )
                                             .await
                                             {
-                                                let _ = tx.send(WorkflowEvent::RunDetailResult {
-                                                    request_id: detail_request_id,
-                                                    run_id: run_id.clone(),
-                                                    result: Ok(detail),
-                                                });
+                                                let _ =
+                                                    tx.try_send(WorkflowEvent::RunDetailResult {
+                                                        request_id: detail_request_id,
+                                                        run_id: run_id.clone(),
+                                                        result: Ok(detail),
+                                                    });
                                             }
                                             ctx_clone.request_repaint();
                                         });
@@ -699,18 +700,20 @@ impl WorkflowView {
                                 ui.horizontal_wrapped(|ui| {
                                     if let Some(duration_secs) = Self::run_duration_secs(run) {
                                         ui.label(format!(
-                                            "{}: {}s",
+                                            "{}: {} {}",
                                             i18n.t("workflow.duration"),
-                                            duration_secs
+                                            duration_secs,
+                                            i18n.t("common.seconds")
                                         ));
                                     }
                                     if let Some(remaining_secs) =
                                         Self::estimated_remaining_secs(run)
                                     {
                                         ui.label(format!(
-                                            "{}: {}s",
+                                            "{}: {} {}",
                                             i18n.t("workflow.estimatedRemaining"),
-                                            remaining_secs
+                                            remaining_secs,
+                                            i18n.t("common.seconds")
                                         ));
                                     }
                                 });
@@ -743,9 +746,10 @@ impl WorkflowView {
                             }
                             if let Some(duration_secs) = Self::run_duration_secs(run) {
                                 ui.label(format!(
-                                    "{}: {}s",
+                                    "{}: {} {}",
                                     i18n.t("workflow.duration"),
-                                    duration_secs
+                                    duration_secs,
+                                    i18n.t("common.seconds")
                                 ));
                             }
                             if let Some(error) = &run.error {

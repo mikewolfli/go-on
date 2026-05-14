@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -151,7 +151,6 @@ fn default_detail_level() -> String {
 fn default_learning_speed() -> String {
     "adaptive".to_string()
 }
-const PROVIDER_CAPABILITY_FILE: &str = "providers.toml";
 
 #[derive(Debug, Clone, Deserialize)]
 struct ProviderSpec {
@@ -191,25 +190,27 @@ fn provider_specs() -> &'static [ProviderSpec] {
 }
 
 fn load_provider_specs() -> Vec<ProviderSpec> {
-    if let Some(path) = find_template(PROVIDER_CAPABILITY_FILE) {
-        if let Ok(content) = fs::read_to_string(path) {
-            if let Ok(catalog) = toml::from_str::<ProviderCapabilityCatalog>(&content) {
-                if !catalog.providers.is_empty() {
-                    return catalog.providers;
-                }
-            }
+    // Use compile-time embedded providers.toml — always available,
+    // no runtime file dependency needed. Falls back to built-in specs
+    // only if the TOML parsing somehow fails.
+    if let Ok(catalog) =
+        toml::from_str::<ProviderCapabilityCatalog>(crate::core::EMBEDDED_PROVIDERS_TOML)
+    {
+        if !catalog.providers.is_empty() {
+            return catalog.providers;
         }
     }
-    // Fallback built-in specs matching config/providers.toml (34 providers)
-    // Used when providers.toml is not found alongside the binary.
+    built_in_provider_specs()
+}
+
+fn built_in_provider_specs() -> Vec<ProviderSpec> {
     vec![
-        // ── OpenAI Family (4) ────────────────────────────────
         ProviderSpec {
             name: "openai".to_string(),
             agent_type: "openai".to_string(),
             url: Some("https://api.openai.com/v1".to_string()),
             chat_path: None,
-            model: Some("gpt-4o".to_string()),
+            model: Some("gpt-4o-mini".to_string()),
             api_key_env: Some("OPENAI_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
@@ -262,7 +263,7 @@ fn load_provider_specs() -> Vec<ProviderSpec> {
             agent_type: "deepseek".to_string(),
             url: Some("https://api.deepseek.com/v1".to_string()),
             chat_path: None,
-            model: Some("deepseek-chat".to_string()),
+            model: Some("deepseek-v4-flash".to_string()),
             api_key_env: Some("DEEPSEEK_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
@@ -288,7 +289,7 @@ fn load_provider_specs() -> Vec<ProviderSpec> {
             agent_type: "qianfan".to_string(),
             url: None,
             chat_path: None,
-            model: Some("ERNIE-Bot".to_string()),
+            model: Some("ERNIE-4.5-8K".to_string()),
             api_key_env: Some("QIANFAN_API_KEY".to_string()),
             secret_key_env: Some("QIANFAN_SECRET_KEY".to_string()),
             anthropic_version: None,
@@ -301,7 +302,7 @@ fn load_provider_specs() -> Vec<ProviderSpec> {
             agent_type: "qwen".to_string(),
             url: Some("https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()),
             chat_path: None,
-            model: Some("qwen-max-2025-01-25".to_string()),
+            model: Some("qwen-max".to_string()),
             api_key_env: Some("QWEN_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
@@ -405,7 +406,7 @@ fn load_provider_specs() -> Vec<ProviderSpec> {
             agent_type: "stepfun".to_string(),
             url: Some("https://api.stepfun.com/v1".to_string()),
             chat_path: None,
-            model: Some("step-2-16k-2505".to_string()),
+            model: Some("step-2-16k".to_string()),
             api_key_env: Some("STEPFUN_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
@@ -452,6 +453,20 @@ fn load_provider_specs() -> Vec<ProviderSpec> {
             supports_system: None,
             supports_vision: None,
         },
+        // ── SiliconFlow / 硅基流动 ────────────────────────
+        ProviderSpec {
+            name: "siliconflow".to_string(),
+            agent_type: "openai_compatible".to_string(),
+            url: Some("https://api.siliconflow.cn/v1".to_string()),
+            chat_path: None,
+            model: Some("deepseek-ai/DeepSeek-V3.2".to_string()),
+            api_key_env: Some("SILICONFLOW_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            max_tokens: None,
+            supports_system: Some(true),
+            supports_vision: Some(true),
+        },
         // ── Other Vendors (15) ──────────────────────────────────
         ProviderSpec {
             name: "ai21".to_string(),
@@ -471,7 +486,7 @@ fn load_provider_specs() -> Vec<ProviderSpec> {
             agent_type: "aleph".to_string(),
             url: Some("https://api.aleph-alpha.com".to_string()),
             chat_path: None,
-            model: Some("luminous-base-control".to_string()),
+            model: Some("luminous-base".to_string()),
             api_key_env: Some("ALEPH_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
@@ -523,7 +538,7 @@ fn load_provider_specs() -> Vec<ProviderSpec> {
             agent_type: "gemini".to_string(),
             url: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
             chat_path: None,
-            model: Some("gemini-2.5-flash-preview-04-17".to_string()),
+            model: Some("gemini-2.5-flash".to_string()),
             api_key_env: Some("GEMINI_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
@@ -649,19 +664,6 @@ fn load_provider_specs() -> Vec<ProviderSpec> {
             supports_vision: None,
         },
     ]
-}
-
-fn find_template(name: &str) -> Option<std::path::PathBuf> {
-    let mut candidates = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join(name));
-        }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join(name));
-    }
-    candidates.into_iter().find(|path| path.exists())
 }
 
 fn provider_spec_by_name(name: &str) -> Option<&'static ProviderSpec> {
@@ -2564,11 +2566,7 @@ fn load_optional_rule_items(path: &Path) -> Vec<String> {
     match fs::read_to_string(path) {
         Ok(content) => parse_rule_items(&content),
         Err(err) => {
-            warn!(
-                "failed to read optional rule file {}: {}",
-                path.display(),
-                err
-            );
+            debug!("skipped optional rule file {}: {}", path.display(), err);
             Vec::new()
         }
     }

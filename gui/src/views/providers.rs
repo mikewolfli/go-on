@@ -2,8 +2,10 @@ use crate::backend::{BackendClient, ProviderCapabilityModel};
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;
 use crate::views::security_prefs;
+use keyring;
 use serde_json::Value;
 use std::sync::mpsc;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 pub struct ProvidersView {
@@ -21,7 +23,7 @@ pub struct ProvidersView {
     sending: bool,
     pending_delete_confirmation: Option<usize>,
     pending_rx: mpsc::Receiver<String>,
-    pending_tx: mpsc::Sender<String>,
+    pending_tx: mpsc::SyncSender<String>,
     /// Models fetched from backend: provider → [model_id, ...]
     remote_models: std::collections::HashMap<String, Vec<String>>,
     /// Whether we've tried to fetch models
@@ -55,9 +57,6 @@ pub struct ProvidersView {
     copilot_access_token: String,
     /// Status message for the copilot auth section
     copilot_status: String,
-    /// GitHub OAuth client_id for Copilot Device Code flow
-    #[allow(dead_code)]
-    copilot_client_id: String,
     /// Flag to trigger config reload after copilot auth completes
     copilot_needs_reload: bool,
 }
@@ -71,7 +70,7 @@ pub const PROVIDER_NAMES: &[&str] = &[
     "openai_compatible",
     "anthropic",
     "cohere",
-    // Chinese Vendors (15)
+    // Chinese Vendors (16)
     "deepseek",
     "wenxin",
     "qianfan",
@@ -87,6 +86,7 @@ pub const PROVIDER_NAMES: &[&str] = &[
     "xihu",
     "moonshot",
     "minimax",
+    "siliconflow",
     // Other Vendors (15)
     "ai21",
     "aleph",
@@ -201,7 +201,7 @@ fn provider_requires_secret(provider: &str) -> bool {
 
 impl ProvidersView {
     pub fn new() -> Self {
-        let (pending_tx, pending_rx) = mpsc::channel();
+        let (pending_tx, pending_rx) = mpsc::sync_channel(256);
         Self {
             selected_provider: PROVIDER_NAMES[0].to_string(),
             new_key: String::new(),
@@ -233,7 +233,6 @@ impl ProvidersView {
             copilot_last_poll_result: String::new(),
             copilot_access_token: String::new(),
             copilot_status: String::new(),
-            copilot_client_id: String::new(),
             copilot_needs_reload: false,
         }
     }
@@ -283,7 +282,7 @@ impl ProvidersView {
                         .as_str()
                         .unwrap_or("https://github.com/login/device")
                         .to_string();
-                    self.copilot_poll_interval = resp["interval"].as_u64().unwrap_or(5);
+                    self.copilot_poll_interval = resp["interval"].as_u64().unwrap_or(5).max(5);
                     self.copilot_status = String::new();
                     #[cfg(debug_assertions)]
                     eprintln!(
@@ -320,6 +319,21 @@ impl ProvidersView {
                             self.new_key = self.copilot_access_token.clone();
                             // Request config reload to refresh monitoring status
                             self.copilot_needs_reload = true;
+                            // Immediately persist to keyring so the token survives app restart
+                            // even if the user doesn't click Save.
+                            if let Err(e) = crate::keyring_util::store_api_key("copilot", token) {
+                                eprintln!("Warning: failed to store Copilot token in keyring (copilot_api_key): {e}");
+                            }
+                            // Also write to github_copilot_token for backend compatibility
+                            if let Err(e) = keyring::Entry::new("go-on", "github_copilot_token")
+                                .and_then(|entry| entry.set_password(token))
+                            {
+                                eprintln!("Warning: failed to store Copilot token in keyring (github_copilot_token): {e}");
+                            }
+                            // Also set env vars so CopilotAgent can read them immediately
+                            // if the backend process reads from inherited env.
+                            std::env::set_var("GITHUB_TOKEN", token);
+                            std::env::set_var("GITHUB_COPILOT_TOKEN", token);
                         }
                     } else if let Some(error) = resp.get("error").and_then(Value::as_str) {
                         self.copilot_last_poll_result = format!("oauth_error={}", error);
@@ -335,9 +349,10 @@ impl ProvidersView {
                                 self.copilot_poll_interval =
                                     self.copilot_poll_interval.saturating_add(5).min(60);
                                 self.copilot_status = format!(
-                                    "{} (backoff to {}s)",
+                                    "{} (backoff to {} {})",
                                     i18n.t("providers.copilot_waiting"),
-                                    self.copilot_poll_interval
+                                    self.copilot_poll_interval,
+                                    i18n.t("common.seconds")
                                 );
                             }
                             "expired_token" => {
@@ -352,7 +367,8 @@ impl ProvidersView {
                             }
                             _ => {
                                 self.copilot_device_state = Some("error".to_string());
-                                self.copilot_status = format!("Error: {}", error);
+                                self.copilot_status =
+                                    format!("{} {}", i18n.t("common.error"), error);
                             }
                         }
                     }
@@ -397,7 +413,7 @@ impl ProvidersView {
                     "__models__:{}",
                     serde_json::to_string(&models).unwrap_or_default()
                 );
-                let _ = tx.send(msg);
+                let _ = tx.try_send(msg);
                 ctx_clone.request_repaint_after(Duration::from_millis(16));
             });
         }
@@ -593,11 +609,11 @@ impl ProvidersView {
                                             match resp.json::<serde_json::Value>().await {
                                                 Ok(body) => {
                                                     let msg = format!("__copilot_device__:{}", serde_json::to_string(&body).unwrap_or_default());
-                                                    let _ = tx.send(msg);
+                                                    let _ = tx.try_send(msg);
                                                 }
                                                 Err(e) => {
                                                     let msg = format!("__copilot_device_err__:Parse error: {}", e);
-                                                    let _ = tx.send(msg);
+                                                    let _ = tx.try_send(msg);
                                                 }
                                             }
                                         }
@@ -605,15 +621,15 @@ impl ProvidersView {
                                             let status = resp.status();
                                             let text = resp.text().await.unwrap_or_default();
                                             let msg = format!("__copilot_device_err__:GitHub {status}: {text}");
-                                            let _ = tx.send(msg);
+                                            let _ = tx.try_send(msg);
                                         }
                                         Ok(Err(e)) => {
                                             let msg = format!("__copilot_device_err__:{}", e);
-                                            let _ = tx.send(msg);
+                                            let _ = tx.try_send(msg);
                                         }
                                         Err(_) => {
                                             let msg = "__copilot_device_err__:Request timed out.".to_string();
-                                            let _ = tx.send(msg);
+                                            let _ = tx.try_send(msg);
                                         }
                                     }
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
@@ -638,15 +654,15 @@ impl ProvidersView {
                                             }
                                             "polling" => {
                                                 ui.vertical(|ui| {
-                                                    ui.heading("GitHub Copilot Authorization");
+                                                    ui.heading(i18n.t("providers.copilot_authorize"));
                                                     ui.add_space(8.0);
-                                                    ui.label("1. Open this URL in your browser:");
+                                                    ui.label(i18n.t("providers.copilot_open_url"));
                                                     if ui.link(&self.copilot_verification_uri).clicked() {
                                                         let _ = webbrowser::open(&self.copilot_verification_uri);
                                                     }
                                                     ui.add_space(4.0);
                                                     ui.horizontal(|ui| {
-                                                        ui.label("2. Enter the code:");
+                                                        ui.label(i18n.t("providers.copilot_enter_code"));
                                                         ui.add(
                                                             egui::Label::new(
                                                                 egui::RichText::new(&self.copilot_user_code)
@@ -691,7 +707,7 @@ impl ProvidersView {
                                                         } else {
                                                             "********".to_string()
                                                         };
-                                                        ui.label(format!("Token: {}", preview));
+                                                        ui.label(format!("{}: {}", i18n.t("providers.tokenPreview"), preview));
                                                     }
                                                     ui.add_space(8.0);
                                                     if ui.button(i18n.t("common.close")).clicked() {
@@ -852,7 +868,7 @@ impl ProvidersView {
                                                 Ok(Err(e)) => err_fmt.replace("%s", &e),
                                                 Err(_) => err_fmt.replace("%s", "timeout"),
                                             };
-                                            let _ = tx.send(msg);
+                                            let _ = tx.try_send(msg);
                                             ctx_clone.request_repaint_after(Duration::from_millis(16));
                                         });
                                     }
@@ -921,7 +937,7 @@ impl ProvidersView {
                                             Ok(Err(e)) => err_fmt.replace("%s", &e),
                                             Err(_) => err_fmt.replace("%s", "timeout"),
                                         };
-                                        let _ = tx.send(msg);
+                                        let _ = tx.try_send(msg);
                                         ctx_clone.request_repaint_after(Duration::from_millis(16));
                                     });
                                 }
@@ -1028,7 +1044,7 @@ impl ProvidersView {
                                                         )
                                                         .await;
                                                     // Clear sending flag after push
-                                                    let _ = tx_push.send(String::new());
+                                                    let _ = tx_push.try_send(String::new());
                                                     ctx_push.request_repaint_after(Duration::from_millis(16));
                                                 });
                                             }
@@ -1152,7 +1168,7 @@ impl ProvidersView {
                                                     Ok(_) => ok_fmt,
                                                     Err(e) => err_fmt.replace("%s", &e.to_string()),
                                                 };
-                                                let _ = tx.send(msg);
+                                                let _ = tx.try_send(msg);
                                                 ctx_clone.request_repaint_after(Duration::from_millis(16));
                                             });
                                         }
@@ -1234,7 +1250,7 @@ impl ProvidersView {
                                         Ok(_) => ok_fmt.replace("%s", &name),
                                         Err(e) => err_fmt.replace("%s", &e.to_string()),
                                     };
-                                    let _ = tx.send(msg);
+                                    let _ = tx.try_send(msg);
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
@@ -1288,7 +1304,7 @@ impl ProvidersView {
                                             err_tpl.replace("{error}", &e.to_string())
                                         ),
                                     };
-                                    let _ = tx.send(msg);
+                                    let _ = tx.try_send(msg);
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
@@ -1349,7 +1365,7 @@ impl ProvidersView {
                                             err_tpl.replace("{error}", &e.to_string())
                                         ),
                                     };
-                                    let _ = tx.send(msg);
+                                    let _ = tx.try_send(msg);
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
@@ -1384,7 +1400,7 @@ impl ProvidersView {
                                     let msg = match result {
                                         Ok(models) => match serde_json::to_string(&models) {
                                             Ok(payload) => {
-                                                let _ = tx.send(format!(
+                                                let _ = tx.try_send(format!(
                                                     "__ops__:{}:{}",
                                                     name,
                                                     count_tpl.replace("{count}", &models.len().to_string())
@@ -1403,7 +1419,7 @@ impl ProvidersView {
                                             failed_tpl.replace("{error}", &e.to_string())
                                         ),
                                     };
-                                    let _ = tx.send(msg);
+                                    let _ = tx.try_send(msg);
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
@@ -1477,7 +1493,12 @@ impl ProvidersView {
                 if let Some(idx) = remove_idx {
                     // Clean up keyring entry before removing from config
                     if let Some(removed) = config.providers.get(idx) {
-                        let _ = crate::keyring_util::delete_api_key(&removed.name.to_lowercase());
+                        // Only delete keyring entry if this is the LAST provider with this name,
+                        // otherwise other labeled instances would lose their shared key.
+                        let remaining = config.providers.iter().filter(|p| p.name == removed.name).count();
+                        if remaining <= 1 {
+                            let _ = crate::keyring_util::delete_api_key(&removed.name.to_lowercase());
+                        }
                     }
                     config.providers.remove(idx);
                     changed = true;
@@ -1501,7 +1522,7 @@ impl ProvidersView {
                     let ctx_clone = ctx.clone();
                     tokio::spawn(async move {
                         let _ = backend_clone.reload_config().await;
-                        let _ = tx.send("Config reloaded for copilot.".to_string());
+                        let _ = tx.try_send("Config reloaded for copilot.".to_string());
                         ctx_clone.request_repaint_after(Duration::from_millis(16));
                     });
                 }
@@ -1523,10 +1544,7 @@ impl ProvidersView {
                             eprintln!("[poll] device_code={}, HTTPS_PROXY={}", &device_code[..8.min(device_code.len())], proxy_url);
                         }
                         tokio::spawn(async move {
-                            // Build a reqwest client with proxy support.
-                            // If proxy fails, fall back to a client with SSL verification
-                            // disabled (some corporate/VPN environments have cert issues).
-                            fn try_proxy_client() -> reqwest::Client {
+                            fn build_proxy_client() -> reqwest::Client {
                                 let proxy_urls = [
                                     "http://127.0.0.1:15732",
                                     "http://127.0.0.1:7890",
@@ -1559,11 +1577,15 @@ impl ProvidersView {
                                     .danger_accept_invalid_certs(true)
                                     .build()
                                 {
+                                    eprintln!(
+                                        "WARNING: copilot poll falling back to dangerous SSL (no certificate verification)"
+                                    );
                                     return client;
                                 }
                                 reqwest::Client::new()
                             }
-                            let poll_client = try_proxy_client();
+                            static COPILOT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+                            let poll_client = COPILOT_CLIENT.get_or_init(build_proxy_client);
                             let poll_params = [
                                 ("client_id", "01ab8ac9400c4e429b23"),
                                 ("device_code", &device_code),
@@ -1583,21 +1605,21 @@ impl ProvidersView {
                                     match resp.json::<serde_json::Value>().await {
                                         Ok(body) => {
                                             let msg = format!("__copilot_poll__:{}", serde_json::to_string(&body).unwrap_or_default());
-                                            let _ = tx.send(msg);
+                                            let _ = tx.try_send(msg);
                                         }
                                         Err(e) => {
                                             let msg = format!("__copilot_poll_err__:Parse error: {}", e);
-                                            let _ = tx.send(msg);
+                                            let _ = tx.try_send(msg);
                                         }
                                     }
                                 }
                                 Ok(Err(e)) => {
                                     let msg = format!("__copilot_poll_err__:{}", e);
-                                    let _ = tx.send(msg);
+                                    let _ = tx.try_send(msg);
                                 }
                                 Err(_) => {
                                     let msg = "__copilot_poll_err__:Poll timed out.".to_string();
-                                    let _ = tx.send(msg);
+                                    let _ = tx.try_send(msg);
                                 }
                             }
                             ctx_clone.request_repaint_after(Duration::from_millis(16));

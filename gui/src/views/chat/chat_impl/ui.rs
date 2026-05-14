@@ -250,7 +250,7 @@ impl ChatView {
                                     .collect::<Vec<_>>()
                             });
                         if let Some(list) = phases {
-                            let _ = tx.send(PendingResponse::Phases(list));
+                            let _ = tx.try_send(PendingResponse::Phases(list));
                             ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
                         }
                     }
@@ -285,7 +285,7 @@ impl ChatView {
                         ids.sort();
                         ids.dedup();
                         options.extend(ids);
-                        let _ = tx.send(PendingResponse::Models(options));
+                        let _ = tx.try_send(PendingResponse::Models(options));
                         ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
                     }
                     Err(_) => {
@@ -641,10 +641,11 @@ impl ChatView {
                 .max_height(100.0)
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
-                    ui.add_sized(
-                        [ui.available_width(), 100.0],
-                        egui::TextEdit::multiline(&mut self.input).hint_text(i18n.t("chat.input")),
-                    )
+                    let input_te = egui::TextEdit::multiline(&mut self.input)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(3)
+                        .hint_text(i18n.t("chat.input"));
+                    ui.add_enabled(!self.sending, input_te)
                 });
             // Check focus of the inner TextEdit via ScrollArea's inner response
             let input_focus = input_resp.inner.has_focus();
@@ -652,9 +653,13 @@ impl ChatView {
             // Character counter
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(format!("{} chars", self.input.len()))
-                        .weak()
-                        .size(10.0),
+                    egui::RichText::new(format!(
+                        "{} {}",
+                        self.input.len(),
+                        i18n.t("chat.charCount")
+                    ))
+                    .weak()
+                    .size(10.0),
                 );
             });
 
@@ -993,15 +998,15 @@ impl ChatView {
                                 } else {
                                     success_tpl.replace("{workflow}", "OK")
                                 };
-                                let _ = tx.send(PendingResponse::UiMessage(msg));
+                                let _ = tx.try_send(PendingResponse::UiMessage(msg));
                             }
                             Ok(Err(e)) => {
                                 let msg = failed_tpl.replace("{error}", &e);
-                                let _ = tx.send(PendingResponse::UiMessage(msg));
+                                let _ = tx.try_send(PendingResponse::UiMessage(msg));
                             }
                             Err(_) => {
                                 let msg = failed_tpl.replace("{error}", "timeout");
-                                let _ = tx.send(PendingResponse::UiMessage(msg));
+                                let _ = tx.try_send(PendingResponse::UiMessage(msg));
                             }
                         }
                         ctx_clone.request_repaint();
@@ -1168,10 +1173,33 @@ impl ChatView {
             ui.add_space(4.0);
         }
 
+        // ── Global thinking toggle ──
+        let msgs = self.messages().to_vec();
+        let has_thinking = msgs.iter().any(|m| !m.thinking.is_empty());
+        if has_thinking {
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(self.show_all_thinking, "💭 Show/Hide All Thinking")
+                    .clicked()
+                {
+                    self.show_all_thinking = !self.show_all_thinking;
+                    if self.show_all_thinking {
+                        // Expand all: set show_thinking_idx to the first message with thinking
+                        for (i, msg) in msgs.iter().enumerate() {
+                            if !msg.thinking.is_empty() {
+                                self.show_thinking_idx = Some(i);
+                            }
+                        }
+                    } else {
+                        self.show_thinking_idx = None;
+                    }
+                }
+            });
+            ui.add_space(4.0);
+        }
+
         // Show ALL messages (no pagination)
         let dark_mode = ui.visuals().dark_mode;
-        let msgs = self.messages().to_vec();
-
         // Cache formatted timestamps to avoid re-allocating per message per frame
         let mut last_ts: u64 = 0;
         let mut last_time_str = String::new();
@@ -1287,17 +1315,22 @@ impl ChatView {
                 ctx_content.clone()
             };
 
-            // Timestamp row
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(time_str).color(weak_text).size(11.0));
-                if !model_name.is_empty() {
-                    ui.label(
-                        egui::RichText::new(&model_name)
-                            .color(muted_text)
-                            .size(10.0),
-                    );
-                }
-            });
+            // Consecutive same-role grouping: hide avatar/name/timestamp
+            let prev_same_role = msg_idx > 0 && msgs[msg_idx - 1].role == msg.role;
+
+            // Timestamp row (hidden for consecutive same-role messages)
+            if !prev_same_role {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(time_str).color(weak_text).size(11.0));
+                    if !model_name.is_empty() {
+                        ui.label(
+                            egui::RichText::new(&model_name)
+                                .color(muted_text)
+                                .size(10.0),
+                        );
+                    }
+                });
+            }
 
             // Bubble content width: restrict to a reasonable max so text wraps
             // Leave space for avatar and margins (about 60px total)
@@ -1324,8 +1357,13 @@ impl ChatView {
             let _active_session_val = self.active_session;
             // All messages left-aligned — color differentiates user vs AI.
             ui.horizontal_top(|ui| {
-                Self::draw_role_avatar(ui, is_user);
-                ui.add_space(6.0);
+                if !prev_same_role {
+                    Self::draw_role_avatar(ui, is_user);
+                    ui.add_space(6.0);
+                } else {
+                    // Indent to align with messages that have avatars
+                    ui.add_space(36.0);
+                }
                 ui.vertical(|ui| {
                     ui.set_max_width(max_bubble_width);
                     egui::Frame::new()
@@ -1479,8 +1517,10 @@ impl ChatView {
                                                     |ui| {
                                                         ui.label(
                                                             egui::RichText::new(format!(
-                                                                "{} chars",
-                                                                char_count
+                                                                "{} {} (~{} tokens)",
+                                                                char_count,
+                                                                i18n.t("chat.charCount"),
+                                                                char_count / 4
                                                             ))
                                                             .size(10.0)
                                                             .color(accent),

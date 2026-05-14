@@ -173,7 +173,6 @@ impl Theme {
         let r6 = CornerRadius::same(6);
         let text_pri = Color32::from_rgb(55, 35, 20);
         let accent = Color32::from_rgb(190, 45, 55);
-        let gold = Color32::from_rgb(200, 165, 50);
 
         style.visuals.window_fill = Color32::from_rgb(252, 248, 238);
         style.visuals.panel_fill = Color32::from_rgb(248, 240, 225);
@@ -190,7 +189,7 @@ impl Theme {
         w.hovered.bg_fill = Color32::from_rgb(235, 220, 200);
         w.hovered.fg_stroke = Stroke::new(1.0, accent);
         w.active.bg_fill = accent;
-        w.active.fg_stroke = Stroke::new(1.0, gold);
+        w.active.fg_stroke = Stroke::new(1.0, Color32::from_rgb(255, 248, 231));
         w.active.corner_radius = r6;
         style.visuals.selection.bg_fill = Color32::from_rgb(240, 215, 210);
     }

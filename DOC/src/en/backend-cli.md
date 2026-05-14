@@ -402,9 +402,53 @@ Example:
 go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
 ```
 
-## Common command recipes
+## Terminal Chat Mode (`--chat` / `-a`)
 
-Minimal setup:
+Start an interactive terminal chat session (like Claude Code or Codex).
+
+```bash
+go-on -a
+# or
+go-on --chat
+```
+
+If your config file is in a different location:
+
+```bash
+go-on -c /path/to/config.toml -a
+```
+
+### Requirements
+
+At least one AI provider must be configured in `config.toml` with valid API keys. API keys are read automatically from the system keyring (keyring → env var fallback).
+
+### Behavior
+
+1. Builds the agent registry from the configured providers.
+2. Opens a readline-style chat loop.
+3. Each message is sent to the first available agent with streaming output.
+4. Supports conversation history (capped at 1000 messages).
+5. Handles graceful shutdown on Ctrl+C or `/quit`.
+
+### Built-in Commands
+
+| Command | Description |
+|---------|-------------|
+| `/quit` or `/exit` | Exit chat mode |
+| `/help` | Show available commands |
+| `/clear` | Clear conversation history |
+| `/agents` | List configured agents |
+
+### Automatic Setup Redirect
+
+If `--chat` is passed and no providers are configured, the onboarding prompt is skipped and a message directs you to run `--setup` first:
+
+```bash
+go-on -c config.toml -a
+# → "No AI agents configured. Run go-on --init to set up a provider first."
+```
+
+## Common command recipes
 
 ```bash
 go-on --setup --setup-level standard --setup-secrets auto
@@ -427,6 +471,12 @@ Run ACP over stdio for an editor-launched integration:
 
 ```bash
 go-on --config config.toml --protocol-mode acp_stdio --verbose
+```
+
+Terminal chat (interactive, like Claude Code):
+
+```bash
+go-on -a
 ```
 
 ## Operational guidance

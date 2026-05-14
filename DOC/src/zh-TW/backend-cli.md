@@ -429,6 +429,58 @@ go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:80
 go-on --config config.toml --protocol-mode acp_stdio --verbose
 ```
 
+終端聊天（互動式，類似 Claude Code / Codex）：
+
+```bash
+go-on -a
+```
+
+## 終端聊天模式（`--chat` / `-a`）
+
+啟動互動式終端聊天會話（類似 Claude Code 或 Codex）。
+
+```bash
+go-on -a
+# 或
+go-on --chat
+```
+
+如果配置文件在其他路徑：
+
+```bash
+go-on -c /path/to/config.toml -a
+```
+
+### 前置條件
+
+至少需要在 `config.toml` 中配置一個 AI 供應商並擁有有效的 API 密鑰。API 密鑰自動從系統 keyring 讀取（keyring → 環境變數回退）。
+
+### 行為說明
+
+1. 根據已配置的供應商構建智能體註冊表。
+2. 打開 readline 風格的對話循環。
+3. 每條消息發送到第一個可用智能體，支援串流輸出。
+4. 維護對話歷史（上限 1000 條消息）。
+5. Ctrl+C 或 `/quit` 優雅退出。
+
+### 內置命令
+
+| 命令 | 說明 |
+|---------|------|
+| `/quit` 或 `/exit` | 退出聊天模式 |
+| `/help` | 顯示可用命令 |
+| `/clear` | 清除對話歷史 |
+| `/agents` | 列出已配置的智能體 |
+
+### 自動跳轉到設置
+
+如果傳入 `--chat` 時未配置任何供應商，將跳過互動式引導直接提示執行 `--setup`：
+
+```bash
+go-on -c config.toml -a
+# → "未配置 AI 智能體。請先執行 go-on --init 來設定供應商。"
+```
+
 ## 操作指導
 
 - 在假設傳輸層故障之前，先使用 `--validate-config`。

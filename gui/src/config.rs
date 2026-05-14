@@ -1,3 +1,4 @@
+use crate::keyring_util::REDACTED_API_KEY;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -191,8 +192,8 @@ pub fn load_app_config() -> AppConfig {
                 Ok(bak) => match serde_json::from_str(&bak) {
                     Ok(cfg) => {
                         eprintln!("Recovered config from backup.");
-                        // Restore backup to main path
-                        let _ = std::fs::write(&path, &bak);
+                        // Restore backup to main path atomically
+                        let _ = crate::fs_util::atomic_write(&path, &bak);
                         cfg
                     }
                     Err(_) => {
@@ -261,11 +262,14 @@ pub fn load_app_config() -> AppConfig {
         }
     }
 
-    // Step 1b: Deduplicate providers — keep last entry for each name
+    // Step 1b: Deduplicate providers — keep last entry for each (name, label) pair.
+    // Multiple entries with the same `name` are allowed when they have different `label` values.
     let mut seen = std::collections::HashSet::new();
     let mut deduped = Vec::new();
     for provider in config.providers.drain(..).rev() {
-        if seen.insert(provider.name.clone()) {
+        // Use (name, label) as the dedup key so different labels of the same provider are preserved.
+        let dedup_key = (provider.name.clone(), provider.label.clone());
+        if seen.insert(dedup_key) {
             deduped.push(provider);
         }
     }
@@ -292,7 +296,7 @@ pub fn load_app_config() -> AppConfig {
         let keyring_key = crate::keyring_util::get_api_key(provider_name);
 
         // If config has key but keyring doesn't → write to keyring
-        if !config_key.is_empty() && config_key != "********" && keyring_key.is_none() {
+        if !config_key.is_empty() && config_key != REDACTED_API_KEY && keyring_key.is_none() {
             eprintln!(
                 "load_config: keyring missing '{}', copying from config",
                 provider_name
@@ -395,37 +399,28 @@ pub fn has_valid_providers(config: &AppConfig) -> bool {
         }
     }
 
-    // Compute the actual result
-    let result = {
-        // PRIMARY: check keyring for all configured providers + the canonical PROVIDER_NAMES list
-        for p in &config.providers {
-            if crate::keyring_util::has_api_key(&p.name.to_lowercase()) {
-                return set_and_return(true);
-            }
+    // PRIMARY: check keyring for all configured providers + the canonical PROVIDER_NAMES list
+    for p in &config.providers {
+        if crate::keyring_util::has_api_key(&p.name.to_lowercase()) {
+            return set_and_return(true);
         }
-
-        for name in crate::views::providers::PROVIDER_NAMES {
-            if crate::keyring_util::has_api_key(name) {
-                return set_and_return(true);
-            }
-        }
-
-        // FALLBACK: if keyring didn't yield any keys (e.g. macOS blocked),
-        // check config.api_key as a fallback
-        for p in &config.providers {
-            if !p.api_key.is_empty() && p.api_key != "********" {
-                return set_and_return(true);
-            }
-        }
-
-        false
-    };
-
-    // Update cache before returning
-    if let Ok(mut cache) = PROVIDERS_CACHE.lock() {
-        *cache = Some((std::time::Instant::now(), result));
     }
-    result
+
+    for name in crate::views::providers::PROVIDER_NAMES {
+        if crate::keyring_util::has_api_key(name) {
+            return set_and_return(true);
+        }
+    }
+
+    // FALLBACK: if keyring didn't yield any keys (e.g. macOS blocked),
+    // check config.api_key as a fallback
+    for p in &config.providers {
+        if !p.api_key.is_empty() && p.api_key != REDACTED_API_KEY {
+            return set_and_return(true);
+        }
+    }
+
+    set_and_return(false)
 }
 
 /// Helper to update the cache and return a value from has_valid_providers.

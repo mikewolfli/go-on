@@ -90,10 +90,10 @@ impl AboutView {
                 ui.add_space(4.0);
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.label(i18n.t("about.projectDescription"));
-                    ui.hyperlink_to(
-                        "GitHub: https://github.com/mikewolfli/go-on",
-                        "https://github.com/mikewolfli/go-on",
-                    );
+                    ui.add(egui::Label::new(
+                        egui::RichText::new(i18n.t("about.githubLink")).size(13.0),
+                    ));
+                    ui.hyperlink("https://github.com/mikewolfli/go-on");
                 });
             });
     }

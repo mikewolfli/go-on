@@ -130,7 +130,7 @@ impl ChatView {
         let outbound_msg = format!("{expanded_msg}{attachment_summary}");
 
         // Add user message immediately
-        self.session().messages.push(Message {
+        self.session().push_message(Message {
             role: "user".to_string(),
             content: expanded_msg.clone(),
             timestamp: now,
@@ -191,7 +191,7 @@ impl ChatView {
                 "[Gen] Started generation {} for model '{}' (active: {}/{})",
                 generation_id, model_name, current_gen_count, MAX_CONCURRENT_GENERATIONS
             );
-            self.session().messages.push(Message {
+            self.session().push_message(Message {
                 role: "assistant".to_string(),
                 content: String::new(),
                 timestamp: now,
@@ -311,7 +311,7 @@ impl ChatView {
                                         "[Gen] Workflow generation {} returned error: {}",
                                         generation_id, error_msg
                                     );
-                                    let _ = tx.send(PendingResponse::Error {
+                                    let _ = tx.try_send(PendingResponse::Error {
                                         generation_id: Some(generation_id),
                                         message: format!("workflow.ask failed: {error_msg}"),
                                     });
@@ -324,7 +324,7 @@ impl ChatView {
                                         "[Gen] Workflow generation {} completed",
                                         generation_id
                                     );
-                                    let _ = tx.send(PendingResponse::ChatCompleted {
+                                    let _ = tx.try_send(PendingResponse::ChatCompleted {
                                         generation_id,
                                         content: result_text,
                                         thinking: String::new(),
@@ -339,7 +339,7 @@ impl ChatView {
                                     "[Gen] Workflow generation {} - JSON parse failed",
                                     generation_id
                                 );
-                                let _ = tx.send(PendingResponse::Error {
+                                let _ = tx.try_send(PendingResponse::Error {
                                     generation_id: Some(generation_id),
                                     message: "workflow response parse error".to_string(),
                                 });
@@ -347,7 +347,7 @@ impl ChatView {
                         }
                         Err(e) => {
                             eprintln!("[Gen] Workflow generation {} failed: {}", generation_id, e);
-                            let _ = tx.send(PendingResponse::Error {
+                            let _ = tx.try_send(PendingResponse::Error {
                                 generation_id: Some(generation_id),
                                 message: format!("workflow.ask error: {e}"),
                             });
@@ -386,7 +386,7 @@ impl ChatView {
                                     generation_id: Some(generation_id),
                                     message: format!("stream error: {err}; fallback: {e}"),
                                 });
-                            let _ = tx.send(fallback);
+                            let _ = tx.try_send(fallback);
                             return;
                         } else {
                             resp
@@ -409,7 +409,7 @@ impl ChatView {
                                 Ok(Some(c)) => c,
                                 Ok(None) => break,
                                 Err(e) => {
-                                    let _ = tx.send(PendingResponse::Error {
+                                    let _ = tx.try_send(PendingResponse::Error {
                                         generation_id: Some(generation_id),
                                         message: format!("read error: {e}"),
                                     });
@@ -420,7 +420,7 @@ impl ChatView {
                             // Safely append chunk to buffer with overflow protection
                             let chunk_len = chunk.len();
                             if sse_buffer.len() + chunk_len > MAX_SSE_BUFFER_BYTES {
-                                let _ = tx.send(PendingResponse::Error {
+                                let _ = tx.try_send(PendingResponse::Error {
                                     generation_id: Some(generation_id),
                                     message: format!(
                                         "stream frame overflow ({}+{} > {}MB)",
@@ -504,7 +504,7 @@ impl ChatView {
 
                                             // Force flush if buffer exceeds max accumulated size
                                             if total_buffer_bytes > MAX_BUFFERED_TOKENS_BYTES {
-                                                let _ = tx.send(PendingResponse::StreamChunk {
+                                                let _ = tx.try_send(PendingResponse::StreamChunk {
                                                     generation_id,
                                                     token: std::mem::take(&mut buffered_token),
                                                     reasoning: std::mem::take(
@@ -533,7 +533,7 @@ impl ChatView {
                                                 .and_then(|v| v.as_u64())
                                                 .unwrap_or(0)
                                                 as usize;
-                                            let _ = tx.send(PendingResponse::TokenEconomy {
+                                            let _ = tx.try_send(PendingResponse::TokenEconomy {
                                                 generation_id,
                                                 input_tokens,
                                                 output_tokens,
@@ -572,7 +572,7 @@ impl ChatView {
                                         if !buffered_token.is_empty()
                                             || !buffered_reasoning.is_empty()
                                         {
-                                            let _ = tx.send(PendingResponse::StreamChunk {
+                                            let _ = tx.try_send(PendingResponse::StreamChunk {
                                                 generation_id,
                                                 token: std::mem::take(&mut buffered_token),
                                                 reasoning: std::mem::take(&mut buffered_reasoning),
@@ -583,7 +583,7 @@ impl ChatView {
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("unknown stream error")
                                             .to_string();
-                                        let _ = tx.send(PendingResponse::Error {
+                                        let _ = tx.try_send(PendingResponse::Error {
                                             generation_id: Some(generation_id),
                                             message,
                                         });
@@ -598,7 +598,7 @@ impl ChatView {
                                 if (!buffered_token.is_empty() || !buffered_reasoning.is_empty())
                                     && last_stream_flush.elapsed() >= stream_chunk_flush_interval
                                 {
-                                    let _ = tx.send(PendingResponse::StreamChunk {
+                                    let _ = tx.try_send(PendingResponse::StreamChunk {
                                         generation_id,
                                         token: std::mem::take(&mut buffered_token),
                                         reasoning: std::mem::take(&mut buffered_reasoning),
@@ -610,7 +610,7 @@ impl ChatView {
 
                         // Flush any remaining buffered content
                         if !buffered_token.is_empty() || !buffered_reasoning.is_empty() {
-                            let _ = tx.send(PendingResponse::StreamChunk {
+                            let _ = tx.try_send(PendingResponse::StreamChunk {
                                 generation_id,
                                 token: buffered_token,
                                 reasoning: buffered_reasoning,
@@ -631,7 +631,7 @@ impl ChatView {
                             generation_id, status_log
                         );
 
-                        let _ = tx.send(PendingResponse::ChatCompleted {
+                        let _ = tx.try_send(PendingResponse::ChatCompleted {
                             generation_id,
                             content: final_content.unwrap_or_default(),
                             thinking: final_thinking.unwrap_or_default(),
@@ -670,7 +670,7 @@ impl ChatView {
                                 generation_id: Some(generation_id),
                                 message: format!("request error: {err}; fallback: {e}"),
                             });
-                        let _ = tx.send(fallback);
+                        let _ = tx.try_send(fallback);
                     }
                 }
             });

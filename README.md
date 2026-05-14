@@ -37,12 +37,12 @@ cargo run --manifest-path gui/Cargo.toml
 
 ### Features
 - **Monitor tab**: Backend health, AI provider status, real-time metrics
-- **Chat tab**: Multi-session conversations with phase/mode selection, file attachments, and dynamic AI status indicators; multi-model support per session
+- **Chat tab**: Multi-session conversations with phase/mode selection, file attachments, and dynamic AI status indicators; multi-model support per session; automatic message pruning (max 1000 messages per session)
 - **Skills tab**: Create and manage AI skills, including the built-in skill-creator
-- **Settings tab**: Provider management with dynamic env var injection (34+ providers), GUI config editor with JSON validation (`gui_config.json`), 6 themes, language switching (en/zh-CN/zh-TW)
+- **Settings tab**: Provider management with dynamic env var injection (35 providers), GUI config editor with JSON validation (`gui_config.json`), 6 themes, language switching (en/zh-CN/zh-TW)
 - **Backend Connection**: ACP+HTTP JSON-RPC, automatic health polling
-- **Keyring**: Dual storage (system keyring + config file)
-- **Auto-restart**: Backend auto-restarts on crash with 3-second cool-down
+- **Keyring**: Dual storage (system keyring + config file) — API keys stored in system keyring by default, config file as fallback
+- **Auto-restart**: Backend auto-restarts on crash with exponential backoff (3→96s); crash count resets on successful health check
 - **Risk Decision & Safeguard Mode**: AI-powered content risk assessment. When the backend detects high-risk topics (medical, legal, financial, security, etc.), it displays a **Risk Decision panel** in the Chat view showing the risk score, strategy (multi-model vote, multi-agent vote, escalation), review requirements, and specific reasons. This enables informed human oversight of sensitive AI interactions.
 
 ## Build Profiles
@@ -55,7 +55,7 @@ Three build profiles support different deployment scenarios:
 | `profile-simple-server` | SQLite + sqlite-vec | Single-server deployment | `cargo build --no-default-features -F profile-simple-server` |
 | `profile-multi-users-server` | PostgreSQL + pgvector | Multi-user production | `cargo build --no-default-features -F profile-multi-users-server` |
 
-## Verification Status (Phase 4+ — 25 Rounds of Deep Scan Complete)
+## Verification Status (Phase 4+ — 46 Rounds of Deep Scan Complete)
 
 | Profile | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
@@ -68,10 +68,13 @@ Cross-platform (Windows, Linux, macOS):
 - All `Mutex::lock().unwrap()` replaced with poison-recovering `lock_guard()`
 - Cross-platform env vars: `HOME`/`USERPROFILE`/`COMPUTERNAME`
 - vscode-addon: `activationEvents` set, `.exe`/`.bat` platform-aware defaults
-- GUI (EGUI): 7 rounds of deep scan (37+ GUI optimizations), zero clippy warnings, 5/5 tests passing
+- GUI (EGUI): Multiple rounds of deep scan (46+ GUI/backend optimizations), zero clippy warnings, 6/6 tests passing
 - GUI: window min constraints set, CSP allows backend connection
-- Backend: auto-restart on crash with 3-second cool-down
-- Provider env var injection: dynamic (all 34+ providers)
+- Backend: auto-restart on crash with exponential backoff (3→96s); crash count resets on healthy check
+- Provider env var injection: dynamic (all 35 providers)
+- All internal channels bounded (`mpsc::sync_channel`) — no unbounded memory growth
+- Chat sessions capped at 1000 messages — automatic oldest-message eviction
+- Optional rule file warnings downgraded from WARN to DEBUG — no log noise
 
 ## Repository Layout
 
@@ -117,7 +120,8 @@ Cross-platform (Windows, Linux, macOS):
 - `vscode-addon/` — VS Code extension with i18n (en_US, zh_CN, zh_TW)
 
 ### Configuration & Scripts
-- `config/` — Configuration files (`config.toml`, `config.production.toml`, `providers.toml`)
+- `config/` — Configuration files (`config.toml`, `config.production.toml`)
+  Provider specs are compiled into the binary from `src/core/providers_data.toml`.
 - `scripts/` — Quality/release gate scripts and deployment utilities
   - `scripts/deploy/nginx/` — Ingress and TLS reverse-proxy templates
 
@@ -292,6 +296,33 @@ cargo run -- --check
 
 - Linux/macOS: `./scripts/start-go-on.sh`
 - Windows: `scripts/start-go-on.bat`
+
+Or start manually in any protocol mode:
+
+```bash
+# ACP over HTTP (default health endpoint at http://127.0.0.1:8090)
+cargo run -- --mode acp_http --bind 127.0.0.1:8090
+
+# MCP over stdio (for Claude Code / Codex integration)
+cargo run -- --mode mcp_stdio
+```
+
+### 5) Terminal Chat Mode (like Claude Code / Codex)
+
+```bash
+# Start interactive terminal chat (uses config.toml from current directory)
+go-on -a
+# or
+go-on --chat
+```
+
+If your config file is in a different location:
+
+```bash
+go-on -c /path/to/config.toml -a
+```
+
+AI agents read API keys automatically from the system keyring. If no agents are configured, the setup wizard will guide you.
 
 Default health endpoint:
 
