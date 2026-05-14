@@ -1,0 +1,39 @@
+# go-on Simple Server — Docker Compose
+# Usage: docker compose -f deploy/simple-server/docker-compose.yml up -d
+
+services:
+  go-on:
+    build:
+      context: ../..
+      dockerfile: deploy/simple-server/Dockerfile
+      args:
+        - BUILDKIT_PROGRESS=plain
+    image: go-on:simple
+    container_name: go-on-simple
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - go-on-data:/opt/go-on
+      - ../../config/config.simple-server.toml:/opt/go-on/config.toml:ro
+    environment:
+      - RUST_LOG=warn
+      - GO_ON_SERVER_API_KEY=${GO_ON_SERVER_API_KEY:-change-me}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "go-on", "-c", "/opt/go-on/config.toml", "--status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+volumes:
+  go-on-data:

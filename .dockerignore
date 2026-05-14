@@ -1,0 +1,44 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Dependencies
+node_modules/
+vscode-addon/node_modules/
+
+# IDE
+.idea/
+.vscode/
+.vscode-server/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config
+config/acp_*.sqlite3*
+config/*.json
+
+# Docker
+**/Dockerfile*
+**/docker-compose*
+
+# Git
+.git/
+.gitignore
+
+# Logs
+*.log
+
+# Generated
+**/*.generated.*
+DOC/
+docs/
+snapshots/
+artifacts/
+test_i18n/
+tests/
+scripts/

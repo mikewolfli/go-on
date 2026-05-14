@@ -1,0 +1,33 @@
+[Unit]
+Description=go-on Multi-Users Server (PostgreSQL + pgvector)
+Documentation=https://github.com/mikewolfli/go-on
+After=network.target network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=go-on
+Group=go-on
+WorkingDirectory=/opt/go-on/backend
+EnvironmentFile=/opt/go-on/backend/environment
+
+ExecStart=/opt/go-on/backend/go-on \
+    -c /opt/go-on/backend/config.toml \
+    --mode acp_http \
+    --bind 0.0.0.0:8090
+
+StandardOutput=append:/opt/go-on/backend/backend.log
+StandardError=append:/opt/go-on/backend/backend.log
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
