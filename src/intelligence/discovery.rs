@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::intelligence::now_ms;
 
 // ── ID generation ────────────────────────────────────────────────────────────
 
@@ -19,12 +20,7 @@ fn generate_id() -> String {
     format!("disc-{}", n)
 }
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
+// Use `crate::intelligence::now_ms()` instead — shared utility in mod.rs
 
 // ── Data types ──────────────────────────────────────────────────────────────
 

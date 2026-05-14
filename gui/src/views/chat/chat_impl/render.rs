@@ -27,7 +27,7 @@ impl ChatView {
             };
             ui.colored_label(
                 trunc_color,
-                truncation_hint.replace("{chars}", &text.len().to_string()),
+                truncation_hint.replace("{chars}", &text.chars().count().to_string()),
             );
             ui.add_space(4.0);
             ui.label(egui::RichText::new(preview).color(text_color));
@@ -246,6 +246,27 @@ fn render_node<'a>(
                 label
             };
             let _ = ui.link(display).clicked();
+        }
+
+        // ── Image: render with egui Image widget, fallback to alt text ──
+        comrak::nodes::NodeValue::Image(image) => {
+            let url = image.url.to_string();
+            let alt_text = collect_text(node);
+            if !url.is_empty() {
+                ui.add(
+                    egui::Image::new(&url)
+                        .max_width(400.0)
+                        .max_height(400.0)
+                        .alt_text(if alt_text.is_empty() {
+                            url.clone()
+                        } else {
+                            alt_text
+                        }),
+                );
+            } else if !alt_text.is_empty() {
+                ui.label(egui::RichText::new(alt_text).color(text_color));
+            }
+            ui.add_space(4.0);
         }
 
         _ => {

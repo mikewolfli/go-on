@@ -211,11 +211,13 @@ fn auto_detect_proxy() {
             .trim_start_matches("socks4://");
         if let Some(port_str) = addr.split(':').nth(1) {
             if let Ok(port) = port_str.parse::<u16>() {
+                let socket_addr = match format!("127.0.0.1:{port}").parse() {
+                    Ok(addr) => addr,
+                    Err(_) => continue,
+                };
                 // Quick TCP connect to see if anything is listening
                 if std::net::TcpStream::connect_timeout(
-                    &format!("127.0.0.1:{port}")
-                        .parse()
-                        .expect("BUG: invalid socket address from proxy port"),
+                    &socket_addr,
                     std::time::Duration::from_millis(100),
                 )
                 .is_ok()

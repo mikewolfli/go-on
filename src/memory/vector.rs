@@ -580,6 +580,12 @@ fn embed_text(text: &str, dimensions: usize) -> Vec<f32> {
         return vector;
     }
 
+    // NOTE: This is a hash-based fallback embedding that splits on non-alphanumeric
+    // characters and uses SHA-256 to assign dimensions. It is NOT a real embedding model.
+    // For production use, configure a proper embedding model (e.g., via the configured
+    // LLM provider or a dedicated embedding service).
+    warn!("embed_text: using hash-based fallback embedding — no real embedding model configured");
+
     for token in tokenize(text) {
         let mut hasher = Sha256::new();
         hasher.update(token.as_bytes());

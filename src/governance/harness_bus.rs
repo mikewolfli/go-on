@@ -1074,9 +1074,9 @@ impl HarnessBus {
     pub fn enforce_action(&self, action: &GovernanceAction, policy_bundle: &PolicyBundle) -> bool {
         match action {
             GovernanceAction::Read => true,
+            GovernanceAction::Search => true,
             GovernanceAction::Write => !policy_bundle.require_approval_for_write,
             GovernanceAction::Shell => policy_bundle.enable_code_execution,
-            _ => true,
         }
     }
 

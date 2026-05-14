@@ -670,6 +670,14 @@ impl ChatView {
             if !self.error.is_empty() {
                 ui.colored_label(egui::Color32::RED, &self.error);
             }
+            if let Some(msg) = self.success_message.take() {
+                let success_color = if ui.visuals().dark_mode {
+                    egui::Color32::from_rgb(100, 220, 100)
+                } else {
+                    egui::Color32::from_rgb(0, 140, 0)
+                };
+                ui.colored_label(success_color, &msg);
+            }
 
             self.render_token_stats(ui, i18n);
 
@@ -774,13 +782,33 @@ impl ChatView {
                         let editors: &[&str] = &["code", "vim", "nano"];
                         for e in editors {
                             if let Ok(mut child) = std::process::Command::new(e).arg(&p).spawn() {
-                                let _ = child.wait();
-                                if let Ok(edited) = std::fs::read_to_string(&p) {
-                                    let trimmed = edited.trim().to_string();
-                                    if !trimmed.is_empty() {
-                                        self.input = trimmed;
+                                let p_clone = p.clone();
+                                let tx = self.pending_tx.clone();
+                                std::thread::spawn(move || {
+                                    let _ = child.wait();
+                                    // Editor closed — read the file and send result back to UI thread
+                                    if let Ok(edited) = std::fs::read_to_string(&p_clone) {
+                                        let trimmed = edited.trim().to_string();
+                                        if !trimmed.is_empty() {
+                                            // Use blocking send to guarantee delivery.
+                                            // In the rare case the channel is full, retry periodically.
+                                            loop {
+                                                match tx.send(
+                                                    PendingResponse::ExternalEditorResult(
+                                                        trimmed.clone(),
+                                                    ),
+                                                ) {
+                                                    Ok(()) => break,
+                                                    Err(std::sync::mpsc::SendError(_)) => {
+                                                        std::thread::sleep(
+                                                            std::time::Duration::from_millis(50),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
-                                }
+                                });
                                 break;
                             }
                         }
@@ -841,21 +869,10 @@ impl ChatView {
                 });
             });
 
-            // Enter send
-            // Enter to send (Ctrl+Enter on Linux to avoid accidental sends in terminal)
-            if ui.input(|i| {
-                if !input_focus || !i.key_pressed(egui::Key::Enter) || i.modifiers.shift {
-                    return false;
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    i.modifiers.ctrl || i.modifiers.command
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    true
-                }
-            }) {
+            // Enter to send (Shift+Enter to insert newline)
+            if ui.input(|i| !input_focus || !i.key_pressed(egui::Key::Enter) || i.modifiers.shift) {
+                // Don't send
+            } else {
                 self.send_message(backend, ctx, autotune_chain_enabled);
             }
 
@@ -1243,18 +1260,14 @@ impl ChatView {
         if has_thinking {
             ui.horizontal(|ui| {
                 if ui
-                    .selectable_label(self.show_all_thinking, "💭 Show/Hide All Thinking")
+                    .selectable_label(
+                        self.show_all_thinking,
+                        format!("💭 {}", i18n.t("chat.showAllThinking")),
+                    )
                     .clicked()
                 {
                     self.show_all_thinking = !self.show_all_thinking;
-                    if self.show_all_thinking {
-                        // Expand all: set show_thinking_idx to the first message with thinking
-                        for (i, msg) in msgs.iter().enumerate() {
-                            if !msg.thinking.is_empty() {
-                                self.show_thinking_idx = Some(i);
-                            }
-                        }
-                    } else {
+                    if !self.show_all_thinking {
                         self.show_thinking_idx = None;
                     }
                 }
@@ -1519,7 +1532,8 @@ impl ChatView {
                             if msg_has_thinking {
                                 ui.add_space(6.0);
 
-                                let is_expanded = self.show_thinking_idx == Some(msg_idx);
+                                let is_expanded = self.show_all_thinking
+                                    || self.show_thinking_idx == Some(msg_idx);
                                 let toggle_icon = if is_expanded { "▼" } else { "▶" };
                                 let char_count = msg_thinking.chars().count();
 
@@ -1607,7 +1621,11 @@ impl ChatView {
                                     .clicked();
 
                                 if header_clicked {
-                                    if is_expanded {
+                                    if self.show_all_thinking {
+                                        // Clicking one while all are shown: switch to single-message mode
+                                        self.show_all_thinking = false;
+                                        self.show_thinking_idx = Some(msg_idx);
+                                    } else if self.show_thinking_idx == Some(msg_idx) {
                                         self.show_thinking_idx = None;
                                     } else {
                                         self.show_thinking_idx = Some(msg_idx);

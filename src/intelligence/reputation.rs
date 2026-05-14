@@ -6,6 +6,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::intelligence::now_ms;
+
 /// Reputation record for a single agent/node
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReputationRecord {
@@ -153,12 +155,7 @@ impl ReputationStore {
     }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+// Use `crate::intelligence::now_ms()` instead — shared utility in mod.rs
 
 #[cfg(test)]
 mod tests {

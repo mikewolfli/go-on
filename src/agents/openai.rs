@@ -135,4 +135,60 @@ impl Agent for OpenAiAgent {
             .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("openai")))
             .into())
     }
+
+    fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
+        vec![
+            crate::agent::ModelInfo {
+                id: "gpt-4o".to_string(),
+                name: "GPT-4o".to_string(),
+                description: "OpenAI GPT-4o (omni model)".to_string(),
+                is_default: self.model == "gpt-4o",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(128_000),
+            },
+            crate::agent::ModelInfo {
+                id: "gpt-4o-mini".to_string(),
+                name: "GPT-4o Mini".to_string(),
+                description: "OpenAI GPT-4o Mini (cost-efficient)".to_string(),
+                is_default: self.model == "gpt-4o-mini",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(128_000),
+            },
+            crate::agent::ModelInfo {
+                id: "gpt-4-turbo".to_string(),
+                name: "GPT-4 Turbo".to_string(),
+                description: "OpenAI GPT-4 Turbo".to_string(),
+                is_default: self.model == "gpt-4-turbo",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(128_000),
+            },
+            crate::agent::ModelInfo {
+                id: "gpt-3.5-turbo".to_string(),
+                name: "GPT-3.5 Turbo".to_string(),
+                description: "OpenAI GPT-3.5 Turbo".to_string(),
+                is_default: self.model == "gpt-3.5-turbo",
+                capabilities: vec!["chat".to_string(), "function_calling".to_string(), "streaming".to_string()],
+                context_window: Some(16_385),
+            },
+        ]
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
+    }
 }

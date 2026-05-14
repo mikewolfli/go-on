@@ -18,6 +18,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::time::Duration;
+use tracing::warn;
 
 use crate::agents::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::config::AppConfig;
@@ -222,10 +223,12 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
 
     while let Some(token) = rx.recv().await {
         // Tool call detection (agents emit __tool_call__:tool_name:args)
-        if let Some(tool_data) = token.strip_prefix("__tool_call__:") {
-            if let Some(colon_pos) = tool_data.find(':') {
-                let tool_name = &tool_data[..colon_pos];
-                let tool_args = &tool_data[colon_pos + 1..];
+        // Use splitn(3, ':') to handle colons inside JSON tool args correctly.
+        if token.starts_with("__tool_call__:") {
+            let parts: Vec<&str> = token.splitn(3, ':').collect();
+            if parts.len() == 3 {
+                let tool_name = parts[1];
+                let tool_args = parts[2];
                 tool_calls.push((tool_name.to_string(), tool_args.to_string()));
                 eprintln!();
                 eprintln!("🔧 [Tool call: {tool_name}]");
@@ -248,7 +251,7 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
 
         if in_reasoning {
             eprint!("{}", token);
-            response.push_str(&token); // Keep reasoning in history
+            // Do NOT add reasoning tokens to response — they would pollute conversation history
         } else {
             response.push_str(&token);
             print!("{}", token);
@@ -256,7 +259,9 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
 
-    chat_task.await.ok();
+    if let Err(e) = chat_task.await {
+        warn!("Agent chat task failed: {e}");
+    }
     eprintln!();
 
     // ── Phase 2: Execute any tool calls ──

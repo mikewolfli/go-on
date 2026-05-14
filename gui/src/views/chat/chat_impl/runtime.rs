@@ -1,5 +1,31 @@
 use super::*;
 
+use std::sync::mpsc::TrySendError;
+use std::time::Duration;
+
+/// Retry `tx.try_send(msg)` with exponential backoff when the channel is full.
+/// Gives up immediately if the channel has been closed.
+async fn try_send_with_retry<T>(tx: &mpsc::SyncSender<T>, mut msg: T) {
+    let mut delay_ms = 5u64;
+    loop {
+        match tx.try_send(msg) {
+            Ok(_) => return,
+            Err(TrySendError::Full(ret)) => {
+                msg = ret;
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                delay_ms = (delay_ms * 2).min(200);
+            }
+            Err(TrySendError::Disconnected(_)) => return,
+        }
+    }
+}
+
+/// Retry helper specifically for the `pending_tx` channel in this file.
+/// Uses `&mpsc::SyncSender<PendingResponse>` to avoid repeated type annotations.
+async fn send_pending(tx: &mpsc::SyncSender<PendingResponse>, msg: PendingResponse) {
+    try_send_with_retry(tx, msg).await;
+}
+
 const MAX_INLINE_ATTACHMENT_B64_CHARS: usize = 8_192;
 const MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024; // 1 MB max SSE frame buffer
 const MAX_BUFFERED_TOKENS_BYTES: usize = 256 * 1024; // 256 KB accumulated token buffer
@@ -316,10 +342,14 @@ impl ChatView {
                                         "[Gen] Workflow generation {} returned error: {}",
                                         generation_id, error_msg
                                     );
-                                    let _ = tx.try_send(PendingResponse::Error {
-                                        generation_id: Some(generation_id),
-                                        message: format!("workflow.ask failed: {error_msg}"),
-                                    });
+                                    send_pending(
+                                        &tx,
+                                        PendingResponse::Error {
+                                            generation_id: Some(generation_id),
+                                            message: format!("workflow.ask failed: {error_msg}"),
+                                        },
+                                    )
+                                    .await;
                                 } else {
                                     let result_text = serde_json::to_string_pretty(
                                         value.get("result").unwrap_or(&value),
@@ -329,34 +359,46 @@ impl ChatView {
                                         "[Gen] Workflow generation {} completed",
                                         generation_id
                                     );
-                                    let _ = tx.try_send(PendingResponse::ChatCompleted {
-                                        generation_id,
-                                        content: result_text,
-                                        thinking: String::new(),
-                                        agent: "workflow".to_string(),
-                                        model: None,
-                                        conversation_id: None,
-                                        branch_id: None,
-                                        risk_decision: value.get("risk_decision").cloned(),
-                                    });
+                                    send_pending(
+                                        &tx,
+                                        PendingResponse::ChatCompleted {
+                                            generation_id,
+                                            content: result_text,
+                                            thinking: String::new(),
+                                            agent: "workflow".to_string(),
+                                            model: None,
+                                            conversation_id: None,
+                                            branch_id: None,
+                                            risk_decision: value.get("risk_decision").cloned(),
+                                        },
+                                    )
+                                    .await;
                                 }
                             } else {
                                 eprintln!(
                                     "[Gen] Workflow generation {} - JSON parse failed",
                                     generation_id
                                 );
-                                let _ = tx.try_send(PendingResponse::Error {
-                                    generation_id: Some(generation_id),
-                                    message: "workflow response parse error".to_string(),
-                                });
+                                send_pending(
+                                    &tx,
+                                    PendingResponse::Error {
+                                        generation_id: Some(generation_id),
+                                        message: "workflow response parse error".to_string(),
+                                    },
+                                )
+                                .await;
                             }
                         }
                         Err(e) => {
                             eprintln!("[Gen] Workflow generation {} failed: {}", generation_id, e);
-                            let _ = tx.try_send(PendingResponse::Error {
-                                generation_id: Some(generation_id),
-                                message: format!("workflow.ask error: {e}"),
-                            });
+                            send_pending(
+                                &tx,
+                                PendingResponse::Error {
+                                    generation_id: Some(generation_id),
+                                    message: format!("workflow.ask error: {e}"),
+                                },
+                            )
+                            .await;
                         }
                     }
                     return; // Skip the normal chat/stream flow
@@ -393,7 +435,7 @@ impl ChatView {
                                     generation_id: Some(generation_id),
                                     message: format!("stream error: {err}; fallback: {e}"),
                                 });
-                            let _ = tx.try_send(fallback);
+                            send_pending(&tx, fallback).await;
                             return;
                         } else {
                             resp
@@ -417,10 +459,14 @@ impl ChatView {
                                 Ok(Some(c)) => c,
                                 Ok(None) => break,
                                 Err(e) => {
-                                    let _ = tx.try_send(PendingResponse::Error {
-                                        generation_id: Some(generation_id),
-                                        message: format!("read error: {e}"),
-                                    });
+                                    send_pending(
+                                        &tx,
+                                        PendingResponse::Error {
+                                            generation_id: Some(generation_id),
+                                            message: format!("read error: {e}"),
+                                        },
+                                    )
+                                    .await;
                                     return;
                                 }
                             };
@@ -428,30 +474,26 @@ impl ChatView {
                             // Safely append chunk to buffer with overflow protection
                             let chunk_len = chunk.len();
                             if sse_buffer.len() + chunk_len > MAX_SSE_BUFFER_BYTES {
-                                let _ = tx.try_send(PendingResponse::Error {
-                                    generation_id: Some(generation_id),
-                                    message: format!(
-                                        "stream frame overflow ({}+{} > {}MB)",
-                                        sse_buffer.len(),
-                                        chunk_len,
-                                        MAX_SSE_BUFFER_BYTES / (1024 * 1024)
-                                    ),
-                                });
+                                send_pending(
+                                    &tx,
+                                    PendingResponse::Error {
+                                        generation_id: Some(generation_id),
+                                        message: format!(
+                                            "stream frame overflow ({}+{} > {}MB)",
+                                            sse_buffer.len(),
+                                            chunk_len,
+                                            MAX_SSE_BUFFER_BYTES / (1024 * 1024)
+                                        ),
+                                    },
+                                )
+                                .await;
                                 return;
                             }
 
                             // Normalize CRLF to LF so frame splitting is consistent across
                             // backends and platforms that may emit different line endings.
                             let part = String::from_utf8_lossy(&chunk);
-                            if part.contains('\r') {
-                                for ch in part.chars() {
-                                    if ch != '\r' {
-                                        sse_buffer.push(ch);
-                                    }
-                                }
-                            } else {
-                                sse_buffer.push_str(&part);
-                            }
+                            sse_buffer.push_str(&part.replace('\r', ""));
 
                             // Process complete frames only (delimited by \n\n)
                             while let Some(split_at) = sse_buffer.find("\n\n") {
@@ -512,13 +554,17 @@ impl ChatView {
 
                                             // Force flush if buffer exceeds max accumulated size
                                             if total_buffer_bytes > MAX_BUFFERED_TOKENS_BYTES {
-                                                let _ = tx.try_send(PendingResponse::StreamChunk {
-                                                    generation_id,
-                                                    token: std::mem::take(&mut buffered_token),
-                                                    reasoning: std::mem::take(
-                                                        &mut buffered_reasoning,
-                                                    ),
-                                                });
+                                                send_pending(
+                                                    &tx,
+                                                    PendingResponse::StreamChunk {
+                                                        generation_id,
+                                                        token: std::mem::take(&mut buffered_token),
+                                                        reasoning: std::mem::take(
+                                                            &mut buffered_reasoning,
+                                                        ),
+                                                    },
+                                                )
+                                                .await;
                                                 total_buffer_bytes = 0;
                                                 last_stream_flush = std::time::Instant::now();
                                             }
@@ -541,12 +587,16 @@ impl ChatView {
                                                 .and_then(|v| v.as_u64())
                                                 .unwrap_or(0)
                                                 as usize;
-                                            let _ = tx.try_send(PendingResponse::TokenEconomy {
-                                                generation_id,
-                                                input_tokens,
-                                                output_tokens,
-                                                total_tokens,
-                                            });
+                                            send_pending(
+                                                &tx,
+                                                PendingResponse::TokenEconomy {
+                                                    generation_id,
+                                                    input_tokens,
+                                                    output_tokens,
+                                                    total_tokens,
+                                                },
+                                            )
+                                            .await;
                                         }
                                     }
                                     "result" => {
@@ -585,21 +635,31 @@ impl ChatView {
                                         if !buffered_token.is_empty()
                                             || !buffered_reasoning.is_empty()
                                         {
-                                            let _ = tx.try_send(PendingResponse::StreamChunk {
-                                                generation_id,
-                                                token: std::mem::take(&mut buffered_token),
-                                                reasoning: std::mem::take(&mut buffered_reasoning),
-                                            });
+                                            send_pending(
+                                                &tx,
+                                                PendingResponse::StreamChunk {
+                                                    generation_id,
+                                                    token: std::mem::take(&mut buffered_token),
+                                                    reasoning: std::mem::take(
+                                                        &mut buffered_reasoning,
+                                                    ),
+                                                },
+                                            )
+                                            .await;
                                         }
                                         let message = data
                                             .get("message")
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("unknown stream error")
                                             .to_string();
-                                        let _ = tx.try_send(PendingResponse::Error {
-                                            generation_id: Some(generation_id),
-                                            message,
-                                        });
+                                        send_pending(
+                                            &tx,
+                                            PendingResponse::Error {
+                                                generation_id: Some(generation_id),
+                                                message,
+                                            },
+                                        )
+                                        .await;
                                         return;
                                     }
                                     _ => {
@@ -611,11 +671,15 @@ impl ChatView {
                                 if (!buffered_token.is_empty() || !buffered_reasoning.is_empty())
                                     && last_stream_flush.elapsed() >= stream_chunk_flush_interval
                                 {
-                                    let _ = tx.try_send(PendingResponse::StreamChunk {
-                                        generation_id,
-                                        token: std::mem::take(&mut buffered_token),
-                                        reasoning: std::mem::take(&mut buffered_reasoning),
-                                    });
+                                    send_pending(
+                                        &tx,
+                                        PendingResponse::StreamChunk {
+                                            generation_id,
+                                            token: std::mem::take(&mut buffered_token),
+                                            reasoning: std::mem::take(&mut buffered_reasoning),
+                                        },
+                                    )
+                                    .await;
                                     last_stream_flush = std::time::Instant::now();
                                 }
                             }
@@ -623,11 +687,15 @@ impl ChatView {
 
                         // Flush any remaining buffered content
                         if !buffered_token.is_empty() || !buffered_reasoning.is_empty() {
-                            let _ = tx.try_send(PendingResponse::StreamChunk {
-                                generation_id,
-                                token: buffered_token,
-                                reasoning: buffered_reasoning,
-                            });
+                            send_pending(
+                                &tx,
+                                PendingResponse::StreamChunk {
+                                    generation_id,
+                                    token: buffered_token,
+                                    reasoning: buffered_reasoning,
+                                },
+                            )
+                            .await;
                         }
 
                         let status_log = format!(
@@ -644,16 +712,20 @@ impl ChatView {
                             generation_id, status_log
                         );
 
-                        let _ = tx.try_send(PendingResponse::ChatCompleted {
-                            generation_id,
-                            content: final_content.unwrap_or_default(),
-                            thinking: final_thinking.unwrap_or_default(),
-                            agent: final_agent.unwrap_or_default(),
-                            model: final_used_model,
-                            conversation_id: final_conv_id,
-                            branch_id: final_branch_id,
-                            risk_decision: final_risk_decision,
-                        });
+                        send_pending(
+                            &tx,
+                            PendingResponse::ChatCompleted {
+                                generation_id,
+                                content: final_content.unwrap_or_default(),
+                                thinking: final_thinking.unwrap_or_default(),
+                                agent: final_agent.unwrap_or_default(),
+                                model: final_used_model,
+                                conversation_id: final_conv_id,
+                                branch_id: final_branch_id,
+                                risk_decision: final_risk_decision,
+                            },
+                        )
+                        .await;
                     }
                     Err(err) => {
                         eprintln!(
@@ -685,7 +757,7 @@ impl ChatView {
                                 generation_id: Some(generation_id),
                                 message: format!("request error: {err}; fallback: {e}"),
                             });
-                        let _ = tx.try_send(fallback);
+                        send_pending(&tx, fallback).await;
                     }
                 }
             });
@@ -917,7 +989,10 @@ impl ChatView {
                     self.stop_requested = false;
                 }
                 PendingResponse::UiMessage(msg) => {
-                    self.error = msg;
+                    self.success_message = Some(msg);
+                }
+                PendingResponse::ExternalEditorResult(content) => {
+                    self.input = content;
                 }
             }
         }

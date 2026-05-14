@@ -133,6 +133,7 @@ impl TokenMultiLevelCache {
     /// Look up a cache entry by input text.
     ///
     /// Routes: L1 (exact) → L2 (semantic) → L3 (template).
+    /// Uses **read** locks for the lookup path to avoid unnecessary contention.
     /// Returns the best matching entry and which level it was found at.
     pub async fn lookup(
         &self,
@@ -143,9 +144,9 @@ impl TokenMultiLevelCache {
             return None;
         }
 
-        // L1: Exact match (fastest path)
+        // L1: Exact match (fastest path) — read-only peek
         let l1_key = hash_input(input);
-        if let Some(entry) = self.l1.write().await.get(&l1_key) {
+        if let Some(entry) = self.l1.read().await.peek(&l1_key) {
             if entry.output.len() > 10 {
                 self.stats
                     .write()
@@ -155,10 +156,10 @@ impl TokenMultiLevelCache {
             }
         }
 
-        // L2: Semantic match (medium-length inputs)
+        // L2: Semantic match (medium-length inputs) — read-only peek
         if context_class != ContextLengthClass::Short {
             let query_vec = simple_embedding(input);
-            if let Some(entry) = self.l2.write().await.find_similar(&query_vec) {
+            if let Some(entry) = self.l2.read().await.peek_similar(&query_vec) {
                 if entry.output.len() > 10 {
                     self.stats
                         .write()
@@ -356,6 +357,12 @@ impl L1ExactCache {
         }
     }
 
+    /// Read-only peek — looks up an entry without updating hit count or LRU order.
+    /// Use this for read-locked lookup paths to avoid unnecessary write contention.
+    pub fn peek(&self, key: &str) -> Option<CacheEntry> {
+        self.map.get(key).cloned()
+    }
+
     /// Insert or update an entry. Evicts LRU if at capacity.
     pub fn put(&mut self, key: String, entry: CacheEntry) {
         if self.map.contains_key(&key) {
@@ -475,7 +482,25 @@ impl L2SemanticCache {
         }
     }
 
+    /// Read-only peek for semantic similarity — finds similar entries without
+    /// updating hit counts. Use this for read-locked lookup paths.
+    pub fn peek_similar(&self, query_vec: &[f32]) -> Option<CacheEntry> {
+        let mut best_score = 0.0f32;
+        let mut best_entry = None;
+
+        for (i, vec) in self.vectors.iter().enumerate() {
+            let score = cosine_similarity(query_vec, vec);
+            if score > best_score && score >= self.similarity_threshold {
+                best_score = score;
+                best_entry = Some(self.entries[i].clone());
+            }
+        }
+
+        best_entry
+    }
+
     /// Find the most semantically similar entry above the threshold.
+    /// Updates hit count and is write-locked.
     pub fn find_similar(&mut self, query_vec: &[f32]) -> Option<CacheEntry> {
         let mut best_score = 0.0f32;
         let mut best_idx = None;

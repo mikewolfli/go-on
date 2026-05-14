@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::intelligence::now_ms;
 
 // ── ID generation ────────────────────────────────────────────────────────────
 
@@ -25,12 +26,7 @@ fn generate_proposal_id() -> String {
     format!("prop-{}", n)
 }
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
+// Use `crate::intelligence::now_ms()` instead — shared utility in mod.rs
 
 // ── Error type ──────────────────────────────────────────────────────────────
 

@@ -458,16 +458,15 @@ impl HyperResilienceEngine {
             .count();
 
         // Determine degradation level based on the ratio of open circuits.
-        let level =
-            if open_circuits > 0 && open_circuits > active_circuit_breakers.saturating_sub(1) {
-                DegradationLevel::Emergency
-            } else if open_circuits > active_circuit_breakers / 2 {
-                DegradationLevel::Constrained
-            } else if open_circuits > 0 || active_failovers > 0 {
-                DegradationLevel::Degraded
-            } else {
-                DegradationLevel::Normal
-            };
+        let level = if open_circuits > 0 && open_circuits > active_circuit_breakers / 2 {
+            DegradationLevel::Emergency
+        } else if open_circuits > active_circuit_breakers / 3 && open_circuits > 0 {
+            DegradationLevel::Constrained
+        } else if open_circuits > 0 || active_failovers > 0 {
+            DegradationLevel::Degraded
+        } else {
+            DegradationLevel::Normal
+        };
 
         SystemHealth {
             level,
@@ -845,7 +844,8 @@ mod tests {
         engine.record_failure("cb-1").unwrap();
         let health2 = engine.system_health();
         assert_eq!(health2.open_circuits, 1);
-        assert_eq!(health2.level, DegradationLevel::Degraded);
+        // One out of two open breakers triggers Constrained (more than 1/3 threshold)
+        assert_eq!(health2.level, DegradationLevel::Constrained);
     }
 
     /// 10. Executing a self-healing action produces a valid report.

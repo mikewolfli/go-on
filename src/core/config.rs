@@ -174,8 +174,15 @@ struct ProviderSpec {
     #[serde(default)]
     supports_system: Option<bool>,
     #[serde(default)]
-    #[allow(dead_code)]
     supports_vision: Option<bool>,
+}
+
+impl ProviderSpec {
+    /// Returns whether this provider supports vision/image inputs.
+    #[allow(dead_code)]
+    pub fn supports_vision(&self) -> bool {
+        self.supports_vision.unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2974,6 +2981,9 @@ pub fn is_agent_env_ready(config: &AppConfig, agent_name: &str) -> bool {
     };
     required_env_vars(agent)
         .into_iter()
+        // inspect_secret_pool(secret_ref, field_name): both arguments are the same
+        // because `secret_ref` doubles as both the secret key to look up and the
+        // display name used in error messages (e.g. "OPENAI_API_KEY").
         .all(|secret_ref| inspect_secret_pool(&secret_ref, &secret_ref).is_ok())
 }
 

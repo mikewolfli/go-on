@@ -395,6 +395,10 @@ fn extract_token(value: &Value) -> Option<String> {
     // message.reasoning_content (non-streaming). We prefix these with
     // __thinking__ so the chat handler can separate them from the main
     // response and stream them as "reasoning" SSE events.
+    //
+    // If BOTH reasoning_content AND content are present in the same delta,
+    // both are returned: first the thinking prefix with reasoning, then the
+    // content (concatenated so neither is lost).
     if let Some(thinking) = value
         .get("choices")
         .and_then(|v| v.get(0))
@@ -403,6 +407,18 @@ fn extract_token(value: &Value) -> Option<String> {
         .and_then(|v| v.as_str())
     {
         if !thinking.is_empty() {
+            // Check if content also exists in the same delta
+            let content = value
+                .get("choices")
+                .and_then(|v| v.get(0))
+                .and_then(|v| v.get("delta"))
+                .and_then(|v| v.get("content"))
+                .and_then(|v| v.as_str());
+            if let Some(text) = content {
+                if !text.is_empty() {
+                    return Some(format!("__thinking__{}{}", thinking, text));
+                }
+            }
             return Some(format!("__thinking__{}", thinking));
         }
     }
@@ -414,6 +430,18 @@ fn extract_token(value: &Value) -> Option<String> {
         .and_then(|v| v.as_str())
     {
         if !thinking.is_empty() {
+            // Check if content also exists in the same message
+            let content = value
+                .get("choices")
+                .and_then(|v| v.get(0))
+                .and_then(|v| v.get("message"))
+                .and_then(|v| v.get("content"))
+                .and_then(|v| v.as_str());
+            if let Some(text) = content {
+                if !text.is_empty() {
+                    return Some(format!("__thinking__{}{}", thinking, text));
+                }
+            }
             return Some(format!("__thinking__{}", thinking));
         }
     }
@@ -427,19 +455,6 @@ fn extract_token(value: &Value) -> Option<String> {
         .and_then(|v| v.as_str())
     {
         return Some(token.to_string());
-    }
-
-    // DeepSeek reasoning content (thinking tokens)
-    if let Some(token) = value
-        .get("choices")
-        .and_then(|v| v.get(0))
-        .and_then(|v| v.get("delta"))
-        .and_then(|v| v.get("reasoning_content"))
-        .and_then(|v| v.as_str())
-    {
-        if !token.is_empty() {
-            return Some(format!("__thinking__{}", token));
-        }
     }
 
     if let Some(parts) = value

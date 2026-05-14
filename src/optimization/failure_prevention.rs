@@ -168,7 +168,7 @@ impl FailurePrevention {
         self.update_health_from_counters(service_name, None);
     }
 
-    pub fn record_outcome(&mut self, service_name: &str, success: bool, latency_ms: u64) {
+    pub fn record_outcome(&mut self, service_name: &str, success: bool, _latency_ms: u64) {
         self.ensure_service_registered(service_name);
         *self
             .total_requests
@@ -183,7 +183,8 @@ impl FailurePrevention {
         } else {
             self.record_failure(service_name);
         }
-        self.update_health_from_counters(service_name, Some(latency_ms as f64));
+        // NOTE: record_success and record_failure already call update_health_from_counters,
+        // so we must NOT call it again here to avoid double-counting.
     }
 
     /// Open circuit breaker for a service (predictive failure prevention)

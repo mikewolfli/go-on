@@ -7,7 +7,7 @@ use crate::agent::{Agent, ModelInfo};
 use crate::config::AppConfig;
 use crate::flow::ResolvedRouting;
 use crate::model_selector::{AutomaticModePolicy, ModelSelectionStrategy, SelectionCriteria};
-use crate::orchestrator::select_model_for_task;
+use crate::orchestration::orchestrator::select_model_for_task;
 use anyhow::Result;
 
 /// Extended routing information with selected model

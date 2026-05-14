@@ -132,20 +132,17 @@ pub struct GoOnApp {
 fn detect_system_language() -> Lang {
     for var in &["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"] {
         if let Some(val) = std::env::var_os(var) {
-            let s = val.to_string_lossy().to_lowercase();
-            if s.contains("zh_cn")
-                || s.contains("zh-cn")
-                || s.contains("zh_cn.")
-                || s.contains("chinese")
-            {
+            // Normalize: lowercase and replace hyphens with underscores so
+            // that hyphen-form locales (e.g. "zh-CN", "zh-Hant-TW") are handled.
+            let s = val.to_string_lossy().to_lowercase().replace('-', "_");
+            if s.contains("zh_cn") || s.contains("chinese") {
                 return Lang::ZhCn;
             }
+            // zh_hk (Hong Kong) uses Traditional Chinese like Taiwan.
             if s.contains("zh_tw")
-                || s.contains("zh-tw")
-                || s.contains("zh_tw.")
+                || s.contains("zh_hk")
                 || s.contains("taiwan")
                 || s.contains("hant")
-                || s.contains("hk")
             {
                 return Lang::ZhTw;
             }

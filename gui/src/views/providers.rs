@@ -59,6 +59,9 @@ pub struct ProvidersView {
     copilot_status: String,
     /// Flag to trigger config reload after copilot auth completes
     copilot_needs_reload: bool,
+    /// Whether we've already scheduled a repaint for the current polling cycle.
+    /// Avoids calling request_repaint_after every frame while polling.
+    copilot_poll_repaint_requested: bool,
 }
 
 /// Provider names for the dropdown (34 total, matching providers.toml)
@@ -246,6 +249,7 @@ impl ProvidersView {
             copilot_access_token: String::new(),
             copilot_status: String::new(),
             copilot_needs_reload: false,
+            copilot_poll_repaint_requested: false,
         }
     }
 
@@ -305,6 +309,7 @@ impl ProvidersView {
                     );
                     self.copilot_device_state = Some("polling".to_string());
                     self.copilot_last_poll = Instant::now();
+                    self.copilot_poll_repaint_requested = false;
                     self.copilot_poll_attempts = 0;
                     self.copilot_slow_down_count = 0;
                     self.copilot_last_poll_result.clear();
@@ -333,6 +338,13 @@ impl ProvidersView {
                             self.copilot_needs_reload = true;
                             // Immediately persist to keyring so the token survives app restart
                             // even if the user doesn't click Save.
+                            //
+                            // NOTE: Dual storage is intentional.
+                            // - store_api_key("copilot", …) stores under the "copilot" service name
+                            //   used by the frontend's keyring_util system for general provider keys.
+                            // - keyring::Entry::new("go-on", "github_copilot_token") stores under
+                            //   "github_copilot_token" so the backend process (which reads this
+                            //   specific entry) can also access the token on restart.
                             if let Err(e) = crate::keyring_util::store_api_key("copilot", token) {
                                 eprintln!("Warning: failed to store Copilot token in keyring (copilot_api_key): {e}");
                             }
@@ -453,6 +465,12 @@ impl ProvidersView {
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 self.process_pending(i18n);
+                // If Copilot OAuth just completed, trigger a backend restart
+                // so the new token is picked up immediately.
+                if self.copilot_needs_reload {
+                    self.copilot_needs_reload = false;
+                    changed = true;
+                }
                 self.ensure_models_loaded(backend, ctx);
                 self.refresh_security_cache();
 
@@ -1541,11 +1559,11 @@ impl ProvidersView {
 
                 // ── Copilot Device Code auto-poll (uses system proxy) ──
                 if self.copilot_device_state.as_deref() == Some("polling") {
-                    // Keep UI frames ticking so polling continues even when the user is idle.
-                    ctx.request_repaint_after(Duration::from_secs(1));
+                    let poll_interval = Duration::from_secs(self.copilot_poll_interval);
                     let elapsed = self.copilot_last_poll.elapsed();
-                    if elapsed >= Duration::from_secs(self.copilot_poll_interval) {
+                    if elapsed >= poll_interval {
                         self.copilot_last_poll = Instant::now();
+                        self.copilot_poll_repaint_requested = false;
                         self.copilot_poll_attempts = self.copilot_poll_attempts.saturating_add(1);
                         let tx = self.pending_tx.clone();
                         let device_code = self.copilot_device_code.clone();
@@ -1636,6 +1654,12 @@ impl ProvidersView {
                             }
                             ctx_clone.request_repaint_after(Duration::from_millis(16));
                         });
+                    } else if !self.copilot_poll_repaint_requested {
+                        // Schedule repaint for the exact moment the next poll is due.
+                        // This avoids forcing a full UI repaint every second while polling.
+                        let remaining = poll_interval.saturating_sub(elapsed);
+                        ctx.request_repaint_after(remaining.max(Duration::from_millis(100)));
+                        self.copilot_poll_repaint_requested = true;
                     }
                 }
             });

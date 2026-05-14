@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -106,6 +106,59 @@ impl MistralAgent {
 
 #[async_trait]
 impl Agent for MistralAgent {
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "mistral-large".to_string(),
+                name: "Mistral Large".to_string(),
+                description: "Mistral Large (most capable)".to_string(),
+                is_default: self.model == "mistral-large",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(128_000),
+            },
+            ModelInfo {
+                id: "mistral-medium".to_string(),
+                name: "Mistral Medium".to_string(),
+                description: "Mistral Medium (balanced)".to_string(),
+                is_default: self.model == "mistral-medium",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(32_000),
+            },
+            ModelInfo {
+                id: "mistral-small".to_string(),
+                name: "Mistral Small".to_string(),
+                description: "Mistral Small (fast & cost-efficient)".to_string(),
+                is_default: self.model == "mistral-small",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(32_000),
+            },
+            ModelInfo {
+                id: "open-mistral-nemo".to_string(),
+                name: "Open Mistral Nemo".to_string(),
+                description: "Mistral Nemo (open model)".to_string(),
+                is_default: self.model == "open-mistral-nemo",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(128_000),
+            },
+        ]
+    }
+
     async fn chat(
         &self,
         messages: Vec<Message>,

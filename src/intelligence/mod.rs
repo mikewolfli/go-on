@@ -11,6 +11,17 @@
 //! - **Verification Systems**: Ensuring output correctness and safety
 //! - **Consciousness Metrics**: BLUE38 F-GAP-25 Agency Consciousness Metrics (M10)
 
+/// Shared monotonic timestamp in milliseconds (epoch-based for human readability).
+///
+/// Many intelligence sub-modules previously defined their own `now_ms()` or `now_ts()`
+/// with identical bodies. Use this shared helper instead of duplicating.
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 pub mod adaptive_selector;
 pub mod consensus;
 pub mod discovery;

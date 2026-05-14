@@ -438,6 +438,7 @@ impl PuaRuleEngine {
     }
 
     pub fn escalate(&self, _reason: &str) -> u8 {
+        tracing::debug!("Escalation triggered: {}", _reason);
         let Ok(mut plan) = self.plan.lock() else {
             return 0;
         };

@@ -260,9 +260,11 @@ impl MultiChannelTransport {
             return Ok(());
         }
 
-        // Queue depth check (early exit)
-        if inner.queues.len() >= inner.config.max_queue_depth {
-            bail!("queue depth exceeded for channel {}", ch);
+        // Queue depth check (early exit) — check the specific channel's queue, not channel count
+        if let Some(queue) = inner.queues.get(ch) {
+            if queue.len() >= inner.config.max_queue_depth {
+                bail!("queue depth exceeded for channel {}", ch);
+            }
         }
 
         // Track sent ID (only if dedup enabled)

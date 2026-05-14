@@ -129,8 +129,9 @@ impl ChatView {
             crate::fs_util::load_json_with_backup(&path, "chat sessions");
         // Enforce MAX_MESSAGES cap on each session loaded from disk
         for session in sessions.iter_mut() {
-            while session.messages.len() > crate::views::chat::types::MAX_MESSAGES {
-                session.messages.remove(0);
+            if session.messages.len() > crate::views::chat::types::MAX_MESSAGES {
+                let excess = session.messages.len() - crate::views::chat::types::MAX_MESSAGES;
+                session.messages.drain(0..excess);
             }
         }
         sessions

@@ -4,8 +4,9 @@ use crate::i18n::runtime::{t, tf};
 /// Serializes global env-var writes (`std::env::set_var`) to prevent data races
 /// in concurrent requests handled by the ACP server.
 static SET_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-static COPILOT_MODELS_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<(u64, Vec<String>)>>> =
-    std::sync::OnceLock::new();
+type CopilotModelsCacheEntry = Option<(u64, Vec<String>)>;
+type CopilotModelsCache = std::sync::Mutex<CopilotModelsCacheEntry>;
+static COPILOT_MODELS_CACHE: std::sync::OnceLock<CopilotModelsCache> = std::sync::OnceLock::new();
 
 const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
 const COPILOT_MODELS_URL: &str = "https://api.githubcopilot.com/models";
@@ -56,8 +57,12 @@ fn build_github_client() -> reqwest::Client {
             .trim_start_matches("socks4://");
         if let Some(port_str) = addr.split(':').nth(1) {
             if let Ok(port) = port_str.parse::<u16>() {
+                let socket_addr = match format!("127.0.0.1:{port}").parse() {
+                    Ok(addr) => addr,
+                    Err(_) => continue,
+                };
                 if std::net::TcpStream::connect_timeout(
-                    &format!("127.0.0.1:{port}").parse().unwrap(),
+                    &socket_addr,
                     std::time::Duration::from_millis(100),
                 )
                 .is_err()
@@ -99,7 +104,7 @@ fn build_github_client() -> reqwest::Client {
     reqwest::Client::new()
 }
 
-fn copilot_models_cache() -> &'static std::sync::Mutex<Option<(u64, Vec<String>)>> {
+fn copilot_models_cache() -> &'static CopilotModelsCache {
     COPILOT_MODELS_CACHE.get_or_init(|| std::sync::Mutex::new(None))
 }
 

@@ -113,8 +113,24 @@ Run-Gate-Step "addon: compile + lint" { npm --prefix vscode-addon run check }
 Run-Gate-Step "addon: contract smoke" { node vscode-addon/scripts/contract-smoke.js }
 
 # ── 4. GUI ────────────────────────────────────────────────────────────────────
-Run-Gate-Step "GUI: build" { npm --prefix GUI run build }
-Run-Gate-Step "GUI: contract smoke" { npm --prefix GUI run test:contract }
+Run-Gate-Step "GUI: cargo check" {
+    Push-Location .\gui
+    try {
+        cargo check --all-targets
+    }
+    finally {
+        Pop-Location
+    }
+}
+Run-Gate-Step "GUI: cargo test" {
+    Push-Location .\gui
+    try {
+        cargo test --all-targets
+    }
+    finally {
+        Pop-Location
+    }
+}
 
 # ── 5. Output artifact ────────────────────────────────────────────────────────
 $PassCount = ($Results | Where-Object { $_.Pass }).Count

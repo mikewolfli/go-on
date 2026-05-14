@@ -322,11 +322,14 @@ impl McpServer {
                 Ok(guard) => {
                     // Try exact name match first
                     if let Some(skill) = guard.get(&tool_name) {
-                        Some((tool_name.clone(), skill))
+                        // Clone while lock is held so skill is fully owned data
+                        Some((tool_name.clone(), skill.clone()))
                     } else if let Some(best_match) =
                         guard.best_match_with_input(&tool_name, &tool_input)
                     {
-                        guard.get(&best_match).map(|skill| (best_match, skill))
+                        guard
+                            .get(&best_match)
+                            .map(|skill| (best_match.clone(), skill.clone()))
                     } else {
                         None
                     }

@@ -428,14 +428,18 @@ pub struct ConfigValidator {
     config_path: std::path::PathBuf,
     /// Configuration
     config: AppConfig,
+    /// Cached I18nManager (loaded once to avoid repeated disk I/O)
+    i18n: Option<I18nManager>,
 }
 
 impl ConfigValidator {
     /// Create a new configuration validator
     pub fn new(config_path: &Path, config: AppConfig) -> Self {
+        let i18n = I18nManager::new(resolve_languages_dir(config_path)).ok();
         Self {
             config_path: config_path.to_path_buf(),
             config,
+            i18n,
         }
     }
 
@@ -748,7 +752,7 @@ impl ConfigValidator {
     /// Generate validation report
     pub fn generate_report(&self, result: &ValidationResult) -> String {
         let lang = report_language();
-        let i18n = I18nManager::new(resolve_languages_dir(&self.config_path)).ok();
+        let i18n = &self.i18n;
         let mut report = String::new();
 
         // Header

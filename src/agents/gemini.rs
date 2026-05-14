@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{option_f64, principles_to_text, stream_sse_events, SseEventAction};
 
@@ -104,10 +104,9 @@ impl GeminiAgent {
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "gemini.api_key_env")?;
         let endpoint = format!(
-            "{}/models/{}:streamGenerateContent?alt=sse&key={}",
+            "{}/models/{}:streamGenerateContent?alt=sse",
             self.base_url.trim_end_matches('/'),
             self.model,
-            api_key
         );
         let payload = self.build_payload(messages, principles, &options);
 
@@ -115,6 +114,7 @@ impl GeminiAgent {
             .client
             .post(endpoint)
             .header("Content-Type", "application/json")
+            .header("x-goog-api-key", &api_key)
             .json(&payload)
             .send()
             .await?;
@@ -160,6 +160,59 @@ impl GeminiAgent {
 
 #[async_trait]
 impl Agent for GeminiAgent {
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "gemini-2.0-flash".to_string(),
+                name: "Gemini 2.0 Flash".to_string(),
+                description: "Google Gemini 2.0 Flash (fast and efficient)".to_string(),
+                is_default: self.model == "gemini-2.0-flash",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(1_048_576),
+            },
+            ModelInfo {
+                id: "gemini-2.0-pro".to_string(),
+                name: "Gemini 2.0 Pro".to_string(),
+                description: "Google Gemini 2.0 Pro (most capable)".to_string(),
+                is_default: self.model == "gemini-2.0-pro",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(1_048_576),
+            },
+            ModelInfo {
+                id: "gemini-1.5-pro".to_string(),
+                name: "Gemini 1.5 Pro".to_string(),
+                description: "Google Gemini 1.5 Pro (stable)".to_string(),
+                is_default: self.model == "gemini-1.5-pro",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(1_048_576),
+            },
+            ModelInfo {
+                id: "gemini-1.5-flash".to_string(),
+                name: "Gemini 1.5 Flash".to_string(),
+                description: "Google Gemini 1.5 Flash (cost-efficient)".to_string(),
+                is_default: self.model == "gemini-1.5-flash",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(1_048_576),
+            },
+        ]
+    }
+
     async fn chat(
         &self,
         messages: Vec<Message>,

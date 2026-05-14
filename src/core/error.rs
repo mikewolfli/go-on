@@ -12,6 +12,7 @@
 //!
 //! Each error type provides detailed context and supports error chaining.
 
+use anyhow::anyhow;
 use thiserror::Error;
 
 /// Main application error type
@@ -169,8 +170,47 @@ impl ErrorContext for AppError {
                 }
                 ProxyError::Timeout(msg) => ProxyError::Timeout(format!("{}: {}", context, msg)),
             }),
-            // Similar implementations for other error variants...
-            _ => self,
+            AppError::Validation(err) => AppError::Validation(match err {
+                ValidationError::InvalidConfig(msg) => {
+                    ValidationError::InvalidConfig(format!("{}: {}", context, msg))
+                }
+                ValidationError::MissingField(msg) => {
+                    ValidationError::MissingField(format!("{}: {}", context, msg))
+                }
+                ValidationError::InvalidFormat(msg) => {
+                    ValidationError::InvalidFormat(format!("{}: {}", context, msg))
+                }
+                ValidationError::OutOfRange(msg) => {
+                    ValidationError::OutOfRange(format!("{}: {}", context, msg))
+                }
+            }),
+            AppError::Network(err) => AppError::Network(match err {
+                NetworkError::ConnectionFailed(msg) => {
+                    NetworkError::ConnectionFailed(format!("{}: {}", context, msg))
+                }
+                NetworkError::RequestTimeout(msg) => {
+                    NetworkError::RequestTimeout(format!("{}: {}", context, msg))
+                }
+                NetworkError::Http(code, msg) => {
+                    NetworkError::Http(code, format!("{}: {}", context, msg))
+                }
+                NetworkError::Ssl(msg) => NetworkError::Ssl(format!("{}: {}", context, msg)),
+            }),
+            AppError::Resource(err) => AppError::Resource(match err {
+                ResourceError::FileSystem(msg) => {
+                    ResourceError::FileSystem(format!("{}: {}", context, msg))
+                }
+                ResourceError::Memory(msg) => {
+                    ResourceError::Memory(format!("{}: {}", context, msg))
+                }
+                ResourceError::Database(msg) => {
+                    ResourceError::Database(format!("{}: {}", context, msg))
+                }
+                ResourceError::ResourceExhausted(msg) => {
+                    ResourceError::ResourceExhausted(format!("{}: {}", context, msg))
+                }
+            }),
+            AppError::External(err) => AppError::External(anyhow!("{}: {}", context, err)),
         }
     }
 }

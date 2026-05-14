@@ -3212,6 +3212,17 @@ impl I18n {
             ),
         );
         m.insert(
+            "chat.showAllThinking",
+            tr!(
+                en,
+                "Show/Hide All Thinking",
+                cn,
+                "显示/隐藏所有思考过程",
+                tw,
+                "顯示/隱藏所有思考過程"
+            ),
+        );
+        m.insert(
             "chat.input",
             tr!(
                 en,

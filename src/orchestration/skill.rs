@@ -303,10 +303,7 @@ impl SkillRegistry {
             anyhow::bail!("{}", tf("error.skill_not_found", &[("name", skill_a)]));
         }
         if !self.skills.contains_key(skill_b) {
-            anyhow::bail!(
-                "{}",
-                tf("error.skill_already_registered", &[("name", skill_b)])
-            );
+            anyhow::bail!("{}", tf("error.skill_not_found", &[("name", skill_b)]));
         }
 
         let skill = ComposedSkill {

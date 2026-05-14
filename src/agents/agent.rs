@@ -21,7 +21,7 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::agents::vendors;
 use crate::agents::{
@@ -458,7 +458,7 @@ pub trait Agent: Send + Sync {
             timestamp,
         };
 
-        tracing::error!(
+        error!(
             target = "agent",
             "run_task called on unsupported provider: phase={} task_id={}",
             envelope.phase,

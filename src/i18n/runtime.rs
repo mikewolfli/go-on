@@ -106,6 +106,7 @@ pub struct Translations {
 }
 
 /// Global i18n manager
+#[derive(Clone)]
 pub struct I18nManager {
     /// Current language
     current_language: Arc<RwLock<Language>>,

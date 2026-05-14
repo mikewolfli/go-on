@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,6 +19,8 @@ pub struct BackendClient {
     /// Client for long-lived requests (chat - 180s timeout)
     long_client: reqwest::Client,
     base_url: String,
+    /// Monotonically increasing JSON-RPC request id (per JSON-RPC 2.0 spec)
+    next_id: Arc<AtomicU64>,
     /// Model list cache with timestamp
     models_cache: ModelsCache,
 }
@@ -121,6 +124,7 @@ impl BackendClient {
             quick_client,
             long_client,
             base_url: base_url.trim_end_matches('/').to_string(),
+            next_id: Arc::new(AtomicU64::new(1)),
             models_cache: Arc::new(std::sync::Mutex::new((None, std::time::Instant::now()))),
         }
     }
@@ -297,9 +301,10 @@ impl BackendClient {
         params: Option<Value>,
         attempts: usize,
     ) -> Result<Value, String> {
+        let req_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let body = serde_json::json!({
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": req_id,
             "method": method,
             "params": params.unwrap_or(Value::Null),
         });

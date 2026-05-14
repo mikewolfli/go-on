@@ -339,7 +339,7 @@
     "cli.model_name_prompt": "模型名称 (留空跳过)",
     "cli.select_provider": "请选择提供商:",
     "cli.detected_marker": " (已检测到)",
-    "cli.detected_note": "（* = 已在環境/金鑰環中偵測到金鑰。預設：",
+    "cli.detected_note": "（* = 已在环境/密钥环中检测到密钥。默认：",
     "cli.other_option": "[其他]",
     "cli.enter_numbers": "输入编号或 \"all\" ",
     "cli.provider_required": "至少需要一个提供商。",

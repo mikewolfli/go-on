@@ -8,6 +8,8 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::intelligence::now_ms;
+
 // ── Configuration ───────────────────────────────────────────────────────────
 
 /// Configuration for the consciousness metrics tracker.
@@ -448,12 +450,7 @@ impl ConsciousnessMetrics {
 
 // ── Timestamp helper ───────────────────────────────────────────────────────
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+// Use `crate::intelligence::now_ms()` instead — shared utility in mod.rs
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 

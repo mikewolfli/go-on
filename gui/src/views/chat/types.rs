@@ -135,6 +135,7 @@ pub enum PendingResponse {
     /// Agent name → list of model IDs. Use a HashMap to preserve agent-grouping.
     Models(std::collections::HashMap<String, Vec<String>>),
     UiMessage(String),
+    ExternalEditorResult(String),
 }
 
 /// Model performance statistics for caching and analysis

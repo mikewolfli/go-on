@@ -174,10 +174,10 @@ pub fn start_watcher(languages_dir: &Path, check_interval: Duration) -> Result<b
             .read()
             .map_err(|e| anyhow::anyhow!("failed to read i18n global lock: {}", e))?;
         match guard.as_ref() {
-            Some(_mgr) => {
-                // Create a new Arc-wrapped copy of the manager for the watcher
-                let copy = I18nManager::new(languages_dir)?;
-                Arc::new(copy)
+            Some(mgr) => {
+                // Clone the existing global manager so the watcher shares the same data.
+                // Deref first so we clone the I18nManager itself, not the &I18nManager reference.
+                Arc::new((*mgr).clone())
             }
             None => return Ok(false),
         }

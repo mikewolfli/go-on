@@ -344,6 +344,68 @@ impl Agent for AnthropicAgent {
             .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("claude")))
             .into())
     }
+
+    fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
+        vec![
+            crate::agent::ModelInfo {
+                id: "claude-sonnet-4".to_string(),
+                name: "Claude Sonnet 4".to_string(),
+                description: "Anthropic Claude Sonnet 4 (latest generation)".to_string(),
+                is_default: self.model == "claude-sonnet-4",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "reasoning".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+                context_window: Some(200_000),
+            },
+            crate::agent::ModelInfo {
+                id: "claude-3-5-sonnet".to_string(),
+                name: "Claude 3.5 Sonnet".to_string(),
+                description: "Anthropic Claude 3.5 Sonnet".to_string(),
+                is_default: self.model == "claude-3-5-sonnet",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+                context_window: Some(200_000),
+            },
+            crate::agent::ModelInfo {
+                id: "claude-3-opus".to_string(),
+                name: "Claude 3 Opus".to_string(),
+                description: "Anthropic Claude 3 Opus (most capable)".to_string(),
+                is_default: self.model == "claude-3-opus",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+                context_window: Some(200_000),
+            },
+            crate::agent::ModelInfo {
+                id: "claude-3-haiku".to_string(),
+                name: "Claude 3 Haiku".to_string(),
+                description: "Anthropic Claude 3 Haiku (fast & cost-efficient)".to_string(),
+                is_default: self.model == "claude-3-haiku",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+                context_window: Some(200_000),
+            },
+        ]
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

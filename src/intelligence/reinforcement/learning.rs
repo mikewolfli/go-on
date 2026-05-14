@@ -581,7 +581,7 @@ impl QLearningAgent {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             state.hash(&mut hasher);
             action.hash(&mut hasher);
-            hasher.finish().is_multiple_of(2)
+            hasher.finish() % 2 == 0
         };
 
         if coin {

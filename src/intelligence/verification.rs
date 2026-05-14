@@ -56,7 +56,7 @@ impl DeterministicVerifier {
 
         // Check for obviously incomplete code blocks
         let code_fence_opens = content.matches("```").count();
-        if !code_fence_opens.is_multiple_of(2) {
+        if code_fence_opens % 2 != 0 {
             issues.push("unclosed markdown code fence (odd number of ```)".to_string());
         }
 

@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -116,6 +116,59 @@ impl LlamaAgent {
 
 #[async_trait]
 impl Agent for LlamaAgent {
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "llama-3.1-70b".to_string(),
+                name: "Llama 3.1 70B".to_string(),
+                description: "Meta Llama 3.1 70B (most capable)".to_string(),
+                is_default: self.model == "llama-3.1-70b",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(131_072),
+            },
+            ModelInfo {
+                id: "llama-3.1-8b".to_string(),
+                name: "Llama 3.1 8B".to_string(),
+                description: "Meta Llama 3.1 8B (fast & efficient)".to_string(),
+                is_default: self.model == "llama-3.1-8b",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(131_072),
+            },
+            ModelInfo {
+                id: "llama-3-70b".to_string(),
+                name: "Llama 3 70B".to_string(),
+                description: "Meta Llama 3 70B".to_string(),
+                is_default: self.model == "llama-3-70b",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(8_192),
+            },
+            ModelInfo {
+                id: "llama-3-8b".to_string(),
+                name: "Llama 3 8B".to_string(),
+                description: "Meta Llama 3 8B (lightweight)".to_string(),
+                is_default: self.model == "llama-3-8b",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(8_192),
+            },
+        ]
+    }
+
     async fn chat(
         &self,
         messages: Vec<Message>,

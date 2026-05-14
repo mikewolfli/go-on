@@ -36,6 +36,7 @@ pub struct ChatView {
     pub input: String,
     pub sending: bool,
     pub error: String,
+    pub success_message: Option<String>,
     pub ai_status: AiStatus,
     pub selected_phase: String,
     pub selected_mode: String,
@@ -145,19 +146,39 @@ impl ChatView {
     }
 
     /// Improved token counting algorithm
-    /// Uses a more accurate estimation based on character and word count
+    /// Uses a more accurate estimation based on character and word count.
+    /// Accounts for CJK (Chinese/Japanese/Korean) characters which are
+    /// denser (~1.5 chars/token) than Latin script (~4 chars/token).
     fn estimate_tokens_improved(text: &str) -> usize {
         // Clean text by removing markdown and extra whitespace
         let clean_text = Self::markdown_to_plain_text(text);
 
-        // Token estimation formula (OpenAI compatible)
-        // Approximately: 1 token per 4 characters for English text
-        // Plus 1 token per word for better accuracy
         let char_count = clean_text.chars().count();
         let word_count = clean_text.split_whitespace().count();
 
+        // Count CJK characters for adjusted token estimation.
+        let cjk_count = clean_text
+            .chars()
+            .filter(|&c| {
+                let code = c as u32;
+                (0x4E00..=0x9FFF).contains(&code)      // CJK Unified Ideographs
+                    || (0x3400..=0x4DBF).contains(&code) // CJK Extension A
+                    || (0x2E80..=0x2FDF).contains(&code) // CJK Radicals
+                    || (0x3040..=0x30FF).contains(&code) // Hiragana & Katakana
+                    || (0xAC00..=0xD7AF).contains(&code) // Hangul Syllables
+            })
+            .count();
+
+        // Blended divisor: CJK chars are ~1.5 tokens each, Latin ~4 chars each.
+        let non_cjk = char_count.saturating_sub(cjk_count);
+        let blended_divisor = if char_count > 0 {
+            (cjk_count as f64 * 1.5 + non_cjk as f64 * 4.0) / char_count as f64
+        } else {
+            4.0
+        };
+
         // Weighted average: 40% from chars, 60% from words
-        let from_chars = (char_count as f64 / 4.0).ceil() as usize;
+        let from_chars = (char_count as f64 / blended_divisor).ceil() as usize;
         let from_words = (word_count as f64 / 0.75).ceil() as usize;
 
         ((from_chars as f64 * 0.4 + from_words as f64 * 0.6).ceil() as usize).max(1)
@@ -192,7 +213,8 @@ impl ChatView {
                 || name.starts_with(&format!("{} ", localized))
                 // Fallback: English default names (for tests and backward compat)
                 || name == "New Chat"
-                || name.starts_with("Chat ")
+                // Match only "Chat <number>" (e.g. "Chat 3"), not user-named sessions like "Chat about project"
+                || (name.starts_with("Chat ") && name[5..].parse::<u64>().is_ok())
                 || name == "New session"
                 || name.starts_with("New session ")
     }
@@ -343,6 +365,7 @@ impl ChatView {
             input: String::new(),
             sending: false,
             error: String::new(),
+            success_message: None,
             ai_status: AiStatus::Idle,
             selected_phase: initial_phase,
             selected_mode: saved_mode,
@@ -509,13 +532,6 @@ impl ChatView {
     /// any specific model ID.
     const COPILOT_AUTO_MODEL: &'static str = "copilot/auto";
 
-    fn is_copilot_agent(&self) -> bool {
-        self.selected_agent == "copilot"
-            || self.available_agent_models.contains_key("copilot")
-                && self.selected_agent.is_empty()
-                && self.selected_model == Self::COPILOT_AUTO_MODEL
-    }
-
     fn sync_model_selection(&mut self) {
         // Ensure model name is trimmed
         self.selected_model = self.selected_model.trim().to_string();
@@ -641,6 +657,19 @@ impl ChatView {
                     if state.msg_idx > idx {
                         state.msg_idx -= 1;
                     }
+                }
+                // Adjust show_thinking_idx if it points at or after the removed message
+                if self.show_thinking_idx == Some(idx) {
+                    self.show_thinking_idx = None;
+                } else if self.show_thinking_idx.map_or(false, |i| i > idx) {
+                    self.show_thinking_idx = Some(self.show_thinking_idx.unwrap() - 1);
+                }
+                // Adjust edit_msg_idx similarly
+                if self.edit_msg_idx == Some(idx) {
+                    self.edit_msg_idx = None;
+                    self.edit_msg_buf.clear();
+                } else if self.edit_msg_idx.map_or(false, |i| i > idx) {
+                    self.edit_msg_idx = Some(self.edit_msg_idx.unwrap() - 1);
                 }
             }
         }
@@ -801,6 +830,7 @@ mod tests {
             input: String::new(),
             sending: false,
             error: String::new(),
+            success_message: None,
             ai_status: AiStatus::Idle,
             selected_phase: String::new(),
             selected_mode: "ask".to_string(),

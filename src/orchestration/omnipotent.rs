@@ -87,7 +87,11 @@ pub struct OmnipotentSession {
 
 impl Drop for OmnipotentSession {
     fn drop(&mut self) {
-        self.active_sessions.fetch_sub(1, Ordering::Release);
+        self.active_sessions
+            .fetch_update(Ordering::Release, Ordering::Relaxed, |v| {
+                Some(v.saturating_sub(1))
+            })
+            .ok();
     }
 }
 

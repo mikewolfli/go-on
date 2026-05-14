@@ -203,45 +203,7 @@ pub fn make_entry(
 }
 
 fn uuid_v4() -> String {
-    use std::cell::RefCell;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    thread_local! {
-        static RNG: RefCell<u64> = {
-            let seed = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0);
-            RefCell::new(seed)
-        };
-    }
-
-    let rand_a: u64 = RNG.with(|rng| {
-        let mut state = rng.borrow_mut();
-        *state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        *state
-    });
-
-    let rand_b: u64 = RNG.with(|rng| {
-        let mut state = rng.borrow_mut();
-        *state = state
-            .wrapping_mul(2862933555777941757)
-            .wrapping_add(3037000493);
-        *state
-    });
-
-    let time_low = (rand_a & 0xffff_ffff) as u32;
-    let time_mid = ((rand_a >> 32) & 0xffff) as u16;
-    let time_hi_and_version = ((rand_a >> 48) as u16 & 0x0fff) | 0x4000;
-    let clock_seq_hi = ((rand_b >> 32) as u8 & 0x3f) | 0x80;
-    let clock_seq_low = (rand_b >> 24) as u8;
-    let node_low = rand_b & 0xffff_ffff_ffff;
-    format!(
-        "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:012x}",
-        time_low, time_mid, time_hi_and_version, clock_seq_hi, clock_seq_low, node_low
-    )
+    uuid::Uuid::new_v4().to_string()
 }
 
 fn now_ms() -> u64 {

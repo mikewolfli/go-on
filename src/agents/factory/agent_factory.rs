@@ -370,7 +370,7 @@ impl AgentFactory {
     pub fn prune_expired(&self) -> usize {
         let now_ms = now_epoch_ms();
 
-        // Collect expired instance IDs.
+        // Collect expired instance IDs while holding only the expirations lock.
         let expired_ids: Vec<String> = self
             .expirations
             .lock()
@@ -386,7 +386,26 @@ impl AgentFactory {
 
         let count = expired_ids.len();
         for id in &expired_ids {
-            self.destroy_agent(id);
+            // Inline removal with consistent lock order (instances → expirations)
+            // instead of calling destroy_agent, to avoid potential deadlock
+            // with find_agents_by_capability (which locks templates → instances).
+            {
+                let mut instances = match self.instances.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => continue,
+                };
+                if instances.remove(id).is_none() {
+                    continue;
+                }
+            }
+            {
+                let mut expirations = match self.expirations.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => continue,
+                };
+                expirations.remove(id);
+            }
+            self.destroyed_count.fetch_add(1, Ordering::Release);
         }
         count
     }

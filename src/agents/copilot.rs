@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 use tracing::warn;
 
-use crate::agent::{Agent, Message, ModelInfo};
+use crate::agent::{resolve_secret, Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, option_string, principles_to_text};
 use crate::i18n::runtime::tf;
@@ -88,10 +88,7 @@ impl CopilotAgent {
             return None;
         }
 
-        let record = match candidate.as_object() {
-            Some(record) => record,
-            None => return None,
-        };
+        let record = candidate.as_object()?;
         ["id", "model", "model_id", "name"]
             .iter()
             .find_map(|key| record.get(*key).and_then(Value::as_str))
@@ -335,19 +332,9 @@ impl CopilotAgent {
         }
 
         // Slow path: fetch a new token.
-        // Support keyring:// references (e.g. "keyring://go-on/copilot_api_key")
-        let github_token = if let Some(rest) = self.token_env.strip_prefix("keyring://") {
-            // rest = "service/account"
-            let mut parts = rest.splitn(2, '/');
-            let service = parts.next().unwrap_or("go-on");
-            let account = parts.next().unwrap_or("copilot_api_key");
-            keyring::Entry::new(service, account)
-                .and_then(|e| e.get_password())
-                .with_context(|| format!("keyring lookup failed for {}", self.token_env))?
-        } else {
-            std::env::var(&self.token_env)
-                .with_context(|| tf("error.copilot_env_not_set", &[("name", &self.token_env)]))?
-        };
+        // Use shared resolve_secret() which handles env vars and keyring:// references
+        // with secret pooling, rotation, and security validation.
+        let github_token = resolve_secret(&self.token_env, "copilot.token_env")?;
         let response = self
             .client
             .get(COPILOT_TOKEN_URL)

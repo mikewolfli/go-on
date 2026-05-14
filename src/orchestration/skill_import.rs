@@ -394,8 +394,8 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>> {
         anyhow::bail!(
             "{}",
             tf(
-                "error.missing_field",
-                &[("field", &format!("request failed for {}", url))]
+                "error.http_request_failed",
+                &[("url", url), ("status", &status.to_string())]
             )
         );
     }
@@ -404,14 +404,17 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>> {
             anyhow::bail!(
                 "{}",
                 tf(
-                    "error.missing_field",
-                    &[(
-                        "field",
-                        &format!(
-                            "response body too large for {}: {} bytes (max {})",
-                            url, content_length, SKILL_IMPORT_MAX_BYTES
-                        )
-                    )]
+                    "error.http_request_failed",
+                    &[
+                        ("url", url),
+                        (
+                            "reason",
+                            &format!(
+                                "response body too large: {} bytes (max {})",
+                                content_length, SKILL_IMPORT_MAX_BYTES
+                            )
+                        ),
+                    ]
                 )
             );
         }
@@ -425,14 +428,17 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>> {
             anyhow::bail!(
                 "{}",
                 tf(
-                    "error.missing_field",
-                    &[(
-                        "field",
-                        &format!(
-                            "response body too large for {}: exceeded {} bytes",
-                            url, SKILL_IMPORT_MAX_BYTES
-                        )
-                    )]
+                    "error.http_request_failed",
+                    &[
+                        ("url", url),
+                        (
+                            "reason",
+                            &format!(
+                                "response stream body exceeded {} bytes",
+                                SKILL_IMPORT_MAX_BYTES
+                            )
+                        ),
+                    ]
                 )
             );
         }

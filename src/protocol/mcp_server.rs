@@ -369,7 +369,15 @@ fn extract_content_length(headers: &str) -> Option<usize> {
         match found {
             None => found = Some(val),
             Some(prev) if prev == val => {} // duplicate with same value — OK
-            Some(_) => return None,         // different values — reject per RFC 7230
+            Some(prev) => {
+                // Conflict — RFC 7230 forbids differing Content-Length headers.
+                // Log a warning and use the last value to avoid body truncation.
+                warn!(
+                    "conflicting Content-Length headers: {} vs {}; using last value",
+                    prev, val
+                );
+                found = Some(val);
+            }
         }
     }
     found
