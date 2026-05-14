@@ -101,6 +101,8 @@ pub struct ChatView {
     /// Agent → [model_id, …] for the two-level picker
     available_agent_models: std::collections::HashMap<String, Vec<String>>,
     models_loaded: bool,
+    /// Timestamp of last models fetch attempt (for retry throttle)
+    last_models_fetch: std::time::Instant,
     last_selected_agent: String,
     stream_chunk_flush_interval: std::time::Duration,
     stream_repaint_interval: std::time::Duration,
@@ -426,6 +428,7 @@ impl ChatView {
             available_models: vec!["auto".to_string()],
             available_agent_models: std::collections::HashMap::new(),
             models_loaded: false,
+            last_models_fetch: std::time::Instant::now(),
             last_selected_agent: String::new(),
             stream_chunk_flush_interval: std::time::Duration::from_millis(33),
             stream_repaint_interval: std::time::Duration::from_millis(33),
@@ -891,6 +894,7 @@ mod tests {
             available_models: vec!["auto".to_string()],
             available_agent_models: std::collections::HashMap::new(),
             models_loaded: false,
+            last_models_fetch: std::time::Instant::now(),
             last_selected_agent: String::new(),
             stream_chunk_flush_interval: std::time::Duration::from_millis(33),
             stream_repaint_interval: std::time::Duration::from_millis(33),

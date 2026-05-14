@@ -802,6 +802,7 @@ impl ChatView {
                     } else {
                         flat
                     };
+                    self.models_loaded = true;
                     // Preserve copilot-auto selection even though the backend
                     // does not report it as a model — it is a sentinel that tells
                     // the GUI to defer model selection to the Copilot service.

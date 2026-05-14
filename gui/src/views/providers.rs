@@ -217,40 +217,81 @@ fn provider_requires_secret(provider: &str) -> bool {
 }
 
 fn build_copilot_http_client() -> reqwest::Client {
-    let proxy_urls = [
-        "http://127.0.0.1:15732",
-        "http://127.0.0.1:7890",
-        "socks5://127.0.0.1:7890",
-        "http://127.0.0.1:10809",
-        "http://127.0.0.1:10808",
-        "http://127.0.0.1:1080",
-        "http://127.0.0.1:33210",
-    ];
-    let env_url = std::env::var("HTTPS_PROXY")
-        .or_else(|_| std::env::var("https_proxy"))
-        .or_else(|_| std::env::var("ALL_PROXY"))
-        .or_else(|_| std::env::var("all_proxy"))
-        .ok();
+    // Strategy 1: direct connection (no proxy) — most reliable for github.com
+    // Do this FIRST so a bad proxy config doesn't poison the OnceLock cache.
+    if let Ok(client) = reqwest::Client::builder().no_proxy().build() {
+        eprintln!("INFO: copilot auth using direct connection (no proxy)");
+        return client;
+    }
 
-    for url in env_url
-        .as_deref()
-        .into_iter()
-        .chain(proxy_urls.iter().copied())
-    {
-        let proxy_result = if url.starts_with("socks5://") || url.starts_with("socks4://") {
-            reqwest::Proxy::all(url)
-        } else {
-            reqwest::Proxy::https(url)
-        };
-        if let Ok(proxy) = proxy_result {
-            if let Ok(client) = reqwest::Client::builder().proxy(proxy).build() {
-                return client;
+    // Strategy 2: env var proxy (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY)
+    let env_vars = [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ];
+    for var in &env_vars {
+        if let Ok(url) = std::env::var(var) {
+            let url = url.trim().to_string();
+            if url.is_empty() {
+                continue;
+            }
+            for make_proxy in [
+                reqwest::Proxy::all,
+                reqwest::Proxy::https,
+                reqwest::Proxy::http,
+            ] {
+                if let Ok(proxy) = make_proxy(&url) {
+                    if let Ok(client) = reqwest::Client::builder().proxy(proxy).build() {
+                        eprintln!("INFO: copilot auth using proxy from {}: {}", var, url);
+                        return client;
+                    }
+                }
             }
         }
     }
 
-    // Fallback: keep legacy behavior for environments with broken trust stores.
+    // Strategy 3: common local proxy ports
+    let common_proxies: [&str; 8] = [
+        "http://127.0.0.1:7890",
+        "socks5://127.0.0.1:7890",
+        "http://127.0.0.1:10809",
+        "socks5://127.0.0.1:10809",
+        "http://127.0.0.1:10808",
+        "http://127.0.0.1:15732",
+        "http://127.0.0.1:1080",
+        "http://127.0.0.1:33210",
+    ];
+    for url in common_proxies {
+        if url.starts_with("socks") {
+            if let Ok(proxy) = reqwest::Proxy::all(url) {
+                if let Ok(client) = reqwest::Client::builder().proxy(proxy).build() {
+                    eprintln!("INFO: copilot auth using proxy {}", url);
+                    return client;
+                }
+            }
+        } else {
+            for make_proxy in [
+                reqwest::Proxy::all,
+                reqwest::Proxy::https,
+                reqwest::Proxy::http,
+            ] {
+                if let Ok(proxy) = make_proxy(url) {
+                    if let Ok(client) = reqwest::Client::builder().proxy(proxy).build() {
+                        eprintln!("INFO: copilot auth using proxy {}", url);
+                        return client;
+                    }
+                }
+            }
+        }
+    }
+
+    // Strategy 4: no proxy + accept invalid certs (for broken corporate cert stores)
     if let Ok(client) = reqwest::Client::builder()
+        .no_proxy()
         .danger_accept_invalid_certs(true)
         .build()
     {
@@ -260,6 +301,8 @@ fn build_copilot_http_client() -> reqwest::Client {
         return client;
     }
 
+    // Final fallback: default system proxy detection
+    eprintln!("INFO: copilot auth using default system proxy detection");
     reqwest::Client::new()
 }
 
@@ -694,7 +737,16 @@ impl ProvidersView {
                                             }
                                         }
                                         Ok(Err(e)) => {
-                                            let msg = format!("__copilot_device_err__:{}", e);
+                                            let detail = if e.is_connect() {
+                                                format!("connection refused: {}", e)
+                                            } else if e.is_timeout() {
+                                                format!("timeout: {}", e)
+                                            } else if e.is_body() {
+                                                format!("body error: {}", e)
+                                            } else {
+                                                format!("{}", e)
+                                            };
+                                            let msg = format!("__copilot_device_err__:{}", detail);
                                             if let Err(e) = tx.try_send(msg) {
                                                 eprintln!("WARN: providers try_send failed: {:?}", e);
                                             }
@@ -1674,7 +1726,14 @@ impl ProvidersView {
                                     }
                                 }
                                 Ok(Err(e)) => {
-                                    let msg = format!("__copilot_poll_err__:{}", e);
+                                    let detail = if e.is_connect() {
+                                        format!("connection refused: {}", e)
+                                    } else if e.is_timeout() {
+                                        format!("timeout: {}", e)
+                                    } else {
+                                        format!("{}", e)
+                                    };
+                                    let msg = format!("__copilot_poll_err__:{}", detail);
                                     if let Err(e) = tx.try_send(msg) {
                                         eprintln!("WARN: providers try_send failed: {:?}", e);
                                     }

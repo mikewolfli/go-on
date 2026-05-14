@@ -264,7 +264,10 @@ impl ChatView {
             });
         }
 
-        if !self.models_loaded {
+        if !self.models_loaded
+            && self.last_models_fetch.elapsed() > std::time::Duration::from_secs(3)
+        {
+            self.last_models_fetch = std::time::Instant::now();
             let backend_clone = backend.clone();
             let tx = self.pending_tx.clone();
             let ctx_clone = ctx.clone();
@@ -286,11 +289,10 @@ impl ChatView {
                     }
                     Err(_) => {
                         eprintln!("Warning: Failed to load models from backend (timeout)");
+                        ctx_clone.request_repaint_after(std::time::Duration::from_millis(3000));
                     }
                 }
             });
-
-            self.models_loaded = true;
         }
 
         // Delegate to the stable layout (uses SidePanel/CentralPanel, no bottom_up).
