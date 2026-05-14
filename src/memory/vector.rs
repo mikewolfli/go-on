@@ -23,13 +23,6 @@ use rusqlite::{ffi::sqlite3_auto_extension, params, Connection, OptionalExtensio
 use sha2::{Digest, Sha256};
 #[cfg(not(feature = "backend-postgres"))]
 use sqlite_vec::sqlite3_vec_init;
-#[cfg(all(not(feature = "backend-postgres"), feature = "profile-local"))]
-#[cfg(all(
-    not(feature = "backend-postgres"),
-    feature = "profile-local",
-    not(feature = "profile-simple-server"),
-    not(feature = "profile-multi-users-server")
-))]
 use tracing::warn;
 
 /// Vector search hit
