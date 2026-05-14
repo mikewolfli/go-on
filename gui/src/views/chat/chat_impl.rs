@@ -507,10 +507,8 @@ impl ChatView {
     /// It signals that the VS Code / GitHub Copilot extension should auto-select
     /// the optimal model on the server side — Go-on does not hardcode or choose
     /// any specific model ID.
-    const COPILOT_AUTO_MODEL: &'static str = "copilot-auto";
+    const COPILOT_AUTO_MODEL: &'static str = "copilot/auto";
 
-    /// Returns `true` if the currently selected agent (or the provided agent name)
-    /// is the GitHub Copilot agent.
     fn is_copilot_agent(&self) -> bool {
         self.selected_agent == "copilot"
             || self.available_agent_models.contains_key("copilot")

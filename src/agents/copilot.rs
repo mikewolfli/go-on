@@ -173,11 +173,18 @@ impl CopilotAgent {
         messages: Vec<Message>,
         options: Option<HashMap<String, Value>>,
     ) -> Value {
-        let model = option_string(&options, "model").unwrap_or_else(|| "copilot".to_string());
-
-        // Map internal aliases to concrete model names that the Copilot API accepts.
+        // ── Model handling ────────────────────────────────────────────
+        // VS Code Copilot extension resolves "auto" to a concrete model
+        // before sending the request.  The resolution is based on the
+        // user's subscription tier (fetched from the Copilot /models API).
+        //
+        // Go-on passes the resolved model through, or defaults to "gpt-4o"
+        // (the safest fallback that all Copilot tiers support).
+        let model = option_string(&options, "model").unwrap_or_default();
         let mapped_model = match model.as_str() {
-            "auto" | "copilot-auto" | "copilot" | "github-copilot" => "gpt-4o",
+            "" | "auto" | "copilot/auto" | "copilot-auto" | "copilot" | "github-copilot" => {
+                "gpt-4o"
+            }
             other => other,
         };
 
@@ -190,35 +197,6 @@ impl CopilotAgent {
         apply_openai_common_options(&mut payload, &options);
 
         payload
-    }
-
-    fn is_quota_or_limit_error(message: &str) -> bool {
-        let text = message.to_ascii_lowercase();
-        text.contains("429")
-            || text.contains("rate limit")
-            || text.contains("quota")
-            || text.contains("token") && text.contains("limit")
-            || text.contains("insufficient_quota")
-            || text.contains("billing")
-            || text.contains("exceeded") && text.contains("limit")
-    }
-
-    fn should_try_free_model(options: &Option<HashMap<String, Value>>) -> bool {
-        match option_string(options, "model").as_deref() {
-            None | Some("") => true,
-            Some(model) => {
-                let model = model.to_ascii_lowercase();
-                model == "auto" || model == "copilot-auto" || model == "copilot"
-            }
-        }
-    }
-
-    fn with_free_model(options: &Option<HashMap<String, Value>>) -> Option<HashMap<String, Value>> {
-        let mut next = options.clone().unwrap_or_default();
-        let fallback_model = option_string(options, "copilot_fallback_model")
-            .unwrap_or_else(|| "gpt-4o-mini".to_string());
-        next.insert("model".to_string(), json!(fallback_model));
-        Some(next)
     }
 
     async fn chat_once(
@@ -255,7 +233,53 @@ impl CopilotAgent {
             );
         }
 
-        stream_sse_to_sender(response, sender).await
+        // Stream the SSE response and capture the actual model name.
+        // OpenAI-compatible streaming responses include the "model" field
+        // in every SSE data event.  We capture the first non-empty one.
+        let actual_model = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let capture = actual_model.clone();
+        let stream_sender = sender.clone();
+
+        crate::agents::stream_sse_events(response, move |data| {
+            use crate::agents::SseEventAction;
+
+            if data.trim() == "[DONE]" {
+                return Ok(SseEventAction::Stop);
+            }
+
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                // Capture model name from the first event that has it.
+                if let Ok(mut m) = capture.lock() {
+                    if m.is_none() {
+                        if let Some(model_name) = json.get("model").and_then(|v| v.as_str()) {
+                            if !model_name.is_empty() {
+                                *m = Some(model_name.to_string());
+                            }
+                        }
+                    }
+                }
+
+                if let Some(token) = crate::agents::extract_token(&json) {
+                    if stream_sender.send(token).is_err() {
+                        return Ok(SseEventAction::Stop);
+                    }
+                }
+            }
+
+            Ok(SseEventAction::Continue)
+        })
+        .await?;
+
+        // Notify the caller about the actual model used.
+        if let Ok(mutex) = actual_model.lock() {
+            if let Some(ref model_name) = *mutex {
+                if !model_name.is_empty() {
+                    let _ = sender.send(format!("__model_used__:{}", model_name));
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -268,127 +292,104 @@ impl Agent for CopilotAgent {
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
-        let mut last_error: Option<anyhow::Error> = None;
-        let mut free_model_attempted = false;
-
-        let mut active_options = options.clone();
-
-        // ── Auto model selection (copilot-auto) ──────────────────────
-        // Emulates VSCode's "auto" model selection: tries the best available
-        // model first, then falls back to cheaper/available alternatives when
-        // quota, rate limits, or "model not supported" errors are hit.
+        // ── Copilot auto model selection ──────────────────────────────
+        // VS Code / GitHub Copilot (official) pre-resolves "Auto" to the
+        // best available model for the user's subscription tier and sends
+        // that concrete model ID to the Copilot API.  There is no "let the
+        // server decide" mode — the client always chooses.
         //
-        // This works for ALL subscription tiers (Free / Pro / Pro+ / Business
-        // / Enterprise) because the Copilot API tells us which models the
-        // user's plan supports — unsupported models return a 400 with
-        // "model_not_supported".  We simply try the next in the list.
-        //
-        // The model pool covers every tier:
-        //   Pro+ & Enterprise → all models available
-        //   Pro → most premium models
-        //   Business → depends on org policy
-        //   Free → limited set, falls through to gpt-5-mini / gpt-4o-mini
-        //
-        // Order: highest quality first.  Users with higher-tier plans will
-        // get the best model immediately.  Lower-tier users will quickly skip
-        // unsupported models and land on one they can use.
+        // Go-on replicates this: when options.model is copilot-auto / auto
+        // / empty, we pick the highest-capability model from our known list
+        // and try it.  On failure (unsupported, quota) we fall through to
+        // the next best.  The actual model from the successful response is
+        // captured from the SSE model field and sent back as __model_used__.
 
-        let is_auto = Self::should_try_free_model(&active_options);
+        // Determine which concrete model IDs to try.
+        let current_model = option_string(&options, "model").unwrap_or_default();
+        let is_auto = current_model.is_empty()
+            || current_model.eq_ignore_ascii_case("auto")
+            || current_model.eq_ignore_ascii_case("copilot/auto")
+            || current_model.eq_ignore_ascii_case("copilot-auto")
+            || current_model.eq_ignore_ascii_case("copilot");
 
-        // Complete fallback chain covering all Copilot subscription tiers.
-        // All model IDs that Copilot Chat API accepts.
-        let auto_models: Vec<&str> = if is_auto {
-            vec![
-                "claude-opus-4",        // Best overall (Pro+, Enterprise)
-                "gpt-5",                // OpenAI flagship (Pro+, Pro, Enterprise)
-                "claude-sonnet-4",      // Anthropic balanced (Pro+, Pro, Enterprise)
-                "o1",                   // Reasoning (Pro+, Pro, Enterprise)
-                "gpt-4o",               // Default premium (all tiers)
-                "claude-3.5-sonnet",    // Legacy premium (all tiers)
-                "o3-mini",              // Lightweight reasoning (all tiers)
-                "gemini-2.0-flash-001", // Google fast (all tiers)
-                "gpt-4o-mini",          // Lightweight (all tiers, 0x multiplier)
-                "gpt-5-mini",           // Latest mini (Free primary)
+        let candidates: Vec<String> = if is_auto {
+            // All known Copilot models, ordered by capability descending.
+            // The first one that returns a successful response wins.
+            [
+                // Ultra-premium (Pro+, Enterprise)
+                "claude-opus-4",
+                "gemini-2.5-pro",
+                // Flagship reasoning
+                "o1",
+                "o3",
+                // Top-tier chat
+                "gpt-5",
+                "claude-sonnet-4",
+                "gemini-2.0-flash-001",
+                // Premium
+                "gpt-4.1",
+                "gpt-4o",
+                "claude-3.5-sonnet",
+                // Lightweight reasoning
+                "o3-mini",
+                "o4-mini",
+                // Budget / fallback
+                "gpt-4.1-mini",
+                "gpt-4o-mini",
+                "gpt-5-mini",
             ]
+            .iter()
+            .map(|&s| s.to_string())
+            .collect()
         } else {
-            vec![]
+            vec![current_model.clone()]
         };
 
-        if is_auto && !auto_models.is_empty() {
-            for &model_id in &auto_models {
+        let mut last_error: Option<anyhow::Error> = None;
+
+        'models: for model_id in &candidates {
+            for attempt in 0..=2 {
                 let mut model_opts = options.clone().unwrap_or_default();
                 model_opts.insert("model".to_string(), json!(model_id));
                 let model_options = Some(model_opts);
 
-                for attempt in 0..=2 {
-                    match self
-                        .chat_once(
-                            messages.clone(),
-                            principles.clone(),
-                            model_options.clone(),
-                            sender.clone(),
-                        )
-                        .await
-                    {
-                        Ok(()) => {
-                            // Notify the caller which model was actually used.
-                            // This token is intercepted by run_agent_collecting
-                            // and excluded from the response text.
-                            let _ = sender.send(format!("__model_used__:{}", model_id));
-                            return Ok(());
-                        }
-                        Err(err) => {
-                            let err_text = err.to_string();
-                            let is_limit = Self::is_quota_or_limit_error(&err_text);
-                            // Quota / rate-limit / model-not-supported → skip
-                            // to the next model in the chain.
-                            if is_limit
-                                || err_text.contains("model_not_supported")
-                                || err_text.contains("not supported")
-                            {
-                                break;
-                            }
-                            if attempt < 2 {
-                                last_error = Some(err);
-                                sleep(Duration::from_secs(1_u64 << attempt)).await;
-                            } else {
-                                last_error = Some(err);
-                            }
-                        }
+                match self
+                    .chat_once(
+                        messages.clone(),
+                        principles.clone(),
+                        model_options,
+                        sender.clone(),
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        // model name captured from SSE inside chat_once
+                        return Ok(());
                     }
-                }
-            }
-
-            return Err(last_error
-                .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("copilot")))
-                .into());
-        }
-
-        // ── Non-auto mode: single model with retry ────────────────
-        for attempt in 0..=2 {
-            match self
-                .chat_once(
-                    messages.clone(),
-                    principles.clone(),
-                    active_options.clone(),
-                    sender.clone(),
-                )
-                .await
-            {
-                Ok(()) => return Ok(()),
-                Err(err) => {
-                    let err_text = err.to_string();
-                    if !free_model_attempted
-                        && Self::should_try_free_model(&active_options)
-                        && Self::is_quota_or_limit_error(&err_text)
-                    {
-                        free_model_attempted = true;
-                        active_options = Self::with_free_model(&active_options);
-                        continue;
-                    }
-                    last_error = Some(err);
-                    if attempt < 2 {
-                        sleep(Duration::from_secs(1_u64 << attempt)).await;
+                    Err(err) => {
+                        let err_text = err.to_string().to_ascii_lowercase();
+                        // Unsupported model, quota, rate-limit → skip model
+                        if err_text.contains("model_not_supported")
+                            || err_text.contains("not supported")
+                            || err_text.contains("429")
+                            || err_text.contains("rate limit")
+                            || err_text.contains("quota")
+                            || err_text.contains("insufficient_quota")
+                        {
+                            if is_auto {
+                                // Try next model
+                                continue 'models;
+                            }
+                            // Non-auto: fail immediately
+                            return Err(err.into());
+                        }
+                        // Transient error → retry
+                        if attempt < 2 {
+                            last_error = Some(err);
+                            sleep(Duration::from_secs(1u64 << attempt)).await;
+                        } else {
+                            last_error = Some(err);
+                        }
                     }
                 }
             }
@@ -402,7 +403,7 @@ impl Agent for CopilotAgent {
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![
             ModelInfo {
-                id: "copilot-auto".to_string(),
+                id: "copilot/auto".to_string(),
                 name: "Auto (best model)".to_string(),
                 description: "GitHub Copilot auto model selection".to_string(),
                 is_default: true,
@@ -546,7 +547,7 @@ impl Agent for CopilotAgent {
 
     fn default_model(&self) -> Option<ModelInfo> {
         Some(ModelInfo {
-            id: "copilot-auto".to_string(),
+            id: "copilot/auto".to_string(),
             name: "Auto (best model)".to_string(),
             description: "GitHub Copilot auto model selection".to_string(),
             is_default: true,

@@ -110,6 +110,8 @@ pub enum PendingResponse {
         content: String,
         thinking: String,
         agent: String,
+        /// The model that was actually used (e.g. Copilot auto-select resolution).
+        model: Option<String>,
         conversation_id: Option<String>,
         branch_id: Option<String>,
         risk_decision: Option<Value>,

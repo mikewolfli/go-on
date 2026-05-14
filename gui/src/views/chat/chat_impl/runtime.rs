@@ -256,12 +256,10 @@ impl ChatView {
                 if !use_workflow_rpc {
                     // ── Model selection ──
                     //   * "auto"         → backend picks the default phase model.
-                    //   * "copilot-auto" → backend / GitHub Copilot auto-selects.
+                    //   * "copilot-auto" → backend routes to copilot agent only,
+                    //                      Copilot service auto-selects model.
                     //   * any other ID   → explicit model override sent to backend.
-                    if !model_clone.trim().is_empty()
-                        && model_clone != "auto"
-                        && model_clone != "copilot-auto"
-                    {
+                    if !model_clone.trim().is_empty() && model_clone != "auto" {
                         body["options"] = serde_json::json!({
                             "model": model_clone,
                         });
@@ -336,6 +334,7 @@ impl ChatView {
                                         content: result_text,
                                         thinking: String::new(),
                                         agent: "workflow".to_string(),
+                                        model: None,
                                         conversation_id: None,
                                         branch_id: None,
                                         risk_decision: value.get("risk_decision").cloned(),
@@ -384,6 +383,7 @@ impl ChatView {
                                         content,
                                         thinking,
                                         agent,
+                                        model: None,
                                         conversation_id: None,
                                         branch_id: None,
                                         risk_decision,
@@ -403,6 +403,7 @@ impl ChatView {
                         let mut final_content: Option<String> = None;
                         let mut final_thinking: Option<String> = None;
                         let mut final_agent: Option<String> = None;
+                        let mut final_used_model: Option<String> = None;
                         let mut final_conv_id: Option<String> = None;
                         let mut final_branch_id: Option<String> = None;
                         let mut final_risk_decision: Option<Value> = None;
@@ -565,6 +566,11 @@ impl ChatView {
                                             })
                                             .and_then(|v| v.as_str())
                                             .map(String::from);
+                                        // selected_model from backend (copilot-auto resolution)
+                                        final_used_model = data
+                                            .get("selected_model")
+                                            .and_then(|v| v.as_str())
+                                            .map(String::from);
                                         final_conv_id = data
                                             .get("conversation_id")
                                             .and_then(|v| v.as_str())
@@ -643,6 +649,7 @@ impl ChatView {
                             content: final_content.unwrap_or_default(),
                             thinking: final_thinking.unwrap_or_default(),
                             agent: final_agent.unwrap_or_default(),
+                            model: final_used_model,
                             conversation_id: final_conv_id,
                             branch_id: final_branch_id,
                             risk_decision: final_risk_decision,
@@ -668,6 +675,7 @@ impl ChatView {
                                     content,
                                     thinking,
                                     agent,
+                                    model: None,
                                     conversation_id: None,
                                     branch_id: None,
                                     risk_decision,
@@ -784,6 +792,7 @@ impl ChatView {
                     content,
                     thinking,
                     agent,
+                    model,
                     conversation_id,
                     branch_id,
                     risk_decision,
@@ -815,6 +824,18 @@ impl ChatView {
                                 }
                                 if !thinking.is_empty() {
                                     m.thinking = thinking;
+                                }
+                                // Update the model used.
+                                //   - Copilot auto → actual model name (e.g. "gemini-2.5-pro")
+                                //   - Other agents → fall back to agent name
+                                if let Some(ref used_model) = model {
+                                    if !used_model.is_empty() {
+                                        m.model = used_model.clone();
+                                        session.model = used_model.clone();
+                                    }
+                                } else if !agent.is_empty() {
+                                    m.model = agent.clone();
+                                    session.model = agent.clone();
                                 }
                                 if self.last_token_estimate == 0 {
                                     self.output_token_estimate =

@@ -329,14 +329,14 @@ impl ChatView {
 
                     egui::ComboBox::from_label("Model")
                         .selected_text(if self.selected_model == ChatView::COPILOT_AUTO_MODEL {
-                            "copilot-auto".to_string()
+                            "copilot/auto".to_string()
                         } else {
                             self.selected_model.clone()
                         })
                         .show_ui(ui, |ui| {
                             for model in &models_list {
                                 let label = if model == ChatView::COPILOT_AUTO_MODEL {
-                                    "copilot-auto"
+                                    "copilot/auto"
                                 } else {
                                     model.as_str()
                                 };
@@ -591,7 +591,7 @@ impl ChatView {
                             //   handles model selection transparently.  The user can still change
                             //   the agent to see model options for other providers.
                             if self.selected_agent == "copilot" {
-                                ui.label("copilot-auto");
+                                ui.label("copilot/auto");
                             } else {
                                 let model_options: Vec<String> = if self.selected_agent.is_empty() {
                                     // Show all models from all agents
@@ -617,7 +617,7 @@ impl ChatView {
                                     .selected_text(if self.selected_model == "auto" {
                                         "AUTO".to_string()
                                     } else if self.selected_model == ChatView::COPILOT_AUTO_MODEL {
-                                        "copilot-auto".to_string()
+                                        "copilot/auto".to_string()
                                     } else {
                                         self.selected_model.clone()
                                     })
@@ -626,7 +626,7 @@ impl ChatView {
                                             let label = if m == "auto" {
                                                 "AUTO"
                                             } else if m == ChatView::COPILOT_AUTO_MODEL {
-                                                "copilot-auto"
+                                                "copilot/auto"
                                             } else {
                                                 m.as_str()
                                             };

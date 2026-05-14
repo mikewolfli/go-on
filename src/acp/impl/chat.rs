@@ -1372,10 +1372,19 @@ pub(crate) async fn process_chat_request(
     // When user picks a specific model (e.g. "deepseek-v4-flash"), replace
     // resolved.agents with only the matching agent(s) so we don't waste time
     // on unrelated providers.  When model is "auto" or empty, keep phase list.
+    // "copilot-auto" routes exclusively to the copilot agent.
     let model_is_specific = base_agent_options
         .get("model")
         .and_then(|v| v.as_str())
         .is_some_and(|m| !m.is_empty() && m != "auto");
+
+    if let Some(model_str) = base_agent_options.get("model").and_then(|v| v.as_str()) {
+        if model_str == "copilot/auto" || model_str == "copilot-auto" || model_str == "copilot" {
+            resolved
+                .agents
+                .retain(|(name, _)| name.eq_ignore_ascii_case("copilot"));
+        }
+    }
 
     if model_is_specific {
         let model = base_agent_options
