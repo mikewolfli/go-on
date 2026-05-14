@@ -277,15 +277,7 @@ impl ChatView {
                 .await
                 {
                     Ok(models) => {
-                        let mut options = vec!["auto".to_string()];
-                        let mut ids: Vec<String> = models
-                            .into_values()
-                            .flat_map(|ids| ids.into_iter())
-                            .collect();
-                        ids.sort();
-                        ids.dedup();
-                        options.extend(ids);
-                        let _ = tx.try_send(PendingResponse::Models(options));
+                        let _ = tx.try_send(PendingResponse::Models(models));
                         ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
                     }
                     Err(_) => {
@@ -331,16 +323,24 @@ impl ChatView {
                     if models_list.is_empty() {
                         models_list.push("auto".to_string());
                     }
+                    if self.available_agent_models.contains_key("copilot") {
+                        models_list.push(ChatView::COPILOT_AUTO_MODEL.to_string());
+                    }
 
                     egui::ComboBox::from_label("Model")
-                        .selected_text(&self.selected_model)
+                        .selected_text(if self.selected_model == ChatView::COPILOT_AUTO_MODEL {
+                            "copilot-auto".to_string()
+                        } else {
+                            self.selected_model.clone()
+                        })
                         .show_ui(ui, |ui| {
                             for model in &models_list {
-                                ui.selectable_value(
-                                    &mut self.selected_model,
-                                    model.clone(),
-                                    model.clone(),
-                                );
+                                let label = if model == ChatView::COPILOT_AUTO_MODEL {
+                                    "copilot-auto"
+                                } else {
+                                    model.as_str()
+                                };
+                                ui.selectable_value(&mut self.selected_model, model.clone(), label);
                             }
                         });
 
@@ -541,41 +541,105 @@ impl ChatView {
                             ui.add_space(8.0);
                             ui.label(egui::RichText::new(i18n.t("chat.model")).color(fg));
                             ui.add_space(6.0);
+                            // ── Two-level model picker: Agent → Model ────
+                            let agent_keys: Vec<String> =
+                                self.available_agent_models.keys().cloned().collect();
                             let prev_model = self.selected_model.clone();
-                            let model_options: Vec<String> = if self.available_models.is_empty() {
-                                vec!["auto".to_string()]
+
+                            // Level 1: Agent (ComboBox)
+                            let agent_text = if self.selected_agent.is_empty() {
+                                "All Agents".to_string()
                             } else {
-                                self.available_models.clone()
+                                self.selected_agent.clone()
                             };
-                            egui::ComboBox::from_id_salt("model_sel")
-                                .selected_text(if self.selected_model == "auto" {
-                                    "AUTO".to_string()
-                                } else {
-                                    self.selected_model.clone()
-                                })
+                            egui::ComboBox::from_id_salt("agent_sel")
+                                .selected_text(&agent_text)
                                 .show_ui(ui, |ui| {
-                                    for m in &model_options {
-                                        let label = if m == "auto" { "AUTO" } else { m.as_str() };
-                                        ui.selectable_value(
-                                            &mut self.selected_model,
-                                            m.to_string(),
-                                            label,
-                                        );
+                                    if ui
+                                        .selectable_value(
+                                            &mut self.selected_agent,
+                                            String::new(),
+                                            "All Agents",
+                                        )
+                                        .clicked()
+                                    {
+                                        self.selected_model = "auto".to_string();
+                                        self.sync_model_selection();
+                                    }
+                                    for agent in &agent_keys {
+                                        if ui
+                                            .selectable_value(
+                                                &mut self.selected_agent,
+                                                agent.clone(),
+                                                agent.as_str(),
+                                            )
+                                            .clicked()
+                                        {
+                                            // Reset to AUTO when agent changes
+                                            self.selected_model = "auto".to_string();
+                                            self.sync_model_selection();
+                                        }
                                     }
                                 });
+
+                            ui.add_space(4.0);
+
+                            // Level 2: Model (ComboBox, filtered by selected agent)
+                            // ── Copilot agent: model is fixed to "copilot-auto" ──
+                            //   When the agent is "copilot", the model selection is frozen to
+                            //   "copilot-auto" because VS Code / GitHub Copilot's own extension
+                            //   handles model selection transparently.  The user can still change
+                            //   the agent to see model options for other providers.
+                            if self.selected_agent == "copilot" {
+                                ui.label("copilot-auto");
+                            } else {
+                                let model_options: Vec<String> = if self.selected_agent.is_empty() {
+                                    // Show all models from all agents
+                                    let mut all: Vec<String> = self.available_models.clone();
+                                    all.insert(0, "auto".to_string());
+                                    // Inject "copilot-auto" as a selectable option so that
+                                    // users can switch to the Copilot auto-select mode from
+                                    // the "All Agents" view.
+                                    if self.available_agent_models.contains_key("copilot") {
+                                        all.push(ChatView::COPILOT_AUTO_MODEL.to_string());
+                                    }
+                                    all
+                                } else {
+                                    let mut agent_models = self
+                                        .available_agent_models
+                                        .get(&self.selected_agent)
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    agent_models.insert(0, "auto".to_string());
+                                    agent_models
+                                };
+                                egui::ComboBox::from_id_salt("model_sel")
+                                    .selected_text(if self.selected_model == "auto" {
+                                        "AUTO".to_string()
+                                    } else if self.selected_model == ChatView::COPILOT_AUTO_MODEL {
+                                        "copilot-auto".to_string()
+                                    } else {
+                                        self.selected_model.clone()
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        for m in &model_options {
+                                            let label = if m == "auto" {
+                                                "AUTO"
+                                            } else if m == ChatView::COPILOT_AUTO_MODEL {
+                                                "copilot-auto"
+                                            } else {
+                                                m.as_str()
+                                            };
+                                            ui.selectable_value(
+                                                &mut self.selected_model,
+                                                m.to_string(),
+                                                label,
+                                            );
+                                        }
+                                    });
+                            }
                             if self.selected_model != prev_model {
                                 self.sync_model_selection();
-                            }
-                            if !self.last_selected_agent.is_empty() {
-                                ui.add_space(8.0);
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "agent: {}",
-                                        self.last_selected_agent
-                                    ))
-                                    .color(fg)
-                                    .size(11.0),
-                                );
                             }
                             ui.add_space(12.0);
                             let tok_resp = ui.checkbox(

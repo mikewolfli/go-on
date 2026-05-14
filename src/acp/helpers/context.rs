@@ -91,6 +91,12 @@ pub async fn probe_agent_runtime_readiness(
         return AgentRuntimeReadiness::Ready;
     };
 
+    // Skip endpoint probe for copilot: its local url is only a placeholder;
+    // the actual API calls go to api.githubcopilot.com (remote).
+    if agent_name.eq_ignore_ascii_case("copilot") {
+        return AgentRuntimeReadiness::Ready;
+    }
+
     match probe_local_endpoint(url, timeout_duration).await {
         EndpointProbeResult::Reachable | EndpointProbeResult::Skipped => {
             AgentRuntimeReadiness::Ready

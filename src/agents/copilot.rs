@@ -175,10 +175,9 @@ impl CopilotAgent {
     ) -> Value {
         let model = option_string(&options, "model").unwrap_or_else(|| "copilot".to_string());
 
-        // Copilot API doesn't accept "auto" or "copilot" as valid model names.
-        // Map them to a concrete model that GitHub Copilot supports.
+        // Map internal aliases to concrete model names that the Copilot API accepts.
         let mapped_model = match model.as_str() {
-            "auto" | "copilot" | "github-copilot" => "gpt-4o",
+            "auto" | "copilot-auto" | "copilot" | "github-copilot" => "gpt-4o",
             other => other,
         };
 
@@ -209,7 +208,7 @@ impl CopilotAgent {
             None | Some("") => true,
             Some(model) => {
                 let model = model.to_ascii_lowercase();
-                model == "auto" || model == "copilot"
+                model == "auto" || model == "copilot-auto" || model == "copilot"
             }
         }
     }
@@ -274,6 +273,98 @@ impl Agent for CopilotAgent {
 
         let mut active_options = options.clone();
 
+        // ── Auto model selection (copilot-auto) ──────────────────────
+        // Emulates VSCode's "auto" model selection: tries the best available
+        // model first, then falls back to cheaper/available alternatives when
+        // quota, rate limits, or "model not supported" errors are hit.
+        //
+        // This works for ALL subscription tiers (Free / Pro / Pro+ / Business
+        // / Enterprise) because the Copilot API tells us which models the
+        // user's plan supports — unsupported models return a 400 with
+        // "model_not_supported".  We simply try the next in the list.
+        //
+        // The model pool covers every tier:
+        //   Pro+ & Enterprise → all models available
+        //   Pro → most premium models
+        //   Business → depends on org policy
+        //   Free → limited set, falls through to gpt-5-mini / gpt-4o-mini
+        //
+        // Order: highest quality first.  Users with higher-tier plans will
+        // get the best model immediately.  Lower-tier users will quickly skip
+        // unsupported models and land on one they can use.
+
+        let is_auto = Self::should_try_free_model(&active_options);
+
+        // Complete fallback chain covering all Copilot subscription tiers.
+        // All model IDs that Copilot Chat API accepts.
+        let auto_models: Vec<&str> = if is_auto {
+            vec![
+                "claude-opus-4",        // Best overall (Pro+, Enterprise)
+                "gpt-5",                // OpenAI flagship (Pro+, Pro, Enterprise)
+                "claude-sonnet-4",      // Anthropic balanced (Pro+, Pro, Enterprise)
+                "o1",                   // Reasoning (Pro+, Pro, Enterprise)
+                "gpt-4o",               // Default premium (all tiers)
+                "claude-3.5-sonnet",    // Legacy premium (all tiers)
+                "o3-mini",              // Lightweight reasoning (all tiers)
+                "gemini-2.0-flash-001", // Google fast (all tiers)
+                "gpt-4o-mini",          // Lightweight (all tiers, 0x multiplier)
+                "gpt-5-mini",           // Latest mini (Free primary)
+            ]
+        } else {
+            vec![]
+        };
+
+        if is_auto && !auto_models.is_empty() {
+            for &model_id in &auto_models {
+                let mut model_opts = options.clone().unwrap_or_default();
+                model_opts.insert("model".to_string(), json!(model_id));
+                let model_options = Some(model_opts);
+
+                for attempt in 0..=2 {
+                    match self
+                        .chat_once(
+                            messages.clone(),
+                            principles.clone(),
+                            model_options.clone(),
+                            sender.clone(),
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            // Notify the caller which model was actually used.
+                            // This token is intercepted by run_agent_collecting
+                            // and excluded from the response text.
+                            let _ = sender.send(format!("__model_used__:{}", model_id));
+                            return Ok(());
+                        }
+                        Err(err) => {
+                            let err_text = err.to_string();
+                            let is_limit = Self::is_quota_or_limit_error(&err_text);
+                            // Quota / rate-limit / model-not-supported → skip
+                            // to the next model in the chain.
+                            if is_limit
+                                || err_text.contains("model_not_supported")
+                                || err_text.contains("not supported")
+                            {
+                                break;
+                            }
+                            if attempt < 2 {
+                                last_error = Some(err);
+                                sleep(Duration::from_secs(1_u64 << attempt)).await;
+                            } else {
+                                last_error = Some(err);
+                            }
+                        }
+                    }
+                }
+            }
+
+            return Err(last_error
+                .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("copilot")))
+                .into());
+        }
+
+        // ── Non-auto mode: single model with retry ────────────────
         for attempt in 0..=2 {
             match self
                 .chat_once(
@@ -311,21 +402,22 @@ impl Agent for CopilotAgent {
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![
             ModelInfo {
-                id: "copilot-chat".to_string(),
-                name: "GitHub Copilot Chat".to_string(),
-                description: "GitHub Copilot Chat model".to_string(),
+                id: "copilot-auto".to_string(),
+                name: "Auto (best model)".to_string(),
+                description: "GitHub Copilot auto model selection".to_string(),
                 is_default: true,
-                context_window: Some(16_384),
+                context_window: Some(128_000),
                 capabilities: vec![
                     "chat".to_string(),
                     "code".to_string(),
                     "streaming".to_string(),
+                    "tools".to_string(),
                 ],
             },
             ModelInfo {
                 id: "gpt-4o".to_string(),
-                name: "GPT-4o via Copilot".to_string(),
-                description: "GPT-4o accessed through GitHub Copilot".to_string(),
+                name: "GPT-4o".to_string(),
+                description: "OpenAI GPT-4o via GitHub Copilot".to_string(),
                 is_default: false,
                 context_window: Some(128_000),
                 capabilities: vec![
@@ -334,20 +426,136 @@ impl Agent for CopilotAgent {
                     "streaming".to_string(),
                 ],
             },
+            ModelInfo {
+                id: "gpt-4o-mini".to_string(),
+                name: "GPT-4o Mini".to_string(),
+                description: "OpenAI GPT-4o Mini via GitHub Copilot".to_string(),
+                is_default: false,
+                context_window: Some(128_000),
+                capabilities: vec![
+                    "chat".to_string(),
+                    "code".to_string(),
+                    "streaming".to_string(),
+                ],
+            },
+            ModelInfo {
+                id: "gpt-5".to_string(),
+                name: "GPT-5".to_string(),
+                description: "OpenAI GPT-5 via GitHub Copilot".to_string(),
+                is_default: false,
+                context_window: Some(128_000),
+                capabilities: vec![
+                    "chat".to_string(),
+                    "code".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+            },
+            ModelInfo {
+                id: "gpt-5-mini".to_string(),
+                name: "GPT-5 Mini".to_string(),
+                description: "OpenAI GPT-5 Mini via GitHub Copilot".to_string(),
+                is_default: false,
+                context_window: Some(128_000),
+                capabilities: vec![
+                    "chat".to_string(),
+                    "code".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+            },
+            ModelInfo {
+                id: "claude-sonnet-4".to_string(),
+                name: "Claude Sonnet 4".to_string(),
+                description: "Anthropic Claude Sonnet 4 via GitHub Copilot".to_string(),
+                is_default: false,
+                context_window: Some(200_000),
+                capabilities: vec![
+                    "chat".to_string(),
+                    "code".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+            },
+            ModelInfo {
+                id: "claude-3.5-sonnet".to_string(),
+                name: "Claude 3.5 Sonnet".to_string(),
+                description: "Anthropic Claude 3.5 Sonnet via GitHub Copilot".to_string(),
+                is_default: false,
+                context_window: Some(200_000),
+                capabilities: vec![
+                    "chat".to_string(),
+                    "code".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+            },
+            ModelInfo {
+                id: "claude-opus-4".to_string(),
+                name: "Claude Opus 4".to_string(),
+                description: "Anthropic Claude Opus 4 via GitHub Copilot".to_string(),
+                is_default: false,
+                context_window: Some(200_000),
+                capabilities: vec![
+                    "chat".to_string(),
+                    "code".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+            },
+            ModelInfo {
+                id: "gemini-2.0-flash-001".to_string(),
+                name: "Gemini 2.0 Flash".to_string(),
+                description: "Google Gemini 2.0 Flash via GitHub Copilot".to_string(),
+                is_default: false,
+                context_window: Some(1_000_000),
+                capabilities: vec![
+                    "chat".to_string(),
+                    "code".to_string(),
+                    "streaming".to_string(),
+                ],
+            },
+            ModelInfo {
+                id: "o1".to_string(),
+                name: "OpenAI o1".to_string(),
+                description: "OpenAI o1 reasoning model via GitHub Copilot".to_string(),
+                is_default: false,
+                context_window: Some(200_000),
+                capabilities: vec![
+                    "chat".to_string(),
+                    "code".to_string(),
+                    "streaming".to_string(),
+                    "reasoning".to_string(),
+                ],
+            },
+            ModelInfo {
+                id: "o3-mini".to_string(),
+                name: "OpenAI o3-mini".to_string(),
+                description: "OpenAI o3-mini reasoning model via GitHub Copilot".to_string(),
+                is_default: false,
+                context_window: Some(200_000),
+                capabilities: vec![
+                    "chat".to_string(),
+                    "code".to_string(),
+                    "streaming".to_string(),
+                    "reasoning".to_string(),
+                ],
+            },
         ]
     }
 
     fn default_model(&self) -> Option<ModelInfo> {
         Some(ModelInfo {
-            id: "copilot-chat".to_string(),
-            name: "GitHub Copilot Chat".to_string(),
-            description: "GitHub Copilot Chat model".to_string(),
+            id: "copilot-auto".to_string(),
+            name: "Auto (best model)".to_string(),
+            description: "GitHub Copilot auto model selection".to_string(),
             is_default: true,
-            context_window: Some(16_384),
+            context_window: Some(128_000),
             capabilities: vec![
                 "chat".to_string(),
                 "code".to_string(),
                 "streaming".to_string(),
+                "tools".to_string(),
             ],
         })
     }

@@ -254,7 +254,14 @@ impl ChatView {
                 };
 
                 if !use_workflow_rpc {
-                    if !model_clone.trim().is_empty() && model_clone != "auto" {
+                    // ── Model selection ──
+                    //   * "auto"         → backend picks the default phase model.
+                    //   * "copilot-auto" → backend / GitHub Copilot auto-selects.
+                    //   * any other ID   → explicit model override sent to backend.
+                    if !model_clone.trim().is_empty()
+                        && model_clone != "auto"
+                        && model_clone != "copilot-auto"
+                    {
                         body["options"] = serde_json::json!({
                             "model": model_clone,
                         });
@@ -704,16 +711,29 @@ impl ChatView {
                     self.phases = list;
                     self.phases_loaded = true;
                 }
-                PendingResponse::Models(list) => {
-                    self.available_models = if list.is_empty() {
+                PendingResponse::Models(agent_models) => {
+                    // Keep structured map for two-level picker
+                    self.available_agent_models = agent_models;
+                    // Build flattened list for backward compat
+                    let mut flat = Vec::new();
+                    for ids in self.available_agent_models.values() {
+                        flat.extend(ids.iter().cloned());
+                    }
+                    flat.sort();
+                    flat.dedup();
+                    self.available_models = if self.available_agent_models.is_empty() {
                         vec!["auto".to_string()]
                     } else {
-                        list
+                        flat
                     };
-                    if !self
-                        .available_models
-                        .iter()
-                        .any(|m| m == &self.selected_model)
+                    // Preserve copilot-auto selection even though the backend
+                    // does not report it as a model — it is a sentinel that tells
+                    // the GUI to defer model selection to the Copilot service.
+                    if self.selected_model != ChatView::COPILOT_AUTO_MODEL
+                        && !self
+                            .available_models
+                            .iter()
+                            .any(|m| m == &self.selected_model)
                     {
                         self.selected_model = "auto".to_string();
                     }

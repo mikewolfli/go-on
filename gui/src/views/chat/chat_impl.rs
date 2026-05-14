@@ -93,8 +93,11 @@ pub struct ChatView {
     session_save_epoch: Arc<AtomicU64>,
     template_save_epoch: Arc<AtomicU64>,
     // Feature 6: model selection
+    selected_agent: String,
     selected_model: String,
     available_models: Vec<String>,
+    /// Agent → [model_id, …] for the two-level picker
+    available_agent_models: std::collections::HashMap<String, Vec<String>>,
     models_loaded: bool,
     last_selected_agent: String,
     stream_chunk_flush_interval: std::time::Duration,
@@ -382,8 +385,10 @@ impl ChatView {
             session_save_epoch: Arc::new(AtomicU64::new(0)),
             template_save_epoch: Arc::new(AtomicU64::new(0)),
             // Feature 6
+            selected_agent: String::new(),
             selected_model: initial_model,
             available_models: vec!["auto".to_string()],
+            available_agent_models: std::collections::HashMap::new(),
             models_loaded: false,
             last_selected_agent: String::new(),
             stream_chunk_flush_interval: std::time::Duration::from_millis(33),
@@ -498,18 +503,68 @@ impl ChatView {
         self.save_templates_to_disk();
     }
 
+    /// The sentinel model name used when the copilot agent is selected.
+    /// It signals that the VS Code / GitHub Copilot extension should auto-select
+    /// the optimal model on the server side — Go-on does not hardcode or choose
+    /// any specific model ID.
+    const COPILOT_AUTO_MODEL: &'static str = "copilot-auto";
+
+    /// Returns `true` if the currently selected agent (or the provided agent name)
+    /// is the GitHub Copilot agent.
+    fn is_copilot_agent(&self) -> bool {
+        self.selected_agent == "copilot"
+            || self.available_agent_models.contains_key("copilot")
+                && self.selected_agent.is_empty()
+                && self.selected_model == Self::COPILOT_AUTO_MODEL
+    }
+
     fn sync_model_selection(&mut self) {
         // Ensure model name is trimmed
         self.selected_model = self.selected_model.trim().to_string();
         if self.selected_model.is_empty() {
             self.selected_model = "auto".to_string();
         }
+
+        // ── Rule 1: If the selected agent is "copilot", force model to "copilot-auto" ──
+        //   The GitHub Copilot service (not Go-on) decides which model to use.
+        if self.selected_agent == "copilot" && self.selected_model != Self::COPILOT_AUTO_MODEL {
+            self.selected_model = Self::COPILOT_AUTO_MODEL.to_string();
+            if let Some(session) = self.sessions.get_mut(self.active_session) {
+                session.model = self.selected_model.clone();
+            }
+            return;
+        }
+
+        // ── Rule 2: If the model is "copilot-auto", derive the agent ──
+        if self.selected_model == Self::COPILOT_AUTO_MODEL {
+            self.selected_agent = "copilot".to_string();
+            if let Some(session) = self.sessions.get_mut(self.active_session) {
+                session.model = self.selected_model.clone();
+            }
+            return;
+        }
+
         // Sync to active session
         if let Some(session) = self.sessions.get_mut(self.active_session) {
             session.model = self.selected_model.clone();
         }
+
+        // Derive selected_agent from available_agent_models
+        if self.selected_model == "auto" {
+            self.selected_agent.clear();
+        } else {
+            self.selected_agent.clear();
+            for (agent, models) in &self.available_agent_models {
+                if models.contains(&self.selected_model) {
+                    self.selected_agent = agent.clone();
+                    break;
+                }
+            }
+        }
+
         // Validate current model is in available list or is "auto"
         let first = if self.selected_model == "auto"
+            || self.selected_model == Self::COPILOT_AUTO_MODEL
             || self
                 .available_models
                 .iter()
@@ -773,8 +828,10 @@ mod tests {
             template_save_in_flight: Arc::new(AtomicBool::new(false)),
             session_save_epoch: Arc::new(AtomicU64::new(0)),
             template_save_epoch: Arc::new(AtomicU64::new(0)),
+            selected_agent: String::new(),
             selected_model: "auto".to_string(),
             available_models: vec!["auto".to_string()],
+            available_agent_models: std::collections::HashMap::new(),
             models_loaded: false,
             last_selected_agent: String::new(),
             stream_chunk_flush_interval: std::time::Duration::from_millis(33),

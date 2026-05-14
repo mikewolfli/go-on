@@ -1182,6 +1182,7 @@ pub(crate) async fn process_chat_request(
     let mut selected_agent = String::new();
     let mut response_text = String::new();
     let mut reasoning_text = String::new();
+    let mut selected_model_name: Option<String> = None;
     let mut last_err: Option<anyhow::Error> = None;
     let candidate_agents = resolved
         .agents
@@ -1489,7 +1490,9 @@ pub(crate) async fn process_chat_request(
                 )
                 .await
                 {
-                    Ok((output_text, reasoning_output)) if !output_text.trim().is_empty() => {
+                    Ok((output_text, reasoning_output, _sel_m))
+                        if !output_text.trim().is_empty() =>
+                    {
                         if let Ok(mut ctrl) = server.online_controller.lock() {
                             ctrl.record_agent_outcome(
                                 phase_name,
@@ -1518,7 +1521,7 @@ pub(crate) async fn process_chat_request(
                         ));
                         continue;
                     }
-                    Ok(_) => {
+                    Ok((_, _, _)) => {
                         let failure = json!({
                             "agent": agent_name,
                             "reason": "empty_response",
@@ -1571,7 +1574,7 @@ pub(crate) async fn process_chat_request(
             )
             .await
             {
-                Ok((output_text, reasoning_output)) => {
+                Ok((output_text, reasoning_output, agent_selected_model)) => {
                     if let Ok(mut ctrl) = server.online_controller.lock() {
                         ctrl.record_agent_outcome(
                             phase_name,
@@ -1583,11 +1586,16 @@ pub(crate) async fn process_chat_request(
                     agent_attempts.push(json!({
                         "agent": agent_name,
                         "ok": true,
-                        "duration_ms": attempt_started.elapsed().as_millis() as u64
+                        "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                        "model": agent_selected_model,
                     }));
                     selected_agent = agent_name.clone();
                     response_text = output_text.clone();
                     reasoning_text = reasoning_output.clone();
+                    // Record the model that was actually used (e.g. Copilot auto-select).
+                    if let Some(ref m) = agent_selected_model {
+                        selected_model_name = Some(m.clone());
+                    }
 
                     // ── Store result in token cache ─────────────────────
                     // After a successful agent execution, store the input/output
@@ -1739,7 +1747,9 @@ pub(crate) async fn process_chat_request(
                     )
                     .await
                     {
-                        Ok((output_text, reasoning_output)) if !output_text.trim().is_empty() => {
+                        Ok((output_text, reasoning_output, _sel_m))
+                            if !output_text.trim().is_empty() =>
+                        {
                             escalation_ballots.push(AgentStrongVoteOutcome {
                                 agent: agent_name.clone(),
                                 model: Some(model_id.clone()),
@@ -1747,7 +1757,7 @@ pub(crate) async fn process_chat_request(
                                 reasoning: reasoning_output,
                             });
                         }
-                        Ok(_) => {
+                        Ok((_, _, _)) => {
                             escalation_failures.push(json!({
                                 "agent": agent_name,
                                 "model": model_id,
@@ -2486,6 +2496,7 @@ pub(crate) async fn process_chat_request(
         "phase": phase_name,
         "phase_origin": phase_origin,
         "agent": selected_agent,
+        "selected_model": selected_model_name,
         "duration_ms": started.elapsed().as_millis() as u64,
         "response": response_text,
         "checkpoint": checkpoint,
@@ -2755,6 +2766,10 @@ pub(crate) async fn process_chat_request(
     Ok(result)
 }
 
+/// Calls an agent and collects its streamed response.
+/// Returns `(response_text, reasoning_text, selected_model)`.
+/// The third element is `Some(model_id)` when the agent
+/// explicitly reports which model it used (e.g. Copilot auto-select).
 async fn run_agent_collecting(
     server: &AcpServer,
     stream_ctx: StreamNotificationContext<'_>,
@@ -2763,7 +2778,7 @@ async fn run_agent_collecting(
     principles: Option<Vec<String>>,
     options: Option<std::collections::HashMap<String, Value>>,
     timeout_duration: Option<Duration>,
-) -> Result<(String, String)> {
+) -> Result<(String, String, Option<String>)> {
     use crate::acp::r#impl::request::tools_pack::execute_mcp_tool_call;
     let (sender, mut receiver) = mpsc::channel::<String>(2048);
     let sender = crate::agent::StreamingSender::from(sender);
@@ -2776,7 +2791,15 @@ async fn run_agent_collecting(
         let mut tool_calls: Vec<(String, String)> = Vec::new();
         let mut chunk_index = 0usize;
         let mut total_chars = 0usize;
+        let mut selected_model: Option<String> = None;
         while let Some(token) = receiver.recv().await {
+            // Check for model-used token (prefixed with __model_used__)
+            // This is sent by CopilotAgent after a successful auto-select.
+            if let Some(model_id) = token.strip_prefix("__model_used__:") {
+                selected_model = Some(model_id.trim().to_string());
+                continue;
+            }
+
             // Check for tool call tokens (prefixed with __tool_call__)
             if let Some(tool_call_data) = token.strip_prefix("__tool_call__:") {
                 // Format: __tool_call__:<tool_name>:<json_arguments>
@@ -2891,7 +2914,11 @@ async fn run_agent_collecting(
                         .await?;
                     }
                 }
-                Ok::<(String, String), anyhow::Error>((response, reasoning_buffer))
+                Ok::<(String, String, Option<String>), anyhow::Error>((
+                    response,
+                    reasoning_buffer,
+                    selected_model,
+                ))
             }
             Ok(Err(err)) => Err(err.into()),
             Err(join_err) => Err(anyhow::anyhow!("agent task panicked: {join_err}")),
@@ -3659,7 +3686,7 @@ async fn generate_phase_summary_text(
     )
     .await
     {
-        Ok((text, _)) => text,
+        Ok((text, _, _)) => text,
         Err(e) => {
             tracing::warn!("phase summary generation failed: {}", e);
             return None;
