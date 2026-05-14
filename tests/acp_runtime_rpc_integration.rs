@@ -1680,6 +1680,121 @@ mod advanced {
     }
 
     #[test]
+    fn provider_matrix_checks_all_registry_providers() {
+        let temp = tempdir().expect("failed to create temp dir");
+        let config_path = temp.path().join("config.toml");
+        write_test_config(&config_path, 60, 120, 5);
+
+        let mut harness = AdvancedRpcHarness::new(&config_path);
+
+        let provider_status = harness.inner.request(6_100, "provider.status", None);
+        let catalog = provider_status["result"]["provider_status"]["registry_catalog"]
+            .as_array()
+            .expect("provider.status should include registry_catalog array");
+
+        assert!(
+            !catalog.is_empty(),
+            "provider.status registry_catalog should not be empty"
+        );
+
+        let mut checked_count = 0usize;
+        for (idx, item) in catalog.iter().enumerate() {
+            let provider = item
+                .get("agent")
+                .and_then(Value::as_str)
+                .expect("registry_catalog item should include agent name")
+                .trim()
+                .to_string();
+
+            assert!(
+                !provider.is_empty(),
+                "registry_catalog agent name should not be empty"
+            );
+
+            let capabilities = harness.inner.request(
+                6_200 + idx as u64,
+                "provider.capabilities",
+                Some(json!({"provider": provider})),
+            );
+            assert!(
+                capabilities.get("error").is_none(),
+                "provider.capabilities should not return rpc error for provider '{}'",
+                provider
+            );
+            assert_eq!(capabilities["result"]["provider"], json!(provider));
+            assert!(
+                capabilities["result"]["capabilities"]
+                    .get("models")
+                    .is_some(),
+                "provider.capabilities should include models list for provider '{}'",
+                provider
+            );
+
+            let list_models = harness.inner.request(
+                6_600 + idx as u64,
+                "provider.list_models",
+                Some(json!({"provider": provider})),
+            );
+            assert!(
+                list_models.get("error").is_none(),
+                "provider.list_models should not return rpc error for provider '{}'",
+                provider
+            );
+            assert_eq!(list_models["result"]["provider"], json!(provider));
+            assert!(
+                list_models["result"].get("model_ids").is_some(),
+                "provider.list_models should include model_ids for provider '{}'",
+                provider
+            );
+
+            let completion = harness.inner.request(
+                7_200 + idx as u64,
+                "provider.test_completion",
+                Some(json!({"provider": provider})),
+            );
+            assert!(
+                completion.get("error").is_none(),
+                "provider.test_completion should not return rpc error for provider '{}'",
+                provider
+            );
+            assert_eq!(completion["result"]["provider"], json!(provider));
+            assert!(
+                completion["result"].get("ok").is_some(),
+                "provider.test_completion should include ok flag for provider '{}'",
+                provider
+            );
+
+            let connection = harness.inner.request(
+                8_200 + idx as u64,
+                "provider.test_connection",
+                Some(json!({"provider": provider})),
+            );
+            assert!(
+                connection.get("error").is_none(),
+                "provider.test_connection should not return rpc error for provider '{}'",
+                provider
+            );
+            assert_eq!(connection["result"]["provider"], json!(provider));
+            assert!(
+                connection["result"].get("key_configured").is_some(),
+                "provider.test_connection should include key_configured for provider '{}'",
+                provider
+            );
+
+            checked_count += 1;
+        }
+
+        assert!(
+            checked_count > 0,
+            "provider matrix check should validate at least one provider"
+        );
+
+        let shutdown = harness.inner.request(6_199, "shutdown", None);
+        assert_eq!(shutdown["result"]["ok"], true);
+        harness.inner.wait_for_exit(Duration::from_secs(8));
+    }
+
+    #[test]
     fn run_scenario_file_executes_security_baseline_benchmark_requests() {
         let temp = tempdir().expect("failed to create temp dir");
         let config_path = temp.path().join("config.toml");

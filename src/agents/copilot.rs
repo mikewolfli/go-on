@@ -18,18 +18,42 @@ use tracing::warn;
 
 use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
-use crate::agents::{
-    apply_openai_common_options, option_string, principles_to_text, stream_sse_to_sender,
-};
+use crate::agents::{apply_openai_common_options, option_string, principles_to_text};
 use crate::i18n::runtime::tf;
 
 const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
+const COPILOT_MODELS_URL: &str = "https://api.githubcopilot.com/models";
 const COPILOT_COMPLETIONS_URL: &str = "https://api.githubcopilot.com/chat/completions";
+const COPILOT_MODELS_CACHE_TTL_SECS: u64 = 300;
+
+pub(crate) const COPILOT_FALLBACK_MODEL_PRIORITY: &[&str] = &[
+    "claude-opus-4",
+    "gemini-2.5-pro",
+    "o3",
+    "o1",
+    "gpt-5",
+    "claude-sonnet-4",
+    "gemini-2.0-flash-001",
+    "gpt-4.1",
+    "gpt-4o",
+    "claude-3.5-sonnet",
+    "o4-mini",
+    "o3-mini",
+    "gpt-5-mini",
+    "gpt-4.1-mini",
+    "gpt-4o-mini",
+];
 
 /// Cached Copilot API token with its expiry (Unix timestamp seconds).
 struct CachedToken {
     token: String,
     expires_at: u64,
+}
+
+/// Cached ranked Copilot model IDs fetched from `/models`.
+struct CachedModels {
+    models: Vec<String>,
+    fetched_at: u64,
 }
 
 pub struct CopilotAgent {
@@ -38,6 +62,8 @@ pub struct CopilotAgent {
     client: reqwest::Client,
     /// Short-lived Copilot API token, auto-refreshed.
     cached: Mutex<Option<CachedToken>>,
+    /// Ranked Copilot model IDs discovered from GitHub's `/models` endpoint.
+    cached_models: Mutex<Option<CachedModels>>,
 }
 
 impl CopilotAgent {
@@ -49,6 +75,236 @@ impl CopilotAgent {
             token_env,
             client,
             cached: Mutex::new(None),
+            cached_models: Mutex::new(None),
+        }
+    }
+
+    fn model_id_from_value(candidate: &Value) -> Option<String> {
+        if let Some(raw) = candidate.as_str() {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+            return None;
+        }
+
+        let record = match candidate.as_object() {
+            Some(record) => record,
+            None => return None,
+        };
+        ["id", "model", "model_id", "name"]
+            .iter()
+            .find_map(|key| record.get(*key).and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    }
+
+    fn bool_field(record: &serde_json::Map<String, Value>, keys: &[&str]) -> bool {
+        keys.iter()
+            .any(|key| record.get(*key).and_then(Value::as_bool).unwrap_or(false))
+    }
+
+    fn capability_score(record: &serde_json::Map<String, Value>) -> i64 {
+        let mut score = 0i64;
+
+        if let Some(capabilities) = record.get("capabilities") {
+            if let Some(items) = capabilities.as_array() {
+                for capability in items.iter().filter_map(Value::as_str) {
+                    let cap = capability.to_ascii_lowercase();
+                    if cap.contains("reason") {
+                        score += 180;
+                    }
+                    if cap.contains("tool") || cap.contains("function") {
+                        score += 140;
+                    }
+                    if cap.contains("vision") {
+                        score += 120;
+                    }
+                    if cap.contains("chat") || cap.contains("code") {
+                        score += 80;
+                    }
+                }
+            }
+        }
+
+        if let Some(window) = record
+            .get("context_window")
+            .or_else(|| record.get("contextWindow"))
+            .and_then(Value::as_u64)
+        {
+            score += (window / 16_000).min(80) as i64;
+        }
+
+        score
+    }
+
+    fn fallback_rank(model_id: &str) -> i64 {
+        let model = model_id.to_ascii_lowercase();
+        let total = COPILOT_FALLBACK_MODEL_PRIORITY.len() as i64;
+        for (idx, known) in COPILOT_FALLBACK_MODEL_PRIORITY.iter().enumerate() {
+            if model == *known {
+                return (total - idx as i64) * 500;
+            }
+        }
+        0
+    }
+
+    pub(crate) fn extract_ranked_model_ids(payload: &Value) -> Vec<String> {
+        let root = payload.as_object();
+        let candidates = if let Some(array) = payload.as_array() {
+            array.clone()
+        } else if let Some(array) = root
+            .and_then(|obj| obj.get("data"))
+            .and_then(Value::as_array)
+        {
+            array.clone()
+        } else if let Some(array) = root
+            .and_then(|obj| obj.get("models"))
+            .and_then(Value::as_array)
+        {
+            array.clone()
+        } else {
+            Vec::new()
+        };
+
+        let mut ranked: Vec<(String, i64, usize)> = Vec::new();
+        for (index, candidate) in candidates.iter().enumerate() {
+            let Some(model_id) = Self::model_id_from_value(candidate) else {
+                continue;
+            };
+            let id_lower = model_id.to_ascii_lowercase();
+
+            let mut score = Self::fallback_rank(&id_lower);
+            if let Some(record) = candidate.as_object() {
+                if Self::bool_field(record, &["is_default", "default", "default_model"]) {
+                    score += 10_000;
+                }
+                if Self::bool_field(record, &["recommended", "is_recommended", "preferred"]) {
+                    score += 8_000;
+                }
+                score += Self::capability_score(record);
+            }
+
+            ranked.push((model_id, score, index));
+        }
+
+        ranked.sort_by(|left, right| {
+            right
+                .1
+                .cmp(&left.1)
+                .then_with(|| left.2.cmp(&right.2))
+                .then_with(|| left.0.cmp(&right.0))
+        });
+
+        let mut dedup = std::collections::HashSet::new();
+        ranked
+            .into_iter()
+            .filter_map(|(model, _, _)| {
+                if dedup.insert(model.clone()) {
+                    Some(model)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn fresh_cached_models(&self) -> Option<Vec<String>> {
+        let guard = match self.cached_models.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("copilot model cache lock poisoned during read; recovering state");
+                poisoned.into_inner()
+            }
+        };
+        let cached = guard.as_ref()?;
+        if Self::now_secs().saturating_sub(cached.fetched_at) <= COPILOT_MODELS_CACHE_TTL_SECS {
+            return Some(cached.models.clone());
+        }
+        None
+    }
+
+    fn stale_cached_models(&self) -> Option<Vec<String>> {
+        let guard = match self.cached_models.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("copilot model cache lock poisoned during stale read; recovering state");
+                poisoned.into_inner()
+            }
+        };
+        guard.as_ref().map(|cached| cached.models.clone())
+    }
+
+    fn store_cached_models(&self, models: Vec<String>) {
+        let mut guard = match self.cached_models.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("copilot model cache lock poisoned during write; recovering state");
+                poisoned.into_inner()
+            }
+        };
+        *guard = Some(CachedModels {
+            models,
+            fetched_at: Self::now_secs(),
+        });
+    }
+
+    async fn fetch_ranked_models_from_network(&self) -> Result<Vec<String>> {
+        let api_token = self.copilot_token().await?;
+        let response = self
+            .client
+            .get(COPILOT_MODELS_URL)
+            .header("Authorization", format!("Bearer {api_token}"))
+            .header("Accept", "application/json")
+            .header("User-Agent", "go-on/1.0")
+            .header("Editor-Version", "vscode/1.90.0")
+            .header("Editor-Plugin-Version", "copilot-chat/0.17.0")
+            .header("Copilot-Integration-Id", "copilot-chat")
+            .send()
+            .await
+            .with_context(|| "copilot models endpoint request failed".to_string())?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Copilot models request failed ({status}): {body}");
+        }
+
+        let payload: Value = response
+            .json()
+            .await
+            .with_context(|| "copilot models endpoint returned invalid json".to_string())?;
+        let models = Self::extract_ranked_model_ids(&payload);
+        if models.is_empty() {
+            anyhow::bail!("Copilot models endpoint returned no model identifiers");
+        }
+        Ok(models)
+    }
+
+    async fn resolve_auto_model_candidates(&self) -> Vec<String> {
+        if let Some(models) = self.fresh_cached_models() {
+            return models;
+        }
+
+        match self.fetch_ranked_models_from_network().await {
+            Ok(models) => {
+                self.store_cached_models(models.clone());
+                models
+            }
+            Err(err) => {
+                warn!(
+                    "copilot auto model resolution fell back after /models failure: {}",
+                    err
+                );
+                if let Some(models) = self.stale_cached_models() {
+                    return models;
+                }
+                COPILOT_FALLBACK_MODEL_PRIORITY
+                    .iter()
+                    .map(|model| (*model).to_string())
+                    .collect()
+            }
         }
     }
 
@@ -219,7 +475,7 @@ impl CopilotAgent {
             // These headers identify the editor to GitHub's backend.
             .header("Editor-Version", "vscode/1.90.0")
             .header("Editor-Plugin-Version", "copilot-chat/0.17.0")
-            .header("Copilot-Integration-Id", "vscode-chat")
+            .header("Copilot-Integration-Id", "copilot-chat")
             .json(&payload)
             .send()
             .await?;
@@ -313,34 +569,9 @@ impl Agent for CopilotAgent {
             || current_model.eq_ignore_ascii_case("copilot");
 
         let candidates: Vec<String> = if is_auto {
-            // All known Copilot models, ordered by capability descending.
-            // The first one that returns a successful response wins.
-            [
-                // Ultra-premium (Pro+, Enterprise)
-                "claude-opus-4",
-                "gemini-2.5-pro",
-                // Flagship reasoning
-                "o1",
-                "o3",
-                // Top-tier chat
-                "gpt-5",
-                "claude-sonnet-4",
-                "gemini-2.0-flash-001",
-                // Premium
-                "gpt-4.1",
-                "gpt-4o",
-                "claude-3.5-sonnet",
-                // Lightweight reasoning
-                "o3-mini",
-                "o4-mini",
-                // Budget / fallback
-                "gpt-4.1-mini",
-                "gpt-4o-mini",
-                "gpt-5-mini",
-            ]
-            .iter()
-            .map(|&s| s.to_string())
-            .collect()
+            // VS Code-aligned flow: resolve models from Copilot `/models`
+            // and use ranked/filtered candidates with graceful fallback.
+            self.resolve_auto_model_candidates().await
         } else {
             vec![current_model.clone()]
         };
@@ -626,5 +857,30 @@ mod tests {
         assert_eq!(payload["temperature"], 0.2);
         assert_eq!(payload["max_tokens"], 512);
         assert_eq!(payload["top_p"], 0.9);
+    }
+
+    #[test]
+    fn extract_ranked_model_ids_prefers_default_and_recommended() {
+        let payload = json!({
+            "data": [
+                {"id": "gpt-4o", "capabilities": ["chat"]},
+                {"id": "gpt-5", "recommended": true, "capabilities": ["chat", "tools"]},
+                {"id": "claude-sonnet-4", "is_default": true, "capabilities": ["chat", "tools", "reasoning"]}
+            ]
+        });
+
+        let models = CopilotAgent::extract_ranked_model_ids(&payload);
+        assert_eq!(models.first().map(String::as_str), Some("claude-sonnet-4"));
+        assert!(models.iter().any(|m| m == "gpt-5"));
+        assert!(models.iter().any(|m| m == "gpt-4o"));
+    }
+
+    #[test]
+    fn extract_ranked_model_ids_dedups_and_accepts_string_list() {
+        let payload = json!(["gpt-4o", "gpt-4o", "gpt-5"]);
+        let models = CopilotAgent::extract_ranked_model_ids(&payload);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0], "gpt-5");
+        assert_eq!(models[1], "gpt-4o");
     }
 }

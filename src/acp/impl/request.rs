@@ -974,6 +974,14 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
+                "provider.list_models" => {
+                    runtime_pack::handle_provider_list_models(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
                 "runtime.restart" => runtime_pack::handle_runtime_restart(server, request_id).await,
                 _ => {
                     send_error(

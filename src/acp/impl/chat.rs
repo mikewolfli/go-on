@@ -1387,6 +1387,7 @@ pub(crate) async fn process_chat_request(
     }
 
     if model_is_specific {
+        let agents_before_model_filter = resolved.agents.clone();
         let model = base_agent_options
             .get("model")
             .and_then(|v| v.as_str())
@@ -1394,10 +1395,30 @@ pub(crate) async fn process_chat_request(
         let model_lower = model.to_ascii_lowercase();
         // Keep only agents whose name is a prefix of or contained in the model string.
         // e.g. "deepseek" matches "deepseek-v4-flash", "openai" matches "gpt-4o".
+        // Exception: model IDs containing '/' (e.g. "deepseek-ai/DeepSeek-V3.2")
+        // are typically vendor-qualified IDs (siliconflow, openrouter, etc.) and
+        // should NOT match a simple agent prefix like "deepseek".
         resolved.agents.retain(|(name, _)| {
             let name_lower = name.to_ascii_lowercase();
-            model_lower.starts_with(&name_lower) || name_lower.starts_with(&model_lower)
+            if model_lower.starts_with(&name_lower) && model_lower.contains('/') {
+                // Qualified model ID like "deepseek-ai/..." → only match if
+                // the agent name also appears after the '/', or the agent is
+                // the model vendor (e.g. "siliconflow/deepseek-...").
+                // For now, skip prefix match when '/' is present.
+                name_lower.starts_with(&model_lower)
+                    || model_lower.ends_with(&format!("/{}", name_lower))
+            } else {
+                model_lower.starts_with(&name_lower) || name_lower.starts_with(&model_lower)
+            }
         });
+
+        if resolved.agents.is_empty() {
+            warn!(
+                model = %model,
+                "model filter did not match any agent, falling back to phase candidate agents"
+            );
+            resolved.agents = agents_before_model_filter;
+        }
     }
 
     let risk_policy = build_risk_vote_policy(&base_agent_options);
@@ -1442,6 +1463,31 @@ pub(crate) async fn process_chat_request(
     let mut agent_vote_sources: Vec<AgentVoteSource> = Vec::new();
     let mut emit_final_vote_response = false;
 
+    // Degraded fallback: if all candidates are marked unhealthy, still attempt
+    // the first candidate so the request can make progress instead of failing fast.
+    let unhealthy_fallback_agent = if let Some(ref cb) = server.capability_bus {
+        let healthy_count = resolved
+            .agents
+            .iter()
+            .filter(|(name, _)| cb.is_agent_healthy(name))
+            .count();
+        if healthy_count == 0 {
+            let selected = resolved.agents.first().map(|(name, _)| name.clone());
+            if let Some(ref name) = selected {
+                warn!(
+                    phase = %phase_name,
+                    fallback_agent = %name,
+                    "all candidate agents unhealthy; forcing degraded fallback attempt"
+                );
+            }
+            selected
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     if !cache_hit {
         for (agent_name, agent) in resolved.agents {
             let attempt_started = std::time::Instant::now();
@@ -1449,14 +1495,22 @@ pub(crate) async fn process_chat_request(
             // Skip unhealthy agents
             if let Some(ref cb) = server.capability_bus {
                 if !cb.is_agent_healthy(&agent_name) {
-                    agent_attempts.push(json!({
-                        "agent": agent_name,
-                        "ok": false,
-                        "skipped_unhealthy": true,
-                        "duration_ms": 0u64,
-                        "error": "agent unhealthy by capability bus"
-                    }));
-                    continue;
+                    if unhealthy_fallback_agent.as_deref() == Some(agent_name.as_str()) {
+                        warn!(
+                            phase = %phase_name,
+                            agent = %agent_name,
+                            "executing unhealthy agent due to degraded fallback"
+                        );
+                    } else {
+                        agent_attempts.push(json!({
+                            "agent": agent_name,
+                            "ok": false,
+                            "skipped_unhealthy": true,
+                            "duration_ms": 0u64,
+                            "error": "agent unhealthy by capability bus"
+                        }));
+                        continue;
+                    }
                 }
             }
 
@@ -1584,6 +1638,24 @@ pub(crate) async fn process_chat_request(
             .await
             {
                 Ok((output_text, reasoning_output, agent_selected_model)) => {
+                    if output_text.trim().is_empty() {
+                        agent_attempts.push(json!({
+                            "agent": agent_name,
+                            "ok": false,
+                            "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                            "error": "empty_response",
+                        }));
+                        if let Ok(mut ctrl) = server.online_controller.lock() {
+                            ctrl.record_agent_outcome(
+                                phase_name,
+                                &agent_name,
+                                false,
+                                attempt_started.elapsed().as_millis() as u64,
+                            );
+                        }
+                        continue;
+                    }
+
                     if let Ok(mut ctrl) = server.online_controller.lock() {
                         ctrl.record_agent_outcome(
                             phase_name,
@@ -1870,9 +1942,29 @@ pub(crate) async fn process_chat_request(
     });
 
     if !cache_hit && response_text.is_empty() && last_err.is_none() {
+        let all_empty_responses = !agent_attempts.is_empty()
+            && agent_attempts.iter().all(|attempt| {
+                attempt
+                    .get("ok")
+                    .and_then(|value| value.as_bool())
+                    .map(|ok| !ok)
+                    .unwrap_or(false)
+                    && attempt
+                        .get("error")
+                        .and_then(|value| value.as_str())
+                        .map(|error| error == "empty_response")
+                        .unwrap_or(false)
+            });
+
         // Record budget usage before early return to prevent budget leak.
         if let Ok(mut budget) = server.tenant_budget.lock() {
             budget.record_usage(tenant_id, 0, 0);
+        }
+        if all_empty_responses {
+            anyhow::bail!(
+                "all candidate agents returned empty responses for phase '{}'",
+                phase_name
+            );
         }
         anyhow::bail!(
             "no healthy agent produced a response for phase '{}'",
@@ -5321,5 +5413,208 @@ mod tests {
             system_text.contains("E2E dual bus integration test"),
             "vector context must be injected into system message"
         );
+    }
+
+    #[cfg(not(feature = "backend-postgres"))]
+    #[tokio::test]
+    async fn process_chat_request_skips_empty_agent_output_and_uses_next_agent() {
+        let temp = tempfile::tempdir().expect("tempdir should exist");
+
+        let seen_messages = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = AgentRegistry::new();
+        registry.register_arc(
+            "empty-agent",
+            Arc::new(RecordingAgent {
+                seen_messages: Arc::new(Mutex::new(Vec::new())),
+                output: "   ".to_string(),
+            }),
+        );
+        registry.register_arc(
+            "test-agent",
+            Arc::new(RecordingAgent {
+                seen_messages: Arc::clone(&seen_messages),
+                output: "fallback answer".to_string(),
+            }),
+        );
+
+        let mut config = test_config();
+        config
+            .phases
+            .get_mut("coding")
+            .expect("coding phase must exist")
+            .agents = vec!["empty-agent".to_string(), "test-agent".to_string()];
+        let config = Arc::new(config);
+        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
+
+        let mut server = ServerBuilder::new().build().expect("server should build");
+        server.flow_manager = Some(flow);
+        server.agent_registry = Some(Arc::new(registry));
+        server.vector_config = config.vector.clone();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
+        server.config_path = Some(config_path.display().to_string());
+
+        let params = ChatParams {
+            mode: "ask".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: "Return a concise answer".to_string(),
+            }],
+            conversation_id: Some("empty-output-conv".to_string()),
+            branch_id: Some("main".to_string()),
+            phase: Some("coding".to_string()),
+            options: None,
+            requirement_contract: None,
+            plan: None,
+            vector_hits: None,
+            execution_decision_candidate: None,
+        };
+
+        let trace = chat_trace_context(&Some(json!(1)), "chat.empty_output");
+        let result = process_chat_request(&server, &params, None, &trace, None)
+            .await
+            .expect("chat request should succeed by trying next agent");
+
+        assert_eq!(result["response"], "fallback answer");
+
+        let attempts = result["agent_attempts"]
+            .as_array()
+            .expect("agent attempts should be an array");
+        assert!(attempts.iter().any(|attempt| {
+            attempt["agent"] == "empty-agent" && attempt["error"] == "empty_response"
+        }));
+        assert!(attempts
+            .iter()
+            .any(|attempt| attempt["agent"] == "test-agent" && attempt["ok"] == true));
+
+        let captured = seen_messages.lock().expect("messages lock").clone();
+        assert_eq!(
+            captured.last().map(|msg| msg.role.as_str()),
+            Some("user"),
+            "second agent should receive the request"
+        );
+    }
+
+    #[cfg(not(feature = "backend-postgres"))]
+    #[tokio::test]
+    async fn process_chat_request_all_empty_outputs_returns_specific_error() {
+        let temp = tempfile::tempdir().expect("tempdir should exist");
+
+        let mut registry = AgentRegistry::new();
+        registry.register_arc(
+            "empty-agent",
+            Arc::new(RecordingAgent {
+                seen_messages: Arc::new(Mutex::new(Vec::new())),
+                output: " ".to_string(),
+            }),
+        );
+
+        let mut config = test_config();
+        config
+            .phases
+            .get_mut("coding")
+            .expect("coding phase must exist")
+            .agents = vec!["empty-agent".to_string()];
+        let config = Arc::new(config);
+        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
+
+        let mut server = ServerBuilder::new().build().expect("server should build");
+        server.flow_manager = Some(flow);
+        server.agent_registry = Some(Arc::new(registry));
+        server.vector_config = config.vector.clone();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
+        server.config_path = Some(config_path.display().to_string());
+
+        let params = ChatParams {
+            mode: "ask".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: "Return a concise answer".to_string(),
+            }],
+            conversation_id: Some("all-empty-conv".to_string()),
+            branch_id: Some("main".to_string()),
+            phase: Some("coding".to_string()),
+            options: None,
+            requirement_contract: None,
+            plan: None,
+            vector_hits: None,
+            execution_decision_candidate: None,
+        };
+
+        let trace = chat_trace_context(&Some(json!(1)), "chat.all_empty");
+        let err = process_chat_request(&server, &params, None, &trace, None)
+            .await
+            .expect_err("all empty outputs should fail with a specific error");
+
+        assert!(
+            err.to_string()
+                .contains("all candidate agents returned empty responses"),
+            "error should explain empty responses"
+        );
+    }
+
+    #[cfg(not(feature = "backend-postgres"))]
+    #[tokio::test]
+    async fn process_chat_request_specific_model_without_match_keeps_phase_agents() {
+        let temp = tempfile::tempdir().expect("tempdir should exist");
+
+        let seen_messages = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = AgentRegistry::new();
+        registry.register_arc(
+            "test-agent",
+            Arc::new(RecordingAgent {
+                seen_messages: Arc::clone(&seen_messages),
+                output: "model fallback answer".to_string(),
+            }),
+        );
+
+        let config = Arc::new(test_config());
+        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
+
+        let mut server = ServerBuilder::new().build().expect("server should build");
+        server.flow_manager = Some(flow);
+        server.agent_registry = Some(Arc::new(registry));
+        server.vector_config = config.vector.clone();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
+        server.config_path = Some(config_path.display().to_string());
+
+        let params = ChatParams {
+            mode: "ask".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: "Return a concise answer".to_string(),
+            }],
+            conversation_id: Some("model-fallback-conv".to_string()),
+            branch_id: Some("main".to_string()),
+            phase: Some("coding".to_string()),
+            options: Some(PhaseOptions {
+                extra: [(
+                    "model".to_string(),
+                    json!("gpt-4o-mini-not-mapped-to-agent-name"),
+                )]
+                .into_iter()
+                .collect(),
+                ..PhaseOptions::default()
+            }),
+            requirement_contract: None,
+            plan: None,
+            vector_hits: None,
+            execution_decision_candidate: None,
+        };
+
+        let trace = chat_trace_context(&Some(json!(1)), "chat.model_filter_fallback");
+        let result = process_chat_request(&server, &params, None, &trace, None)
+            .await
+            .expect("chat request should succeed by falling back to phase agents");
+
+        assert_eq!(result["response"], "model fallback answer");
+        let attempts = result["agent_attempts"]
+            .as_array()
+            .expect("agent attempts should be an array");
+        assert!(attempts
+            .iter()
+            .any(|attempt| attempt["agent"] == "test-agent" && attempt["ok"] == true));
     }
 }

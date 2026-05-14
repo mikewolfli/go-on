@@ -4,6 +4,12 @@ use crate::i18n::runtime::{t, tf};
 /// Serializes global env-var writes (`std::env::set_var`) to prevent data races
 /// in concurrent requests handled by the ACP server.
 static SET_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static COPILOT_MODELS_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<(u64, Vec<String>)>>> =
+    std::sync::OnceLock::new();
+
+const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
+const COPILOT_MODELS_URL: &str = "https://api.githubcopilot.com/models";
+const COPILOT_MODELS_CACHE_TTL_SECS: u64 = 300;
 
 /// Try to build a [`reqwest::Client`] with proxy autodetection.
 ///
@@ -91,6 +97,134 @@ fn build_github_client() -> reqwest::Client {
     // 3. Fallback: plain direct client
     tracing::debug!("No proxy detected, using direct connection");
     reqwest::Client::new()
+}
+
+fn copilot_models_cache() -> &'static std::sync::Mutex<Option<(u64, Vec<String>)>> {
+    COPILOT_MODELS_CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn read_copilot_models_cache() -> Option<Vec<String>> {
+    let guard = copilot_models_cache().lock().ok()?;
+    let (fetched_at, models) = guard.as_ref()?.clone();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now.saturating_sub(fetched_at) <= COPILOT_MODELS_CACHE_TTL_SECS {
+        Some(models)
+    } else {
+        None
+    }
+}
+
+fn read_stale_copilot_models_cache() -> Option<Vec<String>> {
+    let guard = copilot_models_cache().lock().ok()?;
+    guard.as_ref().map(|(_, models)| models.clone())
+}
+
+fn store_copilot_models_cache(models: Vec<String>) {
+    if let Ok(mut guard) = copilot_models_cache().lock() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        *guard = Some((now, models));
+    }
+}
+
+fn resolve_copilot_github_token() -> Option<String> {
+    for env_name in ["GITHUB_COPILOT_TOKEN", "GITHUB_TOKEN"] {
+        if let Ok(value) = std::env::var(env_name) {
+            if !value.trim().is_empty() {
+                return Some(value);
+            }
+        }
+    }
+
+    for account in ["github_copilot_token", "copilot_api_key"] {
+        if let Ok(entry) = keyring::Entry::new("go-on", account) {
+            if let Ok(value) = entry.get_password() {
+                if !value.trim().is_empty() {
+                    return Some(value);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+async fn resolve_copilot_models_dynamic() -> Vec<String> {
+    if let Some(models) = read_copilot_models_cache() {
+        return models;
+    }
+
+    let fallback = crate::agents::copilot::COPILOT_FALLBACK_MODEL_PRIORITY
+        .iter()
+        .map(|model| (*model).to_string())
+        .collect::<Vec<_>>();
+
+    let Some(github_token) = resolve_copilot_github_token() else {
+        return read_stale_copilot_models_cache().unwrap_or(fallback);
+    };
+
+    let client = build_github_client();
+    let token_resp = match client
+        .get(COPILOT_TOKEN_URL)
+        .header("Authorization", format!("token {}", github_token))
+        .header("Accept", "application/json")
+        .header("User-Agent", "go-on/1.0")
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(_) => return read_stale_copilot_models_cache().unwrap_or(fallback),
+    };
+
+    if !token_resp.status().is_success() {
+        return read_stale_copilot_models_cache().unwrap_or(fallback);
+    }
+
+    let token_body: Value = match token_resp.json().await {
+        Ok(body) => body,
+        Err(_) => return read_stale_copilot_models_cache().unwrap_or(fallback),
+    };
+
+    let Some(copilot_token) = token_body.get("token").and_then(Value::as_str) else {
+        return read_stale_copilot_models_cache().unwrap_or(fallback);
+    };
+
+    let models_resp = match client
+        .get(COPILOT_MODELS_URL)
+        .header("Authorization", format!("Bearer {}", copilot_token))
+        .header("Accept", "application/json")
+        .header("User-Agent", "go-on/1.0")
+        .header("Editor-Version", "vscode/1.90.0")
+        .header("Editor-Plugin-Version", "copilot-chat/0.17.0")
+        .header("Copilot-Integration-Id", "copilot-chat")
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(_) => return read_stale_copilot_models_cache().unwrap_or(fallback),
+    };
+
+    if !models_resp.status().is_success() {
+        return read_stale_copilot_models_cache().unwrap_or(fallback);
+    }
+
+    let payload: Value = match models_resp.json().await {
+        Ok(body) => body,
+        Err(_) => return read_stale_copilot_models_cache().unwrap_or(fallback),
+    };
+
+    let ranked = crate::agents::copilot::CopilotAgent::extract_ranked_model_ids(&payload);
+    if ranked.is_empty() {
+        return read_stale_copilot_models_cache().unwrap_or(fallback);
+    }
+
+    store_copilot_models_cache(ranked.clone());
+    ranked
 }
 
 pub(super) async fn handle_metrics(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
@@ -5482,6 +5616,89 @@ pub(super) async fn handle_provider_capabilities(
         Ok(payload) => send_result(server, request_id, payload).await,
         Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
     }
+}
+
+pub(super) async fn handle_provider_list_models(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let provider = params
+        .get("provider")
+        .or_else(|| params.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if provider.is_empty() {
+        return send_error(
+            server,
+            request_id,
+            -32602,
+            "provider is required".to_string(),
+            None,
+        )
+        .await;
+    }
+
+    let static_models = provider_models_for(server, &provider);
+    let mut model_order = if provider.eq_ignore_ascii_case("copilot") {
+        resolve_copilot_models_dynamic().await
+    } else {
+        Vec::new()
+    };
+
+    for model in &static_models {
+        if !model_order.iter().any(|id| id == &model.id) {
+            model_order.push(model.id.clone());
+        }
+    }
+
+    let default_model = static_models
+        .iter()
+        .find(|model| model.is_default)
+        .map(|model| model.id.clone())
+        .or_else(|| model_order.first().cloned());
+
+    let models = model_order
+        .iter()
+        .map(|id| {
+            if let Some(info) = static_models.iter().find(|model| model.id == *id) {
+                json!({
+                    "id": info.id,
+                    "name": info.name,
+                    "description": info.description,
+                    "is_default": info.is_default,
+                    "capabilities": info.capabilities,
+                    "context_window": info.context_window,
+                })
+            } else {
+                json!({
+                    "id": id,
+                    "name": id,
+                    "description": Value::Null,
+                    "is_default": false,
+                    "capabilities": [],
+                    "context_window": Value::Null,
+                })
+            }
+        })
+        .collect::<Vec<_>>();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "provider": provider,
+            "default_model": default_model,
+            "model_ids": model_order,
+            "models": models,
+            "source": if provider.eq_ignore_ascii_case("copilot") { "copilot_models" } else { "registry" },
+        }),
+    )
+    .await
 }
 
 /// Handle provider configuration request from GUI or other clients.

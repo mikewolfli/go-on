@@ -219,10 +219,10 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
     let mut degraded_count: u64 = 0;
     let mut total_count: u64 = 0;
 
-    for agent_config in config.agents.values() {
+    for (agent_key, agent_config) in &config.agents {
         let env_var = agent_config.api_key_env.as_deref().unwrap_or("");
         let secret_env_var = agent_config.secret_key_env.as_deref();
-        let agent_name = &agent_config.agent_type;
+        let agent_name = agent_key;
 
         if env_var.is_empty() {
             continue;

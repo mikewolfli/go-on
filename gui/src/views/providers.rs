@@ -179,6 +179,18 @@ fn models_for_provider(provider: &str) -> &'static [&'static str] {
             "mistral-large-latest",
         ],
         "copilot" => &["auto", "gpt-4o", "gpt-4o-mini"],
+        "siliconflow" => &[
+            "auto",
+            "deepseek-ai/DeepSeek-V3.2",
+            "deepseek-ai/DeepSeek-R1",
+            "deepseek-ai/DeepSeek-V2.5",
+            "Qwen/Qwen2.5-72B-Instruct-128K",
+            "Qwen/Qwen2.5-32B-Instruct",
+            "Qwen/QwQ-32B",
+            "TeleAI/TeleChat-T2",
+            "THUDM/glm-4-9b-chat",
+            "internlm/internlm2_5-20b-chat",
+        ],
         "facewall" | "langboat" | "skywork" | "xihu" | "deepquest" | "fireworks" | "loopai"
         | "titan" => &["auto"],
         "stepfun" => &["auto", "step-2-16k", "step-1-32k"],
@@ -1530,7 +1542,7 @@ impl ProvidersView {
                 // ── Copilot Device Code auto-poll (uses system proxy) ──
                 if self.copilot_device_state.as_deref() == Some("polling") {
                     // Keep UI frames ticking so polling continues even when the user is idle.
-                    ctx.request_repaint_after(Duration::from_millis(250));
+                    ctx.request_repaint_after(Duration::from_secs(1));
                     let elapsed = self.copilot_last_poll.elapsed();
                     if elapsed >= Duration::from_secs(self.copilot_poll_interval) {
                         self.copilot_last_poll = Instant::now();

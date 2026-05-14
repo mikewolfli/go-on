@@ -151,6 +151,25 @@ impl OpenAiCompatibleAgent {
 
 #[async_trait]
 impl Agent for OpenAiCompatibleAgent {
+    fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
+        let model_id = self.model.clone();
+        if model_id.is_empty() {
+            return vec![];
+        }
+        vec![crate::agent::ModelInfo {
+            id: model_id,
+            name: self.model.clone(),
+            description: format!("OpenAI-compatible provider at {}", self.base_url),
+            is_default: true,
+            context_window: Some(4096),
+            capabilities: vec!["chat".to_string(), "streaming".to_string()],
+        }]
+    }
+
+    fn default_model(&self) -> Option<crate::agent::ModelInfo> {
+        self.available_models().into_iter().next()
+    }
+
     async fn chat(
         &self,
         messages: Vec<Message>,

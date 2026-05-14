@@ -1545,22 +1545,27 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       const result = await this.manager.sendRequest("models/list", {});
       const payload = asRecord(result);
       const groups = Array.isArray(payload.models) ? payload.models : [];
-      const parsed = groups
-        .map((group) => {
-          const item = asRecord(group);
-          const name = String(item.agent || "").trim();
-          if (!name) {
-            return null;
-          }
-          const defaultModel = this._modelIdFromRuntime(item.default_model);
-          return {
-            name,
-            type: name,
-            model: defaultModel,
-            api_key_env: inferEnvVar(name),
-          } as ProviderCatalogSpec;
-        })
-        .filter((item): item is ProviderCatalogSpec => Boolean(item));
+      const byProvider = new Map<string, string[]>();
+      for (const group of groups) {
+        const item = asRecord(group);
+        const name = String(item.provider || item.agent || "").trim();
+        const modelId = this._modelIdFromRuntime(item.id || item.model_id || item.name);
+        if (!name) {
+          continue;
+        }
+        if (!byProvider.has(name)) {
+          byProvider.set(name, []);
+        }
+        if (modelId && !byProvider.get(name)?.includes(modelId)) {
+          byProvider.get(name)?.push(modelId);
+        }
+      }
+      const parsed = Array.from(byProvider.entries()).map(([name, models]) => ({
+        name,
+        type: name,
+        model: models[0],
+        api_key_env: inferEnvVar(name),
+      } as ProviderCatalogSpec));
       return parsed;
     } catch {
       return [];
@@ -1623,37 +1628,49 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
 
     if (this.manager.isRunning()) {
       try {
-        const response = await this.manager.sendRequest("models/list", {});
-        const payload = (
-          typeof response === "object" && response !== null ? response : {}
-        ) as Record<string, unknown>;
-        const groups = Array.isArray(payload.models) ? payload.models : [];
-        const matched = groups.find((group) => {
-          const record =
-            typeof group === "object" && group !== null
-              ? (group as Record<string, unknown>)
-              : {};
-          return record.agent === providerName;
+        const response = await this.manager.sendRequest("provider.list_models", {
+          provider: providerName,
         });
-
-        if (matched && typeof matched === "object") {
-          const record = matched as Record<string, unknown>;
-          const defaultModel = this._modelIdFromRuntime(record.default_model);
-          if (defaultModel) {
-            modelSet.add(defaultModel);
+        const payload = asRecord(response);
+        const ids = Array.isArray(payload.model_ids) ? payload.model_ids : [];
+        for (const item of ids) {
+          const modelId = this._modelIdFromRuntime(item);
+          if (modelId) {
+            modelSet.add(modelId);
           }
-          const runtimeModels = Array.isArray(record.models)
-            ? record.models
-            : [];
-          for (const runtimeModel of runtimeModels) {
-            const modelId = this._modelIdFromRuntime(runtimeModel);
+        }
+
+        const runtimeModels = Array.isArray(payload.models) ? payload.models : [];
+        for (const runtimeModel of runtimeModels) {
+          const modelId = this._modelIdFromRuntime(runtimeModel);
+          if (modelId) {
+            modelSet.add(modelId);
+          }
+        }
+
+        const defaultModel = this._modelIdFromRuntime(payload.default_model);
+        if (defaultModel) {
+          modelSet.add(defaultModel);
+        }
+      } catch {
+        try {
+          const response = await this.manager.sendRequest("models/list", {});
+          const payload = asRecord(response);
+          const groups = Array.isArray(payload.models) ? payload.models : [];
+          for (const group of groups) {
+            const record = asRecord(group);
+            const groupProvider = String(record.provider || record.agent || "").trim();
+            if (groupProvider !== providerName) {
+              continue;
+            }
+            const modelId = this._modelIdFromRuntime(record.id || record.model_id || record.name);
             if (modelId) {
               modelSet.add(modelId);
             }
           }
+        } catch {
+          // Keep catalog-only models when runtime endpoint is unavailable.
         }
-      } catch {
-        // Keep catalog-only models when runtime endpoint is unavailable.
       }
     }
 

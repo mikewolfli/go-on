@@ -549,7 +549,18 @@ impl ChatView {
 
         // Derive selected_agent from available_agent_models
         if self.selected_model == "auto" {
-            self.selected_agent.clear();
+            // Keep the current agent selection when model is auto — the user
+            // may have explicitly picked an agent and expects it to stick.
+            // Only clear if no agent is selected at all or the stored agent
+            // is no longer known.
+            if self.selected_agent.is_empty()
+                || (!self
+                    .available_agent_models
+                    .contains_key(&self.selected_agent)
+                    && self.selected_agent != "copilot")
+            {
+                self.selected_agent.clear();
+            }
         } else {
             self.selected_agent.clear();
             for (agent, models) in &self.available_agent_models {

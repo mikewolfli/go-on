@@ -1416,21 +1416,6 @@ impl eframe::App for GoOnApp {
                         );
                     }
                     "skills" => {
-                        // Restore persisted UI state for skills view
-                        self.skills_view.show_create = self.ui_state.skills_show_create;
-                        self.skills_view.show_import = self.ui_state.skills_show_import;
-                        if !self.ui_state.skills_selected_skill_name.is_empty() {
-                            self.skills_view.load_skill_editor_by_name(
-                                &self.ui_state.skills_selected_skill_name,
-                            );
-                        }
-                        self.skills_view.edit_desc = self.ui_state.skills_edit_desc.clone();
-                        self.skills_view.edit_prompt = self.ui_state.skills_edit_prompt.clone();
-                        self.skills_view.edit_schema = self.ui_state.skills_edit_schema.clone();
-                        self.skills_view.test_input = self.ui_state.skills_test_input.clone();
-                        self.skills_view.rollback_version =
-                            self.ui_state.skills_rollback_version.clone();
-
                         self.skills_view.show(
                             ui,
                             &self.i18n,
@@ -1468,12 +1453,6 @@ impl eframe::App for GoOnApp {
                         }
                     }
                     "workflow" => {
-                        // Restore persisted filter and selection state
-                        self.workflow_view.run_status_filter =
-                            self.ui_state.workflow_run_status_filter.clone();
-                        self.workflow_view.selected_run_id =
-                            self.ui_state.workflow_selected_run_id.clone();
-
                         self.workflow_view.show(
                             ui,
                             &self.i18n,

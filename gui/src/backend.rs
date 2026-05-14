@@ -140,7 +140,7 @@ impl BackendClient {
         }
 
         let resp = self.rpc_call("models.list", None).await;
-        let result = match resp {
+        let mut result = match resp {
             Ok(val) => {
                 let mut result: ProviderModels = std::collections::HashMap::new();
                 if let Some(models) = val.get("models").and_then(|m| m.as_array()) {
@@ -157,8 +157,8 @@ impl BackendClient {
                 }
 
                 for models in result.values_mut() {
-                    models.sort();
-                    models.dedup();
+                    let mut seen = std::collections::HashSet::new();
+                    models.retain(|model| seen.insert(model.clone()));
                 }
 
                 result
@@ -168,6 +168,41 @@ impl BackendClient {
                 return stale_cached.unwrap_or_default();
             }
         };
+
+        // Prefer provider.list_models for Copilot so GUI uses the same
+        // backend-resolved model ordering/candidates as chat execution.
+        if let Ok(copilot_val) = self
+            .rpc_call(
+                "provider.list_models",
+                Some(serde_json::json!({ "provider": "copilot" })),
+            )
+            .await
+        {
+            let ids = copilot_val
+                .get("model_ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|item| item.as_str().map(ToString::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .or_else(|| {
+                    copilot_val
+                        .get("models")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|item| item.get("id").and_then(Value::as_str))
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                })
+                .unwrap_or_default();
+
+            if !ids.is_empty() {
+                result.insert("copilot".to_string(), ids);
+            }
+        }
 
         // Update cache only on successful refresh.
         if let Ok(mut cache) = self.models_cache.lock() {
