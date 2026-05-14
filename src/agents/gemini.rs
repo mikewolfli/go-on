@@ -163,6 +163,30 @@ impl Agent for GeminiAgent {
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![
             ModelInfo {
+                id: "gemini-2.5-flash".to_string(),
+                name: "Gemini 2.5 Flash".to_string(),
+                description: "Google Gemini 2.5 Flash (latest, fast & efficient)".to_string(),
+                is_default: self.model == "gemini-2.5-flash",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(1_048_576),
+            },
+            ModelInfo {
+                id: "gemini-2.5-pro".to_string(),
+                name: "Gemini 2.5 Pro".to_string(),
+                description: "Google Gemini 2.5 Pro (latest, most capable)".to_string(),
+                is_default: self.model == "gemini-2.5-pro",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(1_048_576),
+            },
+            ModelInfo {
                 id: "gemini-2.0-flash".to_string(),
                 name: "Gemini 2.0 Flash".to_string(),
                 description: "Google Gemini 2.0 Flash (fast and efficient)".to_string(),

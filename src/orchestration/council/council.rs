@@ -139,6 +139,8 @@ pub struct CouncilProfile {
     pub rejected_count: u32,
     /// Number of proposals still pending or active.
     pub pending_count: u32,
+    /// Number of proposals that ended in a tie.
+    pub tied_count: u32,
 }
 
 /// Multi-agent orchestration council — F-GAP-15.
@@ -549,6 +551,15 @@ impl OrchestrationCouncil {
             })
             .unwrap_or(0);
 
+        let tied_count = proposals
+            .as_ref()
+            .map(|p| {
+                p.values()
+                    .filter(|pr| pr.status == ProposalStatus::Tied)
+                    .count() as u32
+            })
+            .unwrap_or(0);
+
         CouncilProfile {
             total_members,
             active_members,
@@ -556,6 +567,7 @@ impl OrchestrationCouncil {
             passed_count,
             rejected_count,
             pending_count,
+            tied_count,
         }
     }
 }
@@ -945,6 +957,7 @@ mod tests {
         assert_eq!(p.pending_count, 2); // Both are pending or active
         assert_eq!(p.passed_count, 0);
         assert_eq!(p.rejected_count, 0);
+        assert_eq!(p.tied_count, 0);
 
         // Manually alter a proposal's status to test counts.
         {
@@ -1192,6 +1205,9 @@ mod tests {
         let mut p3 = sample_proposal("p3", "Expire me", "alice");
         p3.status = ProposalStatus::Expired;
         council.submit_proposal(p3).unwrap();
+        let mut p4 = sample_proposal("p4", "Tie me", "alice");
+        p4.status = ProposalStatus::Tied;
+        council.submit_proposal(p4).unwrap();
 
         {
             let proposals = council.proposals.lock().unwrap();
@@ -1203,8 +1219,9 @@ mod tests {
         }
 
         let p = council.profile();
-        assert_eq!(p.total_proposals, 3);
+        assert_eq!(p.total_proposals, 4);
         assert_eq!(p.passed_count, 1);
         assert_eq!(p.rejected_count, 1);
+        assert_eq!(p.tied_count, 1);
     }
 }

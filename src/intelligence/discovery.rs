@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use tracing;
 
 use crate::intelligence::now_ms;
 
@@ -205,6 +206,7 @@ impl DiscoveryCenter {
         let entries = match self.entries.lock() {
             Ok(e) => e.clone(),
             Err(_) => {
+                tracing::warn!("DiscoveryCenter lock poisoned in search");
                 return DiscoveryResult {
                     entries: vec![],
                     total_matches: 0,
@@ -289,7 +291,10 @@ impl DiscoveryCenter {
     pub fn extract_patterns(&self, min_success_rate: f64, min_occurrences: usize) -> Vec<String> {
         let entries = match self.entries.lock() {
             Ok(e) => e.clone(),
-            Err(_) => return Vec::new(),
+            Err(_) => {
+                tracing::warn!("DiscoveryCenter lock poisoned in extract_patterns");
+                return Vec::new();
+            }
         };
 
         // Filter high-quality entries
@@ -378,10 +383,16 @@ impl DiscoveryCenter {
     /// Generate abstract knowledge by cross-referencing patterns across categories.
     ///
     /// Returns a human-readable summary of discovered cross-domain insights.
+    ///
+    /// TODO: Reserved for future cross-category insight mining. Currently unused.
+    #[allow(dead_code)]
     pub fn abstract_knowledge(&self) -> Vec<String> {
         let patterns = match self.patterns.read() {
             Ok(p) => p.clone(),
-            Err(_) => return Vec::new(),
+            Err(_) => {
+                tracing::warn!("DiscoveryCenter RwLock poisoned in abstract_knowledge");
+                return Vec::new();
+            }
         };
 
         let mut insights: Vec<String> = Vec::new();
@@ -436,7 +447,10 @@ impl DiscoveryCenter {
     pub fn record_outcome(&self, entry_id: &str, success: bool) {
         let mut entries = match self.entries.lock() {
             Ok(e) => e,
-            Err(_) => return,
+            Err(_) => {
+                tracing::warn!("DiscoveryCenter lock poisoned in record_outcome");
+                return;
+            }
         };
 
         if let Some(entry) = entries.iter_mut().find(|e| e.id == entry_id) {
@@ -463,7 +477,10 @@ impl DiscoveryCenter {
     pub fn most_successful(&self, category: &str, limit: usize) -> Vec<DiscoveryEntry> {
         let entries = match self.entries.lock() {
             Ok(e) => e.clone(),
-            Err(_) => return vec![],
+            Err(_) => {
+                tracing::warn!("DiscoveryCenter lock poisoned in most_successful");
+                return vec![];
+            }
         };
 
         let cat_lower = category.to_lowercase();
@@ -491,14 +508,17 @@ impl DiscoveryCenter {
     pub fn profile(&self) -> DiscoveryProfile {
         match self.profile.lock() {
             Ok(p) => p.clone(),
-            Err(_) => DiscoveryProfile {
-                enabled: true,
-                total_entries: 0,
-                total_patterns: 0,
-                categories: 0,
-                avg_success_rate: 0.0,
-                top_pattern: String::new(),
-            },
+            Err(_) => {
+                tracing::warn!("DiscoveryCenter lock poisoned in profile");
+                DiscoveryProfile {
+                    enabled: true,
+                    total_entries: 0,
+                    total_patterns: 0,
+                    categories: 0,
+                    avg_success_rate: 0.0,
+                    top_pattern: String::new(),
+                }
+            }
         }
     }
 
@@ -508,11 +528,17 @@ impl DiscoveryCenter {
     fn refresh_profile(&self) {
         let entries = match self.entries.lock() {
             Ok(e) => e.clone(),
-            Err(_) => return,
+            Err(_) => {
+                tracing::warn!("DiscoveryCenter lock poisoned in refresh_profile (entries)");
+                return;
+            }
         };
         let patterns = match self.patterns.read() {
             Ok(p) => p.clone(),
-            Err(_) => return,
+            Err(_) => {
+                tracing::warn!("DiscoveryCenter RwLock poisoned in refresh_profile (patterns)");
+                return;
+            }
         };
 
         let total_entries = entries.len() as u32;

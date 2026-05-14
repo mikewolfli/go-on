@@ -6,6 +6,17 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Instant;
 
+/// Default estimated workflow duration in seconds.
+///
+/// This is a static estimate — NOT derived from actual run history.
+/// It serves as an upper bound for the progress bar and remaining-time
+/// display. A more accurate approach would store `workflow_durations:
+/// Vec<f64>` in the view struct, recording actual durations on completion
+/// and using the median of past N runs as the estimate.
+///
+/// Tune this constant to match your typical workflow runtime.
+const ESTIMATED_WORKFLOW_SECS: f64 = 300.0;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkflowStep {
     name: String,
@@ -65,7 +76,7 @@ impl WorkflowView {
             "queued" => 0.05,
             "running" | "paused" => {
                 let elapsed = Self::run_duration_secs(run).unwrap_or(0) as f32;
-                (elapsed / 300.0).clamp(0.08, 0.92)
+                (elapsed / ESTIMATED_WORKFLOW_SECS as f32).clamp(0.08, 0.92)
             }
             "succeeded" | "failed" | "cancelled" => 1.0,
             _ => 0.0,
@@ -78,7 +89,7 @@ impl WorkflowView {
         }
 
         let elapsed = Self::run_duration_secs(run).unwrap_or(0);
-        Some((300 - elapsed).max(0))
+        Some((ESTIMATED_WORKFLOW_SECS as i64 - elapsed).max(0))
     }
 
     fn format_local_ts(ts: i64) -> String {
@@ -151,7 +162,9 @@ impl WorkflowView {
                     Err("timeout".to_string())
                 }
             };
-            let _ = tx.try_send(WorkflowEvent::RunsResult { request_id, result });
+            if let Err(e) = tx.try_send(WorkflowEvent::RunsResult { request_id, result }) {
+                eprintln!("WARN: workflow try_send failed: {:?}", e);
+            }
             ctx_clone.request_repaint();
         });
     }
@@ -186,11 +199,13 @@ impl WorkflowView {
                     Err("timeout".to_string())
                 }
             };
-            let _ = tx.try_send(WorkflowEvent::RunDetailResult {
+            if let Err(e) = tx.try_send(WorkflowEvent::RunDetailResult {
                 request_id,
                 run_id,
                 result,
-            });
+            }) {
+                eprintln!("WARN: workflow try_send failed: {:?}", e);
+            }
             ctx_clone.request_repaint();
         });
     }
@@ -360,7 +375,9 @@ impl WorkflowView {
                 Ok(Err(err)) => format!("workflow.execute failed: {err}"),
                 Err(_) => "workflow.execute timed out".to_string(),
             };
-            let _ = tx.try_send(WorkflowEvent::WorkflowExecuteDone(payload));
+            if let Err(e) = tx.try_send(WorkflowEvent::WorkflowExecuteDone(payload)) {
+                eprintln!("WARN: workflow try_send failed: {:?}", e);
+            }
             ctx_clone.request_repaint();
         });
     }
@@ -664,7 +681,14 @@ impl WorkflowView {
                                                     .replace("{action}", action)
                                                     .replace("{error}", &e.to_string()),
                                             };
-                                            let _ = tx.try_send(WorkflowEvent::UiMessage(msg));
+                                            if let Err(e) =
+                                                tx.try_send(WorkflowEvent::UiMessage(msg))
+                                            {
+                                                eprintln!(
+                                                    "WARN: workflow try_send failed: {:?}",
+                                                    e
+                                                );
+                                            }
 
                                             // Pull latest run detail after action so UI reflects new state quickly.
                                             if let Ok(Ok(detail)) = tokio::time::timeout(
@@ -673,12 +697,18 @@ impl WorkflowView {
                                             )
                                             .await
                                             {
-                                                let _ =
+                                                if let Err(e2) =
                                                     tx.try_send(WorkflowEvent::RunDetailResult {
                                                         request_id: detail_request_id,
                                                         run_id: run_id.clone(),
                                                         result: Ok(detail),
-                                                    });
+                                                    })
+                                                {
+                                                    eprintln!(
+                                                        "WARN: workflow try_send failed: {:?}",
+                                                        e2
+                                                    );
+                                                }
                                             }
                                             ctx_clone.request_repaint();
                                         });

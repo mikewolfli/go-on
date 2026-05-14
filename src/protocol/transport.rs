@@ -370,7 +370,7 @@ impl MultiChannelTransport {
         channel.rate_count += 1;
 
         // Queue depth check
-        if channel.queue.len() >= channel.config.max_queue_size {
+        if channel.queue.len() > channel.config.max_queue_size {
             bail!(
                 "queue size limit ({}) reached for channel {}",
                 channel.config.max_queue_size,

@@ -70,15 +70,16 @@ pub struct ChatView {
     input_token_estimate: usize,
     output_token_estimate: usize,
     /// Enable markdown rendering (default: true)
-    enable_markdown: bool,
+    pub enable_markdown: bool,
     /// Show token details (default: true)
-    show_token_details: bool,
+    pub show_token_details: bool,
     /// Model performance stats cache
-    model_stats: std::collections::HashMap<String, ModelPerfStats>,
+    pub model_stats: std::collections::HashMap<String, ModelPerfStats>,
     // Feature 7: quick prompts
-    show_prompts: bool,
-    show_model_picker: bool,
+    pub show_prompts: bool,
+    pub show_model_picker: bool,
     prompt_templates: Vec<PromptTemplate>,
+    next_template_id: u64,
     selected_template_idx: Option<usize>,
     template_name_buf: String,
     template_command_buf: String,
@@ -342,6 +343,17 @@ impl ChatView {
 
         let (pending_tx, pending_rx) = mpsc::sync_channel(256);
 
+        // Compute next_template_id from max existing template id
+        let next_template_id = templates
+            .iter()
+            .filter_map(|t| {
+                t.id.strip_prefix("tpl_")
+                    .and_then(|s| s.parse::<u64>().ok())
+            })
+            .max()
+            .map(|id| id + 1)
+            .unwrap_or(templates.len() as u64 + 1);
+
         // Load persistent UI state before constructing ChatView
         let ui_state = GlobalUiState::load();
 
@@ -394,6 +406,7 @@ impl ChatView {
             show_prompts: ui_state.show_prompts,
             show_model_picker: ui_state.show_model_picker,
             prompt_templates: templates,
+            next_template_id,
             selected_template_idx: None,
             template_name_buf: String::new(),
             template_command_buf: String::new(),
@@ -678,10 +691,15 @@ impl ChatView {
     fn normalize_command(command: &str) -> String {
         let trimmed = command.trim();
         if trimmed.is_empty() {
-            String::new()
-        } else if trimmed.starts_with('/') {
-            trimmed.to_string()
+            return String::new();
+        }
+        // Strip all leading slashes to handle `/cmd`, `//cmd`, `///cmd`, etc.
+        let without_slashes = trimmed.trim_start_matches('/');
+        if without_slashes.len() < trimmed.len() {
+            // Had leading slashes — put back exactly one
+            format!("/{without_slashes}")
         } else {
+            // No leading slash — add one
             format!("/{trimmed}")
         }
     }
@@ -856,6 +874,7 @@ mod tests {
             show_prompts: false,
             show_model_picker: false,
             prompt_templates: Vec::new(),
+            next_template_id: 1,
             selected_template_idx: None,
             template_name_buf: String::new(),
             template_command_buf: String::new(),

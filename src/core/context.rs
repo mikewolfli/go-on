@@ -8,6 +8,9 @@ use crate::audit::AuditLog;
 use crate::memory::memory::{MemoryPolicy, MemoryStore};
 use anyhow::Result;
 
+/// Default capacity for the audit log ring buffer.
+const DEFAULT_AUDIT_LOG_CAPACITY: usize = 1000;
+
 /// System context for agent execution
 pub struct SystemContext {
     pub memory_store: MemoryStore,
@@ -20,7 +23,7 @@ impl SystemContext {
         let policy = MemoryPolicy::default();
         Self {
             memory_store: MemoryStore::new(policy.clone()),
-            audit_log: AuditLog::new(1000),
+            audit_log: AuditLog::new(DEFAULT_AUDIT_LOG_CAPACITY),
             memory_policy: policy,
         }
     }

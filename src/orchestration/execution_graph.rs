@@ -372,8 +372,12 @@ impl ExecutionGraph {
     }
 
     /// Reset all nodes to Pending (for re-execution).
+    /// The Start node is kept in Completed state to avoid deadlocking the graph.
     pub fn reset(&mut self) {
         for node in self.nodes.values_mut() {
+            if node.kind == ExNodeKind::Start {
+                continue;
+            }
             node.state = ExNodeState::Pending;
             node.output = None;
             node.error = None;
@@ -609,8 +613,9 @@ mod tests {
         assert_eq!(g.count_by_state(&ExNodeState::Completed), 1); // start
 
         g.reset();
-        // After reset: start→Pending, step1→Pending, end→Pending = 3
-        assert_eq!(g.count_by_state(&ExNodeState::Pending), 3);
+        // After reset: start→Completed (preserved), step1→Pending, end→Pending = 2 Pending + 1 Completed
+        assert_eq!(g.count_by_state(&ExNodeState::Pending), 2);
+        assert_eq!(g.count_by_state(&ExNodeState::Completed), 1);
     }
 
     #[test]

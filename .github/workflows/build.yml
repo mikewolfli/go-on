@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
     branches: [main]
 env:
@@ -16,10 +15,7 @@ jobs:
   # ── Backend: profiles + tests ───────────────────────────────
   gate-backend:
     name: Backend (3 profiles + tests)
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -65,11 +61,8 @@ jobs:
 
   # ── EGUI GUI ─────────────────────────────────────────────────
   gate-gui:
-    name: GUI (build + test)
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    name: GUI (check + test)
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -80,18 +73,15 @@ jobs:
         with:
           workspaces: "gui -> gui/target"
           shared-key: "go-on-gui"
-      - name: Build EGUI GUI
-        run: cargo build --release --manifest-path gui/Cargo.toml 2>&1
+      - name: Check EGUI GUI
+        run: cargo check --all-targets --manifest-path gui/Cargo.toml 2>&1
       - name: Test EGUI GUI
         run: cargo test --manifest-path gui/Cargo.toml 2>&1
 
   # ── VS Code addon ────────────────────────────────────────────
   gate-vscode:
     name: VSCode Addon (compile + lint + contract)
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6

@@ -250,7 +250,9 @@ impl ChatView {
                                     .collect::<Vec<_>>()
                             });
                         if let Some(list) = phases {
-                            let _ = tx.try_send(PendingResponse::Phases(list));
+                            if let Err(e) = tx.try_send(PendingResponse::Phases(list)) {
+                                eprintln!("WARN: chat ui try_send failed: {:?}", e);
+                            }
                             ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
                         }
                     }
@@ -277,7 +279,9 @@ impl ChatView {
                 .await
                 {
                     Ok(models) => {
-                        let _ = tx.try_send(PendingResponse::Models(models));
+                        if let Err(e) = tx.try_send(PendingResponse::Models(models)) {
+                            eprintln!("WARN: chat ui try_send failed: {:?}", e);
+                        }
                         ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
                     }
                     Err(_) => {
@@ -443,10 +447,10 @@ impl ChatView {
                                                         .map(|t| t.id.clone())
                                                 })
                                                 .unwrap_or_else(|| {
-                                                    format!(
-                                                        "tpl_{}",
-                                                        self.prompt_templates.len() + 1
-                                                    )
+                                                    let id =
+                                                        format!("tpl_{}", self.next_template_id);
+                                                    self.next_template_id += 1;
+                                                    id
                                                 }),
                                             name,
                                             command,
@@ -536,7 +540,7 @@ impl ChatView {
                                     }
                                 });
                             if self.selected_mode != prev_mode {
-                                // mode changed
+                                // Mode changed — future: trigger model reload or state save
                             }
                             ui.add_space(8.0);
                             ui.label(egui::RichText::new(i18n.t("chat.model")).color(fg));
@@ -642,11 +646,11 @@ impl ChatView {
                                 self.sync_model_selection();
                             }
                             ui.add_space(12.0);
-                            let tok_resp = ui.checkbox(
+                            let _tok_resp = ui.checkbox(
                                 &mut self.show_token_details,
                                 i18n.t("chat.showTokenDetails"),
                             );
-                            if tok_resp.changed() {}
+                            // Token details checkbox changed — no additional action needed
                         });
                     });
                 ui.separator();
@@ -1079,15 +1083,21 @@ impl ChatView {
                                 } else {
                                     success_tpl.replace("{workflow}", "OK")
                                 };
-                                let _ = tx.try_send(PendingResponse::UiMessage(msg));
+                                if let Err(e) = tx.try_send(PendingResponse::UiMessage(msg)) {
+                                    eprintln!("WARN: chat ui try_send failed: {:?}", e);
+                                }
                             }
                             Ok(Err(e)) => {
                                 let msg = failed_tpl.replace("{error}", &e);
-                                let _ = tx.try_send(PendingResponse::UiMessage(msg));
+                                if let Err(e) = tx.try_send(PendingResponse::UiMessage(msg)) {
+                                    eprintln!("WARN: chat ui try_send failed: {:?}", e);
+                                }
                             }
                             Err(_) => {
                                 let msg = failed_tpl.replace("{error}", "timeout");
-                                let _ = tx.try_send(PendingResponse::UiMessage(msg));
+                                if let Err(e) = tx.try_send(PendingResponse::UiMessage(msg)) {
+                                    eprintln!("WARN: chat ui try_send failed: {:?}", e);
+                                }
                             }
                         }
                         ctx_clone.request_repaint();

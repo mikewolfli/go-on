@@ -109,10 +109,10 @@ impl Agent for MistralAgent {
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![
             ModelInfo {
-                id: "mistral-large".to_string(),
-                name: "Mistral Large".to_string(),
-                description: "Mistral Large (most capable)".to_string(),
-                is_default: self.model == "mistral-large",
+                id: "mistral-large-latest".to_string(),
+                name: "Mistral Large Latest".to_string(),
+                description: "Mistral Large (latest, most capable)".to_string(),
+                is_default: self.model == "mistral-large-latest",
                 capabilities: vec![
                     "chat".to_string(),
                     "function_calling".to_string(),
@@ -121,10 +121,10 @@ impl Agent for MistralAgent {
                 context_window: Some(128_000),
             },
             ModelInfo {
-                id: "mistral-medium".to_string(),
-                name: "Mistral Medium".to_string(),
-                description: "Mistral Medium (balanced)".to_string(),
-                is_default: self.model == "mistral-medium",
+                id: "mistral-medium-latest".to_string(),
+                name: "Mistral Medium Latest".to_string(),
+                description: "Mistral Medium (balanced, latest)".to_string(),
+                is_default: self.model == "mistral-medium-latest",
                 capabilities: vec![
                     "chat".to_string(),
                     "function_calling".to_string(),
@@ -133,10 +133,10 @@ impl Agent for MistralAgent {
                 context_window: Some(32_000),
             },
             ModelInfo {
-                id: "mistral-small".to_string(),
-                name: "Mistral Small".to_string(),
-                description: "Mistral Small (fast & cost-efficient)".to_string(),
-                is_default: self.model == "mistral-small",
+                id: "mistral-small-latest".to_string(),
+                name: "Mistral Small Latest".to_string(),
+                description: "Mistral Small (fast & cost-efficient, latest)".to_string(),
+                is_default: self.model == "mistral-small-latest",
                 capabilities: vec![
                     "chat".to_string(),
                     "function_calling".to_string(),

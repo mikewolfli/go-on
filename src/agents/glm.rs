@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -138,5 +138,42 @@ impl Agent for GlmAgent {
         Err(last_error
             .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("glm")))
             .into())
+    }
+
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "glm-4-flash".to_string(),
+                name: "GLM-4 Flash".to_string(),
+                description: "Zhipu GLM-4 Flash (fast, cost-efficient, 128K context)".to_string(),
+                is_default: self.model == "glm-4-flash",
+                capabilities: vec!["chat".to_string(), "function_calling".to_string()],
+                context_window: Some(128000),
+            },
+            ModelInfo {
+                id: "glm-4v".to_string(),
+                name: "GLM-4V".to_string(),
+                description: "GLM-4V vision model (image understanding)".to_string(),
+                is_default: self.model == "glm-4v",
+                capabilities: vec!["chat".to_string(), "vision".to_string()],
+                context_window: Some(128000),
+            },
+            ModelInfo {
+                id: "glm-3-turbo".to_string(),
+                name: "GLM-3 Turbo".to_string(),
+                description: "GLM-3 Turbo fast and cost-effective".to_string(),
+                is_default: self.model == "glm-3-turbo",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(4096),
+            },
+        ]
+    }
+
+    fn default_model(&self) -> Option<ModelInfo> {
+        self.available_models().into_iter().find(|m| m.is_default)
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
     }
 }

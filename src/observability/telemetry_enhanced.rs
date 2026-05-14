@@ -131,6 +131,13 @@ pub fn init_telemetry(config: &TelemetryConfig) -> anyhow::Result<()> {
         layers.push(fmt_layer.with_filter(filter_layer).boxed());
     }
 
+    // Initialize the subscriber with all layers BEFORE metrics/tracing init
+    // so that info!()/warn!() calls in init_metrics() and init_tracing() are captured.
+    tracing_subscriber::registry()
+        .with(layers)
+        .try_init()
+        .map_err(|err| anyhow::anyhow!("failed to initialize tracing subscriber: {}", err))?;
+
     // Configure metrics layer if enabled
     if config.enable_metrics {
         init_metrics(config)?;
@@ -140,12 +147,6 @@ pub fn init_telemetry(config: &TelemetryConfig) -> anyhow::Result<()> {
     if config.enable_tracing {
         init_tracing(config)?;
     }
-
-    // Initialize the subscriber with all layers
-    tracing_subscriber::registry()
-        .with(layers)
-        .try_init()
-        .map_err(|err| anyhow::anyhow!("failed to initialize tracing subscriber: {}", err))?;
 
     info!(
         service_name = config.service_name,

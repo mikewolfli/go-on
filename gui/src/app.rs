@@ -1078,7 +1078,9 @@ state_path = "acp_autotune_state.json"
                             }
                         }
                     };
-                let _ = tx.try_send(BackendUpdate::Health(health));
+                if let Err(e) = tx.try_send(BackendUpdate::Health(health)) {
+                    log_msg(&format!("WARN: app try_send failed: {:?}", e));
+                }
 
                 let providers = match tokio::time::timeout(
                     std::time::Duration::from_secs(5),
@@ -1092,8 +1094,12 @@ state_path = "acp_autotune_state.json"
                         vec![]
                     }
                 };
-                let _ = tx.try_send(BackendUpdate::Providers(providers));
-                let _ = tx.try_send(BackendUpdate::RefreshDone);
+                if let Err(e) = tx.try_send(BackendUpdate::Providers(providers)) {
+                    log_msg(&format!("WARN: app try_send failed: {:?}", e));
+                }
+                if let Err(e) = tx.try_send(BackendUpdate::RefreshDone) {
+                    log_msg(&format!("WARN: app try_send failed: {:?}", e));
+                }
             });
             self.last_refresh = Instant::now();
         }
@@ -1598,6 +1604,16 @@ impl GoOnApp {
     fn restore_tab_ui_state(&mut self, tab_name: &str) {
         match tab_name {
             "chat" => {
+                self.chat_view.selected_mode = self.ui_state.selected_mode.clone();
+                self.chat_view.show_token_details = self.ui_state.show_token_details;
+                self.chat_view.enable_markdown = self.ui_state.enable_markdown;
+                self.chat_view.show_model_picker = self.ui_state.show_model_picker;
+                self.chat_view.show_prompts = self.ui_state.show_prompts;
+                if let Some(json) = &self.ui_state.model_stats_json {
+                    if let Ok(stats) = serde_json::from_str(json) {
+                        self.chat_view.model_stats = stats;
+                    }
+                }
                 if self.ui_state.active_session < self.chat_view.sessions.len() {
                     self.chat_view.active_session = self.ui_state.active_session;
                 }

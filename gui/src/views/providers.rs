@@ -55,6 +55,8 @@ pub struct ProvidersView {
     copilot_last_poll_result: String,
     /// Access token obtained after authorization
     copilot_access_token: String,
+    /// Whether the copilot token was written into new_key (shared field)
+    copilot_token_stored: bool,
     /// Status message for the copilot auth section
     copilot_status: String,
     /// Flag to trigger config reload after copilot auth completes
@@ -247,6 +249,7 @@ impl ProvidersView {
             copilot_slow_down_count: 0,
             copilot_last_poll_result: String::new(),
             copilot_access_token: String::new(),
+            copilot_token_stored: false,
             copilot_status: String::new(),
             copilot_needs_reload: false,
             copilot_poll_repaint_requested: false,
@@ -334,6 +337,7 @@ impl ProvidersView {
                             self.copilot_status =
                                 i18n.t("providers.copilot_authorized").to_string();
                             self.new_key = self.copilot_access_token.clone();
+                            self.copilot_token_stored = true;
                             // Request config reload to refresh monitoring status
                             self.copilot_needs_reload = true;
                             // Immediately persist to keyring so the token survives app restart
@@ -437,12 +441,15 @@ impl ProvidersView {
                     "__models__:{}",
                     serde_json::to_string(&models).unwrap_or_default()
                 );
-                let _ = tx.try_send(msg);
+                if let Err(e) = tx.try_send(msg) {
+                    eprintln!("WARN: providers try_send failed: {:?}", e);
+                }
                 ctx_clone.request_repaint_after(Duration::from_millis(16));
             });
         }
     }
 
+    /// Fetch models from backend on first load. Spawns a background task.
     /// Reload security prefs at most once per 10 seconds.
     fn refresh_security_cache(&mut self) {
         if self.security_last_load.elapsed() >= std::time::Duration::from_secs(10) {
@@ -501,7 +508,10 @@ impl ProvidersView {
                                         )
                                         .clicked()
                                     {
+                                        self.new_key.clear();
+                                        self.new_secret_key.clear();
                                         self.new_model = "auto".to_string();
+                                        self.copilot_token_stored = false;
                                     }
                                 }
                             });
@@ -639,11 +649,15 @@ impl ProvidersView {
                                             match resp.json::<serde_json::Value>().await {
                                                 Ok(body) => {
                                                     let msg = format!("__copilot_device__:{}", serde_json::to_string(&body).unwrap_or_default());
-                                                    let _ = tx.try_send(msg);
+                                                    if let Err(e) = tx.try_send(msg) {
+                                                        eprintln!("WARN: providers try_send failed: {:?}", e);
+                                                    }
                                                 }
                                                 Err(e) => {
                                                     let msg = format!("__copilot_device_err__:Parse error: {}", e);
-                                                    let _ = tx.try_send(msg);
+                                                    if let Err(e) = tx.try_send(msg) {
+                                                        eprintln!("WARN: providers try_send failed: {:?}", e);
+                                                    }
                                                 }
                                             }
                                         }
@@ -651,15 +665,21 @@ impl ProvidersView {
                                             let status = resp.status();
                                             let text = resp.text().await.unwrap_or_default();
                                             let msg = format!("__copilot_device_err__:GitHub {status}: {text}");
-                                            let _ = tx.try_send(msg);
+                                            if let Err(e) = tx.try_send(msg) {
+                                                eprintln!("WARN: providers try_send failed: {:?}", e);
+                                            }
                                         }
                                         Ok(Err(e)) => {
                                             let msg = format!("__copilot_device_err__:{}", e);
-                                            let _ = tx.try_send(msg);
+                                            if let Err(e) = tx.try_send(msg) {
+                                                eprintln!("WARN: providers try_send failed: {:?}", e);
+                                            }
                                         }
                                         Err(_) => {
                                             let msg = "__copilot_device_err__:Request timed out.".to_string();
-                                            let _ = tx.try_send(msg);
+                                            if let Err(e) = tx.try_send(msg) {
+                                                eprintln!("WARN: providers try_send failed: {:?}", e);
+                                            }
                                         }
                                     }
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
@@ -898,7 +918,9 @@ impl ProvidersView {
                                                 Ok(Err(e)) => err_fmt.replace("%s", &e),
                                                 Err(_) => err_fmt.replace("%s", "timeout"),
                                             };
-                                            let _ = tx.try_send(msg);
+                                            if let Err(e) = tx.try_send(msg) {
+                                                eprintln!("WARN: providers try_send failed: {:?}", e);
+                                            }
                                             ctx_clone.request_repaint_after(Duration::from_millis(16));
                                         });
                                     }
@@ -967,7 +989,9 @@ impl ProvidersView {
                                             Ok(Err(e)) => err_fmt.replace("%s", &e),
                                             Err(_) => err_fmt.replace("%s", "timeout"),
                                         };
-                                        let _ = tx.try_send(msg);
+                                        if let Err(e) = tx.try_send(msg) {
+                                            eprintln!("WARN: providers try_send failed: {:?}", e);
+                                        }
                                         ctx_clone.request_repaint_after(Duration::from_millis(16));
                                     });
                                 }
@@ -1074,7 +1098,9 @@ impl ProvidersView {
                                                         )
                                                         .await;
                                                     // Clear sending flag after push
-                                                    let _ = tx_push.try_send(String::new());
+                                                    if let Err(e) = tx_push.try_send(String::new()) {
+                                                        eprintln!("WARN: providers try_send failed: {:?}", e);
+                                                    }
                                                     ctx_push.request_repaint_after(Duration::from_millis(16));
                                                 });
                                             }
@@ -1198,7 +1224,9 @@ impl ProvidersView {
                                                     Ok(_) => ok_fmt,
                                                     Err(e) => err_fmt.replace("%s", &e.to_string()),
                                                 };
-                                                let _ = tx.try_send(msg);
+                                                if let Err(e) = tx.try_send(msg) {
+                                                    eprintln!("WARN: providers try_send failed: {:?}", e);
+                                                }
                                                 ctx_clone.request_repaint_after(Duration::from_millis(16));
                                             });
                                         }
@@ -1212,6 +1240,7 @@ impl ProvidersView {
                             {
                                 self.update_target = idx as isize;
                                 self.new_key.clear();
+                                self.copilot_token_stored = false;
                                 self.status = format!(
                                     "{} '{}' {}.",
                                     i18n.t("providers.enter_new_key"),
@@ -1280,7 +1309,9 @@ impl ProvidersView {
                                         Ok(_) => ok_fmt.replace("%s", &name),
                                         Err(e) => err_fmt.replace("%s", &e.to_string()),
                                     };
-                                    let _ = tx.try_send(msg);
+                                    if let Err(e) = tx.try_send(msg) {
+                                        eprintln!("WARN: providers try_send failed: {:?}", e);
+                                    }
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
@@ -1334,7 +1365,9 @@ impl ProvidersView {
                                             err_tpl.replace("{error}", &e.to_string())
                                         ),
                                     };
-                                    let _ = tx.try_send(msg);
+                                    if let Err(e) = tx.try_send(msg) {
+                                        eprintln!("WARN: providers try_send failed: {:?}", e);
+                                    }
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
@@ -1395,7 +1428,9 @@ impl ProvidersView {
                                             err_tpl.replace("{error}", &e.to_string())
                                         ),
                                     };
-                                    let _ = tx.try_send(msg);
+                                    if let Err(e) = tx.try_send(msg) {
+                                        eprintln!("WARN: providers try_send failed: {:?}", e);
+                                    }
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
@@ -1430,11 +1465,13 @@ impl ProvidersView {
                                     let msg = match result {
                                         Ok(models) => match serde_json::to_string(&models) {
                                             Ok(payload) => {
-                                                let _ = tx.try_send(format!(
+                                                if let Err(e) = tx.try_send(format!(
                                                     "__ops__:{}:{}",
                                                     name,
                                                     count_tpl.replace("{count}", &models.len().to_string())
-                                                ));
+                                                )) {
+                                                    eprintln!("WARN: providers try_send failed: {:?}", e);
+                                                }
                                                 format!("__caps__:{}:{}", name, payload)
                                             }
                                             Err(e) => format!(
@@ -1449,7 +1486,9 @@ impl ProvidersView {
                                             failed_tpl.replace("{error}", &e.to_string())
                                         ),
                                     };
-                                    let _ = tx.try_send(msg);
+                                    if let Err(e) = tx.try_send(msg) {
+                                        eprintln!("WARN: providers try_send failed: {:?}", e);
+                                    }
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
                             }
@@ -1552,7 +1591,9 @@ impl ProvidersView {
                     let ctx_clone = ctx.clone();
                     tokio::spawn(async move {
                         let _ = backend_clone.reload_config().await;
-                        let _ = tx.try_send("Config reloaded for copilot.".to_string());
+                        if let Err(e) = tx.try_send("Config reloaded for copilot.".to_string()) {
+                            eprintln!("WARN: providers try_send failed: {:?}", e);
+                        }
                         ctx_clone.request_repaint_after(Duration::from_millis(16));
                     });
                 }
@@ -1635,21 +1676,29 @@ impl ProvidersView {
                                     match resp.json::<serde_json::Value>().await {
                                         Ok(body) => {
                                             let msg = format!("__copilot_poll__:{}", serde_json::to_string(&body).unwrap_or_default());
-                                            let _ = tx.try_send(msg);
+                                            if let Err(e) = tx.try_send(msg) {
+                                                eprintln!("WARN: providers try_send failed: {:?}", e);
+                                            }
                                         }
                                         Err(e) => {
                                             let msg = format!("__copilot_poll_err__:Parse error: {}", e);
-                                            let _ = tx.try_send(msg);
+                                            if let Err(e) = tx.try_send(msg) {
+                                                eprintln!("WARN: providers try_send failed: {:?}", e);
+                                            }
                                         }
                                     }
                                 }
                                 Ok(Err(e)) => {
                                     let msg = format!("__copilot_poll_err__:{}", e);
-                                    let _ = tx.try_send(msg);
+                                    if let Err(e) = tx.try_send(msg) {
+                                        eprintln!("WARN: providers try_send failed: {:?}", e);
+                                    }
                                 }
                                 Err(_) => {
                                     let msg = "__copilot_poll_err__:Poll timed out.".to_string();
-                                    let _ = tx.try_send(msg);
+                                    if let Err(e) = tx.try_send(msg) {
+                                        eprintln!("WARN: providers try_send failed: {:?}", e);
+                                    }
                                 }
                             }
                             ctx_clone.request_repaint_after(Duration::from_millis(16));

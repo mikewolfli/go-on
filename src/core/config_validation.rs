@@ -500,15 +500,19 @@ impl ConfigValidator {
         }
 
         // Check vector configuration
-        if let Some(vector) = &self.config.vector {
-            if vector.enabled && vector.dimensions != 192 {
-                result.warnings.push(ValidationWarning {
-                    message: format!(
-                        "Vector dimensions ({}) may not be optimal",
-                        vector.dimensions
-                    ),
-                    section: "vector".to_string(),
-                });
+        {
+            const OPTIMAL_VECTOR_DIMENSIONS: usize = 192;
+
+            if let Some(vector) = &self.config.vector {
+                if vector.enabled && vector.dimensions != OPTIMAL_VECTOR_DIMENSIONS {
+                    result.warnings.push(ValidationWarning {
+                        message: format!(
+                            "Vector dimensions ({}) may not be optimal (recommended: {})",
+                            vector.dimensions, OPTIMAL_VECTOR_DIMENSIONS
+                        ),
+                        section: "vector".to_string(),
+                    });
+                }
             }
         }
     }

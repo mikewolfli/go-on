@@ -409,7 +409,7 @@ async fn run_single_review(
     }
 
     let syntax_signal = DeterministicVerifier::run_syntax_check("");
-    let compass_signals = DeterministicVerifier::run_quality_compass_checks();
+    let compass_signals = DeterministicVerifier::run_quality_compass_checks(&response);
     let all_signals_count = 1 + compass_signals.len();
     let passed_signals_count =
         usize::from(syntax_signal.passed) + compass_signals.iter().filter(|s| s.passed).count();

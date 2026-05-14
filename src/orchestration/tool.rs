@@ -285,11 +285,13 @@ impl Default for ToolRegistry {
 fn sanitize_path(input: &ToolInput, path: &str) -> Result<PathBuf> {
     let resolved = PathBuf::from(path);
     let canonical = if resolved.is_absolute() {
-        std::fs::canonicalize(&resolved).unwrap_or(resolved)
+        std::fs::canonicalize(&resolved)
+            .map_err(|e| anyhow::anyhow!("path canonicalization failed: {e}"))?
     } else {
         let cwd = std::env::current_dir().unwrap_or_default();
         let joined = cwd.join(&resolved);
-        std::fs::canonicalize(&joined).unwrap_or(joined)
+        std::fs::canonicalize(&joined)
+            .map_err(|e| anyhow::anyhow!("path canonicalization failed: {e}"))?
     };
 
     if let Some(ref base_dir) = input.allowed_base_dir {

@@ -184,7 +184,7 @@ mod tests {
     fn build_payload_injects_system_principles_and_options() {
         let agent = DeepSeekAgent::new(
             "DEEPSEEK_API_KEY".to_string(),
-            "deepseek-chat".to_string(),
+            "deepseek-v4-flash".to_string(),
             reqwest::Client::new(),
         );
 
@@ -192,13 +192,13 @@ mod tests {
             vec![message("user", "ship it")],
             Some(vec!["Prefer tests".to_string()]),
             Some(HashMap::from([
-                ("model".to_string(), json!("deepseek-reasoner")),
+                ("model".to_string(), json!("deepseek-v4-pro")),
                 ("temperature".to_string(), json!(0.1)),
                 ("max_tokens".to_string(), json!(1024)),
             ])),
         );
 
-        assert_eq!(payload["model"], "deepseek-reasoner");
+        assert_eq!(payload["model"], "deepseek-v4-pro");
         assert_eq!(payload["messages"][0]["role"], "system");
         assert!(payload["messages"][0]["content"]
             .as_str()
@@ -213,13 +213,13 @@ mod tests {
     fn build_payload_without_principles_or_options() {
         let agent = DeepSeekAgent::new(
             "DEEPSEEK_API_KEY".to_string(),
-            "deepseek-chat".to_string(),
+            "deepseek-v4-flash".to_string(),
             reqwest::Client::new(),
         );
 
         let payload = agent.build_payload(vec![message("user", "hello")], None, None);
 
-        assert_eq!(payload["model"], "deepseek-chat");
+        assert_eq!(payload["model"], "deepseek-v4-flash");
         assert_eq!(payload["messages"][0]["content"], "hello");
         assert!(payload.get("temperature").is_none());
         assert!(payload.get("max_tokens").is_none());
@@ -252,7 +252,7 @@ mod tests {
     fn build_payload_with_principles_only() {
         let agent = DeepSeekAgent::new(
             "DEEPSEEK_API_KEY".to_string(),
-            "deepseek-chat".to_string(),
+            "deepseek-v4-flash".to_string(),
             reqwest::Client::new(),
         );
 
@@ -265,6 +265,6 @@ mod tests {
         let content = payload["messages"][0]["content"].as_str().unwrap();
         assert!(content.contains("Be concise"));
         assert!(content.contains("Use examples"));
-        assert_eq!(payload["model"], "deepseek-chat");
+        assert_eq!(payload["model"], "deepseek-v4-flash");
     }
 }

@@ -119,10 +119,10 @@ impl Agent for LlamaAgent {
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![
             ModelInfo {
-                id: "llama-3.1-70b".to_string(),
-                name: "Llama 3.1 70B".to_string(),
-                description: "Meta Llama 3.1 70B (most capable)".to_string(),
-                is_default: self.model == "llama-3.1-70b",
+                id: "llama3.2".to_string(),
+                name: "Llama 3.2".to_string(),
+                description: "Meta Llama 3.2 (latest generation)".to_string(),
+                is_default: self.model == "llama3.2",
                 capabilities: vec![
                     "chat".to_string(),
                     "function_calling".to_string(),
@@ -131,40 +131,16 @@ impl Agent for LlamaAgent {
                 context_window: Some(131_072),
             },
             ModelInfo {
-                id: "llama-3.1-8b".to_string(),
-                name: "Llama 3.1 8B".to_string(),
-                description: "Meta Llama 3.1 8B (fast & efficient)".to_string(),
-                is_default: self.model == "llama-3.1-8b",
+                id: "llama3.2-vision".to_string(),
+                name: "Llama 3.2 Vision".to_string(),
+                description: "Meta Llama 3.2 Vision (multimodal)".to_string(),
+                is_default: self.model == "llama3.2-vision",
                 capabilities: vec![
                     "chat".to_string(),
-                    "function_calling".to_string(),
+                    "vision".to_string(),
                     "streaming".to_string(),
                 ],
                 context_window: Some(131_072),
-            },
-            ModelInfo {
-                id: "llama-3-70b".to_string(),
-                name: "Llama 3 70B".to_string(),
-                description: "Meta Llama 3 70B".to_string(),
-                is_default: self.model == "llama-3-70b",
-                capabilities: vec![
-                    "chat".to_string(),
-                    "function_calling".to_string(),
-                    "streaming".to_string(),
-                ],
-                context_window: Some(8_192),
-            },
-            ModelInfo {
-                id: "llama-3-8b".to_string(),
-                name: "Llama 3 8B".to_string(),
-                description: "Meta Llama 3 8B (lightweight)".to_string(),
-                is_default: self.model == "llama-3-8b",
-                capabilities: vec![
-                    "chat".to_string(),
-                    "function_calling".to_string(),
-                    "streaming".to_string(),
-                ],
-                context_window: Some(8_192),
             },
         ]
     }

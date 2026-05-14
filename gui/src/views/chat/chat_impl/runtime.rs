@@ -37,9 +37,13 @@ struct ActiveGenerationGuard(Arc<std::sync::atomic::AtomicU64>);
 impl Drop for ActiveGenerationGuard {
     fn drop(&mut self) {
         // NOTE: fetch_sub(1) wraps on 0 (unsigned overflow in release, panic in debug).
-        // This is deliberate — the guard should never be dropped more times than created.
-        // If it does, the wrap prevents MAX_CONCURRENT_GENERATIONS from being stuck at 0.
-        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        // This would allow 18 quintillion concurrent generations if a double-free occurs.
+        // Use fetch_update with saturating_sub to safely clamp at zero instead of wrapping.
+        let _ = self.0.fetch_update(
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+            |v| Some(v.saturating_sub(1)),
+        );
     }
 }
 
@@ -113,18 +117,8 @@ impl ChatView {
             return;
         }
 
-        // Check concurrent generation limit to prevent resource exhaustion
-        let current_generations = self
-            .active_generations
-            .load(std::sync::atomic::Ordering::SeqCst);
-        if current_generations >= MAX_CONCURRENT_GENERATIONS as u64 {
-            self.error = format!(
-                "Too many concurrent generations ({}). Please wait for some to complete.",
-                current_generations
-            );
-            return;
-        }
-
+        // Concurrent generation limit is enforced atomically below via fetch_add.
+        // Do NOT check before fetch_add — that would be a TOCTOU race.
         let expanded_msg = self.expand_prompt_command(&msg);
         let mode = self.selected_mode.clone();
         // Validate phase before sending — if the phase is not in the known list
@@ -417,6 +411,7 @@ impl ChatView {
                                     &phase_clone,
                                     Some(&model_clone),
                                     fallback_options.clone(),
+                                    None, // history not available in this scope
                                 )
                                 .await
                                 .map(|(content, thinking, agent, risk_decision)| {
@@ -739,6 +734,7 @@ impl ChatView {
                                 &phase_clone,
                                 Some(&model_clone),
                                 fallback_options.clone(),
+                                None, // history not available in this scope
                             )
                             .await
                             .map(|(content, thinking, agent, risk_decision)| {

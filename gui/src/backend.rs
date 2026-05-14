@@ -579,6 +579,7 @@ impl BackendClient {
         phase: &str,
         model: Option<&str>,
         options_extra: Option<Value>,
+        history: Option<Vec<Value>>,
     ) -> Result<(String, String, String, Option<Value>), String> {
         let phase_val = if phase.is_empty() {
             serde_json::Value::Null
@@ -586,8 +587,16 @@ impl BackendClient {
             serde_json::Value::String(phase.to_string())
         };
 
+        let messages = if let Some(hist) = history {
+            let mut msgs = hist;
+            msgs.push(serde_json::json!({ "role": "user", "content": message }));
+            msgs
+        } else {
+            vec![serde_json::json!({ "role": "user", "content": message })]
+        };
+
         let mut body = serde_json::json!({
-            "messages": [{"role": "user", "content": message}],
+            "messages": messages,
             "mode": mode,
             "phase": phase_val,
         });

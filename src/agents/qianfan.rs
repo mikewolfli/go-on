@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg, token_request_failed_msg};
 use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
 
@@ -211,5 +211,58 @@ impl Agent for QianfanAgent {
         Err(last_error
             .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("qianfan")))
             .into())
+    }
+
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "ERNIE-4.5-8K".to_string(),
+                name: "ERNIE 4.5 8K".to_string(),
+                description: "Baidu ERNIE 4.5 flagship model (8K context)".to_string(),
+                is_default: self.model == "ERNIE-4.5-8K",
+                capabilities: vec!["chat".to_string(), "function_calling".to_string()],
+                context_window: Some(8192),
+            },
+            ModelInfo {
+                id: "ernie-4.0-8k".to_string(),
+                name: "Ernie 4.0 8K".to_string(),
+                description: "Baidu Ernie 4.0 flagship model (8K context)".to_string(),
+                is_default: self.model == "ernie-4.0-8k",
+                capabilities: vec!["chat".to_string(), "function_calling".to_string()],
+                context_window: Some(8192),
+            },
+            ModelInfo {
+                id: "ernie-3.5-8k".to_string(),
+                name: "Ernie 3.5 8K".to_string(),
+                description: "Baidu Ernie 3.5 balanced model (8K context)".to_string(),
+                is_default: self.model == "ernie-3.5-8k",
+                capabilities: vec!["chat".to_string(), "function_calling".to_string()],
+                context_window: Some(8192),
+            },
+            ModelInfo {
+                id: "ernie-speed".to_string(),
+                name: "Ernie Speed".to_string(),
+                description: "Baidu Ernie Speed (fast, cost-effective)".to_string(),
+                is_default: self.model == "ernie-speed",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(4096),
+            },
+            ModelInfo {
+                id: "ernie-lite".to_string(),
+                name: "Ernie Lite".to_string(),
+                description: "Baidu Ernie Lite (lightweight)".to_string(),
+                is_default: self.model == "ernie-lite",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(4096),
+            },
+        ]
+    }
+
+    fn default_model(&self) -> Option<ModelInfo> {
+        self.available_models().into_iter().find(|m| m.is_default)
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
     }
 }

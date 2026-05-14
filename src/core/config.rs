@@ -996,6 +996,7 @@ fn normalized_provider_list(providers: &[String]) -> Vec<String> {
     normalized.dedup();
 
     if normalized.is_empty() {
+        tracing::warn!("no recognized providers found, defaulting to 'copilot'");
         normalized.push("copilot".to_string());
     }
 

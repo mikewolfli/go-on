@@ -1480,7 +1480,7 @@ async fn handle_chat_mode(
         eprintln!("  go-on -c {} --setup", config_path.display());
         return Ok(());
     }
-    crate::cli::chat::run_terminal_chat(config, config_path).await
+    crate::cli::chat::run_terminal_chat(config).await
 }
 
 /// Handle secret management commands, local model setup, recommended config, setup wizard, and AI onboarding.

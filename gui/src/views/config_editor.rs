@@ -203,7 +203,15 @@ impl ConfigEditorView {
                             self.snapshots.len()
                         );
                     }
-                    if ui.button(i18n.t("config.applyJson")).clicked() {
+                    let apply_btn = if safe_mode_enabled {
+                        ui.add_enabled(
+                            self.is_valid_json && !self.draft.trim().is_empty(),
+                            egui::Button::new(i18n.t("config.applyJson")),
+                        )
+                    } else {
+                        ui.add(egui::Button::new(i18n.t("config.applyJson")))
+                    };
+                    if apply_btn.clicked() {
                         // Restore real api_key values before parsing — the draft shows
                         // redacted "sk-bc12...ef56" strings that must not overwrite real keys.
                         let restored = Self::restore_api_keys_in_draft(&self.draft, config);

@@ -79,10 +79,7 @@ fn resolve_safe_path(path_str: &str, allow_new_file: bool) -> Result<std::path::
 }
 
 /// Run an interactive terminal chat session with full agent capabilities.
-pub async fn run_terminal_chat(
-    config: Arc<AppConfig>,
-    _config_path: &std::path::Path,
-) -> Result<()> {
+pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
     if config.agents.is_empty() {
         eprintln!("No AI agents configured. Run `go-on --init` to set up a provider first.");
         return Ok(());

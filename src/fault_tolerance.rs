@@ -39,6 +39,7 @@ pub struct FaultEvent {
     pub id: String,
     pub node_id: String,
     pub fault_type: FaultType,
+    /// Fault severity (0-9, where 9 is most severe). Values >= 8 set node Offline, >= 4 set Degraded.
     pub severity: u8,
     pub description: String,
     pub detected_ms: u64,
@@ -101,7 +102,7 @@ pub struct FaultToleranceProfile {
     pub isolated_groups: usize,
     pub recovery_plans_pending: usize,
     pub recovery_plans_in_progress: usize,
-    pub cluster_health: String,
+    pub cluster_health: ClusterHealth,
 }
 
 /// Status of an automatic recovery action.
@@ -218,21 +219,21 @@ fn cluster_health_from_counts(
     offline_nodes: usize,
     degraded_nodes: usize,
     active_faults: usize,
-) -> &'static str {
+) -> ClusterHealth {
     if total_nodes == 0 {
-        return "Down";
+        return ClusterHealth::Down;
     }
     let offline_ratio = offline_nodes as f64 / total_nodes as f64;
     let degraded_ratio = degraded_nodes as f64 / total_nodes as f64;
     if offline_ratio >= 0.5 || active_faults >= 10 {
-        "Critical"
+        ClusterHealth::Critical
     } else if (offline_ratio >= 0.2 || degraded_ratio >= 0.3 || active_faults >= 5)
         || offline_nodes > 0
         || degraded_nodes > 0
     {
-        "Degraded"
+        ClusterHealth::Degraded
     } else {
-        "Healthy"
+        ClusterHealth::Healthy
     }
 }
 
@@ -512,12 +513,10 @@ impl FaultToleranceEngine {
             if let Some(record) = inner.heartbeats.get_mut(&node_id) {
                 let elapsed = now.saturating_sub(record.last_heartbeat_ms);
                 if elapsed >= timeout {
-                    record.missed_beats = record.missed_beats.saturating_add(1);
+                    record.missed_beats = record.missed_beats.saturating_add(1).min(max_missed);
                 } else {
-                    // Node is responsive; reset miss counter if not offline
-                    if record.status != NodeStatus::Offline {
-                        record.missed_beats = 0;
-                    }
+                    // Node is responsive; reset miss counter
+                    record.missed_beats = 0;
                 }
 
                 // Update status based on missed beats
@@ -580,9 +579,8 @@ impl FaultToleranceEngine {
             .filter(|p| p.state == RecoveryState::InProgress)
             .count();
 
-        let cluster_health_str =
-            cluster_health_from_counts(total_nodes, offline_nodes, degraded_nodes, active_faults)
-                .to_string();
+        let cluster_health =
+            cluster_health_from_counts(total_nodes, offline_nodes, degraded_nodes, active_faults);
 
         FaultToleranceProfile {
             total_nodes,
@@ -593,7 +591,7 @@ impl FaultToleranceEngine {
             isolated_groups,
             recovery_plans_pending,
             recovery_plans_in_progress,
-            cluster_health: cluster_health_str,
+            cluster_health,
         }
     }
 
@@ -805,17 +803,12 @@ impl FaultToleranceEngine {
         if p.total_nodes == 0 {
             return ClusterHealth::Down;
         }
-        match cluster_health_from_counts(
+        cluster_health_from_counts(
             p.total_nodes,
             p.offline_nodes,
             p.degraded_nodes,
             p.active_faults,
-        ) {
-            "Critical" => ClusterHealth::Critical,
-            "Degraded" => ClusterHealth::Degraded,
-            "Healthy" => ClusterHealth::Healthy,
-            _ => ClusterHealth::Down,
-        }
+        )
     }
 
     /// Run the full recovery cycle: check heartbeats, auto-create recovery plans,

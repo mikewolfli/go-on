@@ -106,6 +106,27 @@ impl YiAgent {
 
 #[async_trait]
 impl Agent for YiAgent {
+    fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
+        vec![
+            crate::agent::ModelInfo {
+                id: "yi-lightning".to_string(),
+                name: "Yi Lightning".to_string(),
+                description: "01.AI Yi Lightning (fast, latest generation)".to_string(),
+                is_default: self.model == "yi-lightning",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(128_000),
+            },
+            crate::agent::ModelInfo {
+                id: "yi-large".to_string(),
+                name: "Yi Large".to_string(),
+                description: "01.AI Yi Large (most capable)".to_string(),
+                is_default: self.model == "yi-large",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(128_000),
+            },
+        ]
+    }
+
     async fn chat(
         &self,
         messages: Vec<Message>,

@@ -145,6 +145,10 @@ impl FailurePrevention {
 
     /// Record failure for a service
     pub fn record_failure(&mut self, service_name: &str) {
+        self.record_failure_with_latency(service_name, None);
+    }
+
+    fn record_failure_with_latency(&mut self, service_name: &str, latency_ms: Option<u64>) {
         self.ensure_service_registered(service_name);
         let count = self
             .failure_counts
@@ -156,19 +160,23 @@ impl FailurePrevention {
             self.open_circuit(service_name);
         }
 
-        self.update_health_from_counters(service_name, None);
+        self.update_health_from_counters(service_name, latency_ms.map(|v| v as f64));
     }
 
     /// Record success and reset failure count
     pub fn record_success(&mut self, service_name: &str) {
+        self.record_success_with_latency(service_name, None);
+    }
+
+    fn record_success_with_latency(&mut self, service_name: &str, latency_ms: Option<u64>) {
         self.ensure_service_registered(service_name);
         self.failure_counts.insert(service_name.to_string(), 0);
         self.circuit_breakers
             .insert(service_name.to_string(), CircuitBreakerState::Closed);
-        self.update_health_from_counters(service_name, None);
+        self.update_health_from_counters(service_name, latency_ms.map(|v| v as f64));
     }
 
-    pub fn record_outcome(&mut self, service_name: &str, success: bool, _latency_ms: u64) {
+    pub fn record_outcome(&mut self, service_name: &str, success: bool, latency_ms: u64) {
         self.ensure_service_registered(service_name);
         *self
             .total_requests
@@ -179,12 +187,11 @@ impl FailurePrevention {
                 .successful_requests
                 .entry(service_name.to_string())
                 .or_insert(0) += 1;
-            self.record_success(service_name);
+            self.record_success_with_latency(service_name, Some(latency_ms));
         } else {
-            self.record_failure(service_name);
+            self.record_failure_with_latency(service_name, Some(latency_ms));
         }
-        // NOTE: record_success and record_failure already call update_health_from_counters,
-        // so we must NOT call it again here to avoid double-counting.
+        // Internal methods handle update_health_from_counters with latency.
     }
 
     /// Open circuit breaker for a service (predictive failure prevention)

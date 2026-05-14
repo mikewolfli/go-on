@@ -3,6 +3,18 @@ use crate::i18n::I18n;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+/// Send a message over a SyncSender, retrying up to 3 times with a 5 ms sleep between attempts.
+/// If all retries fail, a warning is printed to stderr.
+fn send_with_retry(tx: &mpsc::SyncSender<String>, msg: String) {
+    for _ in 0..3 {
+        if tx.try_send(msg.clone()).is_ok() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    eprintln!("WARN: monitor failed to send after 3 retries");
+}
+
 pub struct MonitorView {
     pub health: Option<HealthStatus>,
     pub providers: Vec<ProviderStatus>,
@@ -134,14 +146,14 @@ impl MonitorView {
                                 let trends_json = serde_json::to_string(&series)
                                     .unwrap_or_else(|_| "[]".to_string());
                                 let metrics = format!("window={window} points={}", series.len());
-                                let _ = tx.try_send(format!("__metrics__:{metrics}"));
-                                let _ = tx.try_send(format!("__trends__:{trends_json}"));
+                                send_with_retry(&tx, format!("__metrics__:{metrics}"));
+                                send_with_retry(&tx, format!("__trends__:{trends_json}"));
                             }
                             Ok(Err(err)) => {
-                                let _ = tx.try_send(format!("__metrics_error__:{err}"));
+                                send_with_retry(&tx, format!("__metrics_error__:{err}"));
                             }
                             Err(_) => {
-                                let _ = tx.try_send("__metrics_error__:timeout".to_string());
+                                send_with_retry(&tx, "__metrics_error__:timeout".to_string());
                             }
                         }
 
@@ -157,13 +169,13 @@ impl MonitorView {
                                     "groups": groups,
                                     "sample_failures_count": failures.len()
                                 });
-                                let _ = tx.try_send(format!("__errors_summary__:{summary_json}"));
+                                send_with_retry(&tx, format!("__errors_summary__:{summary_json}"));
                             }
                             Ok(Err(err)) => {
-                                let _ = tx.try_send(format!("__metrics_error__:{err}"));
+                                send_with_retry(&tx, format!("__metrics_error__:{err}"));
                             }
                             Err(_) => {
-                                let _ = tx.try_send("__metrics_error__:timeout".to_string());
+                                send_with_retry(&tx, "__metrics_error__:timeout".to_string());
                             }
                         }
                         ctx_clone.request_repaint_after(Duration::from_millis(16));
@@ -289,9 +301,9 @@ impl MonitorView {
                                         }
                                         Err(e) => (format!("__metrics_error__:{e}"), String::new()),
                                     };
-                                    let _ = tx.try_send(payload.0);
+                                    send_with_retry(&tx, payload.0);
                                     if !payload.1.is_empty() {
-                                        let _ = tx.try_send(payload.1);
+                                        send_with_retry(&tx, payload.1);
                                     }
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });
@@ -337,9 +349,9 @@ impl MonitorView {
                                         }
                                         Err(e) => (format!("__metrics_error__:{e}"), String::new()),
                                     };
-                                    let _ = tx.try_send(payload.0);
+                                    send_with_retry(&tx, payload.0);
                                     if !payload.1.is_empty() {
-                                        let _ = tx.try_send(payload.1);
+                                        send_with_retry(&tx, payload.1);
                                     }
                                     ctx_clone.request_repaint_after(Duration::from_millis(16));
                                 });

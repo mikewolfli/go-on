@@ -175,10 +175,12 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
                 .ok_or_else(|| anyhow::anyhow!("search_files requires arguments.pattern"))?;
         }
         "workflow_execute" | "workflow_ask" | "workflow_generate" | "skill_creator" => {
-            // These have required fields validated by the handler itself
+            if tool_name.starts_with("workflow") && tool_input.get("task").is_none() {
+                return Err(anyhow::anyhow!("{} tool requires 'task' field", tool_name));
+            }
         }
         _ => {
-            tracing::warn!("unknown tool name passed to validation: {}", tool_name);
+            return Err(anyhow::anyhow!("unknown tool '{}'", tool_name));
         }
     }
     Ok(())

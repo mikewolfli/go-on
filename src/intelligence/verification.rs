@@ -56,7 +56,7 @@ impl DeterministicVerifier {
 
         // Check for obviously incomplete code blocks
         let code_fence_opens = content.matches("```").count();
-        if code_fence_opens % 2 != 0 {
+        if !code_fence_opens.is_multiple_of(2) {
             issues.push("unclosed markdown code fence (odd number of ```)".to_string());
         }
 
@@ -164,7 +164,23 @@ impl DeterministicVerifier {
     }
 
     /// Run quality compass checks using the configured pua quality compass.
-    pub fn run_quality_compass_checks() -> Vec<VerificationSignal> {
+    ///
+    /// Performs basic content sanity checks — if the content contains obvious issues
+    /// such as unclosed brackets or suspicious patterns, the compass check is marked
+    /// as failed.
+    pub fn run_quality_compass_checks(content: &str) -> Vec<VerificationSignal> {
+        // Basic content sanity: detect unclosed brackets / suspicious patterns.
+        let content_has_issues = {
+            let open_curly = content.matches('{').count();
+            let close_curly = content.matches('}').count();
+            let open_paren = content.matches('(').count();
+            let close_paren = content.matches(')').count();
+            let open_bracket = content.matches('[').count();
+            let close_bracket = content.matches(']').count();
+
+            open_curly != close_curly || open_paren != close_paren || open_bracket != close_bracket
+        };
+
         quality_compass()
             .into_iter()
             .map(|item| {
@@ -172,8 +188,8 @@ impl DeterministicVerifier {
                 // this would actually evaluate the code against each criterion.
                 VerificationSignal {
                     signal_type: QualitySignalType::PuaQualityCompass,
-                    passed: true,
-                    confidence: 0.7,
+                    passed: !content_has_issues,
+                    confidence: if content_has_issues { 0.3 } else { 0.7 },
                     details: Some(item),
                 }
             })

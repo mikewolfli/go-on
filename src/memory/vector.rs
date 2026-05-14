@@ -254,102 +254,112 @@ impl VectorStore {
 
         let query_embedding = embed_text(query, self.dimensions);
         let now = now_ts();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'search'"))?;
+        let limit = self.max_entries.max(top_k);
 
-        let mut scored = match self.mode {
-            SqliteVectorMode::SqliteVec => {
-                let query_blob = embedding_blob(&query_embedding);
-                let mut stmt = conn.prepare(
-                    "
-                    SELECT memory_key, response_text, updated_at,
-                           vec_distance_cosine(embedding_blob, ?2) AS distance
-                    FROM vector_memory
-                    WHERE phase = ?1
-                      AND embedding_blob IS NOT NULL
-                    ORDER BY distance ASC, updated_at DESC
-                    LIMIT 300
-                    ",
-                )?;
-                let mut rows = stmt.query(params![phase, query_blob])?;
-                let mut scored: Vec<(String, f32, String)> = Vec::new();
+        // Collect results within a locked scope, then release the lock
+        // before doing sorting/processing (minimizes lock duration).
+        let mut scored = {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'search'"))?;
 
-                while let Some(row) = rows.next()? {
-                    let memory_key: String = row.get(0)?;
-                    let response_text: String = row.get(1)?;
-                    let updated_at: i64 = row.get(2)?;
-                    let distance: f64 = row.get(3)?;
-                    let similarity = (1.0_f32 - distance as f32).clamp(0.0, 1.0);
-                    if similarity < min_similarity {
-                        continue;
+            let scored = match self.mode {
+                SqliteVectorMode::SqliteVec => {
+                    let query_blob = embedding_blob(&query_embedding);
+                    let mut stmt = conn.prepare(
+                        "
+                        SELECT memory_key, response_text, updated_at,
+                               vec_distance_cosine(embedding_blob, ?2) AS distance
+                        FROM vector_memory
+                        WHERE phase = ?1
+                          AND embedding_blob IS NOT NULL
+                        ORDER BY distance ASC, updated_at DESC
+                        LIMIT ?3
+                        ",
+                    )?;
+                    let mut rows = stmt.query(params![phase, query_blob, limit as i64])?;
+                    let mut scored: Vec<(String, f32, String)> = Vec::new();
+
+                    while let Some(row) = rows.next()? {
+                        let memory_key: String = row.get(0)?;
+                        let response_text: String = row.get(1)?;
+                        let updated_at: i64 = row.get(2)?;
+                        let distance: f64 = row.get(3)?;
+                        let similarity = (1.0_f32 - distance as f32).clamp(0.0, 1.0);
+                        if similarity < min_similarity {
+                            continue;
+                        }
+                        let blended = blend_similarity_with_recency(similarity, now, updated_at);
+                        scored.push((memory_key, blended, response_text));
                     }
-                    let blended = blend_similarity_with_recency(similarity, now, updated_at);
-                    scored.push((memory_key, blended, response_text));
+                    scored
                 }
-                scored
-            }
-            SqliteVectorMode::JsonFallback => {
-                let mut stmt = conn.prepare(
-                    "
-                    SELECT memory_key, response_text, embedding_json, updated_at
-                    FROM vector_memory
-                    WHERE phase = ?1
-                    ORDER BY updated_at DESC
-                    LIMIT 300
-                    ",
-                )?;
+                SqliteVectorMode::JsonFallback => {
+                    let mut stmt = conn.prepare(
+                        "
+                        SELECT memory_key, response_text, embedding_json, updated_at
+                        FROM vector_memory
+                        WHERE phase = ?1
+                        ORDER BY updated_at DESC
+                        LIMIT ?2
+                        ",
+                    )?;
 
-                let mut rows = stmt.query(params![phase])?;
-                let mut scored: Vec<(String, f32, String)> = Vec::new();
+                    let mut rows = stmt.query(params![phase, limit as i64])?;
+                    let mut scored: Vec<(String, f32, String)> = Vec::new();
 
-                while let Some(row) = rows.next()? {
-                    let memory_key: String = row.get(0)?;
-                    let response_text: String = row.get(1)?;
-                    let embedding_json: Option<String> = row.get(2)?;
-                    let updated_at: i64 = row.get(3)?;
+                    while let Some(row) = rows.next()? {
+                        let memory_key: String = row.get(0)?;
+                        let response_text: String = row.get(1)?;
+                        let embedding_json: Option<String> = row.get(2)?;
+                        let updated_at: i64 = row.get(3)?;
 
-                    let Some(embedding_json) = embedding_json else {
-                        continue;
-                    };
-                    let memory_embedding: Vec<f32> = match serde_json::from_str(&embedding_json) {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
-                    if memory_embedding.len() != query_embedding.len() {
-                        continue;
+                        let Some(embedding_json) = embedding_json else {
+                            continue;
+                        };
+                        let memory_embedding: Vec<f32> = match serde_json::from_str(&embedding_json)
+                        {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        if memory_embedding.len() != query_embedding.len() {
+                            continue;
+                        }
+
+                        let similarity = cosine_similarity(&query_embedding, &memory_embedding);
+                        if similarity < min_similarity {
+                            continue;
+                        }
+
+                        let blended = blend_similarity_with_recency(similarity, now, updated_at);
+                        scored.push((memory_key, blended, response_text));
                     }
 
-                    let similarity = cosine_similarity(&query_embedding, &memory_embedding);
-                    if similarity < min_similarity {
-                        continue;
-                    }
-
-                    let blended = blend_similarity_with_recency(similarity, now, updated_at);
-                    scored.push((memory_key, blended, response_text));
+                    scored
                 }
+            };
 
-                scored
+            // Update hit counts while still holding the lock
+            if !scored.is_empty() {
+                for (memory_key, _, _) in &scored {
+                    conn.execute(
+                        "
+                        UPDATE vector_memory
+                        SET hit_count = hit_count + 1,
+                            last_hit_at = ?2
+                        WHERE memory_key = ?1
+                        ",
+                        params![memory_key, now],
+                    )?;
+                }
             }
-        };
+
+            scored
+        }; // conn is dropped here, releasing the lock
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);
-
-        if !scored.is_empty() {
-            for (memory_key, _, _) in &scored {
-                conn.execute(
-                    "
-                    UPDATE vector_memory
-                    SET hit_count = hit_count + 1,
-                        last_hit_at = ?2
-                    WHERE memory_key = ?1
-                    ",
-                    params![memory_key, now],
-                )?;
-            }
-        }
 
         let hits: Vec<VectorHit> = scored
             .into_iter()

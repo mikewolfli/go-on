@@ -182,7 +182,11 @@ impl Agent for OpenAiAgent {
                 name: "GPT-3.5 Turbo".to_string(),
                 description: "OpenAI GPT-3.5 Turbo".to_string(),
                 is_default: self.model == "gpt-3.5-turbo",
-                capabilities: vec!["chat".to_string(), "function_calling".to_string(), "streaming".to_string()],
+                capabilities: vec![
+                    "chat".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
                 context_window: Some(16_385),
             },
         ]

@@ -435,7 +435,10 @@ impl SecurityGovernor {
     /// If a policy with the same `id` already exists, it will be **replaced**
     /// and the old policy is returned.
     pub fn register_policy(&self, policy: SecurityPolicy) -> Option<SecurityPolicy> {
-        let mut inner = self.inner.lock().expect("lock poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("SecurityGovernor lock poisoned in register_policy, recovering");
+            poisoned.into_inner()
+        });
         inner.policies.insert(policy.id.clone(), policy)
     }
 
@@ -443,7 +446,10 @@ impl SecurityGovernor {
     ///
     /// Returns `true` if the policy existed and was removed.
     pub fn remove_policy(&self, id: &str) -> bool {
-        let mut inner = self.inner.lock().expect("lock poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("SecurityGovernor lock poisoned in remove_policy, recovering");
+            poisoned.into_inner()
+        });
         inner.policies.shift_remove(id).is_some()
     }
 
@@ -578,7 +584,10 @@ impl SecurityGovernor {
     /// If the audit log exceeds `max_audit_entries`, the oldest entries are
     /// evicted (circular buffer behaviour).
     pub fn record_audit(&self, entry: AuditEntry) {
-        let mut inner = self.inner.lock().expect("lock poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("SecurityGovernor lock poisoned in record_audit, recovering");
+            poisoned.into_inner()
+        });
         inner.audit_entries.push(entry);
         while inner.audit_entries.len() > inner.config.max_audit_entries {
             inner.audit_entries.remove(0);
@@ -587,19 +596,28 @@ impl SecurityGovernor {
 
     /// Return all recorded audit log entries.
     pub fn audit_log(&self) -> Vec<AuditEntry> {
-        let inner = self.inner.lock().expect("lock poisoned");
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("SecurityGovernor lock poisoned in audit_log, recovering");
+            poisoned.into_inner()
+        });
         inner.audit_entries.clone()
     }
 
     /// Clear the audit log.
     pub fn clear_audit(&self) {
-        let mut inner = self.inner.lock().expect("lock poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("SecurityGovernor lock poisoned in clear_audit, recovering");
+            poisoned.into_inner()
+        });
         inner.audit_entries.clear();
     }
 
     /// Return a [`GovernorProfile`] snapshot of current metrics.
     pub fn profile(&self) -> GovernorProfile {
-        let inner = self.inner.lock().expect("lock poisoned");
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("SecurityGovernor lock poisoned in profile, recovering");
+            poisoned.into_inner()
+        });
         GovernorProfile {
             enabled: inner.config.enabled,
             policies_count: inner.policies.len() as u64,

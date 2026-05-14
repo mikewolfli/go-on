@@ -77,17 +77,27 @@ pub fn select_model_for_task(
         .cloned()
 }
 
-/// Estimate request cost in cents based on model ID
+/// Estimate request cost in cents based on model ID.
+///
+/// NOTE: Model costs and latencies should be aligned with providers_data.toml
+/// as the authoritative source. Update when model pricing changes.
 pub fn estimate_model_cost(model_id: &str) -> u32 {
     match model_id {
         // DeepSeek models
+        "deepseek-v4-flash" => 2,
+        "deepseek-v4-pro" => 8,
+        // Wenxin models
+        "ERNIE-4.5-8K" => 6,
+        // OpenAI models
+        "gpt-4o" => 10,
+        "gpt-4o-mini" => 2,
+        // Anthropic models
+        "claude-sonnet-4-20250514" => 15,
+        // Legacy IDs — kept as fallbacks for backward compatibility
         "deepseek-v3" => 5,
         "deepseek-chat" => 2,
         "deepseek-coder" => 3,
-        // Wenxin models
-        "ernie-4.0-turbo-8k" => 8,
-        "ernie-3.5-turbo" => 4,
-        // OpenAI models
+        "ernie-4.0-turbo-8k" | "ernie-3.5-turbo" => 4,
         "gpt-4" => 30,
         "gpt-3.5-turbo" => 1,
         // Default estimate
@@ -95,19 +105,27 @@ pub fn estimate_model_cost(model_id: &str) -> u32 {
     }
 }
 
-/// Estimate latency in milliseconds based on model ID
+/// Estimate latency in milliseconds based on model ID.
+///
+/// NOTE: Model costs and latencies should be aligned with providers_data.toml
+/// as the authoritative source. Update when model pricing changes.
 pub fn estimate_model_latency(model_id: &str) -> u32 {
     match model_id {
         // Fast models
-        "deepseek-chat" => 800,
-        "ernie-3.5-turbo" => 900,
-        "gpt-3.5-turbo" => 1200,
+        "deepseek-v4-flash" => 600,
+        "gpt-4o-mini" => 400,
         // Medium latency
+        "deepseek-v4-pro" => 1200,
+        "gpt-4o" => 800,
+        "ERNIE-4.5-8K" => 1000,
+        "claude-sonnet-4-20250514" => 1000,
+        // Legacy IDs — kept as fallbacks for backward compatibility
+        "deepseek-chat" => 800,
         "deepseek-coder" => 1500,
-        // Slow/capable models
         "deepseek-v3" => 2000,
-        "ernie-4.0-turbo-8k" => 2200,
+        "ernie-4.0-turbo-8k" | "ernie-3.5-turbo" => 1000,
         "gpt-4" => 2500,
+        "gpt-3.5-turbo" => 1200,
         // Default estimate
         _ => 1500,
     }

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Counter for generating unique artifact IDs.
 static ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -323,7 +323,10 @@ impl ArtifactLayer {
     pub fn prune_expired(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
+            .unwrap_or_else(|e| {
+                tracing::error!("clock error: {e}");
+                Duration::MAX
+            })
             .as_millis() as u64;
 
         let mut artifacts = self.artifacts.lock().expect("artifacts lock poisoned");

@@ -3,6 +3,18 @@ use crate::i18n::I18n;
 use crate::views::security_prefs::{self, SecurityPrefs};
 use std::sync::mpsc;
 
+/// Send a message over a SyncSender, retrying up to 3 times with a 5 ms sleep between attempts.
+/// If all retries fail, a warning is printed to stderr.
+fn send_with_retry(tx: &mpsc::SyncSender<String>, msg: String) {
+    for _ in 0..3 {
+        if tx.try_send(msg.clone()).is_ok() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    eprintln!("WARN: security failed to send after 3 retries");
+}
+
 pub struct SecurityView {
     state: SecurityPrefs,
     status: String,
@@ -117,7 +129,7 @@ impl SecurityView {
                             Ok(_) => restart_requested,
                             Err(e) => format!("{}: {e}", restart_failed),
                         };
-                        let _ = tx.try_send(msg);
+                        send_with_retry(&tx, msg);
                         ctx_clone.request_repaint();
                     });
                 }

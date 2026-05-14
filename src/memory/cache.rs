@@ -215,6 +215,8 @@ impl ResponseCache {
                 SELECT cache_key
                 FROM response_cache
                 ORDER BY updated_at DESC
+                -- LIMIT -1 in SQLite means \"no limit\" (unbounded),
+                -- so this deletes all rows beyond the newest max_entries.
                 LIMIT -1 OFFSET ?1
             )
             ",

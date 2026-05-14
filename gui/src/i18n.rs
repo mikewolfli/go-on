@@ -2837,16 +2837,7 @@ impl I18n {
             "chat.resend",
             tr!(en, "Resend", cn, "重新发送", tw, "重新發送"),
         );
-        m.insert("mode.plan", tr!(en, "Plan", cn, "计划", tw, "計劃"));
-        m.insert("mode.edit", tr!(en, "Edit", cn, "编辑", tw, "編輯"));
-        m.insert(
-            "mode.safeguard",
-            tr!(en, "Safeguard", cn, "安全审查", tw, "安全審查"),
-        );
-        m.insert(
-            "mode.full_auto",
-            tr!(en, "Full Auto", cn, "全自动", tw, "全自動"),
-        );
+
         m.insert(
             "providers.ops.hidden",
             tr!(

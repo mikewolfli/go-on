@@ -1,4 +1,4 @@
-name: Release (build + upload)
+name: Release Full (3-platform package)
 
 on:
   workflow_dispatch:
@@ -15,11 +15,26 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-and-upload:
-    name: Build + upload
+  build-package-and-upload:
+    name: Build + package + upload
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+            backend_bin: go-on
+            gui_bin: go-on-gui-egui
+            archive_ext: tar.gz
+          - os: macos-latest
+            platform: macos-x64
+            backend_bin: go-on
+            gui_bin: go-on-gui-egui
+            archive_ext: tar.gz
+          - os: windows-latest
+            platform: windows-x64
+            backend_bin: go-on.exe
+            gui_bin: go-on-gui-egui.exe
+            archive_ext: zip
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
@@ -54,27 +69,52 @@ jobs:
       - name: Build EGUI GUI
         run: cargo build --release --locked --manifest-path gui/Cargo.toml 2>&1
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: vscode-addon/package-lock.json
-
-      - name: Build VS Code addon
-        working-directory: ./vscode-addon
+      - name: Prepare package (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
-          npm ci
-          npm run compile
-          npx @vscode/vsce package --no-dependencies --out go-on-vscode.vsix
+          PKG_DIR="dist/go-on-${{ matrix.platform }}"
+          mkdir -p "${PKG_DIR}/backend"
 
-      # ── Upload ───────────────────────────────────────────────
-      - name: Upload all assets
+          cp "target/release/${{ matrix.backend_bin }}" "${PKG_DIR}/backend/"
+          cp "target/release/${{ matrix.gui_bin }}" "${PKG_DIR}/"
+          cp "gui/icon.ico" "${PKG_DIR}/icon.ico"
+          cp -r "RULES" "${PKG_DIR}/backend/rules"
+          cp -r "languages" "${PKG_DIR}/backend/languages"
+          cp "config/config.toml" "${PKG_DIR}/backend/config.toml"
+
+      - name: Prepare package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $pkgDir = "dist/go-on-${{ matrix.platform }}"
+          New-Item -ItemType Directory -Force -Path "$pkgDir/backend" | Out-Null
+
+          Copy-Item "target/release/${{ matrix.backend_bin }}" "$pkgDir/backend/"
+          Copy-Item "target/release/${{ matrix.gui_bin }}" "$pkgDir/"
+          Copy-Item "gui/icon.ico" "$pkgDir/icon.ico"
+          Copy-Item "RULES" "$pkgDir/backend/rules" -Recurse -Force
+          Copy-Item "languages" "$pkgDir/backend/languages" -Recurse -Force
+          Copy-Item "config/config.toml" "$pkgDir/backend/config.toml"
+
+      - name: Archive package (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist/out
+          tar -C dist -czf "dist/out/go-on-${{ matrix.platform }}.tar.gz" "go-on-${{ matrix.platform }}"
+
+      - name: Archive package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/out | Out-Null
+          Compress-Archive -Path "dist/go-on-${{ matrix.platform }}/*" -DestinationPath "dist/out/go-on-${{ matrix.platform }}.zip" -Force
+
+      - name: Upload release package
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            target/release/go-on${{ runner.os == 'Windows' && '.exe' || '' }}
-            gui/target/release/go-on-gui-egui${{ runner.os == 'Windows' && '.exe' || '' }}
-            vscode-addon/go-on-vscode.vsix
+            dist/out/go-on-${{ matrix.platform }}.${{ matrix.archive_ext }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

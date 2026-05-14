@@ -92,7 +92,7 @@ impl SettingsView {
 
         let mut changed = false;
 
-        // 使用 ScrollArea 支持滚动
+        // Use ScrollArea for scrolling support
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
@@ -267,7 +267,7 @@ impl SettingsView {
                                     {
                                         config.enterprise.active_environment = env.name.clone();
                                         config.backend_url = env.backend_url.clone();
-                                        save_app_config(config);
+                                        changed = true;
                                     }
                                 }
                             });
@@ -295,7 +295,7 @@ impl SettingsView {
                             config.enterprise.environments[active_index].backend_url =
                                 normalized.clone();
                             config.backend_url = normalized;
-                            save_app_config(config);
+                            changed = true;
                         }
                     }
 
@@ -313,7 +313,7 @@ impl SettingsView {
                                         .clicked()
                                     {
                                         config.enterprise.secret_source = source.to_string();
-                                        save_app_config(config);
+                                        changed = true;
                                     }
                                 }
                             });
@@ -371,7 +371,7 @@ impl SettingsView {
                                 .find(|env| env.name == config.enterprise.active_environment)
                             {
                                 active_env.backend_url = config.backend_url.clone();
-                                save_app_config(config);
+                                changed = true;
                             }
                         }
                     });
@@ -395,7 +395,7 @@ impl SettingsView {
                     );
                     if resp.changed() && !url.is_empty() {
                         config.backend_url = url.trim().trim_end_matches('/').to_string();
-                        save_app_config(config);
+                        changed = true;
                         ui.ctx().request_repaint();
                     }
                 });
@@ -419,7 +419,7 @@ impl SettingsView {
                             .clicked()
                         {
                             config.language = code.to_string();
-                            save_app_config(config);
+                            changed = true;
                             ui.ctx().request_repaint();
                         }
                     }
@@ -450,7 +450,7 @@ impl SettingsView {
                                     .clicked()
                                 {
                                     config.theme = config_name.to_string();
-                                    save_app_config(config);
+                                    changed = true;
                                     ui.ctx().request_repaint();
                                 }
                             }
@@ -584,7 +584,7 @@ impl SettingsView {
                     ui.ctx().request_repaint();
                 }
 
-                ui.add_space(20.0); // 底部留白，确保可以滚动到最后
-            }); // ScrollArea 结束
+                ui.add_space(20.0); // Bottom padding to ensure scrollable to the end
+            }); // End ScrollArea
     }
 }

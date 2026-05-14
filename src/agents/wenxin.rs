@@ -96,7 +96,7 @@ impl WenxinAgent {
     }
 
     fn resolve_target_model(options: &Option<HashMap<String, Value>>) -> String {
-        option_string(options, "model").unwrap_or_else(|| "ernie-3.5-turbo".to_string())
+        option_string(options, "model").unwrap_or_else(|| "ERNIE-4.5-8K".to_string())
     }
 
     fn endpoint_for_model(model: &str) -> &'static str {
@@ -240,9 +240,17 @@ impl Agent for WenxinAgent {
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![
             ModelInfo {
+                id: "ERNIE-4.5-8K".to_string(),
+                name: "ERNIE 4.5 8K".to_string(),
+                description: "Baidu ERNIE 4.5 flagship model (8K context)".to_string(),
+                is_default: true,
+                capabilities: vec!["chat".to_string(), "function_calling".to_string()],
+                context_window: Some(8192),
+            },
+            ModelInfo {
                 id: "ernie-4.0-turbo-8k".to_string(),
                 name: "Ernie 4.0 Turbo 8K".to_string(),
-                description: "Latest Ernie model with 8K context window".to_string(),
+                description: "Ernie 4.0 Turbo with 8K context window".to_string(),
                 is_default: false,
                 capabilities: vec!["chat".to_string()],
                 context_window: Some(8192),
@@ -251,7 +259,7 @@ impl Agent for WenxinAgent {
                 id: "ernie-3.5-turbo".to_string(),
                 name: "Ernie 3.5 Turbo".to_string(),
                 description: "Fast and balanced model for general use".to_string(),
-                is_default: true,
+                is_default: false,
                 capabilities: vec!["chat".to_string()],
                 context_window: Some(4096),
             },
@@ -346,7 +354,7 @@ mod tests {
         assert_eq!(payload["messages"][1]["content"], "review this");
         assert_eq!(payload["temperature"], 0.3);
         assert_eq!(payload["top_p"], 0.8);
-        assert_eq!(payload["model"], "ernie-3.5-turbo");
+        assert_eq!(payload["model"], "ERNIE-4.5-8K");
     }
 
     #[test]

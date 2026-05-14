@@ -213,9 +213,7 @@ impl BrainLoop {
 
     /// Get a clone of a plan by its id.
     pub fn get_plan(&self, id: &str) -> anyhow::Result<BrainLoopPlan> {
-        self.inner
-            .lock()
-            .unwrap()
+        lock_guard(&self.inner)
             .plans
             .get(id)
             .cloned()
@@ -455,9 +453,7 @@ impl BrainLoop {
 
     /// The current phase of a plan.
     pub fn current_phase(&self, plan_id: &str) -> anyhow::Result<BrainLoopPhase> {
-        self.inner
-            .lock()
-            .unwrap()
+        lock_guard(&self.inner)
             .plans
             .get(plan_id)
             .map(|p| p.phase)

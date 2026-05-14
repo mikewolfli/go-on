@@ -25,8 +25,9 @@ impl MemoryResponseCache {
                 guard.remove(key);
                 return None;
             }
+            return Some(entry.clone());
         }
-        guard.get(key).cloned()
+        None
     }
 
     pub(crate) fn purge_expired(&self) -> usize {

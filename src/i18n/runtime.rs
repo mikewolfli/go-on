@@ -239,11 +239,18 @@ impl I18nManager {
 
     /// Get translated message with format arguments
     pub fn get_formatted(&self, key: &str, format_args: &[(&str, &str)]) -> String {
+        const ESCAPED_SENTINEL: &str = "\x00ESCAPED_BRACE\x00";
         let mut message = self.get(key);
+
+        // Escape {{ → sentinel so literal {name} is not substituted
+        message = message.replace("{{", ESCAPED_SENTINEL);
 
         for (placeholder, value) in format_args {
             message = message.replace(&format!("{{{}}}", placeholder), value);
         }
+
+        // Restore sentinel → {
+        message = message.replace(ESCAPED_SENTINEL, "{");
 
         message
     }
@@ -301,22 +308,26 @@ pub fn init_i18n<P: AsRef<Path>>(languages_dir: P) -> Result<()> {
 
 /// Translate message using global i18n instance
 pub fn t(key: &str) -> String {
-    let i18n = read_guard(&I18N, "i18n.global");
-    if let Some(manager) = i18n.as_ref() {
-        manager.get(key)
-    } else {
-        key.to_string()
-    }
+    let result = {
+        let i18n = read_guard(&I18N, "i18n.global");
+        i18n.as_ref().map(|manager| manager.get(key))
+    };
+    result.unwrap_or_else(|| key.to_string())
 }
 
 /// Translate message with formatting
 pub fn tf(key: &str, args: &[(&str, &str)]) -> String {
-    let i18n = read_guard(&I18N, "i18n.global");
-    if let Some(manager) = i18n.as_ref() {
-        manager.get_formatted(key, args)
-    } else {
-        key.to_string()
+    let template = {
+        let i18n = read_guard(&I18N, "i18n.global");
+        i18n.as_ref().map(|manager| manager.get(key))
+    };
+    let template = template.unwrap_or_else(|| key.to_string());
+
+    let mut message = template;
+    for (placeholder, value) in args {
+        message = message.replace(&format!("{{{}}}", placeholder), value);
     }
+    message
 }
 
 /// Set global language

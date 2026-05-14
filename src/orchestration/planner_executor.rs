@@ -99,10 +99,28 @@ impl Executor {
     ) -> Vec<(String, Result<AgentTaskResult, String>)> {
         let mut results = Vec::new();
         let mut completed: Vec<String> = Vec::new();
+        let mut failed: Vec<String> = Vec::new();
 
         for step in &plan.steps {
             // Check dependencies
             let deps_met = step.depends_on.iter().all(|d| completed.contains(d));
+            // Check for upstream failures — short-circuit to avoid cascading "dependencies not met" errors
+            let upstream_failed: Vec<&String> = step
+                .depends_on
+                .iter()
+                .filter(|d| failed.contains(d))
+                .collect();
+            if !upstream_failed.is_empty() {
+                failed.push(step.step_id.clone());
+                results.push((
+                    step.step_id.clone(),
+                    Err(format!(
+                        "cancelled due to upstream failure: {:?}",
+                        upstream_failed
+                    )),
+                ));
+                continue;
+            }
             if !deps_met {
                 results.push((
                     step.step_id.clone(),
@@ -135,6 +153,7 @@ impl Executor {
                             results.push((step.step_id.clone(), Ok(result)));
                         }
                         Err(e) => {
+                            failed.push(step.step_id.clone());
                             results.push((
                                 step.step_id.clone(),
                                 Err(format!("runtime execution failed: {}", e)),
@@ -143,6 +162,7 @@ impl Executor {
                     }
                 }
                 None => {
+                    failed.push(step.step_id.clone());
                     results.push((
                         step.step_id.clone(),
                         Err(format!("no runtime found for mode {:?}", step.mode)),
@@ -199,8 +219,8 @@ mod tests {
         let results = Executor::execute(&plan, &registry, &[]);
         // With no runtimes:
         // plan-1 (no deps) -> "no runtime found"
-        // exec-1 (depends on plan-1, which failed and was not added to completed) -> "dependencies not met"
-        // review-1 (depends on exec-1, ditto) -> "dependencies not met"
+        // exec-1 (depends on plan-1, which failed) -> "cancelled due to upstream failure"
+        // review-1 (depends on exec-1, which was cancelled) -> "cancelled due to upstream failure"
         assert_eq!(results.len(), 3);
         assert!(results[0].1.is_err());
         assert!(results[1].1.is_err());
@@ -217,13 +237,8 @@ mod tests {
         let results = Executor::execute(&plan, &registry, &[]);
         // First step (plan-1) fails with "no runtime found"
         assert!(results[0].1.is_err());
-        // Second step (exec-1) should have no runtime found (it depends on plan-1,
-        // but plan-1 isn't in completed since it errored)
-        // Actually: dependency check happens before runtime lookup.
-        // plan-1's step_id is "plan-1"; it's added to `completed` only on success.
-        // Since plan-1 fails, exec-1's dep isn't met -> "dependencies not met" error.
-        // Wait, looking at the code: if runtime returns Err, `completed.push` is NOT called.
-        // So exec-1 should get "dependencies not met".
+        // Second step (exec-1) depends on plan-1 which failed
+        // -> short-circuit: "cancelled due to upstream failure"
         assert!(results[1].1.is_err());
     }
 }

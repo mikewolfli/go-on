@@ -7,15 +7,27 @@
 //! All mutable state is guarded behind `Arc<Mutex<>>`.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// Helper: current epoch milliseconds
+// Helpers
 // ---------------------------------------------------------------------------
+
+/// Lock a Mutex, recovering from poison by clearing the mutex data and logging a warning.
+fn lock_guard<T: Default>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("continuous_learning mutex poisoned, recovering by clearing state");
+            *poisoned.into_inner() = T::default();
+            mtx.lock().expect("re-lock after poison recovery")
+        }
+    }
+}
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -205,7 +217,7 @@ pub struct ContinuousLearningCenter {
 }
 
 /// Internal mutable state held by the centre.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct CenterState {
     tasks: HashMap<String, LearningTask>,
     memories: HashMap<String, ConsolidatedMemory>,
@@ -253,7 +265,7 @@ impl ContinuousLearningCenter {
         if priority > 10 {
             bail!("priority must be in 0..=10, got {}", priority);
         }
-        let mut state = self.state.lock().expect("state lock poisoned");
+        let mut state = lock_guard(&self.state);
         if state.tasks.len() >= self.config.max_tasks {
             bail!("task limit reached ({})", self.config.max_tasks);
         }
@@ -276,7 +288,7 @@ impl ContinuousLearningCenter {
     /// Updates the status of an existing task.
     pub fn update_task_status(&self, task_id: &str, status: LearningStatus) -> Result<()> {
         let was_completed = status == LearningStatus::Completed;
-        let mut state = self.state.lock().expect("state lock poisoned");
+        let mut state = lock_guard(&self.state);
         let task = state
             .tasks
             .get_mut(task_id)
@@ -304,7 +316,7 @@ impl ContinuousLearningCenter {
         importance: f64,
     ) -> Result<String> {
         let importance = importance.clamp(0.0, 1.0);
-        let mut state = self.state.lock().expect("state lock poisoned");
+        let mut state = lock_guard(&self.state);
         if state.memories.len() >= self.config.max_memories {
             bail!("memory limit reached ({})", self.config.max_memories);
         }
@@ -339,7 +351,7 @@ impl ContinuousLearningCenter {
 
     /// Reinforces a memory by resetting its forgetting curve strength.
     pub fn reinforce_memory(&self, memory_id: &str) -> Result<()> {
-        let mut state = self.state.lock().expect("state lock poisoned");
+        let mut state = lock_guard(&self.state);
 
         let curve = state
             .forgetting_curves
@@ -368,7 +380,7 @@ impl ContinuousLearningCenter {
         pattern_key: &str,
         min_importance: f64,
     ) -> Vec<ConsolidatedMemory> {
-        let state = self.state.lock().expect("state lock poisoned");
+        let state = lock_guard(&self.state);
         let mut results: Vec<_> = state
             .memories
             .values()
@@ -388,7 +400,7 @@ impl ContinuousLearningCenter {
     /// Detects all memories whose current forgetting-curve strength has
     /// dropped below `min_retention_importance` and returns them.
     pub fn detect_forgetting(&self) -> Vec<ForgettingCurve> {
-        let state = self.state.lock().expect("state lock poisoned");
+        let state = lock_guard(&self.state);
         let now = now_ms();
         state
             .forgetting_curves
@@ -408,7 +420,7 @@ impl ContinuousLearningCenter {
     /// Returns the current curriculum stage, advancing to the next stage if
     /// the current one has reached the mastery threshold.
     pub fn apply_curriculum(&self) -> Result<CurriculumStage> {
-        let mut state = self.state.lock().expect("state lock poisoned");
+        let mut state = lock_guard(&self.state);
         if state.curriculum.is_empty() {
             // All stages completed; return a terminal stage.
             return Ok(CurriculumStage {
@@ -443,7 +455,7 @@ impl ContinuousLearningCenter {
     /// Returns the `count` most important memories for replay (ordered by
     /// importance descending then by last-accessed ascending).
     pub fn replay_important_memories(&self, count: usize) -> Vec<ConsolidatedMemory> {
-        let state = self.state.lock().expect("state lock poisoned");
+        let state = lock_guard(&self.state);
         let mut memories: Vec<_> = state.memories.values().cloned().collect();
         // Sort by importance descending, then by last-accessed ascending (LRU bias).
         memories.sort_by(|a, b| {
@@ -463,7 +475,7 @@ impl ContinuousLearningCenter {
     ///
     /// `current_strength = original_strength * exp(-decay_rate * elapsed_hours)`
     pub fn estimate_retention(&self, memory_id: &str) -> f64 {
-        let state = self.state.lock().expect("state lock poisoned");
+        let state = lock_guard(&self.state);
         match state.forgetting_curves.get(memory_id) {
             Some(curve) => {
                 let now = now_ms();
@@ -479,7 +491,7 @@ impl ContinuousLearningCenter {
 
     /// Returns a snapshot of the centre's current state.
     pub fn profile(&self) -> ContinuousLearningProfile {
-        let state = self.state.lock().expect("state lock poisoned");
+        let state = lock_guard(&self.state);
         let total_tasks = state.tasks.len();
         let pending_tasks = state
             .tasks

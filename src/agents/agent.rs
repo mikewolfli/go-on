@@ -359,7 +359,7 @@ pub(crate) fn inspect_secret_pool(secret_ref: &str, field_name: &str) -> Result<
 /// Model information for provider selection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
-    /// Model identifier (e.g., "deepseek-chat")
+    /// Model identifier (e.g., "deepseek-v4-flash")
     pub id: String,
     /// Human-readable model name
     pub name: String,
@@ -766,7 +766,7 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let model = config
                 .model
                 .clone()
-                .unwrap_or_else(|| "deepseek-chat".to_string());
+                .unwrap_or_else(|| "deepseek-v4-flash".to_string());
             Ok(Arc::new(DeepSeekAgent::new(api_key_env, model, client)))
         }
         "wenxin" => {
