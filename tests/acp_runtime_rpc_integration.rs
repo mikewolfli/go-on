@@ -5079,6 +5079,7 @@ fn rpc_unknown_method_and_config_reload() {
     assert!(
         reload_note == "flow/registry/cache/vector/autotune resources reloaded"
             || reload_note == "info.resources_reloaded"
+            || reload_note.contains("config validated")
     );
     let reload_path = reload["result"]["path"]
         .as_str()

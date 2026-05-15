@@ -50,6 +50,7 @@ mod test_suite {
                 model: None,
                 max_tokens: None,
                 supports_system: None,
+                supports_vision: None,
             },
         );
 

@@ -1,0 +1,41 @@
+{
+    "agent_servers": {
+        "go-on-acp": {
+            "type": "custom",
+            "command": "go-on",
+            "args": [
+                "--config",
+                "./config.toml",
+                "--protocol-mode",
+                "acp_stdio",
+                "--verbose"
+            ],
+            "env": {}
+        },
+        "go-on-http": {
+            "type": "custom",
+            "url": "http://127.0.0.1:8090"
+        }
+    },
+    "language_models": {
+        "openai_compatible": {
+            "go-on-local": {
+                "api_url": "http://127.0.0.1:8090/v1",
+                "available_models": [
+                    {
+                        "name": "gpt-5.5",
+                        "display_name": "go-on auto (gpt-5.5)",
+                        "max_tokens": 400000,
+                        "capabilities": {
+                            "chat_completions": true,
+                            "tools": true,
+                            "images": false,
+                            "parallel_tool_calls": false,
+                            "prompt_cache_key": false
+                        }
+                    }
+                ]
+            }
+        }
+    }
+}

@@ -5,8 +5,38 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+fn lock_mutex_recover<'a, T>(mtx: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("{} lock poisoned; recovering", name);
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn read_lock_recover<'a, T>(rw: &'a RwLock<T>, name: &str) -> RwLockReadGuard<'a, T> {
+    match rw.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("{} read lock poisoned; recovering", name);
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn write_lock_recover<'a, T>(rw: &'a RwLock<T>, name: &str) -> RwLockWriteGuard<'a, T> {
+    match rw.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("{} write lock poisoned; recovering", name);
+            poisoned.into_inner()
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -126,10 +156,10 @@ impl ScenarioMatcher {
     /// Register a scenario. If a scenario with the same `id` already exists,
     /// it is replaced (including statistics reset for that id).
     pub fn register_scenario(&self, scenario: Scenario) {
-        let mut scenarios = self
-            .scenarios
-            .write()
-            .expect("ScenarioMatcher::register_scenario lock poisoned");
+        let mut scenarios = write_lock_recover(
+            self.scenarios.as_ref(),
+            "ScenarioMatcher::register_scenario",
+        );
 
         // Replace existing scenario with the same id, or push new.
         if let Some(pos) = scenarios.iter().position(|s| s.id == scenario.id) {
@@ -139,10 +169,10 @@ impl ScenarioMatcher {
         }
 
         // Update profile counters.
-        let mut profile = self
-            .profile
-            .lock()
-            .expect("ScenarioMatcher::register_scenario profile lock poisoned");
+        let mut profile = lock_mutex_recover(
+            self.profile.as_ref(),
+            "ScenarioMatcher::register_scenario profile",
+        );
         let total = scenarios.len() as u32;
         let active = scenarios.iter().filter(|s| s.is_active).count() as u32;
         profile.total_scenarios = total;
@@ -152,20 +182,20 @@ impl ScenarioMatcher {
     /// Deactivate a scenario by its `id`. This is a no-op if the id does not
     /// exist.
     pub fn deactivate_scenario(&self, scenario_id: &str) {
-        let mut scenarios = self
-            .scenarios
-            .write()
-            .expect("ScenarioMatcher::deactivate_scenario lock poisoned");
+        let mut scenarios = write_lock_recover(
+            self.scenarios.as_ref(),
+            "ScenarioMatcher::deactivate_scenario",
+        );
         if let Some(scenario) = scenarios.iter_mut().find(|s| s.id == scenario_id) {
             scenario.is_active = false;
         }
 
         // Update active count in profile.
         let active = scenarios.iter().filter(|s| s.is_active).count() as u32;
-        let mut profile = self
-            .profile
-            .lock()
-            .expect("ScenarioMatcher::deactivate_scenario profile lock poisoned");
+        let mut profile = lock_mutex_recover(
+            self.profile.as_ref(),
+            "ScenarioMatcher::deactivate_scenario profile",
+        );
         profile.active_scenarios = active;
     }
 
@@ -189,10 +219,7 @@ impl ScenarioMatcher {
     ) -> MatchResult {
         let start = Instant::now();
 
-        let scenarios = self
-            .scenarios
-            .read()
-            .expect("ScenarioMatcher::match_task lock poisoned");
+        let scenarios = read_lock_recover(self.scenarios.as_ref(), "ScenarioMatcher::match_task");
 
         // Score each active scenario.
         struct Scored {
@@ -313,10 +340,10 @@ impl ScenarioMatcher {
 
         // Update match statistics.
         {
-            let mut stats_map = self
-                .match_stats
-                .lock()
-                .expect("ScenarioMatcher::match_task stats lock poisoned");
+            let mut stats_map = lock_mutex_recover(
+                self.match_stats.as_ref(),
+                "ScenarioMatcher::match_task stats",
+            );
             let now = now_ms();
             if let Some(ref top) = top {
                 let entry =
@@ -336,10 +363,8 @@ impl ScenarioMatcher {
 
         // Update profile.
         {
-            let mut profile = self
-                .profile
-                .lock()
-                .expect("ScenarioMatcher::match_task profile lock poisoned");
+            let mut profile =
+                lock_mutex_recover(self.profile.as_ref(), "ScenarioMatcher::match_task profile");
             profile.total_matches += 1;
             profile.last_match_duration_ms = duration_ms;
             let total = profile.total_matches;
@@ -376,10 +401,10 @@ impl ScenarioMatcher {
     /// Record an outcome for the scenario identified by `scenario_id`.
     /// Updates the running average duration and success/failure counts.
     pub fn record_outcome(&self, scenario_id: &str, success: bool, duration_ms: u64) {
-        let mut stats_map = self
-            .match_stats
-            .lock()
-            .expect("ScenarioMatcher::record_outcome stats lock poisoned");
+        let mut stats_map = lock_mutex_recover(
+            self.match_stats.as_ref(),
+            "ScenarioMatcher::record_outcome stats",
+        );
         let entry = stats_map
             .entry(scenario_id.to_string())
             .or_insert_with(|| ScenarioStats {
@@ -409,10 +434,7 @@ impl ScenarioMatcher {
 
     /// Return a snapshot of the current matcher profile.
     pub fn profile(&self) -> MatcherProfile {
-        let profile = self
-            .profile
-            .lock()
-            .expect("ScenarioMatcher::profile lock poisoned");
+        let profile = lock_mutex_recover(self.profile.as_ref(), "ScenarioMatcher::profile");
         profile.clone()
     }
 }

@@ -8,11 +8,41 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::orchestration::execution_graph::{ExCondition, ExNode, ExNodeKind, ExecutionGraph};
 use crate::orchestration::flow::FlowManager;
+
+fn lock_mutex_recover<'a, T>(mtx: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("{} lock poisoned; recovering", name);
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn read_lock_recover<'a, T>(rw: &'a RwLock<T>, name: &str) -> RwLockReadGuard<'a, T> {
+    match rw.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("{} read lock poisoned; recovering", name);
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn write_lock_recover<'a, T>(rw: &'a RwLock<T>, name: &str) -> RwLockWriteGuard<'a, T> {
+    match rw.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("{} write lock poisoned; recovering", name);
+            poisoned.into_inner()
+        }
+    }
+}
 
 // ── Supporting types ────────────────────────────────────────────────────────
 
@@ -155,16 +185,13 @@ impl OrchestrationBus {
     pub fn register_mode(&self, mode: &str) {
         // Parse known standard modes to keep enum conversion path active.
         let _ = OrchestrationMode::from_str(mode);
-        let mut modes = self
-            .available_modes
-            .write()
-            .expect("available_modes lock poisoned");
+        let mut modes = write_lock_recover(self.available_modes.as_ref(), "available_modes");
         let mode_str = mode.to_string();
         if !modes.contains(&mode_str) {
             modes.push(mode_str);
         }
         // Update profile
-        let mut prof = self.profile.lock().expect("profile lock poisoned");
+        let mut prof = lock_mutex_recover(self.profile.as_ref(), "profile");
         prof.available_modes = modes.len() as u32;
     }
 
@@ -173,10 +200,7 @@ impl OrchestrationBus {
     /// # Returns
     /// * `Vec<String>` - A sorted copy of registered mode names
     pub fn available_modes(&self) -> Vec<String> {
-        let modes = self
-            .available_modes
-            .read()
-            .expect("available_modes lock poisoned");
+        let modes = read_lock_recover(self.available_modes.as_ref(), "available_modes");
         let mut result = modes.clone();
         result.sort();
         result
@@ -257,10 +281,7 @@ impl OrchestrationBus {
     /// # Returns
     /// * `Result<()>` - Ok if the flow was started, Err if it is already active
     pub fn start_flow(&self, flow_name: &str, task_id: &str) -> Result<()> {
-        let mut flow_map = self
-            .active_flow_map
-            .lock()
-            .expect("active_flow_map lock poisoned");
+        let mut flow_map = lock_mutex_recover(self.active_flow_map.as_ref(), "active_flow_map");
 
         if flow_map.contains_key(flow_name) {
             return Err(anyhow!(
@@ -295,7 +316,7 @@ impl OrchestrationBus {
         flow_map.insert(flow_name.to_string(), entry);
 
         // Update profile
-        let mut prof = self.profile.lock().expect("profile lock poisoned");
+        let mut prof = lock_mutex_recover(self.profile.as_ref(), "profile");
         prof.active_flows = flow_map.len() as u32;
 
         Ok(())
@@ -307,10 +328,7 @@ impl OrchestrationBus {
     /// * `flow_name` - The name of the flow to complete
     /// * `task_id` - The task identifier to verify against
     pub fn complete_flow(&self, flow_name: &str, task_id: &str) {
-        let mut flow_map = self
-            .active_flow_map
-            .lock()
-            .expect("active_flow_map lock poisoned");
+        let mut flow_map = lock_mutex_recover(self.active_flow_map.as_ref(), "active_flow_map");
 
         if let Some(entry) = flow_map.get(flow_name) {
             if entry.task_id == task_id {
@@ -319,14 +337,11 @@ impl OrchestrationBus {
         }
 
         // Update profile
-        let mut prof = self.profile.lock().expect("profile lock poisoned");
+        let mut prof = lock_mutex_recover(self.profile.as_ref(), "profile");
         prof.active_flows = flow_map.len() as u32;
 
         // Increment total routes
-        let mut total = self
-            .total_routes
-            .lock()
-            .expect("total_routes lock poisoned");
+        let mut total = lock_mutex_recover(self.total_routes.as_ref(), "total_routes");
         *total += 1;
     }
 
@@ -335,10 +350,7 @@ impl OrchestrationBus {
     /// # Returns
     /// * `Vec<FlowStatus>` - Status information for each active flow
     pub fn active_flows(&self) -> Vec<FlowStatus> {
-        let flow_map = self
-            .active_flow_map
-            .lock()
-            .expect("active_flow_map lock poisoned");
+        let flow_map = lock_mutex_recover(self.active_flow_map.as_ref(), "active_flow_map");
 
         flow_map
             .values()
@@ -357,11 +369,8 @@ impl OrchestrationBus {
     /// # Returns
     /// * `OrchestrationBusProfile` - A copy of the current profile metrics
     pub fn profile(&self) -> OrchestrationBusProfile {
-        let mut prof = self.profile.lock().expect("profile lock poisoned");
-        let total = *self
-            .total_routes
-            .lock()
-            .expect("total_routes lock poisoned");
+        let mut prof = lock_mutex_recover(self.profile.as_ref(), "profile");
+        let total = *lock_mutex_recover(self.total_routes.as_ref(), "total_routes");
         prof.total_routes = total;
         prof.clone()
     }
@@ -375,10 +384,7 @@ impl OrchestrationBus {
         task_name: &str,
         predecessor: &str,
     ) -> Vec<String> {
-        let mut graph = self
-            .execution_graph
-            .lock()
-            .expect("execution_graph lock poisoned");
+        let mut graph = lock_mutex_recover(self.execution_graph.as_ref(), "execution_graph");
         let node = ExNode::new(task_id, ExNodeKind::Task, task_name);
         graph.add_node(node);
         graph.add_edge(predecessor, task_id, None);
@@ -395,10 +401,7 @@ impl OrchestrationBus {
         true_target: &str,
         false_target: &str,
     ) {
-        let mut graph = self
-            .execution_graph
-            .lock()
-            .expect("execution_graph lock poisoned");
+        let mut graph = lock_mutex_recover(self.execution_graph.as_ref(), "execution_graph");
         graph.add_condition(
             cond_id,
             cond_id,
@@ -418,10 +421,7 @@ impl OrchestrationBus {
 
     /// Mark a task node as complete and record its output.
     pub fn complete_graph_task(&self, task_id: &str, output: serde_json::Value) -> Result<bool> {
-        let mut graph = self
-            .execution_graph
-            .lock()
-            .expect("execution_graph lock poisoned");
+        let mut graph = lock_mutex_recover(self.execution_graph.as_ref(), "execution_graph");
         graph.complete_task(task_id, output)?;
         Ok(graph.is_complete())
     }
@@ -434,10 +434,7 @@ impl OrchestrationBus {
         parallel_tasks: Vec<(String, String)>,
         predecessor: &str,
     ) -> Result<(String, String)> {
-        let mut graph = self
-            .execution_graph
-            .lock()
-            .expect("execution_graph lock poisoned");
+        let mut graph = lock_mutex_recover(self.execution_graph.as_ref(), "execution_graph");
         graph.add_fan_out(branch_name, join_name, parallel_tasks, predecessor)
     }
 
@@ -447,17 +444,13 @@ impl OrchestrationBus {
         id: &str,
         state: crate::orchestration::execution_graph::ExNodeState,
     ) -> Result<()> {
-        self.execution_graph
-            .lock()
-            .expect("execution_graph lock poisoned")
+        lock_mutex_recover(self.execution_graph.as_ref(), "execution_graph")
             .set_node_state(id, state)
     }
 
     /// Check if a fan-out group is complete.
     pub fn is_fan_out_complete(&self, group_id: &str) -> bool {
-        self.execution_graph
-            .lock()
-            .expect("execution_graph lock poisoned")
+        lock_mutex_recover(self.execution_graph.as_ref(), "execution_graph")
             .is_fan_out_complete(group_id)
     }
 
@@ -466,26 +459,17 @@ impl OrchestrationBus {
         &self,
         state: &crate::orchestration::execution_graph::ExNodeState,
     ) -> usize {
-        self.execution_graph
-            .lock()
-            .expect("execution_graph lock poisoned")
-            .count_by_state(state)
+        lock_mutex_recover(self.execution_graph.as_ref(), "execution_graph").count_by_state(state)
     }
 
     /// Summary of fan-out groups: (group_id, completed_count, total_count).
     pub fn graph_fan_out_summary(&self) -> Vec<(String, usize, usize)> {
-        self.execution_graph
-            .lock()
-            .expect("execution_graph lock poisoned")
-            .fan_out_summary()
+        lock_mutex_recover(self.execution_graph.as_ref(), "execution_graph").fan_out_summary()
     }
 
     /// Reset the execution graph for reuse.
     pub fn reset_graph(&self) {
-        self.execution_graph
-            .lock()
-            .expect("execution_graph lock poisoned")
-            .reset();
+        lock_mutex_recover(self.execution_graph.as_ref(), "execution_graph").reset();
     }
 }
 

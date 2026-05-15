@@ -220,6 +220,7 @@ mod tests {
                 model: None,
                 max_tokens: None,
                 supports_system: None,
+                supports_vision: None,
             },
         );
 

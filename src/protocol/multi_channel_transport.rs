@@ -389,7 +389,14 @@ impl MultiChannelTransport {
         let mut failed_channel: Option<TransportChannel> = None;
         for (channel, queue) in inner.queues.iter_mut() {
             if let Some(idx) = queue.iter().position(|m| m.id == _msg_id) {
-                let mut msg = queue.remove(idx).expect("indexed message should exist");
+                let Some(mut msg) = queue.remove(idx) else {
+                    tracing::warn!(
+                        "queue index lookup succeeded but remove returned None for msg_id={} channel={}",
+                        _msg_id,
+                        channel.as_str()
+                    );
+                    continue;
+                };
                 let retry_count = match &msg.delivery_status {
                     DeliveryStatus::Failed { retry_count, .. } => *retry_count,
                     _ => 0,

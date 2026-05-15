@@ -11,7 +11,7 @@ use anyhow;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Counter for generating unique artifact IDs.
@@ -26,6 +26,36 @@ fn generate_id() -> String {
         .as_millis();
     let seq = ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("art-{}-{}", now, seq)
+}
+
+fn lock_mutex_recover<'a, T>(mtx: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("{} lock poisoned; recovering", name);
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn read_lock_recover<'a, T>(rw: &'a RwLock<T>, name: &str) -> RwLockReadGuard<'a, T> {
+    match rw.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("{} read lock poisoned; recovering", name);
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn write_lock_recover<'a, T>(rw: &'a RwLock<T>, name: &str) -> RwLockWriteGuard<'a, T> {
+    match rw.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("{} write lock poisoned; recovering", name);
+            poisoned.into_inner()
+        }
+    }
 }
 
 /// Contract that defines the structure of an artifact type.
@@ -146,14 +176,14 @@ impl ArtifactLayer {
             );
         }
 
-        let mut schemas = self.schemas.write().expect("schemas lock poisoned");
+        let mut schemas = write_lock_recover(self.schemas.as_ref(), "schemas");
         if schemas.contains_key(&schema.name) {
             anyhow::bail!("Schema '{}' is already registered", schema.name);
         }
 
         schemas.insert(schema.name.clone(), schema);
         {
-            let mut profile = self.profile.lock().expect("profile lock poisoned");
+            let mut profile = lock_mutex_recover(self.profile.as_ref(), "profile");
             profile.registered_schemas = schemas.len() as u32;
         }
         Ok(())
@@ -170,7 +200,7 @@ impl ArtifactLayer {
     /// - A version mismatch between registered schema and artifact
     ///   produces a warning but does not invalidate the artifact.
     pub fn validate(&self, artifact: &Artifact) -> ArtifactValidation {
-        let schemas = self.schemas.read().expect("schemas lock poisoned");
+        let schemas = read_lock_recover(self.schemas.as_ref(), "schemas");
         let schema = match schemas.get(&artifact.schema_name) {
             Some(s) => s,
             None => {
@@ -254,7 +284,7 @@ impl ArtifactLayer {
         let mut artifact = artifact;
         artifact.id = generate_id();
 
-        let mut artifacts = self.artifacts.lock().expect("artifacts lock poisoned");
+        let mut artifacts = lock_mutex_recover(self.artifacts.as_ref(), "artifacts");
         let id = artifact.id.clone();
         artifacts.push(artifact);
 
@@ -265,7 +295,7 @@ impl ArtifactLayer {
 
         // Update profile.
         {
-            let mut profile = self.profile.lock().expect("profile lock poisoned");
+            let mut profile = lock_mutex_recover(self.profile.as_ref(), "profile");
             profile.total_artifacts = artifacts.len() as u32;
             profile.active_artifacts = profile_total_active(&artifacts);
             profile.producers = profile_unique_producers(&artifacts);
@@ -276,7 +306,7 @@ impl ArtifactLayer {
 
     /// Finds artifacts matching the given schema name.
     pub fn find_by_schema(&self, schema_name: &str) -> Vec<Artifact> {
-        let artifacts = self.artifacts.lock().expect("artifacts lock poisoned");
+        let artifacts = lock_mutex_recover(self.artifacts.as_ref(), "artifacts");
         artifacts
             .iter()
             .filter(|a| a.schema_name == schema_name)
@@ -286,7 +316,7 @@ impl ArtifactLayer {
 
     /// Finds artifacts produced by the given agent.
     pub fn find_by_producer(&self, producer: &str) -> Vec<Artifact> {
-        let artifacts = self.artifacts.lock().expect("artifacts lock poisoned");
+        let artifacts = lock_mutex_recover(self.artifacts.as_ref(), "artifacts");
         artifacts
             .iter()
             .filter(|a| a.producer == producer)
@@ -298,7 +328,7 @@ impl ArtifactLayer {
     ///
     /// Returns artifacts whose tags set intersects with the `tags` list.
     pub fn find_by_tags(&self, tags: &[String]) -> Vec<Artifact> {
-        let artifacts = self.artifacts.lock().expect("artifacts lock poisoned");
+        let artifacts = lock_mutex_recover(self.artifacts.as_ref(), "artifacts");
         artifacts
             .iter()
             .filter(|a| a.tags.iter().any(|t| tags.contains(t)))
@@ -308,7 +338,7 @@ impl ArtifactLayer {
 
     /// Finds artifacts associated with the given task ID.
     pub fn find_by_task(&self, task_id: &str) -> Vec<Artifact> {
-        let artifacts = self.artifacts.lock().expect("artifacts lock poisoned");
+        let artifacts = lock_mutex_recover(self.artifacts.as_ref(), "artifacts");
         artifacts
             .iter()
             .filter(|a| a.task_id == task_id)
@@ -329,11 +359,11 @@ impl ArtifactLayer {
             })
             .as_millis() as u64;
 
-        let mut artifacts = self.artifacts.lock().expect("artifacts lock poisoned");
+        let mut artifacts = lock_mutex_recover(self.artifacts.as_ref(), "artifacts");
         artifacts.retain(|a| a.created_ms + a.ttl_ms > now);
 
         // Update profile.
-        let mut profile = self.profile.lock().expect("profile lock poisoned");
+        let mut profile = lock_mutex_recover(self.profile.as_ref(), "profile");
         profile.total_artifacts = artifacts.len() as u32;
         profile.active_artifacts = profile_total_active(&artifacts);
         profile.producers = profile_unique_producers(&artifacts);
@@ -341,7 +371,7 @@ impl ArtifactLayer {
 
     /// Returns a snapshot of the current profile metrics.
     pub fn profile(&self) -> ArtifactProfile {
-        let profile = self.profile.lock().expect("profile lock poisoned");
+        let profile = lock_mutex_recover(self.profile.as_ref(), "profile");
         profile.clone()
     }
 }

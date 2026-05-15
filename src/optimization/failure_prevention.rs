@@ -145,6 +145,11 @@ impl FailurePrevention {
 
     /// Record failure for a service
     pub fn record_failure(&mut self, service_name: &str) {
+        self.ensure_service_registered(service_name);
+        *self
+            .total_requests
+            .entry(service_name.to_string())
+            .or_insert(0) += 1;
         self.record_failure_with_latency(service_name, None);
     }
 
@@ -165,6 +170,15 @@ impl FailurePrevention {
 
     /// Record success and reset failure count
     pub fn record_success(&mut self, service_name: &str) {
+        self.ensure_service_registered(service_name);
+        *self
+            .total_requests
+            .entry(service_name.to_string())
+            .or_insert(0) += 1;
+        *self
+            .successful_requests
+            .entry(service_name.to_string())
+            .or_insert(0) += 1;
         self.record_success_with_latency(service_name, None);
     }
 

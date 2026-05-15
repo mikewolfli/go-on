@@ -1015,6 +1015,7 @@ fn default_agent_config(provider: &str) -> Option<AgentConfig> {
         model: spec.model.clone(),
         max_tokens: spec.max_tokens,
         supports_system: Some(spec.supports_system.unwrap_or(true)),
+        supports_vision: spec.supports_vision,
     })
 }
 
@@ -1757,6 +1758,7 @@ pub struct AgentConfig {
     pub model: Option<String>,
     pub max_tokens: Option<u32>,
     pub supports_system: Option<bool>,
+    pub supports_vision: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3699,6 +3701,7 @@ mod tests {
             model: None,
             max_tokens: None,
             supports_system: None,
+            supports_vision: None,
         }
     }
 
@@ -3717,6 +3720,7 @@ mod tests {
                 model: Some("claude-3-7-sonnet-latest".to_string()),
                 max_tokens: Some(4096),
                 supports_system: None,
+                supports_vision: None,
             },
         );
         agents.insert(
@@ -3731,6 +3735,7 @@ mod tests {
                 model: None,
                 max_tokens: None,
                 supports_system: None,
+                supports_vision: None,
             },
         );
 

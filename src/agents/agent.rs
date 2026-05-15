@@ -1214,6 +1214,7 @@ mod tests {
             model: Some("test-model".to_string()),
             max_tokens: Some(1024),
             supports_system: Some(true),
+            supports_vision: None,
         }
     }
 

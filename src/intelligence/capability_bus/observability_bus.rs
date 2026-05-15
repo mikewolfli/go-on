@@ -31,7 +31,17 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+fn lock_mutex_recover<'a, T>(mtx: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("{} lock poisoned; recovering", name);
+            poisoned.into_inner()
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Supporting types
@@ -238,10 +248,8 @@ impl ObservabilityBus {
 
         // --- 1. Push trace event into the ring buffer ---
         {
-            let mut events = self
-                .trace_events
-                .lock()
-                .expect("ObservabilityBus trace_events lock poisoned");
+            let mut events =
+                lock_mutex_recover(self.trace_events.as_ref(), "ObservabilityBus trace_events");
             if events.len() == self.max_events {
                 events.pop_front();
             }
@@ -258,10 +266,7 @@ impl ObservabilityBus {
 
         // --- 2. Update per-agent latency ---
         {
-            let mut windows = self
-                .windows
-                .lock()
-                .expect("ObservabilityBus windows lock poisoned");
+            let mut windows = lock_mutex_recover(self.windows.as_ref(), "ObservabilityBus windows");
             let window = windows
                 .entry(agent.to_string())
                 .or_insert_with(|| DurationWindow::new(self.max_events));
@@ -277,19 +282,19 @@ impl ObservabilityBus {
                 last_updated_ms: now,
             };
 
-            let mut latency = self
-                .agent_latency
-                .lock()
-                .expect("ObservabilityBus agent_latency lock poisoned");
+            let mut latency = lock_mutex_recover(
+                self.agent_latency.as_ref(),
+                "ObservabilityBus agent_latency",
+            );
             latency.insert(agent.to_string(), stats);
         }
 
         // --- 3. Update per-agent error rate ---
         {
-            let mut error_rates = self
-                .agent_error_rates
-                .lock()
-                .expect("ObservabilityBus agent_error_rates lock poisoned");
+            let mut error_rates = lock_mutex_recover(
+                self.agent_error_rates.as_ref(),
+                "ObservabilityBus agent_error_rates",
+            );
             let ers = error_rates
                 .entry(agent.to_string())
                 .or_insert(ErrorRateStats {
@@ -316,17 +321,14 @@ impl ObservabilityBus {
 
         // --- 4. Update profile ---
         {
-            let mut profile = self
-                .profile
-                .lock()
-                .expect("ObservabilityBus profile lock poisoned");
+            let mut profile = lock_mutex_recover(self.profile.as_ref(), "ObservabilityBus profile");
             profile.total_traces += 1;
 
             // Recompute system-level aggregates from latencies.
-            let latency = self
-                .agent_latency
-                .lock()
-                .expect("ObservabilityBus agent_latency lock poisoned (inner)");
+            let latency = lock_mutex_recover(
+                self.agent_latency.as_ref(),
+                "ObservabilityBus agent_latency (inner)",
+            );
             profile.tracked_agents = latency.len() as u32;
 
             let avg_sys: f64 = if !latency.is_empty() {
@@ -337,10 +339,10 @@ impl ObservabilityBus {
             };
             profile.avg_system_latency_ms = avg_sys;
 
-            let error_rates = self
-                .agent_error_rates
-                .lock()
-                .expect("ObservabilityBus agent_error_rates lock poisoned (inner)");
+            let error_rates = lock_mutex_recover(
+                self.agent_error_rates.as_ref(),
+                "ObservabilityBus agent_error_rates (inner)",
+            );
             let (total_errors, total_calls): (u64, u64) =
                 error_rates.values().fold((0, 0), |(acc_err, acc_call), s| {
                     (acc_err + s.error_count, acc_call + s.total_calls)
@@ -355,19 +357,19 @@ impl ObservabilityBus {
 
     /// Return latency statistics for a specific agent, or `None` if unknown.
     pub fn agent_latency(&self, agent: &str) -> Option<LatencyStats> {
-        let latency = self
-            .agent_latency
-            .lock()
-            .expect("ObservabilityBus agent_latency lock poisoned");
+        let latency = lock_mutex_recover(
+            self.agent_latency.as_ref(),
+            "ObservabilityBus agent_latency",
+        );
         latency.get(agent).cloned()
     }
 
     /// Return error-rate statistics for a specific agent, or `None` if unknown.
     pub fn agent_error_rate(&self, agent: &str) -> Option<ErrorRateStats> {
-        let error_rates = self
-            .agent_error_rates
-            .lock()
-            .expect("ObservabilityBus agent_error_rates lock poisoned");
+        let error_rates = lock_mutex_recover(
+            self.agent_error_rates.as_ref(),
+            "ObservabilityBus agent_error_rates",
+        );
         error_rates.get(agent).cloned()
     }
 
@@ -377,10 +379,10 @@ impl ObservabilityBus {
     /// Agents with zero recorded calls are **excluded** since there is
     /// insufficient data for a routing decision.
     pub fn healthy_agents(&self, max_error_rate: f64) -> Vec<String> {
-        let error_rates = self
-            .agent_error_rates
-            .lock()
-            .expect("ObservabilityBus agent_error_rates lock poisoned");
+        let error_rates = lock_mutex_recover(
+            self.agent_error_rates.as_ref(),
+            "ObservabilityBus agent_error_rates",
+        );
         error_rates
             .iter()
             .filter(|(_, s)| s.total_calls > 0 && s.error_rate < max_error_rate)
@@ -393,10 +395,10 @@ impl ObservabilityBus {
     ///
     /// Agents with zero recorded calls are excluded.
     pub fn slow_agents(&self, threshold_ms: f64) -> Vec<String> {
-        let latency = self
-            .agent_latency
-            .lock()
-            .expect("ObservabilityBus agent_latency lock poisoned");
+        let latency = lock_mutex_recover(
+            self.agent_latency.as_ref(),
+            "ObservabilityBus agent_latency",
+        );
         latency
             .iter()
             .filter(|(_, s)| s.sample_count > 0 && s.avg_duration_ms > threshold_ms)
@@ -406,10 +408,7 @@ impl ObservabilityBus {
 
     /// Return a high-level profile snapshot of the bus.
     pub fn system_health(&self) -> ObservabilityBusProfile {
-        let profile = self
-            .profile
-            .lock()
-            .expect("ObservabilityBus profile lock poisoned");
+        let profile = lock_mutex_recover(self.profile.as_ref(), "ObservabilityBus profile");
         profile.clone()
     }
 
@@ -418,10 +417,8 @@ impl ObservabilityBus {
     /// If fewer than `count` events have been recorded, all available events
     /// are returned.
     pub fn recent_traces(&self, count: usize) -> Vec<TraceEvent> {
-        let events = self
-            .trace_events
-            .lock()
-            .expect("ObservabilityBus trace_events lock poisoned");
+        let events =
+            lock_mutex_recover(self.trace_events.as_ref(), "ObservabilityBus trace_events");
         let len = events.len();
         let start = len.saturating_sub(count);
         events.range(start..).cloned().collect()

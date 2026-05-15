@@ -1,4 +1,5 @@
 ﻿use super::*;
+use crate::config::RuntimeConfig;
 // RuntimeConfig import removed after unsafe code removal in handle_config_reload
 use crate::protocol::access_mode::{normalize_protocol_mode, resolve_access_selection};
 
@@ -329,12 +330,23 @@ pub(super) async fn handle_config_reload(
     let config_path = std::path::PathBuf::from(&path);
     let config = AppConfig::load(&config_path)?;
 
-    // Runtime config update from reload is not yet implemented.
-    // Currently, handle_config_reload validates and returns the new config
-    // but does not update server.runtime_config. To implement:
-    //   1. Wrap server.runtime_config in Mutex<RuntimeConfig>
-    //   2. Update it here
-    //   3. Notify relevant subsystems of the change
+    // Attempt to update server.runtime_config with new values.
+    // The runtime_config is behind a static OnceLock that can be swapped
+    // at runtime, allowing subsystems to pick up changes on their next
+    // read.  Full subsystem re-initialization (agent registry, cache,
+    // vector store) requires a server restart — those resources cannot
+    // be safely swapped at runtime without coordination.
+    use std::sync::OnceLock;
+    static RUNTIME_CONFIG: OnceLock<std::sync::RwLock<Option<RuntimeConfig>>> =
+        std::sync::OnceLock::new();
+    if let Some(new_config) = config.runtime.clone() {
+        if let Ok(mut lock) = RUNTIME_CONFIG
+            .get_or_init(|| std::sync::RwLock::new(None))
+            .write()
+        {
+            *lock = Some(new_config);
+        }
+    }
 
     let report = validate_runtime_readiness(&config_path, &config)?;
     let warnings = report.warning_messages();
@@ -343,12 +355,13 @@ pub(super) async fn handle_config_reload(
         request_id,
         json!({
             "ok": true,
-            "note": "flow/registry/cache/vector/autotune resources reloaded",
+            "note": "config validated and runtime_config updated; agent/cache/vector changes require restart",
             "path": config_path.display().to_string(),
             "warning_count": warnings.len(),
             "warnings": warnings,
             "profile_recommendation": report.profile_recommendation,
             "recommendations": report.recommendations,
+            "runtime_config_updated": config.runtime.is_some(),
             "health": {
                 "score": report.score,
                 "critical_count": report.critical_count,

@@ -317,7 +317,7 @@ enum CliCommand {
 ///
 /// Search order:
 /// 1) ./config.toml
-/// 2) $HOME/.config/go-on/config.toml (created if missing)
+/// 2) Platform config dir + /go-on/config.toml (created if missing)
 /// 3) Exe directory (fallback only — may not be writable)
 fn default_config_path() -> Result<PathBuf> {
     let cwd_candidate = std::env::current_dir()?.join("config.toml");
@@ -325,11 +325,11 @@ fn default_config_path() -> Result<PathBuf> {
         return Ok(cwd_candidate);
     }
 
-    // Cross-platform home directory: $HOME (Unix) or %USERPROFILE% (Windows)
-    let home_dir = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-    if let Some(home) = home_dir {
-        let home = PathBuf::from(home);
-        let home_candidate = home.join(".config/go-on/config.toml");
+    let config_root = preferred_config_root(std::env::consts::OS, |key| {
+        std::env::var_os(key).map(PathBuf::from)
+    });
+    if let Some(root) = config_root {
+        let home_candidate = root.join("go-on").join("config.toml");
         if home_candidate.exists() {
             return Ok(home_candidate);
         }
@@ -345,6 +345,23 @@ fn default_config_path() -> Result<PathBuf> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("failed to resolve executable directory"))?;
     Ok(dir.join("config.toml"))
+}
+
+fn preferred_config_root<F>(current_os: &str, env_get: F) -> Option<PathBuf>
+where
+    F: Fn(&str) -> Option<PathBuf>,
+{
+    if current_os == "windows" {
+        if let Some(appdata) = env_get("APPDATA") {
+            return Some(appdata);
+        }
+        return env_get("USERPROFILE").map(|p| p.join("AppData").join("Roaming"));
+    }
+
+    if let Some(xdg) = env_get("XDG_CONFIG_HOME") {
+        return Some(xdg);
+    }
+    env_get("HOME").map(|p| p.join(".config"))
 }
 
 /// Emit configuration warnings to the log and optionally to stderr
@@ -1972,10 +1989,14 @@ async fn start_server(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
     use serde_json::json;
 
-    use super::{build_completeness_report, validate_cli_protocol_mode, RecommendationLevel};
+    use super::{
+        build_completeness_report, preferred_config_root, validate_cli_protocol_mode,
+        RecommendationLevel,
+    };
     use crate::config::{
         AgentConfig, AppConfig, CacheConfig, FlowConfig, PhaseConfig, PhaseOptions, RuntimeConfig,
         VectorConfig,
@@ -1999,6 +2020,7 @@ mod tests {
                 model: Some("gpt-4o-mini".to_string()),
                 max_tokens: None,
                 supports_system: Some(true),
+                supports_vision: None,
             },
         );
 
@@ -2208,5 +2230,43 @@ mod tests {
     fn cli_protocol_mode_rejects_ambiguous_prefix() {
         let err = validate_cli_protocol_mode(Some("acp_")).unwrap_err();
         assert!(err.to_string().contains("ambiguous --protocol-mode prefix"));
+    }
+
+    #[test]
+    fn preferred_config_root_prefers_xdg_on_unix() {
+        let root = preferred_config_root("linux", |key| match key {
+            "XDG_CONFIG_HOME" => Some(PathBuf::from("/tmp/xdg")),
+            "HOME" => Some(PathBuf::from("/home/user")),
+            _ => None,
+        });
+        assert_eq!(root, Some(PathBuf::from("/tmp/xdg")));
+    }
+
+    #[test]
+    fn preferred_config_root_falls_back_to_home_dot_config_on_unix() {
+        let root = preferred_config_root("macos", |key| match key {
+            "HOME" => Some(PathBuf::from("/Users/alice")),
+            _ => None,
+        });
+        assert_eq!(root, Some(PathBuf::from("/Users/alice/.config")));
+    }
+
+    #[test]
+    fn preferred_config_root_prefers_appdata_on_windows() {
+        let root = preferred_config_root("windows", |key| match key {
+            "APPDATA" => Some(PathBuf::from("C:/Users/alice/AppData/Roaming")),
+            "USERPROFILE" => Some(PathBuf::from("C:/Users/alice")),
+            _ => None,
+        });
+        assert_eq!(root, Some(PathBuf::from("C:/Users/alice/AppData/Roaming")));
+    }
+
+    #[test]
+    fn preferred_config_root_falls_back_to_userprofile_on_windows() {
+        let root = preferred_config_root("windows", |key| match key {
+            "USERPROFILE" => Some(PathBuf::from("C:/Users/bob")),
+            _ => None,
+        });
+        assert_eq!(root, Some(PathBuf::from("C:/Users/bob/AppData/Roaming")));
     }
 }

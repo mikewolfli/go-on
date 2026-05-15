@@ -23,8 +23,9 @@ fn lock_guard<T: Default>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
         Ok(guard) => guard,
         Err(poisoned) => {
             tracing::warn!("continuous_learning mutex poisoned, recovering by clearing state");
-            *poisoned.into_inner() = T::default();
-            mtx.lock().expect("re-lock after poison recovery")
+            let mut guard = poisoned.into_inner();
+            *guard = T::default();
+            guard
         }
     }
 }

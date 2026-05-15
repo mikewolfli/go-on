@@ -254,6 +254,7 @@ mod tests {
             model: None,
             max_tokens: None,
             supports_system: None,
+            supports_vision: None,
         }
     }
 
@@ -275,6 +276,7 @@ mod tests {
                 model: Some("deepseek-chat".to_string()),
                 max_tokens: None,
                 supports_system: None,
+                supports_vision: None,
             },
         );
 

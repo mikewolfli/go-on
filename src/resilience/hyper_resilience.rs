@@ -619,6 +619,9 @@ impl HyperResilienceEngine {
     /// evaluates system metrics and triggers self-healing. Here we simply mark
     /// the engine as having health checks running.
     pub fn start_health_checks(&self) {
+        // TODO: Replace simulated health metrics with real health-check
+        // probes that ping each registered circuit breaker / failover
+        // group and update `system_health` accordingly.
         let mut inner = lock_guard(&self.inner);
         inner.health_checks_running = true;
         // Simulated: adjust metrics to reflect "monitored" state.

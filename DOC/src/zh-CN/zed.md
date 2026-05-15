@@ -17,6 +17,7 @@ Zed 当前可以用两大类方式接入 `go-on`：
 {
   "agent_servers": {
     "go-on-acp": {
+      "type": "custom",
       "command": "go-on",
       "args": [
         "--config",
@@ -36,6 +37,7 @@ Windows 示例：
 {
   "agent_servers": {
     "go-on-acp": {
+      "type": "custom",
       "command": "D:/Workspace/RustWorkspace/go-on/target/debug/go-on.exe",
       "args": [
         "--config",
@@ -76,6 +78,7 @@ go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:80
 {
   "agent_servers": {
     "go-on-http": {
+      "type": "custom",
       "url": "http://127.0.0.1:8090"
     }
   }
@@ -99,19 +102,35 @@ http://127.0.0.1:8090/health
 
 如果你的 Zed 版本对应的是 OpenAI 兼容 provider 或 MCP 风格 LLM provider，那么应使用 `/v1` 基址。
 
-示例：
+示例（按最新 Zed `openai_compatible` 结构）：
 
 ```json
 {
   "language_models": {
-    "go-on-local": {
-      "provider": "openai_compatible",
-      "api_url": "http://127.0.0.1:8090/v1",
-      "model": "auto"
+    "openai_compatible": {
+      "go-on-local": {
+        "api_url": "http://127.0.0.1:8090/v1",
+        "available_models": [
+          {
+            "name": "gpt-5.5",
+            "display_name": "go-on auto (gpt-5.5)",
+            "max_tokens": 400000,
+            "capabilities": {
+              "chat_completions": true,
+              "tools": true,
+              "images": false,
+              "parallel_tool_calls": false,
+              "prompt_cache_key": false
+            }
+          }
+        ]
+      }
     }
   }
 }
 ```
+
+如果某个模型只支持 Responses API，请将该模型的 `capabilities.chat_completions` 设为 `false`。
 
 适用场景：
 
@@ -140,6 +159,24 @@ HTTP 模式下，至少手工确认：
 GET http://127.0.0.1:8090/health
 GET http://127.0.0.1:8090/v1/models
 ```
+
+## Zed 外部 Agent 新变化
+
+- 从 Zed `v0.221.x+` 开始，ACP Registry 是更推荐的外部 Agent 安装方式。
+- 常见内置外部 Agent 名称包括：`claude-acp`、`codex-acp`、`gemini`。
+- 建议使用 `zed: acp registry` 进行安装，使用 `dev: open acp logs` 进行联调诊断。
+
+## 三平台路径统一
+
+- Linux 配置文件：`~/.config/zed/settings.json`
+- macOS 配置文件：`~/Library/Application Support/Zed/settings.json`
+- Windows 配置文件：`%APPDATA%/Zed/settings.json`
+
+## 模型更新策略
+
+- 修改 `available_models` 前，先对齐最新官方文档中的模型 ID 与上下文窗口。
+- OpenAI 兼容模型需同时核对 endpoint 兼容性（`chat/completions` 与 `responses`）。
+- 使用 Zed 托管模型时，上线前先检查 Zed `AI > Models` 中的 retired/replaced 列表。
 
 ## 常见失败模式
 

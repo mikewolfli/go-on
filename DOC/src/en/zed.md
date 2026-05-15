@@ -17,6 +17,7 @@ Recommended backend command:
 {
   "agent_servers": {
     "go-on-acp": {
+      "type": "custom",
       "command": "go-on",
       "args": [
         "--config",
@@ -36,6 +37,7 @@ Windows example:
 {
   "agent_servers": {
     "go-on-acp": {
+      "type": "custom",
       "command": "D:/Workspace/RustWorkspace/go-on/target/debug/go-on.exe",
       "args": [
         "--config",
@@ -76,6 +78,7 @@ Then point Zed's external-agent style integration at the runtime base URL:
 {
   "agent_servers": {
     "go-on-http": {
+      "type": "custom",
       "url": "http://127.0.0.1:8090"
     }
   }
@@ -99,19 +102,35 @@ The backend also exposes OpenAI-compatible endpoints:
 
 If your Zed version expects an OpenAI-compatible provider or an MCP-style LLM provider, use a `/v1` base URL.
 
-Example:
+Example (latest Zed `openai_compatible` shape):
 
 ```json
 {
   "language_models": {
-    "go-on-local": {
-      "provider": "openai_compatible",
-      "api_url": "http://127.0.0.1:8090/v1",
-      "model": "auto"
+    "openai_compatible": {
+      "go-on-local": {
+        "api_url": "http://127.0.0.1:8090/v1",
+        "available_models": [
+          {
+            "name": "gpt-5.5",
+            "display_name": "go-on auto (gpt-5.5)",
+            "max_tokens": 400000,
+            "capabilities": {
+              "chat_completions": true,
+              "tools": true,
+              "images": false,
+              "parallel_tool_calls": false,
+              "prompt_cache_key": false
+            }
+          }
+        ]
+      }
     }
   }
 }
 ```
+
+If a model is Responses-only, set `capabilities.chat_completions=false` for that model entry.
 
 Use this path when:
 
@@ -140,6 +159,24 @@ For HTTP mode, verify endpoints manually:
 GET http://127.0.0.1:8090/health
 GET http://127.0.0.1:8090/v1/models
 ```
+
+## Zed external-agent updates
+
+- As of Zed `v0.221.x+`, ACP Registry is the preferred installation path for external agents.
+- Built-in external agent names in Zed commonly include `claude-acp`, `codex-acp`, and `gemini`.
+- Use `zed: acp registry` and `dev: open acp logs` for installation and runtime diagnosis.
+
+## Cross-platform paths
+
+- Linux settings file: `~/.config/zed/settings.json`
+- macOS settings file: `~/Library/Application Support/Zed/settings.json`
+- Windows settings file: `%APPDATA%/Zed/settings.json`
+
+## Model freshness policy
+
+- Keep `available_models` aligned with latest provider docs before changing model IDs.
+- For OpenAI-family models, verify context window and endpoint compatibility from current provider docs.
+- For Zed-hosted model names, re-check retirements/replacements in Zed `AI > Models` docs before rollout.
 
 ## Failure patterns
 

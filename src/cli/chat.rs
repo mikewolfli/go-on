@@ -366,13 +366,27 @@ async fn agent_followup(agent: &Arc<dyn Agent>, messages: &[Message]) -> Result<
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
 
-    task.await.ok();
+    match task.await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            warn!("agent follow-up task returned error: {}", e);
+        }
+        Err(e) => {
+            warn!("agent follow-up task join error: {}", e);
+        }
+    }
     eprintln!();
     Ok(response)
 }
 
-/// Execute a simple tool call by name with given arguments.
-/// Handles common file operations and shell commands.
+/// Execute a tool by name and arguments, returning the result as a string.
+///
+/// # Governance bypass
+///
+/// This function intentionally bypasses the governance layer for simple
+/// read/write/file operations in the terminal chat context.  In a more
+/// restrictive deployment (e.g. a managed service) these operations should
+/// be routed through `enforce_action` to apply sandbox and policy checks.
 async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
     match name {
         "read_file" | "read" => {

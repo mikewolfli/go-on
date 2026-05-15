@@ -205,7 +205,7 @@ impl McpHttpServer {
                     let permit = Arc::clone(&self.connection_semaphore)
                         .acquire_owned()
                         .await;
-                    let _permit = match permit {
+                    let permit_guard = match permit {
                         Ok(p) => p,
                         Err(_) => break,
                     };
@@ -213,7 +213,8 @@ impl McpHttpServer {
                     let mcp_server = Arc::clone(&self.mcp_server);
 
                     tokio::spawn(async move {
-                        // _permit held until handler exits (RAII)
+                        // Hold permit for the whole connection handler lifetime.
+                        let _permit = permit_guard;
                         if let Err(err) = handle_http_connection(&mut socket, mcp_server).await {
                             warn!(
                                 "{}",

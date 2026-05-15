@@ -345,6 +345,7 @@ pub struct AuditLogger {
 
 impl AuditLogger {
     pub fn new(log_dir: PathBuf) -> Self {
+        let _ = std::fs::create_dir_all(&log_dir);
         Self { log_dir }
     }
 
