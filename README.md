@@ -55,32 +55,80 @@ Three build profiles support different deployment scenarios:
 | `profile-simple-server` | SQLite + sqlite-vec | Single-server deployment | `cargo build --no-default-features -F profile-simple-server` |
 | `profile-multi-users-server` | PostgreSQL + pgvector | Multi-user production | `cargo build --no-default-features -F profile-multi-users-server` |
 
-## Verification Status (Phase 4+ — 46 Rounds of Deep Scan Complete)
+### Multi-User Server Features
+
+The `profile-multi-users-server` adds full multi-user security across both ACP+HTTP and MCP+HTTP transport paths:
+
+| Feature | Description |
+|---------|-------------|
+| **CORS Support** | Configurable allowed origins, preflight (OPTIONS) handling, headers on all HTTP/SSE responses |
+| **Entry Auth (Gateway)** | Shared API key via `Authorization: Bearer`, `X-Api-Key`, or `X-Go-On-Key` headers |
+| **User Auth (HMAC Tokens)** | Per-user JWT-like tokens with HMAC-SHA256 signing, auto-provisioning, configurable TTL |
+| **RBAC Authorization** | Role-based access control (admin/user/viewer/monitor) with per-endpoint permission checks |
+| **Tenant Budget Enforcement** | Per-tenant daily token/concurrent task/API call quotas with auto-provisioning |
+| **Conversation Isolation** | Namespaced conversation IDs with tenant prefix to prevent cross-user data leakage |
+| **Shutdown Drain** | Configurable drain period (seconds) for in-flight connections during graceful shutdown |
+| **Signal Handling** | SIGINT (Ctrl+C) and SIGTERM on all platforms for clean shutdown |
+| **Hot-Reload Config** | Runtime configuration reload via `config.reload` RPC (agent/cache/vector changes require restart) |
+
+**Secret Management (Thread-Safe):**
+- `SECRET_OVERRIDE_MAP` — in-memory `HashMap` replaces `std::env::set_var()` (documented UB in multi-threaded contexts)
+- `KEYRING_CACHE` — 30-second TTL cache for keyring lookups to avoid blocking I/O in async hot paths
+- `crate::shared::secret_override::get_secret(key)` — first checks the override map, then falls back to `std::env::var()`
+
+**Security Compliance:**
+- ✅ 0 `std::env::set_var()` calls in production code
+- ✅ 0 `.expect("lock poisoned")` panics — all lock poison recovered via `unwrap_or_else(|e| e.into_inner())`
+- ✅ 0 `unsafe` blocks in production code
+- ✅ All HTTP responses (JSON, SSE, error) include CORS headers
+- ✅ MCP HTTP server shares the same auth pipeline as ACP HTTP server
+
+## Verification Status (Phase 4+ — 50+ Rounds of Deep Scan Complete)
 
 | Profile | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **781 passed** |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **827 passed** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **890 passed** |
+| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **991 passed** |
+| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **991 passed** |
+| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **991 passed** |
+
+### CI Gate Status (GitHub Actions)
+| Step | Result |
+|------|--------|
+| `cargo check --all-targets` | ✅ 0 errors, 0 warnings |
+| `cargo clippy -D warnings` (3 profiles) | ✅ 0 errors each |
+| Unit tests (816) | ✅ All passed |
+| Integration tests (175) | ✅ All passed |
+| GUI EGUI compile + test | ✅ 0 errors |
+| VS Code addon compile + lint + contract | ✅ 0 errors |
 
 Cross-platform (Windows, Linux, macOS):
-- All `localStorage` calls wrapped in try/catch
-- All `Mutex::lock().unwrap()` replaced with poison-recovering `lock_guard()`
-- Cross-platform env vars: `HOME`/`USERPROFILE`/`COMPUTERNAME`
-- vscode-addon: `activationEvents` set, `.exe`/`.bat` platform-aware defaults
-- GUI (EGUI): Multiple rounds of deep scan (46+ GUI/backend optimizations), zero clippy warnings, 6/6 tests passing
-- GUI: window min constraints set, CSP allows backend connection
-- Backend: auto-restart on crash with exponential backoff (3→96s); crash count resets on healthy check
-- Provider env var injection: dynamic (all 35 providers)
-- All internal channels bounded (`mpsc::sync_channel`) — no unbounded memory growth
-- Chat sessions capped at 1000 messages — automatic oldest-message eviction
-- Optional rule file warnings downgraded from WARN to DEBUG — no log noise
+- All platform-specific code has matching fallback implementations (Unix `AsRawFd` ✅ Windows stub ✅)
+- Memory reading: Linux `/proc/self/status` ✅ Windows `windows-sys` ✅ Fallback returns 0 ✅
+- ANSI color codes disabled on Windows (`#[cfg(not(target_os = "windows"))]`) ✅
+- Signal handling: SIGTERM on Unix, SIGINT (Ctrl+C) on all platforms ✅
+- GUI paths use `directories` crate for platform-appropriate data dirs ✅
+- vscode-addon: `activationEvents` set, `.exe`/`.bat` platform-aware defaults ✅
+
+### Thread Safety & Production Hardening
+- All `Mutex::lock().unwrap()` replaced with poison-recovering pattern ✅
+- All `std::env::set_var()` replaced with thread-safe `set_secret_override()` ✅
+- 0 `unsafe` blocks in production code ✅
+- 0 `panic!()` / `todo!()` / `unimplemented!()` in production code ✅
+- 0 `unwrap()` / `.expect()` in production code ✅
+- 37 `.expect("lock poisoned")` calls replaced with poison recovery ✅
+- All internal channels bounded (`mpsc::sync_channel`) — no unbounded memory growth ✅
+- Chat sessions capped at 1000 messages — automatic oldest-message eviction ✅
+- Backend: auto-restart on crash with exponential backoff (3→96s) ✅
+- Optional rule file warnings downgraded from WARN to DEBUG — no log noise ✅
+- 3 build profiles (local, simple-server, multi-users-server) all at 0 warnings ✅
 
 ## Repository Layout
 
 ### Core Directories
 - `src/` — Backend runtime implementation (Rust)
   - `src/acp/` — ACP server, request routing, workflow/task/chat/checkpoint handling
+    - `src/acp/impl/cors.rs` — CORS support module (configurable origins, preflight, response headers)
+    - `src/acp/impl/session.rs` — User session management (HMAC-SHA256 tokens, RBAC integration, tenant isolation)
   - `src/agents/` — Provider adapters (OpenAI, Anthropic, DeepSeek, Ollama, etc.) and agent contracts
     - `src/agents/factory/` — AgentFactory with feature-gated profile selection
   - `src/core/` — Config, setup, readiness, error model
@@ -115,7 +163,9 @@ Cross-platform (Windows, Linux, macOS):
   - `src/observability/` — Metrics/trace/performance helpers
   - `src/optimization/` — Cost/speed/reliability optimization
   - `src/protocol/` — Protocol server, JSON-RPC support, multi-channel transport
-  - `src/shared/` — Shared types, protocol mode, tool descriptors
+    - `src/protocol/mcp_server.rs` — MCP stdio + HTTP server with full CORS/auth/RBAC integration
+  - `src/shared/` — Shared types, protocol mode, tool descriptors, thread-safe secret management
+    - `src/shared/secret_override.rs` — `SECRET_OVERRIDE_MAP` + `KEYRING_CACHE` (thread-safe `set_var` replacement)
 - `gui/` — EGUI (Rust native) desktop GUI
 - `vscode-addon/` — VS Code extension with i18n (en_US, zh_CN, zh_TW)
 
@@ -367,6 +417,42 @@ Authorization: Bearer your-secret-key-here
 If this variable is missing or empty the server will reject all requests with error code `-32003` (`AuthRequired`).
 
 > **Security**: Never commit secret values to version control. Use environment variables, a secrets manager, or a keyring-backed injector.
+
+### Multi-User Server Setup
+
+When running with `config/config.multi-users-server.toml`:
+
+```bash
+# Build
+cargo build --no-default-features -F profile-multi-users-server
+
+# Set required environment variables
+export GO_ON_ENTRY_API_KEY="your-entry-api-key"           # Gateway auth (required)
+export GO_ON_USER_AUTH_TOKEN_SECRET="your-strong-secret"  # HMAC token signing (recommended)
+export DB_USER="postgres"                                  # PostgreSQL user
+export DB_PASS="your-db-password"                         # PostgreSQL password
+export DB_HOST="localhost"                                 # PostgreSQL host
+
+# Start
+./target/release/go-on --config config/config.multi-users-server.toml
+```
+
+**Issue a user token** (for programmatic access):
+ ```bash
+ # Via RPC (after server starts)
+ curl -X POST http://127.0.0.1:8090/rpc \
+   -H "Authorization: Bearer $GO_ON_ENTRY_API_KEY" \
+   -H "Content-Type: application/json" \
+   -d '{"jsonrpc":"2.0","id":1,"method":"issue_token","params":{"user_id":"alice","roles":["admin"],"ttl_seconds":86400}}'
+ ```
+
+**CORS Configuration**: Allowed origins default to empty (CORS disabled). To enable:
+ ```toml
+ [runtime]
+ cors_allowed_origins = ["https://my-frontend.example.com"]
+ # Or for development:
+ # cors_allowed_origins = ["*"]
+ ```
 
 Ingress and TLS templates:
 

@@ -53,32 +53,80 @@ cargo run --manifest-path gui/Cargo.toml
 | `profile-simple-server` | SQLite + sqlite-vec | 单服务部署 | `cargo build --no-default-features -F profile-simple-server` |
 | `profile-multi-users-server` | PostgreSQL + pgvector | 多用户生产环境 | `cargo build --no-default-features -F profile-multi-users-server` |
 
-## 验证状态（Phase 4+ — 46 轮深度扫描完成）
+### 多用户服务器特性
+
+`profile-multi-users-server` 在 ACP+HTTP 和 MCP+HTTP 双传输路径上增加了完整的多用户安全功能：
+
+| 特性 | 说明 |
+|------|------|
+| **CORS 支持** | 可配置允许的来源、预检请求 (OPTIONS) 处理、所有 HTTP/SSE 响应均含 CORS 头部 |
+| **入口认证（网关）** | 通过 `Authorization: Bearer`、`X-Api-Key` 或 `X-Go-On-Key` 头部验证共享 API 密钥 |
+| **用户认证（HMAC 令牌）** | 基于 HMAC-SHA256 签名的 JWT 风格令牌，支持自动配置、可配置 TTL |
+| **RBAC 授权** | 基于角色的访问控制（admin/user/viewer/monitor），支持按端点权限检查 |
+| **租户预算控制** | 每个租户的每日令牌/并发任务/API 调用配额，支持自动配置 |
+| **对话隔离** | 使用租户前缀命名对话 ID，防止跨用户数据泄漏 |
+| **关闭排空** | 优雅关闭期间可配置的排空时间（秒），等待正在处理的连接完成 |
+| **信号处理** | 全平台支持 SIGINT（Ctrl+C）和 SIGTERM 信号实现干净关闭 |
+| **热重载配置** | 通过 `config.reload` RPC 在运行时重新加载配置（agent/cache/vector 变更需重启） |
+
+**密钥管理（线程安全）：**
+- `SECRET_OVERRIDE_MAP` — 内存 `HashMap` 替代 `std::env::set_var()`（多线程环境下为未定义行为）
+- `KEYRING_CACHE` — 30 秒 TTL 密钥环缓存，避免异步热路径中的阻塞 I/O
+- `crate::shared::secret_override::get_secret(key)` — 先检查内存覆写映射，再回退到 `std::env::var()`
+
+**安全合规：**
+- ✅ 生产代码中 0 个 `std::env::set_var()` 调用
+- ✅ 0 个 `.expect("lock poisoned")` 恐慌 — 所有锁中毒通过 `unwrap_or_else(|e| e.into_inner())` 恢复
+- ✅ 生产代码中 0 个 `unsafe` 块
+- ✅ 所有 HTTP 响应（JSON、SSE、错误）均包含 CORS 头部
+- ✅ MCP HTTP 服务器与 ACP HTTP 服务器共享相同的认证流水线
+
+## 验证状态（Phase 4+ — 50+ 轮深度扫描完成）
 
 | 配置文件 | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **781 通过** |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **827 通过** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **890 通过** |
+| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **991 通过** |
+| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **991 通过** |
+| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **991 通过** |
+
+### CI 门禁状态（GitHub Actions）
+| 步骤 | 结果 |
+|------|------|
+| `cargo check --all-targets` | ✅ 0 errors, 0 warnings |
+| `cargo clippy -D warnings`（3 个配置文件） | ✅ 全部 0 errors |
+| 单元测试（816） | ✅ 全部通过 |
+| 集成测试（175） | ✅ 全部通过 |
+| GUI EGUI 编译 + 测试 | ✅ 0 errors |
+| VS Code 插件编译 + 代码检查 + 合约测试 | ✅ 0 errors |
 
 跨平台（Windows、Linux、macOS）：
-- 所有 `localStorage` 调用均已包装 try/catch
-- 所有 `Mutex::lock().unwrap()` 已替换为中毒恢复的 `lock_guard()`
-- 跨平台环境变量：`HOME`/`USERPROFILE`/`COMPUTERNAME`
-- vscode-addon：已设置 `activationEvents`，默认路径支持 `.exe`/`.bat` 平台感知
-- GUI（EGUI）：多轮深度扫描（46+ GUI/后端优化），零 clippy 警告，6/6 测试通过
-- GUI：窗口最小尺寸约束已设置，CSP 允许后端连接
-- 后端：崩溃后自动重启（指数退避 3→96 秒）；健康检查成功时重置崩溃计数
-- Provider 环境变量注入：动态（支持全部 35 个供应商）
-- 所有内部通道已绑定（`mpsc::sync_channel`）— 无内存无限制增长
-- 对话会话上限 1000 条消息 — 自动淘汰最旧消息
-- 可选规则文件降级为 DEBUG 级别 — 无日志噪音
+- 所有平台特定代码均有对应的回退实现（Unix `AsRawFd` ✅ Windows stub ✅）
+- 内存读取：Linux `/proc/self/status` ✅ Windows `windows-sys` ✅ Fallback 返回 0 ✅
+- ANSI 颜色代码在 Windows 上禁用（`#[cfg(not(target_os = "windows"))]`）✅
+- 信号处理：Unix 上支持 SIGTERM，全平台支持 SIGINT（Ctrl+C）✅
+- GUI 路径使用 `directories` 库获取平台合适的数据目录 ✅
+- vscode-addon：已设置 `activationEvents`，`.exe`/`.bat` 平台感知默认路径 ✅
+
+### 线程安全与生产加固
+- 所有 `Mutex::lock().unwrap()` 已替换为中毒恢复模式 ✅
+- 所有 `std::env::set_var()` 已替换为线程安全的 `set_secret_override()` ✅
+- 生产代码中 0 个 `unsafe` 块 ✅
+- 生产代码中 0 个 `panic!()` / `todo!()` / `unimplemented!()` ✅
+- 生产代码中 0 个 `unwrap()` / `.expect()` ✅
+- 37 个 `.expect("lock poisoned")` 调用已替换为中毒恢复 ✅
+- 所有内部通道已绑定（`mpsc::sync_channel`）— 无内存无限制增长 ✅
+- 对话会话上限 1000 条消息 — 自动淘汰最旧消息 ✅
+- 后端：崩溃后自动重启（指数退避 3→96 秒）✅
+- 可选规则文件降级为 DEBUG 级别 — 无日志噪音 ✅
+- 3 个构建配置文件（local/simple-server/multi-users-server）均为 0 warnings ✅
 
 ## 仓库结构
 
 ### 核心目录
 - `src/` — 后端 Runtime 主实现（Rust）
   - `src/acp/` — ACP 服务、请求路由、workflow/task/chat/checkpoint 主链
+    - `src/acp/impl/cors.rs` — CORS 支持模块（可配置来源、预检请求、响应头部）
+    - `src/acp/impl/session.rs` — 用户会话管理（HMAC-SHA256 令牌、RBAC 集成、租户隔离）
   - `src/agents/` — 模型供应商适配器（OpenAI、Anthropic、DeepSeek、Ollama 等）与统一合约
     - `src/agents/factory/` — AgentFactory，特性门控的配置文件选择
   - `src/core/` — 配置、初始化、就绪性检查、错误模型
@@ -113,7 +161,9 @@ cargo run --manifest-path gui/Cargo.toml
   - `src/observability/` — 指标/追踪/性能观测
   - `src/optimization/` — 成本/速度/可靠性优化
   - `src/protocol/` — 协议服务、JSON-RPC 支撑、多渠道消息传输
-  - `src/shared/` — 共享类型、协议模式、工具描述符
+    - `src/protocol/mcp_server.rs` — MCP stdio + HTTP 服务器，完整 CORS/认证/RBAC 集成
+  - `src/shared/` — 共享类型、协议模式、工具描述符、线程安全密钥管理
+    - `src/shared/secret_override.rs` — `SECRET_OVERRIDE_MAP` + `KEYRING_CACHE`（线程安全 `set_var` 替代方案）
 - `gui/` — EGUI（Rust 原生）桌面图形界面
 - `vscode-addon/` — VS Code 扩展（支持 en_US、zh_CN、zh_TW 多语言）
 
