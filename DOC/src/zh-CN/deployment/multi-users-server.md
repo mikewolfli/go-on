@@ -9,8 +9,17 @@
 ### 企业能力
 - **多用户支持**：专为多个用户并发访问设计
 - **PostgreSQL 存储**：带 pgvector 扩展的可扩展数据库
+- **CORS 支持**：可配置的允许来源、预检（OPTIONS）处理、所有 HTTP/SSE 响应上的 CORS 标头
+- **入口认证（网关）**：通过 `Authorization: Bearer`、`X-Api-Key` 或 `X-Go-On-Key` 标头验证的共享 API 密钥
+- **用户认证（HMAC 令牌）**：基于 HMAC-SHA256 签名的每用户 JWT 类令牌，自动配置，可配置 TTL
+- **RBAC 授权**：基于角色的访问控制（admin/user/viewer/monitor），在 ACP+HTTP 和 MCP+HTTP 路径上均进行按端点权限检查
+- **租户预算控制**：每个租户的每日令牌/并发任务/API 调用配额，自动配置
+- **对话隔离**：带租户前缀的命名空间对话 ID，防止跨用户数据泄露
+- **关闭排空**：优雅关闭期间处理进行中连接的可配置排空期
+- **信号处理**：所有平台上的 SIGINT（Ctrl+C）和 SIGTERM，实现干净关闭
+- **线程安全密钥管理**：`SECRET_OVERRIDE_MAP` 替代 `std::env::set_var()`（在多线程上下文中已记录为未定义行为）；`KEYRING_CACHE` 带 30 秒 TTL，避免在异步热路径中阻塞密钥环 I/O
+- **热重载配置**：通过 `config.reload` RPC 进行运行时配置重载
 - **高可用性**：内置冗余和故障转移支持
-- **高级安全**：基于角色的访问控制、审计日志
 - **企业监控**：全面的可观测性堆栈
 - **可扩展性**：水平扩展能力
 - **完整 Phase 4 架构**：所有 14 条总线和 21 个 F-GAP 模块
@@ -22,11 +31,22 @@
 ```
 多用户服务器架构：
 ├── 应用层：go-on 运行时实例
+│   ├── ACP HTTP 服务器（端口 8090）：CORS → 入口认证 → 用户认证 → RBAC → 路由
+│   └── MCP HTTP 服务器（端口 8090）：CORS → 入口认证 → 用户认证 → RBAC → 分发
 ├── 数据库层：带 pgvector 的 PostgreSQL
 ├── 缓存层：Redis（可选）
 ├── 负载均衡器：流量分发
 ├── 监控：Prometheus、Grafana、ELK
 └── 备份：自动化备份系统
+
+请求流程（ACP+HTTP）：
+客户端 → CORS 标头 → 入口认证（API 密钥）→ 用户会话（HMAC 令牌）
+       → RBAC 授权 → 租户预算检查 → 命名空间对话
+       → AI 处理 → 带 CORS 标头的响应
+
+请求流程（MCP+HTTP）：
+客户端 → CORS 标头 → 入口认证（API 密钥）→ 用户会话（HMAC 令牌）
+       → RBAC 授权 → MCP 方法分发 → 带 CORS 的 JSON-RPC 响应
 ```
 
 ## 配置
@@ -40,17 +60,32 @@ default_phase = "coding"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "mcp_http"  # 多用户访问的 MCP over HTTP
+mode = "acp_http"  # 用于多用户访问的 ACP over HTTP（使用 mcp_http 用于 MCP）
 
 [runtime]
 acp_http_bind_addr = "0.0.0.0:8090"
 production_strict = true
+
+# ── 网关入口认证（所有入站流量的共享 API 密钥）────
 entry_auth_enabled = true
 entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 5000
 entry_rate_limit_burst = 1000
-session_timeout_minutes = 60
-max_sessions_per_user = 10
+
+# ── 用户认证（每用户 HMAC 令牌）─────────────
+user_auth_enabled = true
+user_auth_token_secret_env = "GO_ON_USER_AUTH_TOKEN_SECRET"
+user_auth_token_ttl_seconds = 86400
+
+# ── 跨域资源共享（CORS）───────────────────
+cors_allowed_origins = ["https://my-frontend.example.com"]
+# 仅用于开发使用 "*"：
+# cors_allowed_origins = ["*"]
+
+# ── 租户资源配额 ────────────────────────────
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
 
 [database]
 type = "postgres"
@@ -66,22 +101,13 @@ ssl_mode = "prefer"
 [cache]
 enabled = true
 type = "database"  # 使用 PostgreSQL 作为缓存
-# 可选 Redis 缓存
-# type = "redis"
-# redis_url = "redis://localhost:6379"
 
 [vector]
 enabled = true
 type = "pgvector"
-dimensions = 768  # 企业使用的高维度
+dimensions = 768
 top_k = 10
 min_similarity = 0.7
-
-[security]
-rbac_enabled = true
-audit_logging_enabled = true
-data_encryption_enabled = true
-mfa_enabled = false  # 可选：更高安全性时启用
 
 [observability]
 otel_enabled = true
@@ -96,6 +122,26 @@ tracing_sampling_rate = 0.1
 - `backend-postgres`：PostgreSQL 数据库支持
 - `postgres`：PostgreSQL 客户端库
 - `pgvector`：PostgreSQL 的向量扩展
+
+### 运行时配置字段
+
+以下是多用户模式特有的运行时配置字段：
+
+| 字段 | 描述 | 默认值 |
+|-------|-------------|---------|
+| `entry_auth_enabled` | 启用网关 API 密钥认证 | `false` |
+| `entry_auth_api_key_env` | 入口 API 密钥的环境变量名 | `GO_ON_ENTRY_API_KEY` |
+| `entry_rate_limit_rpm` | 每源 IP 的速率限制 | `240` |
+| `entry_rate_limit_burst` | 令牌桶突发容量 | `60` |
+| `user_auth_enabled` | 启用每用户 HMAC 令牌认证 | `false` |
+| `user_auth_token_secret` | HMAC 签名密钥（配置文件） | `go-on-multi-user-secret` |
+| `user_auth_token_secret_env` | HMAC 密钥的环境变量覆盖 | `GO_ON_USER_AUTH_TOKEN_SECRET` |
+| `user_auth_token_ttl_seconds` | 令牌 TTL（秒） | `86400`（24小时） |
+| `cors_allowed_origins` | 允许的 CORS 来源（空 = 禁用） | `[]` |
+| `tenant_default_daily_token_limit` | 每租户每日令牌限制 | `1000000` |
+| `tenant_default_concurrent_tasks` | 每租户最大并发任务数 | `10` |
+| `tenant_default_daily_api_calls` | 每租户每日 API 调用限制 | `10000` |
+| `shutdown_drain_seconds` | 优雅关闭排空期 | `30` |
 
 ## 安装
 
@@ -431,23 +477,108 @@ server {
 ## 安全
 
 ### 认证和授权
-```toml
-[security.authentication]
-type = "jwt"
-jwt_secret_env = "GO_ON_JWT_SECRET"
-token_expiry_hours = 24
-refresh_token_expiry_days = 7
 
-[security.authorization]
-rbac_enabled = true
-roles = ["admin", "user", "viewer"]
-default_role = "user"
+多用户服务器提供**双层认证**系统：
 
-[security.audit]
-enabled = true
-retention_days = 90
-sensitive_fields = ["password", "api_key", "token"]
+**第一层：网关入口认证（共享 API 密钥）**
+- 对每个 HTTP 请求验证预先共享的 API 密钥
+- 密钥来自 `entry_auth_api_key_env` 指定的环境变量（默认：`GO_ON_ENTRY_API_KEY`）
+- 接受的标头：`Authorization: Bearer <key>`、`X-Api-Key`、`X-Go-On-Key`
+- 如果缺失/无效，返回 401 `ENTRY_AUTH_REQUIRED`
+- 如果环境变量未设置，返回 503 `ENTRY_AUTH_MISCONFIGURED`
+
+**第二层：用户认证（HMAC-SHA256 令牌）**
+- 发行使用 HMAC-SHA256 签名的每用户令牌
+- 令牌格式：`user_id:base64_hmac:expires_at_ms`
+- 令牌密钥解析顺序：环境变量（`user_auth_token_secret_env`）> 配置文件 > 默认值
+- 自动配置：有效令牌无需预注册即可获得会话
+- 降级回退：当 `user_auth_enabled=false` 时，所有请求视为管理员
+
+**RBAC 授权**
+- 内置角色：`admin`（完全访问）、`user`（R/W/X）、`viewer`（只读）、`monitor`
+- 权限映射：`GET` → 读取，`POST /chat` → 执行，`POST /rpc` → 执行
+- 在 ACP+HTTP 和 MCP+HTTP 路径上一致应用
+- 返回 401 `AUTH_REQUIRED`（无会话）、403 `ACCESS_DENIED`（无权限）、403 `PRIVILEGE_ESCALATION_REQUIRED`（角色不足）
+
+**免认证端点：** `/` 和 `/health` 绕过所有认证。
+
+### 发行用户令牌
+
+用户令牌可以通过内部 `SessionManager` API 编程方式发行。令牌格式为 `user_id:base64_hmac_sig:expires_at_ms`：
+
+```rust
+// Rust：编程方式发行令牌
+use crate::acp::r#impl::session::{AuthConfig, SessionManager};
+
+let auth_cfg = AuthConfig::from(&runtime_config);
+let mgr = SessionManager::with_auth_config(auth_cfg);
+let token = mgr.issue_token("alice", &["admin"], None, 86400).unwrap();
+// 返回："alice:<base64_hmac>:<expires_at_ms>"
 ```
+
+### CORS 配置
+
+允许的来源默认为 `[]`（空 = 禁用 CORS）。要启用跨域请求：
+
+```toml
+[runtime]
+cors_allowed_origins = ["https://my-frontend.example.com"]
+# 多个来源：
+# cors_allowed_origins = ["https://app1.example.com", "https://app2.example.com"]
+# 仅用于开发：
+# cors_allowed_origins = ["*"]
+```
+
+配置后，所有 HTTP 响应（JSON、SSE、错误）都会自动包含 CORS 标头。
+
+### 租户预算控制
+
+启用用户认证后，系统会自动配置默认租户配额：
+
+```toml
+[runtime]
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
+```
+
+对话 ID 使用租户 ID 前缀进行命名空间隔离，以防止跨用户数据泄露：
+```
+内部 conversation_id = "tenant_id:user_provided_conversation_id"
+```
+
+### 对话隔离
+
+所有对话状态按租户隔离：
+- 当 `user_auth_enabled` 时，对话 ID 以 `tenant_id:` 为前缀
+- 预算控制使用用户会话中的 `tenant_id`（而非原始的 `conversation_id`）
+- 防止跨用户对话历史泄露
+
+### 线程安全密钥管理
+
+项目将所有 `std::env::set_var()` 调用（在多线程上下文中已记录为**未定义行为**）替换为内存中的 `HashMap`：
+
+```rust
+// 线程安全：设置密钥覆盖
+crate::shared::secret_override::set_secret_override("GITHUB_TOKEN", "ghp_xxx");
+
+// 线程安全：读取（先检查覆盖映射，再检查环境变量）
+let value = crate::shared::secret_override::get_secret("GITHUB_TOKEN");
+```
+
+密钥环查找缓存 30 秒 TTL，以避免在异步上下文中阻塞 I/O：
+
+```rust
+// 使用 30 秒 TTL 的缓存
+let value = crate::shared::secret_override::get_keyring_cached("go-on", "copilot_api_key");
+```
+
+**安全合规：**
+- ✅ 生产代码中 0 个 `std::env::set_var()` 调用
+- ✅ 0 个 `.expect("lock poisoned")` panic——所有锁中毒通过 `unwrap_or_else(|e| e.into_inner())` 恢复
+- ✅ 生产代码中 0 个 `unsafe` 块
+- ✅ 所有 HTTP 响应（JSON、SSE、错误）包含 CORS 标头
+- ✅ MCP HTTP 服务器与 ACP HTTP 服务器共享相同的认证管道
 
 ### 网络安全
 ```bash
@@ -455,8 +586,7 @@ sensitive_fields = ["password", "api_key", "token"]
 sudo ufw allow 443/tcp  # HTTPS
 sudo ufw allow 5432/tcp  # PostgreSQL
 sudo ufw allow 6379/tcp  # Redis
-sudo ufw allow 9090/tcp  # 指标
-sudo ufw allow 4317/tcp  # OpenTelemetry
+sudo ufw allow 8090/tcp  # go-on ACP/MCP HTTP
 
 # 启用防火墙
 sudo ufw --force enable
@@ -464,18 +594,13 @@ sudo ufw --force enable
 
 ### 密钥管理
 ```bash
-# 使用 HashiCorp Vault
-vault kv put secret/go-on \
-  db_username=go_on \
-  db_password=$(openssl rand -base64 32) \
-  entry_api_key=$(openssl rand -base64 48) \
-  jwt_secret=$(openssl rand -base64 64)
+# 设置所需的环境变量
+export GO_ON_ENTRY_API_KEY=$(openssl rand -base64 48)
+export GO_ON_USER_AUTH_TOKEN_SECRET=$(openssl rand -base64 64)
 
-# 环境变量
-export GO_ON_DB_USERNAME=$(vault kv get -field=db_username secret/go-on)
-export GO_ON_DB_PASSWORD=$(vault kv get -field=db_password secret/go-on)
-export GO_ON_ENTRY_API_KEY=$(vault kv get -field=entry_api_key secret/go-on)
-export GO_ON_JWT_SECRET=$(vault kv get -field=jwt_secret secret/go-on)
+# 可选：PostgreSQL 凭据
+export GO_ON_DB_USERNAME="go_on"
+export GO_ON_DB_PASSWORD=$(openssl rand -base64 32)
 ```
 
 ## 监控和可观测性

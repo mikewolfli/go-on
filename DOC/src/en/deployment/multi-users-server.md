@@ -9,8 +9,17 @@ Multi-Users Server mode (`profile-multi-users-server`) is the enterprise-grade b
 ### Enterprise Capabilities
 - **Multi-user support**: Designed for concurrent access by multiple users
 - **PostgreSQL storage**: Scalable database with pgvector extension
+- **CORS support**: Configurable allowed origins, preflight (OPTIONS) handling, CORS headers on all HTTP/SSE responses
+- **Entry auth (gateway)**: Shared API key validated via `Authorization: Bearer`, `X-Api-Key`, or `X-Go-On-Key` headers
+- **User auth (HMAC tokens)**: Per-user JWT-like tokens with HMAC-SHA256 signing, auto-provisioning, configurable TTL
+- **RBAC authorization**: Role-based access control (admin/user/viewer/monitor) with per-endpoint permission checks across both ACP+HTTP and MCP+HTTP paths
+- **Tenant budget enforcement**: Per-tenant daily token/concurrent task/API call quotas with auto-provisioning
+- **Conversation isolation**: Namespaced conversation IDs with tenant prefix to prevent cross-user data leakage
+- **Shutdown drain**: Configurable drain period for in-flight connections during graceful shutdown
+- **Signal handling**: SIGINT (Ctrl+C) and SIGTERM on all platforms for clean shutdown
+- **Thread-safe secret management**: `SECRET_OVERRIDE_MAP` replaces `std::env::set_var()` (documented UB in multi-threaded contexts); `KEYRING_CACHE` with 30s TTL avoids blocking keyring I/O in async hot paths
+- **Hot-reload config**: Runtime configuration reload via `config.reload` RPC
 - **High availability**: Built-in redundancy and failover support
-- **Advanced security**: Role-based access control, audit logging
 - **Enterprise monitoring**: Comprehensive observability stack
 - **Scalability**: Horizontal scaling capabilities
 - **Full Phase 4 architecture**: All 14 buses and 21 F-GAP modules
@@ -22,11 +31,22 @@ Multi-Users Server mode (`profile-multi-users-server`) is the enterprise-grade b
 ```
 Multi-Users Server Architecture:
 ├── Application Layer: go-on runtime instances
+│   ├── ACP HTTP Server (port 8090): CORS → Entry Auth → User Auth → RBAC → Routing
+│   └── MCP HTTP Server (port 8090): CORS → Entry Auth → User Auth → RBAC → Dispatch
 ├── Database Layer: PostgreSQL with pgvector
 ├── Cache Layer: Redis (optional)
 ├── Load Balancer: Traffic distribution
 ├── Monitoring: Prometheus, Grafana, ELK
 └── Backup: Automated backup system
+
+Request Flow (ACP+HTTP):
+Client → CORS headers → Entry Auth (API key) → User Session (HMAC token)
+       → RBAC Authorization → Tenant Budget Check → Namespaced Conversation
+       → AI Processing → Response with CORS headers
+
+Request Flow (MCP+HTTP):
+Client → CORS headers → Entry Auth (API key) → User Session (HMAC token)
+       → RBAC Authorization → MCP Method Dispatch → JSON-RPC Response with CORS
 ```
 
 ## Configuration
@@ -40,17 +60,32 @@ default_phase = "coding"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "mcp_http"  # MCP over HTTP for multi-user access
+mode = "acp_http"  # ACP over HTTP for multi-user access (use mcp_http for MCP)
 
 [runtime]
 acp_http_bind_addr = "0.0.0.0:8090"
 production_strict = true
+
+# ── Gateway Entry Auth (shared API key for all ingress) ────
 entry_auth_enabled = true
 entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 5000
 entry_rate_limit_burst = 1000
-session_timeout_minutes = 60
-max_sessions_per_user = 10
+
+# ── User Authentication (per-user HMAC tokens) ─────────────
+user_auth_enabled = true
+user_auth_token_secret_env = "GO_ON_USER_AUTH_TOKEN_SECRET"
+user_auth_token_ttl_seconds = 86400
+
+# ── Cross-Origin Resource Sharing (CORS) ───────────────────
+cors_allowed_origins = ["https://my-frontend.example.com"]
+# Use "*" for development only:
+# cors_allowed_origins = ["*"]
+
+# ── Tenant Resource Quotas ─────────────────────────────────
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
 
 [database]
 type = "postgres"
@@ -66,22 +101,13 @@ ssl_mode = "prefer"
 [cache]
 enabled = true
 type = "database"  # Uses PostgreSQL for cache
-# Optional Redis cache
-# type = "redis"
-# redis_url = "redis://localhost:6379"
 
 [vector]
 enabled = true
 type = "pgvector"
-dimensions = 768  # Higher dimensions for enterprise use
+dimensions = 768
 top_k = 10
 min_similarity = 0.7
-
-[security]
-rbac_enabled = true
-audit_logging_enabled = true
-data_encryption_enabled = true
-mfa_enabled = false  # Optional: enable for higher security
 
 [observability]
 otel_enabled = true
@@ -96,6 +122,26 @@ Multi-Users Server mode requires:
 - `backend-postgres`: PostgreSQL database support
 - `postgres`: PostgreSQL client library
 - `pgvector`: Vector extension for PostgreSQL
+
+### Runtime Config Fields
+
+The following runtime configuration fields are specific to multi-user mode:
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `entry_auth_enabled` | Enable gateway API key auth | `false` |
+| `entry_auth_api_key_env` | Env var name for entry API key | `GO_ON_ENTRY_API_KEY` |
+| `entry_rate_limit_rpm` | Rate limit per source IP | `240` |
+| `entry_rate_limit_burst` | Token bucket burst capacity | `60` |
+| `user_auth_enabled` | Enable per-user HMAC token auth | `false` |
+| `user_auth_token_secret` | HMAC signing secret (config file) | `go-on-multi-user-secret` |
+| `user_auth_token_secret_env` | Env var override for HMAC secret | `GO_ON_USER_AUTH_TOKEN_SECRET` |
+| `user_auth_token_ttl_seconds` | Token TTL in seconds | `86400` (24h) |
+| `cors_allowed_origins` | Allowed CORS origins (empty = disabled) | `[]` |
+| `tenant_default_daily_token_limit` | Daily token limit per tenant | `1000000` |
+| `tenant_default_concurrent_tasks` | Max concurrent tasks per tenant | `10` |
+| `tenant_default_daily_api_calls` | Daily API call limit per tenant | `10000` |
+| `shutdown_drain_seconds` | Graceful shutdown drain period | `30` |
 
 ## Installation
 
@@ -431,23 +477,108 @@ server {
 ## Security
 
 ### Authentication and Authorization
-```toml
-[security.authentication]
-type = "jwt"
-jwt_secret_env = "GO_ON_JWT_SECRET"
-token_expiry_hours = 24
-refresh_token_expiry_days = 7
 
-[security.authorization]
-rbac_enabled = true
-roles = ["admin", "user", "viewer"]
-default_role = "user"
+Multi-Users Server provides a **two-layer authentication** system:
 
-[security.audit]
-enabled = true
-retention_days = 90
-sensitive_fields = ["password", "api_key", "token"]
+**Layer 1: Gateway Entry Auth (shared API key)**
+- Validates every HTTP request against a pre-shared API key
+- Key comes from the environment variable specified in `entry_auth_api_key_env` (default: `GO_ON_ENTRY_API_KEY`)
+- Accepted headers: `Authorization: Bearer <key>`, `X-Api-Key`, `X-Go-On-Key`
+- Returns 401 `ENTRY_AUTH_REQUIRED` if missing/invalid
+- Returns 503 `ENTRY_AUTH_MISCONFIGURED` if env var is not set
+
+**Layer 2: User Auth (HMAC-SHA256 tokens)**
+- Issues per-user tokens signed with HMAC-SHA256
+- Token format: `user_id:base64_hmac:expires_at_ms`
+- Token secret resolved from env var (`user_auth_token_secret_env`) > config file > default
+- Auto-provisioning: valid tokens get sessions without pre-registration
+- Graceful fallback: when `user_auth_enabled=false`, all requests treated as admin
+
+**RBAC Authorization**
+- Built-in roles: `admin` (full access), `user` (R/W/X), `viewer` (read-only), `monitor`
+- Permission mapping: `GET` → Read, `POST /chat` → Execute, `POST /rpc` → Execute
+- Applied consistently across both ACP+HTTP and MCP+HTTP paths
+- Returns 401 `AUTH_REQUIRED` (no session), 403 `ACCESS_DENIED` (no permission), 403 `PRIVILEGE_ESCALATION_REQUIRED` (insufficient role)
+
+**Exempt endpoints:** `/` and `/health` bypass all authentication.
+
+### Issuing User Tokens
+
+User tokens can be issued programmatically via the internal `SessionManager` API. The token format is `user_id:base64_hmac_sig:expires_at_ms`:
+
+```rust
+// Rust: issue a token programmatically
+use crate::acp::r#impl::session::{AuthConfig, SessionManager};
+
+let auth_cfg = AuthConfig::from(&runtime_config);
+let mgr = SessionManager::with_auth_config(auth_cfg);
+let token = mgr.issue_token("alice", &["admin"], None, 86400).unwrap();
+// Returns: "alice:<base64_hmac>:<expires_at_ms>"
 ```
+
+### CORS Configuration
+
+Allowed origins default to `[]` (empty = CORS disabled). To enable cross-origin requests:
+
+```toml
+[runtime]
+cors_allowed_origins = ["https://my-frontend.example.com"]
+# Multiple origins:
+# cors_allowed_origins = ["https://app1.example.com", "https://app2.example.com"]
+# Development only:
+# cors_allowed_origins = ["*"]
+```
+
+All HTTP responses (JSON, SSE, errors) automatically include CORS headers when configured.
+
+### Tenant Budget Enforcement
+
+When user auth is enabled, the system auto-provisions a default tenant quota:
+
+```toml
+[runtime]
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
+```
+
+Conversation IDs are namespaced with the tenant ID prefix to prevent cross-user data leakage:
+```
+Internal conversation_id = "tenant_id:user_provided_conversation_id"
+```
+
+### Conversation Isolation
+
+All conversation state is isolated per-tenant:
+- Conversation IDs are prefixed with `tenant_id:` when `user_auth_enabled`
+- Budget enforcement uses `tenant_id` from user session (not raw `conversation_id`)
+- Cross-user conversation history leakage is prevented
+
+### Thread-Safe Secret Management
+
+The project replaces all `std::env::set_var()` calls (documented as **undefined behavior** in multi-threaded contexts) with an in-memory `HashMap`:
+
+```rust
+// Thread-safe: set a secret override
+crate::shared::secret_override::set_secret_override("GITHUB_TOKEN", "ghp_xxx");
+
+// Thread-safe: read (checks override map first, then env var)
+let value = crate::shared::secret_override::get_secret("GITHUB_TOKEN");
+```
+
+Keyring lookups are cached with a 30-second TTL to avoid blocking I/O in async contexts:
+
+```rust
+// Uses cache with 30s TTL
+let value = crate::shared::secret_override::get_keyring_cached("go-on", "copilot_api_key");
+```
+
+**Security compliance:**
+- ✅ 0 `std::env::set_var()` calls in production code
+- ✅ 0 `.expect("lock poisoned")` panics — all lock poison recovered via `unwrap_or_else(|e| e.into_inner())`
+- ✅ 0 `unsafe` blocks in production code
+- ✅ All HTTP responses (JSON, SSE, error) include CORS headers
+- ✅ MCP HTTP server shares the same auth pipeline as ACP HTTP server
 
 ### Network Security
 ```bash
@@ -455,8 +586,7 @@ sensitive_fields = ["password", "api_key", "token"]
 sudo ufw allow 443/tcp  # HTTPS
 sudo ufw allow 5432/tcp  # PostgreSQL
 sudo ufw allow 6379/tcp  # Redis
-sudo ufw allow 9090/tcp  # Metrics
-sudo ufw allow 4317/tcp  # OpenTelemetry
+sudo ufw allow 8090/tcp  # go-on ACP/MCP HTTP
 
 # Enable firewall
 sudo ufw --force enable
@@ -464,18 +594,13 @@ sudo ufw --force enable
 
 ### Secrets Management
 ```bash
-# Using HashiCorp Vault
-vault kv put secret/go-on \
-  db_username=go_on \
-  db_password=$(openssl rand -base64 32) \
-  entry_api_key=$(openssl rand -base64 48) \
-  jwt_secret=$(openssl rand -base64 64)
+# Set required environment variables
+export GO_ON_ENTRY_API_KEY=$(openssl rand -base64 48)
+export GO_ON_USER_AUTH_TOKEN_SECRET=$(openssl rand -base64 64)
 
-# Environment variables
-export GO_ON_DB_USERNAME=$(vault kv get -field=db_username secret/go-on)
-export GO_ON_DB_PASSWORD=$(vault kv get -field=db_password secret/go-on)
-export GO_ON_ENTRY_API_KEY=$(vault kv get -field=entry_api_key secret/go-on)
-export GO_ON_JWT_SECRET=$(vault kv get -field=jwt_secret secret/go-on)
+# Optional: PostgreSQL credentials
+export GO_ON_DB_USERNAME="go_on"
+export GO_ON_DB_PASSWORD=$(openssl rand -base64 32)
 ```
 
 ## Monitoring and Observability
