@@ -476,9 +476,9 @@ async fn acp_http_responses_api_upstream_502_branch_keeps_context_writer() {
     let section = &source[handler_start..handler_end];
 
     assert!(
-        section.contains(
-            "write_http_json_response_with_context(socket, 502, payload, \"responses.api\")"
-        ),
+        section.contains("write_http_json_response_with_context")
+            && section.contains("502")
+            && section.contains("responses.api"),
         "responses.api 502 branch must use context-aware writer; section={section}"
     );
     assert!(

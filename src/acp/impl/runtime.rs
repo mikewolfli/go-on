@@ -1245,16 +1245,20 @@ async fn write_http_json_response_with_context(
     status: u16,
     body: serde_json::Value,
     method: &str,
+    extra_headers: &str,
 ) -> Result<()> {
     let body = inject_platform_profiles_if_absent(body, method);
-    write_http_json_response(socket, status, body, "").await
+    write_http_json_response(socket, status, body, extra_headers).await
 }
 
 async fn write_responses_api_error(
     socket: &mut TcpStream,
     payload: serde_json::Value,
+    extra_headers: &str,
 ) -> Result<()> {
-    let result = write_http_json_response_with_context(socket, 400, payload, "responses.api").await;
+    let result =
+        write_http_json_response_with_context(socket, 400, payload, "responses.api", extra_headers)
+            .await;
     if let Err(ref e) = result {
         tracing::warn!(
             "write_responses_api_error: failed to write error response: {}",
@@ -1485,6 +1489,7 @@ async fn handle_openai_chat_completions(
     server: Arc<AcpServer>,
     body: serde_json::Value,
     user_session: Option<crate::acp::r#impl::session::UserSession>,
+    cors_headers: &str,
 ) -> Result<()> {
     let openai_req: OpenAiChatRequest = match serde_json::from_value(body) {
         Ok(value) => value,
@@ -1495,8 +1500,14 @@ async fn handle_openai_chat_completions(
                     "type": "invalid_request_error"
                 }
             });
-            write_http_json_response_with_context(socket, 400, payload, "openai.chat.completions")
-                .await?;
+            write_http_json_response_with_context(
+                socket,
+                400,
+                payload,
+                "openai.chat.completions",
+                cors_headers,
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -1532,7 +1543,7 @@ async fn handle_openai_chat_completions(
                     );
                     let payload =
                         inject_platform_profiles_if_absent(payload, "openai.chat.completions");
-                    write_http_json_response(socket, 200, payload, "").await?;
+                    write_http_json_response(socket, 200, payload, cors_headers).await?;
                     return Ok(());
                 }
                 let payload = serde_json::json!({
@@ -1546,6 +1557,7 @@ async fn handle_openai_chat_completions(
                     502,
                     payload,
                     "openai.chat.completions",
+                    cors_headers,
                 )
                 .await?;
                 return Ok(());
@@ -1557,11 +1569,11 @@ async fn handle_openai_chat_completions(
             .unwrap_or_default();
         let payload = build_openai_completion(&request_id, &model, response_text);
         let payload = inject_platform_profiles_if_absent(payload, "openai.chat.completions");
-        write_http_json_response(socket, 200, payload, "").await?;
+        write_http_json_response(socket, 200, payload, cors_headers).await?;
         return Ok(());
     }
 
-    write_sse_headers(socket, "").await?;
+    write_sse_headers(socket, cors_headers).await?;
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let trace = http_trace_context("openai.chat.completions.stream");
@@ -1704,6 +1716,7 @@ fn responses_input_to_messages(input: &serde_json::Value) -> Vec<crate::agent::M
 async fn validate_responses_post_request(
     socket: &mut TcpStream,
     body: &serde_json::Value,
+    extra_headers: &str,
 ) -> Result<ResponsesApiRequest, ()> {
     if !body.is_object() {
         let payload = build_responses_error(
@@ -1711,7 +1724,7 @@ async fn validate_responses_post_request(
             "invalid_request_error",
             t("error.request_body_must_be_json_object"),
         );
-        let _ = write_responses_api_error(socket, payload).await;
+        let _ = write_responses_api_error(socket, payload, extra_headers).await;
         return Err(());
     }
 
@@ -1723,7 +1736,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.model_must_be_string"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
         let payload = build_responses_error(
@@ -1731,7 +1744,7 @@ async fn validate_responses_post_request(
             "invalid_request_error",
             t("error.model_required"),
         );
-        let _ = write_responses_api_error(socket, payload).await;
+        let _ = write_responses_api_error(socket, payload, extra_headers).await;
         return Err(());
     }
     match body.get("input") {
@@ -1741,7 +1754,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.input_required"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
         Some(value) if value.is_null() || (!value.is_string() && !value.is_array()) => {
@@ -1750,7 +1763,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.input_must_be_string_or_array"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
         Some(_) => {}
@@ -1762,7 +1775,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.max_output_tokens_invalid"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
     }
@@ -1773,7 +1786,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.temperature_must_be_number"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         };
         if !(0.0..=2.0).contains(&value) {
@@ -1782,7 +1795,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.temperature_invalid"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
     }
@@ -1793,7 +1806,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.metadata_invalid"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
     }
@@ -1804,7 +1817,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.reasoning_invalid"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
     }
@@ -1815,7 +1828,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.tools_invalid"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
         if v.as_array()
@@ -1826,7 +1839,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.tools_entries_object"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
         if let Some(reason) = v
@@ -1834,7 +1847,7 @@ async fn validate_responses_post_request(
             .and_then(|items| items.iter().find_map(validate_responses_tool))
         {
             let payload = build_responses_error("invalid_input", "invalid_request_error", reason);
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
     }
@@ -1845,7 +1858,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.tool_choice_invalid"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
         if v.is_string() && !is_supported_responses_tool_choice(v) {
@@ -1854,12 +1867,12 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.tool_choice_value_invalid"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
         if let Some(reason) = v.as_object().and_then(|_| validate_responses_tool(v)) {
             let payload = build_responses_error("invalid_input", "invalid_request_error", reason);
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
     }
@@ -1870,7 +1883,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 t("error.previous_response_id_invalid"),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
     }
@@ -1883,7 +1896,7 @@ async fn validate_responses_post_request(
                 "invalid_request_error",
                 tf("error.invalid_request", &[("error", &err.to_string())]),
             );
-            let _ = write_responses_api_error(socket, payload).await;
+            let _ = write_responses_api_error(socket, payload, extra_headers).await;
             return Err(());
         }
     };
@@ -1899,8 +1912,9 @@ async fn handle_responses_api(
     server: Arc<AcpServer>,
     body: serde_json::Value,
     user_session: Option<crate::acp::r#impl::session::UserSession>,
+    cors_headers: &str,
 ) -> Result<()> {
-    let req = match validate_responses_post_request(socket, &body).await {
+    let req = match validate_responses_post_request(socket, &body, cors_headers).await {
         Ok(r) => r,
         Err(()) => return Ok(()),
     };
@@ -1913,7 +1927,7 @@ async fn handle_responses_api(
             "invalid_request_error",
             t("error.model_required"),
         );
-        write_responses_api_error(socket, payload).await?;
+        write_responses_api_error(socket, payload, cors_headers).await?;
         return Ok(());
     }
 
@@ -1923,7 +1937,7 @@ async fn handle_responses_api(
             "invalid_request_error",
             t("error.max_output_tokens_gt_zero"),
         );
-        write_responses_api_error(socket, payload).await?;
+        write_responses_api_error(socket, payload, cors_headers).await?;
         return Ok(());
     }
 
@@ -1946,7 +1960,7 @@ async fn handle_responses_api(
                 "invalid_request_error",
                 "tool_choice=required requires at least one declared tool",
             );
-            write_responses_api_error(socket, payload).await?;
+            write_responses_api_error(socket, payload, cors_headers).await?;
             return Ok(());
         }
 
@@ -1960,7 +1974,7 @@ async fn handle_responses_api(
                     "invalid_request_error",
                     "tool_choice object requires tools to be provided",
                 );
-                write_responses_api_error(socket, payload).await?;
+                write_responses_api_error(socket, payload, cors_headers).await?;
                 return Ok(());
             }
             if !declared_tool_names.contains(name) {
@@ -1969,7 +1983,7 @@ async fn handle_responses_api(
                     "invalid_request_error",
                     "tool_choice function.name must match a declared tool",
                 );
-                write_responses_api_error(socket, payload).await?;
+                write_responses_api_error(socket, payload, cors_headers).await?;
                 return Ok(());
             }
         }
@@ -1981,7 +1995,7 @@ async fn handle_responses_api(
             "invalid_request_error",
             "input must be a string or an array of input messages",
         );
-        write_responses_api_error(socket, payload).await?;
+        write_responses_api_error(socket, payload, cors_headers).await?;
         return Ok(());
     };
     if !input.is_string() && !input.is_array() {
@@ -1990,7 +2004,7 @@ async fn handle_responses_api(
             "invalid_request_error",
             "input must be a string or an array of input messages",
         );
-        write_responses_api_error(socket, payload).await?;
+        write_responses_api_error(socket, payload, cors_headers).await?;
         return Ok(());
     }
 
@@ -2012,7 +2026,7 @@ async fn handle_responses_api(
             "invalid_request_error",
             "input must contain at least one non-empty user message",
         );
-        write_responses_api_error(socket, payload).await?;
+        write_responses_api_error(socket, payload, cors_headers).await?;
         return Ok(());
     }
 
@@ -2035,6 +2049,7 @@ async fn handle_responses_api(
             &model,
             input,
             previous_response_id,
+            cors_headers,
         )
         .await;
     }
@@ -2044,8 +2059,15 @@ async fn handle_responses_api(
         req.tool_choice.as_ref().and_then(|v| v.as_str()),
         Some("required")
     ) {
-        return handle_response_required_tool_call(socket, &server, &request_id, &model, &req)
-            .await;
+        return handle_response_required_tool_call(
+            socket,
+            &server,
+            &request_id,
+            &model,
+            &req,
+            cors_headers,
+        )
+        .await;
     }
 
     // Normal create path (possibly streaming).
@@ -2057,6 +2079,7 @@ async fn handle_responses_api(
         req,
         messages,
         user_session,
+        cors_headers,
     )
     .await
 }
@@ -2069,6 +2092,7 @@ async fn handle_response_tool_result(
     model: &str,
     input: &serde_json::Value,
     previous_response_id: &str,
+    cors_headers: &str,
 ) -> Result<()> {
     let Some(previous_response) = load_responses_api_payload(server.as_ref(), previous_response_id)
     else {
@@ -2077,7 +2101,7 @@ async fn handle_response_tool_result(
             "invalid_request_error",
             "previous_response_id not found",
         );
-        write_responses_api_error(socket, payload).await?;
+        write_responses_api_error(socket, payload, cors_headers).await?;
         return Ok(());
     };
 
@@ -2087,7 +2111,7 @@ async fn handle_response_tool_result(
             "tool_error",
             "previous_response_id has no pending tool_call",
         );
-        write_responses_api_error(socket, payload).await?;
+        write_responses_api_error(socket, payload, cors_headers).await?;
         return Ok(());
     };
 
@@ -2097,7 +2121,7 @@ async fn handle_response_tool_result(
             "tool_error",
             "input must include a tool result with matching tool_call_id",
         );
-        write_responses_api_error(socket, payload).await?;
+        write_responses_api_error(socket, payload, cors_headers).await?;
         return Ok(());
     };
 
@@ -2109,7 +2133,7 @@ async fn handle_response_tool_result(
         &tool_result_text,
     );
     store_responses_api_payload(server.as_ref(), &payload);
-    write_http_json_response(socket, 200, payload, "").await?;
+    write_http_json_response(socket, 200, payload, cors_headers).await?;
     Ok(())
 }
 
@@ -2120,6 +2144,7 @@ async fn handle_response_required_tool_call(
     request_id: &str,
     model: &str,
     req: &ResponsesApiRequest,
+    cors_headers: &str,
 ) -> Result<()> {
     let tool_name = req
         .tools
@@ -2131,11 +2156,12 @@ async fn handle_response_required_tool_call(
     let payload =
         build_responses_api_tool_call_response(request_id, model, &tool_call_id, tool_name);
     store_responses_api_payload(server.as_ref(), &payload);
-    write_http_json_response(socket, 200, payload, "").await?;
+    write_http_json_response(socket, 200, payload, cors_headers).await?;
     Ok(())
 }
 
 /// Handle normal create path (non-tool, non-stream) for POST /v1/responses.
+#[allow(clippy::too_many_arguments)]
 async fn handle_response_create(
     socket: &mut TcpStream,
     server: Arc<AcpServer>,
@@ -2144,6 +2170,7 @@ async fn handle_response_create(
     req: ResponsesApiRequest,
     messages: Vec<crate::agent::Message>,
     user_session: Option<crate::acp::r#impl::session::UserSession>,
+    cors_headers: &str,
 ) -> Result<()> {
     let mut extra = req.extra.clone();
     extra.remove("previous_response_id");
@@ -2198,6 +2225,7 @@ async fn handle_response_create(
             params,
             &trace,
             user_session,
+            cors_headers,
         )
         .await;
     }
@@ -2226,7 +2254,7 @@ async fn handle_response_create(
                 );
                 let payload = inject_platform_profiles_if_absent(payload, "responses.api");
                 store_responses_api_payload(server.as_ref(), &payload);
-                write_http_json_response(socket, 200, payload, "").await?;
+                write_http_json_response(socket, 200, payload, cors_headers).await?;
                 return Ok(());
             }
             let code = classify_responses_upstream_error_code(&err);
@@ -2249,7 +2277,14 @@ async fn handle_response_create(
                     "incomplete_details": null,
                 }),
             );
-            write_http_json_response_with_context(socket, 502, payload, "responses.api").await?;
+            write_http_json_response_with_context(
+                socket,
+                502,
+                payload,
+                "responses.api",
+                cors_headers,
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -2265,7 +2300,7 @@ async fn handle_response_create(
     );
     let payload = inject_platform_profiles_if_absent(payload, "responses.api");
     store_responses_api_payload(server.as_ref(), &payload);
-    write_http_json_response(socket, 200, payload, "").await?;
+    write_http_json_response(socket, 200, payload, cors_headers).await?;
     Ok(())
 }
 
@@ -2274,9 +2309,11 @@ async fn handle_response_get(
     socket: &mut TcpStream,
     server: &AcpServer,
     response_id: &str,
+    cors_headers: &str,
 ) -> Result<()> {
     if let Some(payload) = load_responses_api_payload(server, response_id) {
-        write_http_json_response_with_context(socket, 200, payload, "responses.api").await?;
+        write_http_json_response_with_context(socket, 200, payload, "responses.api", cors_headers)
+            .await?;
     } else {
         write_http_json_response_with_context(
             socket,
@@ -2287,6 +2324,7 @@ async fn handle_response_get(
                 "response id not found",
             ),
             "responses.api",
+            cors_headers,
         )
         .await?;
     }
@@ -2295,6 +2333,7 @@ async fn handle_response_get(
 
 /// Streaming (SSE) path for POST /v1/responses when stream=true.
 /// Sends: response.created → response.output_text.delta → response.completed, then [DONE].
+#[allow(clippy::too_many_arguments)]
 async fn handle_response_stream(
     socket: &mut TcpStream,
     server: Arc<AcpServer>,
@@ -2303,6 +2342,7 @@ async fn handle_response_stream(
     params: crate::acp::r#impl::chat::ChatParams,
     trace: &crate::protocol::rpc_protocol::RequestTraceContext,
     user_session: Option<crate::acp::r#impl::session::UserSession>,
+    cors_headers: &str,
 ) -> Result<()> {
     let created_at = crate::acp::prelude::now_ts();
 
@@ -2317,7 +2357,7 @@ async fn handle_response_stream(
         "incomplete_details": null,
     });
 
-    write_sse_headers(socket, "").await?;
+    write_sse_headers(socket, cors_headers).await?;
     write_sse_event(
         socket,
         "response.created",
@@ -2558,12 +2598,27 @@ async fn http_entry_guard(
     method: &str,
     path: &str,
     peer_addr: SocketAddr,
+    cors_headers: &str,
 ) -> Result<bool> {
-    apply_entry_guards(socket, server, header_part, method, path, peer_addr).await
+    apply_entry_guards(
+        socket,
+        server,
+        header_part,
+        method,
+        path,
+        peer_addr,
+        cors_headers,
+    )
+    .await
 }
 
 /// Route an HTTP GET request based on the path and write the response back to the socket.
-async fn route_http_get(socket: &mut TcpStream, server: &AcpServer, path: &str) -> Result<()> {
+async fn route_http_get(
+    socket: &mut TcpStream,
+    server: &AcpServer,
+    path: &str,
+    cors_headers: &str,
+) -> Result<()> {
     match path {
         "/health" => {
             write_http_json_response_with_context(
@@ -2571,6 +2626,7 @@ async fn route_http_get(socket: &mut TcpStream, server: &AcpServer, path: &str) 
                 200,
                 serde_json::to_value(server.get_status())?,
                 "health",
+                cors_headers,
             )
             .await?;
         }
@@ -2584,6 +2640,7 @@ async fn route_http_get(socket: &mut TcpStream, server: &AcpServer, path: &str) 
                     "data": data,
                 }),
                 "responses.api",
+                cors_headers,
             )
             .await?;
         }
@@ -2593,6 +2650,7 @@ async fn route_http_get(socket: &mut TcpStream, server: &AcpServer, path: &str) 
                 200,
                 build_openai_models_response(),
                 "openai.chat.completions",
+                cors_headers,
             )
             .await?;
         }
@@ -2602,6 +2660,7 @@ async fn route_http_get(socket: &mut TcpStream, server: &AcpServer, path: &str) 
                 200,
                 build_root_capabilities_response(),
                 "initialize",
+                cors_headers,
             )
             .await?;
         }
@@ -2613,7 +2672,7 @@ async fn route_http_get(socket: &mut TcpStream, server: &AcpServer, path: &str) 
                     return Ok(());
                 }
             };
-            handle_response_get(socket, server, response_id).await?;
+            handle_response_get(socket, server, response_id, cors_headers).await?;
         }
         _ => {
             write_http_json_response_with_context(
@@ -2621,6 +2680,7 @@ async fn route_http_get(socket: &mut TcpStream, server: &AcpServer, path: &str) 
                 404,
                 serde_json::json!({"error": t("error.not_found")}),
                 "chat",
+                cors_headers,
             )
             .await?;
         }
@@ -2643,6 +2703,7 @@ async fn route_http_post(
     header_part: &str,
     body_initial_part: &str,
     user_session: Option<crate::acp::r#impl::session::UserSession>,
+    cors_headers: &str,
 ) -> Result<String> {
     let responses_path = path == "/v1/responses";
     let content_length = extract_content_length(header_part).unwrap_or(0);
@@ -2657,6 +2718,7 @@ async fn route_http_post(
                     t("error.body_required"),
                 ),
                 "responses.api",
+                cors_headers,
             )
             .await?;
         } else {
@@ -2665,6 +2727,7 @@ async fn route_http_post(
                 400,
                 serde_json::json!({"error": t("error.body_required")}),
                 "chat",
+                cors_headers,
             )
             .await?;
         }
@@ -2708,6 +2771,7 @@ async fn route_http_post(
                         tf("error.invalid_json", &[("error", &err.to_string())]),
                     ),
                     "responses.api",
+                    cors_headers,
                 )
                 .await?;
             } else {
@@ -2716,6 +2780,7 @@ async fn route_http_post(
                     400,
                     serde_json::json!({"error": tf("error.invalid_json", &[("error", &err.to_string())])}),
                     "chat",
+                    cors_headers,
                 )
                 .await?;
             }
@@ -2736,6 +2801,7 @@ async fn route_http_post(
                                 400,
                                 serde_json::json!({"error": tf("error.invalid_chat_params", &[("error", &err.to_string())])}),
                                 "chat",
+                                cors_headers,
                             )
                             .await?;
                                 return Ok(());
@@ -2755,7 +2821,7 @@ async fn route_http_post(
                     )
                     .await?;
                     let result = inject_platform_profiles_if_absent(result, "chat");
-                    write_http_json_response(socket, 200, result, "").await?;
+                    write_http_json_response(socket, 200, result, cors_headers).await?;
                 }
                 "/chat/stream" => {
                     let params: crate::acp::r#impl::chat::ChatParams =
@@ -2767,12 +2833,13 @@ async fn route_http_post(
                                 400,
                                 serde_json::json!({"error": tf("error.invalid_chat_params", &[("error", &err.to_string())])}),
                                 "chat",
+                                cors_headers,
                             )
                             .await?;
                                 return Ok(());
                             }
                         };
-                    write_sse_headers(socket, "").await?;
+                    write_sse_headers(socket, cors_headers).await?;
 
                     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
                     let trace = http_trace_context("chat.stream");
@@ -2833,6 +2900,7 @@ async fn route_http_post(
                         Arc::clone(&server),
                         body,
                         user_session,
+                        cors_headers,
                     )
                     .await?;
                 }
@@ -2845,6 +2913,7 @@ async fn route_http_post(
                                 400,
                                 serde_json::json!({"error": format!("invalid RPC request: {}", e)}),
                                 "rpc",
+                                cors_headers,
                             )
                             .await?;
                             return Ok(());
@@ -2875,6 +2944,7 @@ async fn route_http_post(
                             500,
                             serde_json::json!({"error": format!("RPC dispatch error: {}", err)}),
                             "rpc",
+                            cors_headers,
                         )
                         .await?;
                         return Ok(());
@@ -2903,7 +2973,7 @@ async fn route_http_post(
                         serde_json::from_str(response_str.trim())
                             .unwrap_or_else(|_| serde_json::json!({"raw": response_str.to_string()}));
 
-                    write_http_json_response(socket, 200, response_value, "").await?;
+                    write_http_json_response(socket, 200, response_value, cors_headers).await?;
                 }
                 "/v1/responses" => {
                     handle_responses_api(
@@ -2911,6 +2981,7 @@ async fn route_http_post(
                         Arc::clone(&server),
                         body,
                         user_session,
+                        cors_headers,
                     )
                     .await?;
                 }
@@ -2920,6 +2991,7 @@ async fn route_http_post(
                         404,
                         serde_json::json!({"error": t("error.not_found")}),
                         "chat",
+                        cors_headers,
                     )
                     .await?;
                 }
@@ -3084,11 +3156,10 @@ async fn check_http_authorization(
     // Resolve permissions from roles (lock is scoped to avoid holding a non-Send
     // guard across .await points)
     let access_decision = server.rbac_enforcer.as_ref().map(|enforcer| {
-        let guard = enforcer.read().expect("rbac lock poisoned");
+        let guard = enforcer.read().unwrap_or_else(|e| e.into_inner());
         let mut p = principal.clone();
         guard.resolve_permissions(&mut p);
-        let decision = guard.check_access(&p, &required_perm);
-        decision
+        guard.check_access(&p, &required_perm)
     });
 
     if let Some(decision) = access_decision {
@@ -3187,6 +3258,7 @@ async fn handle_http_connection(
         parsed.method,
         parsed.path,
         peer_addr,
+        &cors_headers,
     )
     .await?
     {
@@ -3194,11 +3266,7 @@ async fn handle_http_connection(
     }
 
     if parsed.method == "GET" {
-        // For GET requests we currently don't pass CORS headers directly
-        // (CORS is primarily for POST/OPTIONS).  If needed, the request
-        // already has the `Origin` header and clients can rely on the
-        // OPTIONS preflight for CORS negotiation.
-        return route_http_get(socket, server.as_ref(), parsed.path).await;
+        return route_http_get(socket, server.as_ref(), parsed.path, &cors_headers).await;
     }
 
     if parsed.method != "POST" {
@@ -3207,14 +3275,11 @@ async fn handle_http_connection(
             405,
             serde_json::json!({"error": t("error.method_not_allowed")}),
             "chat",
+            &cors_headers,
         )
         .await?;
         return Ok(());
     }
-
-    // Pass CORS headers through to the POST handler (as a label for now —
-    // future enhancement: thread cors_headers into route_http_post).
-    drop(cors_headers);
 
     let _path_label = route_http_post(
         socket,
@@ -3223,6 +3288,7 @@ async fn handle_http_connection(
         parsed.header_part,
         parsed.body_initial_part,
         user_session,
+        &cors_headers,
     )
     .await?;
 
@@ -3329,6 +3395,7 @@ async fn write_entry_rejection(
     source: &str,
     path: &str,
     policy: &str,
+    cors_headers: &str,
 ) -> Result<()> {
     let trace_id = format!("entry-{}", crate::acp::prelude::now_ts_ms());
     write_http_json_response(
@@ -3346,7 +3413,7 @@ async fn write_entry_rejection(
                 "trace_id": trace_id,
             }
         }),
-        "",
+        cors_headers,
     )
     .await
 }
@@ -3358,6 +3425,7 @@ async fn apply_entry_guards(
     method: &str,
     path: &str,
     peer_addr: SocketAddr,
+    cors_headers: &str,
 ) -> Result<bool> {
     if entry_guard_exempt_path(path) {
         return Ok(false);
@@ -3388,6 +3456,7 @@ async fn apply_entry_guards(
                 &source,
                 path,
                 "entry_auth",
+                cors_headers,
             )
             .await?;
             return Ok(true);
@@ -3410,6 +3479,7 @@ async fn apply_entry_guards(
                 &source,
                 path,
                 "entry_auth",
+                cors_headers,
             )
             .await?;
             return Ok(true);
@@ -3439,6 +3509,7 @@ async fn apply_entry_guards(
             &source,
             path,
             "entry_rate_limit",
+            cors_headers,
         )
         .await?;
         return Ok(true);

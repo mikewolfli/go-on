@@ -164,7 +164,7 @@ impl SessionManager {
 
         // First try the in-memory cache.
         {
-            let inner = self.inner.read().expect("lock poisoned");
+            let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
             if let Some(session) = inner.sessions.get(token) {
                 if session.expires_at > now_ms() {
                     return TokenIntrospectResult {
@@ -203,7 +203,7 @@ impl SessionManager {
         };
 
         {
-            let mut inner = self.inner.write().expect("lock poisoned");
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             inner.sessions.insert(token.clone(), session);
         }
 
@@ -214,7 +214,7 @@ impl SessionManager {
     ///
     /// Returns `true` if at least one session was removed.
     pub fn revoke_token(&self, user_id: &str) -> bool {
-        let mut inner = self.inner.write().expect("lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let before = inner.sessions.len();
         inner.sessions.retain(|_, s| s.user_id != user_id);
         inner.sessions.len() < before
@@ -224,7 +224,7 @@ impl SessionManager {
     ///
     /// Returns `true` if the session existed and was removed.
     pub fn revoke_session(&self, token: &str) -> bool {
-        let mut inner = self.inner.write().expect("lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         inner.sessions.remove(token).is_some()
     }
 
@@ -266,7 +266,7 @@ impl SessionManager {
         }
 
         // Verify HMAC signature.
-        let inner = self.inner.read().expect("lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let secret = &inner.token_secret;
         let payload = format!("{}:{}", user_id, expires_at_str);
         let expected_sig = hmac_sha256_b64(secret.as_bytes(), payload.as_bytes());
@@ -340,7 +340,7 @@ impl SessionManager {
     /// Remove all sessions that have expired.
     pub fn cleanup_expired(&self) -> usize {
         let now = now_ms();
-        let mut inner = self.inner.write().expect("lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let before = inner.sessions.len();
         inner.sessions.retain(|_, s| s.expires_at > now);
         before - inner.sessions.len()
@@ -358,7 +358,7 @@ impl SessionManager {
 
     /// Build a signed token string: `user_id:base64_hmac:expires_at_ms`.
     fn build_token(&self, user_id: &str, expires_at: i64) -> Result<String, String> {
-        let inner = self.inner.read().expect("lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let payload = format!("{}:{}", user_id, expires_at);
         let sig = hmac_sha256_b64(inner.token_secret.as_bytes(), payload.as_bytes());
         Ok(format!("{}:{}:{}", user_id, sig, expires_at))
@@ -396,16 +396,16 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     // Pad key to block size.
     key.resize(BLOCK_SIZE, 0);
 
-    let mut ipad = vec![0x36u8; BLOCK_SIZE];
-    let mut opad = vec![0x5cu8; BLOCK_SIZE];
+    let mut ipad = [0x36u8; BLOCK_SIZE];
+    let mut opad = [0x5cu8; BLOCK_SIZE];
 
     for i in 0..BLOCK_SIZE {
         ipad[i] ^= key[i];
         opad[i] ^= key[i];
     }
 
-    let inner_hash = Sha256::digest(&[&ipad[..], data].concat());
-    let result = Sha256::digest(&[&opad[..], &inner_hash[..]].concat());
+    let inner_hash = Sha256::digest([&ipad[..], data].concat());
+    let result = Sha256::digest([&opad[..], &inner_hash[..]].concat());
 
     result.to_vec()
 }

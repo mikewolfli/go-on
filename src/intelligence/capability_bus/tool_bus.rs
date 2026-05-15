@@ -326,8 +326,15 @@ impl ToolBus {
                 // This mirrors the same pattern used by `execute_loop` in
                 // `orchestration::tool` (which is also synchronous).
                 let output_value = std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new()
-                        .expect("ToolBus: failed to create Tokio runtime for skill dispatch");
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(
+                                "ToolBus: failed to create Tokio runtime for skill dispatch: {}",
+                                e
+                            ));
+                        }
+                    };
                     rt.block_on(skill.execute(&skill_input))
                 })
                 .join()

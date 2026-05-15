@@ -126,10 +126,7 @@ impl MemoryBus {
     /// Returns the first hit found according to the provided `strategy`.
     /// If no tier is configured or no entry is found, returns `None`.
     pub fn lookup(&self, key: &str, strategy: &CacheStrategy) -> Option<Vec<u8>> {
-        let mut profile = self
-            .profile
-            .lock()
-            .expect("MemoryBus profile mutex poisoned");
+        let mut profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
 
         // ---- L1: In-memory response cache ----
         if strategy.use_l1_memory {
@@ -257,10 +254,7 @@ impl MemoryBus {
 
     /// Return a snapshot of the current bus profile / metrics.
     pub fn profile(&self) -> MemoryBusProfile {
-        let p = self
-            .profile
-            .lock()
-            .expect("MemoryBus profile mutex poisoned");
+        let p = self.profile.lock().unwrap_or_else(|e| e.into_inner());
         let mut snapshot = p.clone();
 
         // Enrich with live counts from available backends.

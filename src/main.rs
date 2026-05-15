@@ -129,7 +129,7 @@ use crate::config::{
     is_agent_env_ready, validate_runtime_readiness, AppConfig, AutoTuneState, ConfigWarning,
 };
 use crate::flow::FlowManager;
-use crate::i18n::runtime::{init_i18n, tf};
+use crate::i18n::runtime::{init_i18n, t, tf};
 use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::mcp_server::{McpHttpServer, McpStdioServer};
 use crate::protocol::access_mode::{resolve_access_selection, TransportMode};
@@ -1492,8 +1492,8 @@ async fn handle_chat_mode(
     config_path: &std::path::Path,
 ) -> Result<()> {
     if config.agents.is_empty() {
-        eprintln!("No AI providers configured.");
-        eprintln!("Run the setup wizard first:");
+        eprintln!("{}", t("error.no_providers_configured"));
+        eprintln!("{}", t("error.setup_wizard_first"));
         eprintln!("  go-on -c {} --setup", config_path.display());
         return Ok(());
     }

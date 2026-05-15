@@ -189,11 +189,7 @@ pub fn build_preflight_response_headers(
 mod tests {
     use super::*;
 
-    // -- Default config ----------------------------------------------------
-
-    fn default_config() -> CorsConfig {
-        CorsConfig::default()
-    }
+    // -- Test helpers ------------------------------------------------------
 
     fn wildcard_config() -> CorsConfig {
         CorsConfig {

@@ -4689,7 +4689,7 @@ fn execute_tool_calls(
 
 /// A detected repeated task pattern in a conversation.
 /// Used by P3 to proactively propose skill creation.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-17
 struct DetectedTaskPattern {
     /// Suggested skill name
     name: String,

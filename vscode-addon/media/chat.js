@@ -1,5 +1,6 @@
 // Chat functionality with enhanced features
 (function () {
+  // eslint-disable-next-line no-undef
   const vscode = acquireVsCodeApi();
   const messagesContainer = document.getElementById("messages");
   const messageInput = document.getElementById("messageInput");
@@ -30,10 +31,16 @@
   // Enhanced message rendering with markdown support
   function renderMarkdown(text) {
     // First, handle <thinking>...</thinking> blocks - collapsed by default
-    text = text.replace(/<thinking>([\s\S]*?)<\/thinking>/gi, (match, content) => {
-      const escapedContent = escapeHtml(content.trim()).replace(/\n/g, '<br>');
-      return `<details class="thinking-block"><summary class="thinking-toggle">💭 Thinking</summary><div class="thinking-content">${escapedContent}</div></details>`;
-    });
+    text = text.replace(
+      /<thinking>([\s\S]*?)<\/thinking>/gi,
+      (match, content) => {
+        const escapedContent = escapeHtml(content.trim()).replace(
+          /\n/g,
+          "<br>",
+        );
+        return `<details class="thinking-block"><summary class="thinking-toggle">💭 Thinking</summary><div class="thinking-content">${escapedContent}</div></details>`;
+      },
+    );
 
     // Then handle code blocks - collapsible via <details>
     text = text
@@ -44,8 +51,8 @@
           language === "python" ||
           language === "bash";
         // Process newlines in code content as <br> to preserve formatting
-        const escapedCode = escapeHtml(code.trim()).replace(/\n/g, '<br>');
-        return `<details class="code-block" open data-language="${language}"><summary class="code-header"><span class="code-lang">${escapeHtml(language)}</span><span class="code-actions">${canRun ? '<button class="run-btn" data-action="run">▶️</button>' : ''}<button class="copy-btn" data-action="copy">📋</button></span></summary><div class="code-content"><code class="language-${language}">${escapedCode}</code></div></details>`;
+        const escapedCode = escapeHtml(code.trim()).replace(/\n/g, "<br>");
+        return `<details class="code-block" open data-language="${language}"><summary class="code-header"><span class="code-lang">${escapeHtml(language)}</span><span class="code-actions">${canRun ? '<button class="run-btn" data-action="run">▶️</button>' : ""}<button class="copy-btn" data-action="copy">📋</button></span></summary><div class="code-content"><code class="language-${language}">${escapedCode}</code></div></details>`;
       })
       .replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
       .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
@@ -73,7 +80,10 @@
     if (!codeElement) return;
 
     if (action === "copy") {
-      vscode.postMessage({ type: "copyCode", code: codeElement.textContent || "" });
+      vscode.postMessage({
+        type: "copyCode",
+        code: codeElement.textContent || "",
+      });
       const orig = button.textContent;
       button.textContent = "✅";
       setTimeout(() => (button.textContent = orig), 1000);
@@ -438,11 +448,12 @@
           `Code execution result:\n\`\`\`\n${message.result}\n\`\`\``,
         );
         break;
-      case "updateStatus":
+      case "updateStatus": {
         const statusBar = document.getElementById("status");
         statusBar.textContent = message.status;
         updateSessionIndicator();
         break;
+      }
       case "showInputBoxResult":
         if (message.id === "newSessionName" && message.value) {
           createNewSession(message.value.trim());

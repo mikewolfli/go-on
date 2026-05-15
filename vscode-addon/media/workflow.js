@@ -1,4 +1,5 @@
 (function () {
+  // eslint-disable-next-line no-undef
   const vscode = acquireVsCodeApi();
 
   const workflowList = document.getElementById("workflowList");
@@ -44,7 +45,6 @@
   // Pending workflow-creation state for multi-step input flow
   let pendingWorkflowName = null;
   let pendingWorkflowSteps = [];
-  let pendingWorkflowType = null;
 
   createWorkflowBtn.addEventListener("click", () => {
     // NOTE: vscode.window is NOT available in webview context.
@@ -175,6 +175,5 @@
     // Reset pending state
     pendingWorkflowName = null;
     pendingWorkflowSteps = [];
-    pendingWorkflowType = null;
   }
 })();

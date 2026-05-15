@@ -276,7 +276,7 @@ impl DistributedMemoryBus {
         // potential deadlock with maybe_evict_oldest re-locking shared_entries.
         let shared_len = self.shared_entries.lock().map(|g| g.len()).unwrap_or(0);
 
-        let mut entries = self.local_entries.lock().expect("local_entries lock");
+        let mut entries = self.local_entries.lock().unwrap_or_else(|e| e.into_inner());
         entries.push_back(entry);
         Self::maybe_evict_oldest(&mut entries, shared_len, self.max_entries);
 
@@ -403,7 +403,7 @@ impl DistributedMemoryBus {
     pub fn share_with_peers(&self, entry_id: &str) -> bool {
         // 1. Find the local entry
         let entry = {
-            let entries = self.local_entries.lock().expect("local_entries lock");
+            let entries = self.local_entries.lock().unwrap_or_else(|e| e.into_inner());
             entries.iter().find(|e| e.id == entry_id).cloned()
         };
 
@@ -424,7 +424,10 @@ impl DistributedMemoryBus {
         //    We compute the total length without re-acquiring shared_entries
         //    to avoid a deadlock with maybe_evict_oldest.
         {
-            let mut guard = self.shared_entries.lock().expect("shared_entries lock");
+            let mut guard = self
+                .shared_entries
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             guard.push_back(shared_entry);
             let shared_len = guard.len();
             drop(guard);
@@ -497,7 +500,11 @@ impl DistributedMemoryBus {
 
     /// Return a snapshot of the current profile / metrics.
     pub fn profile(&self) -> DistributedMemoryBusProfile {
-        let mut p = self.profile.lock().expect("profile lock").clone();
+        let mut p = self
+            .profile
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
 
         // Refresh live counters from actual data structures
         if let Ok(local) = self.local_entries.lock() {
@@ -553,7 +560,10 @@ impl DistributedMemoryBus {
 
         // Store config
         {
-            let mut cfg = self.transport_config.lock().expect("transport_config lock");
+            let mut cfg = self
+                .transport_config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             *cfg = Some(config.clone());
         }
 
@@ -572,7 +582,7 @@ impl DistributedMemoryBus {
             .name("dmb-transport".into())
             .spawn(move || {
                 let interval = {
-                    let cfg = transport_config.lock().expect("transport_config lock");
+                    let cfg = transport_config.lock().unwrap_or_else(|e| e.into_inner());
                     cfg.as_ref().map(|c| c.sync_interval_ms).unwrap_or(30_000)
                 };
 
@@ -609,7 +619,7 @@ impl DistributedMemoryBus {
                 }
             })?;
 
-        *self.sync_thread.lock().expect("sync_thread lock") = Some(handle);
+        *self.sync_thread.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
 
         // Update profile
         if let Ok(mut p) = self.profile.lock() {
@@ -635,7 +645,12 @@ impl DistributedMemoryBus {
         self.transport_running.store(false, Ordering::SeqCst);
 
         // Join the background thread
-        if let Some(handle) = self.sync_thread.lock().expect("sync_thread lock").take() {
+        if let Some(handle) = self
+            .sync_thread
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
             let _ = handle.join();
         }
 
@@ -700,7 +715,10 @@ impl DistributedMemoryBus {
         let count = entries.len();
         let now = now_ms();
 
-        let mut guard = self.shared_entries.lock().expect("shared_entries lock");
+        let mut guard = self
+            .shared_entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         for entry in entries {
             let shared = SharedMemoryEntry {
                 entry,
@@ -757,12 +775,12 @@ impl DistributedMemoryBus {
 
         // Collect local entries that haven't been synced yet
         let entries_to_sync: Vec<MemoryBusEntry> = {
-            let guard = local_entries.lock().expect("local_entries lock");
+            let guard = local_entries.lock().unwrap_or_else(|e| e.into_inner());
             guard.iter().cloned().collect()
         };
 
         if entries_to_sync.is_empty() {
-            let mut s = stats.lock().expect("stats lock");
+            let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());
             s.last_sync_status = SyncStatus::Idle;
             return Ok(SyncStatus::Idle);
         }
@@ -782,7 +800,7 @@ impl DistributedMemoryBus {
                 entries_synced: 0,
                 duration_ms: duration,
             };
-            let mut s = stats.lock().expect("stats lock");
+            let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());
             s.last_sync_status = status.clone();
             return Ok(status);
         }
@@ -805,7 +823,7 @@ impl DistributedMemoryBus {
             // peer received them. In a real implementation this would be an
             // actual HTTP call. Here we simulate by storing locally as shared.
             {
-                let mut guard = shared_entries.lock().expect("shared_entries lock");
+                let mut guard = shared_entries.lock().unwrap_or_else(|e| e.into_inner());
                 let now = now_ms();
                 for entry in &entries_to_sync {
                     let shared = SharedMemoryEntry {
@@ -830,7 +848,7 @@ impl DistributedMemoryBus {
 
         // Update stats
         {
-            let mut s = stats.lock().expect("stats lock");
+            let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());
             s.total_syncs_sent = s.total_syncs_sent.wrapping_add(1);
             s.total_syncs_received = s.total_syncs_received.wrapping_add(peers.len() as u64);
             s.bytes_sent = s.bytes_sent.wrapping_add(total_bytes_sent);

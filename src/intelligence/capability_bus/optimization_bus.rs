@@ -187,7 +187,7 @@ impl BusFailurePrevention {
     }
 
     fn is_circuit_broken(&self, agent: &str) -> bool {
-        let fp = self.inner.lock().expect("FailurePrevention lock");
+        let fp = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         matches!(
             fp.get_circuit_state(agent),
             crate::optimization::failure_prevention::CircuitBreakerState::Open
@@ -195,13 +195,13 @@ impl BusFailurePrevention {
     }
 
     fn record_outcome(&self, agent: &str, duration_ms: u64, success: bool) {
-        let mut fp = self.inner.lock().expect("FailurePrevention lock");
+        let mut fp = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         fp.record_outcome(agent, success, duration_ms);
     }
 
     fn circuit_breaker_trips(&self) -> u64 {
         // Count how many agents currently have an open circuit breaker.
-        let fp = self.inner.lock().expect("FailurePrevention lock");
+        let fp = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         fp.get_health_report()
             .iter()
             .filter(|h| {
@@ -307,13 +307,19 @@ impl OptimizationBus {
         token_count: u64,
         priority: &str,
     ) -> OptimizationRecommendation {
-        let cost = self.cost_optimizer.lock().expect("CostEstimator lock");
-        let speed = self.speed_optimizer.lock().expect("SpeedOptimizer lock");
+        let cost = self
+            .cost_optimizer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let speed = self
+            .speed_optimizer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let reliability = self
             .reliability_optimizer
             .lock()
-            .expect("ReliabilityOptimizer lock");
-        let mut profile = self.profile.lock().expect("Profile lock");
+            .unwrap_or_else(|e| e.into_inner());
+        let mut profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
 
         profile.total_optimizations = profile.total_optimizations.wrapping_add(1);
 
@@ -356,7 +362,7 @@ impl OptimizationBus {
     pub fn is_circuit_broken(&self, agent: &str) -> bool {
         let broken = self.failure_prevention.is_circuit_broken(agent);
         if broken {
-            let mut profile = self.profile.lock().expect("Profile lock");
+            let mut profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
             profile.circuit_breaker_trips = profile.circuit_breaker_trips.wrapping_add(1);
         }
         broken
@@ -373,14 +379,14 @@ impl OptimizationBus {
 
         // If this was a failure, log a reliability flag.
         if !success {
-            let mut profile = self.profile.lock().expect("Profile lock");
+            let mut profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
             profile.reliability_flags = profile.reliability_flags.wrapping_add(1);
         }
     }
 
     /// Return a snapshot of the current bus profile.
     pub fn profile(&self) -> OptimizationBusProfile {
-        let profile = self.profile.lock().expect("Profile lock");
+        let profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
         let trips = self.failure_prevention.circuit_breaker_trips();
         OptimizationBusProfile {
             circuit_breaker_trips: trips,

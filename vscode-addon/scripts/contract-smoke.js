@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -10,10 +11,6 @@ const contract = JSON.parse(
     path.join(repoRoot, "contracts", "editor-capability-matrix.json"),
     "utf8",
   ),
-);
-const extensionSource = fs.readFileSync(
-  path.join(addonRoot, "src", "extension.ts"),
-  "utf8",
 );
 const runtimeManagerSource = fs.readFileSync(
   path.join(addonRoot, "src", "runtimeManager.ts"),

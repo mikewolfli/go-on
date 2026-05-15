@@ -407,7 +407,7 @@ async fn handle_http_connection(
                         socket,
                         401,
                         serde_json::json!({
-                            "error": "Unauthorized",
+                            "error": t("error.entry_auth_required"),
                             "code": "ENTRY_AUTH_REQUIRED"
                         }),
                         &cors_headers,
@@ -420,7 +420,7 @@ async fn handle_http_connection(
                     socket,
                     503,
                     serde_json::json!({
-                        "error": "Service Unavailable",
+                        "error": t("error.entry_auth_misconfigured"),
                         "code": "ENTRY_AUTH_MISCONFIGURED"
                     }),
                     &cors_headers,
@@ -446,7 +446,7 @@ async fn handle_http_connection(
                         socket,
                         401,
                         serde_json::json!({
-                            "error": "Authentication required",
+                            "error": t("error.auth_required"),
                             "code": "AUTH_REQUIRED"
                         }),
                         &cors_headers,
@@ -474,12 +474,12 @@ async fn handle_http_connection(
                     match enforcer_guard.check_access(&principal, &required_perm) {
                         AccessDecision::Allow => None,
                         AccessDecision::Deny { reason } => Some(serde_json::json!({
-                            "error": "Forbidden",
+                            "error": tf("error.auth_forbidden", &[("reason", &reason)]),
                             "code": "ACCESS_DENIED",
                             "reason": reason
                         })),
                         AccessDecision::Escalate { required_role } => Some(serde_json::json!({
-                            "error": "Insufficient privileges",
+                            "error": tf("error.auth_insufficient_privileges", &[("required_role", &required_role)]),
                             "code": "PRIVILEGE_ESCALATION_REQUIRED",
                             "required_role": required_role
                         })),
@@ -498,9 +498,14 @@ async fn handle_http_connection(
     let content_length = extract_content_length(header_part).unwrap_or(0);
     if content_length > MAX_BODY_SIZE {
         anyhow::bail!(
-            "request body too large: {} bytes (max {})",
-            content_length,
-            MAX_BODY_SIZE
+            "{}",
+            tf(
+                "error.http_body_too_large",
+                &[
+                    ("size", &content_length.to_string()),
+                    ("max", &MAX_BODY_SIZE.to_string())
+                ]
+            )
         );
     }
     let mut body_bytes = body_initial_part.as_bytes().to_vec();

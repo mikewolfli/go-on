@@ -1359,8 +1359,10 @@ impl RuntimeConfig {
         if self.cors_allowed_origins.is_empty() {
             return None;
         }
-        let mut cfg = CorsConfig::default();
-        cfg.allowed_origins = self.cors_allowed_origins.clone();
+        let cfg = CorsConfig {
+            allowed_origins: self.cors_allowed_origins.clone(),
+            ..CorsConfig::default()
+        };
         Some(cfg)
     }
 }

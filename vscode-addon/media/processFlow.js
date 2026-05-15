@@ -1,4 +1,5 @@
 (function () {
+  // eslint-disable-next-line no-undef
   const vscode = acquireVsCodeApi();
 
   const processListEl = document.getElementById("processList");
@@ -140,10 +141,10 @@
       draggingNode = null;
     };
 
-    drawConnections(svg, process, processCanvas);
+    drawConnections(svg);
   }
 
-  function drawConnections(svg, process) {
+  function drawConnections(svg) {
     svg.innerHTML = "";
 
     const nodes = Array.from(processCanvas.querySelectorAll(".stage-node"));

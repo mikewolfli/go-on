@@ -543,14 +543,21 @@ impl IntoIterator for ForkRegistry {
     type IntoIter = std::collections::hash_map::IntoIter<String, ForkEntry>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let inner = Arc::into_inner(self.inner)
-            .expect("ForkRegistry has multiple references")
-            .into_inner()
-            .unwrap_or_else(|e| {
-                warn!("ForkRegistry lock poisoned in into_iter, recovering");
-                e.into_inner()
-            });
-        inner.forks.into_iter()
+        match Arc::into_inner(self.inner) {
+            Some(inner) => {
+                let inner = inner.into_inner().unwrap_or_else(|e| {
+                    warn!("ForkRegistry lock poisoned in into_iter, recovering");
+                    e.into_inner()
+                });
+                inner.forks.into_iter()
+            }
+            None => {
+                warn!(
+                    "ForkRegistry has multiple references in into_iter, returning empty iterator"
+                );
+                HashMap::new().into_iter()
+            }
+        }
     }
 }
 

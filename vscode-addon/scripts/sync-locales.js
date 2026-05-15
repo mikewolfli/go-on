@@ -1,8 +1,9 @@
-const fs = require('fs');
-const path = require('path');
+/* eslint-disable no-console */
+const fs = require("fs");
+const path = require("path");
 
-const sourceDir = path.resolve(__dirname, '..', 'src', 'locales');
-const targetDir = path.resolve(__dirname, '..', 'out', 'locales');
+const sourceDir = path.resolve(__dirname, "..", "src", "locales");
+const targetDir = path.resolve(__dirname, "..", "out", "locales");
 
 if (!fs.existsSync(sourceDir)) {
   console.error(`Source locales directory not found: ${sourceDir}`);

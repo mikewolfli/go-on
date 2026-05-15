@@ -3,6 +3,21 @@ use crate::config::RuntimeConfig;
 // RuntimeConfig import removed after unsafe code removal in handle_config_reload
 use crate::protocol::access_mode::{normalize_protocol_mode, resolve_access_selection};
 use crate::shared::secret_override::get_secret;
+use std::sync::OnceLock;
+
+/// Module-level static for hot-reloaded runtime config.
+/// Shared between `handle_config_reload` (write) and `try_get_reload_config` (read).
+pub(super) static RUNTIME_CONFIG: OnceLock<std::sync::RwLock<Option<RuntimeConfig>>> =
+    std::sync::OnceLock::new();
+
+/// Try to read the reloaded runtime config, if one was stored via `config.reload`.
+#[allow(dead_code)] // Public API — reserved for subsystems that support hot-reload
+pub fn try_get_reload_config() -> Option<RuntimeConfig> {
+    RUNTIME_CONFIG
+        .get()
+        .and_then(|rw| rw.read().ok())
+        .and_then(|guard| guard.clone())
+}
 
 pub(super) fn governance_rule_fingerprint(config_path: Option<&str>) -> Value {
     let base_dir = config_path
@@ -336,14 +351,12 @@ pub(super) async fn handle_config_reload(
     // read.  Full subsystem re-initialization (agent registry, cache,
     // vector store) requires a server restart — those resources cannot
     // be safely swapped at runtime without coordination.
-    // Store the new runtime config in a static OnceLock so subsystems that
-    // support hot-reload can read the updated values.  The runtime_config
-    // on AcpServer itself is not updated because a full live swap would
-    // require coordination across all request handlers.  The response
-    // explicitly warns: "agent/cache/vector changes require restart".
-    use std::sync::OnceLock;
-    static RUNTIME_CONFIG: OnceLock<std::sync::RwLock<Option<RuntimeConfig>>> =
-        std::sync::OnceLock::new();
+    // Store the new runtime config in the module-level static OnceLock so
+    // subsystems that support hot-reload can read the updated values via
+    // `try_get_reload_config()`.  The runtime_config on AcpServer itself
+    // is not updated because a full live swap would require coordination
+    // across all request handlers.  The response explicitly warns:
+    // "agent/cache/vector changes require restart".
     if let Some(new_config) = config.runtime.clone() {
         if let Ok(mut lock) = RUNTIME_CONFIG
             .get_or_init(|| std::sync::RwLock::new(None))
