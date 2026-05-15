@@ -310,7 +310,7 @@ impl EvidenceWeightedPromotion {
     }
 
     /// Return a snapshot of the full promotion history.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-13 — reserved for diagnostic / observability endpoint
     pub fn all_history(&self) -> HashMap<String, Vec<PromotionHistoryEntry>> {
         self.history
             .lock()

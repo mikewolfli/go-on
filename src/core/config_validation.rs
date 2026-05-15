@@ -515,6 +515,37 @@ impl ConfigValidator {
                 }
             }
         }
+
+        // Check multi-user / user auth configuration
+        if let Some(runtime) = &self.config.runtime {
+            if runtime.user_auth_enabled {
+                if runtime.user_auth_token_secret == "go-on-multi-user-secret" {
+                    result.warnings.push(ValidationWarning {
+                        message: "user_auth is enabled with the default token secret 'go-on-multi-user-secret'; set a strong, unique secret via user_auth_token_secret or user_auth_token_secret_env".to_string(),
+                        section: "runtime.user_auth".to_string(),
+                    });
+                }
+
+                if runtime.user_auth_token_secret_env.is_empty() {
+                    result.warnings.push(ValidationWarning {
+                        message: "user_auth is enabled but user_auth_token_secret_env is empty; the token secret should be configured via environment variable in production".to_string(),
+                        section: "runtime.user_auth".to_string(),
+                    });
+                }
+            }
+
+            if runtime.cors_allowed_origins.iter().any(|o| o == "*") {
+                result.warnings.push(ValidationWarning {
+                    message: "cors_allowed_origins contains '*' wildcard, which permits any origin to access the API; restrict to specific origins in production".to_string(),
+                    section: "runtime.cors".to_string(),
+                });
+            }
+
+            if runtime.cors_allowed_origins.is_empty() && runtime.acp_http_bind_addr.is_some() {
+                // Not a warning, just informational — the user may intend to serve APIs internally.
+                // We leave this intentionally informational only.
+            }
+        }
     }
 
     /// Validate agent configurations

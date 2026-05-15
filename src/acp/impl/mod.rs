@@ -15,9 +15,14 @@ pub mod agent;
 pub mod io;
 // Storage implementation functions
 pub mod storage;
+// CORS support for ACP HTTP server
+pub mod cors;
+// User session management
+pub mod session;
 
 // Re-export for convenience
 pub use runtime::*;
+pub use session::UserSession;
 
 // Note: During migration, this module serves as a bridge between
 // the old include! structure and the new modular structure.

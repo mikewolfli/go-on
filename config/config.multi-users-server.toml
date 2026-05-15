@@ -2,9 +2,11 @@
 # go-on Multi-Users Server Profile (profile-multi-users-server)
 #   Build:   cargo build --no-default-features -F profile-multi-users-server
 #   Backend: PostgreSQL + pgvector, multi-user production
-#   Phase 4: 14 buses, 21 F-GAP modules, i18n ~95%
-#   Tests:   898+ (798 unit + 86 RPC + 14 transport)
+#   Full multi-user features: CORS, JWT-like auth, RBAC, tenant quotas
 #   NOTE:    Set DB_USER, DB_PASS, DB_HOST env vars before startup.
+#            Set GO_ON_ENTRY_API_KEY for gateway auth.
+#            Set GO_ON_USER_AUTH_TOKEN_SECRET for user token signing.
+#            Set GO_ON_CORS_ALLOWED_ORIGINS for allowed origins (comma-separated).
 # ============================================================
 
 default_phase = "think"
@@ -13,12 +15,18 @@ model_selection_mode = "adaptive"
 [protocol]
 mode = "acp_http"
 
+# ── Cache (PostgreSQL in production, SQLite fallback for dev) ──────────
+# In production with profile-multi-users-server, set:
+#   cache.connection_string = "postgres://${DB_USER}:${DB_PASS}@${DB_HOST}/goon_cache"
 [cache]
 enabled = true
 path = "acp_cache.sqlite3"
 default_ttl_seconds = 3600
 max_entries = 50000
 
+# ── Vector Store (pgvector in production, sqlite-vec fallback for dev) ─
+# In production with profile-multi-users-server, set:
+#   vector.connection_string = "postgres://${DB_USER}:${DB_PASS}@${DB_HOST}/goon_vector"
 [vector]
 enabled = true
 auto_mode = false
@@ -33,32 +41,55 @@ summary_enabled = true
 summary_trigger_messages = 8
 summary_max_chars = 1200
 
+# ── Runtime Configuration ─────────────────────────────────────────────
 [runtime]
 maintenance_interval_seconds = 120
 health_interval_seconds = 60
 shutdown_drain_seconds = 60
-sqlite_vacuum_interval_cycles = 120
 acp_http_bind_addr = "0.0.0.0:8090"
+production_strict = true
+
+# ── Gateway Entry Auth (shared API key for all ingress) ───────────────
 entry_auth_enabled = true
 entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 5000
 entry_rate_limit_burst = 1000
-production_strict = true
+
+# ── User Authentication (per-user JWT-like tokens) ────────────────────
+user_auth_enabled = true
+user_auth_token_secret_env = "GO_ON_USER_AUTH_TOKEN_SECRET"
+user_auth_token_ttl_seconds = 86400
+
+# ── Cross-Origin Resource Sharing (CORS) ──────────────────────────────
+# Comma-separated list of allowed origins.
+# Set GO_ON_CORS_ALLOWED_ORIGINS env var at runtime, or configure here.
+# Use "*" to allow all origins (development only).
+cors_allowed_origins = []
+
+# ── Tenant Resource Quotas ────────────────────────────────────────────
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
+
+# ── Observability ─────────────────────────────────────────────────────
 otel_enabled = true
 otel_exporter = "otlp"
 otel_service_name = "go-on-multi"
 otel_sample_ratio = 0.5
 trace_slow_top_n = 50
-i18n_enabled = true
-i18n_default_language = "en_US"
+
+# ── Skills ────────────────────────────────────────────────────────────
 skills_enabled = false
 skills_import_enabled = false
 skills_allowed_sources = []
 skills_require_sha256 = true
 skills_cache_dir = "skills_cache"
+
+# ── Governance ────────────────────────────────────────────────────────
 governance_enabled = true
 governance_policy_mode = "enforce"
 
+# ── Agents ────────────────────────────────────────────────────────────
 [agents]
 
 [agents.deepseek]
@@ -67,6 +98,11 @@ api_key_env = "keyring://go-on/deepseek_api_key"
 model = "deepseek-chat"
 supports_system = true
 
+# ── Multi-User Access: RBAC roles can be extended via config ──────────
+# Each agent can have rbac_roles that limit which users can access it.
+# e.g. agents.deepseek.rbac_roles = ["admin", "user"]
+
+# ── Flow Configuration ────────────────────────────────────────────────
 [flow]
 name = "Multi-User Adaptive"
 phases = ["think", "act", "check", "done"]

@@ -618,6 +618,7 @@ impl HyperResilienceEngine {
     /// In a real deployment this would spawn a background task that periodically
     /// evaluates system metrics and triggers self-healing. Here we simply mark
     /// the engine as having health checks running.
+    #[allow(dead_code)] // Public API — reserved for background health-check integration
     pub fn start_health_checks(&self) {
         // TODO: Replace simulated health metrics with real health-check
         // probes that ping each registered circuit breaker / failover

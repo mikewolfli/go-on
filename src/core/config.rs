@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use crate::i18n::runtime::tf;
 
+use crate::acp::r#impl::cors::CorsConfig;
 use crate::agent::inspect_secret_pool;
 use crate::orchestration::roles::{install_role_registry, RoleDefinition};
 
@@ -179,7 +180,7 @@ struct ProviderSpec {
 
 impl ProviderSpec {
     /// Returns whether this provider supports vision/image inputs.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-13 — reserved for multi-modal capability checks
     pub fn supports_vision(&self) -> bool {
         self.supports_vision.unwrap_or(false)
     }
@@ -1020,7 +1021,7 @@ fn default_agent_config(provider: &str) -> Option<AgentConfig> {
 }
 
 /// Legacy helper for manual config compat, not used by modern Path B routing.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-13 — kept for manual config compatibility, not used in Path B
 fn preferred_review_agents(providers: &[String]) -> Vec<String> {
     let mut reviewers: Vec<String> = providers
         .iter()
@@ -1040,7 +1041,7 @@ fn preferred_review_agents(providers: &[String]) -> Vec<String> {
 }
 
 /// Legacy helper for manual config compat, not used by modern Path B routing.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-13 — kept for manual config compatibility, not used in Path B
 fn preferred_delivery_agents(providers: &[String]) -> Vec<String> {
     if providers.iter().any(|provider| provider == "copilot") {
         return vec!["copilot".to_string()];
@@ -1280,6 +1281,34 @@ pub struct RuntimeConfig {
     /// Cache directory used to persist imported skill manifests and index.
     #[serde(default = "default_runtime_skills_cache_dir")]
     pub skills_cache_dir: String,
+    /// Allowed CORS origins for the ACP HTTP server.
+    /// Empty list means CORS is disabled entirely.
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
+    /// Master switch for user-level authentication.
+    /// When `false`, all requests are treated as admin (single-user mode).
+    #[serde(default)]
+    pub user_auth_enabled: bool,
+    /// HMAC secret for signing user authentication tokens.
+    /// Should be overridden with a strong secret in production.
+    #[serde(default = "default_runtime_user_auth_token_secret")]
+    pub user_auth_token_secret: String,
+    /// Env var name holding the HMAC secret for user auth tokens.
+    /// When set, overrides `user_auth_token_secret`.
+    #[serde(default = "default_runtime_user_auth_token_secret_env")]
+    pub user_auth_token_secret_env: String,
+    /// Token TTL in seconds for user authentication tokens (default: 86400 = 24h).
+    #[serde(default = "default_runtime_user_auth_token_ttl_seconds")]
+    pub user_auth_token_ttl_seconds: u64,
+    /// Default daily token limit per tenant (when user auth is enabled).
+    #[serde(default = "default_runtime_tenant_default_daily_token_limit")]
+    pub tenant_default_daily_token_limit: u64,
+    /// Default concurrent tasks limit per tenant.
+    #[serde(default = "default_runtime_tenant_default_concurrent_tasks")]
+    pub tenant_default_concurrent_tasks: usize,
+    /// Default daily API call limit per tenant.
+    #[serde(default = "default_runtime_tenant_default_daily_api_calls")]
+    pub tenant_default_daily_api_calls: usize,
 }
 
 impl Default for RuntimeConfig {
@@ -1311,7 +1340,28 @@ impl Default for RuntimeConfig {
             skills_require_sha256: default_runtime_skills_require_sha256(),
             skills_allow_floating_ref: false,
             skills_cache_dir: default_runtime_skills_cache_dir(),
+            cors_allowed_origins: Vec::new(),
+            user_auth_enabled: false,
+            user_auth_token_secret: default_runtime_user_auth_token_secret(),
+            user_auth_token_secret_env: default_runtime_user_auth_token_secret_env(),
+            user_auth_token_ttl_seconds: default_runtime_user_auth_token_ttl_seconds(),
+            tenant_default_daily_token_limit: default_runtime_tenant_default_daily_token_limit(),
+            tenant_default_concurrent_tasks: default_runtime_tenant_default_concurrent_tasks(),
+            tenant_default_daily_api_calls: default_runtime_tenant_default_daily_api_calls(),
         }
+    }
+}
+
+impl RuntimeConfig {
+    /// Build a [`CorsConfig`] from the configured origins, or return `None` if
+    /// CORS is disabled (empty list).
+    pub fn cors_config(&self) -> Option<CorsConfig> {
+        if self.cors_allowed_origins.is_empty() {
+            return None;
+        }
+        let mut cfg = CorsConfig::default();
+        cfg.allowed_origins = self.cors_allowed_origins.clone();
+        Some(cfg)
     }
 }
 
@@ -1368,7 +1418,31 @@ fn default_runtime_skills_require_sha256() -> bool {
 }
 
 fn default_runtime_skills_cache_dir() -> String {
-    "skills_cache".to_string()
+    "./skills-cache".to_string()
+}
+
+fn default_runtime_user_auth_token_secret() -> String {
+    "go-on-multi-user-secret".to_string()
+}
+
+fn default_runtime_user_auth_token_secret_env() -> String {
+    "GO_ON_USER_AUTH_TOKEN_SECRET".to_string()
+}
+
+fn default_runtime_user_auth_token_ttl_seconds() -> u64 {
+    86_400
+}
+
+fn default_runtime_tenant_default_daily_token_limit() -> u64 {
+    1_000_000
+}
+
+fn default_runtime_tenant_default_concurrent_tasks() -> usize {
+    10
+}
+
+fn default_runtime_tenant_default_daily_api_calls() -> usize {
+    10_000
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3154,6 +3228,17 @@ pub fn validate_runtime_readiness(
         }
     }
 
+    // F-GAP-14: warn when user_auth is enabled but token secret is still the default
+    if let Some(runtime) = &config.runtime {
+        if runtime.user_auth_enabled && runtime.user_auth_token_secret == "go-on-multi-user-secret"
+        {
+            warn!(
+                "runtime.user_auth_enabled=true with default user_auth_token_secret 'go-on-multi-user-secret'; \
+                 set a strong, unique token secret in production"
+            );
+        }
+    }
+
     Ok(build_config_health_report(config_path, config))
 }
 
@@ -3328,6 +3413,17 @@ fn collect_config_warnings_detailed(config_path: &Path, config: &AppConfig) -> V
             message: "cache and vector memory are both disabled; repeated prompts may be slower and less context-aware"
                 .to_string(),
         });
+    }
+
+    // F-GAP-14: warn when CORS is configured with a wildcard origin
+    if let Some(runtime) = &config.runtime {
+        if runtime.cors_allowed_origins.iter().any(|o| o == "*") {
+            warnings.push(ConfigWarning {
+                code: "CORS_WILDCARD_ORIGIN".to_string(),
+                severity: ConfigWarningSeverity::Warn,
+                message: "runtime.cors_allowed_origins contains '*' wildcard; this allows any origin to access the API. Consider restricting to specific origins for production.".to_string(),
+            });
+        }
     }
 
     for path in shared_rule_paths(config_path.parent().unwrap_or_else(|| Path::new("."))) {
@@ -3890,6 +3986,14 @@ mod tests {
             skills_require_sha256: true,
             skills_allow_floating_ref: false,
             skills_cache_dir: "skills_cache".to_string(),
+            cors_allowed_origins: Vec::new(),
+            user_auth_enabled: false,
+            user_auth_token_secret: String::new(),
+            user_auth_token_secret_env: "GO_ON_USER_AUTH_TOKEN_SECRET".to_string(),
+            user_auth_token_ttl_seconds: 86400,
+            tenant_default_daily_token_limit: 1_000_000,
+            tenant_default_concurrent_tasks: 10,
+            tenant_default_daily_api_calls: 10_000,
         });
 
         let err = cfg
@@ -4426,6 +4530,14 @@ mod tests {
             skills_require_sha256: true,
             skills_allow_floating_ref: false,
             skills_cache_dir: "skills_cache".to_string(),
+            cors_allowed_origins: Vec::new(),
+            user_auth_enabled: false,
+            user_auth_token_secret: String::new(),
+            user_auth_token_secret_env: "GO_ON_USER_AUTH_TOKEN_SECRET".to_string(),
+            user_auth_token_ttl_seconds: 86400,
+            tenant_default_daily_token_limit: 1_000_000,
+            tenant_default_concurrent_tasks: 10,
+            tenant_default_daily_api_calls: 10_000,
         });
 
         let report = super::build_config_health_report(&config_path, &cfg);

@@ -457,6 +457,24 @@
     "error.token_revoked": "Token '{token_id}' has been revoked",
     "error.token_expired": "Token '{token_id}' expired at {expires_at} (now: {now})",
     "error.acp_mode_unsupported": "ACP mode does not support method: {method}",
-    "error.mcp_mode_unsupported": "MCP mode does not support method: {method}"
+    "error.mcp_mode_unsupported": "MCP mode does not support method: {method}",
+    "error.auth_required": "Authentication required",
+    "error.auth_invalid_token": "Invalid or expired authentication token",
+    "error.auth_forbidden": "Forbidden: {reason}",
+    "error.auth_insufficient_privileges": "Insufficient privileges: requires {required_role} role",
+    "error.auth_origin_not_allowed": "CORS: origin '{origin}' not allowed",
+    "error.auth_token_issuance_failed": "Failed to issue auth token: {reason}",
+    "error.tenant_quota_exceeded": "Tenant '{tenant_id}': {limit_type} limit exceeded ({used}/{limit})",
+    "error.tenant_not_configured": "No quota configured for tenant '{tenant_id}'",
+    "info.auth_token_issued": "Authentication token issued for user '{user_id}' (expires: {expires_at})",
+    "info.auth_session_revoked": "Session revoked for user '{user_id}'",
+    "info.auth_user_authenticated": "User '{user_id}' authenticated with roles: {roles}",
+    "info.cors_allowed_origin": "CORS: allowed origin '{origin}'",
+    "info.cors_disabled": "CORS is disabled",
+    "info.multi_user_enabled": "Multi-user mode enabled with {auth_type} authentication",
+    "info.multi_user_disabled": "Multi-user mode disabled (single-user admin access)",
+    "warn.cors_origin_denied": "CORS: origin '{origin}' denied",
+    "warn.auth_token_expired": "Authentication token expired for user '{user_id}'",
+    "warn.auth_token_invalid_signature": "Authentication token with invalid signature rejected"
   }
 }

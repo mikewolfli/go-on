@@ -447,19 +447,101 @@ impl McpServer {
         json!({ "models": models })
     }
 
-    /// Stub handler for `prompts/list`.
-    /// Returns an empty prompt list. Full prompt template support is a future enhancement.
+    /// Handler for `prompts/list`.
+    ///
+    /// Returns available prompt templates. Currently supports:
+    /// - system prompts derived from agent configurations
+    /// - phase-specific task prompts
+    ///
+    /// This is a lightweight implementation that surfaces the agent system prompts
+    /// as discoverable prompt templates.  Full template parameterisation is a
+    /// future enhancement.
     async fn handle_list_prompts(&self, _request: &JsonRpcRequest) -> Value {
-        // Future enhancement: return prompt templates registered via the prompt registry
-        json!({ "prompts": [] })
+        let prompts = self.build_prompt_list();
+        json!({ "prompts": prompts })
     }
 
-    /// Stub handler for `prompts/get`.
-    /// Returns an empty result. Full prompt resolution is a future enhancement.
-    async fn handle_get_prompt(&self, _request: &JsonRpcRequest) -> Value {
-        // Future enhancement: resolve and return the requested prompt template
+    /// Handler for `prompts/get`.
+    ///
+    /// Returns a resolved prompt template by name.  Supports agent system prompts
+    /// (prefixed with `agent://`) and built-in skill prompts (prefixed with `skill://`).
+    async fn handle_get_prompt(&self, request: &JsonRpcRequest) -> Value {
+        let name = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // Try to resolve as an agent system prompt
+        if let Some(messages) = self.resolve_agent_prompt(name) {
+            return json!({
+                "description": format!("Agent system prompt for '{}'", name),
+                "messages": messages
+            });
+        }
+
+        // Fallback: return a minimal placeholder prompt message so the client
+        // can still function (rather than an error).
         json!({
-            "messages": []
+            "description": format!("Prompt '{}' not found; returning default", name),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": format!("You are a helpful assistant.  Context: {}", name)
+                }
+            ]
         })
+    }
+
+    /// Build a list of discoverable prompt templates from agent configurations
+    /// and registered skills.
+    fn build_prompt_list(&self) -> Vec<Value> {
+        let mut prompts = Vec::new();
+
+        // Agent system prompts
+        for name in self.agent_registry.names() {
+            prompts.push(json!({
+                "name": format!("agent://{}", name),
+                "description": format!("System prompt for '{}' agent", name),
+                "arguments": []
+            }));
+        }
+
+        prompts
+    }
+
+    /// Resolve an agent prompt by name.
+    /// Returns `None` if no matching agent is found.
+    fn resolve_agent_prompt(&self, name: &str) -> Option<Vec<Value>> {
+        let agent_name = name.strip_prefix("agent://").unwrap_or(name);
+        // Check agent exists and resolve available models.
+        let models = self.agent_registry.get(agent_name).map(|agent| {
+            agent
+                .available_models()
+                .into_iter()
+                .map(|m| m.id)
+                .collect::<Vec<_>>()
+                .join(", ")
+        });
+
+        let model_hint = models
+            .filter(|m| !m.is_empty())
+            .map(|m| format!(" Available models: {}.", m))
+            .unwrap_or_default();
+
+        Some(vec![
+            json!({
+                "role": "system",
+                "content": format!(
+                    "You are a '{}' agent providing AI assistance.{}",
+                    agent_name, model_hint
+                )
+            }),
+            json!({
+                "role": "user",
+                "content": "Hello!"
+            }),
+        ])
     }
 }

@@ -25,6 +25,7 @@ use crate::acp::helpers::context::{
 };
 use crate::acp::helpers::conversation::stream_would_exceed_limits;
 use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
+use crate::acp::r#impl::UserSession;
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
 use crate::config::PhaseOptions;
@@ -77,6 +78,30 @@ pub struct ChatParams {
     pub vector_hits: Option<Vec<serde_json::Value>>,
     /// Optional execution decision candidate
     pub execution_decision_candidate: Option<ExecutionDecisionCandidate>,
+}
+
+/// Context for a chat request, including authentication and tenant info.
+#[derive(Debug, Clone)]
+pub struct ChatRequestContext {
+    /// Authenticated user session, if user auth is enabled.
+    #[allow(dead_code)] // Public API — reserved for audit logging and in-chat RBAC
+    pub user_session: Option<UserSession>,
+    /// Resolved tenant ID (from user session, or conversation_id, or default).
+    pub tenant_id: String,
+}
+
+impl ChatRequestContext {
+    /// Create a new context with optional user session.
+    pub fn new(user_session: Option<UserSession>) -> Self {
+        let tenant_id = user_session
+            .as_ref()
+            .and_then(|s| s.tenant_id.clone())
+            .unwrap_or_else(|| "default-tenant".to_string());
+        Self {
+            user_session,
+            tenant_id,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -502,6 +527,7 @@ pub async fn handle_chat(
             Some(StreamObserver::jsonrpc(id.clone())),
             &pipeline_trace,
             chat_span.as_ref(),
+            None,
         )
         .await?;
 
@@ -688,8 +714,13 @@ pub(crate) async fn process_chat_request(
     stream_observer: Option<StreamObserver>,
     trace: &RequestTraceContext,
     span: Option<&OtelContext>,
+    ctx: Option<ChatRequestContext>,
 ) -> Result<serde_json::Value> {
     let started = std::time::Instant::now();
+
+    // Resolve chat context: use provided context or create a default one.
+    // This carries the authenticated user session and resolved tenant ID.
+    let ctx = ctx.unwrap_or_else(|| ChatRequestContext::new(None));
 
     // Get routing handles
     let (flow, registry) = routing_handles(server)?;
@@ -760,12 +791,9 @@ pub(crate) async fn process_chat_request(
 
     // ── TenantBudgetEnforcer pre-route check (F-GAP-08) ───────────────
     // Check per-tenant resource quotas before allocating compute.
-    // Uses the conversation_id as a tenant identifier — in production this
-    // would be resolved from an auth token or API key.
-    let tenant_id = params
-        .conversation_id
-        .as_deref()
-        .unwrap_or("default-tenant");
+    // Uses the tenant_id resolved from the ChatRequestContext (which comes
+    // from the user session when auth is enabled, or falls back to default).
+    let tenant_id = &ctx.tenant_id;
     if let Ok(mut budget) = server.tenant_budget.lock() {
         if let Err(e) = budget.check_can_start(tenant_id) {
             warn!("tenant budget limit reached for {}: {}", tenant_id, e);
@@ -1057,7 +1085,10 @@ pub(crate) async fn process_chat_request(
     }
 
     // Get or create conversation state
-    let conversation_id = params.conversation_id.clone().unwrap_or_else(|| {
+    // When user auth is enabled, namespace the conversation ID with the tenant_id
+    // to enforce cross-user/tenant isolation.  The raw ID from the client is
+    // embedded after the namespace delimiter so existing logic is preserved.
+    let raw_conversation_id = params.conversation_id.clone().unwrap_or_else(|| {
         format!(
             "conv_{}",
             std::time::SystemTime::now()
@@ -1066,6 +1097,11 @@ pub(crate) async fn process_chat_request(
                 .as_nanos()
         )
     });
+    let conversation_id = if server.runtime_config.user_auth_enabled {
+        format!("{}:{}", tenant_id, raw_conversation_id)
+    } else {
+        raw_conversation_id
+    };
     let branch_id = params
         .branch_id
         .clone()
@@ -5214,7 +5250,7 @@ mod tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.test");
-        let result = process_chat_request(&server, &params, None, &trace, None)
+        let result = process_chat_request(&server, &params, None, &trace, None, None)
             .await
             .expect("chat request should succeed");
 
@@ -5376,7 +5412,7 @@ mod tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.e2e");
-        let result = process_chat_request(&server, &params, None, &trace, None)
+        let result = process_chat_request(&server, &params, None, &trace, None, None)
             .await
             .expect("e2e dual bus chat request should succeed");
 
@@ -5471,7 +5507,7 @@ mod tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.empty_output");
-        let result = process_chat_request(&server, &params, None, &trace, None)
+        let result = process_chat_request(&server, &params, None, &trace, None, None)
             .await
             .expect("chat request should succeed by trying next agent");
 
@@ -5543,7 +5579,7 @@ mod tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.all_empty");
-        let err = process_chat_request(&server, &params, None, &trace, None)
+        let err = process_chat_request(&server, &params, None, &trace, None, None)
             .await
             .expect_err("all empty outputs should fail with a specific error");
 
@@ -5605,7 +5641,7 @@ mod tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.model_filter_fallback");
-        let result = process_chat_request(&server, &params, None, &trace, None)
+        let result = process_chat_request(&server, &params, None, &trace, None, None)
             .await
             .expect("chat request should succeed by falling back to phase agents");
 

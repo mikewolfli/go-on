@@ -271,14 +271,14 @@ fn load_secret_value(secret_ref: &str, field_name: &str) -> Result<String> {
 
         let fallback_candidates = keyring_env_fallback_candidates(service, account);
         for env_name in &fallback_candidates {
-            if let Ok(value) = std::env::var(env_name) {
-                let trimmed = value.trim();
+            if let Some(value) = crate::shared::secret_override::get_secret(env_name) {
+                let trimmed = value.trim().to_string();
                 if !trimmed.is_empty() {
                     warn!(
                         "{} keyring lookup failed, using env fallback {}",
                         field_name, env_name
                     );
-                    return Ok(trimmed.to_string());
+                    return Ok(trimmed);
                 }
             }
         }
@@ -296,7 +296,8 @@ fn load_secret_value(secret_ref: &str, field_name: &str) -> Result<String> {
         );
     }
 
-    std::env::var(secret_ref).with_context(|| tf("error.missing_env_var", &[("name", secret_ref)]))
+    crate::shared::secret_override::get_secret(secret_ref)
+        .ok_or_else(|| anyhow::anyhow!("{}", tf("error.missing_env_var", &[("name", secret_ref)])))
 }
 
 fn rotation_group(field_name: &str) -> String {

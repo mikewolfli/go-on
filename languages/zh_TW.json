@@ -457,6 +457,24 @@
     "error.token_revoked": "權杖 '{token_id}' 已被撤銷",
     "error.token_expired": "權杖 '{token_id}' 已於 {expires_at} 過期 (當前: {now})",
     "error.acp_mode_unsupported": "ACP 模式不支持方法: {method}",
-    "error.mcp_mode_unsupported": "MCP 模式不支持方法: {method}"
+    "error.mcp_mode_unsupported": "MCP 模式不支持方法: {method}",
+    "error.auth_required": "需要身份驗證",
+    "error.auth_invalid_token": "無效或過期的身份驗證權杖",
+    "error.auth_forbidden": "禁止存取: {reason}",
+    "error.auth_insufficient_privileges": "權限不足: 需要 {required_role} 角色",
+    "error.auth_origin_not_allowed": "CORS: 來源 '{origin}' 不允許",
+    "error.auth_token_issuance_failed": "頒發身份驗證權杖失敗: {reason}",
+    "error.tenant_quota_exceeded": "租戶 '{tenant_id}': {limit_type} 限制已超 ({used}/{limit})",
+    "error.tenant_not_configured": "租戶 '{tenant_id}' 未配置配額",
+    "info.auth_token_issued": "已為用戶 '{user_id}' 頒發身份驗證權杖 (過期: {expires_at})",
+    "info.auth_session_revoked": "已撤銷用戶 '{user_id}' 的會話",
+    "info.auth_user_authenticated": "用戶 '{user_id}' 已認證, 角色: {roles}",
+    "info.cors_allowed_origin": "CORS: 允許的來源 '{origin}'",
+    "info.cors_disabled": "CORS 已禁用",
+    "info.multi_user_enabled": "多用戶模式已啟用, 使用 {auth_type} 認證",
+    "info.multi_user_disabled": "多用戶模式已禁用 (單用戶管理員存取)",
+    "warn.cors_origin_denied": "CORS: 來源 '{origin}' 被拒絕",
+    "warn.auth_token_expired": "用戶 '{user_id}' 的身份驗證權杖已過期",
+    "warn.auth_token_invalid_signature": "身份驗證權杖簽名無效, 已被拒絕"
   }
 }

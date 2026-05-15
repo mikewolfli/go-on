@@ -20,8 +20,7 @@ pub use tools::error_codes;
 /// MCP Protocol Version
 pub const MCP_VERSION: &str = "2024-11-05";
 
-/// MCP Server implementation
-#[allow(dead_code)] // F-GAP-10 — planned wiring: multi-channel transport
+/// MCP Server implementation — struct IS used via new/new_with_acp, serve, etc.
 pub struct McpServer {
     pub(crate) agent_registry: Arc<AgentRegistry>,
     pub(crate) tool_registry: Arc<ToolRegistry>,

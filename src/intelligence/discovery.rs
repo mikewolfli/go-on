@@ -385,7 +385,7 @@ impl DiscoveryCenter {
     /// Returns a human-readable summary of discovered cross-domain insights.
     ///
     /// TODO: Reserved for future cross-category insight mining. Currently unused.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-13 — reserved for cross-session knowledge extraction
     pub fn abstract_knowledge(&self) -> Vec<String> {
         let patterns = match self.patterns.read() {
             Ok(p) => p.clone(),

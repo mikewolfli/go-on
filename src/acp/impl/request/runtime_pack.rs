@@ -1,9 +1,6 @@
 use super::*;
 use crate::i18n::runtime::{t, tf};
-
-/// Serializes global env-var writes (`std::env::set_var`) to prevent data races
-/// in concurrent requests handled by the ACP server.
-static SET_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+use crate::shared::secret_override::{get_secret, set_secret_override};
 type CopilotModelsCacheEntry = Option<(u64, Vec<String>)>;
 type CopilotModelsCache = std::sync::Mutex<CopilotModelsCacheEntry>;
 static COPILOT_MODELS_CACHE: std::sync::OnceLock<CopilotModelsCache> = std::sync::OnceLock::new();
@@ -147,12 +144,8 @@ fn resolve_copilot_github_token() -> Option<String> {
     }
 
     for account in ["github_copilot_token", "copilot_api_key"] {
-        if let Ok(entry) = keyring::Entry::new("go-on", account) {
-            if let Ok(value) = entry.get_password() {
-                if !value.trim().is_empty() {
-                    return Some(value);
-                }
-            }
+        if let Some(value) = crate::shared::secret_override::get_keyring_cached("go-on", account) {
+            return Some(value);
         }
     }
 
@@ -1818,8 +1811,7 @@ pub(super) async fn handle_governance_status(
         "multi_user" | "multi-user" | "multi_tenant" | "multi-tenant"
     );
 
-    let auth_key_configured = std::env::var(&server.runtime_config.entry_auth_api_key_env)
-        .ok()
+    let auth_key_configured = get_secret(&server.runtime_config.entry_auth_api_key_env)
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
     let auth_component_ok = server.runtime_config.entry_auth_enabled && auth_key_configured;
@@ -5400,9 +5392,7 @@ pub(super) fn provider_test_connection_payload(
 
     let models = provider_models_for(server, provider);
     let account = format!("{}_api_key", provider);
-    let keyring_has_key = keyring::Entry::new("go-on", &account)
-        .ok()
-        .and_then(|entry| entry.get_password().ok())
+    let keyring_has_key = crate::shared::secret_override::get_keyring_cached("go-on", &account)
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
 
@@ -5754,15 +5744,15 @@ pub(super) async fn handle_provider_configure(
             Err(e) => tracing::warn!("failed to open keyring entry for '{}': {}", name, e),
         }
 
-        // ── Copilot needs additional env vars + keyring entries ──
+        // ── Copilot needs additional secret overrides + keyring entries ──
         if name == "copilot" {
-            // Set env vars that CopilotAgent reads
-            {
-                let _lock = SET_ENV_LOCK.lock().unwrap();
-                std::env::set_var("GITHUB_TOKEN", api_key);
-                std::env::set_var("GITHUB_COPILOT_TOKEN", api_key);
-            }
-            tracing::info!("Set GITHUB_TOKEN and GITHUB_COPILOT_TOKEN env vars for copilot");
+            // Set secret overrides that CopilotAgent reads (thread-safe alternative
+            // to std::env::set_var, which is UB in multi-threaded programs).
+            set_secret_override("GITHUB_TOKEN", api_key);
+            set_secret_override("GITHUB_COPILOT_TOKEN", api_key);
+            tracing::info!(
+                "Set GITHUB_TOKEN and GITHUB_COPILOT_TOKEN secret overrides for copilot"
+            );
             // The built-in provider spec uses api_key_env="GITHUB_COPILOT_TOKEN",
             // which setup.rs maps to keyring://go-on/github_copilot_token.
             // Without this entry, CopilotAgent fails with "keyring lookup failed".
@@ -6033,12 +6023,11 @@ pub(super) async fn handle_copilot_device_code_poll(
                         access_token.len()
                     );
 
-                    // Set both env vars so CopilotAgent works regardless of configured token_env.
-                    {
-                        let _lock = SET_ENV_LOCK.lock().unwrap();
-                        std::env::set_var("GITHUB_TOKEN", access_token);
-                        std::env::set_var("GITHUB_COPILOT_TOKEN", access_token);
-                    }
+                    // Set both secret overrides so CopilotAgent works regardless
+                    // of configured token_env (thread-safe alternative to
+                    // std::env::set_var, which is UB in multi-threaded programs).
+                    set_secret_override("GITHUB_TOKEN", access_token);
+                    set_secret_override("GITHUB_COPILOT_TOKEN", access_token);
 
                     // Persist both Copilot keyring aliases for backward/forward compatibility.
                     if !access_token.is_empty() {

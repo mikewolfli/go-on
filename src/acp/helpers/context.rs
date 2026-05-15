@@ -82,7 +82,7 @@ pub async fn probe_agent_runtime_readiness(
         if key_name.starts_with(KEYRING_PREFIX) {
             continue;
         }
-        if std::env::var(key_name).is_err() {
+        if crate::shared::secret_override::get_secret(key_name).is_none() {
             return AgentRuntimeReadiness::MissingSecret;
         }
     }

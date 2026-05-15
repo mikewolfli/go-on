@@ -21,6 +21,9 @@ use tokio::sync::{Mutex, Notify};
 use tracing::{debug, error, info, warn};
 
 use crate::acp::background::start_background_tasks;
+use crate::acp::r#impl::cors::{
+    build_cors_headers, build_preflight_response_headers, is_origin_allowed,
+};
 use crate::acp::r#impl::io::send_error;
 use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
 use crate::i18n::runtime::{t, tf};
@@ -32,12 +35,14 @@ use crate::config::{AutoTuneConfig, AutoTuneState, RuntimeConfig, VectorConfig};
 use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
 use crate::flow_with_models::FlowModelSelector;
+use crate::governance::rbac::{AccessDecision, Permission, Principal};
 use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::memory_response_cache::MemoryResponseCache;
 use crate::observability::telemetry::TelemetryRuntime;
 use crate::orchestration::skill::SkillRegistry;
 use crate::reinforcement::ArtifactLedger;
 use crate::rpc_protocol::{chat_trace_context, JsonRpcRequest, RequestTraceContext};
+use crate::shared::secret_override::get_secret;
 use crate::vector::VectorStore;
 
 static RESPONSES_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -109,9 +114,9 @@ pub fn new_acp_server(
             ))
         }
     };
-    // Inject RBAC enforcer into the harness bus
+    // Inject RBAC enforcer into the harness bus and create HTTP-level enforcer
     use crate::governance::rbac::{Permission, RbacEnforcer};
-    {
+    let rbac_enforcer: Arc<std::sync::RwLock<RbacEnforcer>> = {
         let mut enforcer = RbacEnforcer::new();
         enforcer.register_role(
             "admin",
@@ -130,11 +135,14 @@ pub fn new_acp_server(
             vec![Permission::Read, Permission::Write, Permission::Execute],
         );
         enforcer.register_role("viewer", vec![Permission::Read]);
+        // Clone the enforcer for harness bus injection
+        let bus_enforcer = enforcer.clone();
         // The Arc has strong count 1 at this point, so get_mut succeeds
         if let Some(bus) = Arc::get_mut(&mut harness_bus) {
-            bus.set_rbac_enforcer(enforcer);
+            bus.set_rbac_enforcer(bus_enforcer);
         }
-    }
+        Arc::new(std::sync::RwLock::new(enforcer))
+    };
 
     let workflow_registry = Arc::new(std::sync::Mutex::new(
         crate::orchestration::workflow_registry::WorkflowRegistry::new(),
@@ -162,6 +170,15 @@ pub fn new_acp_server(
             server.harness_bus = Some(harness_bus);
             server.capability_bus = Some(capability_bus);
             server.provenance_ledger = Some(provenance_ledger);
+            server.rbac_enforcer = Some(rbac_enforcer);
+
+            // Create session manager if user auth is enabled
+            if server.runtime_config.user_auth_enabled {
+                use crate::acp::r#impl::session::{AuthConfig, SessionManager};
+                let auth_config = AuthConfig::from(&server.runtime_config);
+                server.session_manager =
+                    Some(Arc::new(SessionManager::with_auth_config(auth_config)));
+            }
 
             // Wire dual-level task scheduler (ARCH-02): create the scheduler and
             // register one worker per known agent so the priority queue has real routing
@@ -209,6 +226,16 @@ pub fn new_acp_server(
                     .map(|cb| Arc::clone(&cb.tenant_budget))
                     .unwrap_or_default(),
             );
+
+            // Auto-provision a default tenant quota when user auth is enabled so
+            // the budget enforcer does not reject every request with "no quota
+            // configured for tenant 'default-tenant'" (F-GAP-08).
+            if server.runtime_config.user_auth_enabled {
+                if let Ok(mut budget) = server.tenant_budget.lock() {
+                    budget.auto_provision_default(&server.runtime_config);
+                }
+            }
+
             server.optimizer_registry = Arc::clone(
                 &server
                     .capability_bus
@@ -330,7 +357,20 @@ pub fn new_acp_server(
                 responses_api_store: Arc::new(StdMutex::new(std::collections::HashMap::new())),
                 task_graph_store: None,
                 scheduler: None,
+                session_manager: None,
+                rbac_enforcer: None,
             };
+
+            // Create session manager if user auth is enabled
+            if fallback_server.runtime_config.user_auth_enabled {
+                use crate::acp::r#impl::session::{AuthConfig, SessionManager};
+                let auth_config = AuthConfig::from(&fallback_server.runtime_config);
+                fallback_server.session_manager =
+                    Some(Arc::new(SessionManager::with_auth_config(auth_config)));
+            }
+
+            // Wire RBAC enforcer into the fallback server for HTTP-level authorization
+            fallback_server.rbac_enforcer = Some(rbac_enforcer);
 
             // Wire dual-level task scheduler (ARCH-02): create the scheduler and
             // register one worker per known agent so the priority queue has real routing
@@ -378,6 +418,16 @@ pub fn new_acp_server(
                     .map(|cb| Arc::clone(&cb.tenant_budget))
                     .unwrap_or_default(),
             );
+
+            // Auto-provision a default tenant quota when user auth is enabled so
+            // the budget enforcer does not reject every request with "no quota
+            // configured for tenant 'default-tenant'" (F-GAP-08).
+            if fallback_server.runtime_config.user_auth_enabled {
+                if let Ok(mut budget) = fallback_server.tenant_budget.lock() {
+                    budget.auto_provision_default(&fallback_server.runtime_config);
+                }
+            }
+
             fallback_server.optimizer_registry = Arc::clone(
                 &fallback_server
                     .capability_bus
@@ -495,10 +545,13 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
         }
     }
 
-    // Notify background tasks to shutdown
+    // ── Graceful shutdown ──────────────────────────────────────────
     server.begin_shutdown();
-    shutdown_notify.notify_waiters();
 
+    // Notify background tasks to shut down.  No drain for stdio — the
+    // server runs until stdin EOF / SIGINT / SIGTERM, so there are no
+    // in-flight network connections to drain.
+    shutdown_notify.notify_waiters();
     info!("ACP server shutting down");
     Ok(())
 }
@@ -570,7 +623,17 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
         }
     }
 
+    // ── Graceful shutdown with drain ────────────────────────────────
     server.begin_shutdown();
+
+    // Wait for in-flight requests to complete (shutdown drain).
+    let drain_secs = server.runtime_config.shutdown_drain_seconds.max(1);
+    info!(
+        "ACP HTTP server draining connections for {} seconds...",
+        drain_secs
+    );
+    tokio::time::sleep(std::time::Duration::from_secs(drain_secs)).await;
+
     server.shutdown_notify.notify_waiters();
     info!("ACP HTTP server shutting down");
     Ok(())
@@ -1184,7 +1247,7 @@ async fn write_http_json_response_with_context(
     method: &str,
 ) -> Result<()> {
     let body = inject_platform_profiles_if_absent(body, method);
-    write_http_json_response(socket, status, body).await
+    write_http_json_response(socket, status, body, "").await
 }
 
 async fn write_responses_api_error(
@@ -1421,6 +1484,7 @@ async fn handle_openai_chat_completions(
     socket: &mut TcpStream,
     server: Arc<AcpServer>,
     body: serde_json::Value,
+    user_session: Option<crate::acp::r#impl::session::UserSession>,
 ) -> Result<()> {
     let openai_req: OpenAiChatRequest = match serde_json::from_value(body) {
         Ok(value) => value,
@@ -1445,12 +1509,16 @@ async fn handle_openai_chat_completions(
 
     if !openai_req.stream {
         let trace = http_trace_context("openai.chat.completions");
+        let ctx = Some(crate::acp::r#impl::chat::ChatRequestContext::new(
+            user_session.clone(),
+        ));
         let result = crate::acp::r#impl::chat::process_chat_request(
             server.as_ref(),
             &params,
             None,
             &trace,
             None,
+            ctx,
         )
         .await;
         let result = match result {
@@ -1464,7 +1532,7 @@ async fn handle_openai_chat_completions(
                     );
                     let payload =
                         inject_platform_profiles_if_absent(payload, "openai.chat.completions");
-                    write_http_json_response(socket, 200, payload).await?;
+                    write_http_json_response(socket, 200, payload, "").await?;
                     return Ok(());
                 }
                 let payload = serde_json::json!({
@@ -1489,14 +1557,17 @@ async fn handle_openai_chat_completions(
             .unwrap_or_default();
         let payload = build_openai_completion(&request_id, &model, response_text);
         let payload = inject_platform_profiles_if_absent(payload, "openai.chat.completions");
-        write_http_json_response(socket, 200, payload).await?;
+        write_http_json_response(socket, 200, payload, "").await?;
         return Ok(());
     }
 
-    write_sse_headers(socket).await?;
+    write_sse_headers(socket, "").await?;
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let trace = http_trace_context("openai.chat.completions.stream");
+    let ctx = Some(crate::acp::r#impl::chat::ChatRequestContext::new(
+        user_session,
+    ));
     let server_ref = Arc::clone(&server);
     let task = tokio::spawn(async move {
         crate::acp::r#impl::chat::process_chat_request(
@@ -1505,6 +1576,7 @@ async fn handle_openai_chat_completions(
             Some(crate::acp::r#impl::chat::StreamObserver::sse(tx)),
             &trace,
             None,
+            ctx,
         )
         .await
     });
@@ -1826,6 +1898,7 @@ async fn handle_responses_api(
     socket: &mut TcpStream,
     server: Arc<AcpServer>,
     body: serde_json::Value,
+    user_session: Option<crate::acp::r#impl::session::UserSession>,
 ) -> Result<()> {
     let req = match validate_responses_post_request(socket, &body).await {
         Ok(r) => r,
@@ -1976,7 +2049,16 @@ async fn handle_responses_api(
     }
 
     // Normal create path (possibly streaming).
-    handle_response_create(socket, server, &request_id, &model, req, messages).await
+    handle_response_create(
+        socket,
+        server,
+        &request_id,
+        &model,
+        req,
+        messages,
+        user_session,
+    )
+    .await
 }
 
 /// Handle tool result (previous_response_id) — stores and writes tool result response.
@@ -2027,7 +2109,7 @@ async fn handle_response_tool_result(
         &tool_result_text,
     );
     store_responses_api_payload(server.as_ref(), &payload);
-    write_http_json_response(socket, 200, payload).await?;
+    write_http_json_response(socket, 200, payload, "").await?;
     Ok(())
 }
 
@@ -2049,7 +2131,7 @@ async fn handle_response_required_tool_call(
     let payload =
         build_responses_api_tool_call_response(request_id, model, &tool_call_id, tool_name);
     store_responses_api_payload(server.as_ref(), &payload);
-    write_http_json_response(socket, 200, payload).await?;
+    write_http_json_response(socket, 200, payload, "").await?;
     Ok(())
 }
 
@@ -2061,6 +2143,7 @@ async fn handle_response_create(
     model: &str,
     req: ResponsesApiRequest,
     messages: Vec<crate::agent::Message>,
+    user_session: Option<crate::acp::r#impl::session::UserSession>,
 ) -> Result<()> {
     let mut extra = req.extra.clone();
     extra.remove("previous_response_id");
@@ -2107,15 +2190,28 @@ async fn handle_response_create(
     let trace = http_trace_context("responses.api");
 
     if req.stream {
-        return handle_response_stream(socket, server, request_id, model, params, &trace).await;
+        return handle_response_stream(
+            socket,
+            server,
+            request_id,
+            model,
+            params,
+            &trace,
+            user_session,
+        )
+        .await;
     }
 
+    let ctx = Some(crate::acp::r#impl::chat::ChatRequestContext::new(
+        user_session.clone(),
+    ));
     let result = crate::acp::r#impl::chat::process_chat_request(
         server.as_ref(),
         &params,
         None,
         &trace,
         None,
+        ctx,
     )
     .await;
 
@@ -2130,7 +2226,7 @@ async fn handle_response_create(
                 );
                 let payload = inject_platform_profiles_if_absent(payload, "responses.api");
                 store_responses_api_payload(server.as_ref(), &payload);
-                write_http_json_response(socket, 200, payload).await?;
+                write_http_json_response(socket, 200, payload, "").await?;
                 return Ok(());
             }
             let code = classify_responses_upstream_error_code(&err);
@@ -2169,7 +2265,7 @@ async fn handle_response_create(
     );
     let payload = inject_platform_profiles_if_absent(payload, "responses.api");
     store_responses_api_payload(server.as_ref(), &payload);
-    write_http_json_response(socket, 200, payload).await?;
+    write_http_json_response(socket, 200, payload, "").await?;
     Ok(())
 }
 
@@ -2206,6 +2302,7 @@ async fn handle_response_stream(
     model: &str,
     params: crate::acp::r#impl::chat::ChatParams,
     trace: &crate::protocol::rpc_protocol::RequestTraceContext,
+    user_session: Option<crate::acp::r#impl::session::UserSession>,
 ) -> Result<()> {
     let created_at = crate::acp::prelude::now_ts();
 
@@ -2220,7 +2317,7 @@ async fn handle_response_stream(
         "incomplete_details": null,
     });
 
-    write_sse_headers(socket).await?;
+    write_sse_headers(socket, "").await?;
     write_sse_event(
         socket,
         "response.created",
@@ -2233,6 +2330,9 @@ async fn handle_response_stream(
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::acp::r#impl::chat::StreamFrame>(256);
     let observer = crate::acp::r#impl::chat::StreamObserver::sse(tx);
+    let ctx = Some(crate::acp::r#impl::chat::ChatRequestContext::new(
+        user_session,
+    ));
     let server_ref = Arc::clone(&server);
     let trace_for_task = trace.clone();
     let params_for_task = params.clone();
@@ -2243,6 +2343,7 @@ async fn handle_response_stream(
             Some(observer),
             &trace_for_task,
             None,
+            ctx,
         )
         .await
     });
@@ -2541,6 +2642,7 @@ async fn route_http_post(
     path: &str,
     header_part: &str,
     body_initial_part: &str,
+    user_session: Option<crate::acp::r#impl::session::UserSession>,
 ) -> Result<String> {
     let responses_path = path == "/v1/responses";
     let content_length = extract_content_length(header_part).unwrap_or(0);
@@ -2640,16 +2742,20 @@ async fn route_http_post(
                             }
                         };
                     let trace = http_trace_context("chat");
+                    let ctx = Some(crate::acp::r#impl::chat::ChatRequestContext::new(
+                        user_session,
+                    ));
                     let result = crate::acp::r#impl::chat::process_chat_request(
                         server.as_ref(),
                         &params,
                         None,
                         &trace,
                         None,
+                        ctx,
                     )
                     .await?;
                     let result = inject_platform_profiles_if_absent(result, "chat");
-                    write_http_json_response(socket, 200, result).await?;
+                    write_http_json_response(socket, 200, result, "").await?;
                 }
                 "/chat/stream" => {
                     let params: crate::acp::r#impl::chat::ChatParams =
@@ -2666,10 +2772,13 @@ async fn route_http_post(
                                 return Ok(());
                             }
                         };
-                    write_sse_headers(socket).await?;
+                    write_sse_headers(socket, "").await?;
 
                     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
                     let trace = http_trace_context("chat.stream");
+                    let ctx = Some(crate::acp::r#impl::chat::ChatRequestContext::new(
+                        user_session,
+                    ));
                     let server_ref = Arc::clone(&server);
                     let task = tokio::spawn(async move {
                         crate::acp::r#impl::chat::process_chat_request(
@@ -2678,6 +2787,7 @@ async fn route_http_post(
                             Some(crate::acp::r#impl::chat::StreamObserver::sse(tx)),
                             &trace,
                             None,
+                            ctx,
                         )
                         .await
                     });
@@ -2718,7 +2828,13 @@ async fn route_http_post(
                     }
                 }
                 "/chat/completions" | "/v1/chat/completions" | "/chat/chat/completions" => {
-                    handle_openai_chat_completions(socket, Arc::clone(&server), body).await?;
+                    handle_openai_chat_completions(
+                        socket,
+                        Arc::clone(&server),
+                        body,
+                        user_session,
+                    )
+                    .await?;
                 }
                 "/rpc" => {
                     let request: JsonRpcRequest = match serde_json::from_value(body) {
@@ -2787,10 +2903,16 @@ async fn route_http_post(
                         serde_json::from_str(response_str.trim())
                             .unwrap_or_else(|_| serde_json::json!({"raw": response_str.to_string()}));
 
-                    write_http_json_response(socket, 200, response_value).await?;
+                    write_http_json_response(socket, 200, response_value, "").await?;
                 }
                 "/v1/responses" => {
-                    handle_responses_api(socket, Arc::clone(&server), body).await?;
+                    handle_responses_api(
+                        socket,
+                        Arc::clone(&server),
+                        body,
+                        user_session,
+                    )
+                    .await?;
                 }
                 _ => {
                     write_http_json_response_with_context(
@@ -2831,7 +2953,182 @@ async fn write_http_response(
     status: u16,
     body: serde_json::Value,
 ) -> Result<()> {
-    write_http_json_response(socket, status, body).await
+    write_http_json_response(socket, status, body, "").await
+}
+
+/// Compute CORS response headers for an incoming request.
+///
+/// Extracts the `Origin` header from the request, checks it against the
+/// server's CORS configuration, and returns a formatted string of CORS
+/// headers (each ending with `\r\n`).  Returns an empty string when CORS
+/// is disabled or the origin is not allowed.
+fn compute_cors_response_headers(headers: &str, server: &AcpServer) -> String {
+    let config = match server.runtime_config.cors_config() {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    let origin = extract_header_value(headers, "origin");
+    let cors_headers = build_cors_headers(origin.as_deref(), &config);
+    if cors_headers.is_empty() {
+        return String::new();
+    }
+    cors_headers
+        .iter()
+        .map(|(k, v)| format!("{}: {}\r\n", k, v))
+        .collect()
+}
+
+/// Handle an OPTIONS (CORS preflight) request.
+async fn handle_cors_preflight(
+    socket: &mut TcpStream,
+    headers: &str,
+    server: &AcpServer,
+) -> Result<()> {
+    let config = match server.runtime_config.cors_config() {
+        Some(c) => c,
+        None => {
+            write_http_json_response(
+                socket,
+                405,
+                serde_json::json!({"error": "Method Not Allowed"}),
+                "",
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+    let origin = extract_header_value(headers, "origin");
+    let allow_origin = origin.as_deref().filter(|o| is_origin_allowed(o, &config));
+
+    if allow_origin.is_none() && !config.allowed_origins.contains(&"*".to_string()) {
+        write_http_json_response(
+            socket,
+            403,
+            serde_json::json!({"error": "Origin not allowed"}),
+            "",
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let rh = extract_header_value(headers, "access-control-request-headers");
+    let preflight_headers = build_preflight_response_headers(rh.as_deref(), &config);
+    let origin_val = allow_origin.unwrap_or("*").to_string();
+
+    let mut cors_str = format!("Access-Control-Allow-Origin: {}\r\n", origin_val);
+    for (k, v) in &preflight_headers {
+        cors_str.push_str(&format!("{}: {}\r\n", k, v));
+    }
+    cors_str.push_str("Access-Control-Max-Age: ");
+    cors_str.push_str(&config.max_age_seconds.to_string());
+    cors_str.push_str("\r\n");
+
+    write_http_json_response(socket, 200, serde_json::json!({"ok": true}), &cors_str).await?;
+    Ok(())
+}
+
+/// Check if the user session is authorized for the given request path and method.
+/// Returns `Ok(true)` if a response has been written (request is handled/denied),
+/// or `Ok(false)` if the request should proceed.
+async fn check_http_authorization(
+    socket: &mut TcpStream,
+    server: &AcpServer,
+    user_session: Option<&crate::acp::r#impl::session::UserSession>,
+    method: &str,
+    path: &str,
+    cors_headers: &str,
+) -> Result<bool> {
+    // If user auth is disabled, allow everything
+    if !server.runtime_config.user_auth_enabled {
+        return Ok(false);
+    }
+
+    // If no session, reject with 401
+    let session = match user_session {
+        Some(s) => s,
+        None => {
+            write_http_json_response(
+                socket,
+                401,
+                serde_json::json!({"error": "Authentication required", "code": "AUTH_REQUIRED"}),
+                cors_headers,
+            )
+            .await?;
+            return Ok(true);
+        }
+    };
+
+    // Exempt paths (health, root capabilities)
+    if matches!(path, "/" | "/health") {
+        return Ok(false);
+    }
+
+    // Map HTTP method + path to required permission
+    let required_perm = match (method, path) {
+        // Admin-only operations
+        ("POST", "/rpc") => Permission::Execute,
+        ("GET", _) => Permission::Read,
+        ("POST", "/chat" | "/chat/stream") => Permission::Execute,
+        ("POST", "/chat/completions" | "/v1/chat/completions") => Permission::Execute,
+        ("POST", "/v1/responses") => Permission::Execute,
+        _ => Permission::Read,
+    };
+
+    // Create principal from session
+    let principal = Principal::new(
+        &session.user_id,
+        session.roles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        session.tenant_id.as_deref(),
+    );
+
+    // Resolve permissions from roles (lock is scoped to avoid holding a non-Send
+    // guard across .await points)
+    let access_decision = server.rbac_enforcer.as_ref().map(|enforcer| {
+        let guard = enforcer.read().expect("rbac lock poisoned");
+        let mut p = principal.clone();
+        guard.resolve_permissions(&mut p);
+        let decision = guard.check_access(&p, &required_perm);
+        decision
+    });
+
+    if let Some(decision) = access_decision {
+        match decision {
+            AccessDecision::Allow => {
+                return Ok(false);
+            }
+            AccessDecision::Deny { reason } => {
+                write_http_json_response(
+                    socket,
+                    403,
+                    serde_json::json!({
+                        "error": "Forbidden",
+                        "code": "ACCESS_DENIED",
+                        "reason": reason
+                    }),
+                    cors_headers,
+                )
+                .await?;
+                return Ok(true);
+            }
+            AccessDecision::Escalate { required_role } => {
+                write_http_json_response(
+                    socket,
+                    403,
+                    serde_json::json!({
+                        "error": "Insufficient privileges",
+                        "code": "PRIVILEGE_ESCALATION_REQUIRED",
+                        "required_role": required_role
+                    }),
+                    cors_headers,
+                )
+                .await?;
+                return Ok(true);
+            }
+        }
+    }
+
+    // No RBAC enforcer configured — allow (backward compat)
+    Ok(false)
 }
 
 /// Main HTTP connection handler — parses, guards, routes, and times the request.
@@ -2852,6 +3149,37 @@ async fn handle_http_connection(
     let request_text = String::from_utf8_lossy(&buffer[..bytes_read]);
     let parsed = parse_http_request(&request_text)?;
 
+    // Compute CORS headers for this request (empty string when disabled)
+    let cors_headers = compute_cors_response_headers(parsed.header_part, server.as_ref());
+
+    // Extract user session if user auth is enabled
+    let user_session: Option<crate::acp::r#impl::session::UserSession> =
+        server.session_manager.as_ref().and_then(|sm| {
+            let session = sm.extract_user_from_request(parsed.header_part);
+            if let Some(ref s) = session {
+                debug!("Authenticated user: {} (roles: {:?})", s.user_id, s.roles);
+            }
+            session
+        });
+
+    // ── RBAC authorization check ──────────────────────────────
+    if check_http_authorization(
+        socket,
+        server.as_ref(),
+        user_session.as_ref(),
+        parsed.method,
+        parsed.path,
+        &cors_headers,
+    )
+    .await?
+    {
+        return Ok(());
+    }
+
+    if parsed.method == "OPTIONS" {
+        return handle_cors_preflight(socket, parsed.header_part, server.as_ref()).await;
+    }
+
     if http_entry_guard(
         socket,
         server.as_ref(),
@@ -2866,6 +3194,10 @@ async fn handle_http_connection(
     }
 
     if parsed.method == "GET" {
+        // For GET requests we currently don't pass CORS headers directly
+        // (CORS is primarily for POST/OPTIONS).  If needed, the request
+        // already has the `Origin` header and clients can rely on the
+        // OPTIONS preflight for CORS negotiation.
         return route_http_get(socket, server.as_ref(), parsed.path).await;
     }
 
@@ -2880,12 +3212,17 @@ async fn handle_http_connection(
         return Ok(());
     }
 
+    // Pass CORS headers through to the POST handler (as a label for now —
+    // future enhancement: thread cors_headers into route_http_post).
+    drop(cors_headers);
+
     let _path_label = route_http_post(
         socket,
         server,
         parsed.path,
         parsed.header_part,
         parsed.body_initial_part,
+        user_session,
     )
     .await?;
 
@@ -3009,6 +3346,7 @@ async fn write_entry_rejection(
                 "trace_id": trace_id,
             }
         }),
+        "",
     )
     .await
 }
@@ -3029,8 +3367,7 @@ async fn apply_entry_guards(
 
     if server.runtime_config.entry_auth_enabled {
         let env_name = server.runtime_config.entry_auth_api_key_env.trim();
-        let expected_key = std::env::var(env_name)
-            .ok()
+        let expected_key = get_secret(env_name)
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
 
@@ -3123,6 +3460,7 @@ async fn write_http_json_response(
     socket: &mut TcpStream,
     status: u16,
     value: serde_json::Value,
+    extra_headers: &str,
 ) -> Result<()> {
     let status_text = match status {
         200 => "OK",
@@ -3137,10 +3475,11 @@ async fn write_http_json_response(
     };
     let body = serde_json::to_vec(&value)?;
     let headers = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
         status,
         status_text,
-        body.len()
+        body.len(),
+        extra_headers
     );
     tcp_write_timeout(socket, headers.as_bytes()).await?;
     tcp_write_timeout(socket, &body).await?;
@@ -3148,12 +3487,12 @@ async fn write_http_json_response(
     Ok(())
 }
 
-async fn write_sse_headers(socket: &mut TcpStream) -> Result<()> {
-    tcp_write_timeout(
-        socket,
-        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nX-Accel-Buffering: no\r\n\r\n",
-    )
-    .await?;
+async fn write_sse_headers(socket: &mut TcpStream, extra_headers: &str) -> Result<()> {
+    let header_bytes = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nX-Accel-Buffering: no\r\n{}\r\n",
+        extra_headers
+    );
+    tcp_write_timeout(socket, header_bytes.as_bytes()).await?;
     Ok(())
 }
 

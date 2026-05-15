@@ -457,6 +457,24 @@
     "error.token_revoked": "令牌 '{token_id}' 已被撤销",
     "error.token_expired": "令牌 '{token_id}' 已于 {expires_at} 过期 (当前: {now})",
     "error.acp_mode_unsupported": "ACP 模式不支持方法: {method}",
-    "error.mcp_mode_unsupported": "MCP 模式不支持方法: {method}"
+    "error.mcp_mode_unsupported": "MCP 模式不支持方法: {method}",
+    "error.auth_required": "需要身份验证",
+    "error.auth_invalid_token": "无效或过期的身份验证令牌",
+    "error.auth_forbidden": "禁止访问: {reason}",
+    "error.auth_insufficient_privileges": "权限不足: 需要 {required_role} 角色",
+    "error.auth_origin_not_allowed": "CORS: 来源 '{origin}' 不允许",
+    "error.auth_token_issuance_failed": "颁发身份验证令牌失败: {reason}",
+    "error.tenant_quota_exceeded": "租户 '{tenant_id}': {limit_type} 限制已超 ({used}/{limit})",
+    "error.tenant_not_configured": "租户 '{tenant_id}' 未配置配额",
+    "info.auth_token_issued": "已为用户 '{user_id}' 颁发身份验证令牌 (过期: {expires_at})",
+    "info.auth_session_revoked": "已撤销用户 '{user_id}' 的会话",
+    "info.auth_user_authenticated": "用户 '{user_id}' 已认证, 角色: {roles}",
+    "info.cors_allowed_origin": "CORS: 允许的来源 '{origin}'",
+    "info.cors_disabled": "CORS 已禁用",
+    "info.multi_user_enabled": "多用户模式已启用, 使用 {auth_type} 认证",
+    "info.multi_user_disabled": "多用户模式已禁用 (单用户管理员访问)",
+    "warn.cors_origin_denied": "CORS: 来源 '{origin}' 被拒绝",
+    "warn.auth_token_expired": "用户 '{user_id}' 的身份验证令牌已过期",
+    "warn.auth_token_invalid_signature": "身份验证令牌签名无效, 已被拒绝"
   }
 }

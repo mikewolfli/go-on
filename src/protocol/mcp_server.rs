@@ -8,12 +8,17 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
+use tokio::signal;
 use tokio::sync::{Mutex, Notify, Semaphore};
 use tracing::{debug, info, warn};
 
+use crate::acp::r#impl::cors::{
+    build_cors_headers, build_preflight_response_headers, is_origin_allowed,
+};
 use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
 use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
+use crate::governance::rbac::{AccessDecision, Permission, Principal};
 use crate::i18n::runtime::{t, tf};
 use crate::mcp::{JsonRpcRequest, JsonRpcResponse, McpServer};
 use crate::tool::ToolRegistry;
@@ -134,6 +139,7 @@ pub struct McpHttpServer {
     bind_addr: String,
     shutdown_notify: Arc<Notify>,
     connection_semaphore: Arc<Semaphore>,
+    acp_server: Option<Arc<AcpServer>>,
 }
 
 impl McpHttpServer {
@@ -151,6 +157,7 @@ impl McpHttpServer {
             bind_addr,
             shutdown_notify: Arc::new(Notify::new()),
             connection_semaphore: Arc::new(Semaphore::new(256)),
+            acp_server: None,
         }
     }
 
@@ -168,13 +175,14 @@ impl McpHttpServer {
             tool_registry,
             server_name,
             server_version,
-            acp_server,
+            acp_server.clone(),
         );
         Self {
             mcp_server: Arc::new(mcp_server),
             bind_addr,
             shutdown_notify: Arc::new(Notify::new()),
             connection_semaphore: Arc::new(Semaphore::new(256)),
+            acp_server,
         }
     }
 
@@ -195,10 +203,36 @@ impl McpHttpServer {
             )
         );
 
+        // Signal handling for graceful shutdown
+        let mut sigterm = std::pin::pin!(async {
+            #[cfg(unix)]
+            {
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    Ok(mut stream) => {
+                        stream.recv().await;
+                    }
+                    Err(e) => {
+                        warn!("failed to register SIGTERM handler: {e}; graceful shutdown via SIGTERM disabled");
+                        std::future::pending::<()>().await;
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            std::future::pending::<()>().await;
+        });
+
         loop {
             tokio::select! {
                 _ = self.shutdown_notify.notified() => {
                     info!("MCP HTTP server shutting down");
+                    break;
+                }
+                _ = signal::ctrl_c() => {
+                    info!("Received SIGINT (Ctrl+C), initiating graceful shutdown...");
+                    break;
+                }
+                _ = sigterm.as_mut() => {
+                    info!("Received SIGTERM, initiating graceful shutdown...");
                     break;
                 }
                 result = listener.accept() => {
@@ -211,11 +245,12 @@ impl McpHttpServer {
                     };
                     let (mut socket, peer_addr) = result?;
                     let mcp_server = Arc::clone(&self.mcp_server);
+                    let acp_server = self.acp_server.clone();
 
                     tokio::spawn(async move {
                         // Hold permit for the whole connection handler lifetime.
                         let _permit = permit_guard;
-                        if let Err(err) = handle_http_connection(&mut socket, mcp_server).await {
+                        if let Err(err) = handle_http_connection(&mut socket, mcp_server, acp_server).await {
                             warn!(
                                 "{}",
                                 tf(
@@ -231,6 +266,19 @@ impl McpHttpServer {
                 }
             }
         }
+
+        // Drain active connections before full shutdown.
+        let drain_seconds = self
+            .acp_server
+            .as_ref()
+            .map(|s| s.runtime_config.shutdown_drain_seconds)
+            .unwrap_or(30);
+        if drain_seconds > 0 {
+            info!("Draining connections for {} seconds...", drain_seconds);
+            tokio::time::sleep(std::time::Duration::from_secs(drain_seconds)).await;
+        }
+
+        info!("MCP HTTP server stopped");
         Ok(())
     }
 
@@ -243,6 +291,7 @@ impl McpHttpServer {
 async fn handle_http_connection(
     socket: &mut tokio::net::TcpStream,
     mcp_server: Arc<McpServer>,
+    acp_server: Option<Arc<AcpServer>>,
 ) -> Result<()> {
     let mut buffer = vec![0u8; 64 * 1024];
     let bytes_read =
@@ -282,6 +331,10 @@ async fn handle_http_connection(
         anyhow::anyhow!("{}", t("error.http_missing_path"))
     })?;
 
+    // ── CORS headers ─────────────────────────────────────────────────────
+    let cors_headers = compute_mcp_cors_headers(header_part, &acp_server);
+
+    // ── Health endpoint (no auth) ────────────────────────────────────────
     if method == "GET" && path == "/health" {
         let body = inject_platform_profiles_if_absent(
             serde_json::json!({
@@ -290,7 +343,40 @@ async fn handle_http_connection(
             }),
             "health",
         );
-        write_http_json_response(socket, 200, body).await?;
+        write_http_json_response(socket, 200, body, &cors_headers).await?;
+        return Ok(());
+    }
+
+    // ── CORS preflight (OPTIONS) ─────────────────────────────────────────
+    if method == "OPTIONS" {
+        if let Some(ref server) = acp_server {
+            if let Some(ref cfg) = server.runtime_config.cors_config() {
+                let origin = extract_mcp_header_value(header_part, "origin");
+                let preflight_headers = build_preflight_response_headers(origin, cfg);
+                let origin_val: &str = origin.filter(|o| is_origin_allowed(o, cfg)).unwrap_or("*");
+
+                let mut extra = format!("Access-Control-Allow-Origin: {}\r\n", origin_val);
+                for (k, v) in &preflight_headers {
+                    extra.push_str(&format!("{}: {}\r\n", k, v));
+                }
+                extra.push_str(&format!(
+                    "Access-Control-Max-Age: {}\r\n",
+                    cfg.max_age_seconds
+                ));
+
+                write_http_json_response(socket, 200, serde_json::json!({"ok": true}), &extra)
+                    .await?;
+                return Ok(());
+            }
+        }
+        // No CORS config → reject OPTIONS
+        write_http_json_response(
+            socket,
+            405,
+            serde_json::json!({"error": "Method Not Allowed"}),
+            "",
+        )
+        .await?;
         return Ok(());
     }
 
@@ -299,8 +385,113 @@ async fn handle_http_connection(
             serde_json::json!({"error": t("error.method_not_allowed")}),
             "mcp.unknown_method",
         );
-        write_http_json_response(socket, 405, body).await?;
+        write_http_json_response(socket, 405, body, &cors_headers).await?;
         return Ok(());
+    }
+
+    // ── Entry auth (same pattern as ACP HTTP server) ─────────────────────
+    if let Some(ref server) = acp_server {
+        if server.runtime_config.entry_auth_enabled {
+            let env_name = server.runtime_config.entry_auth_api_key_env.trim();
+            let expected_key = crate::shared::secret_override::get_secret(env_name)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+
+            if let Some(ref expected) = expected_key {
+                let provided = extract_mcp_entry_token(header_part)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+
+                if provided != Some(expected.clone()) {
+                    write_http_json_response(
+                        socket,
+                        401,
+                        serde_json::json!({
+                            "error": "Unauthorized",
+                            "code": "ENTRY_AUTH_REQUIRED"
+                        }),
+                        &cors_headers,
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            } else {
+                write_http_json_response(
+                    socket,
+                    503,
+                    serde_json::json!({
+                        "error": "Service Unavailable",
+                        "code": "ENTRY_AUTH_MISCONFIGURED"
+                    }),
+                    &cors_headers,
+                )
+                .await?;
+                return Ok(());
+            }
+        }
+    }
+
+    // ── User auth and RBAC ───────────────────────────────────────────────
+    if let Some(ref server) = acp_server {
+        let user_session = server
+            .session_manager
+            .as_ref()
+            .and_then(|sm| sm.extract_user_from_request(header_part));
+
+        if server.runtime_config.user_auth_enabled {
+            let session = match user_session {
+                Some(ref s) => s,
+                None => {
+                    write_http_json_response(
+                        socket,
+                        401,
+                        serde_json::json!({
+                            "error": "Authentication required",
+                            "code": "AUTH_REQUIRED"
+                        }),
+                        &cors_headers,
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
+
+            // Route-based permission check.
+            // The enforcer guard is NOT `Send`, so we scope the RBAC logic to
+            // a synchronous block and drop the guard before any `.await`.
+            let required_perm = Permission::Execute;
+            if let Some(ref enforcer) = server.rbac_enforcer {
+                let access_decision = {
+                    let enforcer_guard = enforcer
+                        .read()
+                        .map_err(|_| anyhow::anyhow!("rbac lock poisoned"))?;
+                    let mut principal = Principal::new(
+                        &session.user_id,
+                        session.roles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                        session.tenant_id.as_deref(),
+                    );
+                    enforcer_guard.resolve_permissions(&mut principal);
+                    match enforcer_guard.check_access(&principal, &required_perm) {
+                        AccessDecision::Allow => None,
+                        AccessDecision::Deny { reason } => Some(serde_json::json!({
+                            "error": "Forbidden",
+                            "code": "ACCESS_DENIED",
+                            "reason": reason
+                        })),
+                        AccessDecision::Escalate { required_role } => Some(serde_json::json!({
+                            "error": "Insufficient privileges",
+                            "code": "PRIVILEGE_ESCALATION_REQUIRED",
+                            "required_role": required_role
+                        })),
+                    }
+                }; // enforcer_guard dropped here
+
+                if let Some(error_body) = access_decision {
+                    write_http_json_response(socket, 403, error_body, &cors_headers).await?;
+                    return Ok(());
+                }
+            }
+        }
     }
 
     const MAX_BODY_SIZE: usize = 10 * 1024 * 1024; // 10MB
@@ -345,14 +536,20 @@ async fn handle_http_connection(
                 }),
                 id: None,
             };
-            write_http_json_response(socket, 200, serde_json::to_value(error_response)?).await?;
+            write_http_json_response(
+                socket,
+                200,
+                serde_json::to_value(error_response)?,
+                &cors_headers,
+            )
+            .await?;
             return Ok(());
         }
     };
 
     let response = mcp_server.handle_request(request).await?;
     debug!("MCP HTTP: dispatched {} {} -> ok", method, path);
-    write_http_json_response(socket, 200, serde_json::to_value(response)?).await?;
+    write_http_json_response(socket, 200, serde_json::to_value(response)?, &cors_headers).await?;
 
     Ok(())
 }
@@ -388,27 +585,93 @@ async fn write_http_json_response(
     socket: &mut tokio::net::TcpStream,
     status: u16,
     body: serde_json::Value,
+    extra_headers: &str,
 ) -> Result<()> {
     let body_text = serde_json::to_string(&body)?;
     let status_text = match status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
         405 => "Method Not Allowed",
         500 => "Internal Server Error",
+        503 => "Service Unavailable",
         _ => "OK",
     };
 
-    let response = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+    let mut response = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
         status,
         status_text,
         body_text.len(),
-        body_text
     );
+    if !extra_headers.is_empty() {
+        response.push_str(extra_headers);
+        if !extra_headers.ends_with("\r\n") {
+            response.push_str("\r\n");
+        }
+    }
+    response.push_str("\r\n");
+    response.push_str(&body_text);
 
     socket.write_all(response.as_bytes()).await?;
     socket.flush().await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions for MCP HTTP security hardening
+// ---------------------------------------------------------------------------
+
+/// Extract a Bearer token from MCP HTTP request headers.
+/// Checks `Authorization: Bearer <token>` first, then falls back to
+/// `X-Api-Key` and `X-Go-On-Key` headers.
+fn extract_mcp_entry_token(headers: &str) -> Option<String> {
+    if let Some(auth) = extract_mcp_header_value(headers, "authorization") {
+        let lower = auth.to_ascii_lowercase();
+        if lower.starts_with("bearer ") {
+            return Some(auth[7..].trim().to_string());
+        }
+    }
+    extract_mcp_header_value(headers, "x-api-key")
+        .or_else(|| extract_mcp_header_value(headers, "x-go-on-key"))
+        .filter(|value| !value.trim().is_empty())
+        .map(|s| s.to_string())
+}
+
+/// Extract a single header value from raw HTTP headers.
+fn extract_mcp_header_value<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
+    for line in headers.lines() {
+        if let Some((key, value)) = line.split_once(':') {
+            if key.trim().eq_ignore_ascii_case(name) {
+                return Some(value.trim());
+            }
+        }
+    }
+    None
+}
+
+/// Compute CORS response headers for the MCP HTTP server.
+/// Returns an empty string when no CORS config is present or the origin
+/// is not allowed.
+fn compute_mcp_cors_headers(headers: &str, acp_server: &Option<Arc<AcpServer>>) -> String {
+    let config = match acp_server {
+        Some(ref server) => server.runtime_config.cors_config(),
+        None => return String::new(),
+    };
+    let config = match config {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    let origin = extract_mcp_header_value(headers, "origin");
+    let cors_headers = build_cors_headers(origin, &config);
+    if cors_headers.is_empty() {
+        return String::new();
+    }
+    cors_headers
+        .iter()
+        .map(|(k, v)| format!("{}: {}\r\n", k, v))
+        .collect()
 }
 
 #[cfg(test)]

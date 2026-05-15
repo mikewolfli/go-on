@@ -393,7 +393,7 @@ impl MultiChannelTransport {
                     tracing::warn!(
                         "queue index lookup succeeded but remove returned None for msg_id={} channel={}",
                         _msg_id,
-                        channel.as_str()
+                        channel.to_string()
                     );
                     continue;
                 };

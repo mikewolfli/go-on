@@ -17,6 +17,7 @@ use crate::agent::AgentRegistry;
 use crate::cache::ResponseCache;
 use crate::config::{AutoTuneConfig, AutoTuneState, RuntimeConfig, VectorConfig};
 
+use crate::acp::r#impl::session::SessionManager;
 use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
 use crate::flow_with_models::FlowModelSelector;
@@ -159,6 +160,10 @@ pub struct AcpServer {
     pub scheduler: Option<Arc<AgentWorkerScheduler>>,
     /// Provenance ledger — immutable data lineage tracking
     pub provenance_ledger: Option<Arc<ProvenanceLedger>>,
+    /// User session manager for authentication and session lifecycle
+    pub session_manager: Option<Arc<SessionManager>>,
+    /// RBAC enforcer for request-level authorization
+    pub rbac_enforcer: Option<Arc<std::sync::RwLock<crate::governance::rbac::RbacEnforcer>>>,
 }
 
 impl AcpServer {
@@ -581,6 +586,8 @@ impl ServerBuilder {
             task_graph_store: self.task_graph_store,
             scheduler: self.scheduler,
             provenance_ledger: self.provenance_ledger,
+            session_manager: None,
+            rbac_enforcer: None,
         })
     }
 }

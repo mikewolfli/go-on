@@ -2,6 +2,7 @@
 use crate::config::RuntimeConfig;
 // RuntimeConfig import removed after unsafe code removal in handle_config_reload
 use crate::protocol::access_mode::{normalize_protocol_mode, resolve_access_selection};
+use crate::shared::secret_override::get_secret;
 
 pub(super) fn governance_rule_fingerprint(config_path: Option<&str>) -> Value {
     let base_dir = config_path
@@ -138,8 +139,7 @@ pub(super) fn governance_config_summary(config_path: Option<&str>) -> Value {
         .as_ref()
         .map(|runtime| runtime.entry_auth_api_key_env.clone())
         .unwrap_or_else(|| "GO_ON_ENTRY_API_KEY".to_string());
-    let entry_auth_key_configured = std::env::var(&entry_auth_api_key_env)
-        .ok()
+    let entry_auth_key_configured = get_secret(&entry_auth_api_key_env)
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
     let entry_rate_limit_rpm = config
@@ -336,6 +336,11 @@ pub(super) async fn handle_config_reload(
     // read.  Full subsystem re-initialization (agent registry, cache,
     // vector store) requires a server restart — those resources cannot
     // be safely swapped at runtime without coordination.
+    // Store the new runtime config in a static OnceLock so subsystems that
+    // support hot-reload can read the updated values.  The runtime_config
+    // on AcpServer itself is not updated because a full live swap would
+    // require coordination across all request handlers.  The response
+    // explicitly warns: "agent/cache/vector changes require restart".
     use std::sync::OnceLock;
     static RUNTIME_CONFIG: OnceLock<std::sync::RwLock<Option<RuntimeConfig>>> =
         std::sync::OnceLock::new();
@@ -420,8 +425,7 @@ pub(super) async fn handle_config_baseline(
         server.runtime_config.acp_http_bind_addr.as_deref(),
     );
     let entry_auth_key_env = server.runtime_config.entry_auth_api_key_env.clone();
-    let entry_auth_key_configured = std::env::var(&entry_auth_key_env)
-        .ok()
+    let entry_auth_key_configured = get_secret(&entry_auth_key_env)
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
 

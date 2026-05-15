@@ -14,6 +14,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::core::config::RuntimeConfig;
 use crate::i18n::runtime::tf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +114,20 @@ impl TenantBudgetEnforcer {
 
     pub fn quotas(&self) -> &HashMap<String, TenantResourceQuota> {
         &self.quotas
+    }
+
+    /// Auto-provision default quotas from runtime config for the "default-tenant"
+    /// if no quota is already configured.  Called at server startup when user auth
+    /// is enabled so that the budget enforcer does not reject every request.
+    pub fn auto_provision_default(&mut self, config: &RuntimeConfig) {
+        if !self.quotas.contains_key("default-tenant") {
+            self.set_quota(TenantResourceQuota {
+                tenant_id: "default-tenant".to_string(),
+                daily_token_limit: config.tenant_default_daily_token_limit as usize,
+                concurrent_tasks_limit: config.tenant_default_concurrent_tasks,
+                daily_api_call_limit: config.tenant_default_daily_api_calls,
+            });
+        }
     }
 }
 
