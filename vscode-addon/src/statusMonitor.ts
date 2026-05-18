@@ -3,6 +3,8 @@ import { i18n, MessageKeys } from "./i18n";
 
 import { RuntimeManagerLike } from "./managerTypes";
 
+const DEFAULT_HEALTH_INTERVAL_SECONDS = 300;
+
 interface ProbeReport {
   probes?: {
     provider_dependencies?: {
@@ -66,7 +68,9 @@ export class StatusMonitor {
   private startHealthMonitoring() {
     this.stopHealthMonitoring();
     const config = vscode.workspace.getConfiguration("go-on");
-    const interval = config.get<number>("health.interval", 300) * 1000;
+    const interval =
+      config.get<number>("health.interval", DEFAULT_HEALTH_INTERVAL_SECONDS) *
+      1000;
     if (interval <= 0) return;
 
     this.healthCheckTimer = setInterval(async () => {

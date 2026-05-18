@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc;
 use std::sync::Arc;
 
+// Compile-time feature flags — not configurable at runtime.
+// Change these and rebuild to toggle the corresponding feature.
 const CHAT_DISABLE_MARKDOWN_RENDER: bool = false;
 const CHAT_STAGE6_ENABLE_MODE_ROW: bool = true;
 const CHAT_STAGE6_ENABLE_EXTRA_BUTTONS: bool = true;
@@ -745,6 +747,7 @@ impl ChatView {
         }
     }
 
+    #[allow(dead_code)]
     fn expand_prompt_command(&self, raw_input: &str) -> String {
         self.expand_prompt_command_with_fallback(raw_input, None)
     }

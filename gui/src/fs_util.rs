@@ -1,4 +1,12 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Returns the project's config directory using `directories::ProjectDirs`.
+/// This is the canonical location for storing persistent app data
+/// (e.g. font cache, chat sessions, templates).
+pub fn project_config_dir() -> Option<PathBuf> {
+    directories::ProjectDirs::from("com", "goon", "go-on-gui")
+        .map(|dirs| dirs.config_dir().to_path_buf())
+}
 
 /// Get current Unix timestamp in seconds since epoch.
 /// Returns 0 if the system clock is before 1970 (extremely unlikely).

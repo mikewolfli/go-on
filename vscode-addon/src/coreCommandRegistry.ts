@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import { i18n, MessageKeys } from "./i18n";
 import { RuntimeResolution } from "./runtimeBinaryService";
+import { asRecord } from "./utils";
 
 interface CoreCommandRegistryDeps {
   context: vscode.ExtensionContext;
@@ -33,12 +34,6 @@ interface CoreCommandRegistryDeps {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {};
 }
 
 async function ensureRunning(deps: CoreCommandRegistryDeps): Promise<boolean> {
@@ -213,12 +208,11 @@ export function registerCoreCommands(
                 ]),
               );
             } else {
-              // i18n
               vscode.window.showErrorMessage(
                 i18n.getMessage(MessageKeys.goOnStartFailed, [retryMessage]),
               );
             }
-            throw retryError;
+            return;
           }
         }
 

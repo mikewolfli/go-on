@@ -174,6 +174,10 @@ export class GoOnManager {
 
         // Buffered line-frame protocol: accumulate data and split by newlines
         this.stdoutBuffer += output;
+        // Cap buffer at 1MB to prevent memory leak
+        if (this.stdoutBuffer.length > 1024 * 1024) {
+          this.stdoutBuffer = this.stdoutBuffer.slice(-1024 * 1024);
+        }
         const lines = this.stdoutBuffer.split("\n");
         // Keep the last (potentially incomplete) fragment in the buffer
         this.stdoutBuffer = lines.pop() || "";
@@ -246,9 +250,11 @@ export class GoOnManager {
           res.resume();
         });
         healthReq.on("error", () => {
-          // HTTP health check failed — the server may be running in
-          // stdio mode instead. The health monitoring loop will pick
-          // up any connectivity issues later.
+          if (!settled) {
+            // HTTP health check failed — the server may be running in
+            // stdio mode instead. The health monitoring loop will pick
+            // up any connectivity issues later.
+          }
         });
         healthReq.setTimeout(3000, () => {
           healthReq.destroy();
@@ -266,6 +272,7 @@ export class GoOnManager {
 
       this.process.on("close", (code: number) => {
         if (settled) return;
+        settled = true;
         this._outputChannel?.appendLine(`[exit] code ${code}`);
         this._shutdownInProgress = false;
         if (!this._startupConfig) return;
@@ -524,37 +531,43 @@ export class GoOnManager {
         this.pendingRequests.delete(id);
         return;
       }
-      const canWrite = this.process.stdin.write(requestStr);
-      if (!canWrite) {
-        this._outputChannel?.appendLine("[warn] RPC stdin backpressure");
-        // Fallback to HTTP if available
-        if (
-          typeof globalThis !== "undefined" &&
-          typeof (globalThis as any).fetch === "function"
-        ) {
-          (async () => {
-            try {
-              const httpUrl = `http://127.0.0.1:${(this as any).config?.httpPort || 8090}`;
-              const httpResponse = await (globalThis as any).fetch(httpUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: requestStr,
-              });
-              const result = await httpResponse.json();
-              if (this.pendingRequests.has(id)) {
-                const pending = this.pendingRequests.get(id);
-                this.pendingRequests.delete(id);
-                pending?.resolve(result);
+      try {
+        const canWrite = this.process.stdin.write(requestStr);
+        if (!canWrite) {
+          this._outputChannel?.appendLine("[warn] RPC stdin backpressure");
+          // Fallback to HTTP if available
+          if (
+            typeof globalThis !== "undefined" &&
+            typeof (globalThis as any).fetch === "function"
+          ) {
+            (async () => {
+              try {
+                const httpUrl = `http://127.0.0.1:8090`;
+                const httpResponse = await (globalThis as any).fetch(httpUrl, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: requestStr,
+                });
+                const result = await httpResponse.json();
+                if (this.pendingRequests.has(id)) {
+                  const pending = this.pendingRequests.get(id);
+                  this.pendingRequests.delete(id);
+                  pending?.resolve(result);
+                }
+                return;
+              } catch (httpErr) {
+                this._outputChannel?.appendLine(
+                  `[warn] HTTP fallback also failed: ${httpErr}`,
+                );
+                // HTTP fallback also failed, continue to reject via timeout
               }
-              return;
-            } catch (httpErr) {
-              this._outputChannel?.appendLine(
-                `[warn] HTTP fallback also failed: ${httpErr}`,
-              );
-              // HTTP fallback also failed, continue to reject via timeout
-            }
-          })();
+            })();
+          }
         }
+      } catch (writeErr) {
+        this.pendingRequests.delete(id);
+        reject(new Error(`Failed to write to process stdin: ${writeErr}`));
+        return;
       }
     });
   }

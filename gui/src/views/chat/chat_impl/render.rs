@@ -1,4 +1,5 @@
-use super::*;
+use super::ChatView;
+use super::CHAT_DISABLE_MARKDOWN_RENDER;
 
 impl ChatView {
     /// Render markdown text using comrak for full markdown support.

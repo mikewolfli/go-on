@@ -2,6 +2,7 @@ use crate::keyring_util::REDACTED_API_KEY;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -64,11 +65,11 @@ impl Default for EnterpriseConfig {
                 },
                 EnvironmentPreset {
                     name: "stage".to_string(),
-                    backend_url: "http://127.0.0.1:8090".to_string(),
+                    backend_url: "http://127.0.0.1:19090".to_string(),
                 },
                 EnvironmentPreset {
                     name: "prod".to_string(),
-                    backend_url: "http://127.0.0.1:8090".to_string(),
+                    backend_url: "http://127.0.0.1:29090".to_string(),
                 },
             ],
             secret_source: "keyring".to_string(),
@@ -170,15 +171,22 @@ impl Default for AppConfig {
 ///   - This ensures keys are never lost regardless of platform quirks.
 pub fn load_app_config() -> AppConfig {
     let path = app_config_path();
+    let file_exists = path.exists();
+
+    // If config file never existed, start with defaults (no misleading recovery messages)
+    if !file_exists {
+        return AppConfig::default();
+    }
+
     let content = std::fs::read_to_string(&path).unwrap_or_default();
 
     // Detect corrupted config — if file exists but parse fails, warn user
-    let file_exists = path.exists();
-    if file_exists && content.trim().is_empty() {
+    if content.trim().is_empty() {
         eprintln!(
             "WARNING: Config file exists at {} but is empty, using defaults",
             path.display()
         );
+        return AppConfig::default();
     }
 
     let raw: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
@@ -189,6 +197,7 @@ pub fn load_app_config() -> AppConfig {
                 "ERROR: Failed to parse config file at {}: {e}",
                 path.display()
             );
+            // Only attempt backup recovery when the file existed but was corrupted
             eprintln!("Attempting recovery from backup...");
             let bak_path = path.with_extension("json.bak");
             match std::fs::read_to_string(&bak_path) {
@@ -212,13 +221,9 @@ pub fn load_app_config() -> AppConfig {
         }
     };
 
-    if file_exists
-        && !content.trim().is_empty()
-        && config.providers.is_empty()
-        && raw.get("providers").is_none()
-    {
+    if !content.trim().is_empty() && config.providers.is_empty() && raw.get("providers").is_none() {
         eprintln!(
-            "WARNING: Failed to parse config file at {}, using defaults",
+            "WARNING: No providers found in config file at {}, using defaults",
             path.display()
         );
     }
@@ -386,32 +391,55 @@ fn app_config_path() -> PathBuf {
     }
 }
 
-/// Cached result of has_valid_providers, refreshed at most once per second.
-static PROVIDERS_CACHE: std::sync::Mutex<Option<(std::time::Instant, bool)>> =
-    std::sync::Mutex::new(None);
+/// Cache for has_valid_providers: millisecond-epoch timestamp + result, atomically.
+/// Avoids any Mutex contention on the UI thread.
+static PROVIDERS_CACHE_TS: AtomicU64 = AtomicU64::new(0);
+static PROVIDERS_CACHE_RESULT: AtomicBool = AtomicBool::new(false);
 
 /// Check if any AI provider has a key available (in config or keyring).
 /// Results are cached for 1 second to avoid per-frame keyring access.
+/// Lock-free: uses atomic timestamp comparison.
 pub fn has_valid_providers(config: &AppConfig) -> bool {
-    // Check cache first (1 second TTL)
-    if let Ok(cache) = PROVIDERS_CACHE.lock() {
-        if let Some((timestamp, result)) = *cache {
-            if timestamp.elapsed() < std::time::Duration::from_secs(1) {
-                return result;
-            }
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    // Check cache first (1 second TTL) — lock-free read
+    let cached_ts = PROVIDERS_CACHE_TS.load(Ordering::Acquire);
+    if cached_ts > 0 {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_millis() as u64;
+        if now_ms.saturating_sub(cached_ts) < 1000 {
+            return PROVIDERS_CACHE_RESULT.load(Ordering::Acquire);
         }
     }
 
+    // Compute fresh result
+    let result = compute_valid_providers(config);
+
+    // Update atomics
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_millis() as u64;
+    PROVIDERS_CACHE_RESULT.store(result, Ordering::Release);
+    PROVIDERS_CACHE_TS.store(now_ms, Ordering::Release);
+
+    result
+}
+
+/// Core check — computes whether any provider has a valid key.
+fn compute_valid_providers(config: &AppConfig) -> bool {
     // PRIMARY: check keyring for all configured providers + the canonical PROVIDER_NAMES list
     for p in &config.providers {
         if crate::keyring_util::has_api_key(&p.name.to_lowercase()) {
-            return set_and_return(true);
+            return true;
         }
     }
 
     for name in crate::views::providers::PROVIDER_NAMES {
         if crate::keyring_util::has_api_key(name) {
-            return set_and_return(true);
+            return true;
         }
     }
 
@@ -419,17 +447,9 @@ pub fn has_valid_providers(config: &AppConfig) -> bool {
     // check config.api_key as a fallback
     for p in &config.providers {
         if !p.api_key.is_empty() && p.api_key != REDACTED_API_KEY {
-            return set_and_return(true);
+            return true;
         }
     }
 
-    set_and_return(false)
-}
-
-/// Helper to update the cache and return a value from has_valid_providers.
-fn set_and_return(val: bool) -> bool {
-    if let Ok(mut cache) = PROVIDERS_CACHE.lock() {
-        *cache = Some((std::time::Instant::now(), val));
-    }
-    val
+    false
 }

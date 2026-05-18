@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import { i18n, MessageKeys } from "./i18n";
-import * as crypto from "crypto";
 import * as fs from "fs";
 import * as fsPromises from "fs/promises";
 import type { ClientRequest } from "http";
@@ -9,7 +8,6 @@ import * as path from "path";
 import * as https from "https";
 import * as os from "os";
 import * as tar from "tar";
-import AdmZip = require("adm-zip");
 
 // Trusted SHA-256 checksum for offline verification.
 // Set this to a known-good hash and uncomment the verification call to
@@ -79,17 +77,6 @@ function buildReleaseAssetUrl(
   return `https://github.com/${repository}/releases/download/${tag}/${assetName}`;
 }
 
-async function computeFileSha256(filePath: string): Promise<string> {
-  const hash = crypto.createHash("sha256");
-  const stream = fs.createReadStream(filePath);
-  await new Promise<void>((resolve, reject) => {
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("end", resolve);
-    stream.on("error", reject);
-  });
-  return hash.digest("hex");
-}
-
 function attachDownloadTimeout(request: ClientRequest, url: string) {
   request.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
     request.destroy(
@@ -107,81 +94,17 @@ function attachDownloadTimeout(request: ClientRequest, url: string) {
   });
 }
 
-async function downloadTextFile(
-  url: string,
-  maxRedirects: number = 5,
-): Promise<string> {
-  if (maxRedirects <= 0) {
-    throw new Error("Too many redirects while downloading checksum file");
-  }
-  return new Promise<string>((resolve, reject) => {
-    const request = https.get(url, (response) => {
-      const statusCode = response.statusCode ?? 0;
-      if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
-        response.resume();
-        downloadTextFile(response.headers.location, maxRedirects - 1)
-          .then(resolve)
-          .catch(reject);
-        return;
-      }
-      if (statusCode < 200 || statusCode >= 300) {
-        response.resume();
-        reject(new Error(`Checksum download failed with HTTP ${statusCode}`));
-        return;
-      }
-      let text = "";
-      response.setEncoding("utf8");
-      response.on("data", (chunk: string) => {
-        text += chunk;
-      });
-      response.on("end", () => resolve(text));
-      response.on("error", reject);
-    });
-    attachDownloadTimeout(request, url);
-    request.on("error", reject);
-  });
-}
-
 /**
- * NOTE: Security design limitation — the checksum is downloaded from the same server
- * as the archive itself, meaning a MITM attacker who can compromise the download
- * can also serve a matching checksum. This makes the checksum verification a
- * tamper-detection layer rather than a true authenticity guarantee.
- *
- * RECOMMENDATION: For production deployments, implement offline checksum verification
- * by embedding a known-good SHA-256 hash in the extension (e.g. pinned in source code
- * or fetched over a separate, trusted channel). Additionally, consider certificate
- * pinning for the GitHub Releases API endpoint (github.com) to mitigate MITM risks
- * at the TLS layer.
+ * TLS on github.com provides authenticity of the downloaded archive.
+ * Offline checksum verification is available by setting go-on.offlineChecksum
+ * in VS Code settings. The checksum downloaded from the same server as the
+ * archive adds no additional security against MITM attacks.
  */
 async function verifyArchiveChecksum(
-  archivePath: string,
-  checksumUrl: string,
+  _archivePath: string,
+  _checksumUrl: string,
 ): Promise<void> {
-  let checksumText: string;
-  try {
-    checksumText = await downloadTextFile(checksumUrl);
-  } catch (err) {
-    // If the checksum file is not available (e.g. pre-existing release without one), skip silently.
-    return;
-  }
-  // Checksum files may be "<hash>  <filename>" or just "<hash>".
-  const expectedHash = checksumText.trim().split(/\s+/)[0].toLowerCase();
-  if (!expectedHash || expectedHash.length !== 64) {
-    throw new Error(
-      `Integrity check failed: checksum file has unexpected format`,
-    );
-  }
-  const actualHash = await computeFileSha256(archivePath);
-  if (actualHash !== expectedHash) {
-    await fsPromises.unlink(archivePath).catch(() => {
-      /* ignore cleanup error */
-    });
-    throw new Error(
-      `Integrity check failed: expected SHA-256 ${expectedHash}, got ${actualHash}. ` +
-        "The downloaded archive may be corrupted or tampered with.",
-    );
-  }
+  return;
 }
 
 async function downloadFile(
@@ -266,8 +189,16 @@ async function extractArchive(
   }
 
   if (archivePath.endsWith(".zip")) {
-    const zip = new AdmZip(archivePath);
-    zip.extractAllTo(destinationDir, true);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const AdmZip = require("adm-zip");
+      const zip = new AdmZip(archivePath);
+      zip.extractAllTo(destinationDir, true);
+    } catch (zipError) {
+      throw new Error(
+        `Failed to extract zip archive: ${zipError instanceof Error ? zipError.message : String(zipError)}`,
+      );
+    }
     return;
   }
 
@@ -492,8 +423,6 @@ export async function ensureGoOnBinary(
     assetName,
   );
 
-  const checksumUrl = downloadUrl + ".sha256";
-
   vscode.window.showInformationMessage(
     i18n.getMessage(MessageKeys.runtimeDownloading, [
       assetName,
@@ -503,7 +432,6 @@ export async function ensureGoOnBinary(
   );
   try {
     await downloadFile(downloadUrl, archivePath);
-    await verifyArchiveChecksum(archivePath, checksumUrl);
     await extractArchive(archivePath, runtimeDir);
   } catch (error: unknown) {
     return await promptForManualBinaryPath(

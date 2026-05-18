@@ -9,6 +9,7 @@ import { configManager } from "./configManager";
 import { RuntimeManagerLike } from "./managerTypes";
 import { normalizeProtocolMode } from "./protocolContract";
 import { ensureGoOnBinary } from "./runtimeBinaryService";
+import { getNonce, asRecord } from "./utils";
 
 interface ProviderCatalogSpec {
   name: string;
@@ -408,12 +409,6 @@ const GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code";
 const GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const COPILOT_MODEL_CACHE_KEY = "go-on.copilot.modelsCache.v1";
 const COPILOT_STATE_KEY = "go-on.copilot.authState.v1";
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {};
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -2881,14 +2876,4 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
             </body>
             </html>`;
   }
-}
-
-function getNonce() {
-  let text = "";
-  const possible =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
 }

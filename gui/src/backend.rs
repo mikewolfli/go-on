@@ -143,7 +143,21 @@ impl BackendClient {
             }
         }
 
-        let resp = self.rpc_call("models.list", None).await;
+        // Fast gate: timebox the first RPC to 500ms so that an unreachable backend
+        // doesn't block the UI for 5+ seconds. If the backend is slow, we return
+        // stale cache (or empty) and let the next refresh attempt succeed.
+        let resp = match tokio::time::timeout(
+            Duration::from_millis(500),
+            self.rpc_call("models.list", None),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_elapsed) => {
+                eprintln!("[fetch_models] models.list timed out after 500ms, returning stale cache");
+                return stale_cached.unwrap_or_default();
+            }
+        };
         let mut result = match resp {
             Ok(val) => {
                 let mut result: ProviderModels = std::collections::HashMap::new();

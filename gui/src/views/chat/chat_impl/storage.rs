@@ -31,6 +31,7 @@ impl ChatView {
         path: std::path::PathBuf,
         label: &'static str,
         json_payload: String,
+        pending_tx: mpsc::SyncSender<PendingResponse>,
     ) {
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(ChatView::SAVE_DEBOUNCE_MS)).await;
@@ -39,11 +40,11 @@ impl ChatView {
             }
 
             if !ChatView::wait_for_save_slot(&in_flight).await {
-                eprintln!(
+                let _ = pending_tx.try_send(PendingResponse::UiMessage(format!(
                     "Failed to acquire save slot for {}: {}",
                     label,
                     path.display()
-                );
+                )));
                 return;
             }
 
@@ -54,11 +55,11 @@ impl ChatView {
 
             if let Some(parent) = path.parent() {
                 if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                    eprintln!(
+                    let _ = pending_tx.try_send(PendingResponse::UiMessage(format!(
                         "Failed to create {} directory {}: {e}",
                         label,
                         parent.display()
-                    );
+                    )));
                     in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                     return;
                 }
@@ -66,12 +67,18 @@ impl ChatView {
             // Atomic write: .tmp then rename to prevent corruption
             let tmp_path = path.with_extension("tmp");
             if let Err(e) = tokio::fs::write(&tmp_path, &json_payload).await {
-                eprintln!("Failed to write {} tmp: {e}", label);
+                let _ = pending_tx.try_send(PendingResponse::UiMessage(format!(
+                    "Failed to write {} tmp: {e}",
+                    label
+                )));
                 in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                 return;
             }
             if let Err(e) = tokio::fs::rename(&tmp_path, &path).await {
-                eprintln!("Failed to rename {} tmp: {e}", label);
+                let _ = pending_tx.try_send(PendingResponse::UiMessage(format!(
+                    "Failed to rename {} tmp: {e}",
+                    label
+                )));
                 in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                 return;
             }
@@ -80,11 +87,9 @@ impl ChatView {
     }
 
     pub(super) fn templates_path() -> PathBuf {
-        if let Some(dirs) = directories::ProjectDirs::from("com", "goon", "go-on-gui") {
-            dirs.config_dir().join("chat_prompt_templates.json")
-        } else {
-            PathBuf::from("chat_prompt_templates.json")
-        }
+        crate::fs_util::project_config_dir()
+            .map(|p| p.join("chat_prompt_templates.json"))
+            .unwrap_or_else(|| PathBuf::from("chat_prompt_templates.json"))
     }
 
     pub(super) fn load_templates_from_disk() -> Vec<PromptTemplate> {
@@ -112,15 +117,14 @@ impl ChatView {
             path,
             "chat templates",
             json_payload,
+            self.pending_tx.clone(),
         );
     }
 
     pub(super) fn sessions_path() -> PathBuf {
-        if let Some(dirs) = directories::ProjectDirs::from("com", "goon", "go-on-gui") {
-            dirs.config_dir().join("chat_sessions.json")
-        } else {
-            PathBuf::from("chat_sessions.json")
-        }
+        crate::fs_util::project_config_dir()
+            .map(|p| p.join("chat_sessions.json"))
+            .unwrap_or_else(|| PathBuf::from("chat_sessions.json"))
     }
 
     pub(super) fn load_sessions_from_disk() -> Vec<Session> {
@@ -157,6 +161,7 @@ impl ChatView {
             path,
             "chat sessions",
             json_payload,
+            self.pending_tx.clone(),
         );
     }
 }

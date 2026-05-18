@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { RuntimeManagerLike } from "./managerTypes";
 import { t, MessageKeys } from "./i18n";
+import { getNonce } from "./utils";
 
 interface WorkflowStep {
   type: "chat" | "code" | "delay";
@@ -32,9 +33,6 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
   ) {
     this.manager = _manager;
     this.context = _context;
-    this.context.subscriptions.push(
-      new vscode.Disposable(() => this._messageSubscription?.dispose()),
-    );
   }
 
   public resolveWebviewView(
@@ -389,14 +387,4 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
             </body>
             </html>`;
   }
-}
-
-function getNonce() {
-  let text = "";
-  const possible =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
 }

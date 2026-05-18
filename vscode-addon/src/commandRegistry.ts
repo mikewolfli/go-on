@@ -94,6 +94,8 @@ export function registerViewCommands(
   const runWorkflowCommand = vscode.commands.registerCommand(
     "go-on.runWorkflow",
     () => {
+      // TODO: This is a stub. Implement full workflow execution with step-by-step
+      // progress reporting, cancellation support, and result aggregation.
       // i18n
       vscode.window.showInformationMessage(
         i18n.getMessage(MessageKeys.selectWorkflow),

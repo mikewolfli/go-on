@@ -15,8 +15,7 @@ mod views;
 use app::GoOnApp;
 
 fn font_cache_path() -> Option<std::path::PathBuf> {
-    directories::ProjectDirs::from("com", "goon", "go-on-gui")
-        .map(|dirs| dirs.config_dir().join("font_path.cache"))
+    crate::fs_util::project_config_dir().map(|p| p.join("font_path.cache"))
 }
 
 fn read_cached_font_path() -> Option<String> {
@@ -186,7 +185,7 @@ fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
                         .and_then(|n| n.to_str())
                         .unwrap_or("")
                         .to_lowercase();
-                    if name.contains("cjk")
+                    if (name.contains("cjk")
                         || name.contains("chinese")
                         || name.contains("han")
                         || name.contains("noto")
@@ -194,13 +193,12 @@ fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
                         || name.contains("wenquan")
                         || name.contains("droid")
                         || name.contains("fallback")
-                        || name.contains("arialuni")
+                        || name.contains("arialuni"))
+                        && try_load(fonts, &path_str)
                     {
-                        if try_load(fonts, &path_str) {
-                            cjk_found = true;
-                            loaded_font_path = Some(path_str.to_string());
-                            break;
-                        }
+                        cjk_found = true;
+                        loaded_font_path = Some(path_str.to_string());
+                        break;
                     }
                 }
                 if cjk_found {
@@ -216,7 +214,7 @@ fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
     cjk_found
 }
 
-fn auto_detect_proxy() {
+async fn auto_detect_proxy() {
     if std::env::var("HTTPS_PROXY").is_ok() || std::env::var("https_proxy").is_ok() {
         return;
     }
@@ -225,87 +223,97 @@ fn auto_detect_proxy() {
         "http://127.0.0.1:7890",
         "http://127.0.0.1:25519",
         "http://127.0.0.1:10809",
-        "http://127.0.0.1:10809",
         "http://127.0.0.1:1087",
         "http://127.0.0.1:1080",
     ];
-    for proxy_url in proxies {
-        let addr = proxy_url
-            .trim_start_matches("http://")
-            .trim_start_matches("socks5://");
-        if let Some(port_str) = addr.split(':').nth(1) {
-            if let Ok(port) = port_str.parse::<u16>() {
-                if let Ok(socket_addr) = format!("127.0.0.1:{port}").parse() {
-                    if std::net::TcpStream::connect_timeout(
-                        &socket_addr,
-                        std::time::Duration::from_millis(100),
-                    )
-                    .is_ok()
-                    {
-                        std::env::set_var("HTTPS_PROXY", proxy_url);
-                        std::env::set_var("https_proxy", proxy_url);
-                        eprintln!(
-                            "auto_detect_proxy: found proxy at {proxy_url}, set HTTPS_PROXY."
-                        );
-                        return;
+    // Spawn all connection attempts in parallel so the total time is ~100ms
+    // instead of 700ms sequential. Each task is a tokio::spawn using
+    // tokio::net::TcpStream::connect with a 100ms timeout.
+    let tasks: Vec<_> = proxies
+        .iter()
+        .map(|proxy_url| {
+            let url = proxy_url.to_string();
+            tokio::spawn(async move {
+                let addr = url
+                    .trim_start_matches("http://")
+                    .trim_start_matches("socks5://");
+                if let Some(port_str) = addr.split(':').nth(1) {
+                    if let Ok(port) = port_str.parse::<u16>() {
+                        let socket_addr = format!("127.0.0.1:{port}");
+                        if tokio::time::timeout(
+                            std::time::Duration::from_millis(100),
+                            tokio::net::TcpStream::connect(&socket_addr),
+                        )
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .is_some()
+                        {
+                            return Some(url);
+                        }
                     }
                 }
-            }
+                None
+            })
+        })
+        .collect();
+
+    // Check results in original order (first matching proxy wins)
+    for task in tasks {
+        if let Ok(Some(proxy_url)) = task.await {
+            std::env::set_var("HTTPS_PROXY", &proxy_url);
+            std::env::set_var("https_proxy", &proxy_url);
+            eprintln!("auto_detect_proxy: found proxy at {proxy_url}, set HTTPS_PROXY.");
+            return;
         }
     }
 }
 
 fn make_icon() -> egui::IconData {
-    let (w, h) = (64u32, 64u32);
-    let cx = w as f32 / 2.0;
-    let cy = h as f32 / 2.0;
-    let r = cx - 2.0;
-    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-    for y in 0..h {
-        for x in 0..w {
-            let dist = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
-            if dist < r - 1.0 {
-                rgba.extend_from_slice(&[32, 120, 220, 255]);
-            } else if dist < r + 1.0 {
-                let t = ((r + 1.0 - dist) * 255.0) as u8;
-                rgba.extend_from_slice(&[
-                    (32u16 * t as u16 / 255) as u8,
-                    (120u16 * t as u16 / 255) as u8,
-                    (220u16 * t as u16 / 255) as u8,
-                    t,
-                ]);
-            } else {
-                rgba.extend_from_slice(&[0, 0, 0, 0]);
+    // Compute the icon only once and cache it for subsequent calls.
+    static ICON: std::sync::OnceLock<egui::IconData> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| {
+        let (w, h) = (64u32, 64u32);
+        let cx = w as f32 / 2.0;
+        let cy = h as f32 / 2.0;
+        let r = cx - 2.0;
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let dist = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
+                if dist < r - 1.0 {
+                    rgba.extend_from_slice(&[32, 120, 220, 255]);
+                } else if dist < r + 1.0 {
+                    let t = ((r + 1.0 - dist) * 255.0) as u8;
+                    rgba.extend_from_slice(&[
+                        (32u16 * t as u16 / 255) as u8,
+                        (120u16 * t as u16 / 255) as u8,
+                        (220u16 * t as u16 / 255) as u8,
+                        t,
+                    ]);
+                } else {
+                    rgba.extend_from_slice(&[0, 0, 0, 0]);
+                }
             }
         }
-    }
-    egui::IconData {
-        rgba,
-        width: w,
-        height: h,
-    }
+        egui::IconData {
+            rgba,
+            width: w,
+            height: h,
+        }
+    })
+    .clone()
 }
 
-#[cfg(has_app_icon)]
-fn load_embedded_icon() -> Option<egui::IconData> {
-    let bytes = include_bytes!(env!("GOON_ICON_PATH"));
-    let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Ico).ok()?;
-    let rgba = image.to_rgba8();
-    let (width, height) = rgba.dimensions();
-    Some(egui::IconData {
-        rgba: rgba.into_raw(),
-        width,
-        height,
-    })
-}
-#[cfg(not(has_app_icon))]
+/// The `has_app_icon` cfg flag is never set, so this always returns `None`.
+/// Keeping the function avoids changing call sites if the feature is added later.
 fn load_embedded_icon() -> Option<egui::IconData> {
     None
 }
 
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
-    auto_detect_proxy();
+    auto_detect_proxy().await;
     let icon = load_embedded_icon().unwrap_or_else(make_icon);
     let config = crate::config::load_app_config();
     let title = app::GoOnApp::detect_initial_window_title(&config);

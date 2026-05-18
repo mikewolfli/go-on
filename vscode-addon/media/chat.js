@@ -1,7 +1,8 @@
 // Chat functionality with enhanced features
 (function () {
   // eslint-disable-next-line no-undef
-  const vscode = acquireVsCodeApi();
+  const vscode =
+    typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : null;
   const messagesContainer = document.getElementById("messages");
   const messageInput = document.getElementById("messageInput");
   const sendButton = document.getElementById("sendButton");
@@ -14,6 +15,11 @@
   const attachmentPreview = document.getElementById("attachmentPreview");
   const attachmentList = document.getElementById("attachmentList");
   const clearAttachmentsBtn = document.getElementById("clearAttachmentsBtn");
+
+  if (!vscode) {
+    console.error("Go-On: VS Code API not available");
+    return;
+  }
 
   const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
   let attachments = [];
@@ -30,28 +36,35 @@
 
   // Enhanced message rendering with markdown support
   function renderMarkdown(text) {
-    // First, handle <thinking>...</thinking> blocks - collapsed by default
+    // Limit input length to prevent ReDoS attacks
+    const MAX_RENDER_INPUT_LENGTH = 100000; // 100KB
+    if (text.length > MAX_RENDER_INPUT_LENGTH) {
+      text =
+        text.substring(0, MAX_RENDER_INPUT_LENGTH) + "\n\n[Content truncated]";
+    }
+
+    // First escape HTML to prevent XSS
+    text = escapeHtml(text);
+
+    // Handle &lt;thinking&gt;...&lt;/thinking&gt; blocks - collapsed by default
     text = text.replace(
-      /<thinking>([\s\S]*?)<\/thinking>/gi,
-      (match, content) => {
-        const escapedContent = escapeHtml(content.trim()).replace(
-          /\n/g,
-          "<br>",
-        );
-        return `<details class="thinking-block"><summary class="thinking-toggle">💭 Thinking</summary><div class="thinking-content">${escapedContent}</div></details>`;
+      /&lt;thinking&gt;([\s\S]*?)&lt;\/thinking&gt;/gi,
+      (_match, content) => {
+        const safeContent = content.trim().replace(/\n/g, "<br>");
+        return `<details class="thinking-block"><summary class="thinking-toggle">💭 Thinking</summary><div class="thinking-content">${safeContent}</div></details>`;
       },
     );
 
     // Then handle code blocks - collapsible via <details>
     text = text
-      .replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
+      .replace(/```(\w+)?\n?([\s\S]*?)```/g, (_match, lang, code) => {
         const language = lang || "plaintext";
         const canRun =
           language === "javascript" ||
           language === "python" ||
           language === "bash";
-        // Process newlines in code content as <br> to preserve formatting
-        const escapedCode = escapeHtml(code.trim()).replace(/\n/g, "<br>");
+        // Content is already escaped, preserve newlines as <br>
+        const escapedCode = code.trim().replace(/\n/g, "<br>");
         return `<details class="code-block" open data-language="${language}"><summary class="code-header"><span class="code-lang">${escapeHtml(language)}</span><span class="code-actions">${canRun ? '<button class="run-btn" data-action="run">▶️</button>' : ""}<button class="copy-btn" data-action="copy">📋</button></span></summary><div class="code-content"><code class="language-${language}">${escapedCode}</code></div></details>`;
       })
       .replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')

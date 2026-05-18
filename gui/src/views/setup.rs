@@ -82,6 +82,8 @@ impl SetupView {
                     egui::ComboBox::from_id_salt("model_sel")
                         .selected_text(&self.selected_model)
                         .show_ui(ui, |ui| {
+                            // FIXME: This hardcoded model list should be fetched from the
+                            //        backend's provider.catalog endpoint in a future refactor.
                             let models = [
                                 "auto",
                                 "gpt-4o",

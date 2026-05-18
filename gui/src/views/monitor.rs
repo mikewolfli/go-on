@@ -127,7 +127,7 @@ impl MonitorView {
                 let effective_refresh_interval = self.effective_refresh_interval();
 
                 if self.last_metrics_load.elapsed() >= effective_refresh_interval
-                    && backend_configured
+                    && self.backend_configured
                 {
                     self.last_metrics_load = Instant::now();
                     let backend_clone = backend.clone();

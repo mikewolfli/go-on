@@ -16,6 +16,30 @@
   let draggingNode = null;
   let offsetX = 0;
   let offsetY = 0;
+  let layoutDirty = true;
+  let layoutFrameId = null;
+
+  function scheduleLayout() {
+    layoutDirty = true;
+    if (!layoutFrameId) {
+      layoutFrameId = requestAnimationFrame(() => {
+        layoutFrameId = null;
+        if (layoutDirty) {
+          computeAndRenderLayout();
+          layoutDirty = false;
+        }
+      });
+    }
+  }
+
+  function computeAndRenderLayout() {
+    const nodes = Array.from(processCanvas.querySelectorAll(".stage-node"));
+    applyAutoLayout(nodes);
+    const svg = processCanvas.querySelector("svg");
+    if (svg) {
+      drawConnections(svg);
+    }
+  }
 
   function renderProcessList() {
     processListEl.innerHTML = "";
@@ -74,54 +98,24 @@
       return node;
     });
 
-    applyAutoLayout(nodes);
+    scheduleLayout();
 
     function applyAutoLayout(nodes) {
-      const width = processCanvas.clientWidth;
-      const height = processCanvas.clientHeight;
+      const width = processCanvas.clientWidth || 800;
+      const height = processCanvas.clientHeight || 600;
       const cols = Math.max(1, Math.ceil(Math.sqrt(nodes.length)));
-      const rows = Math.max(1, Math.ceil(nodes.length / cols));
       const hGap = Math.max(120, (width - 80) / cols);
-      const vGap = Math.max(100, (height - 80) / rows);
+      const vGap = Math.max(
+        100,
+        (height - 80) / Math.max(1, Math.ceil(nodes.length / cols)),
+      );
 
       nodes.forEach((node, i) => {
         const row = Math.floor(i / cols);
         const col = i % cols;
-        const targetX = 20 + col * hGap;
-        const targetY = 20 + row * vGap;
-        node.style.left = `${targetX}px`;
-        node.style.top = `${targetY}px`;
+        node.style.left = `${20 + col * hGap}px`;
+        node.style.top = `${20 + row * vGap}px`;
       });
-
-      // force-directed refinement step
-      for (let iter = 0; iter < 20; iter++) {
-        const forces = nodes.map(() => ({ x: 0, y: 0 }));
-
-        nodes.forEach((n1, i1) => {
-          const r1 = n1.getBoundingClientRect();
-          nodes.forEach((n2, i2) => {
-            if (i1 === i2) return;
-            const r2 = n2.getBoundingClientRect();
-            const dx = r1.left - r2.left;
-            const dy = r1.top - r2.top;
-            let dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < 1) dist = 1;
-            const repulsion = 1000 / (dist * dist);
-            forces[i1].x += (dx / dist) * repulsion;
-            forces[i1].y += (dy / dist) * repulsion;
-          });
-        });
-
-        nodes.forEach((node, i) => {
-          const f = forces[i];
-          const x = parseFloat(node.style.left || "0") + f.x * 0.05;
-          const y = parseFloat(node.style.top || "0") + f.y * 0.05;
-          node.style.left = `${Math.max(0, Math.min(width - 140, x))}px`;
-          node.style.top = `${Math.max(0, Math.min(height - 80, y))}px`;
-        });
-      }
-
-      drawConnections(svg, process);
     }
 
     processCanvas.onmousemove = (e) => {
@@ -168,7 +162,7 @@
     }
   }
 
-  createProcessBtn.addEventListener("click", () => {
+  createProcessBtn?.addEventListener("click", () => {
     // NOTE: vscode.window is NOT available in webview context.
     // We use postMessage to request the extension host to show UI elements.
     vscode.postMessage({
@@ -181,7 +175,7 @@
   // Pending create-process state for multi-step input flow
   let pendingCreateName = null;
 
-  runProcessBtn.addEventListener("click", () => {
+  runProcessBtn?.addEventListener("click", () => {
     if (!selectedProcessId) {
       // NOTE: vscode.window is NOT available in webview context.
       vscode.postMessage({
@@ -193,7 +187,7 @@
     vscode.postMessage({ type: "runProcess", processId: selectedProcessId });
   });
 
-  exportProcessBtn.addEventListener("click", () => {
+  exportProcessBtn?.addEventListener("click", () => {
     const text = JSON.stringify(processes, null, 2);
     const blob = new Blob([text], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -206,7 +200,7 @@
     URL.revokeObjectURL(url);
   });
 
-  importProcessBtn.addEventListener("click", () => {
+  importProcessBtn?.addEventListener("click", () => {
     if (!importFileInput) return;
     importFileInput.value = "";
     importFileInput.click();

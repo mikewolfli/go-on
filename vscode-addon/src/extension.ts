@@ -61,7 +61,9 @@ async function runGoOnSecretCommand(
       // Give it a moment to terminate, then force kill
       setTimeout(() => {
         try {
-          proc.kill("SIGKILL");
+          if (!proc.killed) {
+            proc.kill("SIGKILL");
+          }
         } catch {
           // process already terminated
         }

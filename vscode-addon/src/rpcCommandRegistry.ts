@@ -2,18 +2,11 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { i18n, MessageKeys } from "./i18n";
+import { isRecord, asRecord } from "./utils";
 
 interface RpcCommandRegistryDeps {
   isRunning: () => boolean;
   sendRequest: (_method: string, _params?: unknown) => Promise<unknown>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
 }
 
 function asArray(value: unknown): unknown[] {

@@ -308,6 +308,7 @@ impl PromptsView {
         }
     }
 
+    #[allow(dead_code)]
     /// Get templates for the currently selected category.
     pub fn current_category_templates(&self) -> Option<&[PromptTemplate]> {
         self.selected_category.as_ref().and_then(|cat_id| {
@@ -318,6 +319,7 @@ impl PromptsView {
         })
     }
 
+    #[allow(dead_code)]
     /// Search templates across all categories matching the query.
     pub fn search_templates(&self, query: &str) -> Vec<(String, String, &PromptTemplate)> {
         // Returns Vec of (category_id, category_name, template)
