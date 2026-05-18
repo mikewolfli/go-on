@@ -7,9 +7,9 @@ go-on 是一个基于 Rust 的 **ACP/MCP 智能体编排、治理与生产安全
 
 ## 版本
 
-- 后端 Runtime：**0.9.5**
-- GUI 桌面端：**0.9.5**
-- VS Code 插件：**0.9.5**
+- 后端 Runtime：**1.0.0**
+- GUI 桌面端：**1.0.0**
+- VS Code 插件：**1.0.0**
 - 默认特性：`profile-local`
 - 可选特性：`profile-simple-server`、`profile-multi-users-server`
 

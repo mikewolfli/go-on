@@ -4,8 +4,8 @@ VS Code extension for operating and interacting with go-on runtime.
 
 ## Version
 
-- Extension: 0.9.5
-- Target runtime: go-on 0.9.5
+- Extension: 1.0.0
+- Target runtime: go-on 1.0.0
 
 ## What Is Implemented (Current)
 
